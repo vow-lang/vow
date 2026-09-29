@@ -43,6 +43,34 @@ fn classify_execution_outcome(exit_code: Option<i32>) -> &'static str {
     }
 }
 
+/// Ordered inputs and module-resolution policy for one `vow test` run.
+///
+/// The execution loop consumes this plan without knowing discovery, naming,
+/// filtering, symlink, ordering, or module-root precedence rules.
+struct TestSelection {
+    files: Vec<PathBuf>,
+    module_root: Option<PathBuf>,
+}
+
+fn select_tests(
+    scan_path: &Path,
+    filter: Option<&str>,
+    module_root_override: Option<&Path>,
+) -> TestSelection {
+    let mut files = discover_test_files(scan_path);
+    if let Some(pattern) = filter {
+        files.retain(|file| {
+            file.file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| stem.contains(pattern))
+        });
+    }
+    let module_root = module_root_override
+        .map(Path::to_path_buf)
+        .or_else(|| scan_path.is_dir().then(|| scan_path.to_path_buf()));
+    TestSelection { files, module_root }
+}
+
 fn discover_test_files(path: &Path) -> Vec<PathBuf> {
     if path.is_file() {
         return vec![path.to_path_buf()];
@@ -72,27 +100,6 @@ fn collect_test_files(dir: &Path, out: &mut Vec<PathBuf>) {
                 out.push(entry_path);
             }
         }
-    }
-}
-
-/// Narrow a list of discovered test files to those selected by `vow test
-/// --filter <pat>`. `None` (no `--filter`) is the identity — every file passes
-/// through in the order [`discover_test_files`] produced. `Some(pat)` keeps a
-/// file when its `file_stem` (the final path component minus its extension)
-/// contains `pat` as a substring; files whose stem is absent or not valid UTF-8
-/// are dropped. Pure companion to [`discover_test_files`]: no IO, so the
-/// selection rule is unit-testable without touching the filesystem.
-fn filter_test_files(files: Vec<PathBuf>, filter: Option<&str>) -> Vec<PathBuf> {
-    match filter {
-        Some(pat) => files
-            .into_iter()
-            .filter(|f| {
-                f.file_stem()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|name| name.contains(pat))
-            })
-            .collect(),
-        None => files,
     }
 }
 
@@ -147,8 +154,8 @@ pub(crate) fn run_test_command(
         std::process::exit(1);
     }
 
-    let test_files = discover_test_files(path);
-    let test_files = filter_test_files(test_files, filter);
+    let selection = select_tests(path, filter, module_root_override);
+    let module_root = selection.module_root.as_deref();
 
     let mut entries = Vec::new();
     let mut total_density = ContractDensity {
@@ -159,22 +166,7 @@ pub(crate) fn run_test_command(
 
     let _ = std::fs::create_dir_all("build");
 
-    // Resolve module root precedence:
-    //   1. explicit --module-root <path> wins (covers single-file invocation
-    //      against a tests/ subdir, e.g. `vow test compiler/tests/test_x.vow
-    //      --module-root compiler`),
-    //   2. otherwise, when the scan path is a directory, use the scan path,
-    //   3. otherwise (single-file scan with no override), fall back to the
-    //      entry file's parent dir (None).
-    let module_root: Option<&Path> = if let Some(override_path) = module_root_override {
-        Some(override_path)
-    } else if path.is_dir() {
-        Some(path)
-    } else {
-        None
-    };
-
-    for test_file in &test_files {
+    for test_file in &selection.files {
         let start = std::time::Instant::now();
         let file_str = test_file.to_string_lossy().to_string();
         let name = test_file
@@ -423,6 +415,32 @@ mod tests {
     }
 
     #[test]
+    fn select_tests_returns_ordered_files_and_resolved_root() {
+        let dir = TempDir::new().unwrap();
+        let beta = write_source(&dir, "beta_test.vow", "module Beta");
+        let alpha = write_source(&dir, "test_alpha.vow", "module Alpha");
+        write_source(&dir, "notes.vow", "module Notes");
+        let nested_dir = dir.path().join("nested");
+        std::fs::create_dir(&nested_dir).unwrap();
+        let nested = nested_dir.join("test_nested.vow");
+        std::fs::write(&nested, "module Nested").unwrap();
+
+        let all = select_tests(dir.path(), None, None);
+        assert_eq!(all.files, vec![beta, nested, alpha.clone()]);
+        assert_eq!(all.module_root, Some(dir.path().to_path_buf()));
+
+        let override_root = dir.path().join("module-root");
+        let filtered = select_tests(dir.path(), Some("alpha"), Some(&override_root));
+        assert_eq!(filtered.files, vec![alpha]);
+        assert_eq!(filtered.module_root, Some(override_root));
+
+        let single = write_source(&dir, "plain.vow", "module Plain");
+        let unmatched = select_tests(&single, Some("missing"), None);
+        assert!(unmatched.files.is_empty());
+        assert_eq!(unmatched.module_root, None);
+    }
+
+    #[test]
     fn classify_execution_outcome_maps_exit_codes() {
         assert_eq!(classify_execution_outcome(Some(0)), "passed");
         assert_eq!(classify_execution_outcome(Some(1)), "failed");
@@ -460,20 +478,25 @@ mod tests {
     }
 
     #[test]
-    fn discover_test_files_accepts_file_and_sorted_test_names() {
+    fn select_tests_accepts_file_and_sorted_test_names() {
         let dir = TempDir::new().unwrap();
         let single = write_source(&dir, "plain.vow", "module Plain fn main() -> i32 { 0 }");
-        assert_eq!(discover_test_files(&single), vec![single.clone()]);
+        assert_eq!(
+            select_tests(&single, None, None).files,
+            vec![single.clone()]
+        );
 
         write_source(&dir, "notes.vow", "module Notes");
         let beta = write_source(&dir, "beta_test.vow", "module Beta");
         let alpha = write_source(&dir, "test_alpha.vow", "module Alpha");
-        let files = discover_test_files(dir.path());
-        assert_eq!(files, vec![beta, alpha]);
+        assert_eq!(
+            select_tests(dir.path(), None, None).files,
+            vec![beta, alpha]
+        );
     }
 
     #[test]
-    fn discover_test_files_recurses_into_subdirectories() {
+    fn select_tests_recurses_into_subdirectories() {
         let dir = TempDir::new().unwrap();
         let top = write_source(&dir, "test_top.vow", "module Top");
         let nested_dir = dir.path().join("tests");
@@ -483,7 +506,7 @@ mod tests {
         // Non-test files in the subdir must be skipped, like at top level.
         std::fs::write(nested_dir.join("helper.vow"), "module Helper").unwrap();
 
-        let files = discover_test_files(dir.path());
+        let files = select_tests(dir.path(), None, None).files;
         // Lexicographic sort on the full path: "test_top.vow" < "tests/test_nested.vow"
         // because '_' (0x5F) sorts before 's' (0x73). Tests rely on stable ordering,
         // so anchor the expected sequence to the observed lexicographic rule.
@@ -491,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn discover_test_files_skips_symlinks() {
+    fn select_tests_skips_symlink_entries() {
         // DirEntry::file_type() does not follow symlinks, so both symlinked
         // files and symlinked dirs are silently skipped. The self-hosted side
         // matches via __vow_fs_is_symlink. Verify the Rust behaviour stays
@@ -517,63 +540,53 @@ mod tests {
         let symlinked_dir = dir.path().join("subdir_symlink");
         std::os::unix::fs::symlink(&external_dir, &symlinked_dir).unwrap();
 
-        let files = discover_test_files(dir.path());
+        let files = select_tests(dir.path(), None, None).files;
         assert_eq!(files, vec![real_test]);
     }
 
     #[test]
-    fn filter_test_files_none_returns_all_unchanged() {
-        // No `--filter` is the identity: every discovered file passes through in
-        // the order `discover_test_files` produced them.
-        let files = vec![
-            PathBuf::from("a/test_alpha.vow"),
-            PathBuf::from("b/test_beta.vow"),
-        ];
-        assert_eq!(filter_test_files(files.clone(), None), files);
-    }
+    fn select_tests_filter_keeps_stem_substring_matches() {
+        let dir = TempDir::new().unwrap();
+        let lexer = write_source(&dir, "test_lexer.vow", "module Lexer");
+        write_source(&dir, "test_parser.vow", "module Parser");
+        let lexer_extra = write_source(&dir, "test_lexer_extra.vow", "module LexerExtra");
 
-    #[test]
-    fn filter_test_files_keeps_substring_matches_on_stem() {
-        // `--filter lex` keeps files whose stem *contains* "lex" (substring, not
-        // exact), so both `test_lexer` and `test_lexer_extra` survive while
-        // `test_parser` is dropped.
-        let files = vec![
-            PathBuf::from("test_lexer.vow"),
-            PathBuf::from("test_parser.vow"),
-            PathBuf::from("test_lexer_extra.vow"),
-        ];
         assert_eq!(
-            filter_test_files(files, Some("lex")),
-            vec![
-                PathBuf::from("test_lexer.vow"),
-                PathBuf::from("test_lexer_extra.vow"),
-            ]
+            select_tests(dir.path(), Some("lex"), None).files,
+            vec![lexer, lexer_extra]
         );
     }
 
     #[test]
-    fn filter_test_files_matches_stem_not_extension_or_parent_dir() {
-        // The match is against `file_stem` only. "vow" appears in every file's
-        // extension and "suite" in the parent directory, yet neither is part of
-        // the stem, so both select nothing — while a real stem substring does.
-        let files = vec![
-            PathBuf::from("suite/test_alpha.vow"),
-            PathBuf::from("suite/test_beta.vow"),
-        ];
-        assert!(filter_test_files(files.clone(), Some("vow")).is_empty());
-        assert!(filter_test_files(files.clone(), Some("suite")).is_empty());
+    fn select_tests_filter_ignores_extension_and_parent_directory() {
+        let dir = TempDir::new().unwrap();
+        let suite = dir.path().join("suite");
+        std::fs::create_dir(&suite).unwrap();
+        let alpha = suite.join("test_alpha.vow");
+        std::fs::write(&alpha, "module Alpha").unwrap();
+        std::fs::write(suite.join("test_beta.vow"), "module Beta").unwrap();
+
+        assert!(select_tests(dir.path(), Some("vow"), None).files.is_empty());
+        assert!(
+            select_tests(dir.path(), Some("suite"), None)
+                .files
+                .is_empty()
+        );
         assert_eq!(
-            filter_test_files(files, Some("alpha")),
-            vec![PathBuf::from("suite/test_alpha.vow")]
+            select_tests(dir.path(), Some("alpha"), None).files,
+            vec![alpha]
         );
     }
 
     #[test]
-    fn filter_test_files_empty_pattern_keeps_everything() {
-        // `String::contains("")` is true for every string, so an empty `--filter`
-        // argument degenerates to the no-filter case rather than dropping all.
-        let files = vec![PathBuf::from("test_a.vow"), PathBuf::from("keep_test.vow")];
-        assert_eq!(filter_test_files(files.clone(), Some("")), files);
+    fn select_tests_empty_filter_keeps_everything() {
+        let dir = TempDir::new().unwrap();
+        let a = write_source(&dir, "test_a.vow", "module A");
+        let keep = write_source(&dir, "keep_test.vow", "module Keep");
+        assert_eq!(
+            select_tests(dir.path(), Some(""), None).files,
+            vec![keep, a]
+        );
     }
 
     #[test]

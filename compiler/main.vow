@@ -3,6 +3,7 @@ module Main
 use ir
 use ir_printer
 use frontend
+use runner_plan
 use clif
 use c_emitter
 use verifier
@@ -84,25 +85,6 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
     String::from("")
 }
 
-fn strip_vow_ext(path: String) -> String {
-    let n: i64 = path.len();
-    if n > 4 {
-        let d: i64 = path.byte_at(n - 4);
-        let v: i64 = path.byte_at(n - 3);
-        let o: i64 = path.byte_at(n - 2);
-        let w: i64 = path.byte_at(n - 1);
-        if d == 46 && v == 118 && o == 111 && w == 119 {
-            let r: String = String::new();
-            let mut i: i64 = 0;
-            while i < n - 4 {
-                r.push_byte(path.byte_at(i));
-                i = i + 1;
-            };
-            return r;
-        }
-    };
-    path
-}
 
 fn default_output(path: String) -> String {
     let n: i64 = path.len();
@@ -1891,123 +1873,6 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     0
 }
 
-// Return the bare filename (everything after the last `/`) with the `.vow`
-// extension stripped. Used by --filter so that matching is over the test's
-// stem name (e.g. `region`) instead of the full path, matching how the Rust
-// side's `f.file_stem()` works.
-fn file_stem_from_path(p: String) -> String {
-    let parts: Vec<String> = string_split(p, String::from("/"));
-    if parts.len() == 0 {
-        return strip_vow_ext(p);
-    }
-    strip_vow_ext(parts[parts.len() - 1])
-}
-
-// Lexicographic less-than over String (byte-wise). Mirrors Rust's `String: Ord`
-// for ASCII-clean paths, which is all we use this for (test-file discovery).
-// Used in lieu of a generic vec_str_sort utility we'd otherwise add to ir.vow
-// just for this caller.
-fn string_lt_lex(a: String, b: String) -> bool {
-    let na: i64 = a.len();
-    let nb: i64 = b.len();
-    let mut i: i64 = 0;
-    while i < na && i < nb {
-        let ca: i64 = a.byte_at(i);
-        let cb: i64 = b.byte_at(i);
-        if ca < cb { return true; }
-        if ca > cb { return false; }
-        i = i + 1;
-    }
-    na < nb
-}
-
-fn sort_str_vec_inplace(xs: Vec<String>) {
-    let n: i64 = xs.len();
-    let mut i: i64 = 1;
-    while i < n {
-        let cur: String = xs[i];
-        let mut j: i64 = i;
-        while j > 0 && string_lt_lex(cur, xs[j - 1]) {
-            xs[j] = xs[j - 1];
-            j = j - 1;
-        }
-        xs[j] = cur;
-        i = i + 1;
-    }
-}
-
-fn is_test_file(name: String) -> bool {
-    if string_ends_with(name, String::from(".vow")) == 0 {
-        return false;
-    }
-    if string_starts_with(name, String::from("test_")) != 0 {
-        return true;
-    }
-    let n: i64 = name.len();
-    if n > 9 {
-        let suffix: String = string_substr(name, n - 9, 9);
-        if suffix == String::from("_test.vow") {
-            return true;
-        }
-    }
-    false
-}
-
-// Strip one trailing '/' if present. Mirrors PathBuf::join semantics so that
-// `compiler/` + `tests` produces `compiler/tests`, not `compiler//tests`.
-fn path_join(dir: String, entry: String) -> String {
-    let n: i64 = dir.len();
-    if n > 0 && dir.byte_at(n - 1) == 47 {
-        let trimmed: String = string_substr(dir, 0, n - 1);
-        return str3(trimmed, String::from("/"), entry);
-    }
-    str3(dir, String::from("/"), entry)
-}
-
-// Walk `root` recursively, collecting every regular file whose name matches
-// `is_test_file`. Mirrors `discover_test_files` in vow/src/main.rs so the two
-// compilers agree on which files `vowc test compiler/` will exercise.
-//
-// Iterative worklist (not recursion) — fs depth is small in practice but the
-// Vow self-hosted compiler has no tail-call optimization, so iteration keeps
-// the work bounded regardless of tree shape.
-fn discover_test_files_recursive(root: String) -> Vec<String> [io] {
-    let out: Vec<String> = Vec::new();
-    if fs_is_dir(root) != 1 {
-        out.push(root);
-        return out;
-    }
-    let stack: Vec<String> = Vec::new();
-    stack.push(root);
-    while stack.len() > 0 {
-        let dir: String = stack[stack.len() - 1];
-        stack.pop();
-        let entries: Vec<String> = fs_listdir(dir);
-        let mut ei: i64 = 0;
-        while ei < entries.len() {
-            let entry: String = entries[ei];
-            let full: String = path_join(dir, entry);
-            // Skip symlinks (both file and directory targets) to match the
-            // Rust side, which uses DirEntry::file_type() — lstat semantics,
-            // so a symlink does not register as is_dir() or is_file().
-            // Skipping here also avoids infinite recursion on symlink cycles.
-            if fs_is_symlink(full) == 1 {
-                ei = ei + 1;
-                continue;
-            }
-            if fs_is_dir(full) == 1 {
-                stack.push(full);
-            } else if is_test_file(entry) {
-                out.push(full);
-            }
-            ei = ei + 1;
-        }
-    }
-    // Sort lexicographically so output ordering is deterministic across
-    // directory iteration order, matching the Rust side's `files.sort()`.
-    sort_str_vec_inplace(out);
-    out
-}
 
 fn test_json_escape(s: String) -> String {
     diag_json_escape_str(s)
@@ -2080,40 +1945,10 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         return 1;
     }
 
-    // Discover test files. Recurses into subdirectories so a test in
-    // `compiler/tests/test_region.vow` is picked up when the user invokes
-    // `vowc test compiler/`. Mirrors `discover_test_files` in vow/src/main.rs.
-    let all_files: Vec<String> = discover_test_files_recursive(path);
-    let test_files: Vec<String> = Vec::new();
-    let mut di: i64 = 0;
-    while di < all_files.len() {
-        let candidate: String = all_files[di];
-        // Match --filter against the file stem (e.g. `test_region`), not the
-        // full path. Mirrors `f.file_stem()` filtering on the Rust side, so
-        // directory components like `tests` don't spuriously match.
-        let stem: String = file_stem_from_path(candidate);
-        if filter.len() == 0 || stem.contains(filter) {
-            test_files.push(candidate);
-        }
-        di = di + 1;
-    }
-
-    fs_mkdir("build");
-
-    // Resolve module root precedence:
-    //   1. explicit --module-root <path> wins (covers single-file invocation
-    //      against a tests/ subdir, e.g. `vowc test compiler/tests/test_x.vow
-    //      --module-root compiler`),
-    //   2. otherwise, when the scan path is a directory, use the scan path,
-    //   3. otherwise (single-file scan with no override), fall back to the
-    //      entry file's parent dir (empty string == default).
-    // Mirrors the Rust side in vow/src/main.rs:run_test_command.
     let module_root_flag: String = get_flag_arg(argv, "--module-root");
-    let module_root: String = {
-        if module_root_flag.len() > 0 { module_root_flag }
-        else if fs_is_dir(path) == 1 { path }
-        else { String::from("") }
-    };
+    let selection: TestSelection = select_tests(path, filter, module_root_flag);
+    let test_files: Vec<String> = selection.files;
+    let module_root: String = selection.module_root;
 
     let entries_json: Vec<String> = Vec::new();
     let mut passed: i64 = 0;
@@ -2123,16 +1958,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
     let mut ti: i64 = 0;
     while ti < test_files.len() {
         let test_path: String = test_files[ti];
-        let test_name: String = strip_vow_ext(test_path);
-        // Strip directory prefix to get just the filename stem
-        let name_parts: Vec<String> = string_split(test_path, String::from("/"));
-        let short_name: String = {
-            if name_parts.len() > 0 {
-                strip_vow_ext(name_parts[name_parts.len() - 1])
-            } else {
-                test_name
-            }
-        };
+        let short_name: String = file_stem_from_path(test_path);
         let start_time: i64 = time_unix_ms();
 
         // Compile
