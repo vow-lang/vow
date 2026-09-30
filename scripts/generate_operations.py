@@ -32,6 +32,8 @@ REPO = Path(__file__).resolve().parent.parent
 # dropped from the Cranelift ABI.
 RETURN_TOKENS = {
     "unit": {"rust_ty": "Ty::Unit", "ity_const": "ITY_UNIT()", "clif_ret": None},
+    "i64": {"rust_ty": "Ty::I64", "ity_const": "ITY_I64()", "clif_ret": "types::I64"},
+    "ptr": {"rust_ty": "Ty::Ptr", "ity_const": "ITY_PTR()", "clif_ret": "types::I64"},
 }
 PARAM_TOKENS = {
     "ptr": "types::I64",

@@ -138,6 +138,21 @@ class GenRustIrBlockTest(unittest.TestCase):
         )
         self.assertEqual(go.gen_rust_ir_block(PRINT_OPS), expected)
 
+    def test_i64_and_ptr_return_tokens_map_to_rust_ty(self):
+        i64_op = dict(PRINT_OPS[1])
+        i64_op["return"] = "i64"
+        ptr_op = dict(PRINT_OPS[1])
+        ptr_op["return"] = "ptr"
+        block = go.gen_rust_ir_block([i64_op, ptr_op])
+        self.assertIn(
+            f'"{i64_op["name"]}" => Some(("{i64_op["runtime_symbol"]}", Ty::I64)),',
+            block,
+        )
+        self.assertIn(
+            f'"{ptr_op["name"]}" => Some(("{ptr_op["runtime_symbol"]}", Ty::Ptr)),',
+            block,
+        )
+
 
 class GenCraneliftBlockTest(unittest.TestCase):
     def test_matches_expected_rustfmt_canonical_text(self):
@@ -183,6 +198,22 @@ class GenCraneliftBlockTest(unittest.TestCase):
             "sig.returns.push(AbiParam::new(types::I64));\n            true", block
         )
 
+    def test_i64_return_token_pushes_return_slot(self):
+        op = dict(PRINT_OPS[1])
+        op["return"] = "i64"
+        block = go.gen_cranelift_block([op])
+        self.assertIn(
+            "sig.returns.push(AbiParam::new(types::I64));\n            true", block
+        )
+
+    def test_ptr_return_token_pushes_return_slot(self):
+        op = dict(PRINT_OPS[1])
+        op["return"] = "ptr"
+        block = go.gen_cranelift_block([op])
+        self.assertIn(
+            "sig.returns.push(AbiParam::new(types::I64));\n            true", block
+        )
+
 
 class GenVowLowerBlockTest(unittest.TestCase):
     def test_matches_expected_text(self):
@@ -204,6 +235,21 @@ class GenVowLowerBlockTest(unittest.TestCase):
             "// GENERATE:OPERATIONS:END"
         )
         self.assertEqual(go.gen_vow_lower_block(PRINT_OPS), expected)
+
+    def test_i64_and_ptr_return_tokens_map_to_ity_const(self):
+        i64_op = dict(PRINT_OPS[1])
+        i64_op["return"] = "i64"
+        ptr_op = dict(PRINT_OPS[1])
+        ptr_op["return"] = "ptr"
+        block = go.gen_vow_lower_block([i64_op, ptr_op])
+        self.assertIn(
+            f'if name == String::from("{i64_op["name"]}") {{ return ITY_I64(); }}',
+            block,
+        )
+        self.assertIn(
+            f'if name == String::from("{ptr_op["name"]}") {{ return ITY_PTR(); }}',
+            block,
+        )
 
 
 class GeneratorDeterminismTest(unittest.TestCase):
