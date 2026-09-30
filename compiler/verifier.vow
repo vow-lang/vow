@@ -538,10 +538,16 @@ fn is_tainted_output(combined: String) -> bool {
 // earlier solver hiccup. Mirrors `classify_esbmc_output` in
 // vow-verify/src/esbmc.rs.
 fn parse_verify_status(combined: String) -> i64 {
-    // `is_tainted_output` scans the whole output, so it's only worth paying
-    // for when a SUCCESSFUL banner is actually present to distrust; `&&`
-    // short-circuits it away on FAILED/timeout/error outputs.
-    if str_find_str(combined, String::from("VERIFICATION SUCCESSFUL")) >= 0 && !is_tainted_output(combined) {
+    parse_verify_status_tainted(combined, is_tainted_output(combined))
+}
+
+// Same classification as `parse_verify_status`, but takes an already-computed
+// taint bit instead of rescanning `combined` for it. Callers that also need
+// the taint bit for their own purposes (e.g. `verify_function_multi_property`)
+// should compute it once and call this directly.
+fn parse_verify_status_tainted(combined: String, tainted: bool) -> i64 {
+    let has_successful: bool = str_find_str(combined, String::from("VERIFICATION SUCCESSFUL")) >= 0;
+    if has_successful && !tainted {
         return VERIFY_PROVEN();
     }
     if str_find_str(combined, String::from("VERIFICATION FAILED")) >= 0 {
@@ -554,8 +560,7 @@ fn parse_verify_status(combined: String) -> i64 {
     // without proving or falsifying — e.g. the incremental-BMC forward
     // condition couldn't establish the property). Must be checked before the
     // generic ERROR fallback.
-    if str_find_str(combined, String::from("VERIFICATION SUCCESSFUL")) >= 0
-        || str_find_str(combined, String::from("VERIFICATION UNKNOWN")) >= 0 {
+    if has_successful || str_find_str(combined, String::from("VERIFICATION UNKNOWN")) >= 0 {
         return VERIFY_UNKNOWN();
     }
     if str_find_str(combined, String::from("timeout")) >= 0 {
@@ -969,11 +974,12 @@ fn verify_function_multi_property(esbmc_bin: String, f: IrFunction, m: IrModule,
         return MultiPropertyResult { status: VERIFY_NOT_FOUND(), verdict_ids: ids, verdict_proven: proven, tainted: false };
     }
     let combined: String = r.combined;
+    let tainted: bool = is_tainted_output(combined);
     let status: i64 = {
-        if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
+        if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status_tainted(combined, tainted) }
     };
     parse_multi_property_verdicts(combined, ids, proven);
-    MultiPropertyResult { status: status, verdict_ids: ids, verdict_proven: proven, tainted: is_tainted_output(combined) }
+    MultiPropertyResult { status: status, verdict_ids: ids, verdict_proven: proven, tainted: tainted }
 }
 
 // True when the function carries at least one `requires` clause — the only

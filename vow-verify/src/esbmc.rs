@@ -908,10 +908,16 @@ fn run_esbmc_capture(
 /// `VERIFICATION FAILED` (a real counterexample) still wins regardless of an
 /// earlier solver hiccup.
 fn classify_esbmc_output(combined: &str) -> VerificationResult {
-    // `is_tainted_output` scans the whole output, so it's only worth paying
-    // for when a SUCCESSFUL banner is actually present to distrust; `&&`
-    // short-circuits it away on FAILED/timeout/tool-error outputs.
-    if combined.contains("VERIFICATION SUCCESSFUL") && !is_tainted_output(combined) {
+    classify_esbmc_output_tainted(combined, is_tainted_output(combined))
+}
+
+/// Same classification as `classify_esbmc_output`, but takes an
+/// already-computed taint bit instead of rescanning `combined` for it.
+/// Callers that also need the taint bit for their own purposes (e.g.
+/// `run_esbmc_multi_property`) should compute it once and call this directly.
+fn classify_esbmc_output_tainted(combined: &str, tainted: bool) -> VerificationResult {
+    let has_successful = combined.contains("VERIFICATION SUCCESSFUL");
+    if has_successful && !tainted {
         VerificationResult::Proven
     } else if combined.contains("VERIFICATION FAILED") {
         VerificationResult::Failed(parse_esbmc_output(combined))
@@ -919,9 +925,7 @@ fn classify_esbmc_output(combined: &str) -> VerificationResult {
         VerificationResult::Unknown {
             reason: memory_limit_reason(),
         }
-    } else if combined.contains("VERIFICATION SUCCESSFUL")
-        || combined.contains("VERIFICATION UNKNOWN")
-    {
+    } else if has_successful || combined.contains("VERIFICATION UNKNOWN") {
         VerificationResult::Unknown {
             reason: parse_unknown_reason(combined),
         }
@@ -998,11 +1002,14 @@ pub fn run_esbmc_multi_property(
         &config,
         &["--multi-property"],
     ) {
-        Ok(combined) => (
-            classify_esbmc_output(&combined),
-            parse_multi_property_verdicts(&combined),
-            is_tainted_output(&combined),
-        ),
+        Ok(combined) => {
+            let tainted = is_tainted_output(&combined);
+            (
+                classify_esbmc_output_tainted(&combined, tainted),
+                parse_multi_property_verdicts(&combined),
+                tainted,
+            )
+        }
         Err(r) => (*r, std::collections::HashMap::new(), false),
     }
 }
@@ -1040,17 +1047,13 @@ pub fn run_esbmc_reach(
         config,
         &["--error-label", "vow_reach"],
     ) {
-        Ok(combined) => {
-            // See `classify_esbmc_output`: skip the whole-output taint scan
-            // unless there's a SUCCESSFUL banner to distrust.
-            if combined.contains("VERIFICATION SUCCESSFUL") && !is_tainted_output(&combined) {
-                ReachVerdict::Vacuous
-            } else if combined.contains("VERIFICATION FAILED") {
-                ReachVerdict::Live
-            } else {
-                ReachVerdict::Inconclusive
-            }
-        }
+        // Route through the same classifier `run_esbmc_with_max_k_step` uses,
+        // so the SUCCESSFUL/FAILED/taint logic lives in exactly one place.
+        Ok(combined) => match classify_esbmc_output(&combined) {
+            VerificationResult::Proven => ReachVerdict::Vacuous,
+            VerificationResult::Failed(_) => ReachVerdict::Live,
+            _ => ReachVerdict::Inconclusive,
+        },
         Err(_) => ReachVerdict::Inconclusive,
     }
 }
@@ -2460,7 +2463,7 @@ VERIFICATION SUCCESSFUL";
     #[cfg(unix)]
     #[test]
     fn run_esbmc_reach_never_claims_vacuous_after_solver_error() {
-        let esbmc = fake_esbmc_fixture("reach-solver-error-then-successful.sh");
+        let esbmc = fake_esbmc_fixture("solver-error-then-successful.sh");
         let result = run_esbmc_reach(
             &esbmc,
             "int main(void) { return 0; }",
