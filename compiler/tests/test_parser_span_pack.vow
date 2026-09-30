@@ -1,0 +1,21 @@
+module TestParserSpanPack
+
+use parser
+use diag
+
+// `start` is a byte offset into a source file and has no reason to stay
+// under 64 KiB; span_pack must round-trip a start past the old bound
+// instead of raising a spurious Caller VowViolation.
+fn check_span_pack_start_past_64kib() -> i32 {
+    let packed: i64 = span_pack(70000, 10);
+    if packed != 4587520010 { return 1; }
+    if span_unpack_start(packed) != 70000 { return 2; }
+    if span_unpack_len(packed) != 10 { return 3; }
+    0
+}
+
+fn main() -> i32 {
+    let start_past_bound: i32 = check_span_pack_start_past_64kib();
+    if start_past_bound != 0 { return start_past_bound; }
+    0
+}
