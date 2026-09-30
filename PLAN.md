@@ -299,12 +299,6 @@ file or per "this clause looks like the others we deleted."
      confirmed via direct read: all four have plain `i64` scalar subjects (`x`, `y`, `n`), not
      length-shaped locals. **Untouched** under the internals-only rule. Included in the PR's file
      list only to state explicitly "read, confirmed out of scope."
-   - `tests/verify/string_matches_literal_at.vow:6-7` — `requires: s.len() >= 2` stays (subject
-     becomes `u64`-typed via `.len()`, but the clause `s.len() >= 2` is not a `>= 0` tautology, it
-     is a real precondition); `requires: pos <= s.len() - 2` stays too (its own subject `pos`
-     stays `i64` under internals-only, since `pos` is a parameter) — but it is now *load-bearing*
-     for `pos >= 0`'s underflow safety in a way it wasn't before, since `s.len() - 2` no longer
-     obviously fails closed the same way. Do not delete either clause as "redundant."
 
 8. **`tests/multi` residual** (own PR) — every `tests/multi/<dir>/*.vow` except: the 8
    `vmod_*/module_io.vow` copies (excluded, moves with the `compiler/` seam), `bignum_legacy/bignum.vow`
@@ -339,9 +333,9 @@ must confirm, per file:
   before and after for these two specifically is an acceptable, expected outcome, not a
   regression, as long as it was already `unknown` before the retype. Confirm the baseline first.
 - **`tests/verify-fail/*` fixtures must still produce a `VerifyFailed` with the same
-  `counterexample-vow-id`/`counterexample-fn`/`counterexample-blame` directives.** Re-authoring
-  the three tautology-only fixtures (slice 7) must not change which vow-id fails or who's blamed
-  — the new contract is additive context, not a replacement mechanism.
+  `counterexample-vow-id`/`counterexample-fn`/`counterexample-blame` directives.** Slice 7 leaves
+  the tautology-only fixtures untouched (§3 slice 7, corrected), so this is a pure regression
+  check, not a consequence of any re-authoring in this seam.
 - **Both compilers must agree.** Every `full_test.sh` `compare_json` call (Sections 4b/4c/4d, 6b)
   is a Rust-vs-self-hosted differential — since neither compiler's source changes in this seam,
   any new divergence would indicate the retype exposed a latent Rust/self-hosted gap in how
@@ -351,10 +345,10 @@ must confirm, per file:
   exercised before).
 - **`benchmarks/`: `validate-references --compare`** (rust vs self-hosted) is the equivalent gate
   for the benchmark suite; run at least once per benchmarks PR.
-- No fixture under `tests/run/` or `examples/` needs to *grow* — this seam is retyping existing
-  correct programs, not adding new behavior, so no new positive/negative test cases are required
-  beyond what already exists. The one addition is the re-authored contracts in slice 7 (still the
-  same fixtures, new clause bodies, same file count).
+- No fixture under `tests/run/`, `tests/verify*/`, or `examples/` needs to *grow* — this seam is
+  retyping existing correct programs, not adding new behavior, so no new positive/negative test
+  cases are required beyond what already exists, and (per the slice 7 correction) no fixture
+  needs its contract re-authored either.
 
 ## 5. Risk areas
 
