@@ -58,14 +58,10 @@ STRICT_SPAN_FIXTURES = frozenset(
     }
 )
 # Fixtures on which the self-hosted compiler still reports offset 0, length 0
-# for a diagnostic the Rust compiler locates. Tracked by #1353; an entry that
-# stops dropping its location fails until it is removed.
-SPANLESS_SELF_FIXTURES = frozenset(
-    {
-        "string_literal_field_branch_overwrite.vow",
-        "string_literal_field_mutation.vow",
-    }
-)
+# for a diagnostic the Rust compiler locates. #1353 fixed the last of these;
+# kept as an empty set (not deleted) so a future drop has this same
+# enforcement point to slot back into, per _span_errors below.
+SPANLESS_SELF_FIXTURES = frozenset()
 
 # `vow test`'s authoritative output contract. Read back out of the schema
 # rather than restated so a field added there is compared by this blocking

@@ -1620,7 +1620,7 @@ fn builtin_method_spec(recv_tag: String, method: String) -> i64 {
             return method_spec_pack(5, ITY_I64(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), false);
         }
         if method == "push_byte" {
-            return method_spec_pack(6, ITY_UNIT(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), false);
+            return method_spec_pack(6, ITY_UNIT(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), true);
         }
         if method == "clear" {
             return method_spec_pack(7, ITY_UNIT(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false);
