@@ -976,6 +976,40 @@ for compiler in rust self; do
 done
 echo ""
 
+# ─── span_pack verifier-bound regression (#1308) ──────────────────
+#
+# `span_pack` (compiler/parser.vow) packs a byte offset (`start`) and a
+# length (`len`) into a single i64. `start < 65536` was never a real domain
+# fact -- `start` is a cumulative file offset with no reason to stay under
+# 64 KiB -- and was silently violated once real compiler sources grew past
+# that size. The fix drops that bound and switches the body to checked
+# `*!`/`+!` so an astronomical `start` aborts cleanly instead of the
+# postcondition going unsound under wraparound. `vow verify
+# compiler/parser.vow` has no `main` (verify-only, no codegen -- that's
+# fine) and pulls in ~51 pre-existing, unrelated `RegionRootEscape` notes
+# from its `use token`/`use ast`/`use diag` graph, so this checks the
+# `ArithOverflowReachable` diagnostic naming `span_pack` specifically, not
+# whether `diagnostics` is empty.
+section_begin "span_pack verifier-bound regression (#1308)"
+
+for compiler in rust self; do
+    if [ "$compiler" = rust ]; then
+        j=$($RUST verify --no-cache compiler/parser.vow 2>/dev/null) || true
+    else
+        j=$(run_self verify --no-cache compiler/parser.vow 2>/dev/null) || true
+    fi
+    errors=()
+    [ "$(arith_status "$j")" = "Verified" ] || errors+=("compiler/parser.vow should verify, got $(arith_status "$j")")
+    [ "$(arith_warns "$j" span_pack)" = "1" ] || errors+=("span_pack should warn once (start's magnitude bound was dropped, so the abort is reachable), got $(arith_warns "$j" span_pack)")
+
+    if [ ${#errors[@]} -eq 0 ]; then
+        pass "span_pack_verifier_bound/$compiler"
+    else
+        fail "span_pack_verifier_bound/$compiler" "$(IFS='; '; echo "${errors[*]}")"
+    fi
+done
+echo ""
+
 # ─── Section 4d: Verify-Skip Tests (tests/verify-skip/) ───────────
 #
 # Functions that exercise a non-modelable construct (e.g. nested-collection
@@ -1344,6 +1378,15 @@ if uv run python scripts/generate_help.py --check >/dev/null 2>&1; then
     pass "help/skills-dir-drift"
 else
     fail "help/skills-dir-drift" "skills/vow/ drifted from generated content; run 'uv run python scripts/generate_help.py'"
+fi
+
+# ops/catalogue-drift: confirm the Operation Catalogue's splice targets and
+# doc-fact cross-checks match docs/spec/operations.json.
+ops_catalogue_drift_log="$TMPDIR/ops_catalogue_drift.log"
+if uv run python scripts/generate_operations.py --check >"$ops_catalogue_drift_log" 2>&1; then
+    pass "ops/catalogue-drift"
+else
+    fail "ops/catalogue-drift" "$(cat "$ops_catalogue_drift_log"); run 'uv run python scripts/generate_operations.py'"
 fi
 echo ""
 

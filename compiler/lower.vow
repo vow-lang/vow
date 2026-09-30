@@ -1702,6 +1702,25 @@ fn catalogue_builtin_to_extern(name: String) -> String {
     if name == String::from("print_str") { return String::from("__vow_string_print"); }
     if name == String::from("print_i64") { return String::from("__vow_print_i64"); }
     if name == String::from("print_u64") { return String::from("__vow_print_u64"); }
+    if name == String::from("fs_read") { return String::from("__vow_fs_read"); }
+    if name == String::from("fs_open") { return String::from("__vow_fs_open"); }
+    if name == String::from("fs_read_line") { return String::from("__vow_fs_read_line"); }
+    if name == String::from("fs_status") { return String::from("__vow_fs_status"); }
+    if name == String::from("fs_close") { return String::from("__vow_fs_close"); }
+    if name == String::from("fs_write") { return String::from("__vow_fs_write"); }
+    if name == String::from("fs_exists") { return String::from("__vow_fs_exists"); }
+    if name == String::from("fs_mkdir") { return String::from("__vow_fs_mkdir"); }
+    if name == String::from("fs_listdir") { return String::from("__vow_fs_listdir"); }
+    if name == String::from("fs_remove") { return String::from("__vow_fs_remove"); }
+    if name == String::from("fs_remove_dir") { return String::from("__vow_fs_remove_dir"); }
+    if name == String::from("fs_is_dir") { return String::from("__vow_fs_is_dir"); }
+    if name == String::from("fs_is_symlink") { return String::from("__vow_fs_is_symlink"); }
+    if name == String::from("fs_rename") { return String::from("__vow_fs_rename"); }
+    if name == String::from("args") { return String::from("__vow_args"); }
+    if name == String::from("stdin_read") { return String::from("__vow_stdin_read"); }
+    if name == String::from("stdin_read_line") { return String::from("__vow_stdin_read_line"); }
+    if name == String::from("stdin_ready") { return String::from("__vow_stdin_ready"); }
+    if name == String::from("eprintln_str") { return String::from("__vow_eprintln_str"); }
     if name == String::from("process_exit") { return String::from("__vow_process_exit"); }
     if name == String::from("process_run") { return String::from("__vow_process_run"); }
     if name == String::from("process_get_stdout") { return String::from("__vow_process_get_stdout"); }
@@ -1720,6 +1739,25 @@ fn catalogue_builtin_ret_ty(name: String) -> i64 {
     if name == String::from("print_str") { return ITY_UNIT(); }
     if name == String::from("print_i64") { return ITY_UNIT(); }
     if name == String::from("print_u64") { return ITY_UNIT(); }
+    if name == String::from("fs_read") { return ITY_PTR(); }
+    if name == String::from("fs_open") { return ITY_I64(); }
+    if name == String::from("fs_read_line") { return ITY_PTR(); }
+    if name == String::from("fs_status") { return ITY_I64(); }
+    if name == String::from("fs_close") { return ITY_I64(); }
+    if name == String::from("fs_write") { return ITY_I64(); }
+    if name == String::from("fs_exists") { return ITY_I64(); }
+    if name == String::from("fs_mkdir") { return ITY_I64(); }
+    if name == String::from("fs_listdir") { return ITY_PTR(); }
+    if name == String::from("fs_remove") { return ITY_I64(); }
+    if name == String::from("fs_remove_dir") { return ITY_I64(); }
+    if name == String::from("fs_is_dir") { return ITY_I64(); }
+    if name == String::from("fs_is_symlink") { return ITY_I64(); }
+    if name == String::from("fs_rename") { return ITY_I64(); }
+    if name == String::from("args") { return ITY_PTR(); }
+    if name == String::from("stdin_read") { return ITY_PTR(); }
+    if name == String::from("stdin_read_line") { return ITY_PTR(); }
+    if name == String::from("stdin_ready") { return ITY_BOOL(); }
+    if name == String::from("eprintln_str") { return ITY_UNIT(); }
     if name == String::from("process_exit") { return ITY_UNIT(); }
     if name == String::from("process_run") { return ITY_I64(); }
     if name == String::from("process_get_stdout") { return ITY_PTR(); }
@@ -1746,21 +1784,6 @@ fn catalogue_builtin_result_tag(name: String) -> i64 {
 fn builtin_to_extern(name: String) -> String {
     let cat: String = catalogue_builtin_to_extern(name);
     if cat != String::from("") { return cat; }
-    if name == String::from("eprintln_str") { return String::from("__vow_eprintln_str"); }
-    if name == String::from("fs_read") { return String::from("__vow_fs_read"); }
-    if name == String::from("fs_open") { return String::from("__vow_fs_open"); }
-    if name == String::from("fs_read_line") { return String::from("__vow_fs_read_line"); }
-    if name == String::from("fs_status") { return String::from("__vow_fs_status"); }
-    if name == String::from("fs_close") { return String::from("__vow_fs_close"); }
-    if name == String::from("fs_write") { return String::from("__vow_fs_write"); }
-    if name == String::from("fs_exists") { return String::from("__vow_fs_exists"); }
-    if name == String::from("fs_mkdir") { return String::from("__vow_fs_mkdir"); }
-    if name == String::from("fs_listdir") { return String::from("__vow_fs_listdir"); }
-    if name == String::from("fs_remove") { return String::from("__vow_fs_remove"); }
-    if name == String::from("fs_remove_dir") { return String::from("__vow_fs_remove_dir"); }
-    if name == String::from("fs_is_dir") { return String::from("__vow_fs_is_dir"); }
-    if name == String::from("fs_is_symlink") { return String::from("__vow_fs_is_symlink"); }
-    if name == String::from("fs_rename") { return String::from("__vow_fs_rename"); }
     if name == String::from("string_substr") { return String::from("__vow_string_substr"); }
     if name == String::from("string_split") { return String::from("__vow_string_split"); }
     if name == String::from("string_starts_with") { return String::from("__vow_string_starts_with"); }
@@ -1830,10 +1853,6 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("hex_decode") { return String::from("__vow_hex_decode"); }
     if name == String::from("parse_f64_bits") { return String::from("__vow_parse_f64_bits"); }
     if name == String::from("format_f64_bits") { return String::from("__vow_format_f64_bits"); }
-    if name == String::from("args") { return String::from("__vow_args"); }
-    if name == String::from("stdin_read") { return String::from("__vow_stdin_read"); }
-    if name == String::from("stdin_read_line") { return String::from("__vow_stdin_read_line"); }
-    if name == String::from("stdin_ready") { return String::from("__vow_stdin_ready"); }
     if new_narrow_intrinsic_target(name) != -1 {
         let ext: String = String::from("__vow_");
         ext.push_str(name);
@@ -1857,21 +1876,6 @@ fn builtin_ret_ty(name: String) -> i64 {
     }
     let cat: i64 = catalogue_builtin_ret_ty(name);
     if cat != -1 { return cat; }
-    if name == String::from("eprintln_str") { return ITY_UNIT(); }
-    if name == String::from("fs_read") { return ITY_PTR(); }
-    if name == String::from("fs_open") { return ITY_I64(); }
-    if name == String::from("fs_read_line") { return ITY_PTR(); }
-    if name == String::from("fs_status") { return ITY_I64(); }
-    if name == String::from("fs_close") { return ITY_I64(); }
-    if name == String::from("fs_write") { return ITY_I64(); }
-    if name == String::from("fs_exists") { return ITY_I64(); }
-    if name == String::from("fs_mkdir") { return ITY_I64(); }
-    if name == String::from("fs_listdir") { return ITY_PTR(); }
-    if name == String::from("fs_remove") { return ITY_I64(); }
-    if name == String::from("fs_remove_dir") { return ITY_I64(); }
-    if name == String::from("fs_is_dir") { return ITY_I64(); }
-    if name == String::from("fs_is_symlink") { return ITY_I64(); }
-    if name == String::from("fs_rename") { return ITY_I64(); }
     if name == String::from("string_substr") { return ITY_PTR(); }
     if name == String::from("string_split") { return ITY_PTR(); }
     if name == String::from("string_starts_with") { return ITY_I64(); }
@@ -1924,10 +1928,6 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("hex_decode") { return ITY_PTR(); }
     if name == String::from("parse_f64_bits") { return ITY_U64(); }
     if name == String::from("format_f64_bits") { return ITY_PTR(); }
-    if name == String::from("args") { return ITY_PTR(); }
-    if name == String::from("stdin_read") { return ITY_PTR(); }
-    if name == String::from("stdin_read_line") { return ITY_PTR(); }
-    if name == String::from("stdin_ready") { return ITY_BOOL(); }
     ITY_UNIT()
 }
 
