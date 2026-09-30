@@ -164,12 +164,16 @@ even when a solver-internal error occurred elsewhere in the same run.
 
 The same discipline applies to `vow contracts --verify`'s per-clause
 `--multi-property` path: an individual claim's `PASSED` verdict is only
-trusted when the run is not tainted (`run_esbmc_multi_property` in
-`vow-verify/src/esbmc.rs`, `verify_function_multi_property` in
-`compiler/verifier.vow`). A tainted `PASSED` falls back to the function's
-overall outcome instead of being reported `proven` outright — a per-claim
-`FAILED` is still trusted regardless of taint, for the same fail-closed reason
-an overall `VERIFICATION FAILED` is.
+trusted when the run is not tainted. `run_esbmc_multi_property`
+(`vow-verify/src/esbmc.rs`) and `verify_function_multi_property`
+(`compiler/verifier.vow`) compute the taint bit; the actual gating — trusting
+a per-claim `PASSED` only when untainted, and a per-claim `FAILED`
+unconditionally — lives in `resolve_clause_status` in `vow/src/contracts.rs`
+and its self-hosted twin of the same name in `compiler/verifier.vow`. A
+tainted `PASSED` falls back to the function's overall outcome instead of
+being reported `proven` outright — a per-claim `FAILED` is still trusted
+regardless of taint, for the same fail-closed reason an overall `VERIFICATION
+FAILED` is.
 
 ## How the existing fallback embodies the discipline
 

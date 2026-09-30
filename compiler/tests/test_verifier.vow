@@ -202,6 +202,72 @@ fn check_is_tainted_output() -> i64 {
     0
 }
 
+// The `--multi-property` per-claim verdict map wins over the function's
+// overall rollup, in both directions: a clause ESBMC proved individually
+// stays proven even when the function overall failed, and a clause ESBMC
+// refuted individually is failed even when the function overall proved.
+// Mirrors resolve_clause_status_prefers_per_claim_verdict_over_overall in
+// vow/src/contracts.rs.
+fn check_resolve_clause_status_prefers_per_claim_verdict_over_overall() -> i64 {
+    let ids: Vec<i64> = Vec::new();
+    ids.push(7);
+    ids.push(8);
+    let proven: Vec<i64> = Vec::new();
+    proven.push(1);
+    proven.push(0);
+
+    if resolve_clause_status(7, ids, proven, VERIFY_FAILED(), false) != String::from("proven") { return 55; }
+    if resolve_clause_status(8, ids, proven, VERIFY_PROVEN(), false) != String::from("failed") { return 55; }
+    0
+}
+
+// esbmc/esbmc#4484: ESBMC 8.4+ can print an individual claim PASSED after an
+// internal solver exception. A tainted run must not let that PASSED verdict
+// win -- it falls through to `overall` (itself already guarded against a
+// tainted VERIFICATION SUCCESSFUL by parse_verify_status_tainted) -- while a
+// genuine per-claim FAILED is still trusted regardless. Mirrors
+// resolve_clause_status_distrusts_per_claim_proven_when_tainted in
+// vow/src/contracts.rs.
+fn check_resolve_clause_status_distrusts_per_claim_proven_when_tainted() -> i64 {
+    let ids: Vec<i64> = Vec::new();
+    ids.push(7);
+    ids.push(8);
+    let proven: Vec<i64> = Vec::new();
+    proven.push(1);
+    proven.push(0);
+
+    // overall still legitimately proven, so the fallback is proven too.
+    if resolve_clause_status(7, ids, proven, VERIFY_PROVEN(), true) != String::from("proven") { return 56; }
+    // tainted per-claim PASSED must not override an Unknown overall.
+    if resolve_clause_status(7, ids, proven, VERIFY_UNKNOWN(), true) != String::from("unknown") { return 56; }
+    // a per-claim FAILED is trusted even when the run is tainted.
+    if resolve_clause_status(8, ids, proven, VERIFY_PROVEN(), true) != String::from("failed") { return 56; }
+    0
+}
+
+// When a clause's vow_id is absent from the per-claim map (ESBMC did not
+// report it individually), its status comes from the function's overall
+// outcome. Pins every fallback arm -- in particular the deliberate
+// VERIFY_FAILED -> "unknown": an overall failure with no individual verdict
+// is genuinely undecided, NOT "failed" (see resolve_clause_status's doc
+// comment). Mirrors
+// resolve_clause_status_falls_back_to_overall_when_clause_unreported in
+// vow/src/contracts.rs.
+fn check_resolve_clause_status_falls_back_to_overall_when_clause_unreported() -> i64 {
+    let empty: Vec<i64> = Vec::new();
+    let missing: i64 = 99;
+
+    if resolve_clause_status(missing, empty, empty, VERIFY_PROVEN(), false) != String::from("proven") { return 57; }
+    if resolve_clause_status(missing, empty, empty, VERIFY_PROVEN_IR(), false) != String::from("proven") { return 57; }
+    if resolve_clause_status(missing, empty, empty, VERIFY_TIMEOUT(), false) != String::from("timeout") { return 57; }
+    if resolve_clause_status(missing, empty, empty, VERIFY_UNKNOWN(), false) != String::from("unknown") { return 57; }
+    if resolve_clause_status(missing, empty, empty, VERIFY_ERROR(), false) != String::from("error") { return 57; }
+    if resolve_clause_status(missing, empty, empty, VERIFY_NOT_FOUND(), false) != String::from("error") { return 57; }
+    // The Failed fallback is intentionally "unknown", not "failed".
+    if resolve_clause_status(missing, empty, empty, VERIFY_FAILED(), false) != String::from("unknown") { return 57; }
+    0
+}
+
 fn main() -> i32 [io] {
     let r1: i64 = check_known_nondet_calls();
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -239,5 +305,11 @@ fn main() -> i32 [io] {
     if r17 != 0 { return i64_to_i32_wrap(r17); }
     let r18: i64 = check_is_tainted_output();
     if r18 != 0 { return i64_to_i32_wrap(r18); }
+    let r19: i64 = check_resolve_clause_status_prefers_per_claim_verdict_over_overall();
+    if r19 != 0 { return i64_to_i32_wrap(r19); }
+    let r20: i64 = check_resolve_clause_status_distrusts_per_claim_proven_when_tainted();
+    if r20 != 0 { return i64_to_i32_wrap(r20); }
+    let r21: i64 = check_resolve_clause_status_falls_back_to_overall_when_clause_unreported();
+    if r21 != 0 { return i64_to_i32_wrap(r21); }
     0
 }
