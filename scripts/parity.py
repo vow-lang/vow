@@ -62,8 +62,6 @@ STRICT_SPAN_FIXTURES = frozenset(
 # stops dropping its location fails until it is removed.
 SPANLESS_SELF_FIXTURES = frozenset(
     {
-        "missing_module.vow",
-        "missing_module_symbol_reference.vow",
         "string_literal_field_branch_overwrite.vow",
         "string_literal_field_mutation.vow",
     }

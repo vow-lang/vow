@@ -515,6 +515,10 @@ fn item_id(v: i64) -> i64 vow {
 struct Module {
     name_sid: i64,
     uses: Vec<i64>,
+    // Packed span per `uses` entry (same index), over the importing file's
+    // bytes -- `use`-resolution diagnostics need the keyword's own location,
+    // not just the resolved path string.
+    uses_spans: Vec<i64>,
     items: Vec<i64>,
     arena: AstArena,
 }
