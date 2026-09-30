@@ -86,6 +86,24 @@ from `start * 65536 + len` to `start *! 65536 +! len`. Nothing else in
 `span_pack`'s signature, callers, or the `len` clamp in `span_pack_to_here`
 changes.
 
+**This was verified empirically during planning, not just reasoned about.**
+The exact edit above was applied to this worktree's `compiler/parser.vow`
+(temporarily, then reverted — see Section 4 slice 2) and run through
+`./target/release/vow verify compiler/parser.vow` (built locally via `cargo
+build --release -p vow`, since neither `build/vowc` nor
+`target/release/vow` pre-existed in this worktree). Result: `"status":
+"Verified"`, with exactly one non-pre-existing diagnostic —
+`{"error_code":"ArithOverflowReachable","message":"checked arithmetic in
+\`span_pack\` can abort: multiplication overflows", ...}` — confirming the
+"abort is reachable but the postcondition holds whenever the function
+returns" verdict predicted above, precisely mirroring the `scale`/`twice`
+functions in `tests/verify/checked_arith_abort_modelled.vow`. The unmodified
+contract (with `start < 65536` still present) produces `"Verified"` with
+**no** `ArithOverflowReachable` diagnostic at all — confirming the bound
+was silently making the proof *easier*, exactly the anti-pattern the issue
+describes, and giving TDD slice 2 below a real, empirically-grounded
+red/green signal (0 warnings vs. 1) rather than a guess.
+
 ## 3. Files to touch
 
 - **`compiler/parser.vow`** (the only production-code file):
@@ -139,47 +157,83 @@ changes.
      expect `TestsPassed`. This is the green step.
    - Production code: the `span_pack` edit in `compiler/parser.vow` (Section
      3) — no other file makes this test pass.
+   - Optional, non-blocking complementary case in the same test file: lex
+     and parse a synthetic in-memory source (>65536 bytes of leading
+     whitespace/comment padding, then a real `fn ... vow { requires: ... }`
+     block) and confirm `span_pack_to_here` produces a correct, non-panicking
+     span for the trailing token. This exercises the actual call sites named
+     in the issue (`compiler/parser.vow:508`, `:1187`,
+     `span_pack_to_here`) rather than calling `span_pack` directly, closer
+     to the issue's literal "parsing `compiler/main.vow` past byte 65536"
+     scenario. Add only if slice 1's direct call doesn't feel sufficient
+     during implementation — the direct call is already a valid, minimal
+     red/green and matches this repo's existing `compiler/tests/` style
+     (e.g. `test_lexer_float_overflow.vow` calls `lex()` directly rather
+     than building a large synthetic fixture).
 
 2. **Verification regression: prove the fixed contract is actually sound
-   under ESBMC, not just "no bound left to violate."**
+   under ESBMC, and that the fix is distinguishable from the bug.**
    - Location: a new assertion block in `scripts/full_test.sh`, placed next
      to the existing checked-arithmetic-model assertions (~line 900-970),
      reusing the `arith_status`/`arith_warns` bash helpers already defined
-     there.
-   - Behavior under test: `build/vowc verify compiler/parser.vow` (single
-     contracted function in that file today — confirmed by grep, so this is
-     a fast, isolated proof, not a whole-parser verify sweep) must report
-     `span_pack` as `Verified`, with **zero** `ArithOverflowReachable`
-     warnings (unlike the `scale`/`twice` functions in
-     `tests/verify/checked_arith_abort_modelled.vow`, `start *! 65536` and
-     `+! len` should never be reachable-overflow-able for any `start >= 0`,
-     `0 <= len < 65536` that satisfies the `requires` — worth confirming
-     empirically in this slice rather than assumed, since `i64` overflow of
-     `start *! 65536` is only ruled out because `requires` doesn't bound
-     `start`'s *magnitude* at all, only its sign; if ESBMC reports the abort
-     as reachable, that is new, accurate information this slice should
-     surface, not paper over).
-   - Before the fix: this same command was never run in CI (the issue's
-     "not currently an ESBMC verify target" claim) — there is no prior green
-     baseline to compare against, so "red" here means "not yet wired in,"
-     not "currently failing." Confirm by running
-     `build/vowc verify compiler/parser.vow` by hand against the *old*
-     contract first (`start < 65536` still present) to see it verify
-     trivially (the bound made the proof easy, which is exactly the
-     anti-pattern), then again after the fix to confirm it still verifies
-     with the bound gone and checked operators in place.
+     there (`arith_warns "$j" span_pack` counts `ArithOverflowReachable`
+     diagnostics whose message contains `` `span_pack` ``, matching how that
+     section already checks `scale`/`twice`/`doomed`).
+   - **Expected outcome (empirically confirmed, not predicted): `Verified`
+     status, plus exactly one `ArithOverflowReachable` diagnostic naming
+     `span_pack`.** This is the correct final state, not a contingency —
+     `requires` only constrains `start`'s sign, not its magnitude, so
+     `start *! 65536` is reachable-overflowable for `start` near
+     `i64::MAX / 65536 ≈ 1.4e14`, exactly like `scale`'s unbounded `x *! 3`
+     in the precedent fixture. The assertion should therefore be
+     `[ "$(arith_status "$j")" = "Verified" ]` and
+     `[ "$(arith_warns "$j" span_pack)" = "1" ]`, not zero.
+   - **This does guard the exact regression the issue is about.** If
+     `start < 65536` is ever re-added (with or without reverting the
+     checked operators), the `ArithOverflowReachable` diagnostic for
+     `span_pack` disappears — verified empirically: the original,
+     unmodified contract (`start < 65536` present, plain `*`/`+`) produces
+     `Verified` with **zero** `span_pack`-named `ArithOverflowReachable`
+     diagnostics. So `arith_warns "$j" span_pack` flips `1 -> 0` exactly
+     when the bogus bound comes back, making `= "1"` a real, empirically
+     verified tripwire, not a check that "still passes" either way.
+   - Before the fix: this exact command was never run in CI (the issue's
+     "not currently an ESBMC verify target" claim, which is about ESBMC
+     specifically — see the *separate*, already-existing static
+     contract-quality gate in Section 5, which does already cover
+     `span_pack`). There is no prior green baseline in `full_test.sh` for
+     this specific assertion, so wiring it in for the first time as part of
+     this PR is itself the "red" step this slice adds; the paired
+     before/after ESBMC runs described above are what makes it a real
+     red/green cycle during implementation, not the CI history.
+   - Empirically confirmed additional facts worth encoding as comments in
+     the new `full_test.sh` block, since they are non-obvious: `vow verify
+     compiler/parser.vow` succeeds even though `compiler/parser.vow` has no
+     `main` (verify-only, no codegen, so that's fine); it resolves
+     `parser.vow`'s `use token`/`use ast`/`use diag` against the file's own
+     parent directory and completes in a few seconds; and its `diagnostics`
+     array additionally contains ~51 pre-existing `RegionRootEscape` notes
+     (region-allocator analysis, unrelated to `span_pack` or this issue) —
+     the assertion must filter by `error_code == "ArithOverflowReachable"`
+     and the function-name substring (which `arith_warns` already does), not
+     by total diagnostic count.
+   - Run this assertion against **both** compilers, matching the existing
+     `if [ "$compiler" = rust ]; ... else run_self ...` pattern in that
+     section of `full_test.sh` — `target/release/vow` and `build/vowc` are
+     both general-purpose Vow compilers capable of verifying any `.vow`
+     file, not just self-verifying themselves, so both should independently
+     confirm this contract.
    - Production code: same `span_pack` edit; this slice only adds the
      regression assertion to `scripts/full_test.sh`.
 
-3. **(If slice 2 reveals a reachable overflow)** — not expected given the
-   contract now bounds `len` and requires non-negativity, but if ESBMC
-   reports `ArithOverflowReachable` on `start *! 65536`, do not add a bound
-   back on `start` (that recreates the exact anti-pattern this issue is
-   about). Instead accept the warning as the honest verdict per
-   `docs/spec/contracts.md`'s "What you get in exchange is a warning, not
-   silence" guidance, and record that outcome in the PR description. No
-   code branches on this slice unless slice 2's empirical run shows it is
-   needed.
+3. **(Contingency, not expected to trigger)** If a future change to
+   `span_pack`'s contract or body ever makes ESBMC report the abort as
+   *unreachable* (i.e. `arith_warns` drops to 0 without `start`'s bound
+   being reintroduced), or reports a genuine counterexample instead of a
+   clean `Verified`, do not add a magnitude bound on `start` to silence it
+   — investigate why the model changed instead. This is a documentation
+   note for future readers of this contract, not a coded branch in this
+   PR.
 
 ## 5. Verification surface
 
@@ -202,7 +256,29 @@ changes.
   `tests/verify/` is needed either — reuse the real source file as its own
   fixture, matching how `full_test.sh` already verifies other real
   `compiler/*.vow` files in-place (e.g. the `checked.vow` reference at
-  line ~941) rather than duplicating logic into `tests/verify/`.
+  line ~941) rather than duplicating logic into `tests/verify/`. Note:
+  `span_pack` is the only `vow {}`-contracted function directly in
+  `compiler/parser.vow` (confirmed by grep), but `vow verify
+  compiler/parser.vow` also pulls in its transitively-`use`d modules
+  (`token`, `ast`, `diag`) and reports ~51 unrelated `RegionRootEscape`
+  notes from that wider graph (confirmed empirically, Section 4 slice 2) —
+  harmless pre-existing noise, but the new assertion must filter on
+  `error_code`/function-name, not treat any non-empty `diagnostics` array as
+  failure.
+- **Operator precedence for `*!`/`+!` confirmed empirically, not assumed.**
+  `start *! 65536 +! len` (no parens) compiled and verified with the
+  intended semantics (`ensures: result == start * 65536 + len` proved
+  against it) — whatever precedence Vow's grammar assigns to checked
+  operators, it parses this specific expression as `(start *! 65536) +!
+  len` as intended. No parens needed in the implementation.
+- **`build/vowc` is absent in this worktree** (only checked during
+  planning, not built — `ls build/vowc` found nothing, and neither did
+  `target/release/vow`). The implementation stage will need to build at
+  least `target/release/vow` (`cargo build --release -p vow`, ~1 minute,
+  confirmed during planning) to run `vow test`/`vow verify` against the
+  fix, and per CLAUDE.md's "Vow Compiler" rule should also validate through
+  the self-hosted `build/vowc` (`scripts/bootstrap.sh`, ~5 minutes per
+  project memory) before treating the fix as verified on both compilers.
 - **Caching:** `vow verify` caches results by default; the new
   `scripts/full_test.sh` assertion should pass `--no-cache` if the existing
   helpers don't already, to avoid a stale-cache false pass while iterating
@@ -210,6 +286,41 @@ changes.
   been a source of false confidence before — confirm the existing
   `arith_status`/`arith_warns` call sites' flags before copying them
   verbatim).
+- **An existing, unrelated static gate already covers `span_pack` and was
+  empirically re-run against the fix during planning.**
+  `scripts/check_contract_quality.py` is a *static* (no ESBMC) weak/
+  tautological-contract ratchet, run in `full_test.sh` on
+  `compiler/main.vow`'s `use` graph with baseline `weak=0, tautological=0`.
+  `compiler/main.vow` -> `frontend.vow` -> `parser.vow` (confirmed by
+  grepping `use` lines), so `span_pack`'s contract is already inside this
+  gate's scope today — and the script's own docstring names `span_pack`
+  explicitly as one of the "parametric bit-packers... hardened with exact
+  functional / enumerated postconditions" under issue #81 that brought the
+  baseline to 0. Ran `./target/release/vow contracts compiler/main.vow |
+  uv run python scripts/check_contract_quality.py --label compiler/main.vow`
+  with the fix applied: `weak=0 (max 0), tautological=0 (max 0),
+  substantive=90, total=90`, exit 0 — unaffected, as expected (removing a
+  `requires` clause doesn't make the surviving `ensures` more tautological;
+  the classifier's axis is orthogonal to "is this bound a verifier
+  artifact"). No baseline-constant edit expected in
+  `scripts/check_contract_quality.py`; implementation stage should still
+  re-run this exact command once after editing `span_pack` as a cheap
+  double-check, since it's already CI-gating and free to confirm.
+- **A grammar.md caveat about checked arithmetic not being modelled was
+  checked and found not to apply here.** `docs/spec/grammar.md` (~670-680,
+  in the "`-` inside the guard, `-!` outside it" loop-decrement section)
+  says "the verifier does not model checked arithmetic at all: `n -! 1` and
+  `n - 1`... yield byte-identical counterexamples" — but that claim is
+  scoped to *loop-invariant* decrement guards specifically (a narrower,
+  separate concern from whole-function `requires`/`ensures` verification).
+  `span_pack` has no loop. The empirical run above (Section 2) directly
+  contradicts a blanket reading of that caveat: `*!`/`+!` in a straight-line
+  function *was* modelled distinctly from `*`/`+` (the `ArithOverflowReachable`
+  diagnostic only appears with the checked operators), consistent with
+  CLAUDE.md's "Checked operators abort with `ArithmeticOverflow` on
+  overflow... the abort is modelled, not ignored." Trust the empirical
+  result for this fix; the grammar.md caveat is real but does not apply to
+  a loop-free function like `span_pack`.
 
 ## 6. Risk areas
 
