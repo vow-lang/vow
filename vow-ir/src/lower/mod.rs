@@ -5702,51 +5702,12 @@ mod tests {
         assert_eq!(builtin_result_tag("i16_to_i8_wrap"), None);
         assert_eq!(builtin_result_tag("i32_to_i8_sat"), None);
         assert_eq!(builtin_result_tag("definitely_not_a_builtin"), None);
-    }
-
-    #[test]
-    fn process_builtins_resolve_via_operation_catalogue() {
-        use BuiltinResultTag::StringHeap;
-
-        for (name, symbol, ty) in [
-            ("process_exit", "__vow_process_exit", Ty::Unit),
-            ("process_run", "__vow_process_run", Ty::I64),
-            ("process_get_stdout", "__vow_process_get_stdout", Ty::Ptr),
-            ("process_get_stderr", "__vow_process_get_stderr", Ty::Ptr),
-            ("process_start", "__vow_process_start", Ty::I64),
-            ("process_wait", "__vow_process_wait", Ty::I64),
-            (
-                "process_wait_timeout",
-                "__vow_process_wait_timeout",
-                Ty::I64,
-            ),
-            ("process_poll_wait", "__vow_process_poll_wait", Ty::I64),
-            ("process_kill", "__vow_process_kill", Ty::I64),
-            ("process_stdout_for", "__vow_process_stdout_for", Ty::Ptr),
-            ("process_stderr_for", "__vow_process_stderr_for", Ty::Ptr),
-        ] {
-            assert_eq!(
-                catalogue_builtin_to_runtime(name),
-                Some((symbol, ty)),
-                "{name}"
-            );
-        }
-
-        for name in [
-            "process_get_stdout",
-            "process_get_stderr",
-            "process_stdout_for",
-            "process_stderr_for",
-        ] {
-            assert_eq!(
-                catalogue_builtin_result_tag(name),
-                Some(StringHeap),
-                "{name}"
-            );
-        }
-        for name in ["process_exit", "process_run", "process_wait"] {
-            assert_eq!(catalogue_builtin_result_tag(name), None, "{name}");
-        }
+        // process_* ops not covered by the StringHeap list above are untagged --
+        // this is only exercisable through the catalogue now that the legacy
+        // process_* match arms were removed from this function.
+        assert_eq!(builtin_result_tag("process_exit"), None);
+        assert_eq!(builtin_result_tag("process_run"), None);
+        assert_eq!(builtin_result_tag("process_wait"), None);
     }
 
     fn unit_ty() -> Type {

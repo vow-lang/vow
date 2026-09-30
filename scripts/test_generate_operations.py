@@ -152,7 +152,7 @@ class RealCatalogueProcessOpsTest(unittest.TestCase):
         op = next(o for o in ops if o["name"] == "process_run")
         self.assertEqual(op["return"], "i64")
         self.assertEqual(op["runtime_symbol"], "__vow_process_run")
-        self.assertEqual(op.get("arena_routing"), "none")
+        self.assertIsNone(op.get("arena_routing"))
 
     def test_process_get_stdout_has_ptr_return_and_heap_fresh_routing(self):
         ops = go.load_catalogue(REPO_ROOT)
@@ -289,20 +289,17 @@ class GenCraneliftBlockTest(unittest.TestCase):
             "sig.returns.push(AbiParam::new(types::I64));\n            true", block
         )
 
-    def test_i64_return_token_pushes_return_slot(self):
-        op = dict(PRINT_OPS[1])
-        op["return"] = "i64"
-        block = go.gen_cranelift_block([op])
-        self.assertIn(
-            "sig.returns.push(AbiParam::new(types::I64));\n            true", block
-        )
-
-    def test_ptr_return_token_pushes_return_slot(self):
-        op = dict(PRINT_OPS[1])
-        op["return"] = "ptr"
-        block = go.gen_cranelift_block([op])
-        self.assertIn(
-            "sig.returns.push(AbiParam::new(types::I64));\n            true", block
+    def test_i64_and_ptr_return_tokens_push_return_slot(self):
+        i64_op = dict(PRINT_OPS[1])
+        i64_op["return"] = "i64"
+        ptr_op = dict(PRINT_OPS[1])
+        ptr_op["return"] = "ptr"
+        block = go.gen_cranelift_block([i64_op, ptr_op])
+        self.assertEqual(
+            block.count(
+                "sig.returns.push(AbiParam::new(types::I64));\n            true"
+            ),
+            2,
         )
 
 

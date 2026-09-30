@@ -30,8 +30,7 @@
       "params": ["i64"],
       "return": "unit",
       "doc_signature": "fn(code: i64) -> !",
-      "effects": "[io]",
-      "arena_routing": "none"
+      "effects": "[io]"
     },
     {
       "name": "process_run",
@@ -39,8 +38,7 @@
       "params": ["ptr", "ptr"],
       "return": "i64",
       "doc_signature": "fn(cmd: String, args: Vec<String>) -> i64",
-      "effects": "[io]",
-      "arena_routing": "none"
+      "effects": "[io]"
     },
     {
       "name": "process_get_stdout",
@@ -66,8 +64,7 @@
       "params": ["ptr", "ptr"],
       "return": "i64",
       "doc_signature": "fn(cmd: String, args: Vec<String>) -> i64",
-      "effects": "[io]",
-      "arena_routing": "none"
+      "effects": "[io]"
     },
     {
       "name": "process_wait",
@@ -75,8 +72,7 @@
       "params": ["i64"],
       "return": "i64",
       "doc_signature": "fn(pid: i64) -> i64",
-      "effects": "[io]",
-      "arena_routing": "none"
+      "effects": "[io]"
     },
     {
       "name": "process_wait_timeout",
@@ -84,8 +80,7 @@
       "params": ["i64", "i64"],
       "return": "i64",
       "doc_signature": "fn(pid: i64, timeout_ms: i64) -> i64",
-      "effects": "[io]",
-      "arena_routing": "none"
+      "effects": "[io]"
     },
     {
       "name": "process_poll_wait",
@@ -93,8 +88,7 @@
       "params": ["i64", "i64"],
       "return": "i64",
       "doc_signature": "fn(pid: i64, timeout_ms: i64) -> i64",
-      "effects": "[io]",
-      "arena_routing": "none"
+      "effects": "[io]"
     },
     {
       "name": "process_kill",
@@ -102,8 +96,7 @@
       "params": ["i64"],
       "return": "i64",
       "doc_signature": "fn(pid: i64) -> i64",
-      "effects": "[io]",
-      "arena_routing": "none"
+      "effects": "[io]"
     },
     {
       "name": "process_stdout_for",

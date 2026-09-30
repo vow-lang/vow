@@ -54,13 +54,12 @@ fn check_process_ret_tys() -> i64 {
     r
 }
 
+// The StringHeap-tagged process_* names are already pinned by
+// check_string_rows in test_lower_builtin_result_tag.vow; this only covers
+// the untagged ones, which aren't asserted anywhere else.
 fn check_process_result_tags() -> i64 {
     let mut r: i64 = 0;
-    if builtin_result_tag(String::from("process_get_stdout")) != BRT_STRING() { r = 50; }
-    if r == 0 && builtin_result_tag(String::from("process_get_stderr")) != BRT_STRING() { r = 51; }
-    if r == 0 && builtin_result_tag(String::from("process_stdout_for")) != BRT_STRING() { r = 52; }
-    if r == 0 && builtin_result_tag(String::from("process_stderr_for")) != BRT_STRING() { r = 53; }
-    if r == 0 && builtin_result_tag(String::from("process_exit")) != BRT_NONE() { r = 54; }
+    if builtin_result_tag(String::from("process_exit")) != BRT_NONE() { r = 54; }
     if r == 0 && builtin_result_tag(String::from("process_run")) != BRT_NONE() { r = 55; }
     r
 }
