@@ -55,26 +55,22 @@ struct FrontendPrep {
     item_files: Vec<String>,
 }
 
-fn frontend_dir_path(path: String) -> String {
-    let mut last_slash: i64 = -1;
-    let mut i: u64 = 0u64;
-    let n: u64 = path.len() as u64;
-    while i < n {
-        if path.byte_at(i as i64) == 47 {
-            last_slash = i as i64;
+fn str_rfind_byte(s: String, b: i64) -> Option<u64> {
+    let n: u64 = s.len() as u64;
+    let mut i: u64 = n;
+    while i > 0 {
+        i = i - 1;
+        if s.byte_at(i) == b {
+            return Option::Some(i);
         }
-        i = i + 1;
     }
-    if last_slash == -1 {
-        String::from(".")
-    } else {
-        let r: String = String::from("");
-        let mut j: i64 = 0;
-        while j < last_slash {
-            r.push_byte(path.byte_at(j));
-            j = j + 1;
-        }
-        r
+    Option::None
+}
+
+fn frontend_dir_path(path: String) -> String {
+    match str_rfind_byte(path, 47) {
+        Option::None => String::from("."),
+        Option::Some(k) => path.substring(0, k as i64),
     }
 }
 

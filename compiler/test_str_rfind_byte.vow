@@ -1,0 +1,38 @@
+module TestStrRfindByte
+
+use frontend
+use clif
+
+fn main() -> i32 [io] {
+    let empty: String = String::from("");
+    match str_rfind_byte(empty, 47) {
+        Option::Some(_) => { return 1; },
+        Option::None => {},
+    }
+
+    let no_match: String = String::from("abc");
+    match str_rfind_byte(no_match, 47) {
+        Option::Some(_) => { return 2; },
+        Option::None => {},
+    }
+
+    let first_byte: String = String::from("/abc");
+    match str_rfind_byte(first_byte, 47) {
+        Option::Some(k) => { if k != 0u64 { return 3; } },
+        Option::None => { return 4; },
+    }
+
+    let last_byte: String = String::from("abc/");
+    match str_rfind_byte(last_byte, 47) {
+        Option::Some(k) => { if k != 3u64 { return 5; } },
+        Option::None => { return 6; },
+    }
+
+    let multi: String = String::from("a/b/c");
+    match str_rfind_byte(multi, 47) {
+        Option::Some(k) => { if k != 3u64 { return 7; } },
+        Option::None => { return 8; },
+    }
+
+    0
+}

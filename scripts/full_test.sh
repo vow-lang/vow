@@ -610,6 +610,42 @@ for name_output in "rust:$rust_missing_parent_output" "self:$self_missing_parent
         fail "build-no-verify/${compiler}-creates-output-parent" "missing executable: $output"
     fi
 done
+
+# default_output's basename scan on a bare filename with no '/' in it — #1119
+# PR1. Never exercised above since every call there passes -o explicitly.
+repo_root=$(pwd -P)
+rust_abs="$repo_root/target/release/vow"
+bare_src='module Bare
+
+fn main() -> i32 [io] {
+    print_i64(42);
+    0
+}'
+rust_bare_dir="$TMPDIR/rust_default_output_no_slash"
+self_bare_dir="$TMPDIR/self_default_output_no_slash"
+mkdir -p "$rust_bare_dir" "$self_bare_dir"
+printf '%s\n' "$bare_src" > "$rust_bare_dir/bare.vow"
+printf '%s\n' "$bare_src" > "$self_bare_dir/bare.vow"
+
+rust_exit=0 self_exit=0
+rust_json=$(cd "$rust_bare_dir" && "$rust_abs" build --no-verify bare.vow 2>/dev/null) || rust_exit=$?
+self_json=$(cd "$self_bare_dir" && run_self build --no-verify bare.vow 2>/dev/null) || self_exit=$?
+
+if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
+    fail "build-no-verify/default-output-no-slash" "empty output (rust=$rust_exit, self=$self_exit)"
+else
+    compare_json "build-no-verify/default-output-no-slash" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$rust_bare_dir/bare.vow"
+fi
+
+for name_output in "rust:$rust_bare_dir/build/bare" "self:$self_bare_dir/build/bare"; do
+    compiler="${name_output%%:*}"
+    output="${name_output#*:}"
+    if [ -x "$output" ]; then
+        pass "build-no-verify/${compiler}-default-output-no-slash-names-build-bare"
+    else
+        fail "build-no-verify/${compiler}-default-output-no-slash-names-build-bare" "missing executable: $output"
+    fi
+done
 echo ""
 
 # ─── Section 2: Verify ─────────────────────────────────────────────

@@ -29,8 +29,9 @@ fn has_flag(argv: Vec<String>, flag: String) -> bool {
 }
 
 fn get_flag_arg(argv: Vec<String>, flag: String) -> String {
+    let n: i64 = argv.len();
     let mut i: i64 = 1;
-    while i < argv.len() - 1 {
+    while n > 1 && i < n - 1 {
         if argv[i] == flag {
             return argv[i + 1];
         }
@@ -89,15 +90,10 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
 fn default_output(path: String) -> String {
     let n: i64 = path.len();
     // Find last '/' to extract basename
-    let mut last_slash: i64 = -1;
-    let mut i: i64 = 0;
-    while i < n {
-        if path.byte_at(i) == 47 {
-            last_slash = i;
-        };
-        i = i + 1;
+    let start: i64 = match str_rfind_byte(path, 47) {
+        Option::None => 0,
+        Option::Some(k) => (k + 1u64) as i64,
     };
-    let start: i64 = last_slash + 1;
     // Strip .vow extension if present
     let mut end: i64 = n;
     if n - start > 4 {
@@ -110,7 +106,7 @@ fn default_output(path: String) -> String {
         }
     };
     let r: String = String::from("build/");
-    i = start;
+    let mut i: i64 = start;
     while i < end {
         r.push_byte(path.byte_at(i));
         i = i + 1;
@@ -757,15 +753,10 @@ fn replay_find_fn(fns: Vec<IrFunction>, name: String) -> i64 {
 
 // Directory prefix of `path` (with trailing slash), or "./" if it has none.
 fn replay_dir_of(path: String) -> String {
-    let n: i64 = path.len();
-    let mut i: i64 = n - 1;
-    while i >= 0 {
-        if path.byte_at(i) == 47 {
-            return path.substring(0, i + 1);
-        }
-        i = i - 1;
+    match str_rfind_byte(path, 47) {
+        Option::None => String::from("./"),
+        Option::Some(k) => path.substring(0, (k + 1u64) as i64),
     }
-    String::from("./")
 }
 
 fn replay_skip(reason: String) -> ReplayVerdict {
@@ -14038,25 +14029,10 @@ fn skill_install_dir(root: String) -> String {
 }
 
 fn skill_parent_dir(path: String) -> String {
-    let n: i64 = path.len();
-    let mut last_slash: i64 = -1;
-    let mut i: i64 = 0;
-    while i < n {
-        if path.byte_at(i) == 47 {
-            last_slash = i;
-        }
-        i = i + 1;
+    match str_rfind_byte(path, 47) {
+        Option::None => String::from(""),
+        Option::Some(k) => path.substring(0, k as i64),
     }
-    if last_slash < 0 {
-        return String::from("");
-    }
-    let parent: String = String::new();
-    i = 0;
-    while i < last_slash {
-        parent.push_byte(path.byte_at(i));
-        i = i + 1;
-    }
-    parent
 }
 
 fn install_skill_tree(root: String, emit_errors: bool) -> String [io, write] {
