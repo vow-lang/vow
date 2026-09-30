@@ -716,6 +716,17 @@ fn check_bounds_assert_cross_block() -> i64 {
     0
 }
 
+// process_* Builtin Operations are all [Effect::IO]-tagged, so
+// is_modelable's effect-emptiness gate already excludes them from the C
+// model. This pins that invariant with evidence (issue #1273 AC #6).
+fn check_process_builtins_are_not_known_to_verifier() -> i64 {
+    if is_known_builtin(String::from("__vow_process_exit")) { return 300; }
+    if is_known_builtin(String::from("__vow_process_run")) { return 301; }
+    if is_known_builtin(String::from("__vow_process_get_stdout")) { return 302; }
+    if is_known_builtin(String::from("__vow_process_wait")) { return 303; }
+    0
+}
+
 fn main() -> i32 {
     let r1: i64 = check_name_modelable_and_mangled(String::from("abs"), 7, 1);
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -757,5 +768,7 @@ fn main() -> i32 {
     if r19 != 0 { return i64_to_i32_wrap(r19); }
     let r20: i64 = check_parse_u64_option_model();
     if r20 != 0 { return i64_to_i32_wrap(r20); }
+    let r21: i64 = check_process_builtins_are_not_known_to_verifier();
+    if r21 != 0 { return i64_to_i32_wrap(r21); }
     0
 }

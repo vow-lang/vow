@@ -2496,6 +2496,62 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
             sig.params.push(AbiParam::new(types::I64));
             true
         }
+        "__vow_process_exit" => {
+            sig.params.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_run" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_get_stdout" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_get_stderr" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_start" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_wait" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_wait_timeout" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_poll_wait" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_kill" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_stdout_for" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_stderr_for" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
         _ => false,
     }
 }
@@ -2886,44 +2942,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         "__vow_debug_i64" | "__vow_debug_u64" => {
             sig.params.push(AbiParam::new(types::I64)); // value
-        }
-        "__vow_process_exit" => {
-            sig.params.push(AbiParam::new(types::I64)); // exit code
-        }
-        "__vow_process_run" => {
-            sig.params.push(AbiParam::new(types::I64)); // cmd *VowVec<u8>
-            sig.params.push(AbiParam::new(types::I64)); // args *VowVec<i64>
-            sig.returns.push(AbiParam::new(types::I64)); // exit code
-        }
-        "__vow_process_get_stdout" | "__vow_process_get_stderr" => {
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_process_start" => {
-            sig.params.push(AbiParam::new(types::I64)); // cmd *VowVec<u8>
-            sig.params.push(AbiParam::new(types::I64)); // args *VowVec<i64>
-            sig.returns.push(AbiParam::new(types::I64)); // handle
-        }
-        "__vow_process_wait" => {
-            sig.params.push(AbiParam::new(types::I64)); // handle
-            sig.returns.push(AbiParam::new(types::I64)); // exit code
-        }
-        "__vow_process_wait_timeout" => {
-            sig.params.push(AbiParam::new(types::I64)); // handle
-            sig.params.push(AbiParam::new(types::I64)); // timeout_ms
-            sig.returns.push(AbiParam::new(types::I64)); // exit code or -2 timeout
-        }
-        "__vow_process_poll_wait" => {
-            sig.params.push(AbiParam::new(types::I64)); // handle
-            sig.params.push(AbiParam::new(types::I64)); // budget ms
-            sig.returns.push(AbiParam::new(types::I64)); // exit code or STILL_RUNNING
-        }
-        "__vow_process_kill" => {
-            sig.params.push(AbiParam::new(types::I64)); // handle
-            sig.returns.push(AbiParam::new(types::I64)); // 0 success, -1 error
-        }
-        "__vow_process_stdout_for" | "__vow_process_stderr_for" => {
-            sig.params.push(AbiParam::new(types::I64)); // handle
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
         // HashMap runtime
         "__vow_map_new" => {
@@ -3673,6 +3691,54 @@ mod tests {
             assert_eq!(sig.params.len(), 1, "{sym}");
             assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
             assert!(sig.returns.is_empty(), "{sym}");
+        }
+    }
+
+    // Coverage-parity twin of vow-clif-shim's
+    // `process_extern_sigs_come_from_the_operation_catalogue` -- both crates
+    // get the same generated `catalogue_extern_sig` block.
+    #[test]
+    fn process_extern_sigs_come_from_the_operation_catalogue() {
+        let sig = extern_sig("__vow_process_exit");
+        assert_eq!(sig.params.len(), 1, "process_exit params");
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert!(sig.returns.is_empty(), "process_exit returns");
+
+        let no_params_return_i64 = ["__vow_process_get_stdout", "__vow_process_get_stderr"];
+        for sym in no_params_return_i64 {
+            let sig = extern_sig(sym);
+            assert!(sig.params.is_empty(), "{sym}");
+            assert_eq!(sig.returns.len(), 1, "{sym}");
+            assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
+        }
+
+        let one_param_returns_i64 = [
+            "__vow_process_wait",
+            "__vow_process_kill",
+            "__vow_process_stdout_for",
+            "__vow_process_stderr_for",
+        ];
+        for sym in one_param_returns_i64 {
+            let sig = extern_sig(sym);
+            assert_eq!(sig.params.len(), 1, "{sym}");
+            assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
+            assert_eq!(sig.returns.len(), 1, "{sym}");
+            assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
+        }
+
+        let two_params_return_i64 = [
+            "__vow_process_run",
+            "__vow_process_start",
+            "__vow_process_wait_timeout",
+            "__vow_process_poll_wait",
+        ];
+        for sym in two_params_return_i64 {
+            let sig = extern_sig(sym);
+            assert_eq!(sig.params.len(), 2, "{sym}");
+            assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
+            assert_eq!(sig.params[1].value_type, types::I64, "{sym}");
+            assert_eq!(sig.returns.len(), 1, "{sym}");
+            assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
         }
     }
 

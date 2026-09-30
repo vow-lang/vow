@@ -206,7 +206,105 @@ FS_STDIN_ARGS_STDERR_OPS = [
     },
 ]
 
-KNOWN_OPS = PRINT_OPS + FS_STDIN_ARGS_STDERR_OPS
+# Process operations migrated in #1273 -- see docs/spec/operations.json for
+# the checked-in source of truth. process_get_stdout/get_stderr/stdout_for/
+# stderr_for return a freshly heap-allocated String, hence arena_routing.
+PROCESS_OPS = [
+    {
+        "name": "process_exit",
+        "runtime_symbol": "__vow_process_exit",
+        "params": ["i64"],
+        "return": "unit",
+        "doc_signature": "fn(code: i64) -> !",
+        "effects": "[io]",
+    },
+    {
+        "name": "process_run",
+        "runtime_symbol": "__vow_process_run",
+        "params": ["ptr", "ptr"],
+        "return": "i64",
+        "doc_signature": "fn(cmd: String, args: Vec<String>) -> i64",
+        "effects": "[io]",
+    },
+    {
+        "name": "process_get_stdout",
+        "runtime_symbol": "__vow_process_get_stdout",
+        "params": [],
+        "return": "ptr",
+        "doc_signature": "fn() -> String",
+        "effects": "[io]",
+        "arena_routing": "heap_fresh",
+    },
+    {
+        "name": "process_get_stderr",
+        "runtime_symbol": "__vow_process_get_stderr",
+        "params": [],
+        "return": "ptr",
+        "doc_signature": "fn() -> String",
+        "effects": "[io]",
+        "arena_routing": "heap_fresh",
+    },
+    {
+        "name": "process_start",
+        "runtime_symbol": "__vow_process_start",
+        "params": ["ptr", "ptr"],
+        "return": "i64",
+        "doc_signature": "fn(cmd: String, args: Vec<String>) -> i64",
+        "effects": "[io]",
+    },
+    {
+        "name": "process_wait",
+        "runtime_symbol": "__vow_process_wait",
+        "params": ["i64"],
+        "return": "i64",
+        "doc_signature": "fn(pid: i64) -> i64",
+        "effects": "[io]",
+    },
+    {
+        "name": "process_wait_timeout",
+        "runtime_symbol": "__vow_process_wait_timeout",
+        "params": ["i64", "i64"],
+        "return": "i64",
+        "doc_signature": "fn(pid: i64, timeout_ms: i64) -> i64",
+        "effects": "[io]",
+    },
+    {
+        "name": "process_poll_wait",
+        "runtime_symbol": "__vow_process_poll_wait",
+        "params": ["i64", "i64"],
+        "return": "i64",
+        "doc_signature": "fn(pid: i64, timeout_ms: i64) -> i64",
+        "effects": "[io]",
+    },
+    {
+        "name": "process_kill",
+        "runtime_symbol": "__vow_process_kill",
+        "params": ["i64"],
+        "return": "i64",
+        "doc_signature": "fn(pid: i64) -> i64",
+        "effects": "[io]",
+    },
+    {
+        "name": "process_stdout_for",
+        "runtime_symbol": "__vow_process_stdout_for",
+        "params": ["i64"],
+        "return": "ptr",
+        "doc_signature": "fn(pid: i64) -> String",
+        "effects": "[io]",
+        "arena_routing": "heap_fresh",
+    },
+    {
+        "name": "process_stderr_for",
+        "runtime_symbol": "__vow_process_stderr_for",
+        "params": ["i64"],
+        "return": "ptr",
+        "doc_signature": "fn(pid: i64) -> String",
+        "effects": "[io]",
+        "arena_routing": "heap_fresh",
+    },
+]
+
+KNOWN_OPS = PRINT_OPS + FS_STDIN_ARGS_STDERR_OPS + PROCESS_OPS
 
 
 class LoadCatalogueTest(unittest.TestCase):
@@ -469,6 +567,14 @@ class LoadCatalogueTest(unittest.TestCase):
             self._write(tmp, ops)
             go.load_catalogue(tmp)  # must not raise
 
+    def test_arena_routing_is_optional(self):
+        # PRINT_OPS carries no arena_routing field at all -- it must not be
+        # required, since only heap-returning ops need to set it.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            self._write(tmp, [PRINT_OPS[0]])
+            go.load_catalogue(tmp)  # must not raise
+
     def test_unexpected_field_name_raises(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
@@ -518,6 +624,54 @@ class LoadCatalogueTest(unittest.TestCase):
             with self.assertRaises(ValueError) as ctx:
                 go.load_catalogue(tmp)
             self.assertIn("missing required field 'params'", str(ctx.exception))
+
+
+class RealCatalogueProcessOpsTest(unittest.TestCase):
+    """Fixture coverage for the process_* entries appended to the real
+    catalogue: a non-unit (i64) return, a ptr return, and an
+    arena_routing: heap_fresh entry, per issue #1273."""
+
+    def test_process_run_has_i64_return(self):
+        ops = go.load_catalogue(REPO_ROOT)
+        op = next(o for o in ops if o["name"] == "process_run")
+        self.assertEqual(op["return"], "i64")
+        self.assertEqual(op["runtime_symbol"], "__vow_process_run")
+        self.assertIsNone(op.get("arena_routing"))
+
+    def test_process_get_stdout_has_ptr_return_and_heap_fresh_routing(self):
+        ops = go.load_catalogue(REPO_ROOT)
+        op = next(o for o in ops if o["name"] == "process_get_stdout")
+        self.assertEqual(op["return"], "ptr")
+        self.assertEqual(op["runtime_symbol"], "__vow_process_get_stdout")
+        self.assertEqual(op["arena_routing"], "heap_fresh")
+
+    def test_all_eleven_process_ops_present(self):
+        ops = go.load_catalogue(REPO_ROOT)
+        names = {o["name"] for o in ops}
+        for name in [
+            "process_exit",
+            "process_run",
+            "process_get_stdout",
+            "process_get_stderr",
+            "process_start",
+            "process_wait",
+            "process_wait_timeout",
+            "process_poll_wait",
+            "process_kill",
+            "process_stdout_for",
+            "process_stderr_for",
+        ]:
+            self.assertIn(name, names)
+
+    def test_real_catalogue_projections_are_up_to_date(self):
+        ops = go.load_catalogue(REPO_ROOT)
+        mismatches = go.check_projections(ops, REPO_ROOT)
+        self.assertEqual(mismatches, [])
+
+    def test_real_catalogue_doc_facts_are_consistent(self):
+        ops = go.load_catalogue(REPO_ROOT)
+        mismatches = go.check_doc_facts(ops, REPO_ROOT)
+        self.assertEqual(mismatches, [])
 
 
 class MainCliTest(unittest.TestCase):
@@ -606,9 +760,47 @@ class GenRustIrBlockTest(unittest.TestCase):
             "        _ => None,\n"
             "    }\n"
             "}\n"
+            "\n"
+            "fn catalogue_builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {\n"
+            "    match name {\n"
+            "        _ => None,\n"
+            "    }\n"
+            "}\n"
             "// GENERATE:OPERATIONS:END"
         )
         self.assertEqual(go.gen_rust_ir_block(PRINT_OPS), expected)
+
+    def test_i64_and_ptr_return_tokens_map_to_rust_ty(self):
+        i64_op = dict(PRINT_OPS[1])
+        i64_op["return"] = "i64"
+        ptr_op = dict(PRINT_OPS[1])
+        ptr_op["return"] = "ptr"
+        block = go.gen_rust_ir_block([i64_op, ptr_op])
+        self.assertIn(
+            f'"{i64_op["name"]}" => Some(("{i64_op["runtime_symbol"]}", Ty::I64)),',
+            block,
+        )
+        self.assertIn(
+            f'"{ptr_op["name"]}" => Some(("{ptr_op["runtime_symbol"]}", Ty::Ptr)),',
+            block,
+        )
+
+    def test_arena_routing_heap_fresh_produces_string_heap_arm(self):
+        op = dict(PRINT_OPS[1])
+        op["arena_routing"] = "heap_fresh"
+        block = go.gen_rust_ir_block([op])
+        self.assertIn(f'"{op["name"]}" => Some(BuiltinResultTag::StringHeap),', block)
+
+    def test_arena_routing_none_produces_no_string_heap_arm(self):
+        op = dict(PRINT_OPS[1])
+        op["arena_routing"] = "none"
+        block = go.gen_rust_ir_block([op])
+        self.assertNotIn("BuiltinResultTag::StringHeap", block)
+        self.assertIn("fn catalogue_builtin_result_tag", block)
+
+    def test_missing_arena_routing_produces_no_string_heap_arm(self):
+        block = go.gen_rust_ir_block([PRINT_OPS[1]])
+        self.assertNotIn("BuiltinResultTag::StringHeap", block)
 
 
 class GenCraneliftBlockTest(unittest.TestCase):
@@ -653,6 +845,19 @@ class GenCraneliftBlockTest(unittest.TestCase):
             del go.RETURN_TOKENS["fake_i64"]
         self.assertIn(
             "sig.returns.push(AbiParam::new(types::I64));\n            true", block
+        )
+
+    def test_i64_and_ptr_return_tokens_push_return_slot(self):
+        i64_op = dict(PRINT_OPS[1])
+        i64_op["return"] = "i64"
+        ptr_op = dict(PRINT_OPS[1])
+        ptr_op["return"] = "ptr"
+        block = go.gen_cranelift_block([i64_op, ptr_op])
+        self.assertEqual(
+            block.count(
+                "sig.returns.push(AbiParam::new(types::I64));\n            true"
+            ),
+            2,
         )
 
 
@@ -712,9 +917,48 @@ class GenVowLowerBlockTest(unittest.TestCase):
             '    if name == String::from("print_u64") { return ITY_UNIT(); }\n'
             "    return -1;\n"
             "}\n"
+            "\n"
+            "fn catalogue_builtin_result_tag(name: String) -> i64 {\n"
+            "    return BRT_NONE();\n"
+            "}\n"
             "// GENERATE:OPERATIONS:END"
         )
         self.assertEqual(go.gen_vow_lower_block(PRINT_OPS), expected)
+
+    def test_i64_and_ptr_return_tokens_map_to_ity_const(self):
+        i64_op = dict(PRINT_OPS[1])
+        i64_op["return"] = "i64"
+        ptr_op = dict(PRINT_OPS[1])
+        ptr_op["return"] = "ptr"
+        block = go.gen_vow_lower_block([i64_op, ptr_op])
+        self.assertIn(
+            f'if name == String::from("{i64_op["name"]}") {{ return ITY_I64(); }}',
+            block,
+        )
+        self.assertIn(
+            f'if name == String::from("{ptr_op["name"]}") {{ return ITY_PTR(); }}',
+            block,
+        )
+
+    def test_arena_routing_heap_fresh_produces_brt_string_arm(self):
+        op = dict(PRINT_OPS[1])
+        op["arena_routing"] = "heap_fresh"
+        block = go.gen_vow_lower_block([op])
+        self.assertIn(
+            f'if name == String::from("{op["name"]}") {{ return BRT_STRING(); }}',
+            block,
+        )
+
+    def test_arena_routing_none_produces_no_brt_string_arm(self):
+        op = dict(PRINT_OPS[1])
+        op["arena_routing"] = "none"
+        block = go.gen_vow_lower_block([op])
+        self.assertNotIn("BRT_STRING()", block)
+        self.assertIn("fn catalogue_builtin_result_tag", block)
+
+    def test_missing_arena_routing_produces_no_brt_string_arm(self):
+        block = go.gen_vow_lower_block([PRINT_OPS[1]])
+        self.assertNotIn("BRT_STRING()", block)
 
 
 class GeneratorDeterminismTest(unittest.TestCase):

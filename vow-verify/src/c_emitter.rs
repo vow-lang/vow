@@ -3241,6 +3241,22 @@ mod tests {
         emit_c_module(&[&f], &HashMap::new(), &VerifyLimits::default())
     }
 
+    // process_* Builtin Operations are all [Effect::IO]-tagged, so
+    // is_modelable's effect-emptiness gate already excludes them from the C
+    // model. This pins that invariant with evidence (issue #1273 AC #6),
+    // rather than leaving it merely implicit in an always-empty match arm.
+    #[test]
+    fn process_builtins_are_not_known_to_the_verifier() {
+        for sym in [
+            "__vow_process_exit",
+            "__vow_process_run",
+            "__vow_process_get_stdout",
+            "__vow_process_wait",
+        ] {
+            assert!(!is_known_builtin(sym), "{sym}");
+        }
+    }
+
     // The whole point of #585: a checked operator must not emit the same model
     // as its wrapping sibling. Wrapping is specified to wrap, so a bare C
     // operator is exact; checked aborts, so it carries an obligation.

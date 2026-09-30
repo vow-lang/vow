@@ -53,6 +53,27 @@ fn catalogue_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "stdin_read_line" => Some(("__vow_stdin_read_line", Ty::Ptr)),
         "stdin_ready" => Some(("__vow_stdin_ready", Ty::Bool)),
         "eprintln_str" => Some(("__vow_eprintln_str", Ty::Unit)),
+        "process_exit" => Some(("__vow_process_exit", Ty::Unit)),
+        "process_run" => Some(("__vow_process_run", Ty::I64)),
+        "process_get_stdout" => Some(("__vow_process_get_stdout", Ty::Ptr)),
+        "process_get_stderr" => Some(("__vow_process_get_stderr", Ty::Ptr)),
+        "process_start" => Some(("__vow_process_start", Ty::I64)),
+        "process_wait" => Some(("__vow_process_wait", Ty::I64)),
+        "process_wait_timeout" => Some(("__vow_process_wait_timeout", Ty::I64)),
+        "process_poll_wait" => Some(("__vow_process_poll_wait", Ty::I64)),
+        "process_kill" => Some(("__vow_process_kill", Ty::I64)),
+        "process_stdout_for" => Some(("__vow_process_stdout_for", Ty::Ptr)),
+        "process_stderr_for" => Some(("__vow_process_stderr_for", Ty::Ptr)),
+        _ => None,
+    }
+}
+
+fn catalogue_builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
+    match name {
+        "process_get_stdout" => Some(BuiltinResultTag::StringHeap),
+        "process_get_stderr" => Some(BuiltinResultTag::StringHeap),
+        "process_stdout_for" => Some(BuiltinResultTag::StringHeap),
+        "process_stderr_for" => Some(BuiltinResultTag::StringHeap),
         _ => None,
     }
 }
@@ -131,17 +152,6 @@ fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "hex_decode" => Some(("__vow_hex_decode", Ty::Ptr)),
         "parse_f64_bits" => Some(("__vow_parse_f64_bits", Ty::U64)),
         "format_f64_bits" => Some(("__vow_format_f64_bits", Ty::Ptr)),
-        "process_exit" => Some(("__vow_process_exit", Ty::Unit)),
-        "process_run" => Some(("__vow_process_run", Ty::I64)),
-        "process_get_stdout" => Some(("__vow_process_get_stdout", Ty::Ptr)),
-        "process_get_stderr" => Some(("__vow_process_get_stderr", Ty::Ptr)),
-        "process_start" => Some(("__vow_process_start", Ty::I64)),
-        "process_wait" => Some(("__vow_process_wait", Ty::I64)),
-        "process_wait_timeout" => Some(("__vow_process_wait_timeout", Ty::I64)),
-        "process_poll_wait" => Some(("__vow_process_poll_wait", Ty::I64)),
-        "process_kill" => Some(("__vow_process_kill", Ty::I64)),
-        "process_stdout_for" => Some(("__vow_process_stdout_for", Ty::Ptr)),
-        "process_stderr_for" => Some(("__vow_process_stderr_for", Ty::Ptr)),
         "__vow_clif_create" => Some(("__vow_clif_create", Ty::I64)),
         "__vow_clif_add_string" => Some(("__vow_clif_add_string", Ty::Unit)),
         "__vow_clif_declare_extern" => Some(("__vow_clif_declare_extern", Ty::Unit)),
@@ -205,6 +215,9 @@ enum BuiltinResultTag {
 
 // Keep this enum and classifier in sync with BRT_* and builtin_result_tag in compiler/lower.vow.
 fn builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
+    if let Some(hit) = catalogue_builtin_result_tag(name) {
+        return Some(hit);
+    }
     // The narrowing _try early path runs before the explicit table: for targets i8/i16/u16/u32 the
     // element type is recoverable from the name. The ends_with("_try") guard is load-bearing —
     // narrow_intrinsic_target also parses _wrap/_sat, which return a plain integer, not an Option.
@@ -217,10 +230,7 @@ fn builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
         "fs_read" | "fs_read_line" | "stdin_read" | "stdin_read_line" | "string_substr"
         | "string_trim" | "string_to_upper" | "string_to_lower" | "string_replace"
         | "string_join" | "int_to_string" | "uint_to_string" | "i64_to_string" | "hex_encode"
-        | "format_f64_bits" | "process_get_stdout" | "process_get_stderr"
-        | "process_stdout_for" | "process_stderr_for" | "proc_sample" => {
-            Some(BuiltinResultTag::StringHeap)
-        }
+        | "format_f64_bits" | "proc_sample" => Some(BuiltinResultTag::StringHeap),
         "args" | "fs_listdir" | "string_split" | "vec_sort" | "hex_decode" => {
             Some(BuiltinResultTag::VecHeap)
         }
@@ -5692,6 +5702,12 @@ mod tests {
         assert_eq!(builtin_result_tag("i16_to_i8_wrap"), None);
         assert_eq!(builtin_result_tag("i32_to_i8_sat"), None);
         assert_eq!(builtin_result_tag("definitely_not_a_builtin"), None);
+        // process_* ops not covered by the StringHeap list above are untagged --
+        // this is only exercisable through the catalogue now that the legacy
+        // process_* match arms were removed from this function.
+        assert_eq!(builtin_result_tag("process_exit"), None);
+        assert_eq!(builtin_result_tag("process_run"), None);
+        assert_eq!(builtin_result_tag("process_wait"), None);
     }
 
     fn unit_ty() -> Type {

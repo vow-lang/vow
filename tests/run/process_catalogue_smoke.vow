@@ -1,0 +1,32 @@
+// TEST: stdout "hello\nerr-msg\nworld\nworld-err\n"
+module ProcessCatalogueSmoke
+
+fn sh_args(script: String) -> Vec<String> {
+    let args: Vec<String> = Vec::new();
+    args.push(String::from("-c"));
+    args.push(script);
+    args
+}
+
+fn main() -> i32 [io] {
+    // Synchronous path: process_run + process_get_stdout/process_get_stderr.
+    let sync_rc: i64 = process_run(String::from("sh"), sh_args(String::from("echo hello; echo err-msg 1>&2")));
+    if sync_rc != 0 {
+        return 1;
+    }
+    print_str(process_get_stdout());
+    print_str(process_get_stderr());
+
+    // Asynchronous path: process_start + process_wait + process_stdout_for/process_stderr_for.
+    let pid: i64 = process_start(String::from("sh"), sh_args(String::from("echo world; echo world-err 1>&2")));
+    if pid < 0 {
+        return 1;
+    }
+    let async_rc: i64 = process_wait(pid);
+    if async_rc != 0 {
+        return 1;
+    }
+    print_str(process_stdout_for(pid));
+    print_str(process_stderr_for(pid));
+    0
+}
