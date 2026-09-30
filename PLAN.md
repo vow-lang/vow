@@ -1,398 +1,388 @@
 # PLAN: #1275 — Harden Operation Catalogue validation and documentation integration
 
-## 0. Status of the blocking dependencies (read this before touching any code)
+## 0. Ground truth as of this planning session (2026-09-30)
 
-`#1275` is blocked by `#1271`, `#1272`, `#1273`, `#1274`, all of which are in turn blocked by
-`#1270`. As of this planning session (2026-09-13), **none have merged to `origin/main`** — no
-`docs/spec/operations.json`, no generator, no catalogue infrastructure exists on `main` at all.
+This supersedes the PLAN.md previously committed on this branch (b5356572, written 2026-09-13
+against a hypothesis — a `docs/spec/schemas/operation-catalogue.schema.json`, a
+`scripts/generate_ops.py`, a `render_abi_rs`/`validate_catalogue`/`compute_drift` API — that never
+matched what actually got built). This plan is grounded in the real, currently-merged code, read
+directly via `git show` in this session, not in sibling branches' planning prose.
 
-This repo's worktrees share one `.git`, so local (unpushed, no-PR) branches from sibling
-in-flight sessions are readable via `git show <branch>:<path>` without merging them:
+**What is actually on `origin/main` today** (this worktree's own branch point, `0cf9d948`, predates
+all of it — do not plan against the worktree's checked-out files):
 
-- `sym/vow/1270-tracer-bullet-...` has **real implementation**: `docs/spec/operations.json`,
-  `docs/spec/schemas/operation-catalogue.schema.json`, `scripts/generate_ops.py` (+
-  `scripts/test_generate_ops.py`), three generated `op_catalogue.rs` files
-  (`vow-ir/src/lower/`, `vow-codegen/src/cranelift_backend/`, `vow-clif-shim/src/`), a
-  `// GENERATE:OP_CATALOGUE:START/END` splice in `compiler/lower.vow`, a freshness gate wired
-  into `scripts/full_test.sh` and `.github/workflows/ci.yml`, and
-  `compiler/tests/test_op_catalogue.vow`. This plan is written directly against that code.
-- `sym/vow/1271-...`, `1272-...`, `1273-...`, `1274-...` each have **only a committed `PLAN.md`**
-  (no implementation), each forked independently from the same `main` tip — they do not see
-  #1270's or each other's work yet. Their plans describe *intended* schema extensions
-  (a `verifier_category`-ish field, an arena-routing field) that do not exist in any code today.
+- `docs/spec/operations.json` — the catalogue. A flat `{"operations": [...]}` list. 22 entries
+  covering `print_*` (#1270, merged as PR #1279) and `fs_*`/stdin/args/stderr (#1272, merged as
+  PR #1356 — the issue itself is still open on GitHub, but its code has landed).
+- `scripts/generate_operations.py` (366 lines) — the one generator/validator. Splices generated
+  match-arm functions between `// GENERATE:OPERATIONS:START/END` markers into four target files:
+  `vow-ir/src/lower/mod.rs`, `vow-codegen/src/cranelift_backend.rs`, `vow-clif-shim/src/lib.rs`,
+  `compiler/lower.vow`. Separately cross-checks (never generates) `docs/spec/grammar.md`'s
+  "Builtin Function Signatures" table, `vow/src/skill.rs`, and `compiler/main.vow`'s help-JSON
+  string against each entry's `doc_signature`/`effects` fields.
+- `scripts/test_generate_operations.py` — direct-function-call tests against `generate_operations`
+  imported as a module, plus tests against the real `docs/spec/operations.json`/`grammar.md`.
+- CI wiring already exists and already fires on a catalogue-only change: `.github/workflows/ci.yml`
+  runs `python3 scripts/generate_operations.py --check` and
+  `python3 scripts/test_generate_operations.py` as explicit steps, gated by
+  `scripts/ci_docs_only.py`'s `code` classifier. **Verified, not assumed**: `ci_docs_only.py`'s
+  `is_prose()` only recognizes paths ending in `.md`; `docs/spec/operations.json` does not end in
+  `.md`, so it is never classified as prose and always triggers the gated jobs. No fix needed here.
+- `scripts/full_test.sh` does **not** call `generate_operations.py` or `generate_help.py` — neither
+  does it call `check_help_coverage.py`. All three Python staleness/generator checks are CI-only
+  steps in `ci.yml`, run as siblings of `full_test.sh`, not from inside it. This is the established
+  pattern for every generator gate in this repo, not a gap specific to the Operation Catalogue —
+  treat "full_test.sh should also run this" as an anti-pattern to avoid introducing, not a fix.
+- `.pre-commit-config.yaml` has no project-specific script hooks (only generic ones: `check-yaml`,
+  `ruff-check`/`ruff-format`, `typos`, `pydoclint`, `commitlint`). `check_help_coverage.py` isn't
+  wired there either. Consistent — no gap.
 
-**This plan's slices 2–4 reference fields that exist in no merged or even branch-local code
-today — only in #1271/#1274's own planning prose.** Treat every such reference as a hypothesis to
-confirm, not a fact.
+**Current catalogue schema** (per `REQUIRED_FIELDS` in `load_catalogue`): every entry must have
+`name`, `runtime_symbol`, `params` (list of `ptr`/`i64`/`u64` tokens), `return` (one of
+`unit`/`i64`/`ptr`/`bool`), `doc_signature` (a human-readable `fn(...) -> ...` string), `effects`
+(a human-readable bracket string, e.g. `"[io]"`, `"[]"`). Observed effects values across all 22
+current entries: `{"[]", "[io]", "[read]", "[write]"}` — never combined, never multi-token yet.
 
-### Preflight (implementation stage — do this before writing any test or code)
+**What today's `load_catalogue` already validates**: required-field presence, duplicate `name`,
+duplicate `runtime_symbol` (unconditional — any duplicate is an error), `return` token against a
+closed set, each `params` token against a closed set, `params` being a list. **What it does not
+validate at all**: the shape of `effects` (free string, no vocabulary check), the shape of
+`doc_signature` (free string, no arity/type check), unknown/extra keys on an entry (silently
+ignored — a typo'd field name is never caught). **What is not actionable today**: `main()` calls
+`load_catalogue(REPO)` with no `try`/`except` — a bad catalogue entry raises `ValueError` (or a bad
+`operations.json` raises `json.JSONDecodeError`) straight through to an uncaught Python traceback,
+not a clean diagnostic. `load_catalogue` also fails on the *first* bad entry it finds (plain
+`raise`), unlike `check_doc_facts`, which already collects every mismatch before reporting — so a
+catalogue with three unrelated problems takes three separate runs to fully diagnose today.
 
-1. `git log origin/main --grep 1270`, `--grep 1271`, `--grep 1272`, `--grep 1273`, `--grep 1274`
-   (squash merges break ancestry checks — grep the squash subject, per this repo's convention).
-2. If any of #1270–#1274 has **not** landed on `origin/main`: stop. Do not scaffold catalogue
-   infrastructure yourself or duplicate what a sibling issue owns. Post `gh issue comment 1275`
-   explaining the block and exit cleanly, per the operating contract for this run.
-3. If all have landed: rebase onto `origin/main`, then re-derive every name in the binding table
-   below from the actual merged schema/generator — do not trust the guessed names.
-4. Confirm whether `render_abi_rs` in the merged `scripts/generate_ops.py` already dedupes by
-   `runtime_symbol` (see Risk Areas — this is a real correctness bug in #1270 as written, and
-   #1271 is expected to trigger it first with `int_to_string`/`i64_to_string` both mapping to
-   `__vow_string_from_i64`). If it's already fixed upstream, drop slice 1b; if not, slice 1b is
-   this issue's to fix, since "malformed projection" is squarely catalogue-hardening scope.
+**What sibling in-progress branches (not yet merged) are adding**, read via
+`git show <branch>:<path>` in this shared-`.git` worktree layout — **informational only, not a
+dependency this plan blocks on** (see §0b):
 
-### Name-binding table (fill in "Confirmed" at preflight; do not code against "Assumed")
+- `sym/vow/1271-...` (query/utility slice) and `sym/vow/1273-...` (process slice) **each
+  independently** add two new optional fields to the same 22-entry base: `verifier_model` (closed
+  set `{"known", "unmodeled"}`) and `arena_routing` (closed set `{"none", "heap_fresh"}`), plus a
+  `catalogue_verifier_known()` generated function spliced into `vow-verify/src/c_emitter.rs` and
+  `compiler/c_emitter.vow`, and a `catalogue_builtin_result_tag()` function for arena-routed
+  heap-returning ops. Both branches use **identical field and value names** (confirmed by diff) —
+  they forked from a close-enough common point that the vocabulary already agrees.
+- `sym/vow/1274-...` (verifier-classifier replacement) has **only its two planning commits** —
+  no implementation yet.
 
-| Role | Assumed name | Source | Confirmed (fill at implementation) |
-|---|---|---|---|
-| Verifier-model category field | `verifier_category` | #1271 PLAN.md L15,25,53; #1274 PLAN.md L15,25,53,88 (both hedge it "might be spelled differently") | — |
-| Verifier-model category values | `Modeled` / `NotModeled` | #1271 PLAN.md §3 (used throughout) | — |
-| Arena-routing category field | (unnamed in any sibling plan; #1271 PLAN.md L283 calls it "arena variant as an optional string") | #1271 PLAN.md L283, L297-299 | — |
-| Arena-routing category values | none proposed yet — likely something like `RootArenaOnly` / `CandidateArenaRouted`, matching the real fork in `vow-codegen/src/cranelift_backend.rs::routed_vec_extern` (a symbol either has no `_in_arena` twin, or has one that takes a caller-supplied region) | derived by this plan from `vow-codegen/src/cranelift_backend.rs:769-870` on current `main`, not from any sibling plan | — |
-| Return-shape tag for `Option`-wrapped returns | today `ir_return_shape` is a flat enum (`I8`..`LinearPtr`); #1271 plans to extend it to "an enum with an optional element-type payload for `Option`" | #1271 PLAN.md L290-291,298 | — |
+### 0a. Files to touch
+
+- `scripts/generate_operations.py` — all new validation logic (see §3). No change to the four
+  existing splice targets' generated *content* is anticipated; this issue hardens the reader/
+  checker, not the compiled projections.
+- `scripts/test_generate_operations.py` — new tests for every check added, following the file's
+  existing direct-import-and-call style (`import generate_operations as go`).
+- `docs/spec/operations.json` — no content change anticipated. If slice-3 validation (§3) finds an
+  existing entry that doesn't actually fit the tightened rules (e.g. a `doc_signature` whose arity
+  doesn't match `params`), fixing that entry is in scope as a one-line data correction, not a
+  schema change.
+- `docs/spec/grammar.md`, `compiler/main.vow`, `vow/src/skill.rs` — no changes anticipated; §0's
+  evidence shows the existing `doc_signature`+`effects` fields already fully derive every row/line
+  `check_doc_facts` checks against (see §3, "doc-metadata" note). Touched only if slice-3
+  discovers an actual mismatch in the real files.
+- `CLAUDE.md`'s "Operation Catalogue" section — extend with one short paragraph once the new
+  validation rules exist, mirroring how the section already documents `--check`'s purpose. Small,
+  additive, no restructuring.
+- No changes anticipated in `vow-ir/`, `vow-codegen/`, `vow-clif-shim/`, `vow-verify/`,
+  `compiler/lower.vow`, `compiler/c_emitter.vow`, or any `.vow` test file — this issue hardens the
+  Python-side catalogue reader, not lowering, codegen, or verifier behavior.
+
+### 0b. Sequencing: this plan does not block on #1271/#1272/#1273/#1274
+
+The issue lists all four as "Blocked by," and #1272 is the only one whose code has actually landed
+on `origin/main` (#1270 also landed). #1271 and #1273 have real, unmerged implementation on sibling
+branches; #1274 has none yet. Waiting for all four to merge before writing this plan would leave
+the run with nothing to commit, and the operating contract for this run says to make the most
+defensible call and document it rather than block.
+
+**Decision**: plan this issue's slices against what is verifiably on `origin/main` today (22
+entries, no `verifier_model`/`arena_routing` fields), written so every new check **also** covers
+`verifier_model`/`arena_routing` using the exact field names and value sets both unmerged branches
+already agree on (`verifier_model: known|unmodeled`, `arena_routing: none|heap_fresh`) — so the
+mechanical work at implementation time is a rebase onto whichever of #1271/#1272/#1273/#1274 has
+landed by then, re-deriving only whichever field names turn out to differ from what's written here.
+
+**Implementation-stage preflight (do this before writing any test or code)**:
+1. `git fetch origin main`; `git log origin/main --oneline -1` — confirm current tip.
+2. Rebase this branch onto `origin/main`.
+3. `git log origin/main --grep 1271`, `--grep 1273`, `--grep 1274` — if any has landed, its exact
+   field names/values are ground truth over this plan's §0 snapshot. Re-read
+   `scripts/generate_operations.py` fresh rather than trusting this document's field names.
+4. If #1271 and #1273 have **both** landed independently (as of this session, neither is merged, so
+   this is a real possibility by implementation time): expect a merge/rebase conflict in
+   `load_catalogue` and the `TARGET_FILES`/marker-splice machinery, since both branches edit the
+   same functions. Resolving it is normal integration work, not this issue's scope — but once
+   resolved, there must be exactly **one** copy of the `verifier_model`/`arena_routing` vocabulary
+   check, not two near-identical copies left over from a mechanical merge.
+5. If #1274 has landed, its own validation additions (if any) become ground truth the same way.
+
+A `gh issue comment 1275` records this decision (posted alongside this commit — see the run's
+closing steps).
 
 ## 1. Problem restated
 
-Once #1270–#1274 land, the Operation Catalogue (`docs/spec/operations.json` +
-`docs/spec/schemas/operation-catalogue.schema.json`) will carry runtime-symbol, ABI,
-return-shape, arena-routing, verifier-category, and human-readable `description` facts for the
-print, query/utility, filesystem/stdin/args/stderr, and process Builtin Operation families,
-generated into Rust and self-hosted projections consumed by lowering, Cranelift codegen, and (for
-pure operations) the verifier's known/modelable classifiers. What is demonstrably still missing,
-based on #1270's actual code and #1271/#1274's stated intentions:
+`docs/spec/operations.json` plus `scripts/generate_operations.py` is a working, CI-gated Operation
+Catalogue: it already prevents four of the eight failure modes the issue's acceptance criteria
+name (duplicate names, duplicate runtime symbols, bad return tokens, bad param tokens), and it
+already keeps `grammar.md`/`skill.rs`/`main.vow`'s hand-written builtin-signature prose from
+silently drifting from the catalogue. What it does not yet do: reject a catalogue entry whose
+`effects` or `doc_signature` string is malformed or uses an unrecognized token, reject an entry
+carrying an unexpected/misspelled field name (which today silently defeats any vocabulary check
+tied to that field, including the `verifier_model`/`arena_routing` checks landing on sibling
+branches), surface any of the above as a clean, actionable, non-traceback diagnostic, or report
+more than one problem per run. This issue closes those specific gaps — it does not redesign the
+catalogue's shape, generation mechanism, or splice targets, and it does not migrate any further
+Builtin Operation family.
 
-- `validate_catalogue()` today (per #1270) only checks JSON-Schema conformance plus duplicate
-  `surface_name` — it does not reject an inconsistent duplicate `runtime_symbol` (two entries
-  claiming the same runtime symbol with different ABI/return-shape facts), does not exist yet to
-  reject a `verifier_category` recorded against an operation the signature table shows as
-  effectful, and cannot yet validate an arena-routing category because that field does not exist.
-- `render_abi_rs` renders one Rust match arm **per catalogue entry**, keyed by `runtime_symbol`,
-  with no dedup step. Two entries sharing a `runtime_symbol` (which #1271 is expected to
-  introduce for `int_to_string`/`i64_to_string` → `__vow_string_from_i64`) render two identical
-  match arms, which `cargo clippy --all -- -D warnings` rejects as `unreachable_patterns`. This is
-  a real "malformed generated projection" bug reachable the moment two surface names legitimately
-  share a runtime symbol, not a hypothetical.
-- `check_grammar_presence`/`check_env_rs_presence` are hardcoded to one heading ("Print / IO")
-  for the print-only tracer bullet. As more families land they must generalize across every
-  catalogue-covered `docs/spec/grammar.md` `####` section, and — separately — today only check
-  that a surface name's row *exists*, never that the row's prose is consistent with the
-  catalogue's `description` field, so a hand-edited row can still drift from the catalogue
-  silently. This is exactly the "hand-authored text drifting from the catalogue" risk named in
-  the issue and in #375's audit note.
-- Freshness ("`--check`") coverage exists for the two splice points #1270 introduces
-  (`vow-ir`/`vow-codegen`/`vow-clif-shim` Rust files + the `compiler/lower.vow` marker block) but
-  must be reconfirmed to also cover whatever second self-hosted splice point (if any) #1274 adds
-  in `compiler/c_emitter.vow` for verifier-category consumption.
-- Diagnostics are mostly-consistent flat strings today; nothing enforces that new checks this
-  issue adds follow the same actionable shape (which entry, which field, what's wrong) as the
-  existing ones.
+## 2. TDD slices
 
-This issue closes those gaps by hardening `scripts/generate_ops.py`'s validation and
-grammar/description cross-checks, and by adding regression tests that pin the hardened
-behavior — without re-architecting the catalogue schema's core shape, without changing lowering,
-codegen, or verifier *behavior*, and without migrating any additional Builtin Operation families.
+Each slice is additive to `scripts/generate_operations.py` / `scripts/test_generate_operations.py`.
+Slices are ordered so each is independently mergeable and small; none depends on a later slice.
 
-## 2. Files to touch
+### AC → slice map
 
-All paths below are relative to repo root; "existing per #1270" means the file/function already
-exists on the branch this plan is grounded in, not on `main` yet (see §0).
+| Acceptance criterion (issue text) | Slice |
+|---|---|
+| Rejects duplicate surface names | already true — slice 1 adds the regression-pin test only |
+| Rejects invalid duplicate Runtime Operation names | already true — slice 1 adds the regression-pin test + documents "invalid" = "any duplicate" |
+| Rejects malformed signatures | slice 3 |
+| Rejects unknown effects | slice 2 |
+| Rejects unknown return shape tags | already true — slice 1 pins it |
+| Rejects unknown arena-routing categories | slice 4 (extends/finalizes whatever lands from #1271/#1273) |
+| Rejects unknown verifier-model categories | slice 4 |
+| Actionable diagnostics | slice 5 (collect-all-errors) + slice 6 (no raw tracebacks) |
+| Schema carries doc metadata for help/spec generation | already true — see note below, no slice needed |
+| Generated help/spec tables consume or are checked against catalogue facts | already true (`check_doc_facts`) — slice 7 extends it to cover any new field/table the rebase introduces |
+| Projection freshness in normal local/CI path | already true — see §0, no slice needed |
+| Invalid-fixture tests without private generator internals | slice 8 |
+| Help/spec output freshness tests for migrated ops | slice 7 |
+| Rust and self-hosted projections checked together | already true (`check_projections` walks all four `TARGET_FILES` in one call) — slice 9 adds a regression-pin test, and covers whatever fifth/sixth target #1271/#1274 add |
+| Existing behavior preserved | implicit — every slice is additive validation, no change to `gen_*_block` output for any of the 22 current entries |
 
-- `docs/spec/schemas/operation-catalogue.schema.json` (existing per #1270) — no *new* fields
-  (those belong to #1271/#1274); confirm/tighten `enum` lists for whatever arena-routing and
-  verifier-category fields land, so `schema_check.py`'s existing generic enum-rejection covers
-  "unknown arena-routing category" / "unknown verifier-model category" automatically. If #1271
-  landed either field as a bare unconstrained `string`, adding the `enum` *is* this issue's job.
-- `scripts/generate_ops.py` (existing per #1270):
-  - `validate_catalogue()` — add: (a) invalid-duplicate-`runtime_symbol` detection; (b)
-    verifier-category-vs-effect-emptiness cross-check, including a hard error for an
-    unrecognized effect token (see slice 2); (c) call into new arena-routing and
-    description-consistency checks (below).
-  - `render_abi_rs()` — dedupe by `runtime_symbol` before emitting match arms (slice 1b).
-  - `check_grammar_presence()` — generalize from one hardcoded heading to searching the union of
-    all catalogue-relevant `####` headings in `grammar.md`; extend to compare row prose against
-    the catalogue `description` field.
-  - New `check_arena_routing(entries, runtime_rs_text)` — cross-checks an entry's arena-routing
-    category against whether `vow-runtime/src/lib.rs` actually exports a `<runtime_symbol>_in_arena`
-    twin.
-  - `main()` — add a `--catalogue PATH` override flag (defaults to the real
-    `docs/spec/operations.json`) so tests can exercise the real CLI/`--check` path against a
-    fixture file (slice 9) instead of only calling private functions.
-  - Error-message formatting — align to `scripts/schema_check.py`'s existing path-style
-    (`"<path> is <value>, expected ..."`) for anything this issue newly emits; do **not** modify
-    `schema_check.py` itself (it is shared parity-gate infrastructure with its own docstring
-    contract — out of scope, see §6).
-- `scripts/test_generate_ops.py` (existing per #1270) — new fixtures/tests for every check added
-  above (see §3's slices for the exact list). Follow the existing inline-`FIXTURE`-dict pattern;
-  no new fixture files needed except where slice 9 requires a real on-disk JSON file for the CLI
-  path.
-- `scripts/full_test.sh` / `.github/workflows/ci.yml` — confirm `generate_ops.py --check` is
-  already gated (per #1270); if #1274 adds a second self-hosted splice point, extend whatever
-  freshness invocation covers it. Expected to be a small addition, not a new gate — the gate
-  itself is #1270's responsibility, already delivered.
-- `docs/spec/grammar.md` — no prose changes from this issue; confirm heading names/table shapes
-  the generalized `check_grammar_presence` depends on are stable. Row content stays with
-  #1270–#1273 (they own the operations being documented); this issue hardens the *check*.
-- `compiler/tests/test_op_catalogue.vow` (existing per #1270) — extend only if self-hosted code
-  independently interprets catalogue-derived facts in a way Python-side validation can't reach
-  (expected: no, since validation runs at generation time against the JSON source, before any
-  `.vow` file is touched — confirm during implementation and drop this file from scope if so).
+**Doc-metadata note** (resolves the issue's "corrections from the original scope" point): the
+issue asks the schema to "carry enough human-readable metadata to generate/check `main.vow`'s
+help-JSON and `grammar.md`'s table rows... a bare name→symbol mapping is not sufficient." Verified
+against the real, merged code: `docs/spec/operations.json` entries were never a bare name→symbol
+mapping — every entry already carries `doc_signature` (a full human-readable `fn(...) -> ...`
+string) and `effects` (a human-readable bracket string), and `check_doc_facts` already derives and
+checks the exact three-column `grammar.md` row (`Function | Signature | Effects`) and the exact
+`skill.rs`/`main.vow` help-JSON line (`"name": "sig effects"`) from those two fields for all 22
+entries with zero hand-authored duplication. There is no fourth prose surface (no per-operation
+description column exists in `grammar.md`, no separate description string in `main.vow`'s
+help-JSON) that these two fields fail to cover. **No new `description` field is added by this
+plan** — inventing one would be undocumented schema growth with no consumer. If a future migration
+slice introduces an operation family whose `grammar.md` presentation needs prose beyond a
+signature+effects row, that is that slice's schema-extension to propose, not a speculative
+addition here.
 
-No changes anticipated in `vow-ir/`, `vow-codegen/` (beyond the `render_abi_rs` dedup fix, which
-is generator-side, not `vow-codegen`-side), `vow-clif-shim/`, `vow-verify/`, `compiler/lower.vow`,
-or `compiler/c_emitter.vow` — this issue does not change lowering, codegen, or verifier
-*behavior*, only the catalogue's own validation and the freshness/doc-consistency gates around
-it.
+### Slice 1 — Regression pins for checks that already work
 
-## 3. TDD slices
+- `test_duplicate_runtime_symbol_raises` — today's suite has `test_duplicate_name_raises` but
+  nothing pinning the separate `seen_symbols` check in `load_catalogue`. Two fixture entries with
+  distinct `name` but the same `runtime_symbol`; assert `ValueError` naming both.
+- Confirm (already present, just verify) `test_unknown_return_token_raises` and
+  `test_unknown_param_token_raises` still pass unmodified.
+- No production change. This slice exists so the issue's own test suite documents full coverage of
+  the "already true" AC rows above, rather than leaving them implicitly satisfied by someone else's
+  commit with no test naming this issue's acceptance criterion.
 
-### AC → slice coverage map
+### Slice 2 — Validate `effects` against a closed, ordered vocabulary
 
-| Issue acceptance criterion | Slice(s) | Note |
-|---|---|---|
-| Rejects duplicate surface names | 0 (regression pin — already implemented by #1270) | |
-| Rejects invalid duplicate Runtime Operation names | 1a | |
-| Rejects malformed signatures | 0 (regression pin — schema `enum` on `abi_params`/`abi_return` already enforces this per #1270) | "malformed signature" has no catalogue-schema meaning beyond ABI-type well-formedness, since signatures/effects live in `env.rs`, not the catalogue (per #375's audit note) |
-| Rejects unknown effects | 2b | An effect token in `env.rs` the parser doesn't recognize must hard-error, not be silently treated as "non-empty ⇒ impure" |
-| Rejects unknown return shape tags | 0 (regression pin — schema `enum` on `ir_return_shape` already enforces this per #1270) | |
-| Rejects unknown arena-routing categories | 3, 4 | |
-| Rejects unknown verifier-model categories | 3, 2a | |
-| Actionable diagnostics | 8 | |
-| Schema carries doc metadata (description) | 0 (regression pin — `description` field already exists per #1270; the audit note's ask predates #1270's actual implementation) | |
-| Generated help/spec tables consume or are checked against catalogue | 5, 6 | via the existing `grammar.md → generate_help.py → compiler/main.vow` chain, checked at the `grammar.md` end |
-| Projection freshness in normal CI path | 7 | mostly pre-existing per #1270; confirm/extend |
-| Invalid-fixture tests, no private internals | 9 | |
-| Help/spec output freshness tests | 10 | |
-| Rust + self-hosted checked together | 11 | |
-| Existing behavior preserved | implicit in all slices (pure test/validation additions) | |
+- Closed vocabulary, lowercase, sourced from `vow-types/src/effects.rs`'s `Effect` enum display
+  mapping (`Read`, `Write`, `IO`, `Panic`, `Unsafe` → `read`, `write`, `io`, `panic`, `unsafe`).
+  Confirm this list against `vow-types/src/effects.rs` fresh at implementation time (do not
+  hardcode from this plan without checking — a variant could be added between now and then).
+- Grammar: `effects` must match `^\[(token(, token)*)?\]$` where each `token` is in the closed set;
+  tokens must be sorted and de-duplicated in the string as written (matches every observed value
+  today: `[]`, `[io]`, `[read]`, `[write]` are all trivially sorted single-or-empty lists — this
+  rule only becomes load-bearing once a multi-effect entry is added, which none are yet).
+- Tests: `test_effects_unknown_token_raises` (e.g. `"[frobnicate]"`), `test_effects_malformed_bracket_raises`
+  (e.g. `"io"` with no brackets, `"[io,]"` trailing comma), `test_effects_unsorted_raises` (e.g.
+  `"[write, read]"`), plus a positive test that all four real observed values parse clean.
+- Production: new `EFFECT_TOKENS` closed set + a small parser in `load_catalogue`, invoked per
+  entry, contributing to the collected-errors list (slice 5).
 
-### Slice 0 — Regression pins for already-implemented checks (no production change expected)
+### Slice 3 — Validate `doc_signature` arity and per-token type mapping
 
-Add explicit tests in `scripts/test_generate_ops.py` pinning behavior #1270 already delivers, so
-this issue's own test suite documents full AC coverage rather than leaving three bullets
-implicitly satisfied by someone else's commit:
-- duplicate `surface_name` rejected (mirror of #1270's existing test, confirm still present)
-- malformed `abi_params`/`abi_return`/`ir_return_shape` (out-of-enum value) rejected
-- `description` field required and present
+- Grammar: `doc_signature` must match `^fn\((.*)\) -> (.+)$`. The parenthesized parameter list,
+  split on top-level commas (each parameter written `name: Type`), must have exactly
+  `len(op["params"])` entries, in order. Each parameter's `Type` and the trailing return `Type`
+  must map to the corresponding `params[i]`/`return` token via one fixed dict, derived empirically
+  from the 22 real entries before writing the check (expected shape: `String → ptr`,
+  `Vec<...> → ptr`, `i64 → i64`, `u64 → u64`, `() → unit`; confirm every existing entry fits this
+  before assuming it's complete — if `bool` appears as a `return` token anywhere in the real
+  catalogue with no corresponding `-> bool`-shaped `doc_signature`, that combination needs its own
+  explicit rule, not a guess).
+- Tests: `test_doc_signature_arity_mismatch_raises` (params has 2 tokens, doc_signature declares 1
+  parameter), `test_doc_signature_type_mismatch_raises` (a `ptr` param token paired with a
+  `doc_signature` parameter typed `i64`), `test_doc_signature_missing_arrow_raises` (no ` -> `),
+  plus a positive test asserting all 22 real entries pass under the finished rule (this doubles as
+  the "malformed signature" regression pin required by the AC table).
+- Production: the arity/type-mapping check in `load_catalogue`, contributing to slice 5's
+  collected-errors list.
 
-If any of these turns out *not* to hold once #1270 actually lands (e.g. `description` becomes
-optional), this slice's tests fail loudly and the gap becomes this issue's to fix — do not skip
-this slice as "already done" without running it.
+### Slice 4 — Close `verifier_model`/`arena_routing`, reject unknown keys
 
-### Slice 1a — Reject inconsistent duplicate `runtime_symbol`
+- If the rebase (see §0b preflight) has landed either or both fields: confirm the closed sets in
+  `generate_operations.py` match this plan's §0 values (`known`/`unmodeled`,
+  `none`/`heap_fresh`); tighten if a sibling branch left either as a bare unvalidated string.
+- If neither has landed yet: add the two optional fields' closed-set validation now, using the
+  exact names/values both unmerged branches already agree on (§0), so the eventual rebase is a
+  clean superset merge rather than a redesign. Do **not** wire either field into any consumer
+  (`c_emitter.rs`/`c_emitter.vow`/lowering) — that is #1271/#1273/#1274's territory; this issue
+  only validates the field's presence in the catalogue.
+- New: reject any key on an entry not in `REQUIRED_FIELDS ∪ {"verifier_model", "arena_routing"}` —
+  today a typo'd field name (`verifer_model`) is silently ignored, which would silently defeat this
+  exact check. This is squarely "unknown verifier-model category" in spirit: a category so unknown
+  the field name itself doesn't exist yet is a sharper failure than a recognized-field-bad-value
+  case, and today neither is caught for a misspelled key.
+- Tests: `test_unknown_verifier_model_raises`, `test_unknown_arena_routing_raises` (mirroring
+  slice 1's pattern), `test_unexpected_field_name_raises` (an entry with a bogus extra key),
+  `test_misspelled_optional_field_raises` (an entry with `verifer_model` instead of
+  `verifier_model` — must fail as an unknown key, not silently pass with the real check skipped).
+- Production: the two closed-set checks (new or confirmed) plus the new allowed-keys check, all
+  contributing to slice 5's collected-errors list.
 
-- Test: `ValidateCatalogueTest.test_rejects_inconsistent_duplicate_runtime_symbol` — two fixture
-  entries share `runtime_symbol` but differ in `abi_return`; assert an error naming both
-  `surface_name`s and the shared symbol.
-- Test: `test_allows_consistent_duplicate_runtime_symbol` — two entries share `runtime_symbol`
-  with byte-identical `abi_params`/`abi_return`/`ir_return_shape`; assert no error (legitimate:
-  multiple surface names may route to one runtime symbol).
-- Production: extend `validate_catalogue()` to group entries by `runtime_symbol` and compare
-  ABI/return-shape facts within each group.
+### Slice 5 — Collect all validation errors before reporting
 
-### Slice 1b — Fix `render_abi_rs` to emit one match arm per unique `runtime_symbol`
+- Today `load_catalogue` raises on the first bad entry (`raise ValueError(...)`), unlike
+  `check_doc_facts`, which already returns a list of every mismatch found. A catalogue with three
+  independent problems takes three separate `--check` runs to fully diagnose.
+- Test: `test_multiple_violations_all_reported` — a fixture with three independent problems (e.g.
+  a duplicate name, an unknown effect token, a bad doc_signature arity on a different entry);
+  assert the raised error (or returned list, depending on the chosen shape — see production note)
+  contains distinguishable text for all three, not just the first encountered.
+- Production: change `load_catalogue`'s internal validation loop to collect `(entry, field,
+  message)` tuples into a list instead of raising immediately; raise once at the end with all
+  messages joined (one `ValueError` whose `str()` contains every message, newline-separated) if the
+  list is non-empty. Keep the function's external contract (raises `ValueError` on any problem,
+  returns the op list on success) unchanged so `main()`, `check_projections`, and `check_doc_facts`
+  callers need no change beyond what slice 6 adds.
 
-- Test: `RenderTest.test_render_abi_rs_dedupes_shared_symbol` — two fixture entries share a
-  `runtime_symbol` (consistent ABI); assert the rendered Rust text contains exactly one match arm
-  for that symbol, not two.
-- Production: dedupe-by-symbol in `render_abi_rs()` before building match arms. Only proceed with
-  this slice if preflight step 4 confirms the bug still exists in the merged #1270/#1271 code.
+### Slice 6 — No raw tracebacks: `main()` catches and reports cleanly
 
-### Slice 2a — Reject `verifier_category` on an effectful operation
+- Today `main()` calls `ops = load_catalogue(REPO)` uncaught; both a malformed
+  `docs/spec/operations.json` (bad JSON → `json.JSONDecodeError`) and a bad entry (→ `ValueError`,
+  post-slice-5 carrying every collected message) surface as a raw Python traceback with a nonzero
+  exit code that happens to be right but a message that isn't actionable for a human or an agent
+  parsing CI output.
+- Test: invoke `generate_operations.main()` (with `sys.argv` patched, matching this file's existing
+  test style) against a fixture with a deliberately malformed `docs/spec/operations.json`-shaped
+  file (via slice 8's `--repo-root`, see below) and assert: nonzero exit, no traceback on stdout/
+  stderr (no `Traceback (most recent call last)` substring), and the collected message text is
+  present.
+- Production: wrap `ops = load_catalogue(...)` in `main()` in `try: ... except (ValueError,
+  json.JSONDecodeError) as e: print(str(e), file=sys.stderr); sys.exit(1)`.
 
-- Test: fixture entry with `verifier_category="Modeled"` whose `surface_name` maps (in a fixture
-  `env.rs`-shaped text snippet) to a non-empty effect list (e.g. `&[Effect::IO]`); assert an
-  error naming the operation and the offending effect.
-- Test (positive): an entry with `verifier_category` set and a genuinely empty effect list (`&[]`)
-  passes.
-- Production: new check (folded into `validate_catalogue()` or a sibling
-  `check_verifier_category_purity(entries, env_rs_text)`) that parses each named builtin's effect
-  list out of `env_rs_text` and rejects a non-`null`/absent verifier category when that list is
-  non-empty.
+### Slice 7 — Extend `check_doc_facts` coverage as the rebase adds fields
 
-### Slice 2b — Hard-error on an unrecognized effect token
+- Only actionable once §0b's preflight determines what, if anything, #1271/#1273/#1274 add to
+  `grammar.md`/help-JSON beyond the existing signature+effects row (per §2's doc-metadata note,
+  expected: nothing — process_* and query/utility operations use the same three-column table
+  shape, confirmed by `df0903b0` on the #1273 branch adding a `process_poll_wait` row in that same
+  shape). If confirmed, this slice is a no-op beyond a regression-pin test
+  (`test_check_doc_facts_covers_all_migrated_families`) asserting `check_doc_facts` returns zero
+  mismatches against the real, post-rebase `docs/spec/operations.json`/`grammar.md`/`skill.rs`/
+  `main.vow` — i.e. an end-to-end freshness test for every migrated Builtin Operation, not just the
+  22 present today. This directly satisfies the "help/spec output freshness tests for migrated
+  Builtin Operations" AC.
 
-- Test: fixture `env.rs` text containing `&[Effect::Frobnicate]` (a token not in the known set);
-  assert the parser used by slice 2a raises/reports an error rather than silently treating the
-  entry as "has effects, therefore impure, therefore fine to skip." Known set as of `main`:
-  `IO`, `Read`, `Write` (confirm the complete list from `vow-types/src/env.rs` at implementation
-  time — do not hardcode from this plan alone, there may be a `Panic` variant too).
-- Production: give the effect-list parser (from slice 2a) an explicit whitelist and fail loudly
-  on anything outside it, rather than a permissive "anything non-`[]` counts as non-empty" regex.
+### Slice 8 — Black-box test seam: `--repo-root` override, no private internals
 
-### Slice 3 — Unknown arena-routing / verifier-category enum values rejected by schema
+- The issue requires catalogue-fixture tests that don't rely on "implementation-private generator
+  internals." Today's tests already call public module functions directly (`go.load_catalogue`,
+  `go.check_doc_facts`, etc.) with a `repo_root` parameter each function already accepts — that
+  part is fine. What's missing is a way to exercise the **CLI entry point** (`main()`,
+  `--check` exit-code behavior) against a fixture tree instead of the hardcoded `REPO` constant.
+- Add a `--repo-root PATH` flag to `main()` (default: `REPO`, i.e. no behavior change for the real
+  CLI invocation used by CI/`--check`). Thread it through to `load_catalogue`/`check_projections`/
+  `check_doc_facts`, all of which already take `repo_root` as a parameter.
+- Test: build a minimal fixture directory tree under a `tempfile.TemporaryDirectory()` (a
+  `docs/spec/operations.json` with a deliberate violation, plus the four/six splice-target files
+  with valid marker pairs and a minimal `grammar.md`/`skill.rs`/`main.vow`), invoke
+  `generate_operations.main()` with `sys.argv` patched to `["generate_operations.py", "--check",
+  "--repo-root", str(fixture_dir)]`, assert nonzero exit and the expected message — proving the
+  full CLI path end-to-end without reaching into `load_catalogue`/`check_projections` directly.
+- This slice's fixture-tree helper is reused by slice 6's test.
 
-- Test: fixture entry with an out-of-enum arena-routing category value (e.g. `"Bogus"`); assert
-  `validate_catalogue()` rejects it. Same for an out-of-enum verifier-category value.
-- Test (positive): a value legitimately in each enum passes.
-- Production: if the merged schema (post #1271/#1274) already declares these as closed `enum`s,
-  this slice is a regression pin only (`schema_check.py`'s existing generic enum-rejection
-  already covers it — no new code). If either field landed as a bare `string`, add the `enum`
-  here — this is squarely "harden validation," not a scope-widening schema redesign.
+### Slice 9 — Regression pin: freshness check covers all splice targets together
 
-### Slice 4 — Arena-routing category vs. actual `_in_arena` runtime-symbol presence
+- `check_projections` already iterates `TARGET_FILES` (four entries today, more once #1271/#1274's
+  `c_emitter.rs`/`c_emitter.vow` targets land) in one call and reports every stale target, not just
+  the first. Add `test_check_projections_reports_every_stale_target` — hand-mutate two of the four
+  (or however many exist post-rebase) target files' spliced blocks in a fixture tree (reusing
+  slice 8's fixture helper), call `check_projections` once, assert both stale paths appear in the
+  returned list. This is the concrete evidence for the "Rust and self-hosted Operation Projections
+  remain generated from the same catalogue and are checked together" AC — it was already true
+  structurally; this slice is the test that pins it.
 
-- Test: fixture entry claiming a "not arena-routed" category, paired with a fixture
-  `vow-runtime/src/lib.rs`-shaped text snippet that *does* export `<runtime_symbol>_in_arena`;
-  assert an inconsistency error. And the reverse: claims "arena-routed," no `_in_arena` export
-  in the fixture text → error.
-- Production: new `check_arena_routing(entries, runtime_rs_text)`, text-scanning
-  `vow-runtime/src/lib.rs` the same way `check_env_rs_presence` already text-scans `env.rs`,
-  checking for a `pub unsafe extern "C" fn <symbol>_in_arena` (or equivalent) definition.
-  Ground the two category values against the real fork already visible in
-  `vow-codegen/src/cranelift_backend.rs::routed_vec_extern` (lines ~769–870 on current `main`):
-  routed operations get a `(<symbol>_in_arena, Some(region))` pair; non-routed operations don't.
+## 3. Verification surface
 
-### Slice 5 — Generalize `check_grammar_presence` across all catalogue-covered headings
+This issue touches no `.vow` contracts, no C emission, no codegen, and no runtime behavior — it
+hardens a build-time Python generator/validator and its own test suite. No ESBMC-provable property
+is introduced or changed, and no `vow` contract clause should be added anywhere to satisfy a
+Python-level check (a build-time catalogue invariant is not a vow, per `CLAUDE.md`'s
+contract-authoring rules). No new fixtures under `tests/run/` or `examples/` are needed — the
+migrated Builtin Operations' compiled/runtime behavior is already covered by each migration
+slice's own end-to-end `.vow` tests (e.g. `tests/run/print_catalogue_smoke.vow`,
+`compiler/tests/test_lower_catalogue_fs_stdin_args_stderr.vow`); this issue's new tests are
+catalogue-fixture-shaped and belong in `scripts/test_generate_operations.py` plus (slice 8) a
+temp-directory fixture tree, not under `tests/run/`.
 
-- Test: fixture catalogue with entries "belonging" to two different `grammar.md` sections (e.g.
-  a print-family name and a filesystem-family name); assert presence is correctly resolved
-  against whichever heading actually contains each name, and a name missing from *every* known
-  builtin-operation heading still errors.
-- Production: change `check_grammar_presence` to search the **union** of all catalogue-relevant
-  `####` headings in `grammar.md` (fixed list: "Print / IO", "Debug", "Filesystem", "String
-  Operations", "Conversion", "Collections", "Time", "System", "Encoding", "Input", "Process
-  Management" — confirm this list against `grammar.md` at implementation time, it may have grown)
-  rather than one hardcoded heading name. Do **not** add a `doc_table` field to the catalogue
-  schema for this — the surface-name-uniqueness invariant (already enforced) means a union search
-  is sufficient and avoids a second source of truth for something derivable from `grammar.md`'s
-  own structure.
+## 4. Risk areas
 
-### Slice 6 — `description` vs. grammar.md row-prose consistency
+- **Determinism / binary fixed point.** None of this issue's production code touches
+  `gen_rust_ir_block`/`gen_cranelift_block`/`gen_vow_lower_block` or their sibling verifier-known
+  renderers — it adds *rejection* checks in `load_catalogue`, which runs before any renderer sees
+  the op list. The real `docs/spec/operations.json`'s 22 (or post-rebase, more) entries must
+  continue to pass every new check with **zero** change to any of the four/six generated blocks —
+  `python3 scripts/generate_operations.py --check` must report clean before and after this issue's
+  changes, on the same input. If any new rule doesn't hold for a real existing entry, fix the data
+  (one-line JSON edit), never loosen the rule to fit bad data silently.
+- **`cargo clippy --all -- -D warnings`.** This issue's production code is Python-only
+  (`scripts/generate_operations.py`); no new Rust or `.vow` production code is added. Slice 1's
+  duplicate-`runtime_symbol` regression pin exists specifically because an *unrejected* duplicate
+  would later render two identical Cranelift/IR match arms and fail `-D warnings` on
+  `unreachable_patterns` — this issue prevents that class of bug from a migration slice, it doesn't
+  introduce clippy risk itself.
+- **`uvx ruff@<pin>` gate.** New Python code must be validated with the repo's pinned ruff, not
+  whatever local ruff is on `$PATH` — see this session's own memory on this exact gotcha.
+- **Sequencing / rebase conflicts.** §0b already covers this: expect `load_catalogue` and
+  `TARGET_FILES` conflicts when rebasing onto a `main` that has absorbed #1271 and/or #1273
+  independently; resolving to a single copy of any duplicated vocabulary-check code is expected
+  integration work, not a design problem with this plan.
+- **Scope creep.** It would be tempting to also wire `verifier_model`/`arena_routing` into an
+  actual consumer (`c_emitter.rs`, lowering) while touching this file — that is #1271/#1273/#1274's
+  job. This issue validates catalogue *data*, it does not change what consumes it.
 
-- Test: fixture where the catalogue `description` text differs from the corresponding
-  `grammar.md` row's prose cell; assert an error naming both texts (or a normalized diff).
-- Production: extend `check_grammar_presence` (or split out
-  `check_grammar_description(entries, grammar_text)`) to compare each row's prose column against
-  the catalogue's `description` field for that `surface_name`, using exact match on trimmed text
-  as the contract (both are meant to be kept identical, not paraphrases of each other).
+## 5. Out of scope
 
-### Slice 7 — Freshness-check coverage confirmation/extension
-
-- Test: if preflight finds #1274 introduced a second self-hosted marker block (e.g. in
-  `compiler/c_emitter.vow`), add a `DriftDetectionTest` case proving `compute_drift()` catches
-  staleness there too, mirroring the existing `compiler/lower.vow` marker-block test.
-- Production: extend `compute_drift()`'s list of checked targets accordingly. Skip this slice
-  entirely (documented as "not applicable") if #1274 ends up reusing the existing
-  `compiler/lower.vow` splice instead of adding a second one.
-
-### Slice 8 — Diagnostic message uniformity
-
-- Test: a fixture that trips one instance of every check kind added by this issue at once;
-  assert every resulting message matches one consistent, documented shape (e.g.
-  `"<locator>: <field> <problem>"`, matching `schema_check.py`'s existing style rather than
-  inventing a new one — see §6, do not edit `schema_check.py` itself).
-- Production: route all new check functions' error strings through one small formatting helper
-  in `generate_ops.py` so maintainers and agents get one consistent format across every failure
-  kind this issue adds (existing #1270 messages may be left as-is if they already conform;
-  confirm rather than reformat for its own sake).
-
-### Slice 9 — End-to-end CLI-level validation-rejection test (no private internals)
-
-- Add `--catalogue PATH` to `generate_ops.py` (see §2) so the real CLI entry point can be pointed
-  at a fixture file instead of the hardcoded `docs/spec/operations.json`.
-- Test: a fixture JSON file (new, on disk — see §4 for placement) covering multiple violations at
-  once — duplicate `surface_name`, an inconsistent duplicate `runtime_symbol`, an out-of-enum
-  arena-routing category, an out-of-enum verifier-category — invoked via
-  `python3 scripts/generate_ops.py --check --catalogue <fixture>` as a subprocess (or via
-  `main()` with `sys.argv` patched, whichever this repo's existing test style prefers — check
-  `test_generate_ops.py` and `test_check_help_coverage.py` for precedent), asserting non-zero
-  exit and that stdout lists every distinct violation.
-- **Fixture correctness requirement**: every entry in this fixture must use **real** existing
-  `surface_name`s (e.g. `print_str`) with otherwise-corrupted facts — an invented name would fail
-  `check_env_rs_presence`/`check_grammar_presence` before ever reaching the checks under test,
-  producing a misleading pass/fail signal unrelated to what the test claims to cover.
-
-### Slice 10 — Help/spec output freshness test for migrated Builtin Operations
-
-- Test: an integration-style test (in `scripts/test_generate_ops.py` or alongside
-  `scripts/test_check_help_coverage.py`) asserting `generate_help.py --check` and
-  `generate_ops.py --check` both pass together against the **real** `docs/spec/operations.json`
-  and `docs/spec/grammar.md` as of whatever operations have migrated by the time this issue
-  lands — proving the two generators' outputs can't independently drift from each other via the
-  shared `grammar.md` chokepoint.
-- Production: none expected beyond wiring both `--check` invocations into `scripts/full_test.sh`
-  if either is missing (expected: `generate_help.py --check` is already there; confirm
-  `generate_ops.py --check` was actually added by #1270 as its plan claims).
-
-### Slice 11 — Rust/self-hosted projection parity smoke test
-
-- Test: mutate one fixture catalogue entry, render both the Rust and self-hosted projections from
-  it, and assert both changed consistently from a single `load_catalogue()` call; separately,
-  assert `compute_drift()` flags staleness when only one target file is updated to match the
-  mutated entry and the other is left stale — proving the two projections cannot independently
-  drift from the single catalogue source.
-- Production: none expected — this slice should pass against #1270's existing
-  `compute_drift()`/render functions once slices 1b and 3 land; if it doesn't, that's a genuine
-  gap this issue must close.
-
-## 4. Verification surface
-
-This issue does not touch contracts, codegen, or the C model — it hardens a build-time Python
-generator/validator and its test suite. No new ESBMC-provable properties are introduced, and no
-`.vow` contract clauses should be added anywhere as a side effect of satisfying a Python-level
-check (per the contract-authoring rules in `CLAUDE.md`, a build-time invariant is not a vow).
-
-- No new fixtures are needed under `tests/run/` or `examples/` — #1270–#1274 already own
-  end-to-end `.vow` coverage (e.g. `tests/run/print_catalogue_smoke.vow`) for the migrated
-  operations' compiled/verified behavior; this issue's tests are catalogue-shaped fixtures in
-  `scripts/test_generate_ops.py`.
-- Slice 9's on-disk fixture file (if the CLI-subprocess approach is chosen over `sys.argv`
-  patching) belongs under `scripts/testdata/` or co-located with `scripts/test_generate_ops.py`
-  (check existing precedent among `scripts/test_*.py` for fixture-file conventions before
-  inventing a new location) — **not** `tests/run/` or `examples/`, which are reserved for `.vow`
-  programs, not generator test fixtures.
-- `compiler/tests/test_op_catalogue.vow` is extended only if self-hosted code independently
-  interprets catalogue facts in a way Python-side validation cannot reach (see §2 — expected: no).
-
-## 5. Risk areas
-
-- **Binary fixed point.** `load_catalogue()` already sorts entries by `surface_name` before
-  handing them to any renderer (per #1270, explicitly for bootstrap-triple-test determinism).
-  Any new renderer/formatter code this issue adds (slice 1b's dedup, slice 8's message
-  formatter) must preserve deterministic ordering — never iterate a Python `dict`/`set` without
-  sorting when building match arms or grouped error-message output. This is the same discipline
-  #1274's own plan already flags for its verifier-category renderer; hold it here too, including
-  for error-message ordering, so CI failures are stable/diffable across runs even though error
-  strings aren't part of the generated compiler artifact.
-- **`cargo clippy --all -- -D warnings`.** This issue is Python-only in its production code
-  (`scripts/generate_ops.py`) plus test-only `.vow`/Rust additions if any. Slice 1b directly
-  *prevents* a real clippy failure (`unreachable_patterns` from duplicate match arms) rather than
-  risking one — no new Rust production code is added by this plan.
-- **`parse → print → parse` idempotency.** Unaffected — no grammar, AST, or printer changes.
-- **Sequencing.** Every slice referencing `verifier_category` or an arena-routing field name
-  depends on #1270–#1274 having landed with the field names/shapes this plan assumed (see §0's
-  binding table). If the implementation stage starts before they land, or they land with
-  different names/shapes, slices 2–4 must be re-derived from the actual merged schema — this
-  document's names are hypotheses, not commitments.
-- **Scope creep.** It is tempting to also fix the `is_string_fresh_helper`-style
-  pattern-predicate exclusions #1271 explicitly defers (`string_trim`/`string_to_upper`/
-  `string_to_lower` keeping their hand-written verifier gate instead of the catalogue) while
-  touching nearby validation code. That rewiring is #1274's territory, not this issue's — #1275
-  hardens validation of whatever categories/fields exist post-#1271–#1274, it does not extend
-  which operations consume them.
-
-## 6. Out of scope
-
-- Migrating any additional Builtin Operation family beyond what #1270–#1274 already migrate
-  (constructors, methods, `pin_to_root`, `string_matches_literal_at`, the
-  `is_string_fresh_helper`-gated string helpers) — excluded by the parent PRD for the entire
-  first-slice arc, not just this issue.
-- Rewriting `docs/spec/grammar.md` prose or `compiler/main.vow`'s help pipeline. Both already
-  flow from `grammar.md` via the pre-existing `scripts/generate_help.py`, confirmed unrelated to
-  the catalogue work by #1270's own plan. This issue only adds/generalizes a
-  catalogue-vs-`grammar.md` *consistency check* — never a new generation path for those files.
-- Adding a `doc_table`/section-membership field to the catalogue schema (see slice 5) — a union
-  search across `grammar.md`'s known builtin-operation headings is sufficient and avoids a second
-  source of truth for something already derivable from `grammar.md`'s structure.
-- Changing verifier C emission bodies, `is_string_fresh_helper`/`string_model_*` special-case
-  logic, or any modeled/skipped behavior for any operation — #1274's territory (explicitly
-  behavior-preserving there) and out of scope for this purely validation-and-doc-integration
-  issue.
-- Introducing a shared `vow-ops` crate to de-duplicate the three byte-identical `op_catalogue.rs`
-  copies (`vow-ir`, `vow-codegen`, `vow-clif-shim`) — #1270's plan already explicitly rejected
-  this as disproportionate; this issue doesn't revisit that call.
-- Modifying `scripts/schema_check.py`'s message format or validation keyword coverage. It is
-  shared parity-gate infrastructure (used outside the Operation Catalogue) with its own
-  documented contract ("the nine keywords those schemas actually use"); this issue aligns
-  `generate_ops.py`'s *own* new messages to its existing style, not the other way around.
-- Formatting/cleanup passes over `scripts/generate_ops.py` or `scripts/generate_help.py` unrelated
-  to the specific functions this issue's slices touch.
+- Migrating any further Builtin Operation family (constructors, methods, `pin_to_root`,
+  `string_matches_literal_at`) — excluded by the parent PRD (#375) for this entire first-slice arc.
+- Adding a `description` field or any new prose surface to the catalogue schema — §2's doc-metadata
+  note shows the existing `doc_signature`+`effects` fields already fully derive every checked prose
+  surface with zero hand-authored duplication; inventing a field with no consumer is undocumented
+  schema growth this issue should not introduce.
+- Wiring `verifier_model`/`arena_routing` into any actual consumer (`vow-verify/src/c_emitter.rs`,
+  `compiler/c_emitter.vow`, lowering, arena-routing codegen) — #1271/#1273/#1274's territory.
+- Cross-checking the catalogue's `effects` string against `vow-types/src/env.rs`'s authoritative
+  `Effect` list per-operation (true semantic parity, not just vocabulary validity). The PRD is
+  explicit that the catalogue reads signature/effects facts as inputs and does not re-own them;
+  the catalogue's `effects` field is a doc-string mirror, and its accuracy relative to the real
+  type-checker table is exercised by each migration slice's own type-checking tests, not by
+  catalogue validation. Listed here as a legitimate follow-up if a future issue wants stronger
+  parity than vocabulary-validity, not as this issue's job.
+- Adding `generate_operations.py --check` to `scripts/full_test.sh` or `.pre-commit-config.yaml` —
+  §0 confirms this would be inconsistent with how every analogous generator gate
+  (`generate_help.py`, `check_help_coverage.py`) already works in this repo: CI-only, run as a
+  sibling step to `full_test.sh`, not folded into it.
+- Fixing `scripts/ci_docs_only.py`'s classifier — §0 confirms it already correctly treats
+  `docs/spec/operations.json` as code (triggers the gated CI jobs), since its prose test is
+  suffix-based (`.md` only) and the JSON file doesn't match it. No change needed.
+- Reformatting or cleaning up unrelated parts of `scripts/generate_operations.py` (e.g. the
+  existing `_split_table_row`/`extract_builtin_signatures_table` machinery) beyond what each slice
+  above directly touches.
