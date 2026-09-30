@@ -1702,6 +1702,17 @@ fn catalogue_builtin_to_extern(name: String) -> String {
     if name == String::from("print_str") { return String::from("__vow_string_print"); }
     if name == String::from("print_i64") { return String::from("__vow_print_i64"); }
     if name == String::from("print_u64") { return String::from("__vow_print_u64"); }
+    if name == String::from("process_exit") { return String::from("__vow_process_exit"); }
+    if name == String::from("process_run") { return String::from("__vow_process_run"); }
+    if name == String::from("process_get_stdout") { return String::from("__vow_process_get_stdout"); }
+    if name == String::from("process_get_stderr") { return String::from("__vow_process_get_stderr"); }
+    if name == String::from("process_start") { return String::from("__vow_process_start"); }
+    if name == String::from("process_wait") { return String::from("__vow_process_wait"); }
+    if name == String::from("process_wait_timeout") { return String::from("__vow_process_wait_timeout"); }
+    if name == String::from("process_poll_wait") { return String::from("__vow_process_poll_wait"); }
+    if name == String::from("process_kill") { return String::from("__vow_process_kill"); }
+    if name == String::from("process_stdout_for") { return String::from("__vow_process_stdout_for"); }
+    if name == String::from("process_stderr_for") { return String::from("__vow_process_stderr_for"); }
     return String::from("");
 }
 
@@ -1709,10 +1720,25 @@ fn catalogue_builtin_ret_ty(name: String) -> i64 {
     if name == String::from("print_str") { return ITY_UNIT(); }
     if name == String::from("print_i64") { return ITY_UNIT(); }
     if name == String::from("print_u64") { return ITY_UNIT(); }
+    if name == String::from("process_exit") { return ITY_UNIT(); }
+    if name == String::from("process_run") { return ITY_I64(); }
+    if name == String::from("process_get_stdout") { return ITY_PTR(); }
+    if name == String::from("process_get_stderr") { return ITY_PTR(); }
+    if name == String::from("process_start") { return ITY_I64(); }
+    if name == String::from("process_wait") { return ITY_I64(); }
+    if name == String::from("process_wait_timeout") { return ITY_I64(); }
+    if name == String::from("process_poll_wait") { return ITY_I64(); }
+    if name == String::from("process_kill") { return ITY_I64(); }
+    if name == String::from("process_stdout_for") { return ITY_PTR(); }
+    if name == String::from("process_stderr_for") { return ITY_PTR(); }
     return -1;
 }
 
 fn catalogue_builtin_result_tag(name: String) -> i64 {
+    if name == String::from("process_get_stdout") { return BRT_STRING(); }
+    if name == String::from("process_get_stderr") { return BRT_STRING(); }
+    if name == String::from("process_stdout_for") { return BRT_STRING(); }
+    if name == String::from("process_stderr_for") { return BRT_STRING(); }
     return BRT_NONE();
 }
 // GENERATE:OPERATIONS:END

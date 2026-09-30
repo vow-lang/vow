@@ -55,8 +55,10 @@ class LoadCatalogueTest(unittest.TestCase):
         (spec_dir / "operations.json").write_text(json.dumps({"operations": ops}))
 
     def test_real_catalogue_loads_and_matches_print_ops(self):
+        # The real catalogue now carries process_* entries after PRINT_OPS,
+        # so only the leading print_* slice is compared against the fixture.
         ops = go.load_catalogue(REPO_ROOT)
-        self.assertEqual(ops, PRINT_OPS)
+        self.assertEqual(ops[:3], PRINT_OPS)
 
     def test_missing_required_field_raises(self):
         with tempfile.TemporaryDirectory() as d:
@@ -138,6 +140,54 @@ class LoadCatalogueTest(unittest.TestCase):
             tmp = Path(d)
             self._write(tmp, [PRINT_OPS[0]])
             go.load_catalogue(tmp)  # must not raise
+
+
+class RealCatalogueProcessOpsTest(unittest.TestCase):
+    """Fixture coverage for the process_* entries appended to the real
+    catalogue: a non-unit (i64) return, a ptr return, and an
+    arena_routing: heap_fresh entry, per issue #1273."""
+
+    def test_process_run_has_i64_return(self):
+        ops = go.load_catalogue(REPO_ROOT)
+        op = next(o for o in ops if o["name"] == "process_run")
+        self.assertEqual(op["return"], "i64")
+        self.assertEqual(op["runtime_symbol"], "__vow_process_run")
+        self.assertEqual(op.get("arena_routing"), "none")
+
+    def test_process_get_stdout_has_ptr_return_and_heap_fresh_routing(self):
+        ops = go.load_catalogue(REPO_ROOT)
+        op = next(o for o in ops if o["name"] == "process_get_stdout")
+        self.assertEqual(op["return"], "ptr")
+        self.assertEqual(op["runtime_symbol"], "__vow_process_get_stdout")
+        self.assertEqual(op["arena_routing"], "heap_fresh")
+
+    def test_all_eleven_process_ops_present(self):
+        ops = go.load_catalogue(REPO_ROOT)
+        names = {o["name"] for o in ops}
+        for name in [
+            "process_exit",
+            "process_run",
+            "process_get_stdout",
+            "process_get_stderr",
+            "process_start",
+            "process_wait",
+            "process_wait_timeout",
+            "process_poll_wait",
+            "process_kill",
+            "process_stdout_for",
+            "process_stderr_for",
+        ]:
+            self.assertIn(name, names)
+
+    def test_real_catalogue_projections_are_up_to_date(self):
+        ops = go.load_catalogue(REPO_ROOT)
+        mismatches = go.check_projections(ops, REPO_ROOT)
+        self.assertEqual(mismatches, [])
+
+    def test_real_catalogue_doc_facts_are_consistent(self):
+        ops = go.load_catalogue(REPO_ROOT)
+        mismatches = go.check_doc_facts(ops, REPO_ROOT)
+        self.assertEqual(mismatches, [])
 
 
 class GenRustIrBlockTest(unittest.TestCase):

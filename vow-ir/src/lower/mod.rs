@@ -34,12 +34,27 @@ fn catalogue_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "print_str" => Some(("__vow_string_print", Ty::Unit)),
         "print_i64" => Some(("__vow_print_i64", Ty::Unit)),
         "print_u64" => Some(("__vow_print_u64", Ty::Unit)),
+        "process_exit" => Some(("__vow_process_exit", Ty::Unit)),
+        "process_run" => Some(("__vow_process_run", Ty::I64)),
+        "process_get_stdout" => Some(("__vow_process_get_stdout", Ty::Ptr)),
+        "process_get_stderr" => Some(("__vow_process_get_stderr", Ty::Ptr)),
+        "process_start" => Some(("__vow_process_start", Ty::I64)),
+        "process_wait" => Some(("__vow_process_wait", Ty::I64)),
+        "process_wait_timeout" => Some(("__vow_process_wait_timeout", Ty::I64)),
+        "process_poll_wait" => Some(("__vow_process_poll_wait", Ty::I64)),
+        "process_kill" => Some(("__vow_process_kill", Ty::I64)),
+        "process_stdout_for" => Some(("__vow_process_stdout_for", Ty::Ptr)),
+        "process_stderr_for" => Some(("__vow_process_stderr_for", Ty::Ptr)),
         _ => None,
     }
 }
 
 fn catalogue_builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
     match name {
+        "process_get_stdout" => Some(BuiltinResultTag::StringHeap),
+        "process_get_stderr" => Some(BuiltinResultTag::StringHeap),
+        "process_stdout_for" => Some(BuiltinResultTag::StringHeap),
+        "process_stderr_for" => Some(BuiltinResultTag::StringHeap),
         _ => None,
     }
 }

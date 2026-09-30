@@ -3322,6 +3322,62 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
             sig.params.push(AbiParam::new(types::I64));
             true
         }
+        "__vow_process_exit" => {
+            sig.params.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_run" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_get_stdout" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_get_stderr" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_start" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_wait" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_wait_timeout" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_poll_wait" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_kill" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_stdout_for" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_stderr_for" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
         _ => false,
     }
 }
