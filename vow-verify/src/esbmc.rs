@@ -908,8 +908,10 @@ fn run_esbmc_capture(
 /// `VERIFICATION FAILED` (a real counterexample) still wins regardless of an
 /// earlier solver hiccup.
 fn classify_esbmc_output(combined: &str) -> VerificationResult {
-    let tainted = is_memory_limit_output(combined) || esbmc_tool_error_reason(combined).is_some();
-    if combined.contains("VERIFICATION SUCCESSFUL") && !tainted {
+    // `is_tainted_output` scans the whole output, so it's only worth paying
+    // for when a SUCCESSFUL banner is actually present to distrust; `&&`
+    // short-circuits it away on FAILED/timeout/tool-error outputs.
+    if combined.contains("VERIFICATION SUCCESSFUL") && !is_tainted_output(combined) {
         VerificationResult::Proven
     } else if combined.contains("VERIFICATION FAILED") {
         VerificationResult::Failed(parse_esbmc_output(combined))
@@ -969,16 +971,24 @@ fn effective_multi_property_config(config: &SolverConfig) -> SolverConfig {
 }
 
 /// Per-clause verification via ESBMC `--multi-property`: returns the overall
-/// outcome plus `vow_id -> proven` for every reported claim, so `vow contracts
-/// --verify` can give each contract clause a precise status instead of marking
-/// the siblings of a failed clause `unknown`.
+/// outcome, `vow_id -> proven` for every reported claim, and whether the run's
+/// combined output was tainted (memory-limit hit or an `ERROR:` line — see
+/// `is_tainted_output`), so `vow contracts --verify` can give each contract
+/// clause a precise status instead of marking the siblings of a failed clause
+/// `unknown` — while still refusing to trust an individual `PASSED` verdict
+/// from a tainted run (esbmc/esbmc#4484 can affect per-claim verdicts the same
+/// way it affects the summary `VERIFICATION SUCCESSFUL` line).
 pub fn run_esbmc_multi_property(
     esbmc: &std::path::Path,
     c_src: &str,
     max_k_step: u32,
     func_name: &str,
     config: &SolverConfig,
-) -> (VerificationResult, std::collections::HashMap<u32, bool>) {
+) -> (
+    VerificationResult,
+    std::collections::HashMap<u32, bool>,
+    bool,
+) {
     let config = effective_multi_property_config(config);
     match run_esbmc_capture(
         esbmc,
@@ -991,8 +1001,9 @@ pub fn run_esbmc_multi_property(
         Ok(combined) => (
             classify_esbmc_output(&combined),
             parse_multi_property_verdicts(&combined),
+            is_tainted_output(&combined),
         ),
-        Err(r) => (*r, std::collections::HashMap::new()),
+        Err(r) => (*r, std::collections::HashMap::new(), false),
     }
 }
 
@@ -1030,9 +1041,9 @@ pub fn run_esbmc_reach(
         &["--error-label", "vow_reach"],
     ) {
         Ok(combined) => {
-            let tainted =
-                is_memory_limit_output(&combined) || esbmc_tool_error_reason(&combined).is_some();
-            if combined.contains("VERIFICATION SUCCESSFUL") && !tainted {
+            // See `classify_esbmc_output`: skip the whole-output taint scan
+            // unless there's a SUCCESSFUL banner to distrust.
+            if combined.contains("VERIFICATION SUCCESSFUL") && !is_tainted_output(&combined) {
                 ReachVerdict::Vacuous
             } else if combined.contains("VERIFICATION FAILED") {
                 ReachVerdict::Live
@@ -1091,6 +1102,13 @@ fn esbmc_tool_error_reason(combined: &str) -> Option<String> {
         .map(str::trim)
         .find(|line| line.starts_with("ERROR:"))
         .map(str::to_string)
+}
+
+/// Whether ESBMC's combined stdout+stderr is "tainted" by a memory-limit hit
+/// or an `ERROR:` line — see `classify_esbmc_output`'s doc comment for why a
+/// tainted `VERIFICATION SUCCESSFUL` must not be trusted (esbmc/esbmc#4484).
+fn is_tainted_output(combined: &str) -> bool {
+    is_memory_limit_output(combined) || esbmc_tool_error_reason(combined).is_some()
 }
 
 /// Extract the short explanation that precedes `VERIFICATION UNKNOWN` from an
@@ -2452,6 +2470,39 @@ VERIFICATION SUCCESSFUL";
         );
 
         assert_eq!(result, ReachVerdict::Inconclusive);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_esbmc_multi_property_flags_a_tainted_run_and_still_reports_the_passed_claim() {
+        // esbmc/esbmc#4484 can print an individual claim PASSED after an
+        // internal solver exception, the same as it can print the summary
+        // `VERIFICATION SUCCESSFUL` line. `run_esbmc_multi_property` must
+        // still report the per-claim verdict map as-is (callers like
+        // `resolve_clause_status` decide what to do with a tainted PASSED),
+        // but it must also surface `tainted = true` so a tainted PASSED is
+        // never the last word — and the *overall* verdict must already be
+        // `Unknown`, not `Proven`, for the same reason `classify_esbmc_output`
+        // rejects a tainted SUCCESSFUL.
+        let esbmc = fake_esbmc_fixture("multi-property-solver-error-then-passed.sh");
+        let (overall, verdicts, tainted) = run_esbmc_multi_property(
+            &esbmc,
+            "int main(void) { return 0; }",
+            5,
+            "main",
+            &SolverConfig::default_config(),
+        );
+
+        assert!(tainted, "run must be flagged tainted");
+        assert!(
+            matches!(overall, VerificationResult::Unknown { .. }),
+            "expected Unknown, got {overall:?}"
+        );
+        assert_eq!(
+            verdicts.get(&0),
+            Some(&true),
+            "the raw per-claim PASSED verdict is still reported"
+        );
     }
 
     #[test]

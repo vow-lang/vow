@@ -63,6 +63,12 @@ struct MultiPropertyResult {
     status: i64,
     verdict_ids: Vec<i64>,
     verdict_proven: Vec<i64>,
+    // Whether the run's combined output was tainted (memory-limit hit or an
+    // `ERROR:` line) — see `is_tainted_output`. A tainted run's `verdict_proven`
+    // entries must not be trusted as `proven` (esbmc/esbmc#4484 can print an
+    // individual claim PASSED after an internal solver exception, the same as
+    // it can print the summary `VERIFICATION SUCCESSFUL` line).
+    tainted: bool,
 }
 
 fn str_contains_byte(s: String, b: i64) -> bool {
@@ -516,6 +522,14 @@ fn effective_timeout_for(encoding: String, solver: String, user_timeout: String)
     String::from("")
 }
 
+// Whether ESBMC's combined stdout+stderr is "tainted" by a memory-limit hit
+// or an `ERROR:` line — see `parse_verify_status`'s doc comment for why a
+// tainted `VERIFICATION SUCCESSFUL` must not be trusted (esbmc/esbmc#4484).
+// Mirrors `is_tainted_output` in vow-verify/src/esbmc.rs.
+fn is_tainted_output(combined: String) -> bool {
+    output_has_memory_limit(combined) || parse_solver_error_reason(combined).len() > 0
+}
+
 // A `VERIFICATION SUCCESSFUL` line is only trusted when the run is not
 // "tainted" by a memory-limit hit or an `ERROR:` line elsewhere in the same
 // output — ESBMC 8.4+ can print SUCCESSFUL after an internal solver
@@ -524,9 +538,10 @@ fn effective_timeout_for(encoding: String, solver: String, user_timeout: String)
 // earlier solver hiccup. Mirrors `classify_esbmc_output` in
 // vow-verify/src/esbmc.rs.
 fn parse_verify_status(combined: String) -> i64 {
-    let tainted: bool =
-        output_has_memory_limit(combined) || parse_solver_error_reason(combined).len() > 0;
-    if str_find_str(combined, String::from("VERIFICATION SUCCESSFUL")) >= 0 && !tainted {
+    // `is_tainted_output` scans the whole output, so it's only worth paying
+    // for when a SUCCESSFUL banner is actually present to distrust; `&&`
+    // short-circuits it away on FAILED/timeout/error outputs.
+    if str_find_str(combined, String::from("VERIFICATION SUCCESSFUL")) >= 0 && !is_tainted_output(combined) {
         return VERIFY_PROVEN();
     }
     if str_find_str(combined, String::from("VERIFICATION FAILED")) >= 0 {
@@ -941,7 +956,7 @@ fn verify_function_multi_property(esbmc_bin: String, f: IrFunction, m: IrModule,
     let proven: Vec<i64> = Vec::new();
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
-        return MultiPropertyResult { status: VERIFY_PROVEN(), verdict_ids: ids, verdict_proven: proven };
+        return MultiPropertyResult { status: VERIFY_PROVEN(), verdict_ids: ids, verdict_proven: proven, tainted: false };
     }
     let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, false);
     let fn_name: String = f.name;
@@ -951,14 +966,14 @@ fn verify_function_multi_property(esbmc_bin: String, f: IrFunction, m: IrModule,
     extra.push(String::from("--multi-property"));
     let r: EsbmcRun = run_esbmc(esbmc_bin, c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout, extra);
     if r.exit_code == -3 {
-        return MultiPropertyResult { status: VERIFY_NOT_FOUND(), verdict_ids: ids, verdict_proven: proven };
+        return MultiPropertyResult { status: VERIFY_NOT_FOUND(), verdict_ids: ids, verdict_proven: proven, tainted: false };
     }
     let combined: String = r.combined;
     let status: i64 = {
         if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
     };
     parse_multi_property_verdicts(combined, ids, proven);
-    MultiPropertyResult { status: status, verdict_ids: ids, verdict_proven: proven }
+    MultiPropertyResult { status: status, verdict_ids: ids, verdict_proven: proven, tainted: is_tainted_output(combined) }
 }
 
 // True when the function carries at least one `requires` clause — the only

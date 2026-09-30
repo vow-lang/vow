@@ -186,6 +186,22 @@ fn check_parse_unknown_reason_surfaces_solver_error_line() -> i64 {
     0
 }
 
+// Mirrors is_tainted_output's Rust twin in vow-verify/src/esbmc.rs: a clean
+// SUCCESSFUL run is not tainted, but either a memory-limit hit or an ERROR:
+// line anywhere in the combined output marks it tainted. `verify_function_multi_property`
+// (compiler/verifier.vow) relies on this to keep a tainted `--multi-property`
+// PASSED claim from being reported `proven` in `vow contracts --verify`
+// (esbmc/esbmc#4484).
+fn check_is_tainted_output() -> i64 {
+    let clean: String = String::from("VERIFICATION SUCCESSFUL\n");
+    if is_tainted_output(clean) { return 52; }
+    let error_tainted: String = String::from("ERROR: SMT solver failed\nVERIFICATION SUCCESSFUL\n");
+    if !is_tainted_output(error_tainted) { return 53; }
+    let memlimit_tainted: String = String::from("Out of memory\n");
+    if !is_tainted_output(memlimit_tainted) { return 54; }
+    0
+}
+
 fn main() -> i32 [io] {
     let r1: i64 = check_known_nondet_calls();
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -221,5 +237,7 @@ fn main() -> i32 [io] {
     if r16 != 0 { return i64_to_i32_wrap(r16); }
     let r17: i64 = check_parse_unknown_reason_surfaces_solver_error_line();
     if r17 != 0 { return i64_to_i32_wrap(r17); }
+    let r18: i64 = check_is_tainted_output();
+    if r18 != 0 { return i64_to_i32_wrap(r18); }
     0
 }

@@ -76,15 +76,25 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
 /// with no individual verdict for this clause is `unknown` — the whole function
 /// failed but ESBMC never refuted *this* clause, so it is genuinely undecided,
 /// not `failed`.
+///
+/// A per-claim `true` (PASSED) is trusted only when `tainted` is false. ESBMC
+/// 8.4+ can print a claim PASSED after an internal solver exception it should
+/// have failed on (esbmc/esbmc#4484) — the same false-proof risk
+/// `classify_esbmc_output` guards against for the overall verdict, so a
+/// tainted PASSED falls through to `overall` instead (which itself already
+/// excludes a tainted SUCCESSFUL). A per-claim `false` (FAILED) is still
+/// trusted regardless of taint — a real counterexample can never be a false
+/// proof.
 fn resolve_clause_status(
     vow_id: u32,
     verdicts: &std::collections::HashMap<u32, bool>,
     overall: &VerificationResult,
+    tainted: bool,
 ) -> &'static str {
     match verdicts.get(&vow_id) {
-        Some(true) => "proven",
+        Some(true) if !tainted => "proven",
         Some(false) => "failed",
-        None => match overall {
+        _ => match overall {
             VerificationResult::Proven | VerificationResult::ProvenIr => "proven",
             VerificationResult::Timeout => "timeout",
             VerificationResult::Unknown { .. } => "unknown",
@@ -133,14 +143,15 @@ fn update_contract_statuses(
         // instead of the siblings of a failed clause collapsing to `unknown`
         // (#81 PR-A). The single-counterexample verify cache is bypassed on this
         // path; precise per-clause status, not throughput, is the goal here.
-        let (overall, verdicts) =
+        let (overall, verdicts, tainted) =
             run_esbmc_multi_property(&esbmc, &c_src, limits.max_k_step, &func.name, config);
 
         for entry in entries.iter_mut() {
             if entry.function_id != func.id.0 {
                 continue;
             }
-            entry.status = resolve_clause_status(entry.vow_id, &verdicts, &overall).to_string();
+            entry.status =
+                resolve_clause_status(entry.vow_id, &verdicts, &overall, tainted).to_string();
         }
 
         // Vacuity probe (#81 PR-B): if the function's `requires` are
@@ -475,12 +486,47 @@ mod tests {
 
         let overall_failed = VerificationResult::Failed(vow_verify::parse_esbmc_output("unknown"));
         assert_eq!(
-            resolve_clause_status(7, &verdicts, &overall_failed),
+            resolve_clause_status(7, &verdicts, &overall_failed, false),
             "proven"
         );
         assert_eq!(
-            resolve_clause_status(8, &verdicts, &VerificationResult::Proven),
+            resolve_clause_status(8, &verdicts, &VerificationResult::Proven, false),
             "failed"
+        );
+    }
+
+    #[test]
+    fn resolve_clause_status_distrusts_per_claim_proven_when_tainted() {
+        // esbmc/esbmc#4484: ESBMC 8.4+ can print an individual claim PASSED
+        // after an internal solver exception. A tainted run must not let that
+        // PASSED verdict win — it falls through to `overall` (itself already
+        // guarded against a tainted SUCCESSFUL by `classify_esbmc_output`) —
+        // while a genuine per-claim FAILED is still trusted regardless.
+        let mut verdicts = std::collections::HashMap::new();
+        verdicts.insert(7u32, true);
+        verdicts.insert(8u32, false);
+
+        assert_eq!(
+            resolve_clause_status(7, &verdicts, &VerificationResult::Proven, true),
+            "proven",
+            "overall still legitimately proven, so the fallback is proven too"
+        );
+        assert_eq!(
+            resolve_clause_status(
+                7,
+                &verdicts,
+                &VerificationResult::Unknown {
+                    reason: "ERROR: SMT solver failed".to_string(),
+                },
+                true,
+            ),
+            "unknown",
+            "tainted per-claim PASSED must not override an Unknown overall"
+        );
+        assert_eq!(
+            resolve_clause_status(8, &verdicts, &VerificationResult::Proven, true),
+            "failed",
+            "a per-claim FAILED is trusted even when the run is tainted"
         );
     }
 
@@ -514,13 +560,16 @@ mod tests {
             ),
         ];
         for (overall, expected) in &cases {
-            assert_eq!(resolve_clause_status(missing, &empty, overall), *expected);
+            assert_eq!(
+                resolve_clause_status(missing, &empty, overall, false),
+                *expected
+            );
         }
 
         // The `Failed(_)` fallback is intentionally `unknown`, not `failed`.
         let overall_failed = VerificationResult::Failed(vow_verify::parse_esbmc_output("unknown"));
         assert_eq!(
-            resolve_clause_status(missing, &empty, &overall_failed),
+            resolve_clause_status(missing, &empty, &overall_failed, false),
             "unknown"
         );
     }
