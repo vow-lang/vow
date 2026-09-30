@@ -346,18 +346,29 @@ def _spans_by_code(diagnostics):
 
 
 def _dropped_spans(rust_diagnostics, self_diagnostics):
-    """Diagnostics the self-hosted side reports with no location at all."""
-    rust_spans = _spans_by_code(rust_diagnostics)
+    """Located Rust diagnostics whose self-hosted counterpart has no location.
+
+    A self-hosted diagnostic at offset 0, length 0 is a dropped location. It is
+    charged to a Rust diagnostic with no located self-hosted twin of the same
+    code, so the two sides may disagree on codes and counts and the drop is
+    still seen.
+    """
     self_spans = _spans_by_code(self_diagnostics)
-    if len(rust_spans) != len(self_spans):
+    spanless = sum(1 for _, offset, length in self_spans if offset == 0 and length == 0)
+    if not spanless:
         return []
-    return [
-        (code, rust_offset, rust_length)
-        for (code, rust_offset, rust_length), (_, self_offset, self_length) in zip(
-            rust_spans, self_spans
-        )
-        if rust_length > 0 and self_offset == 0 and self_length == 0
-    ]
+    located_twins = Counter(
+        code for code, offset, length in self_spans if offset or length
+    )
+    unmatched = []
+    for code, offset, length in _spans_by_code(rust_diagnostics):
+        if length == 0:
+            continue
+        if located_twins[code] > 0:
+            located_twins[code] -= 1
+        else:
+            unmatched.append((code, offset, length))
+    return unmatched[:spanless]
 
 
 def _span_errors(rust_diagnostics, self_diagnostics, fixture_name):

@@ -615,6 +615,12 @@ fn parse_block(p: Parser) -> i64 {
     arena_add_blk(p.arena, stmts_lid, -1, span)
 }
 
+fn parse_block_expr(p: Parser) -> i64 {
+    let span_start: i64 = peek(p).span_start;
+    let bid: i64 = parse_block(p);
+    arena_add_expr(p.arena, EXPR_BLOCK(), bid, 0, 0, span_pack_to_here(p, span_start))
+}
+
 fn parse_stmt(p: Parser) -> i64 {
     if at(p, tok_kw_let()) {
         parse_let_stmt(p)
@@ -846,23 +852,23 @@ fn parse_call_args(p: Parser) -> i64 {
 fn parse_primary(p: Parser) -> i64 {
     let t: Token = peek(p);
     let tag: i64 = t.tag;
-    // Heap-producing expressions (struct literals, calls, namespaced
-    // enum/struct ctors via parse_path_expr) need real spans so the
-    // region pass's `RegionRootEscape` notes anchor to source.
+    // Every expression carries a real span: diagnostics, `vow contracts` offsets
+    // and the region pass's `RegionRootEscape` notes all anchor on it.
     let span_start: i64 = t.span_start;
     if tag == tok_lit_int() {
         let _adv: Token = advance(p);
         arena_add_int_expr(p.arena, t.int_lo, t.int_hi, span_pack_to_here(p, span_start))
     } else if tag == tok_lit_int_suffixed() {
         let _adv: Token = advance(p);
-        let lit_eid: i64 = arena_add_int_expr(p.arena, t.int_lo, t.int_hi, span_pack_to_here(p, span_start));
+        let lit_span: i64 = span_pack_to_here(p, span_start);
+        let lit_eid: i64 = arena_add_int_expr(p.arena, t.int_lo, t.int_hi, lit_span);
         if t.int_val2 == tok_suffix_u64() || t.int_val2 == tok_suffix_i128() || t.int_val2 == tok_suffix_u128() {
             let type_name: String = if t.int_val2 == tok_suffix_u64() { String::from("u64") }
                 else if t.int_val2 == tok_suffix_i128() { String::from("i128") }
                 else { String::from("u128") };
             let type_sid: i64 = arena_intern_str(p.arena, type_name);
-            let target_tid: i64 = arena_add_type(p.arena, TY_NAMED(), type_sid, 0, span_pack_to_here(p, span_start));
-            arena_add_expr(p.arena, EXPR_CAST(), lit_eid, target_tid, 0, span_pack_to_here(p, span_start))
+            let target_tid: i64 = arena_add_type(p.arena, TY_NAMED(), type_sid, 0, lit_span);
+            arena_add_expr(p.arena, EXPR_CAST(), lit_eid, target_tid, 0, lit_span)
         } else {
             lit_eid
         }
@@ -943,8 +949,7 @@ fn parse_primary(p: Parser) -> i64 {
         let _kw: Token = advance(p);
         arena_add_expr(p.arena, EXPR_CONTINUE(), 0, 0, 0, span_pack_to_here(p, span_start))
     } else if tag == tok_lbrace() {
-        let bid: i64 = parse_block(p);
-        arena_add_expr(p.arena, EXPR_BLOCK(), bid, 0, 0, span_pack_to_here(p, span_start))
+        parse_block_expr(p)
     } else if tag == tok_lparen() {
         let _lp: Token = advance(p);
         if at(p, tok_rparen()) {
@@ -1040,9 +1045,7 @@ fn parse_if_expr(p: Parser) -> i64 {
         if at(p, tok_kw_if()) {
             parse_if_expr(p)
         } else {
-            let else_start: i64 = peek(p).span_start;
-            let else_bid: i64 = parse_block(p);
-            arena_add_expr(p.arena, EXPR_BLOCK(), else_bid, 0, 0, span_pack_to_here(p, else_start))
+            parse_block_expr(p)
         }
     } else {
         -1
@@ -1093,9 +1096,7 @@ fn parse_match_expr(p: Parser) -> i64 {
         let pat: i64 = parse_pattern(p);
         let _fa: bool = expect(p, tok_fat_arrow());
         let body: i64 = if at(p, tok_lbrace()) {
-            let arm_start: i64 = peek(p).span_start;
-            let bid: i64 = parse_block(p);
-            arena_add_expr(p.arena, EXPR_BLOCK(), bid, 0, 0, span_pack_to_here(p, arm_start))
+            parse_block_expr(p)
         } else {
             parse_expr(p)
         };

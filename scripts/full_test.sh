@@ -1433,7 +1433,9 @@ done
 # published contracts schema would otherwise mask a real quality regression:
 #   `description`   renders a cast as ` as <type>` in the self-hosted printer
 #                   (compiler/lower.vow) but ` as i64` in the Rust one — #1113.
-#   `source.offset` is always 0 in the self-hosted output — #1135.
+#   `source.offset` anchors on the predicate in the self-hosted output but on
+#                   the `requires:`/`ensures:` keyword in the Rust one — the
+#                   part of #1135 its parser fix left open.
 # Widen this case to a full compare_json once both are fixed.
 quality_fixture="tests/fixtures/contracts/quality_shapes.vow"
 rust_quality_json="$TMPDIR/quality_parity_rust.json"

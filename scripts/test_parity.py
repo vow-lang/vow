@@ -464,6 +464,83 @@ class CompareErrorSpanParityTest(unittest.TestCase):
             [], parity.compare_error(self.failed(1, 2), self.failed(0, 0), 1, 1)
         )
 
+    def span_errors(self, rust, self_hosted, fixture_name):
+        """Only the span verdict, whatever the two sides disagree on elsewhere."""
+        return [
+            error
+            for error in self.compare(rust, self_hosted, fixture_name)
+            if error.startswith("span: ")
+        ]
+
+    @staticmethod
+    def failed_many(*diagnostics):
+        return document(
+            "CompileFailed",
+            diagnostics=[
+                {"error_code": code, "span": {"offset": offset, "length": length}}
+                for code, offset, length in diagnostics
+            ],
+        )
+
+    def test_dropped_location_is_seen_when_self_reports_extra_diagnostics(self):
+        errors = self.span_errors(
+            self.failed_many(("A", 10, 5)),
+            self.failed_many(("A", 0, 0), ("B", 30, 4)),
+            "other.vow",
+        )
+
+        self.assertEqual(["span: self reports no location for [('A', 10, 5)]"], errors)
+
+    def test_dropped_location_is_seen_when_self_reports_fewer_diagnostics(self):
+        errors = self.span_errors(
+            self.failed_many(("A", 10, 5), ("B", 30, 4)),
+            self.failed_many(("A", 0, 0)),
+            "other.vow",
+        )
+
+        self.assertEqual(["span: self reports no location for [('A', 10, 5)]"], errors)
+
+    def test_dropped_location_is_charged_to_the_diagnostic_that_lost_it(self):
+        errors = self.span_errors(
+            self.failed_many(("A", 10, 5), ("A", 30, 6)),
+            self.failed_many(("A", 10, 5), ("A", 0, 0)),
+            "other.vow",
+        )
+
+        self.assertEqual(["span: self reports no location for [('A', 30, 6)]"], errors)
+
+    def test_dropped_location_is_seen_when_the_error_codes_diverge(self):
+        errors = self.span_errors(
+            self.failed_many(("LinearTypeViolation", 126, 44)),
+            self.failed_many(("RegionLinear", 0, 0)),
+            "other.vow",
+        )
+
+        self.assertEqual(
+            ["span: self reports no location for [('LinearTypeViolation', 126, 44)]"],
+            errors,
+        )
+
+    def test_located_diagnostics_are_not_charged_as_dropped(self):
+        self.assertEqual(
+            [],
+            self.span_errors(
+                self.failed_many(("A", 10, 5), ("A", 30, 6)),
+                self.failed_many(("A", 11, 5), ("A", 31, 6)),
+                "other.vow",
+            ),
+        )
+
+    def test_tracked_fixture_still_dropping_with_an_extra_diagnostic_passes(self):
+        self.assertEqual(
+            [],
+            self.span_errors(
+                self.failed_many(("IoError", 48, 25)),
+                self.failed_many(("IoError", 0, 0), ("Extra", 7, 3)),
+                "missing_module.vow",
+            ),
+        )
+
 
 class CompareTestTest(unittest.TestCase):
     @staticmethod
