@@ -1,341 +1,373 @@
 # PLAN: Migrate process Builtin Operations to the Operation Catalogue (#1273)
 
-## §0. Preflight — #1270 must land first
+**Revision note (2026-09-30):** this plan supersedes the version committed 2026-09-13. That
+version was written against a local preview of #1270's branch and assumed the blocker was still
+unmerged. #1270 merged as PR #1279 (`refactor(codegen): source print_* facts from an Operation
+Catalogue`, merged 2026-09-13T20:56:59Z). This revision was re-verified directly against
+`origin/main` (HEAD `f59d2f88`, 55 commits ahead of this branch's base `0cf9d948`) via a
+detached worktree, not against the stale preview. Every file/function/field name below is a
+direct read of the merged code, not a guess. A prior implementation attempt on this branch
+correctly detected the old blocker and exited without touching code — no production code exists
+on this branch yet, so this revision is a pure re-plan.
 
-As of 2026-09-13, `origin/main` HEAD is `0cf9d948`. Issue #1270 (the Operation Catalogue
-tracer bullet: `docs/spec/operations.json`, `docs/spec/schemas/operation-catalogue.schema.json`,
-`scripts/generate_ops.py`, the generated `op_catalogue.rs` modules, and the
-`// GENERATE:OP_CATALOGUE` block in `compiler/lower.vow`) is **not merged** — no PR exists for
-it, and `origin/main` has none of this infrastructure. Its work-in-progress branch
-`sym/vow/1270-tracer-bullet-catalogue-driven-print-builtin-operations-abi-runtime-symbol-facts`
-exists locally (shared object store across worktrees) with 5 commits and is based exactly on
-`origin/main`'s current tip, so it is a clean, non-diverged preview of what #1270 will land.
-Sibling issues #1271 and #1272 hit this identical blocker during their own planning/preflight
-runs and independently concluded: do not scaffold the catalogue infrastructure inside this
-issue's slice (it would race #1271/#1272, who would build the same files), and do not cherry-pick
-#1270's commits into this branch.
+## §0. Preflight — rebase required, blocker cleared
 
-This plan is written against **#1270's branch shape** (verified directly by reading its diff
-against `origin/main`, commit `473db70a` et al.), citing concrete function/file names, but by
-**role**: implementation must re-verify every cited path and shape against whatever actually
-lands on `main` once #1270 merges, since names could still change before that PR is reviewed.
+`origin/main` now has the real Operation Catalogue infrastructure. This branch is still based on
+`0cf9d948`, pre-dating it entirely. **Implementation-stage step 1 (hard precondition):**
 
-**Implementation-stage step 1 (hard precondition, before any other slice):**
-1. `git log origin/main --grep 1270` and `gh pr list --search 1270 --state all` — confirm a
-   merged PR exists.
-2. `git show origin/main:docs/spec/operations.json` and
-   `git show origin/main:scripts/generate_ops.py` — confirm both exist on `main`.
-3. If either check fails, do **not** build the catalogue scaffolding yourself. Post
-   `gh issue comment 1273` stating #1270 is still unmerged, and exit cleanly without applying a
-   handoff label (matching #1271/#1272's precedent) — the branch keeps this `PLAN.md`, ready to
-   execute once #1270 lands.
-4. If both checks pass, `git rebase` (or merge) this branch onto post-merge `main`, then
-   re-read the actual `docs/spec/operations.json`, `scripts/generate_ops.py`,
-   `vow-ir/src/lower/op_catalogue.rs`, and `compiler/lower.vow`'s `GENERATE:OP_CATALOGUE` block
-   to confirm the shapes below still match before starting slice 2.
-
-A `gh issue comment 1273` has been posted from the planning stage recording the same
-assumption and the two scope decisions in §7/§8 below, so a reviewer doesn't have to re-derive
-them from this file alone.
+1. `git fetch origin main` and `git rebase origin/main` (or merge) this branch. Expect no
+   conflicts — nothing has been added to this branch yet besides `PLAN.md`.
+2. Re-run the verification greps in §2/§3 below against the post-rebase tree before writing any
+   code — `main` moves fast (55 commits since this branch's base, including #1351 which
+   restructured the heap-tag classifier this plan touches in §3). If any cited function name has
+   moved again, treat this plan's *facts* (schema shape, scope decision in §7) as authoritative
+   and re-locate the function by grepping for it, rather than assuming the plan is wrong.
+3. Confirm no sibling issue landed first: `gh pr list --search 1271 --state all` and
+   `gh pr list --search 1272 --state all`. As of this writing, neither has a merged PR — both
+   exist only as unmerged local branches (`sym/vow/1271-...`, `sym/vow/1272-...`) that also
+   haven't extended `docs/spec/operations.json` yet. If either merges before this issue is
+   implemented, re-read `docs/spec/operations.json` and `scripts/generate_operations.py` fresh,
+   since a merged #1271 in particular would add `arena_routing`/`verifier_model` fields this plan
+   currently has to introduce itself (see §7).
 
 ## §1. Problem restated
 
 Eleven `process_*` Builtin Operations (`process_exit`, `process_run`, `process_get_stdout`,
 `process_get_stderr`, `process_start`, `process_wait`, `process_wait_timeout`,
-`process_poll_wait`, `process_kill`, `process_stdout_for`, `process_stderr_for`) each have their
-runtime-symbol, Cranelift ABI signature, and IR return-shape facts hand-duplicated across five
-Rust sites (`vow-ir/src/lower/mod.rs::vow_static_builtin_to_runtime`, its lockstep test table,
-`vow-codegen/src/cranelift_backend.rs::make_extern_sig`, `vow-clif-shim/src/lib.rs::make_extern_sig`)
-and two self-hosted sites (`compiler/lower.vow`'s `builtin_to_extern`/`builtin_ret_ty` if-chains).
-All eleven are `[Effect::IO]`-tagged, so none reach the verifier's `is_known_builtin`/`is_modelable`
-gate — this slice is a pure ABI/runtime-symbol/return-shape/doc migration, structurally identical
-to the print tracer bullet (#1270) and the filesystem/stdin/args/stderr slice (#1272), just with
-more entries and four `Ptr`-returning (heap) operations instead of print's three `Unit`-returning
-ones. The fix is to add these eleven operations to the Operation Catalogue
-(`docs/spec/operations.json`) and make both compilers' lowering/codegen call paths consult the
-catalogue's generated projection instead of their hand-written match arms, exactly as #1270 did
-for `print_*`.
+`process_poll_wait`, `process_kill`, `process_stdout_for`, `process_stderr_for`) have their
+runtime-symbol, Cranelift ABI signature, and IR return-type facts hand-duplicated across four
+call sites: `vow-ir/src/lower/mod.rs::vow_static_builtin_to_runtime`,
+`vow-codegen/src/cranelift_backend.rs::make_extern_sig`, `vow-clif-shim/src/lib.rs::make_extern_sig`,
+and `compiler/lower.vow`'s `builtin_to_extern`/`builtin_ret_ty`. Four of them
+(`process_get_stdout`, `process_get_stderr`, `process_stdout_for`, `process_stderr_for`) also have
+a *second* hand-duplicated fact — their heap-allocated-`String`-result tag, consumed by
+`pin_to_root`/arena tracking — in `vow-ir/src/lower/mod.rs::builtin_result_tag` and its
+self-hosted mirror in `compiler/lower.vow`. All eleven are `[Effect::IO]`-tagged, so this is a
+pure ABI/runtime-symbol/return-shape/arena-routing/doc migration; it does not touch the
+verifier's `is_known_builtin`/`is_modelable` gate (confirmed empty of any `process_*` symbol on
+both `vow-verify/src/c_emitter.rs` and its self-hosted mirror `compiler/c_emitter.vow`).
 
-## §2. Concrete operation inventory (verified against `origin/main`)
+The Operation Catalogue (`docs/spec/operations.json` + `scripts/generate_operations.py`) already
+does this for three `print_*` operations (PR #1279), but **only for `Unit`-returning, non-heap
+operations** — its `RETURN_TOKENS` vocabulary currently defines only `"unit"`, and its schema has
+no arena/heap-routing field at all. Six of the eleven `process_*` operations return `I64`, four
+return a heap `Ptr`, and issue #1273's acceptance criterion #1 explicitly requires the catalogue
+to record "arena-routing categories where applicable." **This slice therefore has to extend the
+generator's schema/codegen (not just append data)** before it can add a single `process_*` entry
+— this is the main way this plan differs from the print-only precedent, and from the version of
+this plan written before #1270 merged.
 
-| surface_name | runtime_symbol | ir_return_shape | abi_params | abi_return | vow-types signature (env.rs:241-271) |
+## §2. Verified current state of the Operation Catalogue (read from `origin/main` directly)
+
+**Catalogue data** — `docs/spec/operations.json`, 3 entries today, fields
+`name`/`runtime_symbol`/`params`/`return`/`doc_signature`/`effects`:
+```json
+{"name": "print_str", "runtime_symbol": "__vow_string_print", "params": ["ptr"], "return": "unit", "doc_signature": "fn(s: String) -> ()", "effects": "[io]"}
+```
+
+**Generator** — `scripts/generate_operations.py` (NOT `generate_ops.py` — renamed at some point
+before merge). Key symbols:
+- `RETURN_TOKENS = {"unit": {"rust_ty": "Ty::Unit", "ity_const": "ITY_UNIT()", "clif_ret": None}}`
+  — **only one entry exists**. Adding `process_*` requires adding `"i64"` and `"ptr"` entries.
+- `PARAM_TOKENS = {"ptr": "types::I64", "i64": "types::I64", "u64": "types::I64"}` — already
+  covers every ABI param shape `process_*` needs (all params are `I64`-width at the Cranelift
+  level; no change needed here).
+- `load_catalogue`, `check_doc_facts` (cross-checks `doc_signature`/`effects` against
+  `docs/spec/grammar.md`, `vow/src/skill.rs`, `compiler/main.vow`), `gen_rust_ir_block`,
+  `gen_cranelift_block`, `gen_vow_lower_block`, `write_projections`/`check_projections` (the
+  `--check` flag), `extract_builtin_signatures_table`.
+- **`extract_builtin_signatures_table` already sweeps the whole level-3 `### Builtin Function
+  Signatures` section across every `####` subsection** (confirmed by reading its docstring and
+  loop logic directly) — it is **not** scoped to `#### Print / IO` the way an earlier plan draft
+  assumed. **No change is needed to broaden this function or its heading target** — that entire
+  slice from the pre-merge plan draft is now moot.
+- A test already exists, `GenCraneliftBlockTest.test_non_unit_return_token_pushes_return_slot` in
+  `scripts/test_generate_operations.py`, that proves the `clif_ret` plumbing works for a
+  temporary non-`unit` token (`"fake_i64"`) by monkeypatching `RETURN_TOKENS` mid-test. This
+  de-risks adding real `"i64"`/`"ptr"` tokens — the plumbing is already exercised, just not with a
+  permanent token.
+
+**Generated splice targets** (all four wrapped in `// GENERATE:OPERATIONS:START/END`, not
+`OP_CATALOGUE`):
+- `vow-ir/src/lower/mod.rs` → `fn catalogue_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)>`, consulted first by `vow_static_builtin_to_runtime` before its hand-written match.
+- `vow-codegen/src/cranelift_backend.rs` → `fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool`, consulted first by `make_extern_sig`.
+- `vow-clif-shim/src/lib.rs` → same `catalogue_extern_sig`, consulted first by its own `make_extern_sig` (kept byte-identical to the codegen crate's copy per existing convention).
+- `compiler/lower.vow` → `fn catalogue_builtin_to_extern(name: String) -> String` and `fn catalogue_builtin_ret_ty(name: String) -> i64`, consulted first by `builtin_to_extern`/`builtin_ret_ty`.
+
+**Heap-tag classifier** (separate from the four splice targets above — PR #1351 restructured
+this into a pure classifier, but it is **not** part of the Operation Catalogue's generated code
+today):
+- Rust: `enum BuiltinResultTag { StringHeap, VecHeap, OptionOf(Ty) }` +
+  `fn builtin_result_tag(name: &str) -> Option<BuiltinResultTag>` in `vow-ir/src/lower/mod.rs`,
+  still hand-listing `"process_get_stdout" | "process_get_stderr" | "process_stdout_for" |
+  "process_stderr_for" | "proc_sample"` (among others) in its `StringHeap` arm. Dispatched by
+  `fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId)`.
+- Self-hosted mirror in `compiler/lower.vow`: `fn builtin_result_tag(name: String) -> i64`
+  (sentinels `BRT_NONE()`/`BRT_STRING()`/`BRT_VEC()` from `compiler/ir.vow`) + the same
+  `tag_builtin_result` dispatcher, with the identical five names hand-listed as `BRT_STRING()`.
+- Pinned by tests today: Rust `builtin_result_tag_classifies_names` (in
+  `vow-ir/src/lower/mod.rs`'s test module) and self-hosted
+  `compiler/tests/test_lower_builtin_result_tag.vow` (`expect_tag(..., BRT_STRING(), N)` calls for
+  all five names). **Both must keep passing unchanged after migration** — they test behavior, not
+  implementation path.
+
+**Confirmed still hand-written, not yet catalogued** (all four call sites, unchanged names):
+`vow_static_builtin_to_runtime`, `make_extern_sig` (×2), `builtin_to_extern`/`builtin_ret_ty` all
+still have explicit `process_*` arms outside their respective marker blocks.
+
+**Verifier exclusion confirmed clean**: no `__vow_process_*` symbol appears in
+`vow-verify/src/c_emitter.rs::is_known_builtin` or its self-hosted mirror
+`compiler/c_emitter.vow::is_known_builtin`. No change needed (closes AC #6 — see §5).
+
+**Doc gap confirmed real**: `docs/spec/grammar.md`'s `#### Process Management` table (under the
+level-3 `### Builtin Function Signatures` heading, line ~1063/1224) lists 10 of the 11 operations
+— `process_poll_wait` is missing. `check_doc_facts` will reject any catalogue entry whose name
+has no `grammar.md` row, so this row must be added before `process_poll_wait` can be catalogued.
+
+**No JSON schema file exists** (`docs/spec/schemas/` has no `operation-catalogue.schema.json` —
+validation is done entirely by `load_catalogue`'s Python-side checks). No schema doc to update.
+
+**No `compiler/tests/test_op_catalogue.vow` exists.** There is no dedicated self-hosted test file
+for catalogue consumption today; `print_*` catalogue behavior is verified indirectly through
+whatever existing lowering/extern-resolution tests exercise `builtin_to_extern`/`builtin_ret_ty`
+end-to-end. This plan adds `process_*` coverage to that same indirect style rather than inventing
+a new file, unless a `test_op_catalogue.vow`-equivalent surfaces during the post-rebase re-check.
+
+## §3. Operation inventory (verified return types from `vow-ir/src/lower/mod.rs` directly)
+
+| name | runtime_symbol | params | return | rust `Ty` | arena_routing |
 |---|---|---|---|---|---|
-| `process_exit` | `__vow_process_exit` | `Unit` | `[I64]` | `null` | `(i64) -> Never [IO]` |
-| `process_run` | `__vow_process_run` | `I64` | `[I64, I64]` | `I64` | `(Str, Vec<Str>) -> I64 [IO]` |
-| `process_get_stdout` | `__vow_process_get_stdout` | `Ptr` | `[]` | `I64` | `() -> Str [IO]` |
-| `process_get_stderr` | `__vow_process_get_stderr` | `Ptr` | `[]` | `I64` | `() -> Str [IO]` |
-| `process_start` | `__vow_process_start` | `I64` | `[I64, I64]` | `I64` | `(Str, Vec<Str>) -> I64 [IO]` |
-| `process_wait` | `__vow_process_wait` | `I64` | `[I64]` | `I64` | `(I64) -> I64 [IO]` |
-| `process_wait_timeout` | `__vow_process_wait_timeout` | `I64` | `[I64, I64]` | `I64` | `(I64, I64) -> I64 [IO]` |
-| `process_poll_wait` | `__vow_process_poll_wait` | `I64` | `[I64, I64]` | `I64` | `(I64, I64) -> I64 [IO]` |
-| `process_kill` | `__vow_process_kill` | `I64` | `[I64]` | `I64` | `(I64) -> I64 [IO]` |
-| `process_stdout_for` | `__vow_process_stdout_for` | `Ptr` | `[I64]` | `I64` | `(I64) -> Str [IO]` |
-| `process_stderr_for` | `__vow_process_stderr_for` | `Ptr` | `[I64]` | `I64` | `(I64) -> Str [IO]` |
+| `process_exit` | `__vow_process_exit` | `[i64]` | `unit` | `Ty::Unit` | `none` |
+| `process_run` | `__vow_process_run` | `[ptr, ptr]` | `i64` | `Ty::I64` | `none` |
+| `process_get_stdout` | `__vow_process_get_stdout` | `[]` | `ptr` | `Ty::Ptr` | `heap_fresh` |
+| `process_get_stderr` | `__vow_process_get_stderr` | `[]` | `ptr` | `Ty::Ptr` | `heap_fresh` |
+| `process_start` | `__vow_process_start` | `[ptr, ptr]` | `i64` | `Ty::I64` | `none` |
+| `process_wait` | `__vow_process_wait` | `[i64]` | `i64` | `Ty::I64` | `none` |
+| `process_wait_timeout` | `__vow_process_wait_timeout` | `[i64, i64]` | `i64` | `Ty::I64` | `none` |
+| `process_poll_wait` | `__vow_process_poll_wait` | `[i64, i64]` | `i64` | `Ty::I64` | `none` |
+| `process_kill` | `__vow_process_kill` | `[i64]` | `i64` | `Ty::I64` | `none` |
+| `process_stdout_for` | `__vow_process_stdout_for` | `[i64]` | `ptr` | `Ty::Ptr` | `heap_fresh` |
+| `process_stderr_for` | `__vow_process_stderr_for` | `[i64]` | `ptr` | `Ty::Ptr` | `heap_fresh` |
 
-Pinned facts that must not change during this migration:
-- `process_exit`'s vow-types signature returns `Ty::Never`, but `vow-ir::Ty` has no `Never`
-  variant (checked `vow-ir/src/types.rs:236-253`) and the lowering site has always recorded
-  `Ty::Unit` for it (`vow-ir/src/lower/mod.rs:123`, `compiler/lower.vow:1620`). The catalogue
-  entry records `ir_return_shape: "Unit"` to preserve this pre-existing behavior; this is not a
-  bug this slice fixes.
-- `docs/spec/grammar.md`'s `#### Process Management` table (line ~1213) currently lists only
-  **10** of the 11 operations — `process_poll_wait` is missing (also missing from
-  `vow/src/skill.rs`'s hand-listed JSON, which is generated from this same table, so the gap is
-  consistent, not a separate divergence). This is a genuine pre-existing spec gap uncovered by
-  the catalogue's own `check_grammar_presence` cross-check once `process_poll_wait` is added to
-  the catalogue. Fixed in slice 2 below (in scope — the catalogue can't validate this operation
-  otherwise, unlike #1271's unrelated `#1276` finding which was filed separately because nothing
-  in that slice depended on it).
+`params`/`return` tokens confirmed against the current hand-written `make_extern_sig` arms in
+`vow-codegen/src/cranelift_backend.rs` (e.g. `process_run`'s two `*VowVec` params, `process_wait`'s
+single `i64` param) and against `vow_static_builtin_to_runtime`'s current `Ty` values (line-cited
+in the pre-rebase read; re-confirm post-rebase since #1351 landed between then and now, though it
+touched `builtin_result_tag`, not `vow_static_builtin_to_runtime`).
 
-## §3. Files to touch
+**Pinned fact, do not "fix" during this migration:** `process_exit`'s `vow-types` signature
+returns `Ty::Never` conceptually, but `vow-ir::Ty` has no `Never` variant, and the lowering site
+has always recorded `Ty::Unit` for it. The catalogue entry uses `return: "unit"` to preserve this
+pre-existing behavior; this is not a bug this slice fixes.
 
-**Rust (`crates/` equivalents at repo root):**
-- `docs/spec/operations.json` — append the 11 entries from §2.
+`doc_signature`/`effects` per operation: read verbatim from `docs/spec/grammar.md`'s `Process
+Management` table for the 10 existing rows (do not retype by hand — copy the exact strings so
+`check_doc_facts` matches on the first try); author a new row for `process_poll_wait` matching its
+current Rust/self-hosted signature `(pid: i64, timeout_ms: i64) -> i64 [IO]` (confirm against
+`vow-runtime/src/lib.rs::__vow_process_poll_wait`'s actual parameter meaning before writing the
+row — do not guess parameter names from the ABI param count alone).
+
+## §4. Files to touch
+
+**Rust, generator infrastructure:**
+- `scripts/generate_operations.py` — add `"i64"` and `"ptr"` entries to `RETURN_TOKENS`
+  (`rust_ty: "Ty::I64"`/`"Ty::Ptr"`, `ity_const: "ITY_I64()"`/`"ITY_PTR()"`, `clif_ret:
+  "types::I64"` for both — Cranelift has no distinct pointer type, everything is `I64`-width).
+  Add an `arena_routing` field: extend `REQUIRED_FIELDS` (or make it optional with a validated
+  enum `{"none", "heap_fresh"}` if any existing/parallel-branch precedent uses optional — re-check
+  #1271's branch shape post-rebase per §0 step 3 before deciding required-vs-optional, to avoid
+  inventing a third incompatible schema shape). Add a fourth generated function,
+  `catalogue_builtin_result_tag`, to `gen_rust_ir_block` and `gen_vow_lower_block` (mapping
+  `arena_routing: "heap_fresh"` → `Some(BuiltinResultTag::StringHeap)` / `BRT_STRING()`, `"none"` →
+  `None`/`BRT_NONE()`), spliced into `vow-ir/src/lower/mod.rs` and `compiler/lower.vow` alongside
+  the existing three splice functions.
+- `scripts/test_generate_operations.py` — update `test_real_catalogue_loads_and_matches_print_ops`
+  (currently an exact-equality assert `ops == PRINT_OPS`; will need to become `ops[:3] ==
+  PRINT_OPS` or equivalent once real entries are appended — do not weaken it to a subset-only
+  check without reason). Add fixture coverage for a non-`unit` return (`process_run`, `return:
+  "i64"`), a `ptr` return (`process_get_stdout`), and an `arena_routing: "heap_fresh"` entry
+  exercising the new `catalogue_builtin_result_tag` generation, mirroring the existing
+  `GenRustIrBlockTest`/`GenVowLowerBlockTest` structure.
+- `docs/spec/operations.json` — append the 11 entries from §3.
 - `docs/spec/grammar.md` — add the missing `process_poll_wait` row to `#### Process Management`.
-- `scripts/generate_ops.py` — broaden `check_grammar_presence` from the hardcoded
-  `heading="Print / IO", heading_level=4` to `heading="Builtin Function Signatures",
-  heading_level=3` (this H3 already accumulates every H4 subsection's tables, including
-  `Process Management` — confirmed via `extract_table`'s level-comparison logic in
-  `scripts/generate_help.py`, which already uses this same H3 to build the master `--help`
-  builtins table). Update the function's error message accordingly (it currently says
-  `"Print / IO table"`).
-- `scripts/test_generate_ops.py` — update `LoadCatalogueTest.test_valid_catalogue_loads`'s
-  hardcoded `{"print_str", "print_i64", "print_u64"}` set to the full 14-name union; extend
-  `RenderTest`'s fixture with a non-`Unit`/non-null-return case (`process_run`: `abi_return: I64`)
-  and a `Ptr`-return case (`process_get_stdout`) so `render_lower_rs`/`render_abi_rs`'s currently
-  print-only-exercised branches get real coverage; rename or extend
-  `test_real_catalogue_matches_grammar_print_io_table` to reflect the broadened heading (cosmetic,
-  but keep the assertion of an empty error list against the *real* catalogue + grammar.md).
-- `vow-ir/src/lower/mod.rs` — remove the 11 `process_*` arms from
-  `vow_static_builtin_to_runtime` (currently lines 123-133); add a dedicated
-  `op_catalogue_process_builtins_resolve_from_the_generated_projection` test mirroring #1270's
-  print test; leave `process_*` entries in the existing
-  `builtins_lower_to_runtime_symbols_and_return_types` lockstep table untouched (that table is the
-  single end-to-end behavior pin for every builtin, print or process).
-- `vow-codegen/src/cranelift_backend.rs` — remove the 11 `"__vow_process_*"` arms from
-  `make_extern_sig`'s hand-written match (currently ~lines 2858-2896); add
-  `process_builtins_extern_sigs_come_from_the_operation_catalogue` test mirroring #1270's.
-- `vow-clif-shim/src/lib.rs` — same removal (currently ~lines 3753-3790) and same test, kept
-  byte-identical to the codegen crate's copy per the existing "keep in sync" convention.
+  Run `uv run python scripts/generate_help.py` afterward and confirm the diff is exactly that one
+  new line propagating into `vow/src/skill.rs`, `skills/vow/reference/grammar.md`, and
+  `compiler/main.vow`'s help JSON.
 
-**Self-hosted (`compiler/`):**
-- `compiler/lower.vow` — after running `scripts/generate_ops.py` to regenerate the
-  `GENERATE:OP_CATALOGUE` block (now containing 14 `if` lines per helper instead of 3), manually
-  remove the 11 now-redundant hand-written `if name == String::from("process_*") { return ...; }`
-  lines from `builtin_to_extern` (currently lines 1514-1524) and `builtin_ret_ty` (currently lines
-  1620-1630) — mirroring exactly how #1270 hand-deleted the `print_*` lines after regenerating the
-  marker block (the generator only rewrites content *between* the markers; it does not touch the
-  surrounding hand-written chains).
-- `compiler/tests/test_op_catalogue.vow` — extend with `process_*` assertions analogous to the
-  existing `print_*` checks (`op_catalogue_extern`/`op_catalogue_ret_ty` direct checks, plus
-  `builtin_to_extern`/`builtin_ret_ty` end-to-end checks for a couple of `process_*` names) and
-  keep the existing "unrelated builtin still resolves via fallback" check as-is.
+**Rust, consumption:**
+- `vow-ir/src/lower/mod.rs` — remove the 11 `process_*` arms from `vow_static_builtin_to_runtime`;
+  remove `"process_get_stdout" | "process_get_stderr" | "process_stdout_for" |
+  "process_stderr_for"` from `builtin_result_tag`'s `StringHeap` arm (leave `proc_sample` — it is
+  not `process_*`-prefixed and is explicitly owned by #1271/#1277, see §7). Update
+  `builtin_result_tag_classifies_names` and `builtins_lower_to_runtime_symbols_and_return_types`
+  (the lockstep table) — both should keep passing with the exact same assertions, now satisfied via
+  the catalogue path; add one new test,
+  `process_builtins_resolve_via_operation_catalogue`, asserting
+  `catalogue_builtin_to_runtime("process_run")` etc. directly.
+- `vow-codegen/src/cranelift_backend.rs` — remove the 11 `"__vow_process_*"` arms from
+  `make_extern_sig`; add `process_extern_sigs_come_from_the_operation_catalogue` asserting
+  `catalogue_extern_sig` produces the right params/returns for a couple of representative symbols.
+- `vow-clif-shim/src/lib.rs` — identical removal and test, kept in sync with the codegen crate.
+
+**Self-hosted:**
+- `compiler/lower.vow` — after regenerating the `GENERATE:OPERATIONS` block (now 14 entries per
+  helper, including the new `catalogue_builtin_result_tag`), manually remove the 11 redundant
+  `process_*` lines from `builtin_to_extern`/`builtin_ret_ty`'s hand-written chains, and remove
+  the four `process_*` names from the self-hosted `builtin_result_tag`'s `BRT_STRING()` arm
+  (leave `proc_sample`).
+- `compiler/tests/test_lower_builtin_result_tag.vow` — no assertion changes needed (behavior
+  preserved), but re-run explicitly after the removal to confirm the fallback-free catalogue path
+  produces identical `expect_tag` results.
+- Add `process_*` coverage wherever `print_*` catalogue consumption is currently exercised
+  end-to-end for `builtin_to_extern`/`builtin_ret_ty` (locate this during implementation per §2's
+  note that no dedicated `test_op_catalogue.vow` exists yet — either extend that file if one is
+  found post-rebase, or add a small new `compiler/tests/test_op_catalogue.vow` if none exists,
+  matching whatever pattern `print_*` uses).
 
 **Tests:**
-- `tests/run/process_catalogue_smoke.vow` — new e2e fixture (see §4 slice 10).
-- `vow-verify/src/c_emitter.rs` — one small regression test (see §4 slice 9).
+- `tests/run/process_catalogue_smoke.vow` — new e2e fixture (§5 slice 12).
 
-**No changes needed to:** `vow-runtime/src/lib.rs` (runtime symbol implementations and linkage
-are unchanged — only the lowering/codegen *tables that name them* move), `vow-types/src/env.rs`
-(signatures/effects are read, not modified, per the PRD's explicit scoping),
-`vow-verify/src/c_emitter.rs::is_known_builtin`/`is_modelable` bodies (confirmed no `process_*`
-symbol appears there today — see §5 slice 9), `compiler/c_emitter.vow` (same), and
-`compiler/main.vow`'s hand-written help-JSON `push_str` calls (fully regenerated by
-`scripts/generate_help.py` from `grammar.md`; #1270 needed no direct edit there either, since the
-values were already correct — same expectation here once the `process_poll_wait` row is added).
+**No changes needed to:** `vow-runtime/src/lib.rs` (runtime symbol implementations, linkage, and
+existing unit tests like `process_poll_wait_captures_stdout` are unchanged — only the tables that
+*name* these symbols move), `vow-types/src/env.rs` (signatures/effects are read, not modified),
+`vow-verify/src/c_emitter.rs` / `compiler/c_emitter.vow` (confirmed no `process_*` reference
+exists in either — §2), `compiler/main.vow`'s hand-written help-JSON (fully regenerated by
+`scripts/generate_help.py` from `grammar.md`), `extract_builtin_signatures_table`/
+`check_doc_facts` (already heading-agnostic — §2), any JSON schema file (none exists).
 
-## §4. TDD slices
+## §5. TDD slices
 
-1. **Preflight** (§0) — confirm #1270 merged, rebase, re-verify shapes. Not a code change; gates
-   every slice below.
-2. **Doc gap: add the missing `process_poll_wait` grammar row.** Red: none yet (this is additive
-   prose, not test-driven in the usual sense) — but it becomes a hard prerequisite the moment
-   slice 5's catalogue entry for `process_poll_wait` is added, since `check_grammar_presence`
-   would otherwise fail. Add the row to `docs/spec/grammar.md`'s `Process Management` table, then
-   run `uv run python scripts/generate_help.py` and confirm the only diff is the new
-   `process_poll_wait` line propagating into `vow/src/skill.rs`,
-   `skills/vow/reference/grammar.md`, and `compiler/main.vow`'s help JSON — no unrelated
-   reformatting.
-3. **Broaden `check_grammar_presence`'s heading target.** Red: write a `test_generate_ops.py`
-   case that calls `check_grammar_presence` with a fake entry whose `surface_name` lives only
-   under a non-`Print / IO` H4 (e.g. `"process_exit"`, expected to already be present in
-   `Process Management` once slice 2 lands) and assert it currently fails against the old
-   hardcoded heading. Green: retarget the heading to `"Builtin Function Signatures"`/H3, rerun —
-   passes. Update the existing `test_real_catalogue_matches_grammar_print_io_table` name/assert.
-4. **Catalogue data: append the 11 `process_*` entries.** Red: `uv run python
-   scripts/generate_ops.py --check` fails (entries present in `operations.json` and cross-checks
-   pass, but generated files haven't been regenerated yet — drift detected). Also update
-   `LoadCatalogueTest.test_valid_catalogue_loads`'s hardcoded name set and add
-   `process_run`/`process_get_stdout` to `RenderTest`'s fixture coverage (red until the renderer
-   assertions for non-`Unit` return shape and non-null `abi_return` are added). Green: run
-   `uv run python scripts/generate_ops.py` to regenerate `vow-ir/src/lower/op_catalogue.rs`,
-   `vow-codegen/src/cranelift_backend/op_catalogue.rs`, `vow-clif-shim/src/op_catalogue.rs`, and
-   `compiler/lower.vow`'s marker block; `--check` now passes.
-5. **Rust runtime-symbol/return-shape consumption.** Red: add
-   `op_catalogue_process_builtins_resolve_from_the_generated_projection` in
-   `vow-ir/src/lower/mod.rs` asserting `op_catalogue::lookup("process_exit")` etc. — passes
-   immediately since slice 4 already regenerated `op_catalogue.rs` (the "red" here is really
-   slice 4's `--check`). Green/refactor: remove the 11 `process_*` arms from
-   `vow_static_builtin_to_runtime`; rerun `cargo test -p vow-ir` and confirm
-   `builtins_lower_to_runtime_symbols_and_return_types` (the lockstep table) still passes
-   end-to-end via `vow_builtin_to_runtime`, proving the catalogue path is a transparent
-   substitution.
-6. **Rust ABI consumption.** Same pattern for `vow-codegen/src/cranelift_backend.rs` and
-   `vow-clif-shim/src/lib.rs`: add `process_builtins_extern_sigs_come_from_the_operation_catalogue`
-   asserting `extern_sig("__vow_process_run")` etc. match the ABI table in §2, then remove the 11
-   hand-written match arms from each file's `make_extern_sig`.
-7. **Self-hosted consumption.** After slice 4's regeneration, `compiler/lower.vow`'s
-   `GENERATE:OP_CATALOGUE` block already has the 14 entries. Red: `compiler/tests/test_op_catalogue.vow`
-   asserts `op_catalogue_extern(String::from("process_exit"))` etc. before the hand-written
-   `builtin_to_extern`/`builtin_ret_ty` lines are removed — passes trivially since the catalogue
-   helper is additive. Green/refactor: remove the 11 redundant `process_*` lines from
-   `builtin_to_extern`/`builtin_ret_ty`'s hand-written chains; rerun
-   `build/vowc build --no-verify compiler/tests/test_op_catalogue.vow` (or the project's
-   self-hosted test runner) and confirm the "unrelated builtin still resolves via fallback" case
-   (`fs_read`) still passes, proving the fallback chain is intact.
-8. **Regression guard for the untouched pin_to_root heap-tag chain (no production change).**
-   §7 explains why this slice deliberately does *not* touch `tag_builtin_result` (Rust) or the
-   `lctx_tag` if-chain (self-hosted) that mark `process_get_stdout`/`process_get_stderr`/
-   `process_stdout_for`/`process_stderr_for`'s call results as heap `"String"` for `pin_to_root`.
-   Add one regression test that pins this today-correct, unmodified behavior so a future refactor
-   of either lowering table can't silently drop the tag: assert (via the existing lowering-test
-   harness pattern used elsewhere in `vow-ir/src/lower/mod.rs`'s test module) that lowering a
-   direct call to each of the four operations still produces a result tagged `"String"` in
-   `ctx.inst_struct_type`.
-9. **Verifier purity confirmation (closes AC #6).** Red: none of the 11 `__vow_process_*` symbols
-   currently appear in `vow-verify/src/c_emitter.rs::is_known_builtin` (confirmed by direct grep
-   during planning — zero hits). Add a small test asserting
-   `!is_known_builtin("__vow_process_exit")` (and 1-2 more representative symbols) to freeze this
-   invariant; this is the concrete, testable form of "verified: no process_* operation is pure, so
-   no verifier-classifier category is recorded and no changes to `is_known_builtin`/
-   `is_modelable` or their self-hosted mirror `compiler/c_emitter.vow` are needed."
+1. **Preflight** (§0) — rebase onto `origin/main`, re-verify facts. Gates every slice below.
+2. **Doc gap: add the missing `process_poll_wait` grammar row.** Verify the true parameter
+   semantics against `vow-runtime/src/lib.rs::__vow_process_poll_wait` first. Add the row to
+   `docs/spec/grammar.md`; run `scripts/generate_help.py`; confirm only the expected propagation
+   diff.
+3. **Extend `RETURN_TOKENS` with `"i64"` and `"ptr"`.** Red: add a permanent-token variant of the
+   existing `test_non_unit_return_token_pushes_return_slot` pattern in
+   `scripts/test_generate_operations.py` asserting `gen_cranelift_block` emits a return-slot push
+   for an op using `return: "i64"` — fails against current `RETURN_TOKENS` (`KeyError`). Green: add
+   the two entries. Also assert `gen_rust_ir_block` emits `Ty::I64`/`Ty::Ptr` and
+   `gen_vow_lower_block` emits `ITY_I64()`/`ITY_PTR()` for the respective tokens.
+4. **Add the `arena_routing` field and `catalogue_builtin_result_tag` generation.** Red: a test
+   asserting a catalogue op with `arena_routing: "heap_fresh"` produces a `Some(StringHeap)`/
+   `BRT_STRING()` arm in the generated block, and one with `"none"` produces nothing (or an
+   explicit `None`/`BRT_NONE()`, matching whatever style `catalogue_builtin_to_runtime` already
+   uses for its "not found" case) — fails since the field/function don't exist yet. Green:
+   implement the field validation, the new `gen_*_block` additions, and the `--check` wiring.
+5. **Catalogue data: append the 11 `process_*` entries.** Red: `uv run python
+   scripts/generate_operations.py --check` fails (data present, generated files stale). Update
+   `test_real_catalogue_loads_and_matches_print_ops` and add the `process_run`/`process_get_stdout`
+   fixture coverage from §4. Green: run the generator to regenerate all four splice targets;
+   `--check` passes.
+6. **Rust runtime-symbol/return-shape/arena-tag consumption.** Remove the 11
+   `vow_static_builtin_to_runtime` arms and the 4 `builtin_result_tag` `StringHeap` arms; add
+   `process_builtins_resolve_via_operation_catalogue`; rerun
+   `builtins_lower_to_runtime_symbols_and_return_types` and `builtin_result_tag_classifies_names`
+   and confirm both still pass unchanged, proving the catalogue path is a transparent substitution.
+7. **Rust ABI consumption.** Remove the 11 hand-written arms from `make_extern_sig` in both
+   `vow-codegen/src/cranelift_backend.rs` and `vow-clif-shim/src/lib.rs`; add
+   `process_extern_sigs_come_from_the_operation_catalogue` to each.
+8. **Self-hosted consumption.** After slice 5's regeneration, `compiler/lower.vow`'s
+   `GENERATE:OPERATIONS` block already covers `process_*`. Remove the 11 redundant lines from
+   `builtin_to_extern`/`builtin_ret_ty` and the 4 `process_*` names from the self-hosted
+   `builtin_result_tag`; rerun `compiler/tests/test_lower_builtin_result_tag.vow` and whatever
+   end-to-end `builtin_to_extern`/`builtin_ret_ty` coverage exists (§4) — both must still pass.
+9. **Verifier purity confirmation (closes AC #6).** Add a small test asserting
+   `!is_known_builtin("__vow_process_exit")` (and 1-2 more) in both `vow-verify/src/c_emitter.rs`
+   and `compiler/c_emitter.vow`, freezing the already-true invariant with evidence.
 10. **End-to-end smoke test.** `tests/run/process_catalogue_smoke.vow`, using the portable
-    `process_start(String::from("sh"), ...)` pattern already established in
-    `compiler/main.vow:2300`. Cover both call families so all 11 symbols get at least one
-    exercised path: `process_run("sh", ["-c", "echo hello"])` + `process_get_stdout()`/
-    `process_get_stderr()` (synchronous path), and `process_start("sh", ["-c", "echo world"])` +
-    `process_wait(pid)` + `process_stdout_for(pid)` (async path); assert via `// TEST: stdout`
-    only (the project's `full_test.sh` harness ignores `TEST: stderr` — captured to `/dev/null` —
-    per this repo's documented two-harness split, so don't rely on stderr assertions for CI
-    coverage; use `tests/run_tests.sh`-only `TEST: stderr` lines only as a local-developer bonus,
-    not the primary assertion). `process_kill`/`process_wait_timeout`/`process_poll_wait` already
-    have dedicated Rust unit coverage in `vow-runtime/src/lib.rs`'s test module
-    (`process_poll_wait_captures_stdout`, `process_poll_wait_does_not_kill_running_child`) and
-    don't need duplicate `.vow`-level fixtures for this slice; `process_exit` already has
-    `tests/run/issue850_never_call_statement.vow`.
-11. **Full rebuild and quality gates**, run as separate commands (not `&&`-chained):
-    `cargo fmt --all`; `cargo build --release -p vow` (cap `-j` to the attempt's memory share);
-    `scripts/bootstrap.sh --skip-cargo`; `cargo test --all` (or targeted
-    `-p vow-ir -p vow-codegen -p vow-clif-shim -p vow-verify -p vow` first, then the full suite);
-    `cargo clippy --all -- -D warnings`; `uv run python scripts/generate_ops.py --check`;
-    `uv run python scripts/generate_help.py --check`; `uvx ruff@<CI-pinned version>` over touched
-    Python files; the self-hosted test runner(s) (`scripts/full_test.sh` and, locally,
-    `tests/run_tests.sh`) covering the new `process_catalogue_smoke.vow` fixture and
-    `compiler/tests/test_op_catalogue.vow`.
+    `process_start`/`process_run` pattern already established elsewhere in the codebase (grep
+    `compiler/main.vow` or existing `tests/run/*.vow` fixtures for the current idiom post-rebase,
+    since exact line numbers will have moved). Cover both call families:
+    `process_run("sh", ["-c", "echo hello"])` + `process_get_stdout()`/`process_get_stderr()`
+    (synchronous path), and `process_start("sh", ["-c", "echo world"])` + `process_wait(pid)` +
+    `process_stdout_for(pid)` (async path). Assert via `TEST: stdout` only — `scripts/full_test.sh`
+    ignores `TEST: stderr` (redirected to `/dev/null`), so don't rely on it for CI coverage.
+    `process_kill`/`process_wait_timeout`/`process_poll_wait` already have dedicated Rust unit
+    coverage in `vow-runtime/src/lib.rs` and don't need duplicate `.vow` fixtures; `process_exit`
+    already has `tests/run/issue850_never_call_statement.vow`.
+11. **Full rebuild and quality gates**, run as separate commands (not `&&`-chained): `cargo fmt
+    --all`; `cargo build --release -p vow` (cap `-j` to the attempt's memory share);
+    `scripts/bootstrap.sh --skip-cargo`; `cargo test --all` (or targeted `-p vow-ir -p vow-codegen
+    -p vow-clif-shim -p vow-verify -p vow` first); `cargo clippy --all -- -D warnings`; `uv run
+    python scripts/generate_operations.py --check`; `uv run python scripts/generate_help.py
+    --check`; `uvx ruff@<CI-pinned version>` over touched Python files; `scripts/full_test.sh` and,
+    locally, `tests/run_tests.sh`, covering the new smoke fixture and updated self-hosted tests.
 
-## §5. Verification surface
+## §6. Verification surface
 
 None of the 11 `process_*` operations carry Vow contracts (`requires`/`ensures`) — they are
-runtime-implemented builtins, not user-authored Vow functions, so this slice introduces no new
-`requires`/`ensures` clauses and no new ESBMC proof obligations. All 11 are `[Effect::IO]`
-(confirmed in §2/§3), so `vow-verify/src/c_emitter.rs::is_modelable`'s effect-emptiness gate
-already excludes every one of them from the C model — this was true before this migration and
-stays true after it (slice 9 adds a regression test pinning that fact, closing AC #6 with
-evidence rather than assertion). No `tests/verify/` or `tests/verify-fail/` fixtures need to grow,
-and no verifier-model category is recorded in the catalogue for this slice, consistent with the
-issue body's explicit statement that this slice is "not expected to exercise the verifier's
+runtime-implemented builtins, not user-authored Vow functions. This slice introduces no new
+`requires`/`ensures` clauses and no new ESBMC proof obligations. All 11 are `[Effect::IO]`, so
+`vow-verify/src/c_emitter.rs::is_modelable`'s effect-emptiness gate already excludes every one of
+them from the C model, before and after this migration (slice 9 adds a regression test pinning
+this fact). No `tests/verify/` or `tests/verify-fail/` fixtures need to grow, and no
+`verifier_model` catalogue field is populated for these operations, consistent with the issue
+body's statement that this slice is "not expected to exercise the verifier's
 `is_known_builtin`/`is_modelable` classifier."
 
-## §6. Risk areas
+## §7. Scope decision: `arena_routing` is added, `verifier_model` is not
 
-- **Cross-issue collision on shared files.** #1271 (query/utility) and #1272
-  (filesystem/stdin/args/stderr) are also blocked only by #1270, `ready-for-agent`, and their own
-  planning runs (already committed to their branches) touch the *same* hybrid files this plan
-  touches: `docs/spec/operations.json`, `scripts/generate_ops.py`,
-  `vow-ir/src/lower/mod.rs::vow_static_builtin_to_runtime`, both Cranelift extern-sig tables, and
-  `compiler/lower.vow`'s `builtin_to_extern`/`builtin_ret_ty`. Whichever of #1271/#1272/#1273
-  lands first will shape what the others rebase onto (e.g. #1272 independently designed a new
-  `heap_result_tag` catalogue field for its own heap-returning operations — see §7 for why this
-  plan deliberately does not need that field, and what to do if #1272's version lands first).
-  Before starting implementation, re-check whether either sibling has merged and rebase
-  `docs/spec/operations.json`'s new entries as a simple array append (low conflict surface) rather
-  than resolving a structural rewrite.
-- **Self-hosted determinism.** `scripts/generate_ops.py` sorts catalogue entries by
-  `surface_name`/`runtime_symbol` before rendering, so the regenerated `GENERATE:OP_CATALOGUE`
-  block and both `op_catalogue.rs` files are deterministic across regenerations — this preserves
-  `compiler/lower.vow`'s codegen ordering guarantees and does not put the bootstrap triple test's
-  binary fixed point at risk, since no `BTreeMap`/`HashMap` choice or stack-slot layout in
-  `vow-clif-shim` is touched by this slice.
+Issue #1273's AC #1 explicitly asks for "arena-routing categories where applicable." Since no
+`arena_routing`-equivalent field exists in `docs/spec/operations.json`'s schema on `main` today,
+this slice must introduce it (§4 slice 4) rather than defer it — unlike the pre-merge draft of
+this plan, which incorrectly reasoned the AC didn't require it. The four `Ptr`-returning
+operations get `arena_routing: "heap_fresh"`; the other seven get `"none"`.
+
+`verifier_model` (a hypothetical field for AC #6's purity classification) is **not** added,
+because AC #6 itself is conditional: "if [a process_* operation is pure], record its
+verifier-model category, otherwise no verifier-classifier changes are needed." §2/§6 confirm all
+11 are IO-effectful, so the "otherwise" branch applies — no field, no category, just the
+regression test in slice 9.
+
+**Naming risk:** an unmerged sibling branch for #1271 independently prototypes both
+`arena_routing: {"none", "heap_fresh"}` and `verifier_model: {"known", "unmodeled"}` fields with
+those exact names/values (discovered by inspecting the local branch during planning — it has not
+merged and could still change shape). This plan reuses the `arena_routing` name/values on the
+theory that landing first with an incompatible field name would force whichever of #1271/#1273
+lands second to do a painful rename; if #1271 merges its version first, re-read its actual landed
+schema before slice 4 and conform to it exactly rather than to this plan's guess.
+
+**Explicitly out of scope for the same reason as before:** `proc_sample` (not `process_*`-
+prefixed; its Rust/self-hosted `tag_builtin_result` parity bug is `#1277`, owned by #1271's plan)
+and `__vow_string_parse_u64_opt`'s self-hosted verifier gap (`#1276`, unrelated).
+
+## §8. Risk areas
+
+- **Cross-issue collision on shared files.** #1271 and #1272 are both blocked only by #1270
+  (now cleared) and touch the same generator/splice files. Re-check both before starting (§0 step
+  3). `docs/spec/operations.json` additions are a simple array append (low conflict surface); the
+  generator schema extension (`RETURN_TOKENS`, `arena_routing`) is the riskier shared surface — if
+  #1271 lands its own version of either first, adapt to the landed shape rather than re-deriving.
+- **`RETURN_TOKENS`/`arena_routing` extension touches the generator itself, not just data** —
+  this is new surface area beyond the print-only precedent. Keep the two additions (return tokens,
+  arena field) as separate commits/slices from the data-only append (slice 5), so a review can
+  isolate a generator bug from a data-entry typo.
+- **Self-hosted determinism.** The generator sorts/renders deterministically (confirmed by
+  `GeneratorDeterminismTest` in `scripts/test_generate_operations.py`), so regenerating all four
+  splice targets does not put the bootstrap triple test's binary fixed point at risk. No
+  `BTreeMap`/`HashMap` choice or `vow-clif-shim` stack-slot layout is touched by this slice.
 - **`parse → print → parse` idempotency** is unaffected — no parser, AST, or printer changes.
-- **`cargo clippy --all -- -D warnings`** — removing 11 match arms from three separate
-  hand-written matches risks leaving now-unreachable `_ =>` fallback patterns or unused imports if
-  a file's only remaining process-related code was those arms; run clippy per-crate after each
-  removal (slices 5-6), not just once at the end.
-- **The self-hosted `if` line combining `process_*` and `proc_sample` in `compiler/lower.vow`'s
-  heap-tag chain** (~line 2546: `if fn_name == "process_get_stdout" || ... || fn_name ==
-  "proc_sample" { lctx_tag(...) }`) is a single compound condition today. Because §7 deliberately
-  excludes heap-tag migration from this slice, this line is **not edited** — it is only relevant
-  as a "do not touch" landmark, and as context for why slice 8's regression test exists (to catch
-  anyone who later refactors this line and accidentally drops one of the four `process_*` arms).
+- **`cargo clippy --all -- -D warnings`** — removing 11+4 match arms across four hand-written
+  matches risks leaving unreachable `_ =>` arms or unused imports; run clippy per-crate after each
+  removal slice, not just once at the end.
+- **PR #1351 already restructured `builtin_result_tag` once** (splitting it out of an inline
+  `tag_builtin_result` body). Re-confirm both the Rust and self-hosted function shapes post-rebase
+  before editing — a further refactor could have landed between this plan's research and
+  implementation.
 
-## §7. Scope decision: heap-tag (`pin_to_root`) facts are *not* migrated in this slice
-
-Four operations (`process_get_stdout`, `process_get_stderr`, `process_stdout_for`,
-`process_stderr_for`) return a heap-allocated `String`, and their call results are separately
-tagged `"String"` by `vow-ir/src/lower/mod.rs::tag_builtin_result` and by a parallel hand-written
-`if` chain in `compiler/lower.vow` (~line 2527-2551) so that `pin_to_root` knows to treat them as
-heap values. This is a real hand-duplicated fact, structurally similar to the runtime-symbol/ABI
-facts this slice does migrate — and sibling issue #1272 (whose fs_read/fs_listdir/stdin_read/args
-operations have the same shape) independently chose to add a new nullable `heap_result_tag`
-catalogue field to cover it.
-
-This plan deliberately does **not** do the same for `process_*`, for three reasons:
-1. The issue body's own scope sentence is explicit and narrower: "this migrates
-   runtime-symbol/ABI/return-shape/doc facts" — it does not mention heap/arena tagging facts, and
-   none of the acceptance criteria name `tag_builtin_result`, `pin_to_root`, or `lctx_tag`.
-   AC #4 ("Heap-returning process operations keep correct return shape metadata in both
-   compilers") reads naturally as "the migrated `ir_return_shape: Ptr` fact must stay correct,"
-   which slices 5-6 already guarantee — not as "own the heap-tag classification."
-2. `#1272`'s `heap_result_tag` design is not yet landed or reviewed. Speculatively adopting an
-   unreviewed sibling's schema extension risks a real naming/shape mismatch if #1272's actual PR
-   changes shape during review, and blocks this issue's implementation on #1272's landing order
-   for no benefit `process_*` needs today.
-3. Leaving `tag_builtin_result` and the self-hosted `lctx_tag` chain untouched keeps this slice's
-   diff exactly as small as the runtime-symbol/ABI/return-shape/doc facts it's chartered to move,
-   consistent with "many small changes beat one large change." Slice 8 adds a regression test so
-   the untouched behavior is still verified, not merely assumed.
-
-**Follow-up note for whoever implements this issue:** if #1272 has already merged its
-`heap_result_tag` field by the time this issue is implemented, it is a trivial, optional follow-on
-(not required by this plan) to also add `heap_result_tag: "String"` to the four Ptr-returning
-`process_*` catalogue entries and let `tag_builtin_result`/the self-hosted chain consult it —
-purely additive, doesn't change this plan's slices 1-11, and can be its own small commit if done.
-
-Also out of scope for the same "not this slice's job" reason: `proc_sample` (not a `process_*`-
-prefixed builtin; its Rust `tag_builtin_result` parity bug was already filed as `#1277` and
-explicitly claimed by #1271's plan, which is the actual owner of that operation's family) and
-`__vow_string_parse_u64_opt`'s self-hosted verifier-classifier gap (`#1276`, unrelated to
-`process_*` entirely).
-
-## §8. Out of scope
+## §9. Out of scope
 
 - Migrating any non-`process_*` Builtin Operations (query/utility: #1271; filesystem/stdin/args/
   stderr: #1272).
-- The `heap_result_tag`/`pin_to_root` heap-tag migration for the four `Ptr`-returning `process_*`
-  operations — see §7.
-- `proc_sample`'s Rust/self-hosted `tag_builtin_result` parity bug (`#1276`) and
-  `__vow_string_parse_u64_opt`'s self-hosted verifier gap (`#1277`) — pre-existing, unrelated,
-  owned by other issues.
-- Any change to `vow-verify/src/c_emitter.rs::is_known_builtin`/`is_modelable` or
-  `compiler/c_emitter.vow` — confirmed unnecessary (§5).
-- Any change to `vow-runtime/src/lib.rs`'s `process_*` implementations, linkage, or the
-  `process_map_init`/handle-table mechanism — only the lowering/codegen tables that *name* these
-  symbols move; their behavior is unchanged.
-- Rewriting or regenerating `compiler/main.vow`'s help-JSON `push_str` block by hand — it is
-  fully derived by `scripts/generate_help.py` from `grammar.md`; this slice only needs the
-  `process_poll_wait` grammar row fixed (§3/§4 slice 2) and a regeneration run.
-- Broader hardening of `scripts/generate_ops.py`'s cross-checks beyond the one heading-target
-  fix this slice actually needs to pass (`check_grammar_presence`) — general robustness work is
-  left to whichever issue in the PRD family (#1274/#1275) is chartered for it.
-- Any formatting-only or unrelated cleanup in files this slice must touch anyway (e.g. no
-  reflowing of unrelated `make_extern_sig` match arms while removing the 11 `process_*` ones).
+- `verifier_model` / any verifier-classifier schema field or `is_known_builtin`/`is_modelable`
+  change — confirmed unnecessary (§6/§7).
+- `proc_sample`'s Rust/self-hosted `tag_builtin_result` parity bug (`#1276`... `#1277`, see §7) —
+  pre-existing, unrelated, owned by other issues.
+- Any change to `vow-runtime/src/lib.rs`'s `process_*` implementations, linkage, or the process
+  handle-table mechanism — only the lowering/codegen tables that *name* these symbols move.
+- Rewriting `compiler/main.vow`'s help-JSON by hand — fully derived by `scripts/generate_help.py`.
+- Broader hardening of `scripts/generate_operations.py` beyond the two additions this slice
+  actually needs (`RETURN_TOKENS` i64/ptr, `arena_routing` field) — general schema robustness is
+  left to whichever issue in the PRD family is chartered for it (e.g. #1275).
+- Any formatting-only or unrelated cleanup in files this slice must touch anyway.
