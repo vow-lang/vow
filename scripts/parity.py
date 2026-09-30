@@ -58,8 +58,8 @@ STRICT_SPAN_FIXTURES = frozenset(
     }
 )
 # Fixtures on which the self-hosted compiler still reports offset 0, length 0
-# for a diagnostic the Rust compiler locates. Tracked by #1353; an
-# entry that stops dropping its location fails until it is removed.
+# for a diagnostic the Rust compiler locates. Tracked by #1353; an entry that
+# stops dropping its location fails until it is removed.
 SPANLESS_SELF_FIXTURES = frozenset(
     {
         "linear_alias_option_payload_duplicate.vow",
