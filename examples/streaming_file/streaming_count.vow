@@ -18,11 +18,11 @@ fn main() -> i32 [read, io] {
     }
 
     let mut lines: i64 = 0;
-    let mut bytes: i64 = 0;
+    let mut bytes: u64 = 0;
     let mut line: String = fs_read_line(h);
     while line.len() > 0 {
         lines = lines + 1;
-        bytes = bytes + line.len();
+        bytes = bytes + line.len() as u64;
         line = fs_read_line(h);
     }
 
@@ -38,7 +38,7 @@ fn main() -> i32 [read, io] {
 
     print_i64(lines);
     print_str(String::from("\n"));
-    print_i64(bytes);
+    print_i64(bytes as i64);
     print_str(String::from("\n"));
     0
 }
