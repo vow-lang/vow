@@ -158,9 +158,9 @@ forward-condition pass can still print the success banner. Both classifiers
 line appears anywhere else in the same run's combined stdout+stderr — a
 tainted SUCCESSFUL is reported `Unknown`, not `Proven`. A genuine
 `VERIFICATION FAILED` (a real counterexample) still wins regardless of an
-earlier solver hiccup elsewhere in the run: ESBMC does not fabricate
-counterexamples, so a FAILED verdict is trustworthy even when preceded by a
-solver-internal error.
+earlier solver hiccup elsewhere in the run: unlike a SUCCESSFUL verdict, a
+FAILED verdict can never produce a false proof, so trusting it fails closed
+even when a solver-internal error occurred elsewhere in the same run.
 
 ## How the existing fallback embodies the discipline
 
