@@ -753,15 +753,10 @@ fn replay_find_fn(fns: Vec<IrFunction>, name: String) -> i64 {
 
 // Directory prefix of `path` (with trailing slash), or "./" if it has none.
 fn replay_dir_of(path: String) -> String {
-    let n: i64 = path.len();
-    let mut i: i64 = n - 1;
-    while i >= 0 {
-        if path.byte_at(i) == 47 {
-            return path.substring(0, i + 1);
-        }
-        i = i - 1;
+    match str_rfind_byte(path, 47) {
+        Option::None => String::from("./"),
+        Option::Some(k) => path.substring(0, (k + 1u64) as i64),
     }
-    String::from("./")
 }
 
 fn replay_skip(reason: String) -> ReplayVerdict {
