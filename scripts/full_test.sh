@@ -615,7 +615,9 @@ done
 # PR1. Never exercised above since every call there passes -o explicitly.
 repo_root=$(pwd -P)
 rust_abs="$repo_root/target/release/vow"
-bare_src='fn main() -> i32 [io] {
+bare_src='module Bare
+
+fn main() -> i32 [io] {
     print_i64(42);
     0
 }'
