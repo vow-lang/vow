@@ -2925,44 +2925,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_stdin_ready" => {
             sig.returns.push(AbiParam::new(types::I64)); // bool as i64
         }
-        "__vow_process_exit" => {
-            sig.params.push(AbiParam::new(types::I64)); // exit code
-        }
-        "__vow_process_run" => {
-            sig.params.push(AbiParam::new(types::I64)); // cmd *VowVec<u8>
-            sig.params.push(AbiParam::new(types::I64)); // args *VowVec<i64>
-            sig.returns.push(AbiParam::new(types::I64)); // exit code
-        }
-        "__vow_process_get_stdout" | "__vow_process_get_stderr" => {
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_process_start" => {
-            sig.params.push(AbiParam::new(types::I64)); // cmd *VowVec<u8>
-            sig.params.push(AbiParam::new(types::I64)); // args *VowVec<i64>
-            sig.returns.push(AbiParam::new(types::I64)); // handle
-        }
-        "__vow_process_wait" => {
-            sig.params.push(AbiParam::new(types::I64)); // handle
-            sig.returns.push(AbiParam::new(types::I64)); // exit code
-        }
-        "__vow_process_wait_timeout" => {
-            sig.params.push(AbiParam::new(types::I64)); // handle
-            sig.params.push(AbiParam::new(types::I64)); // timeout_ms
-            sig.returns.push(AbiParam::new(types::I64)); // exit code or -2 timeout
-        }
-        "__vow_process_poll_wait" => {
-            sig.params.push(AbiParam::new(types::I64)); // handle
-            sig.params.push(AbiParam::new(types::I64)); // budget ms
-            sig.returns.push(AbiParam::new(types::I64)); // exit code or STILL_RUNNING
-        }
-        "__vow_process_kill" => {
-            sig.params.push(AbiParam::new(types::I64)); // handle
-            sig.returns.push(AbiParam::new(types::I64)); // 0 success, -1 error
-        }
-        "__vow_process_stdout_for" | "__vow_process_stderr_for" => {
-            sig.params.push(AbiParam::new(types::I64)); // handle
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         // HashMap runtime
         "__vow_map_new" => {
             sig.returns.push(AbiParam::new(types::I64)); // *VowMap
@@ -3712,6 +3674,29 @@ mod tests {
             assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
             assert!(sig.returns.is_empty(), "{sym}");
         }
+    }
+
+    // Coverage-parity twin of vow-clif-shim's
+    // `process_extern_sigs_come_from_the_operation_catalogue` -- both crates
+    // get the same generated `catalogue_extern_sig` block.
+    #[test]
+    fn process_extern_sigs_come_from_the_operation_catalogue() {
+        let sig = extern_sig("__vow_process_run");
+        assert_eq!(sig.params.len(), 2, "process_run params");
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert_eq!(sig.params[1].value_type, types::I64);
+        assert_eq!(sig.returns.len(), 1, "process_run returns");
+        assert_eq!(sig.returns[0].value_type, types::I64);
+
+        let sig = extern_sig("__vow_process_get_stdout");
+        assert!(sig.params.is_empty(), "process_get_stdout params");
+        assert_eq!(sig.returns.len(), 1, "process_get_stdout returns");
+        assert_eq!(sig.returns[0].value_type, types::I64);
+
+        let sig = extern_sig("__vow_process_exit");
+        assert_eq!(sig.params.len(), 1, "process_exit params");
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert!(sig.returns.is_empty(), "process_exit returns");
     }
 
     fn make_module(name: &str, funcs: Vec<Function>) -> Module {

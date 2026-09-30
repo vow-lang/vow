@@ -3820,44 +3820,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_stdin_ready" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "__vow_process_exit" => {
-            sig.params.push(AbiParam::new(types::I64));
-        }
-        "__vow_process_run" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_process_get_stdout" | "__vow_process_get_stderr" => {
-            sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_process_start" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_process_wait" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_process_wait_timeout" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_process_poll_wait" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_process_kill" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_process_stdout_for" | "__vow_process_stderr_for" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
         "__vow_map_new" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
@@ -4162,6 +4124,35 @@ mod tests {
             assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
             assert!(sig.returns.is_empty(), "{sym}");
         }
+
+        unsafe { __vow_clif_destroy(ctx) };
+    }
+
+    // Coverage-parity twin of vow-codegen's
+    // `process_extern_sigs_come_from_the_operation_catalogue` -- both crates
+    // get the same generated `catalogue_extern_sig` block.
+    #[test]
+    fn process_extern_sigs_come_from_the_operation_catalogue() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        let module_ctx = unsafe { &*(ctx as *const ModuleContext) };
+
+        let sig = make_extern_sig("__vow_process_run", &module_ctx.obj_module);
+        assert_eq!(sig.params.len(), 2, "process_run params");
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert_eq!(sig.params[1].value_type, types::I64);
+        assert_eq!(sig.returns.len(), 1, "process_run returns");
+        assert_eq!(sig.returns[0].value_type, types::I64);
+
+        let sig = make_extern_sig("__vow_process_get_stdout", &module_ctx.obj_module);
+        assert!(sig.params.is_empty(), "process_get_stdout params");
+        assert_eq!(sig.returns.len(), 1, "process_get_stdout returns");
+        assert_eq!(sig.returns[0].value_type, types::I64);
+
+        let sig = make_extern_sig("__vow_process_exit", &module_ctx.obj_module);
+        assert_eq!(sig.params.len(), 1, "process_exit params");
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert!(sig.returns.is_empty(), "process_exit returns");
 
         unsafe { __vow_clif_destroy(ctx) };
     }
