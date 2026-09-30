@@ -3699,22 +3699,47 @@ mod tests {
     // get the same generated `catalogue_extern_sig` block.
     #[test]
     fn process_extern_sigs_come_from_the_operation_catalogue() {
-        let sig = extern_sig("__vow_process_run");
-        assert_eq!(sig.params.len(), 2, "process_run params");
-        assert_eq!(sig.params[0].value_type, types::I64);
-        assert_eq!(sig.params[1].value_type, types::I64);
-        assert_eq!(sig.returns.len(), 1, "process_run returns");
-        assert_eq!(sig.returns[0].value_type, types::I64);
-
-        let sig = extern_sig("__vow_process_get_stdout");
-        assert!(sig.params.is_empty(), "process_get_stdout params");
-        assert_eq!(sig.returns.len(), 1, "process_get_stdout returns");
-        assert_eq!(sig.returns[0].value_type, types::I64);
-
         let sig = extern_sig("__vow_process_exit");
         assert_eq!(sig.params.len(), 1, "process_exit params");
         assert_eq!(sig.params[0].value_type, types::I64);
         assert!(sig.returns.is_empty(), "process_exit returns");
+
+        let no_params_return_i64 = ["__vow_process_get_stdout", "__vow_process_get_stderr"];
+        for sym in no_params_return_i64 {
+            let sig = extern_sig(sym);
+            assert!(sig.params.is_empty(), "{sym}");
+            assert_eq!(sig.returns.len(), 1, "{sym}");
+            assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
+        }
+
+        let one_param_returns_i64 = [
+            "__vow_process_wait",
+            "__vow_process_kill",
+            "__vow_process_stdout_for",
+            "__vow_process_stderr_for",
+        ];
+        for sym in one_param_returns_i64 {
+            let sig = extern_sig(sym);
+            assert_eq!(sig.params.len(), 1, "{sym}");
+            assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
+            assert_eq!(sig.returns.len(), 1, "{sym}");
+            assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
+        }
+
+        let two_params_return_i64 = [
+            "__vow_process_run",
+            "__vow_process_start",
+            "__vow_process_wait_timeout",
+            "__vow_process_poll_wait",
+        ];
+        for sym in two_params_return_i64 {
+            let sig = extern_sig(sym);
+            assert_eq!(sig.params.len(), 2, "{sym}");
+            assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
+            assert_eq!(sig.params[1].value_type, types::I64, "{sym}");
+            assert_eq!(sig.returns.len(), 1, "{sym}");
+            assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
+        }
     }
 
     // Coverage-parity twin of vow-clif-shim's

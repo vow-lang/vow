@@ -4156,22 +4156,47 @@ mod tests {
         assert_ne!(ctx, 0);
         let module_ctx = unsafe { &*(ctx as *const ModuleContext) };
 
-        let sig = make_extern_sig("__vow_process_run", &module_ctx.obj_module);
-        assert_eq!(sig.params.len(), 2, "process_run params");
-        assert_eq!(sig.params[0].value_type, types::I64);
-        assert_eq!(sig.params[1].value_type, types::I64);
-        assert_eq!(sig.returns.len(), 1, "process_run returns");
-        assert_eq!(sig.returns[0].value_type, types::I64);
-
-        let sig = make_extern_sig("__vow_process_get_stdout", &module_ctx.obj_module);
-        assert!(sig.params.is_empty(), "process_get_stdout params");
-        assert_eq!(sig.returns.len(), 1, "process_get_stdout returns");
-        assert_eq!(sig.returns[0].value_type, types::I64);
-
         let sig = make_extern_sig("__vow_process_exit", &module_ctx.obj_module);
         assert_eq!(sig.params.len(), 1, "process_exit params");
         assert_eq!(sig.params[0].value_type, types::I64);
         assert!(sig.returns.is_empty(), "process_exit returns");
+
+        let no_params_return_i64 = ["__vow_process_get_stdout", "__vow_process_get_stderr"];
+        for sym in no_params_return_i64 {
+            let sig = make_extern_sig(sym, &module_ctx.obj_module);
+            assert!(sig.params.is_empty(), "{sym}");
+            assert_eq!(sig.returns.len(), 1, "{sym}");
+            assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
+        }
+
+        let one_param_returns_i64 = [
+            "__vow_process_wait",
+            "__vow_process_kill",
+            "__vow_process_stdout_for",
+            "__vow_process_stderr_for",
+        ];
+        for sym in one_param_returns_i64 {
+            let sig = make_extern_sig(sym, &module_ctx.obj_module);
+            assert_eq!(sig.params.len(), 1, "{sym}");
+            assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
+            assert_eq!(sig.returns.len(), 1, "{sym}");
+            assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
+        }
+
+        let two_params_return_i64 = [
+            "__vow_process_run",
+            "__vow_process_start",
+            "__vow_process_wait_timeout",
+            "__vow_process_poll_wait",
+        ];
+        for sym in two_params_return_i64 {
+            let sig = make_extern_sig(sym, &module_ctx.obj_module);
+            assert_eq!(sig.params.len(), 2, "{sym}");
+            assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
+            assert_eq!(sig.params[1].value_type, types::I64, "{sym}");
+            assert_eq!(sig.returns.len(), 1, "{sym}");
+            assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
+        }
 
         unsafe { __vow_clif_destroy(ctx) };
     }
