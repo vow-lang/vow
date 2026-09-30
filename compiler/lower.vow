@@ -306,6 +306,13 @@ fn lctx_emit(ctx: LowerCtx, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, 
 }
 
 fn lctx_set_inst_span(ctx: LowerCtx, inst_id: i64, span: i64) {
+    // lctx_emit no-ops on a terminated block and returns ctx.next_inst_id
+    // without assigning it to any instruction. ids are monotonic, so an id
+    // that has not yet been assigned can never appear in ctx.func -- skip
+    // the scan below instead of walking every block to confirm that.
+    if inst_id >= ctx.next_inst_id {
+        return;
+    }
     let start: i64 = span_unpack_start(span);
     let len: i64 = span_unpack_len(span);
     // Fast path: patch the last inst in current block before falling back to a full O(n) scan.
