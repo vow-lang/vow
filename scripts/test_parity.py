@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import parity
 
@@ -445,15 +446,23 @@ class CompareErrorSpanParityTest(unittest.TestCase):
             [], self.compare(self.failed(365, 14), self.failed(365, 14), name)
         )
 
+    @mock.patch.object(
+        parity, "SPANLESS_SELF_FIXTURES", frozenset({"tracked_spanless.vow"})
+    )
     def test_tracked_fixture_still_dropping_its_location_passes(self):
         self.assertEqual(
             [],
-            self.compare(self.failed(48, 25), self.failed(0, 0), "missing_module.vow"),
+            self.compare(
+                self.failed(48, 25), self.failed(0, 0), "tracked_spanless.vow"
+            ),
         )
 
+    @mock.patch.object(
+        parity, "SPANLESS_SELF_FIXTURES", frozenset({"tracked_spanless.vow"})
+    )
     def test_tracked_fixture_that_now_has_a_location_fails(self):
         errors = self.compare(
-            self.failed(48, 25), self.failed(48, 25), "missing_module.vow"
+            self.failed(48, 25), self.failed(48, 25), "tracked_spanless.vow"
         )
 
         self.assertEqual(1, len(errors))
@@ -531,13 +540,16 @@ class CompareErrorSpanParityTest(unittest.TestCase):
             ),
         )
 
+    @mock.patch.object(
+        parity, "SPANLESS_SELF_FIXTURES", frozenset({"tracked_spanless.vow"})
+    )
     def test_tracked_fixture_still_dropping_with_an_extra_diagnostic_passes(self):
         self.assertEqual(
             [],
             self.span_errors(
                 self.failed_many(("IoError", 48, 25)),
                 self.failed_many(("IoError", 0, 0), ("Extra", 7, 3)),
-                "missing_module.vow",
+                "tracked_spanless.vow",
             ),
         )
 

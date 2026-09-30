@@ -58,27 +58,10 @@ STRICT_SPAN_FIXTURES = frozenset(
     }
 )
 # Fixtures on which the self-hosted compiler still reports offset 0, length 0
-# for a diagnostic the Rust compiler locates. Tracked by #1353; an entry that
-# stops dropping its location fails until it is removed.
-SPANLESS_SELF_FIXTURES = frozenset(
-    {
-        "linear_alias_option_payload_duplicate.vow",
-        "linear_empty_variant_phi_duplicate.vow",
-        "linear_enum_payload_duplicate.vow",
-        "linear_for_mutation_phi_leak.vow",
-        "linear_if_mutation_phi_leak.vow",
-        "linear_loop_mutation_phi_leak.vow",
-        "linear_match_mutation_phi_leak.vow",
-        "linear_match_payload_partial_duplicate.vow",
-        "linear_match_payload_return_after_consume.vow",
-        "linear_option_payload_duplicate.vow",
-        "linear_while_mutation_phi_leak.vow",
-        "missing_module.vow",
-        "missing_module_symbol_reference.vow",
-        "string_literal_field_branch_overwrite.vow",
-        "string_literal_field_mutation.vow",
-    }
-)
+# for a diagnostic the Rust compiler locates. #1353 fixed the last of these;
+# kept as an empty set (not deleted) so a future drop has this same
+# enforcement point to slot back into, per _span_errors below.
+SPANLESS_SELF_FIXTURES = frozenset()
 
 # `vow test`'s authoritative output contract. Read back out of the schema
 # rather than restated so a field added there is compared by this blocking

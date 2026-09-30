@@ -9,6 +9,7 @@ fn empty_module() -> Module {
     Module {
         name_sid: 0,
         uses: Vec::new(),
+        uses_spans: Vec::new(),
         items: Vec::new(),
         arena: arena_new(),
     }

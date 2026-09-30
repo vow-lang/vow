@@ -152,11 +152,14 @@ fn parse_module_into(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx, file: S
     }
 
     let uses: Vec<i64> = Vec::new();
+    let uses_spans: Vec<i64> = Vec::new();
     while at(p, tok_kw_use()) {
+        let span_start: i64 = peek(p).span_start;
         let _kw: Token = advance(p);
         let path: i64 = parse_path(p);
         if path != -1 {
             uses.push(path);
+            uses_spans.push(span_pack_to_here(p, span_start));
         }
     }
 
@@ -174,6 +177,7 @@ fn parse_module_into(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx, file: S
     Module {
         name_sid: 0,
         uses: uses,
+        uses_spans: uses_spans,
         items: items,
         arena: p.arena,
     }
