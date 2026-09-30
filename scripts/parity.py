@@ -62,17 +62,6 @@ STRICT_SPAN_FIXTURES = frozenset(
 # stops dropping its location fails until it is removed.
 SPANLESS_SELF_FIXTURES = frozenset(
     {
-        "linear_alias_option_payload_duplicate.vow",
-        "linear_empty_variant_phi_duplicate.vow",
-        "linear_enum_payload_duplicate.vow",
-        "linear_for_mutation_phi_leak.vow",
-        "linear_if_mutation_phi_leak.vow",
-        "linear_loop_mutation_phi_leak.vow",
-        "linear_match_mutation_phi_leak.vow",
-        "linear_match_payload_partial_duplicate.vow",
-        "linear_match_payload_return_after_consume.vow",
-        "linear_option_payload_duplicate.vow",
-        "linear_while_mutation_phi_leak.vow",
         "missing_module.vow",
         "missing_module_symbol_reference.vow",
         "string_literal_field_branch_overwrite.vow",

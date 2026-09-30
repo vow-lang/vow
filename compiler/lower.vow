@@ -340,11 +340,12 @@ fn lctx_set_inst_span(ctx: LowerCtx, inst_id: i64, span: i64) {
     }
 }
 
-fn lctx_emit_linear_consume_if_needed(ctx: LowerCtx, inst_id: i64) {
+fn lctx_emit_linear_consume_if_needed(ctx: LowerCtx, inst_id: i64, span: i64) {
     if lctx_inst_ty(ctx, inst_id) == ITY_LPTR() {
         let args: Vec<i64> = Vec::new();
         args.push(inst_id);
-        lctx_emit(ctx, IOP_LINEAR_CONSUME(), ITY_UNIT(), args, IDATA_NONE(), 0, 0, String::from(""));
+        let consume_id: i64 = lctx_emit(ctx, IOP_LINEAR_CONSUME(), ITY_UNIT(), args, IDATA_NONE(), 0, 0, String::from(""));
+        lctx_set_inst_span(ctx, consume_id, span);
     }
 }
 
@@ -2578,6 +2579,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let rhs_up_args: Vec<i64> = Vec::new();
             rhs_up_args.push(rhs_id);
             let rhs_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), rhs_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+            lctx_set_inst_span(ctx, rhs_up_id, expr_span(a, eid));
             let rhs_up_block: i64 = ctx.current_block;
             let rhs_jmp_args: Vec<i64> = Vec::new();
             lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), rhs_jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
@@ -2590,6 +2592,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let short_up_args: Vec<i64> = Vec::new();
             short_up_args.push(short_val);
             let short_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), short_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+            lctx_set_inst_span(ctx, short_up_id, expr_span(a, eid));
             let short_up_block: i64 = ctx.current_block;
             let short_jmp_args: Vec<i64> = Vec::new();
             lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), short_jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
@@ -2598,6 +2601,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             lctx_switch_to_block(ctx, merge_block);
             let phi_args: Vec<i64> = Vec::new();
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_BOOL(), phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            lctx_set_inst_span(ctx, phi_id, expr_span(a, eid));
             backpatch_upsilon(ctx, rhs_up_block, rhs_up_id, phi_id);
             backpatch_upsilon(ctx, short_up_block, short_up_id, phi_id);
             return phi_id;
@@ -2918,6 +2922,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let up_args: Vec<i64> = Vec::new();
             up_args.push(then_mut_vals[mi]);
             let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+            lctx_set_inst_span(ctx, up_id, expr_span(a, eid));
             mut_up_then.push(up_id);
             mi = mi + 1;
         }
@@ -2925,6 +2930,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let then_up_args: Vec<i64> = Vec::new();
         then_up_args.push(then_result);
         let then_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), then_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+        lctx_set_inst_span(ctx, then_up_id, expr_span(a, eid));
 
         if !lctx_is_terminated(ctx) {
             let jmp_args: Vec<i64> = Vec::new();
@@ -2963,6 +2969,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let up_args: Vec<i64> = Vec::new();
             up_args.push(else_mut_vals[mi2]);
             let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+            lctx_set_inst_span(ctx, up_id, expr_span(a, eid));
             mut_up_else.push(up_id);
             mi2 = mi2 + 1;
         }
@@ -2970,6 +2977,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let else_up_args: Vec<i64> = Vec::new();
         else_up_args.push(else_result);
         let else_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), else_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+        lctx_set_inst_span(ctx, else_up_id, expr_span(a, eid));
 
         if !lctx_is_terminated(ctx) {
             let jmp_args: Vec<i64> = Vec::new();
@@ -2993,6 +3001,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             );
             let phi_args: Vec<i64> = Vec::new();
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), mphi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            lctx_set_inst_span(ctx, phi_id, expr_span(a, eid));
             backpatch_upsilon(ctx, then_exit_block, mut_up_then[mi3], phi_id);
             backpatch_upsilon(ctx, else_exit_block, mut_up_else[mi3], phi_id);
             lctx_assign(ctx, mname, phi_id);
@@ -3007,6 +3016,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let phi_args: Vec<i64> = Vec::new();
             let result_ty: i64 = lctx_inst_ty(ctx, else_result);
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            lctx_set_inst_span(ctx, phi_id, expr_span(a, eid));
             backpatch_upsilon(ctx, else_exit_block, else_up_id, phi_id);
             return phi_id;
         }
@@ -3014,12 +3024,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let phi_args: Vec<i64> = Vec::new();
             let result_ty: i64 = lctx_inst_ty(ctx, then_result);
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            lctx_set_inst_span(ctx, phi_id, expr_span(a, eid));
             backpatch_upsilon(ctx, then_exit_block, then_up_id, phi_id);
             return phi_id;
         }
         let phi_args: Vec<i64> = Vec::new();
         let result_ty: i64 = merge_phi_ty(lctx_inst_ty(ctx, then_result), lctx_inst_ty(ctx, else_result));
         let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
+        lctx_set_inst_span(ctx, phi_id, expr_span(a, eid));
         backpatch_upsilon(ctx, then_exit_block, then_up_id, phi_id);
         backpatch_upsilon(ctx, else_exit_block, else_up_id, phi_id);
         return phi_id;
@@ -3049,6 +3061,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let up_args: Vec<i64> = Vec::new();
             up_args.push(cur_val);
             let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+            lctx_set_inst_span(ctx, up_id, expr_span(a, eid));
             pre_up_ids.push(up_id);
             ai = ai + 1;
         }
@@ -3065,6 +3078,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let phi_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let phi_args: Vec<i64> = Vec::new();
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), phi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            lctx_set_inst_span(ctx, phi_id, expr_span(a, eid));
             phi_ids.push(phi_id);
             lctx_assign(ctx, vname, phi_id);
             ai2 = ai2 + 1;
@@ -3086,6 +3100,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let ep_args: Vec<i64> = Vec::new();
             let ep_ty: i64 = lctx_inst_ty(ctx, phi_ids[epi]);
             let ep_id: i64 = lctx_emit(ctx, IOP_PHI(), ep_ty, ep_args, IDATA_NONE(), 0, 0, String::from(""));
+            lctx_set_inst_span(ctx, ep_id, expr_span(a, eid));
             exit_phi_ids.push(ep_id);
             exit_phi_names.push(assigned[epi]);
             epi = epi + 1;
@@ -3098,7 +3113,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let up_args: Vec<i64> = Vec::new();
             up_args.push(phi_ids[eui]);
             let up_ty: i64 = lctx_inst_ty(ctx, phi_ids[eui]);
-            lctx_emit(ctx, IOP_UPSILON(), up_ty, up_args, IDATA_PHI_TARGET(), exit_phi_ids[eui], 0, String::from(""));
+            let exit_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), up_ty, up_args, IDATA_PHI_TARGET(), exit_phi_ids[eui], 0, String::from(""));
+            lctx_set_inst_span(ctx, exit_up_id, expr_span(a, eid));
             eui = eui + 1;
         }
 
@@ -3155,7 +3171,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let val_ty: i64 = lctx_inst_ty(ctx, new_val);
                 let up_args: Vec<i64> = Vec::new();
                 up_args.push(new_val);
-                lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), phi_ids[ai3], 0, String::from(""));
+                let loop_mut_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), phi_ids[ai3], 0, String::from(""));
+                lctx_set_inst_span(ctx, loop_mut_up_id, expr_span(a, eid));
                 ai3 = ai3 + 1;
             }
         }
@@ -3202,6 +3219,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let up_args: Vec<i64> = Vec::new();
             up_args.push(cur_val);
             let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+            lctx_set_inst_span(ctx, up_id, expr_span(a, eid));
             pre_up_ids.push(up_id);
             ai = ai + 1;
         }
@@ -3218,6 +3236,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let phi_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let phi_args: Vec<i64> = Vec::new();
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), phi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            lctx_set_inst_span(ctx, phi_id, expr_span(a, eid));
             phi_ids.push(phi_id);
             lctx_assign(ctx, vname, phi_id);
             ai2 = ai2 + 1;
@@ -3242,6 +3261,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let lep_args: Vec<i64> = Vec::new();
             let lep_ty: i64 = lctx_inst_ty(ctx, phi_ids[lepi]);
             let lep_id: i64 = lctx_emit(ctx, IOP_PHI(), lep_ty, lep_args, IDATA_NONE(), 0, 0, String::from(""));
+            lctx_set_inst_span(ctx, lep_id, expr_span(a, eid));
             l_exit_phi_ids.push(lep_id);
             l_exit_phi_names.push(assigned[lepi]);
             lepi = lepi + 1;
@@ -3293,7 +3313,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let val_ty: i64 = lctx_inst_ty(ctx, new_val);
                 let up_args: Vec<i64> = Vec::new();
                 up_args.push(new_val);
-                lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), phi_ids[ai3], 0, String::from(""));
+                let for_mut_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), phi_ids[ai3], 0, String::from(""));
+                lctx_set_inst_span(ctx, for_mut_up_id, expr_span(a, eid));
                 ai3 = ai3 + 1;
             }
         }
@@ -3318,6 +3339,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let first_ty: i64 = ctx.loop_break_up_tys[break_start];
             let phi_args2: Vec<i64> = Vec::new();
             let break_phi: i64 = lctx_emit(ctx, IOP_PHI(), first_ty, phi_args2, IDATA_NONE(), 0, 0, String::from(""));
+            lctx_set_inst_span(ctx, break_phi, expr_span(a, eid));
             let mut bi: i64 = 0;
             while bi < break_count {
                 let up_id: i64 = ctx.loop_break_up_ids[break_start + bi];
@@ -3369,6 +3391,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let idx_up_args: Vec<i64> = Vec::new();
         idx_up_args.push(idx_init);
         let idx_up: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), idx_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+        lctx_set_inst_span(ctx, idx_up, expr_span(a, eid));
 
         let mut ai: i64 = 0;
         while ai < nassigned {
@@ -3378,6 +3401,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let up_args: Vec<i64> = Vec::new();
             up_args.push(cur_val);
             let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+            lctx_set_inst_span(ctx, up_id, expr_span(a, eid));
             pre_up_ids.push(up_id);
             ai = ai + 1;
         }
@@ -3388,6 +3412,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         lctx_switch_to_block(ctx, header_block);
         let idx_phi_args: Vec<i64> = Vec::new();
         let idx_phi: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), idx_phi_args, IDATA_NONE(), 0, 0, String::from(""));
+        lctx_set_inst_span(ctx, idx_phi, expr_span(a, eid));
 
         let mut ai2: i64 = 0;
         while ai2 < nassigned {
@@ -3396,6 +3421,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let phi_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let phi_args: Vec<i64> = Vec::new();
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), phi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            lctx_set_inst_span(ctx, phi_id, expr_span(a, eid));
             phi_ids.push(phi_id);
             lctx_assign(ctx, vname, phi_id);
             ai2 = ai2 + 1;
@@ -3419,6 +3445,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let fep_args: Vec<i64> = Vec::new();
             let fep_ty: i64 = lctx_inst_ty(ctx, phi_ids[fepi]);
             let fep_id: i64 = lctx_emit(ctx, IOP_PHI(), fep_ty, fep_args, IDATA_NONE(), 0, 0, String::from(""));
+            lctx_set_inst_span(ctx, fep_id, expr_span(a, eid));
             f_exit_phi_ids.push(fep_id);
             f_exit_phi_names.push(assigned[fepi]);
             fepi = fepi + 1;
@@ -3431,7 +3458,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let up_args: Vec<i64> = Vec::new();
             up_args.push(phi_ids[feui]);
             let up_ty: i64 = lctx_inst_ty(ctx, phi_ids[feui]);
-            lctx_emit(ctx, IOP_UPSILON(), up_ty, up_args, IDATA_PHI_TARGET(), f_exit_phi_ids[feui], 0, String::from(""));
+            let for_exit_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), up_ty, up_args, IDATA_PHI_TARGET(), f_exit_phi_ids[feui], 0, String::from(""));
+            lctx_set_inst_span(ctx, for_exit_up_id, expr_span(a, eid));
             feui = feui + 1;
         }
 
@@ -3502,7 +3530,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let idx_next: i64 = lctx_emit(ctx, IOP_WADD(), ITY_I64(), add_args, IDATA_INTEGER(), ITY_I64(), 0, String::from(""));
             let idx_up_back_args: Vec<i64> = Vec::new();
             idx_up_back_args.push(idx_next);
-            lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), idx_up_back_args, IDATA_PHI_TARGET(), idx_phi, 0, String::from(""));
+            let idx_back_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), idx_up_back_args, IDATA_PHI_TARGET(), idx_phi, 0, String::from(""));
+            lctx_set_inst_span(ctx, idx_back_up_id, expr_span(a, eid));
 
             let mut ai3: i64 = 0;
             while ai3 < nassigned {
@@ -3511,7 +3540,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let val_ty: i64 = lctx_inst_ty(ctx, new_val);
                 let up_args: Vec<i64> = Vec::new();
                 up_args.push(new_val);
-                lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), phi_ids[ai3], 0, String::from(""));
+                let for_mut_up_id2: i64 = lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), phi_ids[ai3], 0, String::from(""));
+                lctx_set_inst_span(ctx, for_mut_up_id2, expr_span(a, eid));
                 ai3 = ai3 + 1;
             }
         }
@@ -3595,7 +3625,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let original: i64 = lower_expr(ctx, rhs_eid);
                 let val_id: i64 = lower_narrow_literal(ctx, a, rhs_eid, original, field_ty);
                 // Field store transfers a linear RHS into the heap container.
-                lctx_emit_linear_consume_if_needed(ctx, val_id);
+                lctx_emit_linear_consume_if_needed(ctx, val_id, expr_span(a, eid));
                 let fs_args: Vec<i64> = Vec::new();
                 fs_args.push(recv_id);
                 fs_args.push(val_id);
@@ -3623,7 +3653,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 original
             };
             // Index store transfers a linear RHS into the heap container.
-            lctx_emit_linear_consume_if_needed(ctx, val_id);
+            lctx_emit_linear_consume_if_needed(ctx, val_id, expr_span(a, eid));
             let set_args: Vec<i64> = Vec::new();
             set_args.push(recv_id);
             set_args.push(idx_id);
@@ -4271,7 +4301,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), arm_block, next_check, String::from(""));
 
                 lctx_switch_to_block(ctx, arm_block);
-                lctx_emit_linear_consume_if_needed(ctx, ptr_id);
+                lctx_emit_linear_consume_if_needed(ctx, ptr_id, expr_span(a, eid));
                 lctx_push_scope(ctx);
 
                 let variant_payloads: Vec<i64> = lctx_get_variant_payloads(ctx, ptr_id);
@@ -4335,6 +4365,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         let mu_args: Vec<i64> = Vec::new();
                         mu_args.push(arm_mut_vals[mci]);
                         let mu_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                        lctx_set_inst_span(ctx, mu_id, expr_span(a, eid));
                         arm_mut_ups.push(mu_id);
                         arm_mut_inputs.push(arm_mut_vals[mci]);
                         mci = mci + 1;
@@ -4343,6 +4374,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let up_args: Vec<i64> = Vec::new();
                     up_args.push(arm_result);
                     let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                    lctx_set_inst_span(ctx, up_id, expr_span(a, eid));
                     let jmp_args: Vec<i64> = Vec::new();
                     lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
 
@@ -4366,7 +4398,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 }
             } else if ptag == PAT_WILD() || ptag == PAT_IDENT() {
                 if ptag == PAT_WILD() {
-                    lctx_emit_linear_consume_if_needed(ctx, ptr_id);
+                    lctx_emit_linear_consume_if_needed(ctx, ptr_id, expr_span(a, eid));
                 }
                 lctx_push_scope(ctx);
                 if ptag == PAT_IDENT() {
@@ -4393,6 +4425,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         let mu2_args: Vec<i64> = Vec::new();
                         mu2_args.push(arm_mut_vals2[mci2]);
                         let mu2_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu2_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                        lctx_set_inst_span(ctx, mu2_id, expr_span(a, eid));
                         arm_mut_ups.push(mu2_id);
                         arm_mut_inputs.push(arm_mut_vals2[mci2]);
                         mci2 = mci2 + 1;
@@ -4401,6 +4434,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let up_args: Vec<i64> = Vec::new();
                     up_args.push(arm_result);
                     let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                    lctx_set_inst_span(ctx, up_id, expr_span(a, eid));
                     let jmp_args: Vec<i64> = Vec::new();
                     lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
 
@@ -4419,7 +4453,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     rmi2 = rmi2 + 1;
                 }
             } else {
-                lctx_emit_linear_consume_if_needed(ctx, ptr_id);
+                lctx_emit_linear_consume_if_needed(ctx, ptr_id, expr_span(a, eid));
                 let u_args: Vec<i64> = Vec::new();
                 let unit_id: i64 = lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""));
 
@@ -4428,6 +4462,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let mu3_args: Vec<i64> = Vec::new();
                     mu3_args.push(saved_mut_vals[mci3]);
                     let mu3_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu3_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                    lctx_set_inst_span(ctx, mu3_id, expr_span(a, eid));
                     arm_mut_ups.push(mu3_id);
                     arm_mut_inputs.push(saved_mut_vals[mci3]);
                     mci3 = mci3 + 1;
@@ -4436,6 +4471,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let up_args: Vec<i64> = Vec::new();
                 up_args.push(unit_id);
                 let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                lctx_set_inst_span(ctx, up_id, expr_span(a, eid));
                 let jmp_args: Vec<i64> = Vec::new();
                 lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
 
@@ -4467,6 +4503,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 mti = mti + 1;
             }
             let mphi_id: i64 = lctx_emit(ctx, IOP_PHI(), mphi_ty, mphi_args, IDATA_NONE(), 0, 0, String::from(""));
+            lctx_set_inst_span(ctx, mphi_id, expr_span(a, eid));
             let mut bpi: i64 = 0;
             while bpi < n_merge_arms {
                 backpatch_upsilon(ctx, arm_exit_blocks[bpi], arm_mut_ups[bpi * nmut + mpi], mphi_id);
@@ -4528,6 +4565,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         let new_up_args: Vec<i64> = Vec::new();
                         new_up_args.push(final_val);
                         let new_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), new_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                        lctx_set_inst_span(ctx, new_up_id, expr_span(a, eid));
                         let blk2: IrBlock = ctx.func.blocks[arm_block];
                         let mut tj: i64 = 0;
                         while tj < tail.len() {
@@ -4543,6 +4581,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
+        lctx_set_inst_span(ctx, phi_id, expr_span(a, eid));
         lctx_merge_compatible_aggregate_metadata(ctx, arm_result_values, phi_id);
 
         let n_results: i64 = arm_up_ids.len();
@@ -4629,6 +4668,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let up_args: Vec<i64> = Vec::new();
                     up_args.push(val_id);
                     let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                    lctx_set_inst_span(ctx, up_id, expr_span(a, eid));
                     let cur_block: i64 = ctx.current_block;
                     ctx.loop_break_up_ids.push(up_id);
                     ctx.loop_break_up_blocks.push(cur_block);
@@ -4656,7 +4696,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         let up_args: Vec<i64> = Vec::new();
                         up_args.push(cur_val);
                         let up_ty: i64 = lctx_inst_ty(ctx, cur_val);
-                        lctx_emit(ctx, IOP_UPSILON(), up_ty, up_args, IDATA_PHI_TARGET(), ep_ids[epi], 0, String::from(""));
+                        let ep_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), up_ty, up_args, IDATA_PHI_TARGET(), ep_ids[epi], 0, String::from(""));
+                        lctx_set_inst_span(ctx, ep_up_id, expr_span(a, eid));
                     }
                     epi = epi + 1;
                 }
@@ -4685,7 +4726,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let val_ty: i64 = lctx_inst_ty(ctx, cur_val);
                 let up_args: Vec<i64> = Vec::new();
                 up_args.push(cur_val);
-                lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), phi_ids2[pi], 0, String::from(""));
+                let cont_mut_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), phi_ids2[pi], 0, String::from(""));
+                lctx_set_inst_span(ctx, cont_mut_up_id, expr_span(a, eid));
                 pi = pi + 1;
             }
             let idx_phi2: i64 = ctx.loop_continue_idx_phi[nlh - 1];
@@ -4698,7 +4740,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let idx_next: i64 = lctx_emit(ctx, IOP_WADD(), ITY_I64(), add_args, IDATA_INTEGER(), ITY_I64(), 0, String::from(""));
                 let idx_up_args: Vec<i64> = Vec::new();
                 idx_up_args.push(idx_next);
-                lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), idx_up_args, IDATA_PHI_TARGET(), idx_phi2, 0, String::from(""));
+                let cont_idx_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), idx_up_args, IDATA_PHI_TARGET(), idx_phi2, 0, String::from(""));
+                lctx_set_inst_span(ctx, cont_idx_up_id, expr_span(a, eid));
             }
             let jmp_args: Vec<i64> = Vec::new();
             return lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), hdr_block, 0, String::from(""));
@@ -4802,7 +4845,7 @@ fn lower_unwrap(ctx: LowerCtx, eid: i64, recv_id: i64, empty_tag: i64) -> i64 {
 
 fn lower_consumed_expr(ctx: LowerCtx, eid: i64) -> i64 {
     let id: i64 = lower_expr(ctx, eid);
-    lctx_emit_linear_consume_if_needed(ctx, id);
+    lctx_emit_linear_consume_if_needed(ctx, id, expr_span(ctx.arena, eid));
     id
 }
 
