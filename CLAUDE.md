@@ -187,8 +187,9 @@ same marker convention `scripts/generate_help.py` uses for `// GENERATE:SKILL_*`
 `--check` fails if any drift.
 
 `load_catalogue` hand-validates every entry beyond the four fields' presence and type: `effects` must
-match `^\[(token(, token)*)?\]$` against the closed, alphabetically-sorted vocabulary
-`{read, write, io, panic, unsafe}`; `doc_signature` must parse as `fn(...) -> Type` with arity and
+match `^\[(token(, token)*)?\]$` against the closed vocabulary `{read, write, io, panic, unsafe}`, with
+tokens in alphabetical order (matching `vow-syntax/src/printer.rs`'s `print_effects`, which sorts the
+same way); `doc_signature` must parse as `fn(...) -> Type` with arity and
 per-parameter/return types matching `params`/`return` (`String`/`Vec<...>` both denote `ptr`); the
 optional `verifier_model` (`known`/`unmodeled`) and `arena_routing` (`none`/`heap_fresh`) fields, when
 present, must be in their closed sets; and any field name not in the recognized set (required or
