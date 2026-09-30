@@ -1589,6 +1589,16 @@ layout is shared by the Rust bootstrap and self-hosted compilers.
 -0.5
 ```
 
+Out-of-range literals are a compile-time error, same as the integer case: a
+literal whose magnitude exceeds `f64::MAX` (~1.7976931348623157e308) parses
+to infinity and is rejected as `InvalidCharacter` at lex time, rather than
+silently becoming a float value that has no valid C double-literal
+representation:
+
+```vow
+let x: f64 = 99999...9.0;   // 310 nines — error: InvalidCharacter — float literal out of range
+```
+
 ### Boolean Literals
 
 ```vow
@@ -4180,6 +4190,19 @@ fn f() -> i64 {
 ```
 
 **Fix:** Remove the invalid character. Vow has no `@` operator.
+
+A float literal whose decimal magnitude overflows `f64` (parses to
+infinity) is also an `InvalidCharacter` error, raised at lex time rather
+than allowed through to produce an uncompilable C `inf` token later in
+the pipeline:
+
+```vow
+fn f() -> f64 {
+    999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999.0
+}
+```
+
+**Fix:** Use a literal whose magnitude is within `f64::MAX` (~1.7976931348623157e308).
 
 ### InvalidIntSuffix
 
@@ -6798,6 +6821,16 @@ layout is shared by the Rust bootstrap and self-hosted compilers.
 -0.5
 ```
 
+Out-of-range literals are a compile-time error, same as the integer case: a
+literal whose magnitude exceeds `f64::MAX` (~1.7976931348623157e308) parses
+to infinity and is rejected as `InvalidCharacter` at lex time, rather than
+silently becoming a float value that has no valid C double-literal
+representation:
+
+```vow
+let x: f64 = 99999...9.0;   // 310 nines — error: InvalidCharacter — float literal out of range
+```
+
 ### Boolean Literals
 
 ```vow
@@ -9393,6 +9426,19 @@ fn f() -> i64 {
 ```
 
 **Fix:** Remove the invalid character. Vow has no `@` operator.
+
+A float literal whose decimal magnitude overflows `f64` (parses to
+infinity) is also an `InvalidCharacter` error, raised at lex time rather
+than allowed through to produce an uncompilable C `inf` token later in
+the pipeline:
+
+```vow
+fn f() -> f64 {
+    999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999.0
+}
+```
+
+**Fix:** Use a literal whose magnitude is within `f64::MAX` (~1.7976931348623157e308).
 
 ### InvalidIntSuffix
 

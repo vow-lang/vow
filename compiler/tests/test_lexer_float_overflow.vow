@@ -1,0 +1,32 @@
+module TestLexerFloatOverflow
+
+use lexer
+use token
+use diag
+
+// A decimal magnitude comfortably past f64::MAX (~1.7976931348623157e308)
+// must be rejected at lex time rather than silently becoming +Infinity,
+// which the C emitter cannot render as a valid double-literal token.
+fn check_overflowing_float_rejected() -> i32 {
+    let src: String = empty_str();
+    let mut i: i64 = 0;
+    while i < 310 {
+        src.push_byte(57);
+        i = i + 1;
+    }
+    src.push_byte(46);
+    src.push_byte(48);
+    let tokens: Vec<Token> = lex(src);
+    if tokens.len() != 2 { return 1; }
+    let t0: Token = tokens[0];
+    if t0.tag != tok_invalid_float() { return 2; }
+    if t0.int_val != EC_INVALID_CHARACTER() { return 3; }
+    if t0.str_val != String::from("float literal out of range") { return 4; }
+    0
+}
+
+fn main() -> i32 {
+    let overflow: i32 = check_overflowing_float_rejected();
+    if overflow != 0 { return overflow; }
+    0
+}

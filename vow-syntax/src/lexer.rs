@@ -303,6 +303,13 @@ impl<'src> Lexer<'src> {
                 span,
                 code: ErrorCode::InvalidCharacter,
             })?;
+            if value.is_infinite() {
+                return Err(LexError {
+                    message: "float literal out of range".to_string(),
+                    span,
+                    code: ErrorCode::InvalidCharacter,
+                });
+            }
             return Ok(Token::new(TokenKind::LitFloat(value), span));
         }
 
@@ -514,6 +521,16 @@ mod tests {
         let error = Lexer::new("340282366920938463463374607431768211456u128")
             .tokenize()
             .expect_err("u128::MAX + 1 must be rejected");
+        assert!(error.message.contains("out of range"));
+    }
+
+    #[test]
+    fn lex_float_rejects_magnitude_above_f64_max() {
+        let digits = "9".repeat(310);
+        let error = Lexer::new(&format!("{digits}.0"))
+            .tokenize()
+            .expect_err("magnitude past f64::MAX must be rejected");
+        assert_eq!(error.code, ErrorCode::InvalidCharacter);
         assert!(error.message.contains("out of range"));
     }
 

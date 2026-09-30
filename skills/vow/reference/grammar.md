@@ -232,6 +232,16 @@ layout is shared by the Rust bootstrap and self-hosted compilers.
 -0.5
 ```
 
+Out-of-range literals are a compile-time error, same as the integer case: a
+literal whose magnitude exceeds `f64::MAX` (~1.7976931348623157e308) parses
+to infinity and is rejected as `InvalidCharacter` at lex time, rather than
+silently becoming a float value that has no valid C double-literal
+representation:
+
+```vow
+let x: f64 = 99999...9.0;   // 310 nines — error: InvalidCharacter — float literal out of range
+```
+
 ### Boolean Literals
 
 ```vow

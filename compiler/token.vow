@@ -98,6 +98,10 @@ fn tok_pipe() -> i64 { 80 }
 fn tok_invalid_int() -> i64 { 81 }
 // A float literal (`digit+ '.' digit+`). `int_lo` carries the f64 bit pattern.
 fn tok_lit_float() -> i64 { 82 }
+// A float literal whose magnitude overflows f64 (parses to +Infinity).
+// `int_val` carries the `EC_*` diagnostic code and `str_val` the message,
+// mirroring `tok_invalid_int()`.
+fn tok_invalid_float() -> i64 { 83 }
 
 fn tok_suffix_i8() -> i64 { 0 }
 fn tok_suffix_i16() -> i64 { 1 }
