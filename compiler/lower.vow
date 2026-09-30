@@ -5285,7 +5285,7 @@ fn lower_requires_clauses(ctx: LowerCtx, vow_lid: i64) {
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
             collect_free_vars_in_expr(ctx, clause_eid, binding_names, binding_ids);
-            let clause_offset: i64 = span_unpack_start(expr_span(a, clause_eid));
+            let clause_offset: i64 = span_unpack_start(vow_clause_span(a, cid));
             let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLER(), binding_ids, binding_names, clause_offset);
             let pred_id: i64 = lower_expr(ctx, clause_eid);
             let vow_args: Vec<i64> = Vec::new();
@@ -5312,7 +5312,7 @@ fn lower_ensures_clauses(ctx: LowerCtx, vow_lid: i64, result_id: i64) {
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
             collect_free_vars_in_expr(ctx, clause_eid, binding_names, binding_ids);
-            let clause_offset: i64 = span_unpack_start(expr_span(a, clause_eid));
+            let clause_offset: i64 = span_unpack_start(vow_clause_span(a, cid));
             let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLEE(), binding_ids, binding_names, clause_offset);
             let pred_id: i64 = lower_expr(ctx, clause_eid);
             let vow_args: Vec<i64> = Vec::new();
@@ -5338,7 +5338,7 @@ fn lower_invariant_clauses(ctx: LowerCtx, vow_lid: i64) {
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
             collect_free_vars_in_expr(ctx, clause_eid, binding_names, binding_ids);
-            let clause_offset: i64 = span_unpack_start(expr_span(a, clause_eid));
+            let clause_offset: i64 = span_unpack_start(vow_clause_span(a, cid));
             let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLEE(), binding_ids, binding_names, clause_offset);
             let pred_id: i64 = lower_expr(ctx, clause_eid);
             let vow_args: Vec<i64> = Vec::new();

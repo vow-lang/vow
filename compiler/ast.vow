@@ -448,6 +448,7 @@ fn arena_add_vow_clause(a: AstArena, kind: i64, eid: i64, span: i64) -> i64 {
 
 fn vow_clause_kind(a: AstArena, cid: i64) -> i64 { a.vow_data[cid * 3] }
 fn vow_clause_expr(a: AstArena, cid: i64) -> i64 { a.vow_data[cid * 3 + 1] }
+fn vow_clause_span(a: AstArena, cid: i64) -> i64 { a.vow_data[cid * 3 + 2] }
 
 fn arena_add_sdef(a: AstArena, name_sid: i64, fields_lid: i64, is_linear: i64, span: i64) -> i64 {
     let sid: i64 = (a.sdef_data.len() / 4) as i64;

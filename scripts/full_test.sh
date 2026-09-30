@@ -1469,17 +1469,22 @@ done
 
 # contract-quality/parity: the ratchet above only ever runs $SELF, so
 # vow/src/contract_quality.rs has no end-to-end coverage from it and the two
-# classifiers can drift silently. Compare the (function, kind, quality) triples
-# both compilers derive from one fixture.
+# classifiers can drift silently. Compare the (function, kind, quality,
+# source.offset) tuples both compilers derive from one fixture, plus check
+# that each offset actually lands on the clause keyword.
 #
-# Scoped to those three fields on purpose — two pre-existing divergences in the
+# `quality_fixture` only has vow-block `requires`/`ensures` clauses (no
+# `invariant`, no parameter `where` refinements) — the keyword-prefix check
+# below assumes that anchor rule (docs/spec/cli.md, docs/spec/contracts.md).
+# A `where` refinement also reports kind "requires" but Rust anchors it on
+# the parameter name, not the keyword, so it would fail this check; keep
+# such fixtures out of `quality_fixture` or exclude them explicitly.
+#
+# Scoped to skip `description` on purpose — a pre-existing divergence in the
 # published contracts schema would otherwise mask a real quality regression:
 #   `description`   renders a cast as ` as <type>` in the self-hosted printer
 #                   (compiler/lower.vow) but ` as i64` in the Rust one — #1113.
-#   `source.offset` anchors on the predicate in the self-hosted output but on
-#                   the `requires:`/`ensures:` keyword in the Rust one — the
-#                   part of #1135 its parser fix left open.
-# Widen this case to a full compare_json once both are fixed.
+# Widen this case to a full compare_json once that's fixed too.
 quality_fixture="tests/fixtures/contracts/quality_shapes.vow"
 rust_quality_json="$TMPDIR/quality_parity_rust.json"
 self_quality_json="$TMPDIR/quality_parity_self.json"
@@ -1490,21 +1495,24 @@ else
     parity_result=$(python3 -c "
 import json, sys
 
-def triples(path):
+def tuples(path):
     with open(path) as f:
         d = json.load(f)
     got = sorted(
-        (c['function'], c['kind'], c['quality']) for c in d['contracts']
+        (c['function'], c['kind'], c['quality'], c['source']['offset'])
+        for c in d['contracts']
     )
     return got, d['summary']['quality']
 
-r_triples, r_quality = triples(sys.argv[1])
-s_triples, s_quality = triples(sys.argv[2])
+fixture_bytes = open(sys.argv[3], 'rb').read()
+
+r_tuples, r_quality = tuples(sys.argv[1])
+s_tuples, s_quality = tuples(sys.argv[2])
 errors = []
-if r_triples != s_triples:
-    only_rust = [t for t in r_triples if t not in s_triples]
-    only_self = [t for t in s_triples if t not in r_triples]
-    errors.append(f'clause quality differs: rust-only={only_rust} self-only={only_self}')
+if r_tuples != s_tuples:
+    only_rust = [t for t in r_tuples if t not in s_tuples]
+    only_self = [t for t in s_tuples if t not in r_tuples]
+    errors.append(f'clause quality/offset differs: rust-only={only_rust} self-only={only_self}')
 if r_quality != s_quality:
     errors.append(f'summary.quality differs: rust={r_quality} self={s_quality}')
 # Pin the absolute expectation too: parity alone would pass a regression that
@@ -1512,8 +1520,22 @@ if r_quality != s_quality:
 expected = {'weak': 6, 'tautological': 2, 'substantive': 7}
 if r_quality != expected:
     errors.append(f'rust summary.quality {r_quality} != expected {expected}')
+# Pin the anchor decision itself: the byte at offset must start the clause
+# keyword (e.g. b'requires:'), not land inside the predicate expression.
+for function, kind, quality, offset in r_tuples:
+    needle = (kind + ':').encode()
+    if not fixture_bytes[offset:].startswith(needle):
+        errors.append(
+            f'{function}/{kind}: rust offset {offset} does not start with {needle!r}'
+        )
+for function, kind, quality, offset in s_tuples:
+    needle = (kind + ':').encode()
+    if not fixture_bytes[offset:].startswith(needle):
+        errors.append(
+            f'{function}/{kind}: self-hosted offset {offset} does not start with {needle!r}'
+        )
 print('; '.join(errors) if errors else 'OK')
-" "$rust_quality_json" "$self_quality_json" 2>&1) || parity_result="checker error: $parity_result"
+" "$rust_quality_json" "$self_quality_json" "$quality_fixture" 2>&1) || parity_result="checker error: $parity_result"
     if [ "$parity_result" = "OK" ]; then
         pass "contract-quality/parity"
     else
