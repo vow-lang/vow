@@ -1,0 +1,160 @@
+module TestLowerAggregateMetadata
+
+use ast
+use ir
+use lower
+
+fn test_ctx() -> LowerCtx {
+    lctx_new(String::from("metadata"), ITY_UNIT(), 0, arena_new(), Vec::new())
+}
+
+fn check_vec_projection() -> i64 {
+    let ctx: LowerCtx = test_ctx();
+    let elem_path: Vec<String> = Vec::new();
+    elem_path.push(String::from("Vec"));
+    elem_path.push(String::from("Option"));
+    let option_path: Vec<i64> = Vec::new();
+    option_path.push(-1);
+    option_path.push(ITY_U8());
+    let first_variants: Vec<i64> = Vec::new();
+    let second_variants: Vec<i64> = Vec::new();
+    second_variants.push(ITY_I128());
+    second_variants.push(-1);
+    let variant_path: Vec<Vec<i64>> = Vec::new();
+    variant_path.push(first_variants);
+    variant_path.push(second_variants);
+    lctx_tag(ctx, 1, String::from("Vec"));
+    lctx_tag_vec_elem_path(ctx, 1, elem_path);
+    lctx_tag_vec_option_elem_ty_path(ctx, 1, option_path);
+    lctx_tag_vec_variant_payload_ty_path(ctx, 1, variant_path);
+
+    lctx_project_vec_index_metadata(ctx, 1, 2);
+    if lctx_get_tag(ctx, 2) != String::from("Vec") { return 1; }
+    let nested_path: Vec<String> = lctx_get_vec_elem_path(ctx, 2);
+    if nested_path.len() != 1 || nested_path[0] != String::from("Option") { return 2; }
+    let nested_options: Vec<i64> = lctx_get_vec_option_elem_ty_path(ctx, 2);
+    if nested_options.len() != 1 || nested_options[0] != ITY_U8() { return 3; }
+
+    lctx_project_vec_index_metadata(ctx, 2, 3);
+    if lctx_get_tag(ctx, 3) != String::from("Option") { return 4; }
+    if lctx_find_option_elem_ty(ctx, 3) != ITY_U8() { return 5; }
+    let payloads: Vec<i64> = lctx_get_variant_payloads(ctx, 3);
+    if payloads.len() != 2 || payloads[0] != ITY_I128() || payloads[1] != -1 { return 6; }
+    0
+}
+
+fn check_pattern_and_question_application() -> i64 {
+    let ctx: LowerCtx = test_ctx();
+    let pat_vec_path: Vec<String> = Vec::new();
+    pat_vec_path.push(String::from("Widget"));
+    let pat_option_path: Vec<i64> = Vec::new();
+    pat_option_path.push(ITY_U16());
+    let pat_variant_entry: Vec<i64> = Vec::new();
+    pat_variant_entry.push(ITY_I128());
+    pat_variant_entry.push(ITY_U64());
+    let pat_variant_path: Vec<Vec<i64>> = Vec::new();
+    pat_variant_path.push(pat_variant_entry);
+    let pat_payloads: Vec<i64> = Vec::new();
+    pat_payloads.push(ITY_I128());
+    pat_payloads.push(ITY_U64());
+    ctx.pat_aggregate_names.push(String::from("Result"));
+    ctx.pat_vec_elem_paths.push(pat_vec_path);
+    ctx.pat_vec_option_elem_ty_paths.push(pat_option_path);
+    ctx.pat_vec_variant_payload_ty_paths.push(pat_variant_path);
+    ctx.pat_option_elem_tys.push(ITY_U8());
+    ctx.pat_variant_payload_tys.push(pat_payloads);
+    ctx.pat_aggregate_linear.push(0);
+
+    lctx_apply_pattern_aggregate_metadata(ctx, 10, 0, String::from("Result"));
+    if lctx_get_tag(ctx, 10) != String::from("Result") { return 10; }
+    if lctx_find_option_elem_ty(ctx, 10) != ITY_U8() { return 11; }
+    let installed_variants: Vec<i64> = lctx_get_variant_payloads(ctx, 10);
+    if installed_variants.len() != 2 || installed_variants[0] != ITY_I128() { return 12; }
+
+    let question_vec_path: Vec<String> = Vec::new();
+    question_vec_path.push(String::from("Option"));
+    let question_option_path: Vec<i64> = Vec::new();
+    question_option_path.push(ITY_U32());
+    ctx.question_aggregate_names.push(String::from("Vec"));
+    ctx.question_vec_elem_paths.push(question_vec_path);
+    ctx.question_vec_option_elem_ty_paths.push(question_option_path);
+    ctx.question_option_elem_tys.push(ITY_U32());
+    ctx.question_aggregate_linear.push(0);
+
+    lctx_apply_question_aggregate_metadata(ctx, 11, 0, String::from("Vec"));
+    if lctx_get_tag(ctx, 11) != String::from("Vec") { return 13; }
+    if lctx_find_option_elem_ty(ctx, 11) != ITY_U32() { return 14; }
+    0
+}
+
+fn check_call_and_pin_policies() -> i64 {
+    let ctx: LowerCtx = test_ctx();
+    ctx.func_ret_tags.push(String::from("Result"));
+    ctx.func_ret_vec_elems.push(String::from("Widget"));
+    ctx.func_ret_option_elems.push(-1);
+    let call_variants: Vec<i64> = Vec::new();
+    call_variants.push(ITY_I128());
+    call_variants.push(ITY_U64());
+    ctx.func_ret_variant_payload_tys.push(call_variants);
+
+    lctx_apply_call_result_metadata(ctx, 20, 0);
+    if lctx_get_tag(ctx, 20) != String::from("Result") { return 20; }
+    if lctx_get_vec_elem(ctx, 20) != String::from("Widget") { return 21; }
+    if lctx_find_option_elem_ty(ctx, 20) != -1 { return 22; }
+    let installed_variants: Vec<i64> = lctx_get_variant_payloads(ctx, 20);
+    if installed_variants.len() != 2 || installed_variants[1] != ITY_U64() { return 23; }
+
+    let pin_path: Vec<String> = Vec::new();
+    pin_path.push(String::from("Option"));
+    let pin_options: Vec<i64> = Vec::new();
+    pin_options.push(ITY_U8());
+    let pin_variant_entry: Vec<i64> = Vec::new();
+    pin_variant_entry.push(ITY_I128());
+    let pin_variants: Vec<Vec<i64>> = Vec::new();
+    pin_variants.push(pin_variant_entry);
+    lctx_tag(ctx, 21, String::from("Vec"));
+    lctx_tag_vec_elem_path(ctx, 21, pin_path);
+    lctx_tag_vec_option_elem_ty_path(ctx, 21, pin_options);
+    lctx_tag_vec_variant_payload_ty_path(ctx, 21, pin_variants);
+
+    lctx_copy_pin_result_metadata(ctx, 21, 22);
+    if lctx_get_tag(ctx, 22) != String::from("Vec") { return 24; }
+    if lctx_get_vec_elem(ctx, 22) != String::from("Option") { return 25; }
+    if lctx_get_vec_option_elem_ty_path(ctx, 22).len() != 1 { return 26; }
+    if lctx_get_vec_variant_payload_ty_path(ctx, 22).len() != 0 { return 27; }
+    0
+}
+
+fn check_compatible_merge() -> i64 {
+    let ctx: LowerCtx = test_ctx();
+    lctx_tag(ctx, 30, String::from("Vec"));
+    lctx_tag(ctx, 31, String::from("Vec"));
+    let path: Vec<String> = Vec::new();
+    path.push(String::from("Widget"));
+    lctx_tag_vec_elem_path(ctx, 30, path);
+    let compatible_sources: Vec<i64> = Vec::new();
+    compatible_sources.push(30);
+    compatible_sources.push(31);
+    lctx_merge_compatible_aggregate_metadata(ctx, compatible_sources, 32);
+    if lctx_get_tag(ctx, 32) != String::from("Vec") { return 30; }
+    if lctx_get_vec_elem(ctx, 32) != String::from("Widget") { return 31; }
+
+    lctx_tag(ctx, 33, String::from("Vec"));
+    let conflict: Vec<String> = Vec::new();
+    conflict.push(String::from("Other"));
+    lctx_tag_vec_elem_path(ctx, 33, conflict);
+    let conflicting_sources: Vec<i64> = Vec::new();
+    conflicting_sources.push(30);
+    conflicting_sources.push(33);
+    lctx_merge_compatible_aggregate_metadata(ctx, conflicting_sources, 34);
+    if lctx_get_tag(ctx, 34) != String::from("") { return 32; }
+    0
+}
+
+fn main() -> i32 {
+    let mut result: i64 = check_vec_projection();
+    if result == 0 { result = check_pattern_and_question_application(); }
+    if result == 0 { result = check_call_and_pin_policies(); }
+    if result == 0 { result = check_compatible_merge(); }
+    i64_to_i32_wrap(result)
+}

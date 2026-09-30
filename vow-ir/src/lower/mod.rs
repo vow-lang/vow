@@ -345,7 +345,7 @@ fn builtin_method_spec(
     })
 }
 
-fn propagate_vec_element_metadata(ctx: &mut LowerCtx, source: InstId, result: InstId) {
+fn project_vec_index_metadata(ctx: &mut LowerCtx, source: InstId, result: InstId) {
     let Some(elem_types) = ctx.inst_vec_elem_types.get(&source).cloned() else {
         return;
     };
@@ -409,7 +409,11 @@ fn pattern_scalar_ir_type(ty: PatternScalarType) -> Ty {
     }
 }
 
-fn tag_pattern_aggregate_metadata(ctx: &mut LowerCtx, result: InstId, info: PatternAggregateInfo) {
+fn apply_pattern_aggregate_metadata(
+    ctx: &mut LowerCtx,
+    result: InstId,
+    info: PatternAggregateInfo,
+) {
     ctx.inst_struct_type.insert(result, info.type_name);
     if !info.vec_elem_types.is_empty() {
         let option_types = info
@@ -450,6 +454,38 @@ fn tag_pattern_aggregate_metadata(ctx: &mut LowerCtx, result: InstId, info: Patt
     }
 }
 
+fn copy_pin_result_metadata(ctx: &mut LowerCtx, source: InstId, result: InstId) {
+    let Some(type_name) = ctx.inst_struct_type.get(&source).cloned() else {
+        return;
+    };
+    let is_vec = type_name == "Vec";
+    ctx.inst_struct_type.insert(result, type_name);
+    if !is_vec {
+        return;
+    }
+    if let Some(elem_types) = ctx.inst_vec_elem_types.get(&source).cloned() {
+        ctx.inst_vec_elem_types.insert(result, elem_types);
+    }
+    if let Some(option_types) = ctx.inst_vec_option_elem_tys.get(&source).cloned() {
+        ctx.inst_vec_option_elem_tys.insert(result, option_types);
+    }
+}
+
+fn apply_call_result_metadata(ctx: &mut LowerCtx, result: InstId, call_info: FuncSigInfo) {
+    if let Some(ret_tag) = call_info.ret_tag {
+        ctx.inst_struct_type.insert(result, ret_tag);
+    }
+    if let Some(ret_vec_elem) = call_info.ret_vec_elem {
+        ctx.inst_vec_elem_types.insert(result, vec![ret_vec_elem]);
+    }
+    if let Some(ret_option_elem) = call_info.ret_option_elem {
+        ctx.inst_option_elem_ty.insert(result, ret_option_elem);
+    }
+    if let Some(variant_tys) = call_info.ret_variant_payload_tys {
+        ctx.inst_variant_payload_tys.insert(result, variant_tys);
+    }
+}
+
 fn compatible_metadata_value<T: Clone + PartialEq>(
     sources: &[InstId],
     get: impl Fn(InstId) -> Option<T>,
@@ -467,7 +503,7 @@ fn compatible_metadata_value<T: Clone + PartialEq>(
     Ok(compatible)
 }
 
-fn copy_compatible_aggregate_metadata(ctx: &mut LowerCtx, sources: &[InstId], result: InstId) {
+fn merge_compatible_aggregate_metadata(ctx: &mut LowerCtx, sources: &[InstId], result: InstId) {
     let Some(type_name) = sources
         .first()
         .and_then(|source| ctx.inst_struct_type.get(source))
@@ -1819,7 +1855,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         InstData::CallExtern("__vow_string_pin_to_root".to_string()),
                         span,
                     );
-                    ctx.inst_struct_type.insert(result, "String".to_string());
+                    copy_pin_result_metadata(ctx, source_id, result);
                     return result;
                 }
                 if ctx
@@ -1834,15 +1870,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         InstData::CallExtern("__vow_vec_pin_to_root_val".to_string()),
                         span,
                     );
-                    ctx.inst_struct_type.insert(result, "Vec".to_string());
-                    if let Some(elem_types) = ctx.inst_vec_elem_types.get(&source_id).cloned() {
-                        ctx.inst_vec_elem_types.insert(result, elem_types);
-                    }
-                    if let Some(option_types) =
-                        ctx.inst_vec_option_elem_tys.get(&source_id).cloned()
-                    {
-                        ctx.inst_vec_option_elem_tys.insert(result, option_types);
-                    }
+                    copy_pin_result_metadata(ctx, source_id, result);
                     return result;
                 }
                 // pin_to_root relies on lowering-time String/Vec tags. Keep
@@ -1858,18 +1886,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::CallTarget(call_info.id),
                     span,
                 );
-                if let Some(ret_tag) = call_info.ret_tag {
-                    ctx.inst_struct_type.insert(result, ret_tag);
-                }
-                if let Some(ret_vec_elem) = call_info.ret_vec_elem {
-                    ctx.inst_vec_elem_types.insert(result, vec![ret_vec_elem]);
-                }
-                if let Some(ret_option_elem) = call_info.ret_option_elem {
-                    ctx.inst_option_elem_ty.insert(result, ret_option_elem);
-                }
-                if let Some(variant_tys) = call_info.ret_variant_payload_tys {
-                    ctx.inst_variant_payload_tys.insert(result, variant_tys);
-                }
+                apply_call_result_metadata(ctx, result, call_info);
                 result
             } else if let Some((sym, ret_ty)) = vow_debug_builtin_to_runtime(&callee_name) {
                 ctx.emit(
@@ -2497,7 +2514,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 InstData::CallExtern("__vow_vec_get_val".to_string()),
                 span,
             );
-            propagate_vec_element_metadata(ctx, iter_id, elem_id);
+            project_vec_index_metadata(ctx, iter_id, elem_id);
 
             // Save scope depth before pushing the for-each binding scope.
             // Loop-carried phis track outer mutation variables whose bindings
@@ -3357,7 +3374,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                     span,
                                 );
                                 if let Some(info) = aggregate {
-                                    tag_pattern_aggregate_metadata(ctx, field_val, info);
+                                    apply_pattern_aggregate_metadata(ctx, field_val, info);
                                 }
                                 ctx.define(name.clone(), field_val);
                             }
@@ -3554,7 +3571,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
 
             let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
-            copy_compatible_aggregate_metadata(ctx, &arm_result_values, phi_id);
+            merge_compatible_aggregate_metadata(ctx, &arm_result_values, phi_id);
 
             for (arm_block, up_id, _, _) in &arm_results {
                 backpatch_upsilon(ctx, *arm_block, *up_id, phi_id);
@@ -3801,7 +3818,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             } else {
                 raw_result
             };
-            propagate_vec_element_metadata(ctx, vec_ptr, result);
+            project_vec_index_metadata(ctx, vec_ptr, result);
             if let Some(ast_type) = elem_ast_type {
                 ctx.inst_declared_ast_types.insert(result, ast_type);
             }
@@ -3912,7 +3929,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
             if let Some(info) = aggregate {
-                tag_pattern_aggregate_metadata(ctx, payload, info);
+                apply_pattern_aggregate_metadata(ctx, payload, info);
             }
             payload
         }
@@ -4095,7 +4112,7 @@ fn lower_unwrap(
         span,
     );
     if let Some(info) = aggregate {
-        tag_pattern_aggregate_metadata(ctx, payload, info);
+        apply_pattern_aggregate_metadata(ctx, payload, info);
     }
     payload
 }
@@ -8298,7 +8315,7 @@ fn parse_or_default(s: String) -> i64 {
         ctx.inst_vec_option_elem_tys
             .insert(source, vec![None, Some(Ty::U8)]);
 
-        propagate_vec_element_metadata(&mut ctx, source, nested_vec);
+        project_vec_index_metadata(&mut ctx, source, nested_vec);
         assert_eq!(ctx.inst_struct_type.get(&nested_vec).unwrap(), "Vec");
         assert_eq!(
             ctx.inst_vec_elem_types.get(&nested_vec).unwrap(),
@@ -8309,9 +8326,97 @@ fn parse_or_default(s: String) -> i64 {
             &[Some(Ty::U8)]
         );
 
-        propagate_vec_element_metadata(&mut ctx, nested_vec, nested_option);
+        project_vec_index_metadata(&mut ctx, nested_vec, nested_option);
         assert_eq!(ctx.inst_struct_type.get(&nested_option).unwrap(), "Option");
         assert_eq!(ctx.inst_option_elem_ty.get(&nested_option), Some(&Ty::U8));
+    }
+
+    #[test]
+    fn aggregate_metadata_transitions_preserve_policy_boundaries() {
+        let mut ctx = LowerCtx::new(
+            "metadata_policies".to_string(),
+            vec![],
+            vec![],
+            Ty::Unit,
+            vec![],
+            "test.vow".to_string(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+            Rc::new(HashMap::new()),
+            HashMap::new(),
+            Rc::new(HashMap::new()),
+            HashMap::new(),
+            HashSet::new(),
+            Rc::new(HashMap::new()),
+        );
+        let source = InstId(10);
+        let pinned = InstId(11);
+        ctx.inst_struct_type.insert(source, "Vec".to_string());
+        ctx.inst_vec_elem_types
+            .insert(source, vec!["Option".to_string()]);
+        ctx.inst_vec_option_elem_tys
+            .insert(source, vec![Some(Ty::U8)]);
+        ctx.inst_vec_variant_payload_tys
+            .insert(source, vec![vec![Some(Ty::I128), None]]);
+
+        copy_pin_result_metadata(&mut ctx, source, pinned);
+        assert_eq!(ctx.inst_struct_type.get(&pinned).unwrap(), "Vec");
+        assert_eq!(
+            ctx.inst_vec_elem_types.get(&pinned).unwrap(),
+            &["Option".to_string()]
+        );
+        assert_eq!(
+            ctx.inst_vec_option_elem_tys.get(&pinned).unwrap(),
+            &[Some(Ty::U8)]
+        );
+        assert!(!ctx.inst_vec_variant_payload_tys.contains_key(&pinned));
+
+        let call_result = InstId(12);
+        let call_info = FuncSigInfo {
+            id: FuncId(0),
+            ret_ty: Ty::Ptr,
+            ret_tag: Some("Result".to_string()),
+            ret_vec_elem: Some("Widget".to_string()),
+            ret_option_elem: Some(Ty::U16),
+            ret_variant_payload_tys: Some(vec![Some(Ty::I128), Some(Ty::U64)]),
+            param_tys: vec![],
+            param_ast_tys: vec![],
+        };
+        apply_call_result_metadata(&mut ctx, call_result, call_info);
+        assert_eq!(ctx.inst_struct_type.get(&call_result).unwrap(), "Result");
+        assert_eq!(
+            ctx.inst_vec_elem_types.get(&call_result).unwrap(),
+            &["Widget".to_string()]
+        );
+        assert_eq!(ctx.inst_option_elem_ty.get(&call_result), Some(&Ty::U16));
+        assert_eq!(
+            ctx.inst_variant_payload_tys.get(&call_result).unwrap(),
+            &[Some(Ty::I128), Some(Ty::U64)]
+        );
+
+        let compatible = InstId(13);
+        let sparse = InstId(14);
+        let merged = InstId(15);
+        ctx.inst_struct_type.insert(compatible, "Vec".to_string());
+        ctx.inst_vec_elem_types
+            .insert(compatible, vec!["Widget".to_string()]);
+        ctx.inst_struct_type.insert(sparse, "Vec".to_string());
+        merge_compatible_aggregate_metadata(&mut ctx, &[compatible, sparse], merged);
+        assert_eq!(ctx.inst_struct_type.get(&merged).unwrap(), "Vec");
+        assert_eq!(
+            ctx.inst_vec_elem_types.get(&merged).unwrap(),
+            &["Widget".to_string()]
+        );
+
+        let conflicting = InstId(16);
+        let rejected = InstId(17);
+        ctx.inst_struct_type.insert(conflicting, "Vec".to_string());
+        ctx.inst_vec_elem_types
+            .insert(conflicting, vec!["Other".to_string()]);
+        merge_compatible_aggregate_metadata(&mut ctx, &[compatible, conflicting], rejected);
+        assert!(!ctx.inst_struct_type.contains_key(&rejected));
     }
 
     #[test]
