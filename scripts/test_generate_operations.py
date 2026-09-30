@@ -47,6 +47,165 @@ PRINT_OPS = [
     },
 ]
 
+# Filesystem, stdin, args, and direct-stderr operations migrated in #1272 --
+# see docs/spec/operations.json for the checked-in source of truth.
+FS_STDIN_ARGS_STDERR_OPS = [
+    {
+        "name": "fs_read",
+        "runtime_symbol": "__vow_fs_read",
+        "params": ["ptr"],
+        "return": "ptr",
+        "doc_signature": "fn(path: String) -> String",
+        "effects": "[read]",
+    },
+    {
+        "name": "fs_open",
+        "runtime_symbol": "__vow_fs_open",
+        "params": ["ptr"],
+        "return": "i64",
+        "doc_signature": "fn(path: String) -> i64",
+        "effects": "[read]",
+    },
+    {
+        "name": "fs_read_line",
+        "runtime_symbol": "__vow_fs_read_line",
+        "params": ["i64"],
+        "return": "ptr",
+        "doc_signature": "fn(handle: i64) -> String",
+        "effects": "[read]",
+    },
+    {
+        "name": "fs_status",
+        "runtime_symbol": "__vow_fs_status",
+        "params": ["i64"],
+        "return": "i64",
+        "doc_signature": "fn(handle: i64) -> i64",
+        "effects": "[read]",
+    },
+    {
+        "name": "fs_close",
+        "runtime_symbol": "__vow_fs_close",
+        "params": ["i64"],
+        "return": "i64",
+        "doc_signature": "fn(handle: i64) -> i64",
+        "effects": "[read]",
+    },
+    {
+        "name": "fs_write",
+        "runtime_symbol": "__vow_fs_write",
+        "params": ["ptr", "ptr"],
+        "return": "i64",
+        "doc_signature": "fn(path: String, data: String) -> i64",
+        "effects": "[write]",
+    },
+    {
+        "name": "fs_exists",
+        "runtime_symbol": "__vow_fs_exists",
+        "params": ["ptr"],
+        "return": "i64",
+        "doc_signature": "fn(path: String) -> i64",
+        "effects": "[read]",
+    },
+    {
+        "name": "fs_mkdir",
+        "runtime_symbol": "__vow_fs_mkdir",
+        "params": ["ptr"],
+        "return": "i64",
+        "doc_signature": "fn(path: String) -> i64",
+        "effects": "[io]",
+    },
+    {
+        "name": "fs_listdir",
+        "runtime_symbol": "__vow_fs_listdir",
+        "params": ["ptr"],
+        "return": "ptr",
+        "doc_signature": "fn(path: String) -> Vec<String>",
+        "effects": "[read]",
+    },
+    {
+        "name": "fs_remove",
+        "runtime_symbol": "__vow_fs_remove",
+        "params": ["ptr"],
+        "return": "i64",
+        "doc_signature": "fn(path: String) -> i64",
+        "effects": "[io]",
+    },
+    {
+        "name": "fs_remove_dir",
+        "runtime_symbol": "__vow_fs_remove_dir",
+        "params": ["ptr"],
+        "return": "i64",
+        "doc_signature": "fn(path: String) -> i64",
+        "effects": "[io]",
+    },
+    {
+        "name": "fs_is_dir",
+        "runtime_symbol": "__vow_fs_is_dir",
+        "params": ["ptr"],
+        "return": "i64",
+        "doc_signature": "fn(path: String) -> i64",
+        "effects": "[read]",
+    },
+    {
+        "name": "fs_is_symlink",
+        "runtime_symbol": "__vow_fs_is_symlink",
+        "params": ["ptr"],
+        "return": "i64",
+        "doc_signature": "fn(path: String) -> i64",
+        "effects": "[read]",
+    },
+    {
+        "name": "fs_rename",
+        "runtime_symbol": "__vow_fs_rename",
+        "params": ["ptr", "ptr"],
+        "return": "i64",
+        "doc_signature": "fn(old: String, new: String) -> i64",
+        "effects": "[io]",
+    },
+    {
+        "name": "args",
+        "runtime_symbol": "__vow_args",
+        "params": [],
+        "return": "ptr",
+        "doc_signature": "fn() -> Vec<String>",
+        "effects": "[read]",
+    },
+    {
+        "name": "stdin_read",
+        "runtime_symbol": "__vow_stdin_read",
+        "params": [],
+        "return": "ptr",
+        "doc_signature": "fn() -> String",
+        "effects": "[read]",
+    },
+    {
+        "name": "stdin_read_line",
+        "runtime_symbol": "__vow_stdin_read_line",
+        "params": [],
+        "return": "ptr",
+        "doc_signature": "fn() -> String",
+        "effects": "[read]",
+    },
+    {
+        "name": "stdin_ready",
+        "runtime_symbol": "__vow_stdin_ready",
+        "params": [],
+        "return": "bool",
+        "doc_signature": "fn() -> bool",
+        "effects": "[read]",
+    },
+    {
+        "name": "eprintln_str",
+        "runtime_symbol": "__vow_eprintln_str",
+        "params": ["ptr"],
+        "return": "unit",
+        "doc_signature": "fn(s: String) -> ()",
+        "effects": "[io]",
+    },
+]
+
+KNOWN_OPS = PRINT_OPS + FS_STDIN_ARGS_STDERR_OPS
+
 
 class LoadCatalogueTest(unittest.TestCase):
     def _write(self, tmp_path: Path, ops: list) -> None:
@@ -54,9 +213,9 @@ class LoadCatalogueTest(unittest.TestCase):
         spec_dir.mkdir(parents=True, exist_ok=True)
         (spec_dir / "operations.json").write_text(json.dumps({"operations": ops}))
 
-    def test_real_catalogue_loads_and_matches_print_ops(self):
+    def test_real_catalogue_loads_and_matches_known_ops(self):
         ops = go.load_catalogue(REPO_ROOT)
-        self.assertEqual(ops, PRINT_OPS)
+        self.assertEqual(ops, KNOWN_OPS)
 
     def test_missing_required_field_raises(self):
         with tempfile.TemporaryDirectory() as d:
@@ -182,6 +341,45 @@ class GenCraneliftBlockTest(unittest.TestCase):
         self.assertIn(
             "sig.returns.push(AbiParam::new(types::I64));\n            true", block
         )
+
+
+class ReturnTokensRenderTest(unittest.TestCase):
+    def _op(self, return_token: str) -> dict:
+        op = dict(PRINT_OPS[1])  # single i64 param, easiest to reuse
+        op["name"] = f"op_{return_token}"
+        op["runtime_symbol"] = f"__vow_op_{return_token}"
+        op["return"] = return_token
+        return op
+
+    def test_i64_return_token_renders(self):
+        op = self._op("i64")
+        self.assertIn("Ty::I64", go.gen_rust_ir_block([op]))
+        cranelift = go.gen_cranelift_block([op])
+        self.assertIn(
+            "sig.returns.push(AbiParam::new(types::I64));\n            true", cranelift
+        )
+        self.assertIn("ITY_I64()", go.gen_vow_lower_block([op]))
+
+    def test_ptr_return_token_renders(self):
+        op = self._op("ptr")
+        self.assertIn("Ty::Ptr", go.gen_rust_ir_block([op]))
+        cranelift = go.gen_cranelift_block([op])
+        self.assertIn(
+            "sig.returns.push(AbiParam::new(types::I64));\n            true", cranelift
+        )
+        self.assertIn("ITY_PTR()", go.gen_vow_lower_block([op]))
+
+    def test_bool_return_token_renders_as_i64_in_cranelift(self):
+        # stdin_ready is the one operation using this token: the Vow surface
+        # type is bool, but Cranelift has no dedicated bool return type, so
+        # the ABI must still push types::I64 -- never a narrower I8/bool slot.
+        op = self._op("bool")
+        self.assertIn("Ty::Bool", go.gen_rust_ir_block([op]))
+        cranelift = go.gen_cranelift_block([op])
+        self.assertIn(
+            "sig.returns.push(AbiParam::new(types::I64));\n            true", cranelift
+        )
+        self.assertIn("ITY_BOOL()", go.gen_vow_lower_block([op]))
 
 
 class GenVowLowerBlockTest(unittest.TestCase):
@@ -320,10 +518,10 @@ class ExtractBuiltinSignaturesTableTest(unittest.TestCase):
         table = go.extract_builtin_signatures_table(GRAMMAR_FIXTURE)
         self.assertNotIn("irrelevant", " ".join(table.keys()))
 
-    def test_real_grammar_md_contains_print_ops(self):
+    def test_real_grammar_md_contains_known_ops(self):
         grammar_text = (REPO_ROOT / "docs" / "spec" / "grammar.md").read_text()
         table = go.extract_builtin_signatures_table(grammar_text)
-        for op in PRINT_OPS:
+        for op in KNOWN_OPS:
             self.assertEqual(table[op["name"]], (op["doc_signature"], op["effects"]))
 
     def test_duplicate_row_across_subsections_raises(self):
@@ -419,7 +617,7 @@ class CheckDocFactsTest(unittest.TestCase):
         self.assertTrue(any("print_str" in m and "skill.rs" in m for m in mismatches))
 
     def test_real_repo_has_no_mismatches(self):
-        mismatches = go.check_doc_facts(PRINT_OPS, REPO_ROOT)
+        mismatches = go.check_doc_facts(KNOWN_OPS, REPO_ROOT)
         self.assertEqual(mismatches, [])
 
 

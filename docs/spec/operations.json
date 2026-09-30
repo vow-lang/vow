@@ -23,6 +23,158 @@
       "return": "unit",
       "doc_signature": "fn(v: u64) -> ()",
       "effects": "[io]"
+    },
+    {
+      "name": "fs_read",
+      "runtime_symbol": "__vow_fs_read",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(path: String) -> String",
+      "effects": "[read]"
+    },
+    {
+      "name": "fs_open",
+      "runtime_symbol": "__vow_fs_open",
+      "params": ["ptr"],
+      "return": "i64",
+      "doc_signature": "fn(path: String) -> i64",
+      "effects": "[read]"
+    },
+    {
+      "name": "fs_read_line",
+      "runtime_symbol": "__vow_fs_read_line",
+      "params": ["i64"],
+      "return": "ptr",
+      "doc_signature": "fn(handle: i64) -> String",
+      "effects": "[read]"
+    },
+    {
+      "name": "fs_status",
+      "runtime_symbol": "__vow_fs_status",
+      "params": ["i64"],
+      "return": "i64",
+      "doc_signature": "fn(handle: i64) -> i64",
+      "effects": "[read]"
+    },
+    {
+      "name": "fs_close",
+      "runtime_symbol": "__vow_fs_close",
+      "params": ["i64"],
+      "return": "i64",
+      "doc_signature": "fn(handle: i64) -> i64",
+      "effects": "[read]"
+    },
+    {
+      "name": "fs_write",
+      "runtime_symbol": "__vow_fs_write",
+      "params": ["ptr", "ptr"],
+      "return": "i64",
+      "doc_signature": "fn(path: String, data: String) -> i64",
+      "effects": "[write]"
+    },
+    {
+      "name": "fs_exists",
+      "runtime_symbol": "__vow_fs_exists",
+      "params": ["ptr"],
+      "return": "i64",
+      "doc_signature": "fn(path: String) -> i64",
+      "effects": "[read]"
+    },
+    {
+      "name": "fs_mkdir",
+      "runtime_symbol": "__vow_fs_mkdir",
+      "params": ["ptr"],
+      "return": "i64",
+      "doc_signature": "fn(path: String) -> i64",
+      "effects": "[io]"
+    },
+    {
+      "name": "fs_listdir",
+      "runtime_symbol": "__vow_fs_listdir",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(path: String) -> Vec<String>",
+      "effects": "[read]"
+    },
+    {
+      "name": "fs_remove",
+      "runtime_symbol": "__vow_fs_remove",
+      "params": ["ptr"],
+      "return": "i64",
+      "doc_signature": "fn(path: String) -> i64",
+      "effects": "[io]"
+    },
+    {
+      "name": "fs_remove_dir",
+      "runtime_symbol": "__vow_fs_remove_dir",
+      "params": ["ptr"],
+      "return": "i64",
+      "doc_signature": "fn(path: String) -> i64",
+      "effects": "[io]"
+    },
+    {
+      "name": "fs_is_dir",
+      "runtime_symbol": "__vow_fs_is_dir",
+      "params": ["ptr"],
+      "return": "i64",
+      "doc_signature": "fn(path: String) -> i64",
+      "effects": "[read]"
+    },
+    {
+      "name": "fs_is_symlink",
+      "runtime_symbol": "__vow_fs_is_symlink",
+      "params": ["ptr"],
+      "return": "i64",
+      "doc_signature": "fn(path: String) -> i64",
+      "effects": "[read]"
+    },
+    {
+      "name": "fs_rename",
+      "runtime_symbol": "__vow_fs_rename",
+      "params": ["ptr", "ptr"],
+      "return": "i64",
+      "doc_signature": "fn(old: String, new: String) -> i64",
+      "effects": "[io]"
+    },
+    {
+      "name": "args",
+      "runtime_symbol": "__vow_args",
+      "params": [],
+      "return": "ptr",
+      "doc_signature": "fn() -> Vec<String>",
+      "effects": "[read]"
+    },
+    {
+      "name": "stdin_read",
+      "runtime_symbol": "__vow_stdin_read",
+      "params": [],
+      "return": "ptr",
+      "doc_signature": "fn() -> String",
+      "effects": "[read]"
+    },
+    {
+      "name": "stdin_read_line",
+      "runtime_symbol": "__vow_stdin_read_line",
+      "params": [],
+      "return": "ptr",
+      "doc_signature": "fn() -> String",
+      "effects": "[read]"
+    },
+    {
+      "name": "stdin_ready",
+      "runtime_symbol": "__vow_stdin_ready",
+      "params": [],
+      "return": "bool",
+      "doc_signature": "fn() -> bool",
+      "effects": "[read]"
+    },
+    {
+      "name": "eprintln_str",
+      "runtime_symbol": "__vow_eprintln_str",
+      "params": ["ptr"],
+      "return": "unit",
+      "doc_signature": "fn(s: String) -> ()",
+      "effects": "[io]"
     }
   ]
 }
