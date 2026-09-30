@@ -145,6 +145,23 @@ Notes on the taxonomy decisions:
   `Unknown`, `Skipped`, and `error` all fail the run (see
   [`docs/spec/cli.md`](spec/cli.md)).
 
+## A `VERIFICATION SUCCESSFUL` line is not always trustworthy
+
+ESBMC 8.4+ can print `VERIFICATION SUCCESSFUL` even when an earlier phase of
+the same run hit an internal solver exception it should have failed on
+([esbmc/esbmc#4484](https://github.com/esbmc/esbmc/issues/4484)):
+`do_bmc_strategy` treats an unknown base case as "not violated", and a later
+forward-condition pass can still print the success banner. Both classifiers
+(`classify_esbmc_output` in `vow-verify/src/esbmc.rs` and
+`parse_verify_status` in `compiler/verifier.vow`) therefore only trust a
+`VERIFICATION SUCCESSFUL` line when no memory-limit marker or `ERROR:`-prefixed
+line appears anywhere else in the same run's combined stdout+stderr — a
+tainted SUCCESSFUL is reported `Unknown`, not `Proven`. A genuine
+`VERIFICATION FAILED` (a real counterexample) still wins regardless of an
+earlier solver hiccup elsewhere in the run: ESBMC does not fabricate
+counterexamples, so a FAILED verdict is trustworthy even when preceded by a
+solver-internal error.
+
 ## How the existing fallback embodies the discipline
 
 `run_with_fallback` in `vow-verify/src/solver_strategy.rs` is the only adaptive

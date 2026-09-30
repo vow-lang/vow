@@ -136,6 +136,56 @@ fn check_unattributed_sentinel() -> i64 {
     0
 }
 
+fn check_parse_solver_error_reason_detects_error_line() -> i64 {
+    let combined: String = String::from(
+        "Checking base case, k = 1\nERROR: SMT solver failed\nmore text\n"
+    );
+    if parse_solver_error_reason(combined) != String::from("ERROR: SMT solver failed") { return 45; }
+    0
+}
+
+fn check_parse_solver_error_reason_ignores_clean_output() -> i64 {
+    let combined: String = String::from(
+        "ESBMC version 8.2.0\nChecking forward condition, k = 1\nVERIFICATION SUCCESSFUL\n"
+    );
+    if parse_solver_error_reason(combined).len() != 0 { return 46; }
+    0
+}
+
+fn check_parse_verify_status_rejects_successful_after_solver_error() -> i64 {
+    let oom: String = String::from(
+        "Checking base case, k = 1\nERROR: Out of memory\nERROR: SMT solver failed\nChecking forward condition, k = 1\nVERIFICATION SUCCESSFUL\n"
+    );
+    if parse_verify_status(oom) != VERIFY_UNKNOWN() { return 47; }
+    let generic: String = String::from(
+        "Checking base case, k = 1\nERROR: SMT solver failed\nChecking forward condition, k = 1\nVERIFICATION SUCCESSFUL\n"
+    );
+    if parse_verify_status(generic) != VERIFY_UNKNOWN() { return 48; }
+    0
+}
+
+fn check_parse_verify_status_still_trusts_failed_after_solver_error() -> i64 {
+    let combined: String = String::from(
+        "ERROR: SMT solver failed\n[Counterexample]\n\nVERIFICATION FAILED"
+    );
+    if parse_verify_status(combined) != VERIFY_FAILED() { return 49; }
+    0
+}
+
+fn check_parse_verify_status_reports_error_without_any_verdict() -> i64 {
+    let combined: String = String::from("ERROR: SMT solver failed\nsome trailing diagnostics\n");
+    if parse_verify_status(combined) != VERIFY_ERROR() { return 50; }
+    0
+}
+
+fn check_parse_unknown_reason_surfaces_solver_error_line() -> i64 {
+    let combined: String = String::from(
+        "Checking base case, k = 1\nERROR: SMT solver failed\nChecking forward condition, k = 1\nVERIFICATION SUCCESSFUL\n"
+    );
+    if parse_unknown_reason(combined) != String::from("ERROR: SMT solver failed") { return 51; }
+    0
+}
+
 fn main() -> i32 [io] {
     let r1: i64 = check_known_nondet_calls();
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -159,5 +209,17 @@ fn main() -> i32 [io] {
     if r10 != 0 { return i64_to_i32_wrap(r10); }
     let r11: i64 = check_append_memlimit_arg_matches_host();
     if r11 != 0 { return i64_to_i32_wrap(r11); }
+    let r12: i64 = check_parse_solver_error_reason_detects_error_line();
+    if r12 != 0 { return i64_to_i32_wrap(r12); }
+    let r13: i64 = check_parse_solver_error_reason_ignores_clean_output();
+    if r13 != 0 { return i64_to_i32_wrap(r13); }
+    let r14: i64 = check_parse_verify_status_rejects_successful_after_solver_error();
+    if r14 != 0 { return i64_to_i32_wrap(r14); }
+    let r15: i64 = check_parse_verify_status_still_trusts_failed_after_solver_error();
+    if r15 != 0 { return i64_to_i32_wrap(r15); }
+    let r16: i64 = check_parse_verify_status_reports_error_without_any_verdict();
+    if r16 != 0 { return i64_to_i32_wrap(r16); }
+    let r17: i64 = check_parse_unknown_reason_surfaces_solver_error_line();
+    if r17 != 0 { return i64_to_i32_wrap(r17); }
     0
 }

@@ -516,8 +516,17 @@ fn effective_timeout_for(encoding: String, solver: String, user_timeout: String)
     String::from("")
 }
 
+// A `VERIFICATION SUCCESSFUL` line is only trusted when the run is not
+// "tainted" by a memory-limit hit or an `ERROR:` line elsewhere in the same
+// output — ESBMC 8.4+ can print SUCCESSFUL after an internal solver
+// exception it should have failed on (esbmc/esbmc#4484). A genuine
+// `VERIFICATION FAILED` (a real counterexample) still wins regardless of an
+// earlier solver hiccup. Mirrors `classify_esbmc_output` in
+// vow-verify/src/esbmc.rs.
 fn parse_verify_status(combined: String) -> i64 {
-    if str_find_str(combined, String::from("VERIFICATION SUCCESSFUL")) >= 0 {
+    let tainted: bool =
+        output_has_memory_limit(combined) || parse_solver_error_reason(combined).len() > 0;
+    if str_find_str(combined, String::from("VERIFICATION SUCCESSFUL")) >= 0 && !tainted {
         return VERIFY_PROVEN();
     }
     if str_find_str(combined, String::from("VERIFICATION FAILED")) >= 0 {
@@ -526,10 +535,12 @@ fn parse_verify_status(combined: String) -> i64 {
     if output_has_memory_limit(combined) {
         return VERIFY_UNKNOWN();
     }
-    // ESBMC's third legitimate outcome: it finished without proving or
-    // falsifying (e.g. the incremental-BMC forward condition couldn't establish
-    // the property). Must be checked before the generic ERROR fallback.
-    if str_find_str(combined, String::from("VERIFICATION UNKNOWN")) >= 0 {
+    // A tainted SUCCESSFUL, or ESBMC's third legitimate outcome (it finished
+    // without proving or falsifying — e.g. the incremental-BMC forward
+    // condition couldn't establish the property). Must be checked before the
+    // generic ERROR fallback.
+    if str_find_str(combined, String::from("VERIFICATION SUCCESSFUL")) >= 0
+        || str_find_str(combined, String::from("VERIFICATION UNKNOWN")) >= 0 {
         return VERIFY_UNKNOWN();
     }
     if str_find_str(combined, String::from("timeout")) >= 0 {
@@ -559,11 +570,34 @@ fn output_has_memory_limit(combined: String) -> bool {
         || str_find_str(lower, String::from("bad_alloc")) >= 0
 }
 
+// Extract the first `ERROR:`-prefixed line from ESBMC's combined output, or
+// "" if none is present. Mirrors `esbmc_tool_error_reason` in
+// vow-verify/src/esbmc.rs (ESBMC 8.4+ can print `VERIFICATION SUCCESSFUL`
+// after an internal solver exception; esbmc/esbmc#4484).
+fn parse_solver_error_reason(combined: String) -> String {
+    let lines: Vec<String> = Vec::new();
+    split_lines(combined, lines);
+    let n: u64 = lines.len() as u64;
+    let mut i: u64 = 0u64;
+    while i < n {
+        let line: String = str_trim(lines[i]);
+        if str_starts_with(line, String::from("ERROR:")) {
+            return line;
+        }
+        i = i + 1;
+    }
+    String::from("")
+}
+
 // Extract a short explanation from an ESBMC `VERIFICATION UNKNOWN` log.
 // Mirrors `parse_unknown_reason` in vow-verify/src/esbmc.rs.
 fn parse_unknown_reason(combined: String) -> String {
     if output_has_memory_limit(combined) {
         return memory_limit_reason();
+    }
+    let solver_error: String = parse_solver_error_reason(combined);
+    if solver_error.len() > 0 {
+        return solver_error;
     }
     let lines: Vec<String> = Vec::new();
     split_lines(combined, lines);

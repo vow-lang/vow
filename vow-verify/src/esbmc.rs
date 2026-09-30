@@ -900,8 +900,16 @@ fn run_esbmc_capture(
 }
 
 /// Classify ESBMC's combined stdout+stderr into a terminal verification result.
+///
+/// A `VERIFICATION SUCCESSFUL` line is only trusted when the run is not
+/// "tainted" by a memory-limit hit or an `ERROR:` line elsewhere in the same
+/// output — ESBMC 8.4+ can print SUCCESSFUL after an internal solver
+/// exception it should have failed on (esbmc/esbmc#4484). A genuine
+/// `VERIFICATION FAILED` (a real counterexample) still wins regardless of an
+/// earlier solver hiccup.
 fn classify_esbmc_output(combined: &str) -> VerificationResult {
-    if combined.contains("VERIFICATION SUCCESSFUL") {
+    let tainted = is_memory_limit_output(combined) || esbmc_tool_error_reason(combined).is_some();
+    if combined.contains("VERIFICATION SUCCESSFUL") && !tainted {
         VerificationResult::Proven
     } else if combined.contains("VERIFICATION FAILED") {
         VerificationResult::Failed(parse_esbmc_output(combined))
@@ -909,7 +917,7 @@ fn classify_esbmc_output(combined: &str) -> VerificationResult {
         VerificationResult::Unknown {
             reason: memory_limit_reason(),
         }
-    } else if combined.contains("VERIFICATION UNKNOWN") {
+    } else if combined.contains("VERIFICATION SUCCESSFUL") || combined.contains("VERIFICATION UNKNOWN") {
         VerificationResult::Unknown {
             reason: parse_unknown_reason(combined),
         }
@@ -1020,7 +1028,9 @@ pub fn run_esbmc_reach(
         &["--error-label", "vow_reach"],
     ) {
         Ok(combined) => {
-            if combined.contains("VERIFICATION SUCCESSFUL") {
+            let tainted =
+                is_memory_limit_output(&combined) || esbmc_tool_error_reason(&combined).is_some();
+            if combined.contains("VERIFICATION SUCCESSFUL") && !tainted {
                 ReachVerdict::Vacuous
             } else if combined.contains("VERIFICATION FAILED") {
                 ReachVerdict::Live
@@ -1067,6 +1077,20 @@ fn is_memory_limit_output(combined: &str) -> bool {
         || lower.contains("bad_alloc")
 }
 
+/// Extract the first `ERROR:`-prefixed line from ESBMC's combined
+/// stdout+stderr text, if any. ESBMC 8.4+ can still print `VERIFICATION
+/// SUCCESSFUL` after an internal solver exception (esbmc/esbmc#4484) — a
+/// present `ERROR:` line disqualifies that verdict regardless of where in
+/// the combined text it appears, since stdout and stderr are captured on
+/// separate threads and simply concatenated, not interleaved.
+fn esbmc_tool_error_reason(combined: &str) -> Option<String> {
+    combined
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("ERROR:"))
+        .map(str::to_string)
+}
+
 /// Extract the short explanation that precedes `VERIFICATION UNKNOWN` from an
 /// ESBMC log. Typical lines: `The forward condition is unable to prove the
 /// property` or `Unable to prove or falsify the program, giving up.` — we
@@ -1078,6 +1102,9 @@ fn parse_unknown_reason(combined: &str) -> String {
     // ensures correct behavior if parse_unknown_reason gains new call sites.
     if is_memory_limit_output(combined) {
         return memory_limit_reason();
+    }
+    if let Some(reason) = esbmc_tool_error_reason(combined) {
+        return reason;
     }
     let mut reason = String::new();
     for line in combined.lines() {
@@ -2117,6 +2144,84 @@ VERIFICATION SUCCESSFUL";
     }
 
     #[test]
+    fn esbmc_tool_error_reason_detects_error_line() {
+        let combined = "Checking base case, k = 1\nERROR: SMT solver failed\nmore text\n";
+        assert_eq!(
+            esbmc_tool_error_reason(combined),
+            Some("ERROR: SMT solver failed".to_string())
+        );
+    }
+
+    #[test]
+    fn esbmc_tool_error_reason_ignores_clean_output() {
+        let combined = "ESBMC version 8.2.0\n\
+                        Checking forward condition, k = 1\n\
+                        VERIFICATION SUCCESSFUL\n";
+        assert_eq!(esbmc_tool_error_reason(combined), None);
+    }
+
+    #[test]
+    fn classify_esbmc_output_rejects_successful_after_solver_error() {
+        let combined = "Checking base case, k = 1\n\
+                        ERROR: Out of memory\n\
+                        ERROR: SMT solver failed\n\
+                        Checking forward condition, k = 1\n\
+                        VERIFICATION SUCCESSFUL\n";
+        let result = classify_esbmc_output(combined);
+        assert!(
+            matches!(result, VerificationResult::Unknown { .. }),
+            "expected Unknown, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn classify_esbmc_output_rejects_successful_after_generic_solver_error() {
+        let combined = "Checking base case, k = 1\n\
+                        ERROR: SMT solver failed\n\
+                        Checking forward condition, k = 1\n\
+                        VERIFICATION SUCCESSFUL\n";
+        let result = classify_esbmc_output(combined);
+        assert!(
+            matches!(result, VerificationResult::Unknown { .. }),
+            "expected Unknown, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn classify_esbmc_output_still_trusts_failed_after_solver_error() {
+        let combined = "ERROR: SMT solver failed\n\
+                        [Counterexample]\n\n\
+                        Violated property:\n\
+                          file /tmp/test.c line 1 column 1 function main\n\
+                          vow:1\n\n\
+                        VERIFICATION FAILED";
+        let result = classify_esbmc_output(combined);
+        assert!(
+            matches!(result, VerificationResult::Failed(_)),
+            "expected Failed, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn classify_esbmc_output_reports_tool_error_without_any_verdict() {
+        let combined = "ERROR: SMT solver failed\nsome trailing diagnostics\n";
+        let result = classify_esbmc_output(combined);
+        assert!(
+            matches!(result, VerificationResult::ToolError(_)),
+            "expected ToolError, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn parse_unknown_reason_surfaces_solver_error_line() {
+        let combined = "Checking base case, k = 1\n\
+                        ERROR: SMT solver failed\n\
+                        Checking forward condition, k = 1\n\
+                        VERIFICATION SUCCESSFUL\n";
+        assert_eq!(parse_unknown_reason(combined), "ERROR: SMT solver failed");
+    }
+
+    #[test]
     fn esbmc_cli_args_orders_base_extra_then_solver_config() {
         let config = SolverConfig {
             solver: crate::solver_strategy::Solver::Z3,
@@ -2272,6 +2377,79 @@ VERIFICATION SUCCESSFUL";
             }
             other => panic!("expected memory-limit Unknown, got {other:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_esbmc_never_reports_proven_after_solver_error() {
+        let esbmc = fake_esbmc_fixture("solver-error-oom-then-successful.sh");
+        let result = run_esbmc_with_max_k_step(
+            &esbmc,
+            "int main(void) { return 0; }",
+            5,
+            "main",
+            &SolverConfig::default_config(),
+        );
+
+        match result {
+            VerificationResult::Unknown { reason } => {
+                assert_eq!(reason, "memory limit exceeded");
+            }
+            other => panic!("expected memory-limit Unknown, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_esbmc_reports_generic_solver_error_as_unknown() {
+        let esbmc = fake_esbmc_fixture("solver-error-then-successful.sh");
+        let result = run_esbmc_with_max_k_step(
+            &esbmc,
+            "int main(void) { return 0; }",
+            5,
+            "main",
+            &SolverConfig::default_config(),
+        );
+
+        match result {
+            VerificationResult::Unknown { reason } => {
+                assert_eq!(reason, "ERROR: SMT solver failed");
+            }
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_esbmc_still_reports_failed_after_solver_error() {
+        let esbmc = fake_esbmc_fixture("solver-error-then-failed.sh");
+        let result = run_esbmc_with_max_k_step(
+            &esbmc,
+            "int main(void) { __ESBMC_assert(0, \"vow:1\"); return 0; }",
+            1,
+            "main",
+            &SolverConfig::default_config(),
+        );
+
+        assert!(
+            matches!(result, VerificationResult::Failed(_)),
+            "expected Failed, got {result:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_esbmc_reach_never_claims_vacuous_after_solver_error() {
+        let esbmc = fake_esbmc_fixture("reach-solver-error-then-successful.sh");
+        let result = run_esbmc_reach(
+            &esbmc,
+            "int main(void) { return 0; }",
+            5,
+            "main",
+            &SolverConfig::default_config(),
+        );
+
+        assert_eq!(result, ReachVerdict::Inconclusive);
     }
 
     #[test]
