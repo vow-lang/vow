@@ -3127,9 +3127,11 @@ the structured diagnostics documented under [Runtime Errors](errors.md#runtime-e
 
 `source.offset` anchors differently depending on where the clause comes from: for a
 clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte
-offset of the clause keyword, not the predicate expression. For a parameter's inline
-`where` refinement (also reported as `kind: "requires"`), it is the byte offset of the
-parameter name.
+offset of the clause keyword, not the predicate expression, in both compilers. For a
+parameter's inline `where` refinement (also reported as `kind: "requires"`), the Rust
+compiler anchors on the byte offset of the parameter name; the self-hosted compiler does
+not yet track a parameter-name span and anchors on the refinement predicate expression
+instead.
 
 ### Status Values
 
@@ -3672,9 +3674,11 @@ A counterexample in the JSON output:
 
 `source.offset` anchors differently depending on where the clause comes from: for a
 clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte
-offset of the clause keyword, not the predicate expression. For a parameter's inline
-`where` refinement (also reported as `kind: "requires"`), it is the byte offset of the
-parameter name.
+offset of the clause keyword, not the predicate expression, in both compilers. For a
+parameter's inline `where` refinement (also reported as `kind: "requires"`), the Rust
+compiler anchors on the byte offset of the parameter name; the self-hosted compiler does
+not yet track a parameter-name span and anchors on the refinement predicate expression
+instead.
 
 When caller code violates a callee's `requires` clause, `violation` and
 `vow_id` identify the callee clause. `call_sites` points back to the caller
@@ -8375,9 +8379,11 @@ the structured diagnostics documented under [Runtime Errors](errors.md#runtime-e
 
 `source.offset` anchors differently depending on where the clause comes from: for a
 clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte
-offset of the clause keyword, not the predicate expression. For a parameter's inline
-`where` refinement (also reported as `kind: "requires"`), it is the byte offset of the
-parameter name.
+offset of the clause keyword, not the predicate expression, in both compilers. For a
+parameter's inline `where` refinement (also reported as `kind: "requires"`), the Rust
+compiler anchors on the byte offset of the parameter name; the self-hosted compiler does
+not yet track a parameter-name span and anchors on the refinement predicate expression
+instead.
 
 ### Status Values
 
@@ -8921,9 +8927,11 @@ A counterexample in the JSON output:
 
 `source.offset` anchors differently depending on where the clause comes from: for a
 clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte
-offset of the clause keyword, not the predicate expression. For a parameter's inline
-`where` refinement (also reported as `kind: "requires"`), it is the byte offset of the
-parameter name.
+offset of the clause keyword, not the predicate expression, in both compilers. For a
+parameter's inline `where` refinement (also reported as `kind: "requires"`), the Rust
+compiler anchors on the byte offset of the parameter name; the self-hosted compiler does
+not yet track a parameter-name span and anchors on the refinement predicate expression
+instead.
 
 When caller code violates a callee's `requires` clause, `violation` and
 `vow_id` identify the callee clause. `call_sites` points back to the caller
