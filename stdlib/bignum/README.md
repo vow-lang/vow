@@ -30,7 +30,7 @@ Full details: [docs/spec/stdlib.md#bignum](../../docs/spec/stdlib.md#bignum).
 ## Usage
 
 ```
-ulimit -v 2000000; build/vowc build --no-verify stdlib/bignum/main.vow -o /tmp/bignum_demo && /tmp/bignum_demo
+build/vowc build --no-verify stdlib/bignum/main.vow -o /tmp/bignum_demo && /tmp/bignum_demo
 ```
 
 ## Gotchas

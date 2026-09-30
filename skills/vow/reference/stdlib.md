@@ -10,8 +10,7 @@ carry contracts, but only some are statically verifiable under the current ESBMC
 model — read [Verification status](#verification-status) before relying on a
 contract as a proof rather than a runtime check.
 
-In all examples below, `vow` refers to `build/vowc`. Always run `ulimit -v 2000000`
-before invoking the compiler or any binary it produces.
+In all examples below, `vow` refers to `build/vowc`.
 
 ## Modules at a glance
 
@@ -45,8 +44,8 @@ Two practical ways to use a stdlib module:
 [Verification status](#verification-status)), and the point here is to *run* the demo,
 not to verify it:
 ```
-$ ulimit -v 2000000; build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo
-$ ulimit -v 2000000; /tmp/math_demo
+$ build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo
+$ /tmp/math_demo
 ```
 
 **2. Copy the module's `.vow` file(s) into your project directory.** Because `use`

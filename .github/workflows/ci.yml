@@ -113,7 +113,6 @@ jobs:
       - name: Build concatenated self-hosted compiler
         run: |
           bash scripts/concat_vow.sh clif > /tmp/compiler_clif.vow
-          ulimit -v 2000000
           ./target/debug/vow build --no-verify --no-cache /tmp/compiler_clif.vow -o /tmp/vowc_concat
           test -x /tmp/vowc_concat
       - run: cargo llvm-cov --all --lcov --output-path lcov.info

@@ -108,8 +108,8 @@ def run_workflow(
     max_rounds = config.get("defaults", {}).get("max_rounds", 5)
     compile_fix_attempts = config.get("defaults", {}).get("compile_fix_attempts", 3)
     verify_timeout = config.get("defaults", {}).get("verify_timeout", 120)
-    memory_limit_kb = config.get("defaults", {}).get("memory_limit", 2_000_000)
-    memory_limit = memory_limit_kb * 1024
+    memory_limit_kb = config.get("defaults", {}).get("memory_limit")
+    memory_limit = memory_limit_kb * 1024 if memory_limit_kb else None
 
     vow_docs = load_vow_docs(root)
 

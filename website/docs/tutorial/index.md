@@ -22,10 +22,6 @@ program until it is **proven correct** — the core loop Vow is built around.
 - A Rust toolchain (to build the bootstrap compiler the first time).
 - [ESBMC](https://github.com/esbmc/esbmc) on your `PATH` for the verification steps.
 
-!!! warning "Always cap memory"
-    Every command below is prefixed with `ulimit -v 2000000`. The compiler and the
-    binaries it produces can otherwise consume all system memory. Make it a habit.
-
 Once you're comfortable, the **[Language reference](../reference/index.md)** has the
 full grammar, contract semantics, and CLI details, and the
 **[Standard library](../stdlib.md)** documents the reusable modules.

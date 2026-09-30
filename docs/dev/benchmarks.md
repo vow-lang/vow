@@ -4,7 +4,7 @@ This directory documents repository-local benchmark harnesses. These are develop
 
 ## Memory Characterization
 
-`bench/memory/run.sh` builds the programs under `bench/memory/programs/` with `target/release/vow build --no-verify`, runs them under `ulimit -v 2000000` and `/usr/bin/time -v`, and checks maximum RSS against each source file's `// BENCH: max-rss-kb N` annotation.
+`bench/memory/run.sh` builds the programs under `bench/memory/programs/` with `target/release/vow build --no-verify`, runs them under `/usr/bin/time -v`, and checks maximum RSS against each source file's `// BENCH: max-rss-kb N` annotation.
 
 Use it when changing arena, container, string, or allocation behavior:
 

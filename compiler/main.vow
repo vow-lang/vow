@@ -3413,7 +3413,7 @@ fn skill_entrypoint() -> String {
     r.push_str(String::from("## Core workflow\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("1. Write a `.vow` file with explicit contracts.\n"));
-    r.push_str(String::from("2. Run `ulimit -v 2000000; build/vowc build <file.vow>`.\n"));
+    r.push_str(String::from("2. Run `build/vowc build <file.vow>`.\n"));
     r.push_str(String::from("3. Parse stdout JSON and inspect `status`, `diagnostics`, and `counterexamples`.\n"));
     r.push_str(String::from("4. Fix compile errors, verification failures, or weak contracts, then rerun.\n"));
     r.push_str(String::from("\n"));
@@ -3459,7 +3459,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Vow is a systems programming language with built-in contracts (preconditions, postconditions, loop invariants) that are statically verified by ESBMC bounded model checking. Programs compile to native executables via Cranelift. The compiler emits structured JSON for machine consumption.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("In all documentation below, `vow` refers to the `build/vowc` binary. Always use `ulimit -v 2000000` before invoking the compiler or any binary it produces -- without this, the process can consume all system memory.\n"));
+    r.push_str(String::from("In all documentation below, `vow` refers to the `build/vowc` binary.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## What Vow Excludes\n"));
     r.push_str(String::from("\n"));
@@ -3470,7 +3470,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("The standard workflow for writing verified Vow programs:\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("1. **Write** -- Create a `.vow` file with function contracts (`requires`, `ensures`, `invariant`)\n"));
-    r.push_str(String::from("2. **Build** -- Run `ulimit -v 2000000; build/vowc build <file.vow>`\n"));
+    r.push_str(String::from("2. **Build** -- Run `build/vowc build <file.vow>`\n"));
     r.push_str(String::from("3. **Parse JSON** -- Read the JSON object from stdout\n"));
     r.push_str(String::from("4. **Handle status:**\n"));
     r.push_str(String::from("   - `Verified` → Done. Binary is at `executable`.\n"));
@@ -3492,8 +3492,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Build and run (`build/vowc` is the primary compiler binary, produced by `scripts/bootstrap.sh`):\n"));
     r.push_str(String::from("```\n"));
-    r.push_str(String::from("$ ulimit -v 2000000; build/vowc build hello.vow\n"));
-    r.push_str(String::from("$ ulimit -v 2000000; ./hello\n"));
+    r.push_str(String::from("$ build/vowc build hello.vow\n"));
+    r.push_str(String::from("$ ./hello\n"));
     r.push_str(String::from("Hello, world!\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -7117,8 +7117,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("model -- read [Verification status](#verification-status) before relying on a\n"));
     r.push_str(String::from("contract as a proof rather than a runtime check.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("In all examples below, `vow` refers to `build/vowc`. Always run `ulimit -v 2000000`\n"));
-    r.push_str(String::from("before invoking the compiler or any binary it produces.\n"));
+    r.push_str(String::from("In all examples below, `vow` refers to `build/vowc`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Modules at a glance\n"));
     r.push_str(String::from("\n"));
@@ -7152,8 +7151,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("[Verification status](#verification-status)), and the point here is to *run* the demo,\n"));
     r.push_str(String::from("not to verify it:\n"));
     r.push_str(String::from("```\n"));
-    r.push_str(String::from("$ ulimit -v 2000000; build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo\n"));
-    r.push_str(String::from("$ ulimit -v 2000000; /tmp/math_demo\n"));
+    r.push_str(String::from("$ build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo\n"));
+    r.push_str(String::from("$ /tmp/math_demo\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**2. Copy the module's `.vow` file(s) into your project directory.** Because `use`\n"));
@@ -12357,8 +12356,7 @@ fn skill_support_content_reference_stdlib_md_347c6c47() -> String {
     r.push_str(String::from("model -- read [Verification status](#verification-status) before relying on a\n"));
     r.push_str(String::from("contract as a proof rather than a runtime check.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("In all examples below, `vow` refers to `build/vowc`. Always run `ulimit -v 2000000`\n"));
-    r.push_str(String::from("before invoking the compiler or any binary it produces.\n"));
+    r.push_str(String::from("In all examples below, `vow` refers to `build/vowc`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Modules at a glance\n"));
     r.push_str(String::from("\n"));
@@ -12392,8 +12390,8 @@ fn skill_support_content_reference_stdlib_md_347c6c47() -> String {
     r.push_str(String::from("[Verification status](#verification-status)), and the point here is to *run* the demo,\n"));
     r.push_str(String::from("not to verify it:\n"));
     r.push_str(String::from("```\n"));
-    r.push_str(String::from("$ ulimit -v 2000000; build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo\n"));
-    r.push_str(String::from("$ ulimit -v 2000000; /tmp/math_demo\n"));
+    r.push_str(String::from("$ build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo\n"));
+    r.push_str(String::from("$ /tmp/math_demo\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**2. Copy the module's `.vow` file(s) into your project directory.** Because `use`\n"));

@@ -11,7 +11,6 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PROGRAM_DIR="$SCRIPT_DIR/programs"
 EXPECTED_FILE="$SCRIPT_DIR/expected.toml"
 VOW="$ROOT_DIR/target/release/vow"
-ULIMIT_KB=2000000
 CUSHION_KB=4096
 RECORD=false
 
@@ -305,7 +304,7 @@ for source in "${PROGRAMS[@]}"; do
   fi
 
   set +e
-  ( ulimit -v "$ULIMIT_KB"; /usr/bin/time -v -o "$time_log" "$binary" >"$run_stdout" 2>"$run_stderr" )
+  /usr/bin/time -v -o "$time_log" "$binary" >"$run_stdout" 2>"$run_stderr"
   run_exit=$?
   set -e
 

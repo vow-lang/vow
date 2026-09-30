@@ -7,7 +7,7 @@
 max_rounds = 5
 compile_fix_attempts = 3
 verify_timeout = 120        # seconds
-memory_limit = 2000000      # ulimit -v value (KB)
+# memory_limit = 2000000    # optional per-process ulimit -v value (KB); unset = unlimited
 
 [agents.coder]
 model = "claude-sonnet-5"

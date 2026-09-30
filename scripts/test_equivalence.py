@@ -567,7 +567,7 @@ class RunCompilerEnvTest(unittest.TestCase):
                 side_effect=subprocess.TimeoutExpired("x", 1),
             ) as run,
         ):
-            equivalence.run_compiler("binary", [], 1, False)
+            equivalence.run_compiler("binary", [], 1)
 
         env = run.call_args.kwargs["env"]
         self.assertNotIn("ANTHROPIC_API_KEY", env)
@@ -585,7 +585,7 @@ class RunBinaryEnvAndCwdTest(unittest.TestCase):
                 side_effect=subprocess.TimeoutExpired("x", 1),
             ) as run,
         ):
-            equivalence.run_binary("binary", b"", 1, False)
+            equivalence.run_binary("binary", b"", 1)
 
         self.assertNotIn("OPENAI_API_KEY", run.call_args.kwargs["env"])
 
@@ -595,7 +595,7 @@ class RunBinaryEnvAndCwdTest(unittest.TestCase):
             "run",
             side_effect=subprocess.TimeoutExpired("x", 1),
         ) as run:
-            equivalence.run_binary("binary", b"", 1, False)
+            equivalence.run_binary("binary", b"", 1)
 
         self.assertEqual(equivalence.REPO_ROOT, run.call_args.kwargs["cwd"])
 
@@ -605,9 +605,7 @@ class RunBinaryEnvAndCwdTest(unittest.TestCase):
             "run",
             side_effect=subprocess.TimeoutExpired("x", 1),
         ) as run:
-            equivalence.run_binary(
-                "relative/path/to/bin", b"", 1, False, isolate_cwd=True
-            )
+            equivalence.run_binary("relative/path/to/bin", b"", 1, isolate_cwd=True)
 
         called_path = Path(run.call_args.args[0][0])
         self.assertTrue(called_path.is_absolute())
@@ -675,7 +673,7 @@ class VerifyOnlyTest(unittest.TestCase):
 
             pending = [rust_res, self_res]
 
-            def fake_run_compiler(binary, args, timeout, limit_memory):
+            def fake_run_compiler(binary, args, timeout):
                 seen.append(args)
                 return pending.pop(0)
 
@@ -869,7 +867,7 @@ class CheckFileCleanupTest(unittest.TestCase):
 
             pending = list(compiler_results)
 
-            def fake_run_compiler(binary, args, timeout, limit_memory):
+            def fake_run_compiler(binary, args, timeout):
                 target = Path(args[args.index("-o") + 1])
                 target.write_bytes(b"partial")
                 target.with_suffix(".o").write_bytes(b"partial")

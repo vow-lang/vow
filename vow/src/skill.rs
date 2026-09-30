@@ -1259,7 +1259,7 @@ program or contract, and repeat until the result is `Verified`.
 ## Core workflow
 
 1. Write a `.vow` file with explicit contracts.
-2. Run `ulimit -v 2000000; build/vowc build <file.vow>`.
+2. Run `build/vowc build <file.vow>`.
 3. Parse stdout JSON and inspect `status`, `diagnostics`, and `counterexamples`.
 4. Fix compile errors, verification failures, or weak contracts, then rerun.
 
@@ -1305,7 +1305,7 @@ argument-hint: "[file.vow]"
 
 Vow is a systems programming language with built-in contracts (preconditions, postconditions, loop invariants) that are statically verified by ESBMC bounded model checking. Programs compile to native executables via Cranelift. The compiler emits structured JSON for machine consumption.
 
-In all documentation below, `vow` refers to the `build/vowc` binary. Always use `ulimit -v 2000000` before invoking the compiler or any binary it produces — without this, the process can consume all system memory.
+In all documentation below, `vow` refers to the `build/vowc` binary.
 
 ## What Vow Excludes
 
@@ -1316,7 +1316,7 @@ No block comments, no generics, no traits, no closures, no macros, no garbage co
 The standard workflow for writing verified Vow programs:
 
 1. **Write** — Create a `.vow` file with function contracts (`requires`, `ensures`, `invariant`)
-2. **Build** — Run `ulimit -v 2000000; build/vowc build <file.vow>`
+2. **Build** — Run `build/vowc build <file.vow>`
 3. **Parse JSON** — Read the JSON object from stdout
 4. **Handle status:**
    - `Verified` → Done. Binary is at `executable`.
@@ -1338,8 +1338,8 @@ fn main() -> i32 [io] {
 
 Build and run (`build/vowc` is the primary compiler binary, produced by `scripts/bootstrap.sh`):
 ```
-$ ulimit -v 2000000; build/vowc build hello.vow
-$ ulimit -v 2000000; ./hello
+$ build/vowc build hello.vow
+$ ./hello
 Hello, world!
 ```
 
@@ -4963,8 +4963,7 @@ carry contracts, but only some are statically verifiable under the current ESBMC
 model — read [Verification status](#verification-status) before relying on a
 contract as a proof rather than a runtime check.
 
-In all examples below, `vow` refers to `build/vowc`. Always run `ulimit -v 2000000`
-before invoking the compiler or any binary it produces.
+In all examples below, `vow` refers to `build/vowc`.
 
 ## Modules at a glance
 
@@ -4998,8 +4997,8 @@ Two practical ways to use a stdlib module:
 [Verification status](#verification-status)), and the point here is to *run* the demo,
 not to verify it:
 ```
-$ ulimit -v 2000000; build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo
-$ ulimit -v 2000000; /tmp/math_demo
+$ build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo
+$ /tmp/math_demo
 ```
 
 **2. Copy the module's `.vow` file(s) into your project directory.** Because `use`
@@ -10176,8 +10175,7 @@ carry contracts, but only some are statically verifiable under the current ESBMC
 model — read [Verification status](#verification-status) before relying on a
 contract as a proof rather than a runtime check.
 
-In all examples below, `vow` refers to `build/vowc`. Always run `ulimit -v 2000000`
-before invoking the compiler or any binary it produces.
+In all examples below, `vow` refers to `build/vowc`.
 
 ## Modules at a glance
 
@@ -10211,8 +10209,8 @@ Two practical ways to use a stdlib module:
 [Verification status](#verification-status)), and the point here is to *run* the demo,
 not to verify it:
 ```
-$ ulimit -v 2000000; build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo
-$ ulimit -v 2000000; /tmp/math_demo
+$ build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo
+$ /tmp/math_demo
 ```
 
 **2. Copy the module's `.vow` file(s) into your project directory.** Because `use`

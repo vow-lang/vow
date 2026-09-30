@@ -19,7 +19,7 @@ from manifest import load_applicable, load_manifest
 from prompts import build_system_prompt
 from report import generate_report
 from runner import BenchmarkResult, run_benchmark
-from verifier import SELF_HOSTED_MEM_LIMIT, run_verify
+from verifier import run_verify
 
 
 def find_root() -> Path:
@@ -60,15 +60,15 @@ def find_self_hosted_binary(root: Path) -> Path:
     return binary
 
 
-def resolve_compiler(root: Path, compiler_name: str) -> tuple[Path, int | None]:
+def resolve_compiler(root: Path, compiler_name: str) -> Path:
     if compiler_name == "self-hosted":
-        return find_self_hosted_binary(root), SELF_HOSTED_MEM_LIMIT
-    return find_vow_binary(root), None
+        return find_self_hosted_binary(root)
+    return find_vow_binary(root)
 
 
 def cmd_run(args: argparse.Namespace) -> None:
     root = find_root()
-    vow_binary, memory_limit = resolve_compiler(root, args.compiler)
+    vow_binary = resolve_compiler(root, args.compiler)
     system_prompt = build_system_prompt(root)
     results_dir = Path(__file__).resolve().parent / "results"
 
@@ -134,7 +134,6 @@ def cmd_run(args: argparse.Namespace) -> None:
                 model_config,
                 system_prompt,
                 vow_binary,
-                memory_limit=memory_limit,
             )
             results.append(result)
             status_str = result.status.upper()
@@ -159,7 +158,6 @@ def cmd_run(args: argparse.Namespace) -> None:
                     model_config,
                     system_prompt,
                     vow_binary,
-                    memory_limit=memory_limit,
                 )
                 stretch_results.append(asdict(result))
                 print(f"{result.status.upper()} [{result.wall_clock_seconds:.1f}s]")
@@ -197,14 +195,14 @@ def cmd_validate_references(args: argparse.Namespace) -> None:
         _validate_compare(root, benchmarks)
         return
 
-    vow_binary, memory_limit = resolve_compiler(root, args.compiler)
+    vow_binary = resolve_compiler(root, args.compiler)
     compiler_label = args.compiler
 
     passed = 0
     failed = 0
     print(f"Compiler: {compiler_label}")
     for bench in benchmarks:
-        vr = run_verify(vow_binary, bench.reference_vow, memory_limit=memory_limit)
+        vr = run_verify(vow_binary, bench.reference_vow)
         status = "OK" if vr.status == "Verified" else f"FAIL ({vr.status})"
         print(f"  {bench.id} {bench.name}: {status}")
         if vr.status == "Verified":
@@ -218,8 +216,8 @@ def cmd_validate_references(args: argparse.Namespace) -> None:
 
 
 def _validate_compare(root: Path, benchmarks: list) -> None:
-    rust_binary, _ = resolve_compiler(root, "rust")
-    self_binary, self_mem = resolve_compiler(root, "self-hosted")
+    rust_binary = resolve_compiler(root, "rust")
+    self_binary = resolve_compiler(root, "self-hosted")
 
     print(f"{'ID':<5} {'Name':<35} {'Rust':<12} {'Self-Hosted':<12} {'Match'}")
     print("-" * 75)
@@ -227,7 +225,7 @@ def _validate_compare(root: Path, benchmarks: list) -> None:
     mismatches = 0
     for bench in benchmarks:
         rust_vr = run_verify(rust_binary, bench.reference_vow)
-        self_vr = run_verify(self_binary, bench.reference_vow, memory_limit=self_mem)
+        self_vr = run_verify(self_binary, bench.reference_vow)
         rust_ok = rust_vr.status == "Verified"
         self_ok = self_vr.status == "Verified"
         match = rust_ok == self_ok

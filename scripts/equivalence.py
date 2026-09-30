@@ -42,7 +42,6 @@ import hashlib
 import json
 import os
 import re
-import resource
 import subprocess
 import sys
 import time
@@ -52,9 +51,6 @@ from pathlib import Path
 import candidate_isolation
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-
-# `ulimit -v` equivalent for self-hosted binaries, in bytes (2 GB).
-SELF_MEM_LIMIT = 2_000_000 * 1024
 
 # Signals Vow uses deliberately: a checked-arithmetic overflow, a vow violation
 # in debug mode, and a division guard all terminate the process on purpose. When
@@ -196,11 +192,7 @@ def collect_corpus(roots, exclude):
 # ---------------------------------------------------------------------------
 
 
-def _limit_memory():
-    resource.setrlimit(resource.RLIMIT_AS, (SELF_MEM_LIMIT, SELF_MEM_LIMIT))
-
-
-def run_compiler(binary, args, timeout, limit_memory):
+def run_compiler(binary, args, timeout):
     """Run one compiler. Never raises: a crash is data, not an error."""
     try:
         proc = subprocess.run(
@@ -210,7 +202,6 @@ def run_compiler(binary, args, timeout, limit_memory):
             cwd=REPO_ROOT,
             env=candidate_isolation.scrubbed_env(),
             timeout=timeout,
-            preexec_fn=_limit_memory if limit_memory else None,
         )
     except subprocess.TimeoutExpired:
         return {"timeout": True, "exit": None, "stdout": "", "stderr": "", "json": None}
@@ -231,7 +222,7 @@ def run_compiler(binary, args, timeout, limit_memory):
     }
 
 
-def _run_binary_at(path, stdin_data, timeout, limit_memory, cwd):
+def _run_binary_at(path, stdin_data, timeout, cwd):
     try:
         proc = subprocess.run(
             [str(path)],
@@ -241,21 +232,20 @@ def _run_binary_at(path, stdin_data, timeout, limit_memory, cwd):
             cwd=cwd,
             env=candidate_isolation.scrubbed_env(),
             timeout=timeout,
-            preexec_fn=_limit_memory if limit_memory else None,
         )
     except subprocess.TimeoutExpired:
         return {"timeout": True, "exit": None, "stdout": b""}
     return {"timeout": False, "exit": proc.returncode, "stdout": proc.stdout}
 
 
-def run_binary(path, stdin_data, timeout, limit_memory, isolate_cwd=False):
+def run_binary(path, stdin_data, timeout, isolate_cwd=False):
     # A relative path resolves against the CHILD's cwd, not the parent's, so
     # this must happen before a disposable cwd changes what "relative" means.
     path = Path(path).resolve()
     if isolate_cwd:
         with candidate_isolation.disposable_workdir() as d:
-            return _run_binary_at(path, stdin_data, timeout, limit_memory, d)
-    return _run_binary_at(path, stdin_data, timeout, limit_memory, REPO_ROOT)
+            return _run_binary_at(path, stdin_data, timeout, d)
+    return _run_binary_at(path, stdin_data, timeout, REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
@@ -497,16 +487,8 @@ def compare_runtime(
     cross-compiler comparison — reporting it as a divergence would be a false
     positive, so it is reported as skipped-nondeterministic instead.
     """
-    # Both binaries run under the SAME limits. Limiting only the self-hosted
-    # side (the repo's `ulimit -v` convention, which exists for running the
-    # memory-hungry self-hosted *compiler*) would make any program needing more
-    # than the cap look like a miscompile.
-    r1 = run_binary(
-        rust_bin, stdin_data, timeout, limit_memory=True, isolate_cwd=isolate_cwd
-    )
-    r2 = run_binary(
-        rust_bin, stdin_data, timeout, limit_memory=True, isolate_cwd=isolate_cwd
-    )
+    r1 = run_binary(rust_bin, stdin_data, timeout, isolate_cwd=isolate_cwd)
+    r2 = run_binary(rust_bin, stdin_data, timeout, isolate_cwd=isolate_cwd)
     rust_hung = r1["timeout"] or r2["timeout"]
     if not rust_hung and (r1["stdout"] != r2["stdout"] or r1["exit"] != r2["exit"]):
         return [], "nondeterministic"
@@ -521,9 +503,7 @@ def compare_runtime(
     # mismatching run against a stable r1/r2 is reported as a runtime
     # divergence — which is the right answer, since self-hosted-only
     # instability is itself a miscompile. Three runs, not four.
-    s = run_binary(
-        self_bin, stdin_data, timeout, limit_memory=True, isolate_cwd=isolate_cwd
-    )
+    s = run_binary(self_bin, stdin_data, timeout, isolate_cwd=isolate_cwd)
 
     if rust_hung and s["timeout"]:
         # Neither side finished, so nothing distinguishes them.
@@ -662,8 +642,8 @@ def check_file(
             args = ["build", "--no-verify", "--no-cache", str(vow_file)]
             rust_args = args + ["-o", str(rust_out)]
             self_args = args + ["-o", str(self_out)]
-        r = run_compiler(rust, rust_args, timeout, False)
-        s = run_compiler(slf, self_args, timeout, True)
+        r = run_compiler(rust, rust_args, timeout)
+        s = run_compiler(slf, self_args, timeout)
 
         record["divergences"] += check_fail_closed("rust", r)
         record["divergences"] += check_fail_closed("self-hosted", s)

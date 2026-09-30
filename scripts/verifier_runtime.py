@@ -35,8 +35,6 @@ import candidate_isolation
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-SELF_MEM_LIMIT = 2_000_000 * 1024
-
 # A fixture may document that its own contracts are expected to fail; such a
 # fixture is a precision-direction subject, not a soundness one.
 DIRECTIVE_SKIP = re.compile(r'^// TEST: skip "(.*)"$', re.M)
@@ -45,13 +43,7 @@ DIRECTIVE_SKIP = re.compile(r'^// TEST: skip "(.*)"$', re.M)
 DIRECTIVE_KNOWN_GAP = re.compile(r"^// TEST: known-soundness-gap\s*(\S*)", re.M)
 
 
-def _limit():
-    import resource
-
-    resource.setrlimit(resource.RLIMIT_AS, (SELF_MEM_LIMIT, SELF_MEM_LIMIT))
-
-
-def run_json(binary, args, timeout, limit=False):
+def run_json(binary, args, timeout):
     try:
         proc = subprocess.run(
             [str(binary)] + args,
@@ -60,7 +52,6 @@ def run_json(binary, args, timeout, limit=False):
             cwd=REPO_ROOT,
             env=candidate_isolation.scrubbed_env(),
             timeout=timeout,
-            preexec_fn=_limit if limit else None,
         )
     except subprocess.TimeoutExpired:
         return None, "timeout"

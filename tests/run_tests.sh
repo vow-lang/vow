@@ -47,17 +47,17 @@ done
 # --- Helpers ---
 
 run_vowc() {
-  ( ulimit -v 2000000; "$VOWC" "$@" )
+  "$VOWC" "$@"
 }
 
 run_vowc_with_tmpdir() {
   local tmp_root="$1"
   shift
-  ( export TMPDIR="$tmp_root"; ulimit -v 2000000; "$VOWC" "$@" )
+  ( export TMPDIR="$tmp_root"; "$VOWC" "$@" )
 }
 
 run_bin() {
-  ( ulimit -v 2000000; "$@" )
+  "$@"
 }
 
 pass() {

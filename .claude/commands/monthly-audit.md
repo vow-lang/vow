@@ -63,7 +63,7 @@ month's citation without re-checking it still holds. Then spend real effort hunt
 a fresh soundness hole this audit hasn't seen before is worth more than re-confirming an old one.
 
 **D. Self-hosted compiler parity & bootstrap health.** Re-run the CLAUDE.md-documented fixed-point triple
-test (`concat_vow.sh` → Stage 0 → A → B → C, compare SHA-256) under `ulimit -v 2000000`, fresh-built —
+test (`concat_vow.sh` → Stage 0 → A → B → C, compare SHA-256), fresh-built —
 do not reuse a stale `build/vowc`. Probe (compile-and-run, not grep) the same parity questions as last
 time: linear double-consume, match exhaustiveness, effect/purity error codes, plus anything newly relevant
 to what landed this month. Check whether mutation testing (`vowc mutants`) has been run to completion

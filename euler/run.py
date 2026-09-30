@@ -12,7 +12,6 @@ import argparse
 import json
 import os
 import re
-import resource
 import subprocess
 import sys
 import tempfile
@@ -211,8 +210,6 @@ ONLY the complete updated .vow file, no explanation."""
 # Verifier + executor
 # ---------------------------------------------------------------------------
 
-SELF_HOSTED_MEM_LIMIT = 2_000_000 * 1024
-
 
 @dataclass
 class VerifyResult:
@@ -227,7 +224,6 @@ def run_verify(
     vow_binary: Path,
     source: str,
     timeout: int = 120,
-    memory_limit: int | None = None,
     unwind: int | None = None,
 ) -> VerifyResult:
     with tempfile.NamedTemporaryFile(
@@ -235,10 +231,6 @@ def run_verify(
     ) as f:
         f.write(source)
         tmp = f.name
-
-    def _limit():
-        if memory_limit:
-            resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
 
     cmd = [str(vow_binary), "verify"]
     if unwind is not None:
@@ -251,7 +243,6 @@ def run_verify(
             capture_output=True,
             text=True,
             timeout=timeout,
-            preexec_fn=_limit if memory_limit else None,
         )
         raw = result.stdout.strip()
         try:
@@ -272,7 +263,7 @@ def run_verify(
 
 
 def run_execute(
-    vow_binary: Path, source: str, memory_limit: int | None = None, timeout: int = 60
+    vow_binary: Path, source: str, timeout: int = 60
 ) -> tuple[int | None, str]:
     """Compile and execute, returning (exit_code, stdout)."""
     with tempfile.NamedTemporaryFile(
@@ -283,10 +274,6 @@ def run_execute(
 
     out_path = src_path.replace(".vow", "")
 
-    def _limit():
-        if memory_limit:
-            resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
-
     try:
         # Compile
         comp = subprocess.run(
@@ -294,7 +281,6 @@ def run_execute(
             capture_output=True,
             text=True,
             timeout=timeout,
-            preexec_fn=_limit if memory_limit else None,
         )
         if comp.returncode != 0:
             return None, comp.stderr
@@ -305,7 +291,6 @@ def run_execute(
             capture_output=True,
             text=True,
             timeout=timeout,
-            preexec_fn=_limit if memory_limit else None,
         )
         return exe.returncode, exe.stdout.strip()
     except subprocess.TimeoutExpired:
@@ -368,7 +353,6 @@ def run_problem(
     vow_binary: Path,
     max_cegis: int = 5,
     verify_timeout: int = 120,
-    memory_limit: int | None = None,
     supports_unwind: bool = True,
 ) -> ProblemResult:
     start = time.time()
@@ -452,14 +436,13 @@ def run_problem(
             vow_binary,
             code,
             timeout=verify_timeout,
-            memory_limit=memory_limit,
             unwind=unwind_arg,
         )
         verify_outputs.append(vr.raw_json)
 
         if vr.status == "Verified":
             # Verified! Now compile + execute to check the answer
-            exit_code, output = run_execute(vow_binary, code, memory_limit=memory_limit)
+            exit_code, output = run_execute(vow_binary, code)
             # Check if the first line of output matches the expected answer
             answer_correct = None
             actual_output = output
@@ -603,15 +586,15 @@ def find_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def resolve_compiler(root: Path) -> tuple[Path, int | None, bool]:
+def resolve_compiler(root: Path) -> tuple[Path, bool]:
     # Prefer self-hosted vowc (supports --unwind)
     vowc = root / "build" / "vowc"
     if vowc.exists():
-        return vowc, SELF_HOSTED_MEM_LIMIT, True
+        return vowc, True
     # Fall back to Rust stage-0 binary (does NOT accept --unwind)
     binary = root / "target" / "release" / "vow"
     if binary.exists():
-        return binary, None, False
+        return binary, False
     print(
         "Error: no vow compiler found. Run scripts/bootstrap.sh or cargo build --release",
         file=sys.stderr,
@@ -621,7 +604,7 @@ def resolve_compiler(root: Path) -> tuple[Path, int | None, bool]:
 
 def cmd_run(args: argparse.Namespace) -> None:
     root = find_root()
-    vow_binary, memory_limit, supports_unwind = resolve_compiler(root)
+    vow_binary, supports_unwind = resolve_compiler(root)
     system_prompt = build_system_prompt(root)
     results_dir = Path(__file__).resolve().parent / "results"
 
@@ -672,7 +655,6 @@ def cmd_run(args: argparse.Namespace) -> None:
             system_prompt,
             vow_binary,
             max_cegis=args.max_cegis,
-            memory_limit=memory_limit,
             supports_unwind=supports_unwind,
         )
         results.append(result)
