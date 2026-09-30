@@ -145,6 +145,32 @@ Notes on the taxonomy decisions:
   `Unknown`, `Skipped`, and `error` all fail the run (see
   [`docs/spec/cli.md`](spec/cli.md)).
 
+## A `VERIFICATION SUCCESSFUL` line is not always trustworthy
+
+ESBMC 8.4+ can print `VERIFICATION SUCCESSFUL` even when an earlier phase of
+the same run hit an internal solver exception it should have failed on
+([esbmc/esbmc#4484](https://github.com/esbmc/esbmc/issues/4484)):
+`do_bmc_strategy` treats an unknown base case as "not violated", and a later
+forward-condition pass can still print the success banner. Both classifiers
+(`classify_esbmc_output` in `vow-verify/src/esbmc.rs` and
+`parse_verify_status` in `compiler/verifier.vow`) therefore only trust a
+`VERIFICATION SUCCESSFUL` line when no memory-limit marker or `ERROR:`-prefixed
+line appears anywhere else in the same run's combined stdout+stderr — a
+tainted SUCCESSFUL is reported `Unknown`, not `Proven`. A genuine
+`VERIFICATION FAILED` (a real counterexample) still wins regardless of an
+earlier solver hiccup elsewhere in the run: unlike a SUCCESSFUL verdict, a
+FAILED verdict can never produce a false proof, so trusting it fails closed
+even when a solver-internal error occurred elsewhere in the same run.
+
+The same discipline applies to `vow contracts --verify`'s per-clause
+`--multi-property` path: an individual claim's `PASSED` verdict is only
+trusted when the run is not tainted (`run_esbmc_multi_property` in
+`vow-verify/src/esbmc.rs`, `verify_function_multi_property` in
+`compiler/verifier.vow`). A tainted `PASSED` falls back to the function's
+overall outcome instead of being reported `proven` outright — a per-claim
+`FAILED` is still trusted regardless of taint, for the same fail-closed reason
+an overall `VERIFICATION FAILED` is.
+
 ## How the existing fallback embodies the discipline
 
 `run_with_fallback` in `vow-verify/src/solver_strategy.rs` is the only adaptive

@@ -14524,6 +14524,13 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                         let overall: i64 = mpr.status;
                         let v_ids: Vec<i64> = mpr.verdict_ids;
                         let v_proven: Vec<i64> = mpr.verdict_proven;
+                        // A per-claim PASSED (verdict == 1) is trusted only when
+                        // the run is not tainted (esbmc/esbmc#4484): a tainted
+                        // PASSED falls through to `overall`, which is itself
+                        // already guarded against a tainted VERIFICATION
+                        // SUCCESSFUL by parse_verify_status. A per-claim FAILED
+                        // (verdict == 0) is still trusted regardless of taint.
+                        let mpr_tainted: bool = mpr.tainted;
                         let mut ei: i64 = 0;
                         while ei < e_func_ids.len() {
                             if e_func_ids[ei] == func.id {
@@ -14537,7 +14544,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                                         k = k + 1;
                                     }
                                 }
-                                if verdict == 1 {
+                                if verdict == 1 && !mpr_tainted {
                                     e_statuses[ei] = String::from("proven");
                                 } else if verdict == 0 {
                                     e_statuses[ei] = String::from("failed");
