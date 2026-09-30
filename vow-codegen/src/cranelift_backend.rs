@@ -2404,6 +2404,98 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
             sig.params.push(AbiParam::new(types::I64));
             true
         }
+        "__vow_fs_read" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_fs_open" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_fs_read_line" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_fs_status" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_fs_close" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_fs_write" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_fs_exists" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_fs_mkdir" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_fs_listdir" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_fs_remove" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_fs_remove_dir" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_fs_is_dir" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_fs_is_symlink" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_fs_rename" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_args" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_stdin_read" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_stdin_read_line" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_stdin_ready" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_eprintln_str" => {
+            sig.params.push(AbiParam::new(types::I64));
+            true
+        }
         _ => false,
     }
 }
@@ -2630,65 +2722,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // value
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        // File I/O runtime
-        "__vow_fs_read" => {
-            sig.params.push(AbiParam::new(types::I64)); // path C-string
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8> or null
-        }
-        "__vow_fs_open" => {
-            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
-            sig.returns.push(AbiParam::new(types::I64)); // positive handle or -1
-        }
-        "__vow_fs_read_line" => {
-            sig.params.push(AbiParam::new(types::I64)); // file handle
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_fs_status" => {
-            sig.params.push(AbiParam::new(types::I64)); // file handle
-            sig.returns.push(AbiParam::new(types::I64)); // 0=active, 1=EOF, -1=err
-        }
-        "__vow_fs_close" => {
-            sig.params.push(AbiParam::new(types::I64)); // file handle
-            sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
-        }
-        "__vow_fs_write" => {
-            sig.params.push(AbiParam::new(types::I64)); // path C-string
-            sig.params.push(AbiParam::new(types::I64)); // data *VowVec<u8>
-            sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
-        }
-        "__vow_fs_exists" => {
-            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
-            sig.returns.push(AbiParam::new(types::I64)); // 1=exists, 0=not
-        }
-        "__vow_fs_mkdir" => {
-            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
-            sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
-        }
-        "__vow_fs_listdir" => {
-            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<String>
-        }
-        "__vow_fs_remove" => {
-            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
-            sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
-        }
-        "__vow_fs_remove_dir" => {
-            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
-            sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
-        }
-        "__vow_fs_is_dir" => {
-            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
-            sig.returns.push(AbiParam::new(types::I64)); // 1=dir, 0=not
-        }
-        "__vow_fs_is_symlink" => {
-            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
-            sig.returns.push(AbiParam::new(types::I64)); // 1=symlink, 0=not
-        }
-        "__vow_fs_rename" => {
-            sig.params.push(AbiParam::new(types::I64)); // old path *VowVec<u8>
-            sig.params.push(AbiParam::new(types::I64)); // new path *VowVec<u8>
-            sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
-        }
         "__vow_string_substr" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // start
@@ -2848,26 +2881,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // f64 bit pattern (as u64)
             sig.returns.push(AbiParam::new(types::I64)); // string ptr
         }
-        "__vow_eprintln_str" => {
-            sig.params.push(AbiParam::new(types::I64)); // C-string ptr
-        }
         "__vow_debug_str" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
         }
         "__vow_debug_i64" | "__vow_debug_u64" => {
             sig.params.push(AbiParam::new(types::I64)); // value
-        }
-        "__vow_args" => {
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<String>
-        }
-        "__vow_stdin_read" => {
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_stdin_read_line" => {
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_stdin_ready" => {
-            sig.returns.push(AbiParam::new(types::I64)); // bool as i64
         }
         "__vow_process_exit" => {
             sig.params.push(AbiParam::new(types::I64)); // exit code
@@ -3656,6 +3674,65 @@ mod tests {
             assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
             assert!(sig.returns.is_empty(), "{sym}");
         }
+    }
+
+    // Coverage-parity twin of vow-clif-shim's
+    // `catalogue_fs_stdin_args_stderr_externs_have_expected_shape` -- both
+    // crates get the same generated `catalogue_extern_sig` block from
+    // scripts/generate_operations.py, so both get a direct test of it. Guards
+    // against a transcription typo in docs/spec/operations.json silently
+    // producing a wrong-arity extern signature.
+    #[test]
+    fn catalogue_fs_stdin_args_stderr_externs_have_expected_shape() {
+        let one_param_returns_i64 = [
+            "__vow_fs_read",
+            "__vow_fs_open",
+            "__vow_fs_read_line",
+            "__vow_fs_status",
+            "__vow_fs_close",
+            "__vow_fs_exists",
+            "__vow_fs_mkdir",
+            "__vow_fs_listdir",
+            "__vow_fs_remove",
+            "__vow_fs_remove_dir",
+            "__vow_fs_is_dir",
+            "__vow_fs_is_symlink",
+        ];
+        for sym in one_param_returns_i64 {
+            let sig = extern_sig(sym);
+            assert_eq!(sig.params.len(), 1, "{sym}");
+            assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
+            assert_eq!(sig.returns.len(), 1, "{sym}");
+            assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
+        }
+
+        let two_params_return_i64 = ["__vow_fs_write", "__vow_fs_rename"];
+        for sym in two_params_return_i64 {
+            let sig = extern_sig(sym);
+            assert_eq!(sig.params.len(), 2, "{sym}");
+            assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
+            assert_eq!(sig.params[1].value_type, types::I64, "{sym}");
+            assert_eq!(sig.returns.len(), 1, "{sym}");
+            assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
+        }
+
+        let no_params_return_i64 = [
+            "__vow_args",
+            "__vow_stdin_read",
+            "__vow_stdin_read_line",
+            "__vow_stdin_ready",
+        ];
+        for sym in no_params_return_i64 {
+            let sig = extern_sig(sym);
+            assert!(sig.params.is_empty(), "{sym}");
+            assert_eq!(sig.returns.len(), 1, "{sym}");
+            assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
+        }
+
+        let sig = extern_sig("__vow_eprintln_str");
+        assert_eq!(sig.params.len(), 1);
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert!(sig.returns.is_empty());
     }
 
     fn make_module(name: &str, funcs: Vec<Function>) -> Module {

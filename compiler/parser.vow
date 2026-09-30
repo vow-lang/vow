@@ -879,6 +879,10 @@ fn parse_primary(p: Parser) -> i64 {
         push_error_code(p, t.int_val, t.str_val);
         let _adv: Token = advance(p);
         arena_add_int_expr(p.arena, 0u64, 0u64, span_pack_to_here(p, span_start))
+    } else if tag == tok_invalid_float() {
+        push_error_code(p, t.int_val, t.str_val);
+        let _adv: Token = advance(p);
+        arena_add_expr(p.arena, EXPR_LIT_FLOAT(), 0, 0, 0, span_pack_to_here(p, span_start))
     } else if tag == tok_lit_bool() {
         let _adv: Token = advance(p);
         arena_add_expr(p.arena, EXPR_LIT_BOOL(), t.int_val, 0, 0, span_pack_to_here(p, span_start))

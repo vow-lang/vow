@@ -32,12 +32,62 @@ REPO = Path(__file__).resolve().parent.parent
 # dropped from the Cranelift ABI.
 RETURN_TOKENS = {
     "unit": {"rust_ty": "Ty::Unit", "ity_const": "ITY_UNIT()", "clif_ret": None},
+    "i64": {"rust_ty": "Ty::I64", "ity_const": "ITY_I64()", "clif_ret": "types::I64"},
+    "ptr": {"rust_ty": "Ty::Ptr", "ity_const": "ITY_PTR()", "clif_ret": "types::I64"},
+    "bool": {
+        "rust_ty": "Ty::Bool",
+        "ity_const": "ITY_BOOL()",
+        "clif_ret": "types::I64",
+    },
 }
 PARAM_TOKENS = {
     "ptr": "types::I64",
     "i64": "types::I64",
     "u64": "types::I64",
 }
+
+# Effect keyword spellings, sourced from vow-syntax/src/token.rs's effect
+# keyword lexing -- the same spellings the printer emits and grammar.md's
+# "Builtin Function Signatures" table documents.
+EFFECT_TOKENS = {"read", "write", "io", "panic", "unsafe"}
+
+EFFECTS_RE = re.compile(r"^\[(?P<tokens>[a-z]+(?:, [a-z]+)*)?\]$")
+
+DOC_SIGNATURE_RE = re.compile(r"^fn\((?P<params>.*)\) -> (?P<ret>.+)$")
+
+
+def _split_top_level_commas(s: str) -> list[str]:
+    """Split on commas at bracket depth 0, so a generic type's internal
+    comma (e.g. a future `Pair<A, B>`) never splits a single parameter."""
+    if not s:
+        return []
+    parts = []
+    depth = 0
+    start = 0
+    for i, ch in enumerate(s):
+        if ch in "<(":
+            depth += 1
+        elif ch in ">)":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            parts.append(s[start:i])
+            start = i + 1
+    parts.append(s[start:])
+    return [p.strip() for p in parts]
+
+
+def _doc_type_to_token(type_str: str) -> str | None:
+    """Map a doc_signature parameter/return Type spelling to its catalogue
+    token. `String` and any `Vec<...>` both denote a heap pointer, so both
+    map to `ptr` -- this is a many-to-one mapping, not a bijection."""
+    if type_str == "String" or re.match(r"^Vec<.*>$", type_str):
+        return "ptr"
+    if type_str in ("i64", "u64", "bool"):
+        return type_str
+    if type_str == "()":
+        return "unit"
+    return None
+
 
 REQUIRED_FIELDS = [
     "name",
@@ -48,11 +98,23 @@ REQUIRED_FIELDS = [
     "effects",
 ]
 
+# Optional fields a catalogue entry may carry, each with its own closed
+# vocabulary. Field names/values agreed with sibling in-progress catalogue
+# slices (#1271/#1273) so a future rebase is a clean superset merge.
+OPTIONAL_FIELD_VALUES = {
+    "verifier_model": {"known", "unmodeled"},
+    "arena_routing": {"none", "heap_fresh"},
+}
+
+ALLOWED_FIELDS = set(REQUIRED_FIELDS) | set(OPTIONAL_FIELD_VALUES)
+
 
 def load_catalogue(repo_root: Path) -> list[dict]:
     """Read and hand-validate docs/spec/operations.json under repo_root.
 
-    Raises ValueError naming the offending operation/field on any violation.
+    Collects every violation across every entry before raising, so a
+    catalogue with several unrelated problems is fully diagnosed in one run.
+    Raises ValueError with all violations (newline-separated) if any exist.
     """
     catalogue_path = repo_root / "docs" / "spec" / "operations.json"
     data = json.loads(catalogue_path.read_text())
@@ -60,47 +122,143 @@ def load_catalogue(repo_root: Path) -> list[dict]:
         raise ValueError(f"{catalogue_path}: top-level 'operations' key must be a list")
     ops = data["operations"]
 
+    errors: list[str] = []
     seen_names: set[str] = set()
     seen_symbols: set[str] = set()
+
     for op in ops:
-        for field in REQUIRED_FIELDS:
-            if field not in op:
-                name = op.get("name", "<unnamed>")
-                raise ValueError(
-                    f"operation '{name}' is missing required field '{field}'"
+        name = op.get("name", "<unnamed>")
+
+        missing_fields = [f for f in REQUIRED_FIELDS if f not in op]
+        if missing_fields:
+            for field in missing_fields:
+                errors.append(f"operation '{name}' is missing required field '{field}'")
+            # Required fields are a precondition for every check below --
+            # a missing field must not reach e.g. the doc_signature arity
+            # check and raise a raw TypeError one layer deeper.
+            continue
+
+        unknown_fields = set(op) - ALLOWED_FIELDS
+        if unknown_fields:
+            errors.append(
+                f"operation '{name}' has unknown field(s) {sorted(unknown_fields)} "
+                f"(allowed: {sorted(ALLOWED_FIELDS)})"
+            )
+
+        for field, allowed_values in OPTIONAL_FIELD_VALUES.items():
+            if field in op and op[field] not in allowed_values:
+                errors.append(
+                    f"operation '{name}' has unknown {field} '{op[field]}' "
+                    f"(known: {sorted(allowed_values)})"
                 )
 
-        name = op["name"]
         if name in seen_names:
-            raise ValueError(f"duplicate operation name '{name}'")
+            errors.append(f"duplicate operation name '{name}'")
         seen_names.add(name)
 
         symbol = op["runtime_symbol"]
         if symbol in seen_symbols:
-            raise ValueError(
-                f"duplicate runtime_symbol '{symbol}' (operation '{name}')"
-            )
+            errors.append(f"duplicate runtime_symbol '{symbol}' (operation '{name}')")
         seen_symbols.add(symbol)
 
         ret = op["return"]
-        if ret not in RETURN_TOKENS:
-            raise ValueError(
+        ret_valid = ret in RETURN_TOKENS
+        if not ret_valid:
+            errors.append(
                 f"operation '{name}' has unknown return token '{ret}' "
                 f"(known: {sorted(RETURN_TOKENS)})"
             )
 
         params = op["params"]
-        if not isinstance(params, list):
-            raise ValueError(
+        params_valid = isinstance(params, list)
+        if not params_valid:
+            errors.append(
                 f"operation '{name}' has 'params' of type {type(params).__name__}, "
                 "expected a list"
             )
-        for param in params:
-            if param not in PARAM_TOKENS:
-                raise ValueError(
-                    f"operation '{name}' has unknown params token '{param}' "
-                    f"(known: {sorted(PARAM_TOKENS)})"
+        else:
+            for param in params:
+                if param not in PARAM_TOKENS:
+                    errors.append(
+                        f"operation '{name}' has unknown params token '{param}' "
+                        f"(known: {sorted(PARAM_TOKENS)})"
+                    )
+
+        effects = op["effects"]
+        if not isinstance(effects, str):
+            errors.append(
+                f"operation '{name}' has 'effects' of type "
+                f"{type(effects).__name__}, expected a string"
+            )
+        else:
+            match = EFFECTS_RE.match(effects)
+            if match is None:
+                errors.append(
+                    f"operation '{name}' has malformed effects string {effects!r} "
+                    f"(expected e.g. '[]', '[io]', '[read, write]')"
                 )
+            else:
+                tokens = match.group("tokens")
+                eff_tokens = tokens.split(", ") if tokens else []
+                unknown = [t for t in eff_tokens if t not in EFFECT_TOKENS]
+                if unknown:
+                    errors.append(
+                        f"operation '{name}' has unknown effects token(s) {unknown} "
+                        f"in {effects!r} (known: {sorted(EFFECT_TOKENS)})"
+                    )
+                elif eff_tokens != sorted(eff_tokens):
+                    errors.append(
+                        f"operation '{name}' has unsorted effects {effects!r} "
+                        f"(expected {sorted(eff_tokens)!r} order)"
+                    )
+
+        doc_signature = op["doc_signature"]
+        if not isinstance(doc_signature, str):
+            errors.append(
+                f"operation '{name}' has 'doc_signature' of type "
+                f"{type(doc_signature).__name__}, expected a string"
+            )
+        else:
+            sig_match = DOC_SIGNATURE_RE.match(doc_signature)
+            if sig_match is None:
+                errors.append(
+                    f"operation '{name}' has malformed doc_signature "
+                    f"{doc_signature!r} (expected 'fn(...) -> Type')"
+                )
+            else:
+                if params_valid:
+                    doc_params = [
+                        p
+                        for p in _split_top_level_commas(sig_match.group("params"))
+                        if p
+                    ]
+                    if len(doc_params) != len(params):
+                        errors.append(
+                            f"operation '{name}' doc_signature declares "
+                            f"{len(doc_params)} parameter(s) but 'params' has "
+                            f"{len(params)}: {doc_signature!r}"
+                        )
+                    else:
+                        for i, doc_param in enumerate(doc_params):
+                            _, _, type_str = doc_param.partition(": ")
+                            token = _doc_type_to_token(type_str.strip())
+                            if token != params[i]:
+                                errors.append(
+                                    f"operation '{name}' doc_signature parameter "
+                                    f"{i} ({doc_param!r}) does not match params "
+                                    f"token '{params[i]}': {doc_signature!r}"
+                                )
+                if ret_valid:
+                    ret_token = _doc_type_to_token(sig_match.group("ret").strip())
+                    if ret_token != ret:
+                        errors.append(
+                            f"operation '{name}' doc_signature return type "
+                            f"({sig_match.group('ret')!r}) does not match return "
+                            f"token '{ret}': {doc_signature!r}"
+                        )
+
+    if errors:
+        raise ValueError("\n".join(errors))
 
     return ops
 
@@ -337,11 +495,20 @@ def check_projections(ops: list[dict], repo_root: Path) -> list[str]:
 
 
 def main() -> None:
-    check_only = "--check" in sys.argv
-    ops = load_catalogue(REPO)
+    argv = sys.argv[1:]
+    check_only = "--check" in argv
+    repo_root = REPO
+    if "--repo-root" in argv:
+        repo_root = Path(argv[argv.index("--repo-root") + 1])
+
+    try:
+        ops = load_catalogue(repo_root)
+    except (ValueError, json.JSONDecodeError) as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
 
     if check_only:
-        mismatches = check_projections(ops, REPO) + check_doc_facts(ops, REPO)
+        mismatches = check_projections(ops, repo_root) + check_doc_facts(ops, repo_root)
         if mismatches:
             for m in mismatches:
                 print(m)
@@ -350,7 +517,7 @@ def main() -> None:
         print("OK: operations catalogue up to date")
         return
 
-    write_projections(ops, REPO)
+    write_projections(ops, repo_root)
     for rel_path, _ in TARGET_FILES:
         print(f"Updated {rel_path}")
 
