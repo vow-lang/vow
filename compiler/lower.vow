@@ -557,7 +557,7 @@ fn lctx_get_vec_elem(ctx: LowerCtx, inst_id: i64) -> String {
     String::from("")
 }
 
-fn lctx_propagate_vec_elem(ctx: LowerCtx, source_id: i64, result_id: i64) {
+fn lctx_project_vec_index_metadata(ctx: LowerCtx, source_id: i64, result_id: i64) {
     let path: Vec<String> = lctx_get_vec_elem_path(ctx, source_id);
     if path.len() == 0 {
         return;
@@ -683,7 +683,7 @@ fn i64_vec_vec_equal(a: Vec<Vec<i64>>, b: Vec<Vec<i64>>) -> bool {
     true
 }
 
-fn lctx_copy_compatible_aggregate_metadata(ctx: LowerCtx, sources: Vec<i64>, result_id: i64) {
+fn lctx_merge_compatible_aggregate_metadata(ctx: LowerCtx, sources: Vec<i64>, result_id: i64) {
     if sources.len() == 0 { return; }
     let aggregate_name: String = lctx_get_tag(ctx, sources[0]);
     if aggregate_name.len() == 0 { return; }
@@ -770,6 +770,90 @@ fn lctx_copy_compatible_aggregate_metadata(ctx: LowerCtx, sources: Vec<i64>, res
     if option_elem != -1 { lctx_tag_option_elem(ctx, result_id, option_elem); }
     if variant_payloads.len() > 0 { lctx_tag_variant_payloads(ctx, result_id, variant_payloads); }
     if declared_ast_tid != -1 { lctx_tag_declared_ast_tid(ctx, result_id, declared_ast_tid); }
+}
+
+fn lctx_copy_pin_result_metadata(ctx: LowerCtx, source_id: i64, result_id: i64) {
+    let aggregate_name: String = lctx_get_tag(ctx, source_id);
+    if aggregate_name.len() == 0 { return; }
+    let is_vec: bool = aggregate_name == String::from("Vec");
+    lctx_tag(ctx, result_id, aggregate_name);
+    if !is_vec { return; }
+    let elem_path: Vec<String> = lctx_get_vec_elem_path(ctx, source_id);
+    if elem_path.len() > 0 {
+        lctx_tag_vec_elem_path(ctx, result_id, elem_path);
+    }
+    let option_path: Vec<i64> = lctx_get_vec_option_elem_ty_path(ctx, source_id);
+    if option_path.len() > 0 {
+        lctx_tag_vec_option_elem_ty_path(ctx, result_id, option_path);
+    }
+}
+
+fn lctx_apply_call_result_metadata(ctx: LowerCtx, result_id: i64, fidx: i64) {
+    let ret_tag: String = ctx.func_ret_tags[fidx];
+    if ret_tag.len() > 0 {
+        lctx_tag(ctx, result_id, ret_tag);
+    }
+    let ret_vec_elem: String = ctx.func_ret_vec_elems[fidx];
+    if ret_vec_elem.len() > 0 {
+        lctx_tag_vec_elem(ctx, result_id, ret_vec_elem);
+    }
+    let ret_option_elem: i64 = ctx.func_ret_option_elems[fidx];
+    if ret_option_elem != -1 {
+        lctx_tag(ctx, result_id, String::from("Option"));
+        lctx_tag_option_elem(ctx, result_id, ret_option_elem);
+    }
+    let ret_variant_tys: Vec<i64> = ctx.func_ret_variant_payload_tys[fidx];
+    if ret_variant_tys.len() > 0 {
+        lctx_tag_variant_payloads(ctx, result_id, ret_variant_tys);
+    }
+}
+
+fn lctx_apply_pattern_aggregate_metadata(
+    ctx: LowerCtx, result_id: i64, pid: i64, aggregate_name: String
+) {
+    if aggregate_name.len() > 0 {
+        lctx_tag(ctx, result_id, aggregate_name);
+    }
+    let vec_elems: Vec<String> = lctx_get_pattern_vec_elem_path(ctx, pid);
+    if vec_elems.len() > 0 {
+        lctx_tag_vec_elem_path(ctx, result_id, vec_elems);
+    }
+    let vec_options: Vec<i64> = lctx_get_pattern_vec_option_elem_ty_path(ctx, pid);
+    if vec_options.len() > 0 {
+        lctx_tag_vec_option_elem_ty_path(ctx, result_id, vec_options);
+    }
+    let vec_variants: Vec<Vec<i64>> = lctx_get_pattern_vec_variant_payload_ty_path(ctx, pid);
+    if vec_variants.len() > 0 {
+        lctx_tag_vec_variant_payload_ty_path(ctx, result_id, vec_variants);
+    }
+    let option_elem: i64 = lctx_get_pattern_option_elem_ty(ctx, pid);
+    if option_elem != -1 {
+        lctx_tag_option_elem(ctx, result_id, option_elem);
+    }
+    let variant_payloads: Vec<i64> = lctx_get_pattern_variant_payload_tys(ctx, pid);
+    if variant_payloads.len() > 0 {
+        lctx_tag_variant_payloads(ctx, result_id, variant_payloads);
+    }
+}
+
+fn lctx_apply_question_aggregate_metadata(
+    ctx: LowerCtx, result_id: i64, eid: i64, aggregate_name: String
+) {
+    if aggregate_name.len() > 0 {
+        lctx_tag(ctx, result_id, aggregate_name);
+    }
+    let vec_elems: Vec<String> = lctx_get_question_vec_elem_path(ctx, eid);
+    if vec_elems.len() > 0 {
+        lctx_tag_vec_elem_path(ctx, result_id, vec_elems);
+    }
+    let vec_options: Vec<i64> = lctx_get_question_vec_option_elem_ty_path(ctx, eid);
+    if vec_options.len() > 0 {
+        lctx_tag_vec_option_elem_ty_path(ctx, result_id, vec_options);
+    }
+    let option_elem: i64 = lctx_get_question_option_elem_ty(ctx, eid);
+    if option_elem != -1 {
+        lctx_tag_option_elem(ctx, result_id, option_elem);
+    }
 }
 
 fn lctx_get_pattern_aggregate(ctx: LowerCtx, pid: i64) -> String {
@@ -2665,7 +2749,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     call_args.push(source_id);
                     let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_pin_to_root"));
                     lctx_set_inst_span(ctx, result, expr_span(a, eid));
-                    lctx_tag(ctx, result, String::from("String"));
+                    lctx_copy_pin_result_metadata(ctx, source_id, result);
                     return result;
                 }
                 if lctx_get_tag(ctx, source_id) == String::from("Vec") {
@@ -2673,15 +2757,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     call_args.push(source_id);
                     let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_pin_to_root_val"));
                     lctx_set_inst_span(ctx, result, expr_span(a, eid));
-                    lctx_tag(ctx, result, String::from("Vec"));
-                    let elem_path: Vec<String> = lctx_get_vec_elem_path(ctx, source_id);
-                    if elem_path.len() > 0 {
-                        lctx_tag_vec_elem_path(ctx, result, elem_path);
-                    }
-                    let option_path: Vec<i64> = lctx_get_vec_option_elem_ty_path(ctx, source_id);
-                    if option_path.len() > 0 {
-                        lctx_tag_vec_option_elem_ty_path(ctx, result, option_path);
-                    }
+                    lctx_copy_pin_result_metadata(ctx, source_id, result);
                     return result;
                 }
                 // pin_to_root relies on lowering-time String/Vec tags. Keep builtin result
@@ -2774,23 +2850,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let ret_ty: i64 = ctx.func_ret_tys[fidx];
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_TARGET(), fidx, 0, String::from(""));
             lctx_set_inst_span(ctx, result, expr_span(a, eid));
-            let ret_tag: String = ctx.func_ret_tags[fidx];
-            if ret_tag.len() > 0 {
-                lctx_tag(ctx, result, ret_tag);
-            }
-            let ret_vec_elem: String = ctx.func_ret_vec_elems[fidx];
-            if ret_vec_elem.len() > 0 {
-                lctx_tag_vec_elem(ctx, result, ret_vec_elem);
-            }
-            let ret_option_elem: i64 = ctx.func_ret_option_elems[fidx];
-            if ret_option_elem != -1 {
-                lctx_tag(ctx, result, String::from("Option"));
-                lctx_tag_option_elem(ctx, result, ret_option_elem);
-            }
-            let ret_variant_tys: Vec<i64> = ctx.func_ret_variant_payload_tys[fidx];
-            if ret_variant_tys.len() > 0 {
-                lctx_tag_variant_payloads(ctx, result, ret_variant_tys);
-            }
+            lctx_apply_call_result_metadata(ctx, result, fidx);
             return result;
         }
         let call_args: Vec<i64> = Vec::new();
@@ -3383,7 +3443,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         get_args.push(iter_id);
         get_args.push(idx_phi);
         let elem_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), get_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"));
-        lctx_propagate_vec_elem(ctx, iter_id, elem_id);
+        lctx_project_vec_index_metadata(ctx, iter_id, elem_id);
 
         let for_scope_depth: i64 = ctx.scope_vars.len();
         lctx_push_scope(ctx);
@@ -4105,7 +4165,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let raw_result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"));
         let elem_ty: i64 = lctx_lower_ast_ty(ctx, elem_ast_tid);
         let result: i64 = lower_narrow_literal(ctx, a, eid, raw_result, elem_ty);
-        lctx_propagate_vec_elem(ctx, vec_ptr, result);
+        lctx_project_vec_index_metadata(ctx, vec_ptr, result);
         lctx_tag_declared_ast_tid(ctx, result, elem_ast_tid);
         return result;
     }
@@ -4223,11 +4283,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         let name_sid: i64 = pat_a(a, inner_pid);
                         let pname: String = arena_str(a, name_sid);
                         let aggregate_struct: String = lctx_get_pattern_aggregate(ctx, inner_pid);
-                        let aggregate_vec_elems: Vec<String> = lctx_get_pattern_vec_elem_path(ctx, inner_pid);
-                        let aggregate_vec_options: Vec<i64> = lctx_get_pattern_vec_option_elem_ty_path(ctx, inner_pid);
-                        let aggregate_vec_variants: Vec<Vec<i64>> = lctx_get_pattern_vec_variant_payload_ty_path(ctx, inner_pid);
-                        let aggregate_option_elem: i64 = lctx_get_pattern_option_elem_ty(ctx, inner_pid);
-                        let aggregate_variant_payloads: Vec<i64> = lctx_get_pattern_variant_payload_tys(ctx, inner_pid);
                         let declared_wide: i64 = lctx_declared_wide_payload_ty(ctx, en, vn, ii);
                         let field_ty: i64 = {
                             if aggregate_struct.len() > 0 && lctx_pattern_is_linear(ctx, inner_pid) == 1 {
@@ -4245,24 +4300,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         let fg2_args: Vec<i64> = Vec::new();
                         fg2_args.push(ptr_id);
                         let field_val: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ty, fg2_args, IDATA_FIELD(), 1 + ii, 0, String::from(""));
-                        if aggregate_struct.len() > 0 {
-                            lctx_tag(ctx, field_val, aggregate_struct);
-                        }
-                        if aggregate_vec_elems.len() > 0 {
-                            lctx_tag_vec_elem_path(ctx, field_val, aggregate_vec_elems);
-                        }
-                        if aggregate_vec_options.len() > 0 {
-                            lctx_tag_vec_option_elem_ty_path(ctx, field_val, aggregate_vec_options);
-                        }
-                        if aggregate_vec_variants.len() > 0 {
-                            lctx_tag_vec_variant_payload_ty_path(ctx, field_val, aggregate_vec_variants);
-                        }
-                        if aggregate_option_elem != -1 {
-                            lctx_tag_option_elem(ctx, field_val, aggregate_option_elem);
-                        }
-                        if aggregate_variant_payloads.len() > 0 {
-                            lctx_tag_variant_payloads(ctx, field_val, aggregate_variant_payloads);
-                        }
+                        lctx_apply_pattern_aggregate_metadata(
+                            ctx, field_val, inner_pid, aggregate_struct
+                        );
                         lctx_define(ctx, pname, field_val);
                     }
                     ii = ii + 1;
@@ -4495,7 +4535,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
-        lctx_copy_compatible_aggregate_metadata(ctx, arm_result_values, phi_id);
+        lctx_merge_compatible_aggregate_metadata(ctx, arm_result_values, phi_id);
 
         let n_results: i64 = arm_up_ids.len();
         let mut ri: i64 = 0;
@@ -4549,9 +4589,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         lctx_switch_to_block(ctx, continue_block);
         let aggregate_name: String = lctx_get_question_aggregate(ctx, eid);
-        let aggregate_vec_elems: Vec<String> = lctx_get_question_vec_elem_path(ctx, eid);
-        let aggregate_vec_options: Vec<i64> = lctx_get_question_vec_option_elem_ty_path(ctx, eid);
-        let aggregate_option_elem: i64 = lctx_get_question_option_elem_ty(ctx, eid);
         let payload_ty: i64 = {
             if aggregate_name.len() > 0 && lctx_question_is_linear(ctx, eid) == 1 {
                 ITY_LPTR()
@@ -4564,18 +4601,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let payload_args: Vec<i64> = Vec::new();
         payload_args.push(inner_id);
         let payload_id: i64 = lctx_emit(ctx, IOP_FIELD_GET(), payload_ty, payload_args, IDATA_FIELD(), 1, 0, String::from(""));
-        if aggregate_name.len() > 0 {
-            lctx_tag(ctx, payload_id, aggregate_name);
-        }
-        if aggregate_vec_elems.len() > 0 {
-            lctx_tag_vec_elem_path(ctx, payload_id, aggregate_vec_elems);
-        }
-        if aggregate_vec_options.len() > 0 {
-            lctx_tag_vec_option_elem_ty_path(ctx, payload_id, aggregate_vec_options);
-        }
-        if aggregate_option_elem != -1 {
-            lctx_tag_option_elem(ctx, payload_id, aggregate_option_elem);
-        }
+        lctx_apply_question_aggregate_metadata(
+            ctx, payload_id, eid, aggregate_name
+        );
         return payload_id;
     }
 
@@ -4739,9 +4767,6 @@ fn lower_unwrap(ctx: LowerCtx, eid: i64, recv_id: i64, empty_tag: i64) -> i64 {
 
     lctx_switch_to_block(ctx, payload_block);
     let aggregate_name: String = lctx_get_question_aggregate(ctx, eid);
-    let aggregate_vec_elems: Vec<String> = lctx_get_question_vec_elem_path(ctx, eid);
-    let aggregate_vec_options: Vec<i64> = lctx_get_question_vec_option_elem_ty_path(ctx, eid);
-    let aggregate_option_elem: i64 = lctx_get_question_option_elem_ty(ctx, eid);
     let payload_ty: i64 = {
         if aggregate_name.len() > 0 && lctx_question_is_linear(ctx, eid) == 1 {
             ITY_LPTR()
@@ -4763,18 +4788,7 @@ fn lower_unwrap(ctx: LowerCtx, eid: i64, recv_id: i64, empty_tag: i64) -> i64 {
     let payload_args: Vec<i64> = Vec::new();
     payload_args.push(recv_id);
     let payload_id: i64 = lctx_emit(ctx, IOP_FIELD_GET(), payload_ty, payload_args, IDATA_FIELD(), 1, 0, String::from(""));
-    if aggregate_name.len() > 0 {
-        lctx_tag(ctx, payload_id, aggregate_name);
-    }
-    if aggregate_vec_elems.len() > 0 {
-        lctx_tag_vec_elem_path(ctx, payload_id, aggregate_vec_elems);
-    }
-    if aggregate_vec_options.len() > 0 {
-        lctx_tag_vec_option_elem_ty_path(ctx, payload_id, aggregate_vec_options);
-    }
-    if aggregate_option_elem != -1 {
-        lctx_tag_option_elem(ctx, payload_id, aggregate_option_elem);
-    }
+    lctx_apply_question_aggregate_metadata(ctx, payload_id, eid, aggregate_name);
     payload_id
 }
 
