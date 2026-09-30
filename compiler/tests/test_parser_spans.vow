@@ -1,0 +1,88 @@
+module TestParserSpans
+
+use lexer
+use token
+use ast
+use diag
+use parser
+
+// One program exercising every expression kind whose parser site used to pass
+// a literal 0 span (#1135), plus the type forms and literal suffix desugar.
+fn source() -> String {
+    String::from(
+        "module SpanProbe\nfn probe(a: i64, b: bool, v: [i64], t: (i64, i64)) -> i64 vow {\n    ensures: result >= 0\n} {\n    let n: i64 = -a;\n    let m: bool = !b;\n    let c: i64 = a as i64;\n    let w: u64 = 5u64;\n    let f: f64 = 1.5;\n    let z: bool = true;\n    let u: () = ();\n    let mut i: i64 = 0;\n    while i < 3 { i = i + 1; }\n    loop { break; }\n    for x in v { continue; }\n    let r: i64 = if b { 1 } else { 2 };\n    let q: i64 = match a { 0 => { 1 }, _ => 2 };\n    { let k: i64 = 1; }\n    let tp: (i64, i64) = (a, i);\n    return i;\n}\nfn main() -> i32 { 0 }"
+    )
+}
+
+fn expr_span_zero_count(a: AstArena, tag: i64) -> i64 {
+    let mut count: i64 = 0;
+    let mut eid: i64 = 0;
+    let total: i64 = (a.expr_data.len() / 5) as i64;
+    while eid < total {
+        if expr_tag(a, eid) == tag && expr_span(a, eid) == 0 { count = count + 1; }
+        eid = eid + 1;
+    }
+    count
+}
+
+fn expr_count(a: AstArena, tag: i64) -> i64 {
+    let mut count: i64 = 0;
+    let mut eid: i64 = 0;
+    let total: i64 = (a.expr_data.len() / 5) as i64;
+    while eid < total {
+        if expr_tag(a, eid) == tag { count = count + 1; }
+        eid = eid + 1;
+    }
+    count
+}
+
+fn type_span_zero_count(a: AstArena) -> i64 {
+    let mut count: i64 = 0;
+    let mut tid: i64 = 0;
+    let total: i64 = (a.type_data.len() / 4) as i64;
+    while tid < total {
+        if type_span(a, tid) == 0 { count = count + 1; }
+        tid = tid + 1;
+    }
+    count
+}
+
+fn check_kind(a: AstArena, tag: i64) -> i32 {
+    if expr_count(a, tag) == 0 { return 2; }
+    if expr_span_zero_count(a, tag) != 0 { return 3; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let _parsed: Module = parse_module_into(lex(source()), arena, dctx, String::from("spans.vow"));
+    if dctx.error_count != 0 { return 1; }
+    let tags: Vec<i64> = Vec::new();
+    tags.push(EXPR_UNOP());
+    tags.push(EXPR_CAST());
+    tags.push(EXPR_LIT_INT());
+    tags.push(EXPR_LIT_FLOAT());
+    tags.push(EXPR_LIT_BOOL());
+    tags.push(EXPR_RESULT());
+    tags.push(EXPR_IDENT());
+    tags.push(EXPR_RETURN());
+    tags.push(EXPR_BREAK());
+    tags.push(EXPR_CONTINUE());
+    tags.push(EXPR_BLOCK());
+    tags.push(EXPR_TUPLE());
+    tags.push(EXPR_IF());
+    tags.push(EXPR_WHILE());
+    tags.push(EXPR_LOOP());
+    tags.push(EXPR_FOR());
+    tags.push(EXPR_MATCH());
+    tags.push(EXPR_BINOP());
+    let mut i: i64 = 0;
+    while i < tags.len() {
+        let result: i32 = check_kind(arena, tags[i]);
+        if result != 0 { return result; }
+        i = i + 1;
+    }
+    if type_span_zero_count(arena) != 0 { return 90; }
+    0
+}

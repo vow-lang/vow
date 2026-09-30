@@ -102,7 +102,7 @@ fn expect_ident_or_keyword(p: Parser) -> i64 {
 fn span_pack(start: i64, len: i64) -> i64 vow {
     requires: start >= 0,
     requires: len >= 0,
-    requires: start < 65536,
+    requires: start < 140737488355328,
     requires: len < 65536,
     ensures: result == start * 65536 + len
 } {
@@ -542,11 +542,12 @@ fn parse_vow_block(p: Parser) -> i64 {
 }
 
 fn parse_type(p: Parser) -> i64 {
+    let span_start: i64 = peek(p).span_start;
     if at(p, tok_lparen()) {
         let _lp: Token = advance(p);
         if at(p, tok_rparen()) {
             let _rp: Token = advance(p);
-            return arena_add_type(p.arena, TY_UNIT(), 0, 0, 0);
+            return arena_add_type(p.arena, TY_UNIT(), 0, 0, span_pack_to_here(p, span_start));
         }
         let t: i64 = parse_type(p);
         if at(p, tok_comma()) {
@@ -558,25 +559,25 @@ fn parse_type(p: Parser) -> i64 {
             }
             let _rp: bool = expect(p, tok_rparen());
             let elems_lid: i64 = arena_add_list(p.arena, tup_items);
-            return arena_add_type(p.arena, TY_TUPLE(), elems_lid, 0, 0);
+            return arena_add_type(p.arena, TY_TUPLE(), elems_lid, 0, span_pack_to_here(p, span_start));
         }
         let _rp: bool = expect(p, tok_rparen());
         return t;
     }
     if at(p, tok_bang()) {
         let _bang: Token = advance(p);
-        return arena_add_type(p.arena, TY_NEVER(), 0, 0, 0);
+        return arena_add_type(p.arena, TY_NEVER(), 0, 0, span_pack_to_here(p, span_start));
     }
     if at(p, tok_amp()) {
         let _amp: Token = advance(p);
         let inner: i64 = parse_type(p);
-        return arena_add_type(p.arena, TY_REF(), inner, 0, 0);
+        return arena_add_type(p.arena, TY_REF(), inner, 0, span_pack_to_here(p, span_start));
     }
     if at(p, tok_lbracket()) {
         let _lb: Token = advance(p);
         let inner: i64 = parse_type(p);
         let _rb: bool = expect(p, tok_rbracket());
-        return arena_add_type(p.arena, TY_SLICE(), inner, 0, 0);
+        return arena_add_type(p.arena, TY_SLICE(), inner, 0, span_pack_to_here(p, span_start));
     }
     let name_sid: i64 = expect_ident(p);
     if at(p, tok_lt()) {
@@ -590,9 +591,9 @@ fn parse_type(p: Parser) -> i64 {
         }
         let _gt: bool = expect(p, tok_gt());
         let args_lid: i64 = arena_add_list(p.arena, gen_items);
-        return arena_add_type(p.arena, TY_GENERIC(), name_sid, args_lid, 0);
+        return arena_add_type(p.arena, TY_GENERIC(), name_sid, args_lid, span_pack_to_here(p, span_start));
     }
-    arena_add_type(p.arena, TY_NAMED(), name_sid, 0, 0)
+    arena_add_type(p.arena, TY_NAMED(), name_sid, 0, span_pack_to_here(p, span_start))
 }
 
 fn parse_block(p: Parser) -> i64 {
@@ -764,13 +765,15 @@ fn parse_expr_prec(p: Parser, min_prec: i64) -> i64 {
 
 fn parse_unary(p: Parser) -> i64 {
     if at(p, tok_bang()) {
+        let span_start: i64 = peek(p).span_start;
         let _t: Token = advance(p);
         let operand: i64 = parse_unary(p);
-        arena_add_expr(p.arena, EXPR_UNOP(), UNOP_NOT(), operand, 0, 0)
+        arena_add_expr(p.arena, EXPR_UNOP(), UNOP_NOT(), operand, 0, span_pack_to_here(p, span_start))
     } else if at(p, tok_minus()) {
+        let span_start: i64 = peek(p).span_start;
         let _t: Token = advance(p);
         let operand: i64 = parse_unary(p);
-        arena_add_expr(p.arena, EXPR_UNOP(), UNOP_NEG(), operand, 0, 0)
+        arena_add_expr(p.arena, EXPR_UNOP(), UNOP_NEG(), operand, 0, span_pack_to_here(p, span_start))
     } else {
         parse_postfix(p)
     }
@@ -849,30 +852,30 @@ fn parse_primary(p: Parser) -> i64 {
     let span_start: i64 = t.span_start;
     if tag == tok_lit_int() {
         let _adv: Token = advance(p);
-        arena_add_int_expr(p.arena, t.int_lo, t.int_hi, 0)
+        arena_add_int_expr(p.arena, t.int_lo, t.int_hi, span_pack_to_here(p, span_start))
     } else if tag == tok_lit_int_suffixed() {
         let _adv: Token = advance(p);
-        let lit_eid: i64 = arena_add_int_expr(p.arena, t.int_lo, t.int_hi, 0);
+        let lit_eid: i64 = arena_add_int_expr(p.arena, t.int_lo, t.int_hi, span_pack_to_here(p, span_start));
         if t.int_val2 == tok_suffix_u64() || t.int_val2 == tok_suffix_i128() || t.int_val2 == tok_suffix_u128() {
             let type_name: String = if t.int_val2 == tok_suffix_u64() { String::from("u64") }
                 else if t.int_val2 == tok_suffix_i128() { String::from("i128") }
                 else { String::from("u128") };
             let type_sid: i64 = arena_intern_str(p.arena, type_name);
-            let target_tid: i64 = arena_add_type(p.arena, TY_NAMED(), type_sid, 0, 0);
-            arena_add_expr(p.arena, EXPR_CAST(), lit_eid, target_tid, 0, 0)
+            let target_tid: i64 = arena_add_type(p.arena, TY_NAMED(), type_sid, 0, span_pack_to_here(p, span_start));
+            arena_add_expr(p.arena, EXPR_CAST(), lit_eid, target_tid, 0, span_pack_to_here(p, span_start))
         } else {
             lit_eid
         }
     } else if tag == tok_lit_float() {
         let _adv: Token = advance(p);
-        arena_add_expr(p.arena, EXPR_LIT_FLOAT(), t.int_lo as i64, 0, 0, 0)
+        arena_add_expr(p.arena, EXPR_LIT_FLOAT(), t.int_lo as i64, 0, 0, span_pack_to_here(p, span_start))
     } else if tag == tok_invalid_int() {
         push_error_code(p, t.int_val, t.str_val);
         let _adv: Token = advance(p);
-        arena_add_int_expr(p.arena, 0u64, 0u64, 0)
+        arena_add_int_expr(p.arena, 0u64, 0u64, span_pack_to_here(p, span_start))
     } else if tag == tok_lit_bool() {
         let _adv: Token = advance(p);
-        arena_add_expr(p.arena, EXPR_LIT_BOOL(), t.int_val, 0, 0, 0)
+        arena_add_expr(p.arena, EXPR_LIT_BOOL(), t.int_val, 0, 0, span_pack_to_here(p, span_start))
     } else if tag == tok_lit_string() {
         let _adv: Token = advance(p);
         let sid: i64 = arena_intern_str(p.arena, t.str_val);
@@ -881,7 +884,7 @@ fn parse_primary(p: Parser) -> i64 {
         let name_str: String = t.str_val;
         if p.in_ensures == 1 && name_str == String::from("result") {
             let _adv: Token = advance(p);
-            return arena_add_expr(p.arena, EXPR_RESULT(), 0, 0, 0, 0);
+            return arena_add_expr(p.arena, EXPR_RESULT(), 0, 0, 0, span_pack_to_here(p, span_start));
         }
         let first_byte: i64 = name_str.byte_at(0);
         let _adv: Token = advance(p);
@@ -908,7 +911,7 @@ fn parse_primary(p: Parser) -> i64 {
             let fields_lid: i64 = arena_add_list(p.arena, field_items);
             arena_add_expr(p.arena, EXPR_SLIT(), path_lid, fields_lid, 0, span_pack_to_here(p, span_start))
         } else {
-            arena_add_expr(p.arena, EXPR_IDENT(), sid, 0, 0, 0)
+            arena_add_expr(p.arena, EXPR_IDENT(), sid, 0, 0, span_pack_to_here(p, span_start))
         }
     } else if tag == tok_kw_if() {
         parse_if_expr(p)
@@ -921,32 +924,32 @@ fn parse_primary(p: Parser) -> i64 {
     } else if tag == tok_kw_return() {
         let _kw: Token = advance(p);
         if at(p, tok_semicolon()) || at(p, tok_rbrace()) {
-            arena_add_expr(p.arena, EXPR_RETURN(), -1, 0, 0, 0)
+            arena_add_expr(p.arena, EXPR_RETURN(), -1, 0, 0, span_pack_to_here(p, span_start))
         } else {
             let val: i64 = parse_expr(p);
-            arena_add_expr(p.arena, EXPR_RETURN(), val, 0, 0, 0)
+            arena_add_expr(p.arena, EXPR_RETURN(), val, 0, 0, span_pack_to_here(p, span_start))
         }
     } else if tag == tok_kw_loop() {
         parse_loop_expr(p)
     } else if tag == tok_kw_break() {
         let _kw: Token = advance(p);
         if at(p, tok_semicolon()) || at(p, tok_rbrace()) {
-            arena_add_expr(p.arena, EXPR_BREAK(), -1, 0, 0, 0)
+            arena_add_expr(p.arena, EXPR_BREAK(), -1, 0, 0, span_pack_to_here(p, span_start))
         } else {
             let val: i64 = parse_expr(p);
-            arena_add_expr(p.arena, EXPR_BREAK(), val, 0, 0, 0)
+            arena_add_expr(p.arena, EXPR_BREAK(), val, 0, 0, span_pack_to_here(p, span_start))
         }
     } else if tag == tok_kw_continue() {
         let _kw: Token = advance(p);
-        arena_add_expr(p.arena, EXPR_CONTINUE(), 0, 0, 0, 0)
+        arena_add_expr(p.arena, EXPR_CONTINUE(), 0, 0, 0, span_pack_to_here(p, span_start))
     } else if tag == tok_lbrace() {
         let bid: i64 = parse_block(p);
-        arena_add_expr(p.arena, EXPR_BLOCK(), bid, 0, 0, 0)
+        arena_add_expr(p.arena, EXPR_BLOCK(), bid, 0, 0, span_pack_to_here(p, span_start))
     } else if tag == tok_lparen() {
         let _lp: Token = advance(p);
         if at(p, tok_rparen()) {
             let _rp: Token = advance(p);
-            arena_add_expr(p.arena, EXPR_TUPLE(), arena_add_list(p.arena, Vec::new()), 0, 0, 0)
+            arena_add_expr(p.arena, EXPR_TUPLE(), arena_add_list(p.arena, Vec::new()), 0, 0, span_pack_to_here(p, span_start))
         } else {
             let e: i64 = parse_expr(p);
             if at(p, tok_comma()) {
@@ -958,7 +961,7 @@ fn parse_primary(p: Parser) -> i64 {
                 }
                 let _rp: bool = expect(p, tok_rparen());
                 let elems_lid: i64 = arena_add_list(p.arena, tup_items);
-                arena_add_expr(p.arena, EXPR_TUPLE(), elems_lid, 0, 0, 0)
+                arena_add_expr(p.arena, EXPR_TUPLE(), elems_lid, 0, 0, span_pack_to_here(p, span_start))
             } else {
                 let _rp: bool = expect(p, tok_rparen());
                 e
@@ -967,7 +970,7 @@ fn parse_primary(p: Parser) -> i64 {
     } else {
         let _skip: Token = advance(p);
         push_error(p, String::from("unexpected token in expression"));
-        arena_add_expr(p.arena, EXPR_LIT_INT(), 0, 0, 0, 0)
+        arena_add_expr(p.arena, EXPR_LIT_INT(), 0, 0, 0, span_pack_to_here(p, span_start))
     }
 }
 
@@ -1028,6 +1031,7 @@ fn parse_path_expr(p: Parser, first_sid: i64, span_start: i64) -> i64 {
 }
 
 fn parse_if_expr(p: Parser) -> i64 {
+    let span_start: i64 = peek(p).span_start;
     let _kw: bool = expect(p, tok_kw_if());
     let cond: i64 = parse_expr(p);
     let then_bid: i64 = parse_block(p);
@@ -1036,31 +1040,35 @@ fn parse_if_expr(p: Parser) -> i64 {
         if at(p, tok_kw_if()) {
             parse_if_expr(p)
         } else {
+            let else_start: i64 = peek(p).span_start;
             let else_bid: i64 = parse_block(p);
-            arena_add_expr(p.arena, EXPR_BLOCK(), else_bid, 0, 0, 0)
+            arena_add_expr(p.arena, EXPR_BLOCK(), else_bid, 0, 0, span_pack_to_here(p, else_start))
         }
     } else {
         -1
     };
-    arena_add_expr(p.arena, EXPR_IF(), cond, then_bid, else_eid, 0)
+    arena_add_expr(p.arena, EXPR_IF(), cond, then_bid, else_eid, span_pack_to_here(p, span_start))
 }
 
 fn parse_while_expr(p: Parser) -> i64 {
+    let span_start: i64 = peek(p).span_start;
     let _kw: bool = expect(p, tok_kw_while());
     let cond: i64 = parse_expr(p);
     let vow_lid: i64 = parse_vow_block(p);
     let body_bid: i64 = parse_block(p);
-    arena_add_expr(p.arena, EXPR_WHILE(), cond, body_bid, vow_lid, 0)
+    arena_add_expr(p.arena, EXPR_WHILE(), cond, body_bid, vow_lid, span_pack_to_here(p, span_start))
 }
 
 fn parse_loop_expr(p: Parser) -> i64 {
+    let span_start: i64 = peek(p).span_start;
     let _kw: bool = expect(p, tok_kw_loop());
     let vow_lid: i64 = parse_vow_block(p);
     let body_bid: i64 = parse_block(p);
-    arena_add_expr(p.arena, EXPR_LOOP(), body_bid, vow_lid, 0, 0)
+    arena_add_expr(p.arena, EXPR_LOOP(), body_bid, vow_lid, 0, span_pack_to_here(p, span_start))
 }
 
 fn parse_for_expr(p: Parser) -> i64 {
+    let span_start: i64 = peek(p).span_start;
     let _kw: bool = expect(p, tok_kw_for());
     let name_tok: Token = advance(p);
     let name_sid: i64 = arena_intern_str(p.arena, name_tok.str_val);
@@ -1072,10 +1080,11 @@ fn parse_for_expr(p: Parser) -> i64 {
     info_items.push(name_sid);
     info_items.push(vow_lid);
     let info_lid: i64 = arena_add_list(p.arena, info_items);
-    arena_add_expr(p.arena, EXPR_FOR(), iterable, body_bid, info_lid, 0)
+    arena_add_expr(p.arena, EXPR_FOR(), iterable, body_bid, info_lid, span_pack_to_here(p, span_start))
 }
 
 fn parse_match_expr(p: Parser) -> i64 {
+    let span_start: i64 = peek(p).span_start;
     let _kw: bool = expect(p, tok_kw_match());
     let scrutinee: i64 = parse_expr(p);
     let _lb: bool = expect(p, tok_lbrace());
@@ -1084,8 +1093,9 @@ fn parse_match_expr(p: Parser) -> i64 {
         let pat: i64 = parse_pattern(p);
         let _fa: bool = expect(p, tok_fat_arrow());
         let body: i64 = if at(p, tok_lbrace()) {
+            let arm_start: i64 = peek(p).span_start;
             let bid: i64 = parse_block(p);
-            arena_add_expr(p.arena, EXPR_BLOCK(), bid, 0, 0, 0)
+            arena_add_expr(p.arena, EXPR_BLOCK(), bid, 0, 0, span_pack_to_here(p, arm_start))
         } else {
             parse_expr(p)
         };
@@ -1099,7 +1109,7 @@ fn parse_match_expr(p: Parser) -> i64 {
     }
     let _rb: bool = expect(p, tok_rbrace());
     let arms_lid: i64 = arena_add_list(p.arena, arm_items);
-    arena_add_expr(p.arena, EXPR_MATCH(), scrutinee, arms_lid, 0, 0)
+    arena_add_expr(p.arena, EXPR_MATCH(), scrutinee, arms_lid, 0, span_pack_to_here(p, span_start))
 }
 
 fn parse_pattern(p: Parser) -> i64 {

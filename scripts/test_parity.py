@@ -405,6 +405,66 @@ class CompareErrorCharacterizationTest(unittest.TestCase):
         self.assertEqual(["rust has no diagnostics", "self has no diagnostics"], errors)
 
 
+class CompareErrorSpanParityTest(unittest.TestCase):
+    @staticmethod
+    def failed(offset, length, code="TautologicalComparison"):
+        return document(
+            "CompileFailed",
+            diagnostics=[
+                {"error_code": code, "span": {"offset": offset, "length": length}}
+            ],
+        )
+
+    def compare(self, rust, self_hosted, fixture_name):
+        return parity.compare_error(rust, self_hosted, 1, 1, fixture_name)
+
+    def test_dropped_location_fails(self):
+        errors = self.compare(self.failed(365, 14), self.failed(0, 0), "other.vow")
+
+        self.assertEqual(
+            [
+                "span: self reports no location for "
+                "[('TautologicalComparison', 365, 14)]"
+            ],
+            errors,
+        )
+
+    def test_differing_nonzero_anchor_passes_outside_the_strict_list(self):
+        self.assertEqual(
+            [], self.compare(self.failed(365, 14), self.failed(364, 15), "other.vow")
+        )
+
+    def test_strict_fixture_requires_identical_offset_and_length(self):
+        name = "tautological_u64_ge_zero.vow"
+
+        errors = self.compare(self.failed(365, 14), self.failed(364, 15), name)
+
+        self.assertEqual(1, len(errors))
+        self.assertTrue(errors[0].startswith("span: "))
+        self.assertEqual(
+            [], self.compare(self.failed(365, 14), self.failed(365, 14), name)
+        )
+
+    def test_tracked_fixture_still_dropping_its_location_passes(self):
+        self.assertEqual(
+            [],
+            self.compare(self.failed(48, 25), self.failed(0, 0), "missing_module.vow"),
+        )
+
+    def test_tracked_fixture_that_now_has_a_location_fails(self):
+        errors = self.compare(
+            self.failed(48, 25), self.failed(48, 25), "missing_module.vow"
+        )
+
+        self.assertEqual(1, len(errors))
+        self.assertIn("SPANLESS_SELF_FIXTURES", errors[0])
+
+    def test_spans_are_not_compared_without_a_fixture(self):
+        self.assertEqual(
+            [], parity.compare_error(self.failed(1, 2), self.failed(0, 0), 1, 1)
+        )
+
+
 class CompareTestTest(unittest.TestCase):
     @staticmethod
     def entry(name, **fields):
