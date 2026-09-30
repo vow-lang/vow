@@ -3125,6 +3125,14 @@ the structured diagnostics documented under [Runtime Errors](errors.md#runtime-e
 | `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
 | `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
+`source.offset` anchors differently depending on where the clause comes from: for a
+clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte
+offset of the clause keyword, not the predicate expression, in both compilers. For a
+parameter's inline `where` refinement (also reported as `kind: "requires"`), the Rust
+compiler anchors on the byte offset of the parameter name; the self-hosted compiler does
+not yet track a parameter-name span and anchors on the refinement predicate expression
+instead.
+
 ### Status Values
 
 | Status          | Meaning                                              |
@@ -3663,6 +3671,14 @@ A counterexample in the JSON output:
 | `vow_id`    | Function-local ID linking to the specific vow clause            |
 | `source`    | Byte offset in the source file of the violated clause           |
 | `blame`     | Whether the caller, callee, or neither party is responsible     |
+
+`source.offset` anchors differently depending on where the clause comes from: for a
+clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte
+offset of the clause keyword, not the predicate expression, in both compilers. For a
+parameter's inline `where` refinement (also reported as `kind: "requires"`), the Rust
+compiler anchors on the byte offset of the parameter name; the self-hosted compiler does
+not yet track a parameter-name span and anchors on the refinement predicate expression
+instead.
 
 When caller code violates a callee's `requires` clause, `violation` and
 `vow_id` identify the callee clause. `call_sites` points back to the caller
@@ -8361,6 +8377,14 @@ the structured diagnostics documented under [Runtime Errors](errors.md#runtime-e
 | `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
 | `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
+`source.offset` anchors differently depending on where the clause comes from: for a
+clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte
+offset of the clause keyword, not the predicate expression, in both compilers. For a
+parameter's inline `where` refinement (also reported as `kind: "requires"`), the Rust
+compiler anchors on the byte offset of the parameter name; the self-hosted compiler does
+not yet track a parameter-name span and anchors on the refinement predicate expression
+instead.
+
 ### Status Values
 
 | Status          | Meaning                                              |
@@ -8900,6 +8924,14 @@ A counterexample in the JSON output:
 | `vow_id`    | Function-local ID linking to the specific vow clause            |
 | `source`    | Byte offset in the source file of the violated clause           |
 | `blame`     | Whether the caller, callee, or neither party is responsible     |
+
+`source.offset` anchors differently depending on where the clause comes from: for a
+clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte
+offset of the clause keyword, not the predicate expression, in both compilers. For a
+parameter's inline `where` refinement (also reported as `kind: "requires"`), the Rust
+compiler anchors on the byte offset of the parameter name; the self-hosted compiler does
+not yet track a parameter-name span and anchors on the refinement predicate expression
+instead.
 
 When caller code violates a callee's `requires` clause, `violation` and
 `vow_id` identify the callee clause. `call_sites` points back to the caller
