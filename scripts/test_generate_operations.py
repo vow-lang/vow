@@ -8,6 +8,8 @@ scripts/test_check_help_coverage.py uses for generate_help.py's siblings),
 plus the real docs/spec/operations.json catalogue for the end-to-end cases.
 """
 
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -238,6 +240,17 @@ class LoadCatalogueTest(unittest.TestCase):
             self.assertIn("print_str", str(ctx.exception))
             self.assertIn("duplicate", str(ctx.exception).lower())
 
+    def test_duplicate_runtime_symbol_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            other = dict(PRINT_OPS[1])
+            other["runtime_symbol"] = PRINT_OPS[0]["runtime_symbol"]
+            self._write(tmp, [PRINT_OPS[0], other])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn(PRINT_OPS[0]["runtime_symbol"], str(ctx.exception))
+            self.assertIn("duplicate", str(ctx.exception).lower())
+
     def test_unknown_return_token_raises(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
@@ -279,6 +292,306 @@ class LoadCatalogueTest(unittest.TestCase):
                 go.load_catalogue(tmp)
             self.assertIn("print_str", str(ctx.exception))
             self.assertIn("params", str(ctx.exception))
+
+    def test_effects_unknown_token_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            bad["effects"] = "[frobnicate]"
+            self._write(tmp, [bad])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("frobnicate", str(ctx.exception))
+
+    def test_effects_malformed_bracket_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            bad["effects"] = "io"
+            self._write(tmp, [bad])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("effects", str(ctx.exception))
+
+    def test_effects_trailing_comma_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            bad["effects"] = "[io,]"
+            self._write(tmp, [bad])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("effects", str(ctx.exception))
+
+    def test_effects_unsorted_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            bad["effects"] = "[write, read]"
+            self._write(tmp, [bad])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("effects", str(ctx.exception))
+
+    def test_effects_all_observed_real_values_parse_clean(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            ops = []
+            for i, eff in enumerate(["[]", "[io]", "[read]", "[write]"]):
+                op = dict(PRINT_OPS[0])
+                op["name"] = f"op_{i}"
+                op["runtime_symbol"] = f"__vow_op_{i}"
+                op["effects"] = eff
+                ops.append(op)
+            self._write(tmp, ops)
+            go.load_catalogue(tmp)  # must not raise
+
+    def test_effects_multi_token_sorted_parses_clean(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            op = dict(PRINT_OPS[0])
+            op["effects"] = "[read, write]"
+            self._write(tmp, [op])
+            go.load_catalogue(tmp)  # must not raise
+
+    def test_doc_signature_arity_mismatch_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            self.assertEqual(bad["params"], ["ptr"])
+            bad["doc_signature"] = "fn() -> ()"
+            self._write(tmp, [bad])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("print_str", str(ctx.exception))
+            self.assertIn("doc_signature", str(ctx.exception))
+
+    def test_doc_signature_type_mismatch_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            self.assertEqual(bad["params"], ["ptr"])
+            bad["doc_signature"] = "fn(s: i64) -> ()"
+            self._write(tmp, [bad])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("print_str", str(ctx.exception))
+            self.assertIn("doc_signature", str(ctx.exception))
+
+    def test_doc_signature_return_type_mismatch_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            self.assertEqual(bad["return"], "unit")
+            bad["doc_signature"] = "fn(s: String) -> i64"
+            self._write(tmp, [bad])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("print_str", str(ctx.exception))
+            self.assertIn("doc_signature", str(ctx.exception))
+
+    def test_doc_signature_missing_arrow_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            bad["doc_signature"] = "fn(s: String)"
+            self._write(tmp, [bad])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("print_str", str(ctx.exception))
+            self.assertIn("doc_signature", str(ctx.exception))
+
+    def test_doc_signature_vec_return_matches_ptr_token(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            op = dict(PRINT_OPS[0])
+            op["params"] = []
+            op["return"] = "ptr"
+            op["doc_signature"] = "fn() -> Vec<String>"
+            self._write(tmp, [op])
+            go.load_catalogue(tmp)  # must not raise
+
+    def test_doc_signature_bool_return_matches_bool_token(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            op = dict(PRINT_OPS[0])
+            op["params"] = []
+            op["return"] = "bool"
+            op["doc_signature"] = "fn() -> bool"
+            self._write(tmp, [op])
+            go.load_catalogue(tmp)  # must not raise
+
+    def test_unknown_verifier_model_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            bad["verifier_model"] = "nonsense"
+            self._write(tmp, [bad])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("nonsense", str(ctx.exception))
+            self.assertIn("verifier_model", str(ctx.exception))
+
+    def test_known_verifier_model_values_parse_clean(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            ops = []
+            for i, val in enumerate(["known", "unmodeled"]):
+                op = dict(PRINT_OPS[0])
+                op["name"] = f"op_{i}"
+                op["runtime_symbol"] = f"__vow_op_{i}"
+                op["verifier_model"] = val
+                ops.append(op)
+            self._write(tmp, ops)
+            go.load_catalogue(tmp)  # must not raise
+
+    def test_unknown_arena_routing_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            bad["arena_routing"] = "nonsense"
+            self._write(tmp, [bad])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("nonsense", str(ctx.exception))
+            self.assertIn("arena_routing", str(ctx.exception))
+
+    def test_known_arena_routing_values_parse_clean(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            ops = []
+            for i, val in enumerate(["none", "heap_fresh"]):
+                op = dict(PRINT_OPS[0])
+                op["name"] = f"op_{i}"
+                op["runtime_symbol"] = f"__vow_op_{i}"
+                op["arena_routing"] = val
+                ops.append(op)
+            self._write(tmp, ops)
+            go.load_catalogue(tmp)  # must not raise
+
+    def test_unexpected_field_name_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            bad["bogus_field"] = "whatever"
+            self._write(tmp, [bad])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("bogus_field", str(ctx.exception))
+
+    def test_misspelled_optional_field_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            bad["verifer_model"] = "known"
+            self._write(tmp, [bad])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("verifer_model", str(ctx.exception))
+
+    def test_multiple_violations_all_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            dup_name = dict(PRINT_OPS[0])
+            bad_effects = dict(PRINT_OPS[1])
+            bad_effects["effects"] = "[frobnicate]"
+            bad_arity = dict(PRINT_OPS[2])
+            bad_arity["doc_signature"] = "fn() -> ()"
+            self._write(tmp, [PRINT_OPS[0], dup_name, bad_effects, bad_arity])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            message = str(ctx.exception)
+            self.assertIn("duplicate operation name 'print_str'", message)
+            self.assertIn("frobnicate", message)
+            self.assertIn("doc_signature", message)
+            self.assertIn("print_u64", message)
+
+    def test_missing_field_does_not_crash_dependent_checks(self):
+        # A missing 'params' must not reach the doc_signature arity check
+        # and raise a raw TypeError -- it must stop at the clean, collected
+        # "missing required field" message for that entry.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            del bad["params"]
+            self._write(tmp, [bad])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("missing required field 'params'", str(ctx.exception))
+
+
+class MainCliTest(unittest.TestCase):
+    """Exercises main() itself (the --check CLI entry point) rather than
+    load_catalogue/check_projections/check_doc_facts directly, so the CLI
+    plumbing (argv parsing, --repo-root threading) is proven end to end."""
+
+    def _write_minimal_catalogue(self, tmp: Path, ops: list) -> None:
+        spec_dir = tmp / "docs" / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        (spec_dir / "operations.json").write_text(json.dumps({"operations": ops}))
+
+    def _run_main(self, argv: list[str]):
+        old_argv = sys.argv
+        sys.argv = ["generate_operations.py"] + argv
+        try:
+            return go.main()
+        finally:
+            sys.argv = old_argv
+
+    def test_repo_root_flag_threads_through_check(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            bad["effects"] = "[frobnicate]"
+            self._write_minimal_catalogue(tmp, [bad])
+            stderr = io.StringIO()
+            with (
+                self.assertRaises(SystemExit) as ctx,
+                contextlib.redirect_stderr(stderr),
+            ):
+                self._run_main(["--check", "--repo-root", str(tmp)])
+            self.assertEqual(ctx.exception.code, 1)
+            self.assertIn("frobnicate", stderr.getvalue())
+
+    def test_repo_root_flag_defaults_to_real_repo(self):
+        # No --repo-root: main() must still validate the real, checked-in
+        # catalogue exactly as the CI/local `--check` invocation does.
+        self._run_main(["--check"])
+
+    def test_bad_catalogue_exits_cleanly_without_traceback(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            bad["effects"] = "[frobnicate]"
+            self._write_minimal_catalogue(tmp, [bad])
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with (
+                self.assertRaises(SystemExit) as ctx,
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                self._run_main(["--check", "--repo-root", str(tmp)])
+            self.assertEqual(ctx.exception.code, 1)
+            combined = stdout.getvalue() + stderr.getvalue()
+            self.assertNotIn("Traceback (most recent call last)", combined)
+            self.assertIn("frobnicate", combined)
+
+    def test_malformed_json_exits_cleanly_without_traceback(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            spec_dir = tmp / "docs" / "spec"
+            spec_dir.mkdir(parents=True, exist_ok=True)
+            (spec_dir / "operations.json").write_text("{not valid json")
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with (
+                self.assertRaises(SystemExit) as ctx,
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                self._run_main(["--check", "--repo-root", str(tmp)])
+            self.assertEqual(ctx.exception.code, 1)
+            combined = stdout.getvalue() + stderr.getvalue()
+            self.assertNotIn("Traceback (most recent call last)", combined)
 
 
 class GenRustIrBlockTest(unittest.TestCase):
@@ -672,6 +985,22 @@ class WriteAndCheckProjectionsTest(unittest.TestCase):
             (tmp / "compiler/lower.vow").write_text("no markers at all\n")
             with self.assertRaises(ValueError):
                 go.check_projections(PRINT_OPS, tmp)
+
+    def test_check_projections_reports_every_stale_target(self):
+        # A single catalogue edit (e.g. hand-editing operations.json and
+        # forgetting to regenerate) must invalidate every language
+        # projection's check in one --check run, not just one of them.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _write_target_fixtures(tmp)
+            go.write_projections(PRINT_OPS, tmp)
+            edited_ops = [dict(op) for op in PRINT_OPS]
+            edited_ops[0] = dict(edited_ops[0])
+            edited_ops[0]["runtime_symbol"] = "__vow_string_print_v2"
+            mismatches = go.check_projections(edited_ops, tmp)
+        stale_targets = " ".join(mismatches)
+        self.assertIn("mod.rs", stale_targets)
+        self.assertIn("lower.vow", stale_targets)
 
 
 if __name__ == "__main__":

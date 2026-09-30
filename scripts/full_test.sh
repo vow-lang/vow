@@ -1345,6 +1345,15 @@ if uv run python scripts/generate_help.py --check >/dev/null 2>&1; then
 else
     fail "help/skills-dir-drift" "skills/vow/ drifted from generated content; run 'uv run python scripts/generate_help.py'"
 fi
+
+# ops/catalogue-drift: confirm the Operation Catalogue's splice targets and
+# doc-fact cross-checks match docs/spec/operations.json.
+ops_catalogue_drift_log="$TMPDIR/ops_catalogue_drift.log"
+if uv run python scripts/generate_operations.py --check >"$ops_catalogue_drift_log" 2>&1; then
+    pass "ops/catalogue-drift"
+else
+    fail "ops/catalogue-drift" "$(cat "$ops_catalogue_drift_log"); run 'uv run python scripts/generate_operations.py'"
+fi
 echo ""
 
 # ─── Section 8b: Tooling Scripts ──────────────────────────────────
