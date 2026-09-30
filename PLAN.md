@@ -28,11 +28,19 @@ all of it — do not plan against the worktree's checked-out files):
   `scripts/ci_docs_only.py`'s `code` classifier. **Verified, not assumed**: `ci_docs_only.py`'s
   `is_prose()` only recognizes paths ending in `.md`; `docs/spec/operations.json` does not end in
   `.md`, so it is never classified as prose and always triggers the gated jobs. No fix needed here.
-- `scripts/full_test.sh` does **not** call `generate_operations.py` or `generate_help.py` — neither
-  does it call `check_help_coverage.py`. All three Python staleness/generator checks are CI-only
-  steps in `ci.yml`, run as siblings of `full_test.sh`, not from inside it. This is the established
-  pattern for every generator gate in this repo, not a gap specific to the Operation Catalogue —
-  treat "full_test.sh should also run this" as an anti-pattern to avoid introducing, not a fix.
+- `scripts/full_test.sh` Section 8 (~line 1328-1346) already runs
+  `uv run python scripts/check_help_coverage.py ...` (twice, Rust and self-hosted `--help`) and
+  `uv run python scripts/generate_help.py --check` as a "help/skills-dir-drift" gate, logging
+  output to a tempfile and calling `fail` with its contents on nonzero exit. **It does not run
+  `generate_operations.py --check` at all.** This is a real, verified gap, not an intentional
+  pattern: the #1270 branch has an unmerged commit (`7b5825c2`, "wire the Operation Catalogue
+  freshness gate into CI and full_test.sh") that adds exactly this — an `ops/catalogue-drift`
+  step right after the help gate, same log-and-fail shape — but the squash-merged PR that actually
+  landed #1270 (#1279) did not carry that hunk into `main`. So today a catalogue edit that goes
+  stale is caught by `ci.yml` (a GitHub Actions run) but not by a local `scripts/full_test.sh`
+  invocation, unlike every other generator gate in the file. This is this issue's to fix (see
+  slice 10) — it is squarely "projection freshness checks integrated into the normal local/CI
+  validation path."
 - `.pre-commit-config.yaml` has no project-specific script hooks (only generic ones: `check-yaml`,
   `ruff-check`/`ruff-format`, `typos`, `pydoclint`, `commitlint`). `check_help_coverage.py` isn't
   wired there either. Consistent — no gap.
@@ -84,6 +92,8 @@ dependency this plan blocks on** (see §0b):
   evidence shows the existing `doc_signature`+`effects` fields already fully derive every row/line
   `check_doc_facts` checks against (see §3, "doc-metadata" note). Touched only if slice-3
   discovers an actual mismatch in the real files.
+- `scripts/full_test.sh` — add the missing `ops/catalogue-drift` step to Section 8, mirroring the
+  adjacent "help/skills-dir-drift" step exactly (see §0, slice 10).
 - `CLAUDE.md`'s "Operation Catalogue" section — extend with one short paragraph once the new
   validation rules exist, mirroring how the section already documents `--check`'s purpose. Small,
   additive, no restructuring.
@@ -126,17 +136,18 @@ closing steps).
 ## 1. Problem restated
 
 `docs/spec/operations.json` plus `scripts/generate_operations.py` is a working, CI-gated Operation
-Catalogue: it already prevents four of the eight failure modes the issue's acceptance criteria
+Catalogue: it already prevents four of the seven failure modes the issue's acceptance criteria
 name (duplicate names, duplicate runtime symbols, bad return tokens, bad param tokens), and it
 already keeps `grammar.md`/`skill.rs`/`main.vow`'s hand-written builtin-signature prose from
 silently drifting from the catalogue. What it does not yet do: reject a catalogue entry whose
 `effects` or `doc_signature` string is malformed or uses an unrecognized token, reject an entry
 carrying an unexpected/misspelled field name (which today silently defeats any vocabulary check
 tied to that field, including the `verifier_model`/`arena_routing` checks landing on sibling
-branches), surface any of the above as a clean, actionable, non-traceback diagnostic, or report
-more than one problem per run. This issue closes those specific gaps — it does not redesign the
-catalogue's shape, generation mechanism, or splice targets, and it does not migrate any further
-Builtin Operation family.
+branches), surface any of the above as a clean, actionable, non-traceback diagnostic, report more
+than one problem per run, or catch projection staleness from a local `scripts/full_test.sh` run
+the way the analogous help/skills-dir-drift gate already does. This issue closes those specific
+gaps — it does not redesign the catalogue's shape, generation mechanism, or splice targets, and it
+does not migrate any further Builtin Operation family.
 
 ## 2. TDD slices
 
@@ -157,7 +168,7 @@ Slices are ordered so each is independently mergeable and small; none depends on
 | Actionable diagnostics | slice 5 (collect-all-errors) + slice 6 (no raw tracebacks) |
 | Schema carries doc metadata for help/spec generation | already true — see note below, no slice needed |
 | Generated help/spec tables consume or are checked against catalogue facts | already true (`check_doc_facts`) — slice 7 extends it to cover any new field/table the rebase introduces |
-| Projection freshness in normal local/CI path | already true — see §0, no slice needed |
+| Projection freshness in normal local/CI path | **real gap** — CI (`ci.yml`) has it, `full_test.sh` does not — slice 10 |
 | Invalid-fixture tests without private generator internals | slice 8 |
 | Help/spec output freshness tests for migrated ops | slice 7 |
 | Rust and self-hosted projections checked together | already true (`check_projections` walks all four `TARGET_FILES` in one call) — slice 9 adds a regression-pin test, and covers whatever fifth/sixth target #1271/#1274 add |
@@ -192,14 +203,21 @@ addition here.
 
 ### Slice 2 — Validate `effects` against a closed, ordered vocabulary
 
-- Closed vocabulary, lowercase, sourced from `vow-types/src/effects.rs`'s `Effect` enum display
-  mapping (`Read`, `Write`, `IO`, `Panic`, `Unsafe` → `read`, `write`, `io`, `panic`, `unsafe`).
-  Confirm this list against `vow-types/src/effects.rs` fresh at implementation time (do not
-  hardcode from this plan without checking — a variant could be added between now and then).
-- Grammar: `effects` must match `^\[(token(, token)*)?\]$` where each `token` is in the closed set;
-  tokens must be sorted and de-duplicated in the string as written (matches every observed value
-  today: `[]`, `[io]`, `[read]`, `[write]` are all trivially sorted single-or-empty lists — this
-  rule only becomes load-bearing once a multi-effect entry is added, which none are yet).
+- Closed vocabulary, lowercase, sourced from `vow-syntax/src/token.rs`'s effect keyword lexing
+  (`"read" => KwRead`, `"write" => KwWrite`, `"io" => KwIO`, `"panic" => KwPanic`,
+  `"unsafe" => KwUnsafe`) — the same spellings `vow-syntax/src/printer.rs` emits back out. Confirm
+  this list against `vow-syntax/src/token.rs` fresh at implementation time (do not hardcode from
+  this plan without checking — a variant could be added between now and then). Use the parser's
+  vocabulary, not `vow-types::Effect`'s `Display` impl — the catalogue's `effects` string is
+  user-facing Vow syntax (it appears verbatim in `grammar.md`), not a Rust-internal debug format.
+- Grammar: `effects` must match `^\[(token(, token)*)?\]$` where each `token` is in the closed set,
+  de-duplicated. Canonical multi-token order: `docs/spec/grammar.md` line ~60 already documents
+  two real multi-effect examples — `` `[read, write]` `` and `` `[io, panic]` `` — both happen to
+  be alphabetical; grep for that line fresh at implementation time and adopt whatever order it
+  shows as canonical (do not invent alphabetical order independently of that evidence — it's
+  currently consistent with it, but the doc line is the source of truth `check_doc_facts` compares
+  bytes against). Every observed value today (`[]`, `[io]`, `[read]`, `[write]`) is a trivial
+  single-or-empty list, so this rule is dormant until a multi-effect entry is actually added.
 - Tests: `test_effects_unknown_token_raises` (e.g. `"[frobnicate]"`), `test_effects_malformed_bracket_raises`
   (e.g. `"io"` with no brackets, `"[io,]"` trailing comma), `test_effects_unsorted_raises` (e.g.
   `"[write, read]"`), plus a positive test that all four real observed values parse clean.
@@ -262,6 +280,14 @@ addition here.
   list is non-empty. Keep the function's external contract (raises `ValueError` on any problem,
   returns the op list on success) unchanged so `main()`, `check_projections`, and `check_doc_facts`
   callers need no change beyond what slice 6 adds.
+- **Dependent-check guard**: when a required field is missing or the wrong type (e.g. `params` is
+  not a list — already checked today), skip every check in slices 2-4 that assumes that field's
+  shape for that entry, rather than letting them run against malformed data. A missing `params`
+  must not reach slice 3's arity check and raise `TypeError` instead of a clean `ValueError` — that
+  would reintroduce exactly the raw-traceback problem slice 6 removes, just one layer deeper. Each
+  new check function should take the required-fields presence/type results as a precondition and
+  no-op (not crash) when its inputs aren't shaped as expected; the pre-existing required-field/type
+  check already reports the root problem for that entry.
 
 ### Slice 6 — No raw tracebacks: `main()` catches and reports cleanly
 
@@ -301,24 +327,55 @@ addition here.
 - Add a `--repo-root PATH` flag to `main()` (default: `REPO`, i.e. no behavior change for the real
   CLI invocation used by CI/`--check`). Thread it through to `load_catalogue`/`check_projections`/
   `check_doc_facts`, all of which already take `repo_root` as a parameter.
-- Test: build a minimal fixture directory tree under a `tempfile.TemporaryDirectory()` (a
-  `docs/spec/operations.json` with a deliberate violation, plus the four/six splice-target files
-  with valid marker pairs and a minimal `grammar.md`/`skill.rs`/`main.vow`), invoke
-  `generate_operations.main()` with `sys.argv` patched to `["generate_operations.py", "--check",
-  "--repo-root", str(fixture_dir)]`, assert nonzero exit and the expected message — proving the
-  full CLI path end-to-end without reaching into `load_catalogue`/`check_projections` directly.
-- This slice's fixture-tree helper is reused by slice 6's test.
+- `load_catalogue` runs first and raises before `check_projections`/`check_doc_facts` ever read any
+  splice target. So an **invalid-catalogue** fixture (slices 1-4's CLI-level cases, and slice 6)
+  only needs a `docs/spec/operations.json` under the fixture root — no need to also build the
+  four/six target files or `grammar.md`/`skill.rs`/`main.vow` for those cases. A fixture that needs
+  the full tree (target files + docs) is only required for a **staleness** case (slice 9, where the
+  catalogue itself is valid but a projection is out of date).
+- Test: for the invalid-catalogue case, a fixture dir containing only a deliberately-violating
+  `docs/spec/operations.json`; invoke `generate_operations.main()` with `sys.argv` patched to
+  `["generate_operations.py", "--check", "--repo-root", str(fixture_dir)]`, assert nonzero exit and
+  the expected message — proving the full CLI path end-to-end without reaching into
+  `load_catalogue`/`check_projections` directly.
+- This slice's `--repo-root` flag and minimal-fixture helper are reused by slice 6's test.
 
 ### Slice 9 — Regression pin: freshness check covers all splice targets together
 
 - `check_projections` already iterates `TARGET_FILES` (four entries today, more once #1271/#1274's
   `c_emitter.rs`/`c_emitter.vow` targets land) in one call and reports every stale target, not just
-  the first. Add `test_check_projections_reports_every_stale_target` — hand-mutate two of the four
-  (or however many exist post-rebase) target files' spliced blocks in a fixture tree (reusing
-  slice 8's fixture helper), call `check_projections` once, assert both stale paths appear in the
-  returned list. This is the concrete evidence for the "Rust and self-hosted Operation Projections
-  remain generated from the same catalogue and are checked together" AC — it was already true
-  structurally; this slice is the test that pins it.
+  the first. Add `test_check_projections_reports_every_stale_target` using a fixture tree built the
+  way `write_projections` would leave it (all targets freshly spliced and matching), then edit the
+  **catalogue entry itself** — e.g. change one op's `runtime_symbol` in the fixture
+  `operations.json` — without re-running `write_projections` on the targets. This is a single
+  catalogue edit, exactly as a real drift would occur (someone hand-edits `operations.json` and
+  forgets to regenerate), rather than two independent hand-mutations of generated files, which
+  wouldn't arise from any real workflow. Call `check_projections` once and assert it reports **both**
+  the Rust IR target (`vow-ir/src/lower/mod.rs`'s block, keyed by the changed symbol) and
+  `compiler/lower.vow`'s block as stale from that one edit — this is the concrete evidence for
+  "Rust and self-hosted Operation Projections remain generated from the same catalogue and are
+  checked together": one catalogue change invalidates both language projections' checks in a single
+  `--check` run, not just one of them.
+
+### Slice 10 — Wire `generate_operations.py --check` into `full_test.sh`
+
+- §0 established this is a real, verified gap: `full_test.sh` Section 8 already runs the analogous
+  help-coverage/skills-drift gate (`check_help_coverage.py`, `generate_help.py --check`) but never
+  runs `generate_operations.py --check`, even though `ci.yml` does. An unmerged commit on the
+  #1270 branch (`7b5825c2`) already wrote the fix but it didn't survive that branch's squash-merge.
+- Production: add an `ops/catalogue-drift` step to `scripts/full_test.sh` Section 8, immediately
+  after the existing "help/skills-dir-drift" block (~line 1346), following that block's exact
+  shape: log `uv run python scripts/generate_operations.py --check` output to a `$TMPDIR` tempfile,
+  `pass "ops/catalogue-drift"` on success, `fail "ops/catalogue-drift" "$(cat "$log"); run 'uv run
+  python scripts/generate_operations.py'"` on failure. (Use the current file/function name,
+  `generate_operations.py` — the historical commit predates a rename from `generate_ops.py`.)
+- Test: this is a bash addition to a 1788-line integration-test harness, not something
+  `scripts/test_generate_operations.py` can exercise directly. Verification is running
+  `scripts/full_test.sh` locally post-change and confirming the new "ops/catalogue-drift" line
+  appears and passes against the real, clean repo state — plus a manual negative check (hand-edit
+  one generated block, confirm the step fails with the expected message, revert). Record this as a
+  manual verification step in the PR description; it does not need a new automated test of its own,
+  matching how the adjacent help/skills-dir-drift step has no dedicated test either.
 
 ## 3. Verification surface
 
@@ -376,10 +433,12 @@ temp-directory fixture tree, not under `tests/run/`.
   type-checker table is exercised by each migration slice's own type-checking tests, not by
   catalogue validation. Listed here as a legitimate follow-up if a future issue wants stronger
   parity than vocabulary-validity, not as this issue's job.
-- Adding `generate_operations.py --check` to `scripts/full_test.sh` or `.pre-commit-config.yaml` —
-  §0 confirms this would be inconsistent with how every analogous generator gate
-  (`generate_help.py`, `check_help_coverage.py`) already works in this repo: CI-only, run as a
-  sibling step to `full_test.sh`, not folded into it.
+- Adding `generate_operations.py --check` (or `test_generate_operations.py`) to
+  `.pre-commit-config.yaml` — no analogous generator check (`generate_help.py`,
+  `check_help_coverage.py`) is wired there today; adding one would be a new local-hook pattern this
+  issue shouldn't introduce unilaterally. (`full_test.sh` wiring, by contrast, is in scope — see
+  slice 10 — because the analogous help/skills-dir-drift gate already lives there and the catalogue
+  gate's absence is a verified gap relative to that existing pattern, not new ground.)
 - Fixing `scripts/ci_docs_only.py`'s classifier — §0 confirms it already correctly treats
   `docs/spec/operations.json` as code (triggers the gated CI jobs), since its prose test is
   suffix-based (`.md` only) and the JSON file doesn't match it. No change needed.
