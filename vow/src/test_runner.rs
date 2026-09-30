@@ -32,14 +32,14 @@ fn classify_pipeline_status(status: &BuildStatus) -> Option<&'static str> {
     }
 }
 
-/// Map a test binary's process exit code to its per-file test status. `Some(0)`
-/// passed, any other exit code failed, and `None` (the process was killed at the
-/// timeout deadline) is `timeout`.
-fn classify_execution_outcome(exit_code: Option<i32>) -> &'static str {
-    match exit_code {
-        Some(0) => "passed",
-        Some(_) => "failed",
-        None => "timeout",
+/// Map a test binary's outcome to its per-file test status. `Some(0)` passed,
+/// any other exit code failed, and so did a binary killed by a signal (no exit
+/// code); only a process killed at the timeout deadline is `timeout`.
+fn classify_execution_outcome(exit_code: Option<i32>, timed_out: bool) -> &'static str {
+    match (timed_out, exit_code) {
+        (true, _) => "timeout",
+        (false, Some(0)) => "passed",
+        (false, _) => "failed",
     }
 }
 
@@ -270,19 +270,14 @@ pub(crate) fn run_test_command(
             }
         };
 
-        // Execute with ulimit wrapper and timeout
+        // Execute with a timeout
         let exe_abs = std::fs::canonicalize(&exe_path).unwrap_or(exe_path.clone());
-        let child = std::process::Command::new("sh")
-            .args([
-                "-c",
-                "ulimit -v 2000000; \"$0\"",
-                &exe_abs.display().to_string(),
-            ])
+        let child = std::process::Command::new(&exe_abs)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn();
 
-        let (exit_code, stdout_str, stderr_str) = match child {
+        let (exit_code, timed_out, stdout_str, stderr_str) = match child {
             Ok(mut child) => {
                 // Take stdout/stderr handles and drain in background threads to
                 // prevent pipe buffer deadlock when tests produce >64KB output.
@@ -324,17 +319,17 @@ pub(crate) fn run_test_command(
                 let stdout = stdout_thread.join().unwrap_or_default();
                 let stderr = stderr_thread.join().unwrap_or_default();
                 match exit {
-                    Some(code) => (code, stdout, stderr),
-                    None => (None, String::new(), "timeout".to_string()),
+                    Some(code) => (code, false, stdout, stderr),
+                    None => (None, true, String::new(), "timeout".to_string()),
                 }
             }
-            Err(e) => (Some(-1), String::new(), e.to_string()),
+            Err(e) => (Some(-1), false, String::new(), e.to_string()),
         };
 
         // Clean up the produced binary
         let _ = std::fs::remove_file(&exe_path);
 
-        let status = classify_execution_outcome(exit_code);
+        let status = classify_execution_outcome(exit_code, timed_out);
 
         entries.push(TestEntry {
             file: file_str,
@@ -442,10 +437,21 @@ mod tests {
 
     #[test]
     fn classify_execution_outcome_maps_exit_codes() {
-        assert_eq!(classify_execution_outcome(Some(0)), "passed");
-        assert_eq!(classify_execution_outcome(Some(1)), "failed");
-        assert_eq!(classify_execution_outcome(Some(-1)), "failed");
-        assert_eq!(classify_execution_outcome(None), "timeout");
+        assert_eq!(classify_execution_outcome(Some(0), false), "passed");
+        assert_eq!(classify_execution_outcome(Some(1), false), "failed");
+        assert_eq!(classify_execution_outcome(Some(-1), false), "failed");
+        assert_eq!(classify_execution_outcome(None, true), "timeout");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_signal_death_is_a_failure_not_a_timeout() {
+        use std::os::unix::process::ExitStatusExt;
+
+        // Raw wait status for death by SIGABRT: no exit code at all.
+        let aborted = std::process::ExitStatus::from_raw(6);
+        assert_eq!(aborted.code(), None);
+        assert_eq!(classify_execution_outcome(aborted.code(), false), "failed");
     }
 
     #[test]

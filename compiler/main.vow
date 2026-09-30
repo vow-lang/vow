@@ -2118,12 +2118,9 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                     entries_json.push(entry);
                     failed = failed + 1;
                 } else {
-                    // Execute with ulimit wrapper
-                    let sh_args: Vec<String> = Vec::new();
-                    sh_args.push(String::from("-c"));
-                    sh_args.push(String::from("ulimit -v 2000000; \"$0\""));
-                    sh_args.push(tmp_out);
-                    let handle: i64 = process_start(String::from("sh"), sh_args);
+                    // Execute with a timeout
+                    let no_args: Vec<String> = Vec::new();
+                    let handle: i64 = process_start(tmp_out, no_args);
                     let exit_code: i64 = process_wait_timeout(handle, timeout_ms);
                     let stdout: String = {
                         if exit_code == -2 {
@@ -4964,6 +4961,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `TestsFailed`  | One or more tests failed                          |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Each test binary is run directly, with no memory limit, and is killed when `--timeout` elapses (status `timeout`). A binary that exits non-zero, or is killed by a signal, is `failed`; a signal death or a `timeout` has no `exit_code` (`null`, or omitted by the Rust compiler).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed -- a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.\n"));
     r.push_str(String::from("\n"));
@@ -10195,6 +10194,8 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `TestsFailed`  | One or more tests failed                          |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Each test binary is run directly, with no memory limit, and is killed when `--timeout` elapses (status `timeout`). A binary that exits non-zero, or is killed by a signal, is `failed`; a signal death or a `timeout` has no `exit_code` (`null`, or omitted by the Rust compiler).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed -- a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.\n"));
     r.push_str(String::from("\n"));
