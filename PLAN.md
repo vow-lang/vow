@@ -20,21 +20,53 @@ subject is a hard `LiteralOutOfRange` error. The work is a pure source-level ret
 refactor with existing tests as the safety net — it touches no compiler, no IR, no codegen, and
 no runtime code in either the Rust or self-hosted compiler.
 
+## Scope of this branch
+
+The issue is one seam but batches into ~8 independently-revertable PRs ("one PR per bullet").
+This branch implements **only slice 3, "examples, excluding `sat/` and `search.vow`"** (§3 below)
+and opens exactly one PR for it. Every other numbered slice is a **follow-up**, not work for this
+branch — do not bundle them in. PR title/body must say "Part of #1120", not "Closes #1120": a
+squash merge with "Closes" would auto-close the tracking issue with the other ~7 slices still
+outstanding.
+
+Slice 3 was chosen over the issue's own listed order (which puts `stdlib/bignum` first) because
+it is the lowest-risk entry point: no descending-loop restructure (confirmed by grepping every
+`examples/*.vow` outside `sat/` for `while .* >= 0` and bare `-1` — none found, see §3), no
+in-domain `-1` exclusion table to apply, and no `tests/multi/` mirror-file coupling to keep in
+sync in the same commit. `stdlib/bignum` (5 descending loops, sign/`Ordering` `-1` values, an
+unguarded `clen - 2` underflow to audit) is materially higher-risk and is better attempted after
+this slice validates the retype-and-delete workflow end to end, including the full
+`scripts/bootstrap.sh` + `scripts/full_test.sh` gate (~45 minutes wall-clock per slice).
+
+**Follow-up slices (not this branch, listed for the next run to pick up in this order):**
+1. `stdlib/bignum/bignum.vow` (alone — sign/`Ordering` `-1` values, 5 descending loops)
+2. `stdlib` rest (`gc.vow`, `math/vec_math.vow`, `heap/{min,max}_heap.vow`, `stack/stack.vow`,
+   `geometry/shape.vow` + their two `tests/multi/` mirrors)
+4. `examples/sat` (alone — the read-before-decrement `analyze` loop, densest file set)
+5. `benchmarks` easy+medium, then `benchmarks` hard (two PRs)
+6. `tests/run`
+7. `tests/verify*`
+8. `tests/multi` residual
+
 ## 2. Files to touch
 
 No `vow-*` crate or `compiler/*.vow` module changes — this seam is corpus-only by definition
 (blocked-by/blocks relationship in the issue confirms `compiler/` is a separate, independent seam).
-Files touched are exclusively under:
+Full seam file list below for context; **this branch touches only the bullet marked "this
+branch"** (`examples/`, excluding `sat/` and `search.vow` — see "Scope of this branch"). The rest
+are follow-up-slice files, not touched now.
 
 - `stdlib/bignum/bignum.vow` (own PR, alone)
 - `stdlib/gc/gc.vow`, `stdlib/math/vec_math.vow`, `stdlib/heap/min_heap.vow`,
   `stdlib/heap/max_heap.vow`, `stdlib/stack/stack.vow`, `stdlib/geometry/shape.vow`
   — plus their `tests/multi/` mirrors (`tests/multi/stack/stack.vow`,
   `tests/multi/geometry/shape.vow`) in the *same* commit, since they are byte-identical copies
-- `examples/*.vow` excluding `sat/*` and `search.vow` — `examples/cmdloop.vow`,
-  `examples/streaming_file/*.vow`, `examples/vec_*.vow`, `examples/map_*.vow`, and the remaining
-  ~17 files with `.len()`/index hits (exact list to be re-derived fresh at PR time — see §5 on
-  census drift)
+- **(this branch)** `examples/*.vow` excluding `sat/*` and `search.vow` — `examples/cmdloop.vow`,
+  `examples/streaming_file/*.vow`, `examples/vec_fill.vow`, `examples/sum_range.vow`,
+  `examples/map_*.vow`, and the remaining files with `.len()`/index hits (exact list to be
+  re-derived fresh at PR time — see §5 on census drift; §3 slice 3 has per-file findings for the
+  files already spot-checked during planning, including two, `vec_bounds.vow` and `bisect.vow`,
+  that turn out to need no changes at all)
 - `examples/sat/*.vow` (`solver.vow`, `types.vow`, plus the other files in that directory) — own PR
 - `benchmarks/easy/*/{reference,skeleton}.vow`, `benchmarks/medium/*/{reference,skeleton}.vow`
   (one PR), then `benchmarks/hard/*/{reference,skeleton}.vow` (second PR)
@@ -65,7 +97,17 @@ re-run the full corpus" rather than a classic red-green-refactor cycle, because 
 behavior to assert — the retype must be behavior-preserving by construction. Slices are ordered
 by risk (lowest blast-radius / most mechanical first) so early PRs validate the workflow before
 the two semantically-sensitive ones (`vec_math.vow`'s invariant rewrite, `sat/solver.vow`'s
-non-mechanical loop restructure).
+non-mechanical loop restructure). See "Scope of this branch" above: only slice 3 is implemented
+now; slices 1, 2, 4–8 are follow-ups for later runs.
+
+**Corpus-wide principle, corrected during planning (see slice 7):** `.len()` returns `i64`
+throughout Phase A — only internal locals are retyped to `u64`, never a `.len()` result or an
+exported parameter/return. Consequently the clauses this seam actually deletes are almost always
+loop `invariant`s over a genuinely-retyped local (typically `i >= 0` on a loop counter), not
+`requires`/`ensures` over a parameter or `result` — those keep their `i64` subject and their
+clause, tautological-looking or not, regardless of directory. Apply the mechanical test
+("retype, build, delete exactly what the compiler now rejects") literally per clause, not per
+file or per "this clause looks like the others we deleted."
 
 1. **`stdlib/bignum/bignum.vow`** (own PR — isolated because of the sign/`Ordering` `-1` values).
    - Before touching anything: `build/vowc verify stdlib/bignum/bignum.vow` and whatever
@@ -81,6 +123,14 @@ non-mechanical loop restructure).
    - Audit `bignum.vow:146-147`'s `chunks[clen - 1]` / `let mut i: i64 = clen - 2;` for
      underflow once `clen` is `u64` — confirm both are guarded by a `clen > 0` (or stronger) check
      before subtracting, or restructure to decrement-first if not.
+   - **Apply the `solver.vow`-style read-before-decrement check to each of the five descending
+     loops individually** (not just the one in `examples/sat`, per advisor review) — for every
+     loop, confirm whether the body indexes before or after the decrement. A loop already written
+     decrement-first (`i = i - 1; ...; use v[i]`) rewrites mechanically to the canonical
+     `while i > 0 { i = i - 1; ...; use v[i] }` idiom with no semantic change. A loop that indexes
+     *before* decrementing (`use v[i]; ...; i = i - 1`, the `solver.vow:641-650` shape) needs the
+     same hand-traced restructure-or-defer decision as slice 4's `analyze` function — do not
+     assume all five are the mechanical case just because four of them might be.
    - Compile, let `TautologicalComparison` enumerate now-dead `>= 0` clauses, delete exactly
      those. Re-run the file's `tests/` fixtures; JSON/exit code must match the captured baseline.
 
@@ -105,15 +155,57 @@ non-mechanical loop restructure).
    - Full `tests/` pass (including the `tests/multi/stack`, `tests/multi/geometry` main.vow
      builds under Section 6b of `full_test.sh`) must stay green.
 
-3. **`examples`, excluding `sat/` and `search.vow`** — `cmdloop.vow`, `streaming_file/*.vow`,
-   `vec_*.vow`, `map_*.vow`, and the rest of the ~17-file hit list (re-enumerate at PR time with
-   the issue's grep recipe: `find examples -name '*.vow' | xargs sed -E 's://.*::; s:"[^"]*":"":g'`
-   piped through the `.len()`/index/`>= 0` counts, excluding `sat/` and `search.vow`).
+3. **`examples`, excluding `sat/` and `search.vow`** — **this branch's actual scope** (see
+   "Scope of this branch" above). `cmdloop.vow`, `streaming_file/*.vow`, `vec_*.vow`, `map_*.vow`,
+   and the rest of the hit list — re-enumerate fresh at implementation time with the issue's grep
+   recipe (`find examples -name '*.vow' | xargs sed -E 's://.*::; s:"[^"]*":"":g'` piped through
+   `.len()`/index/`>= 0` counts, excluding `sat/` and `search.vow`), since the corpus has drifted
+   since the issue's census (§5).
    - `search.vow` is explicitly excluded: it is mirrored verbatim in `docs/spec/examples.md:196-215`
      and `docs/spec/grammar.md:561-567`, and its `-1` at `:10` (`break -1;`) is a true sentinel,
      out of scope (sentinel→`Option` conversion is epic track C2).
-   - Purely mechanical retype-and-delete per file; no descending-loop rewrites expected outside
-     `sat/`.
+   - Confirmed by direct grep of every `examples/*.vow` outside `sat/` for `while .* >= 0` and
+     bare `-1`: **no descending loops and no in-domain `-1` values exist in this slice.**
+     `examples/max.vow:16`'s `max_of(-1, -5)` is a plain negative literal argument to a generic
+     `max`, not a sentinel or length subject — untouched, no action needed.
+   - **Per-file scope is not uniform — apply the internals-only filter literally, file by file:**
+     - `examples/vec_bounds.vow` — confirmed by direct read: `get_element(i: i64)` has `i` as an
+       *exported parameter* with `requires: i >= 0, requires: i < 3`, and the function body has
+       no internal locals at all (just three `v.push()` calls and `v[i]`). **This file has
+       nothing to retype and nothing to delete** — it is a complete no-op under the
+       internals-only rule, not a candidate for `.len()` bridging or clause deletion.
+     - `examples/bisect.vow` — confirmed by direct read: `lo`/`hi` are parameters re-bound into
+       local `let lo: i64 = lo; let hi: i64 = hi;` shadows, with `invariant: hi - lo >= 0` over an
+       **abstract numeric range**, not a `Vec` index (there is no `Vec` in this file at all). This
+       is exactly the `benchmarks/medium/M01_binary_search` shape the issue explicitly excludes
+       under "do not retype abstract scalar parameters" — the issue only names the benchmark
+       instance, but the same exclusion applies here on the same grounds (retyping risks a
+       `Verified → unknown` regression on a range-halving invariant, and `lo`/`hi` were never
+       length-shaped to begin with). **Leave `bisect.vow` untouched**, and note in the PR body
+       that this exclusion was extended here by analogy to the benchmarks guidance.
+     - `examples/vec_fill.vow`, `examples/sum_range.vow` — confirmed by direct read: both are the
+       genuine mechanical case. `n: i64` stays a parameter (unchanged); `let mut i: i64 = 0;` is
+       a real internal loop counter, retyped to `u64`. Because `n` itself is a plain `i64`
+       parameter (not a `.len()` result), the comparison `i < n` needs a cast bridge the issue's
+       literal wording (`v.len() as u64`) doesn't cover verbatim — apply the same principle at
+       the boundary between the retyped-internal `i: u64` and the unchanged-signature `n: i64`:
+       write `i < n as u64` (and `i <= n as u64` for the surviving invariant). `invariant: i >= 0`
+       becomes `TautologicalComparison` over `u64` and is deleted; `invariant: i <= n` survives as
+       `invariant: i <= n as u64`. `ensures: result.len() == n` in `vec_fill.vow` is untouched
+       (both sides stay `i64`: `.len()`'s return type and the parameter `n`).
+     - `examples/i32_numeric_tower.vow`, `u8_numeric_tower.vow`, `cegis_broken.vow`,
+       `cegis_fixed.vow`, `where_clamp.vow`, `safemath/safemath.vow`, `safemath/stats.vow` —
+       confirmed by direct grep: every `>= 0` clause in these files is over a plain numeric
+       parameter or arithmetic result (`a`, `b`, `value`, `result` of a subtraction/sum), never a
+       length, index, or capacity. **None of these are in scope** — they demonstrate numeric-tower
+       and checked-arithmetic contracts unrelated to this seam. `safemath/stats.vow:33`'s
+       `invariant: i >= 0` is the one exception worth a closer look (a loop counter, possibly
+       length-bound) — confirm at implementation time whether `i` there indexes a `Vec`/count
+       derived from one before deciding mechanical-retype vs. leave-alone.
+   - Every other file in the hit list (`cmdloop.vow`, `streaming_file/*.vow`, `map_*.vow`, and
+     any not spot-checked above) is expected to be purely mechanical retype-and-delete — confirm
+     each against the same filter (internal length/index/capacity local → retype; parameter,
+     abstract-range local, or non-length scalar → leave alone) rather than assuming.
 
 4. **`examples/sat`** (own PR — densest, most semantics-sensitive file set: `solver.vow` alone is
    ~47 `.len()` sites, ~95 index sites, ~48 clauses).
@@ -166,32 +258,42 @@ non-mechanical loop restructure).
      trust the content).
 
 7. **`tests/verify*`** (`tests/verify/`, `tests/verify-fail/`, `tests/verify-skip/`) (own PR).
-   - The eight tautology-only fixtures need re-authoring, not deletion, because
-     `vow/src/verification.rs:222`'s `.filter(|f| !f.vows.is_empty())` means a clauseless function
-     is silently dropped from verification:
-     - `tests/verify/string_param_verify.vow` — confirmed via direct read: three functions
-       (`str_len_nonneg`, `vec_len_nonneg`, `map_len_nonneg`), each with only
-       `ensures: result >= 0` over a `.len()` result. Re-author each with a real, still-true,
-       non-tautological postcondition (candidates: relate `result` to a known input property,
-       e.g. `ensures: result == <some derivable invariant>`, or convert to an equality against a
-       second call — needs a concrete design decision at implementation time, not deferred to
-       "figure it out then"). Preserve or deliberately drop the `// TEST: category model-drift`
-       directive at `:1` — document the choice in the PR.
-     - `tests/verify-fail/string_push_str_overflow.vow` — confirmed via direct read: the comment
-       block (`:5-10`) explains the `ensures: result.len() >= 0` clause exists *purely* to make
-       `over` a verify target so the raw C-level capacity assert (blame `none`) can be exercised.
-       Re-author with a non-tautological but true `ensures` (e.g.
-       `ensures: result.len() == a.len() + b.len()` under the pre-overflow model, or whatever the
-       push_str contract should honestly state) that still makes `over` a target; keep the
-       `// TEST: counterexample-*` directives intact since Section 4c
-       (`full_test.sh` around the verify-fail loop, `~line 788`) asserts `VerifyFailed`.
-     - `tests/verify-skip/vec_of_string_skipped.vow`, `vec_of_vec_skipped.vow` — confirmed via
-       direct read: both comment blocks say the contract exists only to make the function a
-       target for the non-modelable/Skipped path (issue #505 regression). Re-author with a
-       non-tautological `ensures` that preserves the "String/Vec `get_val` result is a model
-       struct" trigger condition — the contract's truth doesn't matter for these (the function
-       is never actually verified, only classified as Skipped), but it must still compile and
-       must still not be a bare `>= 0` tautology once the subject is `u64`.
+   - **Correction from advisor review: `.len()` still returns `i64` throughout Phase A** (§6 is
+     explicit about this — the return-type flip is Phase B). A `result >= 0` or `x.len() >= 0`
+     clause is only a hard `TautologicalComparison` once its subject is actually retyped to `u64`
+     *in this same PR*. The issue's own mechanical test ("retype, build, delete exactly the
+     clauses the compiler now rejects, and leave every clause that still compiles alone") governs
+     here as everywhere else in this seam — it is not overridden by the "fixtures whose only
+     contract is the tautology" checklist, which is a **guardrail against deleting these clauses
+     by mistake**, not a mandate to re-author them now.
+   - Re-derive, per fixture, whether it actually contains an internal local that gets retyped to
+     `u64` in this PR. For the four fixtures the issue flags as tautology-only:
+     - `tests/verify/string_param_verify.vow` — confirmed via direct read: `str_len_nonneg`,
+       `vec_len_nonneg`, `map_len_nonneg` each consist of a single `s.len()`/`v.len()`/`m.len()`
+       expression as the function body, with **no internal locals to retype at all**. The
+       `ensures: result >= 0` clause's subject is `result: i64` (the unchanged exported return
+       type), so it still compiles unchanged after this PR. **Leave it exactly as-is; do not
+       re-author.** Flag it in the PR body as deferred to Phase B (when `.len()`'s return type
+       itself flips and `result` becomes genuinely `u64`-typed).
+     - `tests/verify-fail/string_push_str_overflow.vow` — same reasoning: `ensures:
+       result.len() >= 0`'s subject is `result.len(): i64`, and the function has no retyped
+       internal local. **Leave it untouched**, deferred to Phase B.
+     - `tests/verify-skip/vec_of_string_skipped.vow`, `vec_of_vec_skipped.vow` — same reasoning:
+       `ensures: result >= 0` is over `first_word_len`'s `i64` return, no internal `u64` local
+       introduced. **Leave both untouched**, deferred to Phase B.
+   - In short: for this directory, expect the retype-and-delete mechanism to fire almost
+     entirely on loop `invariant`s over genuinely-retyped locals (the general pattern noted in
+     §3's intro), not on `requires`/`ensures` over parameters or return values — those stay `i64`
+     everywhere in this seam by construction, so their `>= 0` clauses, tautological-looking or
+     not, are untouched here regardless of which fixture they're in.
+   - `tests/verify/string_matches_literal_at.vow:6-7` — **also corrected**: `requires:
+     s.len() >= 2` and `requires: pos <= s.len() - 2` both have `.len()`-derived subjects that
+     stay `i64` in Phase A (no internal local retyped in this function), so **neither clause
+     changes in this PR** — the original plan's claim that `s.len()`'s subject "becomes
+     `u64`-typed" was wrong. Keep both; this note is now informational only (no action), retained
+     so a future Phase B implementer knows `pos <= s.len() - 2` is load-bearing for `pos`'s
+     underflow safety and must not be dropped as "redundant" with `s.len() >= 2` once these
+     become live retype targets.
    - `tests/verify/postcondition_correct.vow`, `tests/verify-fail/missing_precondition.vow`,
      `tests/verify-fail/cegis_broken.vow`, `tests/verify-fail/caller_requires_unchecked.vow` —
      confirmed via direct read: all four have plain `i64` scalar subjects (`x`, `y`, `n`), not
@@ -274,14 +376,16 @@ must confirm, per file:
   silently changes which trail literal is treated as a conflict pivot, which is a correctness bug
   in a SAT solver that a passing test suite may not catch if the existing `examples/sat` fixtures
   don't exercise the specific backtrack path affected.
-- **The eight tautology-only `tests/verify*` fixtures (slice 7) require a genuine design
-  decision per fixture**, not a mechanical rule — "replace `>= 0` with some other true clause" is
-  underspecified until the implementer picks the actual replacement predicate. Get this wrong
-  (e.g. pick a replacement that's *also* somehow tautological, or one that changes which vow-id
-  is the verify target) and the fixture silently stops testing what it was meant to test, with no
-  compiler error to catch it — CI would stay green while the regression test for issue #505 (or
-  whichever issue the fixture protects) goes dark. Cross-check the replacement contract against
-  the file's own explanatory comment before finalizing.
+- **Misreading "Phase A" as "`.len()` already returns `u64`" is the single easiest mistake in
+  this seam**, and this plan made it once during drafting (original slice 7, corrected above
+  after advisor review) before verifying against §6 and the issue's own Phase-A rule statement.
+  The four "tautology-only" `tests/verify*` fixtures and `string_matches_literal_at.vow` turned
+  out to need **no changes at all** in this seam — their subjects are parameters/`result` of
+  unchanged exported signatures, which stay `i64` by construction, so their clauses still compile
+  and must be left alone per the mechanical test. Any slice touching a `requires`/`ensures` (as
+  opposed to a loop `invariant`) should treat that as a signal to double check the subject is
+  actually an internal local being retyped in *this* PR, not assume it qualifies because it looks
+  similar to a deleted `invariant`.
 - **`bignum.vow`'s sign/Ordering `-1` values and `examples/sat/types.vow`'s `VAL_FALSE = -1`** are
   easy to mis-migrate if an implementer greps for `-1` and retypes mechanically rather than
   reading the exclusion table first. No compiler error catches this either (a `-1` sign assigned
