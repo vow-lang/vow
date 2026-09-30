@@ -186,6 +186,19 @@ same marker convention `scripts/generate_help.py` uses for `// GENERATE:SKILL_*`
 `compiler/main.vow`/`vow/src/skill.rs` are **checked against** the catalogue (not generated from it) —
 `--check` fails if any drift.
 
+`load_catalogue` hand-validates every entry beyond the four fields' presence and type: `effects` must
+match `^\[(token(, token)*)?\]$` against the closed, alphabetically-sorted vocabulary
+`{read, write, io, panic, unsafe}`; `doc_signature` must parse as `fn(...) -> Type` with arity and
+per-parameter/return types matching `params`/`return` (`String`/`Vec<...>` both denote `ptr`); the
+optional `verifier_model` (`known`/`unmodeled`) and `arena_routing` (`none`/`heap_fresh`) fields, when
+present, must be in their closed sets; and any field name not in the recognized set (required or
+optional) is rejected outright, so a misspelled field can never silently defeat its own check. All
+violations across all entries are collected and reported together, not just the first. `main()` never
+lets a bad catalogue surface as a raw Python traceback — a malformed `operations.json` or a rejected
+entry prints a clean message to stderr and exits 1. `scripts/full_test.sh` runs
+`generate_operations.py --check` as its `ops/catalogue-drift` gate (Section 8), alongside CI's
+`ci.yml` step, so staleness is caught locally too, not only on push.
+
 Follow-up issues (#1271–#1275) extend this same catalogue with more operation groups; they should add
 entries and target files to the existing generator rather than inventing a new mechanism.
 
