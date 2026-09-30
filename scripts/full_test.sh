@@ -1522,18 +1522,13 @@ if r_quality != expected:
     errors.append(f'rust summary.quality {r_quality} != expected {expected}')
 # Pin the anchor decision itself: the byte at offset must start the clause
 # keyword (e.g. b'requires:'), not land inside the predicate expression.
-for function, kind, quality, offset in r_tuples:
-    needle = (kind + ':').encode()
-    if not fixture_bytes[offset:].startswith(needle):
-        errors.append(
-            f'{function}/{kind}: rust offset {offset} does not start with {needle!r}'
-        )
-for function, kind, quality, offset in s_tuples:
-    needle = (kind + ':').encode()
-    if not fixture_bytes[offset:].startswith(needle):
-        errors.append(
-            f'{function}/{kind}: self-hosted offset {offset} does not start with {needle!r}'
-        )
+for label, clause_tuples in (('rust', r_tuples), ('self-hosted', s_tuples)):
+    for function, kind, quality, offset in clause_tuples:
+        needle = (kind + ':').encode()
+        if not fixture_bytes[offset:].startswith(needle):
+            errors.append(
+                f'{function}/{kind}: {label} offset {offset} does not start with {needle!r}'
+            )
 print('; '.join(errors) if errors else 'OK')
 " "$rust_quality_json" "$self_quality_json" "$quality_fixture" 2>&1) || parity_result="checker error: $parity_result"
     if [ "$parity_result" = "OK" ]; then
