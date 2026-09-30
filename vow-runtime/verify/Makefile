@@ -21,10 +21,11 @@ ESBMC ?= esbmc
 #   8.3.0   ~290 MiB
 #   8.5.0   ~585 MiB
 #
-# All fit inside the 2 GB ulimit that scripts/verify_arena.sh enforces, but
-# the trend is not in one direction, so the headroom cannot be assumed. That
-# is what the CI run guards (#546, #747) -- and why the ESBMC pin is one of
-# the paths that forces the arena proof to re-run, per scripts/ci_docs_only.py.
+# All fit inside 2 GB (scripts/verify_arena.sh enforces that when
+# VOW_ULIMIT_KB=2000000 is set), but the trend is not in one direction, so the
+# headroom cannot be assumed. That is what the CI run watches (#546, #747) --
+# and why the ESBMC pin is one of the paths that forces the arena proof to
+# re-run, per scripts/ci_docs_only.py.
 # The pin itself lives in .github/actions/install-esbmc/action.yml.
 UNWIND ?= 5
 SOLVER_FLAGS ?= --boolector
