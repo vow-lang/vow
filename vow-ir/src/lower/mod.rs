@@ -37,6 +37,12 @@ fn catalogue_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         _ => None,
     }
 }
+
+fn catalogue_builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
+    match name {
+        _ => None,
+    }
+}
 // GENERATE:OPERATIONS:END
 
 fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {

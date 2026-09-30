@@ -121,6 +121,24 @@ class LoadCatalogueTest(unittest.TestCase):
             self.assertIn("print_str", str(ctx.exception))
             self.assertIn("params", str(ctx.exception))
 
+    def test_unknown_arena_routing_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = dict(PRINT_OPS[0])
+            bad["arena_routing"] = "nonsense"
+            self._write(tmp, [bad])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("nonsense", str(ctx.exception))
+
+    def test_arena_routing_is_optional(self):
+        # PRINT_OPS carries no arena_routing field at all -- it must not be
+        # required, since only heap-returning ops need to set it.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            self._write(tmp, [PRINT_OPS[0]])
+            go.load_catalogue(tmp)  # must not raise
+
 
 class GenRustIrBlockTest(unittest.TestCase):
     def test_matches_expected_rustfmt_canonical_text(self):
@@ -131,6 +149,12 @@ class GenRustIrBlockTest(unittest.TestCase):
             '        "print_str" => Some(("__vow_string_print", Ty::Unit)),\n'
             '        "print_i64" => Some(("__vow_print_i64", Ty::Unit)),\n'
             '        "print_u64" => Some(("__vow_print_u64", Ty::Unit)),\n'
+            "        _ => None,\n"
+            "    }\n"
+            "}\n"
+            "\n"
+            "fn catalogue_builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {\n"
+            "    match name {\n"
             "        _ => None,\n"
             "    }\n"
             "}\n"
@@ -152,6 +176,23 @@ class GenRustIrBlockTest(unittest.TestCase):
             f'"{ptr_op["name"]}" => Some(("{ptr_op["runtime_symbol"]}", Ty::Ptr)),',
             block,
         )
+
+    def test_arena_routing_heap_fresh_produces_string_heap_arm(self):
+        op = dict(PRINT_OPS[1])
+        op["arena_routing"] = "heap_fresh"
+        block = go.gen_rust_ir_block([op])
+        self.assertIn(f'"{op["name"]}" => Some(BuiltinResultTag::StringHeap),', block)
+
+    def test_arena_routing_none_produces_no_string_heap_arm(self):
+        op = dict(PRINT_OPS[1])
+        op["arena_routing"] = "none"
+        block = go.gen_rust_ir_block([op])
+        self.assertNotIn("BuiltinResultTag::StringHeap", block)
+        self.assertIn("fn catalogue_builtin_result_tag", block)
+
+    def test_missing_arena_routing_produces_no_string_heap_arm(self):
+        block = go.gen_rust_ir_block([PRINT_OPS[1]])
+        self.assertNotIn("BuiltinResultTag::StringHeap", block)
 
 
 class GenCraneliftBlockTest(unittest.TestCase):
@@ -232,6 +273,10 @@ class GenVowLowerBlockTest(unittest.TestCase):
             '    if name == String::from("print_u64") { return ITY_UNIT(); }\n'
             "    return -1;\n"
             "}\n"
+            "\n"
+            "fn catalogue_builtin_result_tag(name: String) -> i64 {\n"
+            "    return BRT_NONE();\n"
+            "}\n"
             "// GENERATE:OPERATIONS:END"
         )
         self.assertEqual(go.gen_vow_lower_block(PRINT_OPS), expected)
@@ -250,6 +295,26 @@ class GenVowLowerBlockTest(unittest.TestCase):
             f'if name == String::from("{ptr_op["name"]}") {{ return ITY_PTR(); }}',
             block,
         )
+
+    def test_arena_routing_heap_fresh_produces_brt_string_arm(self):
+        op = dict(PRINT_OPS[1])
+        op["arena_routing"] = "heap_fresh"
+        block = go.gen_vow_lower_block([op])
+        self.assertIn(
+            f'if name == String::from("{op["name"]}") {{ return BRT_STRING(); }}',
+            block,
+        )
+
+    def test_arena_routing_none_produces_no_brt_string_arm(self):
+        op = dict(PRINT_OPS[1])
+        op["arena_routing"] = "none"
+        block = go.gen_vow_lower_block([op])
+        self.assertNotIn("BRT_STRING()", block)
+        self.assertIn("fn catalogue_builtin_result_tag", block)
+
+    def test_missing_arena_routing_produces_no_brt_string_arm(self):
+        block = go.gen_vow_lower_block([PRINT_OPS[1]])
+        self.assertNotIn("BRT_STRING()", block)
 
 
 class GeneratorDeterminismTest(unittest.TestCase):

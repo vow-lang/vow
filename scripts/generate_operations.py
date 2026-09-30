@@ -50,6 +50,12 @@ REQUIRED_FIELDS = [
     "effects",
 ]
 
+# Optional per-op arena-routing classification, consumed by
+# catalogue_builtin_result_tag() -- "heap_fresh" means the op returns a
+# freshly heap-allocated String that pin_to_root/arena tracking must tag;
+# "none" (or omitting the field) means no tagging is needed.
+ARENA_ROUTINGS = {"none", "heap_fresh"}
+
 
 def load_catalogue(repo_root: Path) -> list[dict]:
     """Read and hand-validate docs/spec/operations.json under repo_root.
@@ -104,6 +110,12 @@ def load_catalogue(repo_root: Path) -> list[dict]:
                     f"(known: {sorted(PARAM_TOKENS)})"
                 )
 
+        if "arena_routing" in op and op["arena_routing"] not in ARENA_ROUTINGS:
+            raise ValueError(
+                f"operation '{name}' has unknown arena_routing "
+                f"'{op['arena_routing']}' (known: {sorted(ARENA_ROUTINGS)})"
+            )
+
     return ops
 
 
@@ -123,10 +135,23 @@ def gen_rust_ir_block(ops: list[dict]) -> str:
         f"{RETURN_TOKENS[op['return']]['rust_ty']})),"
         for op in ops
     )
+    tag_arms = "\n".join(
+        f'        "{op["name"]}" => Some(BuiltinResultTag::StringHeap),'
+        for op in ops
+        if op.get("arena_routing") == "heap_fresh"
+    )
+    tag_arms_block = f"{tag_arms}\n" if tag_arms else ""
     return _wrap_marker_block(
         "fn catalogue_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {\n"
         "    match name {\n"
         f"{arms}\n"
+        "        _ => None,\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "fn catalogue_builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {\n"
+        "    match name {\n"
+        f"{tag_arms_block}"
         "        _ => None,\n"
         "    }\n"
         "}\n"
@@ -168,6 +193,12 @@ def gen_vow_lower_block(ops: list[dict]) -> str:
         f"{{ return {RETURN_TOKENS[op['return']]['ity_const']}; }}"
         for op in ops
     )
+    tag_arms = "\n".join(
+        f'    if name == String::from("{op["name"]}") {{ return BRT_STRING(); }}'
+        for op in ops
+        if op.get("arena_routing") == "heap_fresh"
+    )
+    tag_arms_block = f"{tag_arms}\n" if tag_arms else ""
     return _wrap_marker_block(
         "fn catalogue_builtin_to_extern(name: String) -> String {\n"
         f"{extern_arms}\n"
@@ -177,6 +208,11 @@ def gen_vow_lower_block(ops: list[dict]) -> str:
         "fn catalogue_builtin_ret_ty(name: String) -> i64 {\n"
         f"{ret_ty_arms}\n"
         "    return -1;\n"
+        "}\n"
+        "\n"
+        "fn catalogue_builtin_result_tag(name: String) -> i64 {\n"
+        f"{tag_arms_block}"
+        "    return BRT_NONE();\n"
         "}\n"
     )
 

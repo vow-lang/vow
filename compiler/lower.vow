@@ -1711,6 +1711,10 @@ fn catalogue_builtin_ret_ty(name: String) -> i64 {
     if name == String::from("print_u64") { return ITY_UNIT(); }
     return -1;
 }
+
+fn catalogue_builtin_result_tag(name: String) -> i64 {
+    return BRT_NONE();
+}
 // GENERATE:OPERATIONS:END
 
 fn builtin_to_extern(name: String) -> String {
