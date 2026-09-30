@@ -985,7 +985,7 @@ fn verify_function_multi_property(esbmc_bin: String, f: IrFunction, m: IrModule,
 // Map a single contract clause to its status string from a `--multi-property`
 // run's per-claim verdicts, falling back to the function's overall outcome
 // when ESBMC did not report the clause individually. Mirrors
-// resolve_clause_status in vow/src/contracts.rs:88-106.
+// resolve_clause_status in vow/src/contracts.rs.
 //
 // The per-claim verdict wins when present (1 -> proven, 0 -> failed).
 // Otherwise the fallback mirrors the fail-closed status set: every non-proven
