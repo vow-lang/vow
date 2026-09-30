@@ -1510,6 +1510,8 @@ fn BRT_STRING() -> i64 { -2 }
 fn BRT_VEC() -> i64 { -3 }
 
 fn builtin_result_tag(name: String) -> i64 {
+    let cat: i64 = catalogue_builtin_result_tag(name);
+    if cat != BRT_NONE() { return cat; }
     if name == String::from("fs_read") || name == String::from("fs_read_line") ||
        name == String::from("stdin_read") || name == String::from("stdin_read_line") ||
        name == String::from("string_substr") || name == String::from("string_trim") ||
@@ -1517,9 +1519,7 @@ fn builtin_result_tag(name: String) -> i64 {
        name == String::from("string_replace") || name == String::from("string_join") ||
        name == String::from("int_to_string") || name == String::from("uint_to_string") ||
        name == String::from("i64_to_string") || name == String::from("hex_encode") ||
-       name == String::from("format_f64_bits") || name == String::from("process_get_stdout") ||
-       name == String::from("process_get_stderr") || name == String::from("process_stdout_for") ||
-       name == String::from("process_stderr_for") || name == String::from("proc_sample") {
+       name == String::from("format_f64_bits") || name == String::from("proc_sample") {
         return BRT_STRING();
     }
     if name == String::from("args") || name == String::from("fs_listdir") ||
@@ -1834,17 +1834,6 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("stdin_read") { return String::from("__vow_stdin_read"); }
     if name == String::from("stdin_read_line") { return String::from("__vow_stdin_read_line"); }
     if name == String::from("stdin_ready") { return String::from("__vow_stdin_ready"); }
-    if name == String::from("process_exit") { return String::from("__vow_process_exit"); }
-    if name == String::from("process_run") { return String::from("__vow_process_run"); }
-    if name == String::from("process_get_stdout") { return String::from("__vow_process_get_stdout"); }
-    if name == String::from("process_get_stderr") { return String::from("__vow_process_get_stderr"); }
-    if name == String::from("process_start") { return String::from("__vow_process_start"); }
-    if name == String::from("process_wait") { return String::from("__vow_process_wait"); }
-    if name == String::from("process_wait_timeout") { return String::from("__vow_process_wait_timeout"); }
-    if name == String::from("process_poll_wait") { return String::from("__vow_process_poll_wait"); }
-    if name == String::from("process_kill") { return String::from("__vow_process_kill"); }
-    if name == String::from("process_stdout_for") { return String::from("__vow_process_stdout_for"); }
-    if name == String::from("process_stderr_for") { return String::from("__vow_process_stderr_for"); }
     if new_narrow_intrinsic_target(name) != -1 {
         let ext: String = String::from("__vow_");
         ext.push_str(name);
@@ -1939,17 +1928,6 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("stdin_read") { return ITY_PTR(); }
     if name == String::from("stdin_read_line") { return ITY_PTR(); }
     if name == String::from("stdin_ready") { return ITY_BOOL(); }
-    if name == String::from("process_exit") { return ITY_UNIT(); }
-    if name == String::from("process_run") { return ITY_I64(); }
-    if name == String::from("process_get_stdout") { return ITY_PTR(); }
-    if name == String::from("process_get_stderr") { return ITY_PTR(); }
-    if name == String::from("process_start") { return ITY_I64(); }
-    if name == String::from("process_wait") { return ITY_I64(); }
-    if name == String::from("process_wait_timeout") { return ITY_I64(); }
-    if name == String::from("process_poll_wait") { return ITY_I64(); }
-    if name == String::from("process_kill") { return ITY_I64(); }
-    if name == String::from("process_stdout_for") { return ITY_PTR(); }
-    if name == String::from("process_stderr_for") { return ITY_PTR(); }
     ITY_UNIT()
 }
 

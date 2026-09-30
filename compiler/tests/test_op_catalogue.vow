@@ -1,0 +1,74 @@
+module TestOpCatalogue
+
+use ast
+use ir
+use lower
+
+fn expect_extern(name: String, want: String, code: i64) -> i64 {
+    if builtin_to_extern(name) != want { return code; }
+    0
+}
+
+fn expect_ret_ty(name: String, want: i64, code: i64) -> i64 {
+    if builtin_ret_ty(name) != want { return code; }
+    0
+}
+
+fn check_print_ops() -> i64 {
+    let mut r: i64 = expect_extern(String::from("print_str"), String::from("__vow_string_print"), 1);
+    if r == 0 { r = expect_extern(String::from("print_i64"), String::from("__vow_print_i64"), 2); }
+    if r == 0 { r = expect_extern(String::from("print_u64"), String::from("__vow_print_u64"), 3); }
+    if r == 0 { r = expect_ret_ty(String::from("print_str"), ITY_UNIT(), 4); }
+    if r == 0 { r = expect_ret_ty(String::from("print_i64"), ITY_UNIT(), 5); }
+    if r == 0 { r = expect_ret_ty(String::from("print_u64"), ITY_UNIT(), 6); }
+    r
+}
+
+fn check_process_externs() -> i64 {
+    let mut r: i64 = expect_extern(String::from("process_exit"), String::from("__vow_process_exit"), 10);
+    if r == 0 { r = expect_extern(String::from("process_run"), String::from("__vow_process_run"), 11); }
+    if r == 0 { r = expect_extern(String::from("process_get_stdout"), String::from("__vow_process_get_stdout"), 12); }
+    if r == 0 { r = expect_extern(String::from("process_get_stderr"), String::from("__vow_process_get_stderr"), 13); }
+    if r == 0 { r = expect_extern(String::from("process_start"), String::from("__vow_process_start"), 14); }
+    if r == 0 { r = expect_extern(String::from("process_wait"), String::from("__vow_process_wait"), 15); }
+    if r == 0 { r = expect_extern(String::from("process_wait_timeout"), String::from("__vow_process_wait_timeout"), 16); }
+    if r == 0 { r = expect_extern(String::from("process_poll_wait"), String::from("__vow_process_poll_wait"), 17); }
+    if r == 0 { r = expect_extern(String::from("process_kill"), String::from("__vow_process_kill"), 18); }
+    if r == 0 { r = expect_extern(String::from("process_stdout_for"), String::from("__vow_process_stdout_for"), 19); }
+    if r == 0 { r = expect_extern(String::from("process_stderr_for"), String::from("__vow_process_stderr_for"), 20); }
+    r
+}
+
+fn check_process_ret_tys() -> i64 {
+    let mut r: i64 = expect_ret_ty(String::from("process_exit"), ITY_UNIT(), 30);
+    if r == 0 { r = expect_ret_ty(String::from("process_run"), ITY_I64(), 31); }
+    if r == 0 { r = expect_ret_ty(String::from("process_get_stdout"), ITY_PTR(), 32); }
+    if r == 0 { r = expect_ret_ty(String::from("process_get_stderr"), ITY_PTR(), 33); }
+    if r == 0 { r = expect_ret_ty(String::from("process_start"), ITY_I64(), 34); }
+    if r == 0 { r = expect_ret_ty(String::from("process_wait"), ITY_I64(), 35); }
+    if r == 0 { r = expect_ret_ty(String::from("process_wait_timeout"), ITY_I64(), 36); }
+    if r == 0 { r = expect_ret_ty(String::from("process_poll_wait"), ITY_I64(), 37); }
+    if r == 0 { r = expect_ret_ty(String::from("process_kill"), ITY_I64(), 38); }
+    if r == 0 { r = expect_ret_ty(String::from("process_stdout_for"), ITY_PTR(), 39); }
+    if r == 0 { r = expect_ret_ty(String::from("process_stderr_for"), ITY_PTR(), 40); }
+    r
+}
+
+fn check_process_result_tags() -> i64 {
+    let mut r: i64 = 0;
+    if builtin_result_tag(String::from("process_get_stdout")) != BRT_STRING() { r = 50; }
+    if r == 0 && builtin_result_tag(String::from("process_get_stderr")) != BRT_STRING() { r = 51; }
+    if r == 0 && builtin_result_tag(String::from("process_stdout_for")) != BRT_STRING() { r = 52; }
+    if r == 0 && builtin_result_tag(String::from("process_stderr_for")) != BRT_STRING() { r = 53; }
+    if r == 0 && builtin_result_tag(String::from("process_exit")) != BRT_NONE() { r = 54; }
+    if r == 0 && builtin_result_tag(String::from("process_run")) != BRT_NONE() { r = 55; }
+    r
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_print_ops();
+    if r == 0 { r = check_process_externs(); }
+    if r == 0 { r = check_process_ret_tys(); }
+    if r == 0 { r = check_process_result_tags(); }
+    i64_to_i32_wrap(r)
+}
