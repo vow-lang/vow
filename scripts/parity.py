@@ -27,8 +27,58 @@ KNOWN_CEX_COUNT_DIVERGENCE = re.compile(
 # message can never silently disable a suppression.
 VALUES_LABEL = "values"
 ERROR_CODES_LABEL = "error codes"
+SPAN_LABEL = "span"
 COUNTEREXAMPLE_COUNT_LABEL = "counterexamples count"
 ESBMC_INTERNAL_VALUE_PREFIX = "$esbmc$"
+
+# Fixtures whose diagnostic spans must match the Rust compiler's exactly. The
+# two front ends anchor some checks on different nodes (e.g. an assignment vs
+# its left-hand side), so corpus-wide equality would pin unrelated checker
+# differences; every other fixture is only checked for a dropped location.
+STRICT_SPAN_FIXTURES = frozenset(
+    {
+        "tautological_u64_ge_zero.vow",
+        "tautological_cast_ge_zero.vow",
+        "i8_literal_below_range.vow",
+        "u8_literal_out_of_range.vow",
+        "i32_narrowing_cast.vow",
+        "u8_shift_out_of_range.vow",
+        "i8_negative_shift_count.vow",
+        "break_outside_loop.vow",
+        "continue_outside_loop.vow",
+        "i32_u64_if.vow",
+        "i32_u64_break.vow",
+        "i32_u64_return.vow",
+        "u64_i64_return.vow",
+        "match_bool_literal_pattern.vow",
+        "index_type_bool.vow",
+        "int_suffix_usize.vow",
+        "i128_match_literal_out_of_range.vow",
+        "let_tuple_arity_mismatch.vow",
+    }
+)
+# Fixtures on which the self-hosted compiler still reports offset 0, length 0
+# for a diagnostic the Rust compiler locates. Tracked by #1353; an entry that
+# stops dropping its location fails until it is removed.
+SPANLESS_SELF_FIXTURES = frozenset(
+    {
+        "linear_alias_option_payload_duplicate.vow",
+        "linear_empty_variant_phi_duplicate.vow",
+        "linear_enum_payload_duplicate.vow",
+        "linear_for_mutation_phi_leak.vow",
+        "linear_if_mutation_phi_leak.vow",
+        "linear_loop_mutation_phi_leak.vow",
+        "linear_match_mutation_phi_leak.vow",
+        "linear_match_payload_partial_duplicate.vow",
+        "linear_match_payload_return_after_consume.vow",
+        "linear_option_payload_duplicate.vow",
+        "linear_while_mutation_phi_leak.vow",
+        "missing_module.vow",
+        "missing_module_symbol_reference.vow",
+        "string_literal_field_branch_overwrite.vow",
+        "string_literal_field_mutation.vow",
+    }
+)
 
 # `vow test`'s authoritative output contract. Read back out of the schema
 # rather than restated so a field added there is compared by this blocking
@@ -280,7 +330,67 @@ def compare_json(rust, self_hosted, rust_exit, self_exit):
     return errors
 
 
-def compare_error(rust, self_hosted, rust_exit, self_exit):
+def _spans_by_code(diagnostics):
+    """Each diagnostic's (offset, length), ordered by error code then position."""
+    spans = []
+    for diagnostic in diagnostics:
+        span = diagnostic.get("span") or {}
+        spans.append(
+            (
+                diagnostic.get("error_code", ""),
+                span.get("offset", 0),
+                span.get("length", 0),
+            )
+        )
+    return sorted(spans)
+
+
+def _dropped_spans(rust_diagnostics, self_diagnostics):
+    """Located Rust diagnostics whose self-hosted counterpart has no location.
+
+    A self-hosted diagnostic at offset 0, length 0 is a dropped location. It is
+    charged to a Rust diagnostic with no located self-hosted twin of the same
+    code, so the two sides may disagree on codes and counts and the drop is
+    still seen.
+    """
+    self_spans = _spans_by_code(self_diagnostics)
+    spanless = sum(1 for _, offset, length in self_spans if offset == 0 and length == 0)
+    if not spanless:
+        return []
+    located_twins = Counter(
+        code for code, offset, length in self_spans if offset or length
+    )
+    unmatched = []
+    for code, offset, length in _spans_by_code(rust_diagnostics):
+        if length == 0:
+            continue
+        if located_twins[code] > 0:
+            located_twins[code] -= 1
+        else:
+            unmatched.append((code, offset, length))
+    return unmatched[:spanless]
+
+
+def _span_errors(rust_diagnostics, self_diagnostics, fixture_name):
+    """Span parity: strict on the curated fixtures, drop-detection elsewhere."""
+    if fixture_name in STRICT_SPAN_FIXTURES:
+        return _mismatch(
+            SPAN_LABEL,
+            _spans_by_code(rust_diagnostics),
+            _spans_by_code(self_diagnostics),
+        )
+    dropped = _dropped_spans(rust_diagnostics, self_diagnostics)
+    if dropped and fixture_name not in SPANLESS_SELF_FIXTURES:
+        return [f"{SPAN_LABEL}: self reports no location for {dropped}"]
+    if not dropped and fixture_name in SPANLESS_SELF_FIXTURES:
+        return [
+            f"{SPAN_LABEL}: {fixture_name} no longer drops its location — "
+            "remove it from SPANLESS_SELF_FIXTURES"
+        ]
+    return []
+
+
+def compare_error(rust, self_hosted, rust_exit, self_exit, fixture_name=None):
     """Return parity errors for an invocation expected to fail compilation."""
     errors = []
     if rust_exit == 0:
@@ -299,6 +409,12 @@ def compare_error(rust, self_hosted, rust_exit, self_exit):
         _error_codes(rust.get("diagnostics", [])),
         _error_codes(self_hosted.get("diagnostics", [])),
     )
+    if fixture_name is not None:
+        errors += _span_errors(
+            rust.get("diagnostics", []),
+            self_hosted.get("diagnostics", []),
+            fixture_name,
+        )
     return errors
 
 
@@ -618,7 +734,10 @@ def main(argv=None):
             print(f"FAIL: fixture read error: {error}")
             return 1
     else:
-        errors = compare_error(rust, self_hosted, int(rust_exit), int(self_exit))
+        fixture_name = Path(fixture_path).name if fixture_path else None
+        errors = compare_error(
+            rust, self_hosted, int(rust_exit), int(self_exit), fixture_name
+        )
         verdict = _ledger_verdict(rust, self_hosted, errors, fixture_path)
 
     if verdict is not None:

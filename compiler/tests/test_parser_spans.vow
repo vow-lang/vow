@@ -1,0 +1,197 @@
+module TestParserSpans
+
+use lexer
+use token
+use ast
+use diag
+use parser
+
+// Every parser-created expression and type node must carry a span covering
+// exactly its own source text (#1135). Failures return a distinct exit code:
+// 1 parse error, 2 a span-less node, 10+ expression case, 50+ type case,
+// 60+ error recovery, 70+ offsets past 64 KiB.
+
+fn add_line(s: String, line: String) {
+    s.push_str(line);
+    s.push_str(String::from("\n"));
+}
+
+fn source() -> String {
+    let s: String = String::from("");
+    add_line(s, String::from("module SpanProbe"));
+    add_line(s, String::from("fn probe(a: i64, b: bool, v: [i64], t: (i64, i64), r: &i64, g: Vec<i64>) -> i64 vow {"));
+    add_line(s, String::from("    ensures: result >= 0"));
+    add_line(s, String::from("} {"));
+    add_line(s, String::from("    let n: i64 = -a;"));
+    add_line(s, String::from("    let m: bool = !b;"));
+    add_line(s, String::from("    let c: i64 = a as i64;"));
+    add_line(s, String::from("    let w: u64 = 5u64;"));
+    add_line(s, String::from("    let big: i128 = 7i128;"));
+    add_line(s, String::from("    let f: f64 = 1.5;"));
+    add_line(s, String::from("    let z: bool = true;"));
+    add_line(s, String::from("    let u: () = ();"));
+    add_line(s, String::from("    let mut i: i64 = 0;"));
+    add_line(s, String::from("    while i < 3 { i = i + 1; }"));
+    add_line(s, String::from("    loop { break; }"));
+    add_line(s, String::from("    let lv: i64 = loop { break 1; };"));
+    add_line(s, String::from("    for x in v { continue; }"));
+    add_line(s, String::from("    let r2: i64 = if b { 1 } else { 2 };"));
+    add_line(s, String::from("    let q: i64 = match a { 0 => { 1 }, _ => 2 };"));
+    add_line(s, String::from("    { let k: i64 = 1; }"));
+    add_line(s, String::from("    let tp: (i64, i64) = (a, i);"));
+    add_line(s, String::from("    return i;"));
+    add_line(s, String::from("}"));
+    add_line(s, String::from("fn stop() -> ! { loop { } }"));
+    add_line(s, String::from("fn unit_return() -> () { return; }"));
+    add_line(s, String::from("fn main() -> i32 { 0 }"));
+    s
+}
+
+// Padding comments push the function past offset 65535, where the packed span
+// stops fitting the old 16-bit start slot.
+fn far_source() -> String {
+    let s: String = String::from("module Far\n");
+    let mut k: i64 = 0;
+    while k < 1000 {
+        add_line(s, String::from("// 0123456789012345678901234567890123456789012345678901234567890123456789"));
+        k = k + 1;
+    }
+    add_line(s, String::from("fn f(a: i64) -> i64 { let n: i64 = -a; n }"));
+    add_line(s, String::from("fn main() -> i32 { 0 }"));
+    s
+}
+
+fn expr_total(a: AstArena) -> i64 { (a.expr_data.len() / 5) as i64 }
+fn type_total(a: AstArena) -> i64 { (a.type_data.len() / 4) as i64 }
+
+fn span_text(src: String, span: i64) -> String {
+    let start: i64 = span_unpack_start(span);
+    src.substring(start, start + span_unpack_len(span))
+}
+
+fn spanless_node_count(a: AstArena) -> i64 {
+    let mut count: i64 = 0;
+    let mut eid: i64 = 0;
+    let n_exprs: i64 = expr_total(a);
+    while eid < n_exprs {
+        if expr_span(a, eid) == 0 { count = count + 1; }
+        eid = eid + 1;
+    }
+    let mut tid: i64 = 0;
+    let n_types: i64 = type_total(a);
+    while tid < n_types {
+        if type_span(a, tid) == 0 { count = count + 1; }
+        tid = tid + 1;
+    }
+    count
+}
+
+fn has_expr_text(a: AstArena, src: String, tag: i64, want: String) -> bool {
+    let n_exprs: i64 = expr_total(a);
+    let mut eid: i64 = 0;
+    while eid < n_exprs {
+        if expr_tag(a, eid) == tag && span_text(src, expr_span(a, eid)) == want { return true; }
+        eid = eid + 1;
+    }
+    false
+}
+
+fn has_type_text(a: AstArena, src: String, want: String) -> bool {
+    let n_types: i64 = type_total(a);
+    let mut tid: i64 = 0;
+    while tid < n_types {
+        if span_text(src, type_span(a, tid)) == want { return true; }
+        tid = tid + 1;
+    }
+    false
+}
+
+fn add_case(tags: Vec<i64>, wants: Vec<String>, tag: i64, want: String) {
+    tags.push(tag);
+    wants.push(want);
+}
+
+fn check_probe() -> i32 {
+    let src: String = source();
+    let arena: AstArena = arena_new();
+    let dctx: DiagCtx = diag_ctx_new();
+    let _parsed: Module = parse_module_into(lex(src), arena, dctx, String::from("spans.vow"));
+    if dctx.error_count != 0 { return 1; }
+    if spanless_node_count(arena) != 0 { return 2; }
+
+    let tags: Vec<i64> = Vec::new();
+    let wants: Vec<String> = Vec::new();
+    add_case(tags, wants, EXPR_UNOP(), String::from("-a"));
+    add_case(tags, wants, EXPR_UNOP(), String::from("!b"));
+    add_case(tags, wants, EXPR_CAST(), String::from("a as i64"));
+    add_case(tags, wants, EXPR_CAST(), String::from("5u64"));
+    add_case(tags, wants, EXPR_CAST(), String::from("7i128"));
+    add_case(tags, wants, EXPR_LIT_INT(), String::from("5u64"));
+    add_case(tags, wants, EXPR_LIT_FLOAT(), String::from("1.5"));
+    add_case(tags, wants, EXPR_LIT_BOOL(), String::from("true"));
+    add_case(tags, wants, EXPR_RESULT(), String::from("result"));
+    add_case(tags, wants, EXPR_IDENT(), String::from("a"));
+    add_case(tags, wants, EXPR_RETURN(), String::from("return i"));
+    add_case(tags, wants, EXPR_RETURN(), String::from("return"));
+    add_case(tags, wants, EXPR_BREAK(), String::from("break"));
+    add_case(tags, wants, EXPR_BREAK(), String::from("break 1"));
+    add_case(tags, wants, EXPR_CONTINUE(), String::from("continue"));
+    add_case(tags, wants, EXPR_BLOCK(), String::from("{ 2 }"));
+    add_case(tags, wants, EXPR_BLOCK(), String::from("{ 1 }"));
+    add_case(tags, wants, EXPR_BLOCK(), String::from("{ let k: i64 = 1; }"));
+    add_case(tags, wants, EXPR_TUPLE(), String::from("()"));
+    add_case(tags, wants, EXPR_TUPLE(), String::from("(a, i)"));
+    add_case(tags, wants, EXPR_IF(), String::from("if b { 1 } else { 2 }"));
+    add_case(tags, wants, EXPR_WHILE(), String::from("while i < 3 { i = i + 1; }"));
+    add_case(tags, wants, EXPR_LOOP(), String::from("loop { break; }"));
+    add_case(tags, wants, EXPR_FOR(), String::from("for x in v { continue; }"));
+    add_case(tags, wants, EXPR_MATCH(), String::from("match a { 0 => { 1 }, _ => 2 }"));
+    let mut i: i64 = 0;
+    while i < tags.len() {
+        if !has_expr_text(arena, src, tags[i], wants[i]) { return 10 + i64_to_i32_wrap(i); }
+        i = i + 1;
+    }
+
+    let types: Vec<String> = Vec::new();
+    types.push(String::from("[i64]"));
+    types.push(String::from("(i64, i64)"));
+    types.push(String::from("()"));
+    types.push(String::from("!"));
+    types.push(String::from("&i64"));
+    types.push(String::from("Vec<i64>"));
+    types.push(String::from("5u64"));
+    let mut j: i64 = 0;
+    while j < types.len() {
+        if !has_type_text(arena, src, types[j]) { return 50 + i64_to_i32_wrap(j); }
+        j = j + 1;
+    }
+    0
+}
+
+fn check_error_recovery() -> i32 {
+    let src: String = String::from("module Bad\nfn f() -> i64 { let x: i64 = ); x }\n");
+    let arena: AstArena = arena_new();
+    let dctx: DiagCtx = diag_ctx_new();
+    let _parsed: Module = parse_module_into(lex(src), arena, dctx, String::from("bad.vow"));
+    if dctx.error_count == 0 { return 60; }
+    if !has_expr_text(arena, src, EXPR_LIT_INT(), String::from(")")) { return 61; }
+    0
+}
+
+fn check_far_offsets() -> i32 {
+    let src: String = far_source();
+    let arena: AstArena = arena_new();
+    let dctx: DiagCtx = diag_ctx_new();
+    let _parsed: Module = parse_module_into(lex(src), arena, dctx, String::from("far.vow"));
+    if dctx.error_count != 0 { return 70; }
+    if !has_expr_text(arena, src, EXPR_UNOP(), String::from("-a")) { return 71; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let probe: i32 = check_probe();
+    if probe != 0 { return probe; }
+    let recovery: i32 = check_error_recovery();
+    if recovery != 0 { return recovery; }
+    check_far_offsets()
+}

@@ -17,8 +17,10 @@ input — the compiler's own source. It says nothing about any construct the
 compiler's source never uses.
 
 `full_test.sh` covers more over a fixed corpus. It compares diagnostic
-error-code/blame multisets and source-level counterexample values, but sweeps
-neither `benchmarks/` nor `stdlib/` uniformly. The first full-corpus
+error-code/blame multisets, diagnostic spans (exactly on the fixtures in
+`STRICT_SPAN_FIXTURES`, and for a dropped location everywhere else), and
+source-level counterexample values, but sweeps neither `benchmarks/` nor
+`stdlib/` uniformly. The first full-corpus
 differential sweep found a total miscompile of Euclid's algorithm in
 `benchmarks/medium/M13_gcd` that both guards had sailed past for the entire
 life of the benchmark suite.
