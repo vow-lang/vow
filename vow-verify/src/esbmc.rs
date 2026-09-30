@@ -917,7 +917,9 @@ fn classify_esbmc_output(combined: &str) -> VerificationResult {
         VerificationResult::Unknown {
             reason: memory_limit_reason(),
         }
-    } else if combined.contains("VERIFICATION SUCCESSFUL") || combined.contains("VERIFICATION UNKNOWN") {
+    } else if combined.contains("VERIFICATION SUCCESSFUL")
+        || combined.contains("VERIFICATION UNKNOWN")
+    {
         VerificationResult::Unknown {
             reason: parse_unknown_reason(combined),
         }
