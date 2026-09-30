@@ -102,11 +102,10 @@ fn expect_ident_or_keyword(p: Parser) -> i64 {
 fn span_pack(start: i64, len: i64) -> i64 vow {
     requires: start >= 0,
     requires: len >= 0,
-    requires: start < 140737488355328,
     requires: len < 65536,
     ensures: result == start * 65536 + len
 } {
-    start * 65536 + len
+    start *! 65536 +! len
 }
 
 fn span_end_here(p: Parser) -> i64 {
