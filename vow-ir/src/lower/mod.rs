@@ -34,17 +34,6 @@ fn catalogue_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "print_str" => Some(("__vow_string_print", Ty::Unit)),
         "print_i64" => Some(("__vow_print_i64", Ty::Unit)),
         "print_u64" => Some(("__vow_print_u64", Ty::Unit)),
-        _ => None,
-    }
-}
-// GENERATE:OPERATIONS:END
-
-fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
-    if let Some(hit) = catalogue_builtin_to_runtime(name) {
-        return Some(hit);
-    }
-    match name {
-        "eprintln_str" => Some(("__vow_eprintln_str", Ty::Unit)),
         "fs_read" => Some(("__vow_fs_read", Ty::Ptr)),
         "fs_open" => Some(("__vow_fs_open", Ty::I64)),
         "fs_read_line" => Some(("__vow_fs_read_line", Ty::Ptr)),
@@ -59,6 +48,21 @@ fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "fs_is_dir" => Some(("__vow_fs_is_dir", Ty::I64)),
         "fs_is_symlink" => Some(("__vow_fs_is_symlink", Ty::I64)),
         "fs_rename" => Some(("__vow_fs_rename", Ty::I64)),
+        "args" => Some(("__vow_args", Ty::Ptr)),
+        "stdin_read" => Some(("__vow_stdin_read", Ty::Ptr)),
+        "stdin_read_line" => Some(("__vow_stdin_read_line", Ty::Ptr)),
+        "stdin_ready" => Some(("__vow_stdin_ready", Ty::Bool)),
+        "eprintln_str" => Some(("__vow_eprintln_str", Ty::Unit)),
+        _ => None,
+    }
+}
+// GENERATE:OPERATIONS:END
+
+fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
+    if let Some(hit) = catalogue_builtin_to_runtime(name) {
+        return Some(hit);
+    }
+    match name {
         "string_substr" => Some(("__vow_string_substr", Ty::Ptr)),
         "string_split" => Some(("__vow_string_split", Ty::Ptr)),
         "string_starts_with" => Some(("__vow_string_starts_with", Ty::I64)),
@@ -127,10 +131,6 @@ fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "hex_decode" => Some(("__vow_hex_decode", Ty::Ptr)),
         "parse_f64_bits" => Some(("__vow_parse_f64_bits", Ty::U64)),
         "format_f64_bits" => Some(("__vow_format_f64_bits", Ty::Ptr)),
-        "args" => Some(("__vow_args", Ty::Ptr)),
-        "stdin_read" => Some(("__vow_stdin_read", Ty::Ptr)),
-        "stdin_read_line" => Some(("__vow_stdin_read_line", Ty::Ptr)),
-        "stdin_ready" => Some(("__vow_stdin_ready", Ty::Bool)),
         "process_exit" => Some(("__vow_process_exit", Ty::Unit)),
         "process_run" => Some(("__vow_process_run", Ty::I64)),
         "process_get_stdout" => Some(("__vow_process_get_stdout", Ty::Ptr)),

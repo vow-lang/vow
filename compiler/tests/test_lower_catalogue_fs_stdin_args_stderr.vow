@@ -1,0 +1,75 @@
+module TestLowerCatalogueFsStdinArgsStderr
+
+use ast
+use ir
+use lower
+
+// Parity check for the 19 filesystem/stdin/args/stderr operations migrated
+// to the Operation Catalogue (docs/spec/operations.json) in #1272: pins
+// builtin_to_extern/builtin_ret_ty's observable behavior regardless of
+// whether the answer comes from the generated catalogue_* block or a
+// hand-written arm.
+
+fn expect_extern(name: String, want: String, code: i64) -> i64 {
+    if builtin_to_extern(name) != want { return code; }
+    0
+}
+
+fn expect_ret_ty(name: String, want: i64, code: i64) -> i64 {
+    if builtin_ret_ty(name) != want { return code; }
+    0
+}
+
+fn check_extern_symbols() -> i64 {
+    let mut r: i64 = expect_extern(String::from("fs_read"), String::from("__vow_fs_read"), 1);
+    if r == 0 { r = expect_extern(String::from("fs_open"), String::from("__vow_fs_open"), 2); }
+    if r == 0 { r = expect_extern(String::from("fs_read_line"), String::from("__vow_fs_read_line"), 3); }
+    if r == 0 { r = expect_extern(String::from("fs_status"), String::from("__vow_fs_status"), 4); }
+    if r == 0 { r = expect_extern(String::from("fs_close"), String::from("__vow_fs_close"), 5); }
+    if r == 0 { r = expect_extern(String::from("fs_write"), String::from("__vow_fs_write"), 6); }
+    if r == 0 { r = expect_extern(String::from("fs_exists"), String::from("__vow_fs_exists"), 7); }
+    if r == 0 { r = expect_extern(String::from("fs_mkdir"), String::from("__vow_fs_mkdir"), 8); }
+    if r == 0 { r = expect_extern(String::from("fs_listdir"), String::from("__vow_fs_listdir"), 9); }
+    if r == 0 { r = expect_extern(String::from("fs_remove"), String::from("__vow_fs_remove"), 10); }
+    if r == 0 { r = expect_extern(String::from("fs_remove_dir"), String::from("__vow_fs_remove_dir"), 11); }
+    if r == 0 { r = expect_extern(String::from("fs_is_dir"), String::from("__vow_fs_is_dir"), 12); }
+    if r == 0 { r = expect_extern(String::from("fs_is_symlink"), String::from("__vow_fs_is_symlink"), 13); }
+    if r == 0 { r = expect_extern(String::from("fs_rename"), String::from("__vow_fs_rename"), 14); }
+    if r == 0 { r = expect_extern(String::from("args"), String::from("__vow_args"), 15); }
+    if r == 0 { r = expect_extern(String::from("stdin_read"), String::from("__vow_stdin_read"), 16); }
+    if r == 0 { r = expect_extern(String::from("stdin_read_line"), String::from("__vow_stdin_read_line"), 17); }
+    if r == 0 { r = expect_extern(String::from("stdin_ready"), String::from("__vow_stdin_ready"), 18); }
+    if r == 0 { r = expect_extern(String::from("eprintln_str"), String::from("__vow_eprintln_str"), 19); }
+    r
+}
+
+fn check_ret_tys() -> i64 {
+    let mut r: i64 = expect_ret_ty(String::from("fs_read"), ITY_PTR(), 20);
+    if r == 0 { r = expect_ret_ty(String::from("fs_open"), ITY_I64(), 21); }
+    if r == 0 { r = expect_ret_ty(String::from("fs_read_line"), ITY_PTR(), 22); }
+    if r == 0 { r = expect_ret_ty(String::from("fs_status"), ITY_I64(), 23); }
+    if r == 0 { r = expect_ret_ty(String::from("fs_close"), ITY_I64(), 24); }
+    if r == 0 { r = expect_ret_ty(String::from("fs_write"), ITY_I64(), 25); }
+    if r == 0 { r = expect_ret_ty(String::from("fs_exists"), ITY_I64(), 26); }
+    if r == 0 { r = expect_ret_ty(String::from("fs_mkdir"), ITY_I64(), 27); }
+    if r == 0 { r = expect_ret_ty(String::from("fs_listdir"), ITY_PTR(), 28); }
+    if r == 0 { r = expect_ret_ty(String::from("fs_remove"), ITY_I64(), 29); }
+    if r == 0 { r = expect_ret_ty(String::from("fs_remove_dir"), ITY_I64(), 30); }
+    if r == 0 { r = expect_ret_ty(String::from("fs_is_dir"), ITY_I64(), 31); }
+    if r == 0 { r = expect_ret_ty(String::from("fs_is_symlink"), ITY_I64(), 32); }
+    if r == 0 { r = expect_ret_ty(String::from("fs_rename"), ITY_I64(), 33); }
+    // stdin_ready is the one operation in this family whose Vow surface type
+    // (bool) is not the ABI's raw i64 -- pin it separately from its siblings.
+    if r == 0 { r = expect_ret_ty(String::from("args"), ITY_PTR(), 34); }
+    if r == 0 { r = expect_ret_ty(String::from("stdin_read"), ITY_PTR(), 35); }
+    if r == 0 { r = expect_ret_ty(String::from("stdin_read_line"), ITY_PTR(), 36); }
+    if r == 0 { r = expect_ret_ty(String::from("stdin_ready"), ITY_BOOL(), 37); }
+    if r == 0 { r = expect_ret_ty(String::from("eprintln_str"), ITY_UNIT(), 38); }
+    r
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_extern_symbols();
+    if r == 0 { r = check_ret_tys(); }
+    i64_to_i32_wrap(r)
+}
