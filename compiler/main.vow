@@ -14031,15 +14031,7 @@ fn skill_install_dir(root: String) -> String {
 fn skill_parent_dir(path: String) -> String {
     match str_rfind_byte(path, 47) {
         Option::None => String::from(""),
-        Option::Some(k) => {
-            let parent: String = String::new();
-            let mut i: u64 = 0u64;
-            while i < k {
-                parent.push_byte(path.byte_at(i));
-                i = i + 1;
-            }
-            parent
-        },
+        Option::Some(k) => path.substring(0, k as i64),
     }
 }
 
