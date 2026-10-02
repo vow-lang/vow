@@ -34,7 +34,7 @@ fn gc_new() -> GcHeap {
 fn gc_alloc(h: GcHeap, val: i64) -> i64 {
     let fl: Vec<i64> = h.free_list;
     if fl.len() > 0 {
-        let idx: u64 = fl.len() as u64 - 1;
+        let idx: u64 = (fl.len() as u64) - 1;
         let slot: i64 = fl[idx];
         fl.pop();
         let vals: Vec<i64> = h.values;
@@ -159,7 +159,7 @@ fn gc_collect(h: GcHeap) -> i64 {
     let rt: Vec<i64> = h.ref_to;
     let elen: u64 = rf.len() as u64;
     while wl.len() > 0 {
-        let last_idx: u64 = wl.len() as u64 - 1;
+        let last_idx: u64 = (wl.len() as u64) - 1;
         let obj: i64 = wl[last_idx];
         wl.pop();
 
