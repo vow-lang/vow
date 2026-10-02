@@ -206,11 +206,18 @@ a run re-reviews only **changed** pairs and reports the rest as explicitly
 skipped. For the corpus it records which files have ever diverged, so a
 regression is distinguishable from a new finding.
 
-Pair rows are written atomically by `pair_review.py --update-ledger --date
-<YYYY-MM-DD>` after a complete, error-free equivalence review. A deferred or
-errored pair keeps its prior hash and date, forcing the next run to revisit it.
-The harness preserves the corpus rows and confirmed issue numbers; operators
-still add issue and promoted-fixture metadata during triage.
+Pair rows are written by `pair_review.py --update-ledger --date <YYYY-MM-DD>`
+after a complete, error-free equivalence review. The writeback re-reads the
+file and merges into its current content, not the copy loaded before the
+(minutes-long) review ran, and detects an edit landing after that re-read —
+e.g. a human hand-editing the git-tracked JSON — retrying the merge against
+the fresh content instead of discarding it. The final rename is still atomic,
+but the merge itself is not a full transaction: a sliver between the last
+comparison and the rename remains, narrowed from the whole review to one
+stat-then-read. A deferred or errored pair keeps its prior hash and date,
+forcing the next run to revisit it. The harness preserves the corpus rows and
+confirmed issue numbers; operators still add issue and promoted-fixture
+metadata during triage.
 
 Schema: see `ledger.schema.json`.
 
