@@ -5,13 +5,12 @@ fn find_min_idx(v: Vec<i64>) -> i64 vow {
   ensures: result >= 0,
   ensures: result < v.len()
 } {
-  let mut min_idx: i64 = 0;
-  let mut i: i64 = 1;
-  while i < v.len() vow {
-    invariant: min_idx >= 0,
-    invariant: min_idx < v.len(),
+  let mut min_idx: u64 = 0;
+  let mut i: u64 = 1;
+  while i < v.len() as u64 vow {
+    invariant: min_idx < v.len() as u64,
     invariant: i >= 1,
-    invariant: i <= v.len()
+    invariant: i <= v.len() as u64
   } {
     if v[i] < v[min_idx] {
       min_idx = i;
@@ -20,7 +19,7 @@ fn find_min_idx(v: Vec<i64>) -> i64 vow {
     }
     i = i + 1;
   }
-  min_idx
+  min_idx as i64
 }
 
 fn main() -> i32 [io] {

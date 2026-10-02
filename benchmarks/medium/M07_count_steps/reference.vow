@@ -4,14 +4,13 @@ fn count_steps(n: i64) -> i64 vow {
   requires: n >= 0,
   ensures: result == n
 } {
-  let mut i: i64 = 0;
-  while i < n vow {
-    invariant: i >= 0,
-    invariant: i <= n
+  let mut i: u64 = 0;
+  while i < n as u64 vow {
+    invariant: i <= n as u64
   } {
     i = i + 1;
   }
-  i
+  i as i64
 }
 
 fn main() -> i32 [io] {

@@ -14,10 +14,9 @@ fn vec_count_pos(v: Vec<i64>) -> i64
 
 - `ensures: result >= 0` — count is non-negative
 - `ensures: result <= v.len()` — count is at most the Vec length
-- Loop `invariant: count >= 0`
+- `count` and `i` are `u64` locals, so they need no `>= 0` invariants; bridge with `v.len() as u64` and `count as i64`
 - Loop `invariant: count <= i`
-- Loop `invariant: i >= 0`
-- Loop `invariant: i <= v.len()`
+- Loop `invariant: i <= v.len() as u64`
 
 ## Constraints
 

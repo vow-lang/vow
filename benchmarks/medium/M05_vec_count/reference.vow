@@ -4,13 +4,11 @@ fn vec_count_pos(v: Vec<i64>) -> i64 vow {
   ensures: result >= 0,
   ensures: result <= v.len()
 } {
-  let mut count: i64 = 0;
-  let mut i: i64 = 0;
-  while i < v.len() vow {
-    invariant: count >= 0,
+  let mut count: u64 = 0;
+  let mut i: u64 = 0;
+  while i < v.len() as u64 vow {
     invariant: count <= i,
-    invariant: i >= 0,
-    invariant: i <= v.len()
+    invariant: i <= v.len() as u64
   } {
     if v[i] > 0 {
       count = count + 1;
@@ -19,7 +17,7 @@ fn vec_count_pos(v: Vec<i64>) -> i64 vow {
     }
     i = i + 1;
   }
-  count
+  count as i64
 }
 
 fn main() -> i32 [io] {
