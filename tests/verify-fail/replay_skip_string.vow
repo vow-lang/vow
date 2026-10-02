@@ -15,5 +15,5 @@ module ReplaySkipString
 fn want_big(s: String) -> i64 vow {
   ensures: result == 999
 } {
-  s.len()
+  s.len() as i64
 }

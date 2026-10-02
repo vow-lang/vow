@@ -15,7 +15,7 @@ fn store_grid(outer: Vec<Vec<i64>>) -> i64 vow {
   ensures: result >= 0
 } {
   outer.push(Vec::new());
-  outer.len()
+  outer.len() as i64
 }
 
 fn main() -> i32 [io] {

@@ -6,23 +6,23 @@ module StringParamVerify
 
 fn str_len_stable(s: String) -> i64 vow {
   ensures: result >= 0,
-  ensures: result == s.len()
+  ensures: result == s.len() as i64
 } {
-  s.len()
+  s.len() as i64
 }
 
 fn vec_len_stable(v: Vec<i64>) -> i64 vow {
   ensures: result >= 0,
-  ensures: result == v.len()
+  ensures: result == v.len() as i64
 } {
-  v.len()
+  v.len() as i64
 }
 
 fn map_len_stable(m: HashMap<i64, i64>) -> i64 vow {
   ensures: result >= 0,
-  ensures: result == m.len()
+  ensures: result == m.len() as i64
 } {
-  m.len()
+  m.len() as i64
 }
 
 fn main() -> i32 [io] {

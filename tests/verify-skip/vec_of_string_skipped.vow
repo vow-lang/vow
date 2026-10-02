@@ -13,7 +13,7 @@ fn first_word_len(words: Vec<String>) -> i64 vow {
   ensures: result >= 0
 } {
   let head: String = words[0];
-  head.len()
+  head.len() as i64
 }
 
 fn main() -> i32 [io] {

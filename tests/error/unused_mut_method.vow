@@ -8,7 +8,7 @@ module UnusedMutMethod
 fn build() -> i64 {
   let mut v: Vec<i64> = Vec::new();
   v.push(1);
-  v.len()
+  v.len() as i64
 }
 
 fn main() -> i32 {

@@ -16,6 +16,6 @@ fn push_three() -> Vec<i64> vow {
 
 fn main() -> i32 [io] {
   let v: Vec<i64> = push_three();
-  print_i64(v.len());
+  print_u64(v.len() as u64);
   0
 }

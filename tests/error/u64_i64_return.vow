@@ -4,8 +4,8 @@
 // u64 return type.
 module U64I64Return
 
-fn count(v: Vec<u64>) -> u64 {
-  return v.len();
+fn count(n: i64) -> u64 {
+  return n;
 }
 
 fn main() -> i32 {

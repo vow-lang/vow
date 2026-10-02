@@ -51,7 +51,7 @@ fn gen_tactical(base: i64) -> Vec<Mv> {
     tactical
 }
 
-fn swap_moves(moves: Vec<Mv>, a: i64, b: i64) {
+fn swap_moves(moves: Vec<Mv>, a: u64, b: u64) {
     let ta: Mv = moves[a];
     let tb: Mv = moves[b];
     moves[a] = tb;
@@ -68,8 +68,8 @@ fn search(base: i64, depth: i64) -> i64 {
         moves = gen_tactical(base);
     }
     let mut sum: i64 = 0;
-    let mut i: i64 = 0;
-    while i < moves.len() {
+    let mut i: u64 = 0;
+    while i < moves.len() as u64 {
         if i > 0 {
             swap_moves(moves, i, 0);
         }
