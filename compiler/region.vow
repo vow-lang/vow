@@ -1165,12 +1165,13 @@ fn check_store_effects_at_call(
     int_kinds: Vec<i64>,
     dctx: DiagCtx, source_file: String
 ) {
+    let n_flat: u64 = flat.len() as u64;
     let mut i: u64 = 0;
     let checked_targets: Vec<i64> = Vec::new();
-    while i < flat.len() as u64 {
+    while i < n_flat {
         let target: i64 = flat[i];
         i = i + 1;
-        if i >= flat.len() as u64 { return; }
+        if i >= n_flat { return; }
         let kind: i64 = flat[i];
         i = i + 1;
         if target >= 0 && target < call_inst.args.len() as i64
@@ -1190,7 +1191,7 @@ fn check_store_effects_at_call(
             }
         }
         if kind == RSUM_KIND_ALIAS_OF() {
-            if i >= flat.len() as u64 { return; }
+            if i >= n_flat { return; }
             let source_param: i64 = flat[i];
             i = i + 1;
             if target >= 0 && target < call_inst.args.len() as i64
@@ -1221,11 +1222,11 @@ fn check_store_effects_at_call(
             // FIXME: when AliasOfAny store effects land (e.g. after
             // `trace_origin_shallow` is extended), align the two paths before
             // re-introducing any diagnostic here.
-            if i >= flat.len() as u64 { return; }
+            if i >= n_flat { return; }
             let n: i64 = flat[i];
             i = i + 1;
             let mut ai: i64 = 0;
-            while ai < n && i < flat.len() as u64 {
+            while ai < n && i < n_flat {
                 i = i + 1;
                 ai = ai + 1;
             }
@@ -3449,7 +3450,8 @@ fn block_tree_dominance_parent(
         ri = ri + 1;
     }
 
-    let bound: u64 = (forward.len() as u64) * (forward.len() as u64) + 1;
+    let n_fwd: u64 = forward.len() as u64;
+    let bound: u64 = n_fwd * n_fwd + 1;
     let mut iter: u64 = 0;
     let mut changed: bool = true;
     while changed && iter < bound {
@@ -4915,10 +4917,10 @@ fn tarjan_sccs(cg: Vec<Vec<i64>>, n: u64) -> Vec<Vec<i64>> {
     let work_node: Vec<i64> = Vec::new();
     let work_pos: Vec<i64> = Vec::new(); // -1 = visit, >= 0 = process at child_pos
 
-    let mut start: i64 = 0;
-    while start < n as i64 {
+    let mut start: u64 = 0;
+    while start < n {
         if indices[start] == -1 {
-            work_node.push(start);
+            work_node.push(start as i64);
             work_pos.push(-1);
             while work_node.len() > 0 {
                 let last: u64 = (work_node.len() as u64) - 1;
@@ -5074,14 +5076,15 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
         let mut bi4: u64 = 0;
         while bi4 < f.blocks.len() as u64 {
             let blk3: IrBlock = f.blocks[bi4];
+            let n_insts3: u64 = blk3.insts.len() as u64;
             let opens_here: bool = region_vec_contains_i64(block_regions, blk3.id);
 
-            let mut term_pos: u64 = blk3.insts.len() as u64;
+            let mut term_pos: u64 = n_insts3;
             let mut k: u64 = 0;
-            while k < blk3.insts.len() as u64 {
+            while k < n_insts3 {
                 if iop_is_terminal(blk3.insts[k].op) {
                     term_pos = k;
-                    k = blk3.insts.len() as u64;
+                    k = n_insts3;
                 } else {
                     k = k + 1;
                 }
@@ -5096,7 +5099,7 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
             }
 
             let mut copy_i: u64 = 0;
-            while copy_i < blk3.insts.len() as u64 {
+            while copy_i < n_insts3 {
                 if copy_i == term_pos {
                     let term: IrInst = blk3.insts[copy_i];
                     if term.op == IOP_BRANCH() && term.dk == IDATA_BRANCH_TARGETS() {
@@ -5178,7 +5181,7 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
                 }
                 copy_i = copy_i + 1;
             }
-            if term_pos == blk3.insts.len() as u64 {
+            if term_pos == n_insts3 {
                 let no_refresh2: Vec<i64> = Vec::new();
                 let no_succ_close2: Vec<i64> = close_regions_for_edge(
                     blk3.id, 0, false, block_regions, block_parent, block_depth, no_refresh2
