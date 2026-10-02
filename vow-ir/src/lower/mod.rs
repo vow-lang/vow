@@ -4950,7 +4950,8 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
                             if let Some(elem_ty) = option_named_elem_type(ann, &ctx.type_aliases) {
                                 ctx.inst_option_elem_ty.insert(val, elem_ty);
                             }
-                            if let Some(variant_tys) = result_wide_payload_tys(ann, &ctx.type_aliases)
+                            if let Some(variant_tys) =
+                                result_wide_payload_tys(ann, &ctx.type_aliases)
                             {
                                 ctx.inst_variant_payload_tys.insert(val, variant_tys);
                             }
