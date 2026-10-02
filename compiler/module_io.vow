@@ -25,7 +25,7 @@ fn EFFECT_WRITE() -> i64 { 16 }
 
 struct ModuleReader {
     buf: Vec<i64>,
-    pos: i64,
+    pos: u64,
 }
 
 struct WireRegionConstraint {
@@ -136,8 +136,7 @@ fn write_i64_bits(out: Vec<i64>, v: i64) {
 }
 
 fn reader_read_u8(r: ModuleReader) -> i64 vow {
-    requires: r.pos >= 0,
-    requires: r.pos < r.buf.len()
+    requires: r.pos < r.buf.len() as u64
 } {
     let b: i64 = r.buf[r.pos];
     r.pos = r.pos + 1;
@@ -145,8 +144,7 @@ fn reader_read_u8(r: ModuleReader) -> i64 vow {
 }
 
 fn reader_read_u16_le(r: ModuleReader) -> i64 vow {
-    requires: r.pos >= 0,
-    requires: r.pos + 1 < r.buf.len()
+    requires: r.pos + 1 < r.buf.len() as u64
 } {
     let b0: i64 = r.buf[r.pos];
     let b1: i64 = r.buf[r.pos + 1];
@@ -155,8 +153,7 @@ fn reader_read_u16_le(r: ModuleReader) -> i64 vow {
 }
 
 fn reader_read_u32_le(r: ModuleReader) -> i64 vow {
-    requires: r.pos >= 0,
-    requires: r.pos + 3 < r.buf.len()
+    requires: r.pos + 3 < r.buf.len() as u64
 } {
     let b0: i64 = r.buf[r.pos];
     let b1: i64 = r.buf[r.pos + 1];
@@ -192,26 +189,21 @@ fn read_i64_bits(r: ModuleReader) -> i64 {
         + b7 * 72057594037927936
 }
 
-fn write_leb(out: Vec<i64>, v: i64) vow {
-    requires: v >= 0
-} {
-    let mut n: i64 = v;
-    loop vow {
-        invariant: n >= 0
-    } {
-        let byte: i64 = n - (n / 128) * 128;
+fn write_leb(out: Vec<i64>, v: u64) {
+    let mut n: u64 = v;
+    loop {
+        let byte: u64 = n - (n / 128) * 128;
         n = n / 128;
         if n == 0 {
-            out.push(byte);
+            out.push(byte as i64);
             return;
         }
-        out.push(byte + 128);
+        out.push((byte + 128) as i64);
     }
 }
 
 fn reader_read_leb(r: ModuleReader) -> i64 vow {
-    requires: r.pos >= 0,
-    requires: r.pos < r.buf.len()
+    requires: r.pos < r.buf.len() as u64
 } {
     let mut value: i64 = 0;
     let mut shift: i64 = 0;
@@ -232,11 +224,10 @@ fn reader_read_leb(r: ModuleReader) -> i64 vow {
 }
 
 fn write_string(out: Vec<i64>, s: String) {
-    let n: i64 = s.len();
+    let n: u64 = s.len() as u64;
     write_leb(out, n);
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < n vow {
-        invariant: i >= 0,
         invariant: i <= n
     } {
         out.push(s.byte_at(i));
@@ -262,8 +253,8 @@ fn effect_bit_set(effects: i64, bit: i64) -> bool {
     (effects / bit) % 2 == 1
 }
 
-fn effect_disc_count(effects: i64) -> i64 {
-    let mut n: i64 = 0;
+fn effect_disc_count(effects: i64) -> u64 {
+    let mut n: u64 = 0;
     if effect_bit_set(effects, EFFECT_IO()) { n = n + 1; }
     if effect_bit_set(effects, EFFECT_PANIC()) { n = n + 1; }
     if effect_bit_set(effects, EFFECT_READ()) { n = n + 1; }
@@ -367,11 +358,10 @@ fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64
         write_u32_le(out, aux);
         return;
     }
-    let n: i64 = aliases.len();
+    let n: u64 = aliases.len() as u64;
     write_leb(out, n);
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < n vow {
-        invariant: i >= 0,
         invariant: i <= n
     } {
         write_u32_le(out, aliases[i]);
@@ -407,24 +397,22 @@ fn region_constraint_decode(r: ModuleReader) -> WireRegionConstraint [panic] {
     WireRegionConstraint { kind: kind, aux: 0, aliases: aliases }
 }
 
-fn store_effect_flat_advance(flat: Vec<i64>, start: i64) -> i64 {
+fn store_effect_flat_advance(flat: Vec<i64>, start: u64) -> u64 {
     let kind: i64 = flat[start + 1];
     if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() {
         start + 2
     } else if kind == RSUM_KIND_ALIAS_OF() {
         start + 3
     } else {
-        start + 3 + flat[start + 2]
+        start + 3 + (flat[start + 2] as u64)
     }
 }
 
-fn store_effect_count(flat: Vec<i64>) -> i64 {
-    let mut count: i64 = 0;
-    let mut i: i64 = 0;
-    let n: i64 = flat.len();
-    while i < n vow {
-        invariant: i >= 0
-    } {
+fn store_effect_count(flat: Vec<i64>) -> u64 {
+    let mut count: u64 = 0;
+    let mut i: u64 = 0;
+    let n: u64 = flat.len() as u64;
+    while i < n {
         i = store_effect_flat_advance(flat, i);
         count = count + 1;
     }
@@ -433,11 +421,10 @@ fn store_effect_count(flat: Vec<i64>) -> i64 {
 
 fn write_region_summary(out: Vec<i64>, f: IrFunction) {
     let param_regions: Vec<i64> = f.rsum_param_regions;
-    write_leb(out, param_regions.len());
-    let mut i: i64 = 0;
-    while i < param_regions.len() vow {
-        invariant: i >= 0,
-        invariant: i <= param_regions.len()
+    write_leb(out, param_regions.len() as u64);
+    let mut i: u64 = 0;
+    while i < param_regions.len() as u64 vow {
+        invariant: i <= param_regions.len() as u64
     } {
         write_u32_le(out, param_regions[i]);
         i = i + 1;
@@ -448,9 +435,8 @@ fn write_region_summary(out: Vec<i64>, f: IrFunction) {
     let flat: Vec<i64> = f.rsum_store_effects;
     write_leb(out, store_effect_count(flat));
     i = 0;
-    while i < flat.len() vow {
-        invariant: i >= 0,
-        invariant: i <= flat.len()
+    while i < flat.len() as u64 vow {
+        invariant: i <= flat.len() as u64
     } {
         let target: i64 = flat[i];
         let kind: i64 = flat[i + 1];
@@ -462,11 +448,10 @@ fn write_region_summary(out: Vec<i64>, f: IrFunction) {
             region_constraint_encode(out, kind, flat[i + 2], Vec::new());
             i = i + 3;
         } else {
-            let n_aliases: i64 = flat[i + 2];
+            let n_aliases: u64 = flat[i + 2] as u64;
             let aliases: Vec<i64> = Vec::new();
-            let mut j: i64 = 0;
+            let mut j: u64 = 0;
             while j < n_aliases vow {
-                invariant: j >= 0,
                 invariant: j <= n_aliases
             } {
                 aliases.push(flat[i + 3 + j]);
@@ -506,11 +491,10 @@ fn read_region_summary(r: ModuleReader) -> WireRegionSummary [panic] {
         if src.kind == RSUM_KIND_ALIAS_OF() {
             flat.push(src.aux);
         } else if src.kind == RSUM_KIND_ALIAS_OF_ANY() {
-            flat.push(src.aliases.len());
-            let mut j: i64 = 0;
-            while j < src.aliases.len() vow {
-                invariant: j >= 0,
-                invariant: j <= src.aliases.len()
+            flat.push(src.aliases.len() as i64);
+            let mut j: u64 = 0;
+            while j < src.aliases.len() as u64 vow {
+                invariant: j <= src.aliases.len() as u64
             } {
                 flat.push(src.aliases[j]);
                 j = j + 1;
@@ -712,11 +696,10 @@ fn write_inst(out: Vec<i64>, inst: IrInst) {
     write_u32_le(out, inst.id);
     write_u16_le(out, opcode_disc(inst.op));
     write_u8(out, ty_disc(inst.ty));
-    write_leb(out, inst.args.len());
-    let mut i: i64 = 0;
-    while i < inst.args.len() vow {
-        invariant: i >= 0,
-        invariant: i <= inst.args.len()
+    write_leb(out, inst.args.len() as u64);
+    let mut i: u64 = 0;
+    while i < inst.args.len() as u64 vow {
+        invariant: i <= inst.args.len() as u64
     } {
         write_u32_le(out, inst.args[i]);
         i = i + 1;
@@ -751,11 +734,10 @@ fn read_inst(r: ModuleReader) -> IrInst [panic] {
 
 fn write_block(out: Vec<i64>, block: IrBlock) {
     write_u32_le(out, block.id);
-    write_leb(out, block.insts.len());
-    let mut i: i64 = 0;
-    while i < block.insts.len() vow {
-        invariant: i >= 0,
-        invariant: i <= block.insts.len()
+    write_leb(out, block.insts.len() as u64);
+    let mut i: u64 = 0;
+    while i < block.insts.len() as u64 vow {
+        invariant: i <= block.insts.len() as u64
     } {
         write_inst(out, block.insts[i]);
         i = i + 1;
@@ -780,11 +762,10 @@ fn write_vow_entry(out: Vec<i64>, entry: IrVowEntry) {
     write_u32_le(out, entry.id);
     write_string(out, entry.description);
     write_u8(out, blame_disc(entry.blame));
-    write_leb(out, entry.binding_ids.len());
-    let mut i: i64 = 0;
-    while i < entry.binding_ids.len() vow {
-        invariant: i >= 0,
-        invariant: i <= entry.binding_ids.len()
+    write_leb(out, entry.binding_ids.len() as u64);
+    let mut i: u64 = 0;
+    while i < entry.binding_ids.len() as u64 vow {
+        invariant: i <= entry.binding_ids.len() as u64
     } {
         write_string(out, entry.binding_names[i]);
         write_u32_le(out, entry.binding_ids[i]);
@@ -824,27 +805,27 @@ fn sort_local_names(ids: Vec<i64>, names: Vec<String>) -> SortedLocalNames vow {
 } {
     let used: Vec<i64> = Vec::new();
     let mut i: i64 = 0;
-    while i < ids.len() vow {
+    while i < ids.len() as i64 vow {
         invariant: i >= 0,
-        invariant: i <= ids.len()
+        invariant: i <= ids.len() as i64
     } {
         used.push(0);
         i = i + 1;
     }
     let out_ids: Vec<i64> = Vec::new();
     let out_names: Vec<String> = Vec::new();
-    let mut remaining: i64 = ids.len();
+    let mut remaining: i64 = ids.len() as i64;
     while remaining > 0 vow {
         invariant: remaining >= 0,
-        invariant: remaining <= ids.len(),
+        invariant: remaining <= ids.len() as i64,
         invariant: out_ids.len() <= ids.len()
     } {
         let mut best_idx: i64 = -1;
         let mut best_id: i64 = 0;
         i = 0;
-        while i < ids.len() vow {
+        while i < ids.len() as i64 vow {
             invariant: i >= 0,
-            invariant: i <= ids.len()
+            invariant: i <= ids.len() as i64
         } {
             if used[i] == 0 {
                 let cur: i64 = ids[i];
@@ -858,11 +839,11 @@ fn sort_local_names(ids: Vec<i64>, names: Vec<String>) -> SortedLocalNames vow {
         // Keep the last name for duplicate ids to mirror Rust's HashMap insert semantics.
         let mut chosen_idx: i64 = best_idx;
         i = 0;
-        while i < ids.len() vow {
+        while i < ids.len() as i64 vow {
             invariant: i >= 0,
-            invariant: i <= ids.len(),
+            invariant: i <= ids.len() as i64,
             invariant: remaining >= 0,
-            invariant: remaining <= ids.len()
+            invariant: remaining <= ids.len() as i64
         } {
             if used[i] == 0 && ids[i] == best_id {
                 used[i] = 1;
@@ -891,11 +872,10 @@ fn read_field(r: ModuleReader) -> IrFieldLayout {
 
 fn write_struct_layout(out: Vec<i64>, layout: IrStructLayout) {
     write_string(out, layout.name);
-    write_leb(out, layout.fields.len());
-    let mut i: i64 = 0;
-    while i < layout.fields.len() vow {
-        invariant: i >= 0,
-        invariant: i <= layout.fields.len()
+    write_leb(out, layout.fields.len() as u64);
+    let mut i: u64 = 0;
+    while i < layout.fields.len() as u64 vow {
+        invariant: i <= layout.fields.len() as u64
     } {
         write_field(out, layout.fields[i]);
         i = i + 1;
@@ -925,11 +905,10 @@ fn read_struct_layout(r: ModuleReader) -> IrStructLayout {
 fn write_variant(out: Vec<i64>, variant: IrVariantLayout) {
     write_string(out, variant.name);
     write_i64_bits(out, variant.tag);
-    write_leb(out, variant.payload.len());
-    let mut i: i64 = 0;
-    while i < variant.payload.len() vow {
-        invariant: i >= 0,
-        invariant: i <= variant.payload.len()
+    write_leb(out, variant.payload.len() as u64);
+    let mut i: u64 = 0;
+    while i < variant.payload.len() as u64 vow {
+        invariant: i <= variant.payload.len() as u64
     } {
         write_field(out, variant.payload[i]);
         i = i + 1;
@@ -956,11 +935,10 @@ fn read_variant(r: ModuleReader) -> IrVariantLayout {
 
 fn write_enum_layout(out: Vec<i64>, layout: IrEnumLayout) {
     write_string(out, layout.name);
-    write_leb(out, layout.variants.len());
-    let mut i: i64 = 0;
-    while i < layout.variants.len() vow {
-        invariant: i >= 0,
-        invariant: i <= layout.variants.len()
+    write_leb(out, layout.variants.len() as u64);
+    let mut i: u64 = 0;
+    while i < layout.variants.len() as u64 vow {
+        invariant: i <= layout.variants.len() as u64
     } {
         write_variant(out, layout.variants[i]);
         i = i + 1;
@@ -988,21 +966,19 @@ fn write_function(out: Vec<i64>, f: IrFunction) {
     write_u32_le(out, f.id);
     write_string(out, f.name);
 
-    write_leb(out, f.params.len());
-    let mut i: i64 = 0;
-    while i < f.params.len() vow {
-        invariant: i >= 0,
-        invariant: i <= f.params.len()
+    write_leb(out, f.params.len() as u64);
+    let mut i: u64 = 0;
+    while i < f.params.len() as u64 vow {
+        invariant: i <= f.params.len() as u64
     } {
         write_u8(out, ty_disc(f.params[i]));
         i = i + 1;
     }
 
-    write_leb(out, f.param_names.len());
+    write_leb(out, f.param_names.len() as u64);
     i = 0;
-    while i < f.param_names.len() vow {
-        invariant: i >= 0,
-        invariant: i <= f.param_names.len()
+    while i < f.param_names.len() as u64 vow {
+        invariant: i <= f.param_names.len() as u64
     } {
         write_string(out, f.param_names[i]);
         i = i + 1;
@@ -1011,32 +987,29 @@ fn write_function(out: Vec<i64>, f: IrFunction) {
     write_u8(out, ty_disc(f.return_ty));
     write_effects(out, f.effects);
 
-    write_leb(out, f.vows.len());
+    write_leb(out, f.vows.len() as u64);
     i = 0;
-    while i < f.vows.len() vow {
-        invariant: i >= 0,
-        invariant: i <= f.vows.len()
+    while i < f.vows.len() as u64 vow {
+        invariant: i <= f.vows.len() as u64
     } {
         write_vow_entry(out, f.vows[i]);
         i = i + 1;
     }
 
-    write_leb(out, f.blocks.len());
+    write_leb(out, f.blocks.len() as u64);
     i = 0;
-    while i < f.blocks.len() vow {
-        invariant: i >= 0,
-        invariant: i <= f.blocks.len()
+    while i < f.blocks.len() as u64 vow {
+        invariant: i <= f.blocks.len() as u64
     } {
         write_block(out, f.blocks[i]);
         i = i + 1;
     }
 
     let sorted: SortedLocalNames = sort_local_names(f.local_names_ids, f.local_names_strs);
-    write_leb(out, sorted.ids.len());
+    write_leb(out, sorted.ids.len() as u64);
     i = 0;
-    while i < sorted.ids.len() vow {
-        invariant: i >= 0,
-        invariant: i <= sorted.ids.len()
+    while i < sorted.ids.len() as u64 vow {
+        invariant: i <= sorted.ids.len() as u64
     } {
         write_u32_le(out, sorted.ids[i]);
         write_string(out, sorted.names[i]);
@@ -1133,41 +1106,37 @@ fn module_encode(m: IrModule) -> Vec<i64> {
     write_u32_le(out, MODULE_VERSION());
     write_string(out, m.name);
 
-    write_leb(out, m.strings.len());
-    let mut i: i64 = 0;
-    while i < m.strings.len() vow {
-        invariant: i >= 0,
-        invariant: i <= m.strings.len()
+    write_leb(out, m.strings.len() as u64);
+    let mut i: u64 = 0;
+    while i < m.strings.len() as u64 vow {
+        invariant: i <= m.strings.len() as u64
     } {
         write_string(out, m.strings[i]);
         i = i + 1;
     }
 
-    write_leb(out, m.struct_layouts.len());
+    write_leb(out, m.struct_layouts.len() as u64);
     i = 0;
-    while i < m.struct_layouts.len() vow {
-        invariant: i >= 0,
-        invariant: i <= m.struct_layouts.len()
+    while i < m.struct_layouts.len() as u64 vow {
+        invariant: i <= m.struct_layouts.len() as u64
     } {
         write_struct_layout(out, m.struct_layouts[i]);
         i = i + 1;
     }
 
-    write_leb(out, m.enum_layouts.len());
+    write_leb(out, m.enum_layouts.len() as u64);
     i = 0;
-    while i < m.enum_layouts.len() vow {
-        invariant: i >= 0,
-        invariant: i <= m.enum_layouts.len()
+    while i < m.enum_layouts.len() as u64 vow {
+        invariant: i <= m.enum_layouts.len() as u64
     } {
         write_enum_layout(out, m.enum_layouts[i]);
         i = i + 1;
     }
 
-    write_leb(out, m.functions.len());
+    write_leb(out, m.functions.len() as u64);
     i = 0;
-    while i < m.functions.len() vow {
-        invariant: i >= 0,
-        invariant: i <= m.functions.len()
+    while i < m.functions.len() as u64 vow {
+        invariant: i <= m.functions.len() as u64
     } {
         write_function(out, m.functions[i]);
         i = i + 1;
@@ -1231,7 +1200,7 @@ fn module_decode(buf: Vec<i64>) -> IrModule [panic] {
         i = i + 1;
     }
 
-    if r.pos != r.buf.len() {
+    if r.pos != r.buf.len() as u64 {
         return reject_decode_module();
     }
 
