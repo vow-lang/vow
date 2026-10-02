@@ -4,11 +4,11 @@ module LoopBreakState
 fn main() -> i32 [io] {
     let xs: Vec<i64> = Vec::new();
     xs.push(10);
-    let mut idx: i64 = 0;
+    let mut idx: u64 = 0;
     let mut found: i64 = 0;
     let mut value: i64 = 0;
     loop {
-        if idx >= xs.len() {
+        if idx >= xs.len() as u64 {
             break;
         }
         let cand: i64 = xs[idx];

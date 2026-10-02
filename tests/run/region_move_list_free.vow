@@ -26,8 +26,8 @@ fn gen_pseudo(base: i64) -> Vec<Mv> {
 fn gen_legal(base: i64) -> Vec<Mv> {
     let pseudo: Vec<Mv> = gen_pseudo(base);
     let legal: Vec<Mv> = Vec::new();
-    let mut i: i64 = 0;
-    while i < pseudo.len() {
+    let mut i: u64 = 0;
+    while i < pseudo.len() as u64 {
         let mv: Mv = pseudo[i];
         if mv.from % 2 == 0 {
             legal.push(mv);
@@ -40,8 +40,8 @@ fn gen_legal(base: i64) -> Vec<Mv> {
 fn gen_tactical(base: i64) -> Vec<Mv> {
     let legal: Vec<Mv> = gen_legal(base);
     let tactical: Vec<Mv> = Vec::new();
-    let mut i: i64 = 0;
-    while i < legal.len() {
+    let mut i: u64 = 0;
+    while i < legal.len() as u64 {
         let mv: Mv = legal[i];
         if mv.tag % 3 == 0 {
             tactical.push(mv);
