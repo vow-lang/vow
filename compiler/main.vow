@@ -17,9 +17,9 @@ use complexity
 use complexity_main
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
-    let mut i: i64 = 1;
+    let mut i: u64 = 1;
     let mut found: bool = false;
-    while i < argv.len() {
+    while i < argv.len() as u64 {
         if argv[i] == flag {
             found = true;
         }
@@ -29,7 +29,7 @@ fn has_flag(argv: Vec<String>, flag: String) -> bool {
 }
 
 fn get_flag_arg(argv: Vec<String>, flag: String) -> String {
-    let n: i64 = argv.len();
+    let n: i64 = argv.len() as i64;
     let mut i: i64 = 1;
     while n > 1 && i < n - 1 {
         if argv[i] == flag {
@@ -41,7 +41,7 @@ fn get_flag_arg(argv: Vec<String>, flag: String) -> String {
 }
 
 fn get_source_path(argv: Vec<String>) -> String {
-    let argc: i64 = argv.len();
+    let argc: i64 = argv.len() as i64;
     let mut i: i64 = argc - 1;
     while i >= 1 {
         let a: String = argv[i];
@@ -64,7 +64,7 @@ fn get_source_path(argv: Vec<String>) -> String {
 }
 
 fn get_source_path_sub(argv: Vec<String>) -> String {
-    let argc: i64 = argv.len();
+    let argc: i64 = argv.len() as i64;
     let mut i: i64 = argc - 1;
     while i >= 2 {
         let a: String = argv[i];
@@ -88,7 +88,7 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
 
 
 fn default_output(path: String) -> String {
-    let n: i64 = path.len();
+    let n: i64 = path.len() as i64;
     // Find last '/' to extract basename
     let start: i64 = match str_rfind_byte(path, 47) {
         Option::None => 0,
@@ -169,7 +169,7 @@ fn frontend_path_from_argv(argv: Vec<String>, sub: bool, cmd: String) -> String 
 
 fn find_ir_function_index_by_id(fns: Vec<IrFunction>, id: i64) -> i64 {
     let mut i: i64 = 0;
-    while i < fns.len() {
+    while i < fns.len() as i64 {
         let f: IrFunction = fns[i];
         if f.id == id {
             return i;
@@ -181,7 +181,7 @@ fn find_ir_function_index_by_id(fns: Vec<IrFunction>, id: i64) -> i64 {
 
 fn find_ir_vow_index(vows: Vec<IrVowEntry>, id: i64) -> i64 {
     let mut i: i64 = 0;
-    while i < vows.len() {
+    while i < vows.len() as i64 {
         let ve: IrVowEntry = vows[i];
         if ve.id == id {
             return i;
@@ -193,7 +193,7 @@ fn find_ir_vow_index(vows: Vec<IrVowEntry>, id: i64) -> i64 {
 
 fn find_param_index(names: Vec<String>, name: String) -> i64 {
     let mut i: i64 = 0;
-    while i < names.len() {
+    while i < names.len() as i64 {
         if names[i] == name {
             return i;
         }
@@ -205,8 +205,8 @@ fn find_param_index(names: Vec<String>, name: String) -> i64 {
 fn ce_value_for_param(names: Vec<String>, vals: Vec<String>, param: String, param_idx: i64) -> String {
     let fallback_esbmc: String = str2(String::from("$esbmc$p"), i64_to_string(param_idx));
     let fallback_raw: String = str2(String::from("p"), i64_to_string(param_idx));
-    let mut i: i64 = 0;
-    while i < names.len() {
+    let mut i: u64 = 0;
+    while i < names.len() as u64 {
         if names[i] == param || names[i] == fallback_esbmc || names[i] == fallback_raw {
             return vals[i];
         }
@@ -217,11 +217,11 @@ fn ce_value_for_param(names: Vec<String>, vals: Vec<String>, param: String, para
 
 fn inst_const_i64_string_by_id(f: IrFunction, inst_id: i64) -> String {
     let blocks: Vec<IrBlock> = f.blocks;
-    let mut bi: i64 = 0;
-    while bi < blocks.len() {
+    let mut bi: u64 = 0;
+    while bi < blocks.len() as u64 {
         let insts: Vec<IrInst> = blocks[bi].insts;
-        let mut ii: i64 = 0;
-        while ii < insts.len() {
+        let mut ii: u64 = 0;
+        while ii < insts.len() as u64 {
             let inst: IrInst = insts[ii];
             if inst.id == inst_id {
                 if inst.op == IOP_CONST_I32() || inst.op == IOP_CONST_I64() {
@@ -265,11 +265,11 @@ fn string_is_i64_literal(s: String) -> bool {
 
 fn callee_i64_string_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, call_inst: IrInst) -> String {
     let blocks: Vec<IrBlock> = callee.blocks;
-    let mut bi: i64 = 0;
-    while bi < blocks.len() {
+    let mut bi: u64 = 0;
+    while bi < blocks.len() as u64 {
         let insts: Vec<IrInst> = blocks[bi].insts;
-        let mut ii: i64 = 0;
-        while ii < insts.len() {
+        let mut ii: u64 = 0;
+        while ii < insts.len() as u64 {
             let inst: IrInst = insts[ii];
             if inst.id == inst_id {
                 if inst.op == IOP_CONST_I32() || inst.op == IOP_CONST_I64() {
@@ -280,7 +280,7 @@ fn callee_i64_string_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, c
                 }
                 if inst.op == IOP_GET_ARG() && inst.dk == IDATA_ARG_INDEX() {
                     let pidx: i64 = inst.dv;
-                    if pidx >= 0 && pidx < call_inst.args.len() {
+                    if pidx >= 0 && pidx < call_inst.args.len() as i64 {
                         return inst_const_i64_string_by_id(f, call_inst.args[pidx]);
                     }
                     return String::from("");
@@ -313,11 +313,11 @@ fn callee_i64_string_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, c
 
 fn callee_bool_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, call_inst: IrInst) -> i64 {
     let blocks: Vec<IrBlock> = callee.blocks;
-    let mut bi: i64 = 0;
-    while bi < blocks.len() {
+    let mut bi: u64 = 0;
+    while bi < blocks.len() as u64 {
         let insts: Vec<IrInst> = blocks[bi].insts;
-        let mut ii: i64 = 0;
-        while ii < insts.len() {
+        let mut ii: u64 = 0;
+        while ii < insts.len() as u64 {
             let inst: IrInst = insts[ii];
             if inst.id == inst_id {
                 if inst.op == IOP_CONST_BOOL() {
@@ -396,11 +396,11 @@ fn callee_bool_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, call_in
 
 fn callee_precondition_predicate_inst_id(callee: IrFunction, ve: IrVowEntry) -> i64 {
     let blocks: Vec<IrBlock> = callee.blocks;
-    let mut bi: i64 = 0;
-    while bi < blocks.len() {
+    let mut bi: u64 = 0;
+    while bi < blocks.len() as u64 {
         let insts: Vec<IrInst> = blocks[bi].insts;
-        let mut ii: i64 = 0;
-        while ii < insts.len() {
+        let mut ii: u64 = 0;
+        while ii < insts.len() as u64 {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_VOW_REQ() && inst.dk == IDATA_VOW_ID() && inst.dv == ve.id && inst.args.len() > 0 {
                 return inst.args[0];
@@ -422,11 +422,11 @@ fn call_violates_callee_precondition_const(f: IrFunction, callee: IrFunction, ve
 
 fn call_matches_callee_precondition_values(f: IrFunction, callee: IrFunction, ve: IrVowEntry, inst: IrInst, vr: VerifyResult) -> bool {
     let mut matched_binding: bool = false;
-    let mut bindi: i64 = 0;
-    while bindi < ve.binding_names.len() {
+    let mut bindi: u64 = 0;
+    while bindi < ve.binding_names.len() as u64 {
         let bname: String = ve.binding_names[bindi];
         let pidx: i64 = find_param_index(callee.param_names, bname);
-        if pidx < 0 || pidx >= inst.args.len() {
+        if pidx < 0 || pidx >= inst.args.len() as i64 {
             return false;
         }
         let ce_val: String = ce_value_for_param(vr.var_names, vr.var_values, bname, pidx);
@@ -456,11 +456,11 @@ fn call_matches_callee_precondition_candidate(f: IrFunction, callee: IrFunction,
 fn count_exact_callee_precondition_calls(f: IrFunction, callee: IrFunction, ve: IrVowEntry, vr: VerifyResult) -> i64 {
     let mut count: i64 = 0;
     let blocks: Vec<IrBlock> = f.blocks;
-    let mut bi: i64 = 0;
-    while bi < blocks.len() {
+    let mut bi: u64 = 0;
+    while bi < blocks.len() as u64 {
         let insts: Vec<IrInst> = blocks[bi].insts;
-        let mut ii: i64 = 0;
-        while ii < insts.len() {
+        let mut ii: u64 = 0;
+        while ii < insts.len() as u64 {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() && inst.dv == callee.id {
                 if call_matches_callee_precondition_candidate(f, callee, ve, inst, vr) {
@@ -476,11 +476,11 @@ fn count_exact_callee_precondition_calls(f: IrFunction, callee: IrFunction, ve: 
 
 fn inst_offset_by_id(f: IrFunction, inst_id: i64) -> i64 {
     let blocks: Vec<IrBlock> = f.blocks;
-    let mut bi: i64 = 0;
-    while bi < blocks.len() {
+    let mut bi: u64 = 0;
+    while bi < blocks.len() as u64 {
         let insts: Vec<IrInst> = blocks[bi].insts;
-        let mut ii: i64 = 0;
-        while ii < insts.len() {
+        let mut ii: u64 = 0;
+        while ii < insts.len() as u64 {
             let inst: IrInst = insts[ii];
             if inst.id == inst_id {
                 return inst.ostart;
@@ -494,11 +494,11 @@ fn inst_offset_by_id(f: IrFunction, inst_id: i64) -> i64 {
 
 fn inst_len_by_id(f: IrFunction, inst_id: i64) -> i64 {
     let blocks: Vec<IrBlock> = f.blocks;
-    let mut bi: i64 = 0;
-    while bi < blocks.len() {
+    let mut bi: u64 = 0;
+    while bi < blocks.len() as u64 {
         let insts: Vec<IrInst> = blocks[bi].insts;
-        let mut ii: i64 = 0;
-        while ii < insts.len() {
+        let mut ii: u64 = 0;
+        while ii < insts.len() as u64 {
             let inst: IrInst = insts[ii];
             if inst.id == inst_id {
                 return inst.olen;
@@ -546,11 +546,11 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
 
                 let exact_call_matches: i64 = count_exact_callee_precondition_calls(f, callee, ve, vr);
                 let blocks: Vec<IrBlock> = f.blocks;
-                let mut bi: i64 = 0;
-                while bi < blocks.len() {
+                let mut bi: u64 = 0;
+                while bi < blocks.len() as u64 {
                     let insts: Vec<IrInst> = blocks[bi].insts;
-                    let mut ii: i64 = 0;
-                    while ii < insts.len() {
+                    let mut ii: u64 = 0;
+                    while ii < insts.len() as u64 {
                         let inst: IrInst = insts[ii];
                         if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() && inst.dv == callee.id {
                             if exact_call_matches == 0 || call_matches_callee_precondition_candidate(f, callee, ve, inst, vr) {
@@ -559,11 +559,11 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
                                 call_site_offsets.push(inst.ostart);
                                 call_site_lengths.push(inst.olen);
 
-                                let mut bindi: i64 = 0;
-                                while bindi < ve.binding_names.len() {
+                                let mut bindi: u64 = 0;
+                                while bindi < ve.binding_names.len() as u64 {
                                     let bname: String = ve.binding_names[bindi];
                                     let pidx: i64 = find_param_index(callee.param_names, bname);
-                                    if pidx >= 0 && pidx < inst.args.len() {
+                                    if pidx >= 0 && pidx < inst.args.len() as i64 {
                                         violating_arg_params.push(bname);
                                         let arg_inst_id: i64 = inst.args[pidx];
                                         let ce_val: String = ce_value_for_param(vr.var_names, vr.var_values, bname, pidx);
@@ -598,8 +598,8 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
         ce_blame = DIAG_BLAME_CALLER();
     } else {
         let vow_entries: Vec<IrVowEntry> = f.vows;
-        let mut vi: i64 = 0;
-        while vi < vow_entries.len() {
+        let mut vi: u64 = 0;
+        while vi < vow_entries.len() as u64 {
             let ve: IrVowEntry = vow_entries[vi];
             if ve.id == vow_id {
                 ce_violation = ve.description;
@@ -691,8 +691,8 @@ fn replay_effects_suffix(effects: i64) -> String {
     if (effects & EFF_WRITE()) != 0 { parts.push(String::from("write")); }
     if parts.len() == 0 { return String::from(""); }
     let s: String = String::from(" [");
-    let mut i: i64 = 0;
-    while i < parts.len() {
+    let mut i: u64 = 0;
+    while i < parts.len() as u64 {
         if i > 0 { s.push_str(String::from(", ")); }
         s.push_str(parts[i]);
         i = i + 1;
@@ -703,9 +703,9 @@ fn replay_effects_suffix(effects: i64) -> String {
 
 // True if `s` is a plain decimal integer literal (optional leading `-`).
 fn replay_is_int_literal(s: String) -> bool {
-    let n: i64 = s.len();
+    let n: u64 = s.len() as u64;
     if n == 0 { return false; }
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     if s.byte_at(0) == 45 {
         if n == 1 { return false; }
         i = 1;
@@ -733,8 +733,8 @@ fn replay_render_scalar(ty: i64, raw: String) -> String {
 
 // Counterexample value for source name `name`, or "" if absent.
 fn replay_value_for(name: String, names: Vec<String>, vals: Vec<String>) -> String {
-    let mut i: i64 = 0;
-    while i < names.len() {
+    let mut i: u64 = 0;
+    while i < names.len() as u64 {
         if names[i] == name { return vals[i]; }
         i = i + 1;
     }
@@ -743,7 +743,7 @@ fn replay_value_for(name: String, names: Vec<String>, vals: Vec<String>) -> Stri
 
 fn replay_find_fn(fns: Vec<IrFunction>, name: String) -> i64 {
     let mut i: i64 = 0;
-    while i < fns.len() {
+    while i < fns.len() as i64 {
         let f: IrFunction = fns[i];
         if f.name == name { return i; }
         i = i + 1;
@@ -795,7 +795,7 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
 
     let params: Vec<i64> = f.params;
     let pnames: Vec<String> = f.param_names;
-    let np: i64 = params.len();
+    let np: i64 = params.len() as i64;
     let body: String = String::from("");
     let call_args: String = String::from("");
     let mut pi: i64 = 0;
@@ -950,9 +950,9 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
 // take precedence over it. Every match overwrites both fields so only the
 // winning line's classification survives.
 fn replay_scan_stderr(err: String) -> ReplayScan {
-    let n: i64 = err.len();
-    let mut start: i64 = 0;
-    let mut i: i64 = 0;
+    let n: u64 = err.len() as u64;
+    let mut start: u64 = 0;
+    let mut i: u64 = 0;
     let mut violation_line: String = String::from("");
     let mut abort_kind: String = String::from("");
     while i <= n {
@@ -978,13 +978,13 @@ fn replay_scan_stderr(err: String) -> ReplayScan {
 // "VowViolation" — the caller decides what that means for this line.
 fn replay_last_error_kind_in_line(line: String) -> String {
     let marker: String = String::from("{\"error\":\"");
-    let n: i64 = line.len();
-    let m: i64 = marker.len();
-    let mut i: i64 = 0;
+    let n: u64 = line.len() as u64;
+    let m: u64 = marker.len() as u64;
+    let mut i: u64 = 0;
     let mut found: String = String::from("");
     while i + m <= n {
         let mut matched: bool = true;
-        let mut j: i64 = 0;
+        let mut j: u64 = 0;
         while j < m {
             if line.byte_at(i + j) != marker.byte_at(j) {
                 matched = false;
@@ -993,8 +993,8 @@ fn replay_last_error_kind_in_line(line: String) -> String {
             j = j + 1;
         }
         if matched {
-            let start: i64 = i + m;
-            let mut end: i64 = start;
+            let start: u64 = i + m;
+            let mut end: u64 = start;
             while end < n && line.byte_at(end) != 34 {
                 end = end + 1;
             }
@@ -1009,8 +1009,8 @@ fn replay_last_error_kind_in_line(line: String) -> String {
 
 fn replay_all(ces: Vec<VerifyCE>, fns: Vec<IrFunction>, path: String, argv0: String) -> Vec<VerifyCE> [io] {
     let out: Vec<VerifyCE> = Vec::new();
-    let mut i: i64 = 0;
-    while i < ces.len() {
+    let mut i: u64 = 0;
+    while i < ces.len() as u64 {
         let ce: VerifyCE = ces[i];
         let v: ReplayVerdict = replay_one_ce(ce, fns, path, argv0);
         let reason: String = {
@@ -1044,8 +1044,8 @@ fn replay_all(ces: Vec<VerifyCE>, fns: Vec<IrFunction>, path: String, argv0: Str
 fn emit_ce_vars(vr: VerifyResult) [io] {
     let vnames: Vec<String> = vr.var_names;
     let vvals: Vec<String> = vr.var_values;
-    let mut vi: i64 = 0;
-    while vi < vnames.len() {
+    let mut vi: u64 = 0;
+    while vi < vnames.len() as u64 {
         eprintln_str(str4(String::from("    "), vnames[vi], String::from(" = "), vvals[vi]));
         vi = vi + 1;
     }
@@ -1100,12 +1100,12 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
     let in_flight_fi: Vec<i64> = Vec::new();
     let in_flight_tmp: Vec<String> = Vec::new();
     let mut fi: i64 = 0;
-    while fi < fns.len() {
+    while fi < fns.len() as i64 {
         let f: IrFunction = fns[fi];
         let vows: Vec<IrVowEntry> = f.vows;
         // Stop launching new ESBMC jobs once any in-flight verification has failed.
         if vows.len() > 0 && all_proven == 1 {
-            while in_flight_h.len() >= jobs {
+            while in_flight_h.len() as i64 >= jobs {
                 let oldest_h: i64 = in_flight_h[0];
                 let oldest_fi: i64 = in_flight_fi[0];
                 let oldest_tmp: String = in_flight_tmp[0];
@@ -1153,8 +1153,8 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
 
 fn emit_ir_warnings(ir_mod: IrModule, dctx: DiagCtx) [io] {
     let ws: Vec<String> = ir_mod.warnings;
-    let mut i: i64 = 0;
-    while i < ws.len() {
+    let mut i: u64 = 0;
+    while i < ws.len() as u64 {
         let d: Diagnostic = diag_new(SEV_WARNING(), EC_LOWERING_WARNING(), ws[i], String::from(""), 0, 0, DIAG_BLAME_NONE());
         diag_ctx_emit(dctx, d);
         eprintln_str(ws[i]);
@@ -1185,9 +1185,9 @@ fn resolve_verify_jobs(argv: Vec<String>) -> i64 [io] {
 fn vec_i64_remove_front(v: Vec<i64>) {
     // Caller-enforced invariant: v.len() > 0 (drain loops guard this).
     // Guard defensively so an empty Vec becomes a no-op rather than popping below zero.
-    let n: i64 = v.len();
+    let n: u64 = v.len() as u64;
     if n == 0 { return; }
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < n - 1 {
         v[i] = v[i + 1];
         i = i + 1;
@@ -1196,9 +1196,9 @@ fn vec_i64_remove_front(v: Vec<i64>) {
 }
 
 fn vec_string_remove_front(v: Vec<String>) {
-    let n: i64 = v.len();
+    let n: u64 = v.len() as u64;
     if n == 0 { return; }
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < n - 1 {
         v[i] = v[i + 1];
         i = i + 1;
@@ -1223,7 +1223,7 @@ fn record_soft_fail(meta: Vec<String>, status: String, message: String, function
 // Mirrors Rust's BuildStatus::VerifyFailed { function, description } shape.
 fn verify_function_index(fns: Vec<IrFunction>, name: String) -> i64 {
     let mut i: i64 = 0;
-    while i < fns.len() {
+    while i < fns.len() as i64 {
         let f: IrFunction = fns[i];
         if f.name == name {
             return i;
@@ -1296,7 +1296,7 @@ fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunct
 fn arith_owner_index(m: IrModule, owner_id: i64) -> i64 {
     let fns: Vec<IrFunction> = m.functions;
     let mut i: i64 = 0;
-    while i < fns.len() {
+    while i < fns.len() as i64 {
         let f: IrFunction = fns[i];
         if f.id == owner_id { return i; }
         i = i + 1;
@@ -1310,8 +1310,8 @@ fn arith_owner_index(m: IrModule, owner_id: i64) -> i64 {
 fn arith_already_reported(dctx: DiagCtx, owner_name: String, file: String, ostart: i64, olen: i64) -> bool {
     let ds: Vec<Diagnostic> = dctx.diags;
     let needle: String = str3(String::from("checked arithmetic in `"), owner_name, String::from("` can abort"));
-    let mut i: i64 = 0;
-    while i < ds.len() {
+    let mut i: u64 = 0;
+    while i < ds.len() as u64 {
         let d: Diagnostic = ds[i];
         if d.code == EC_ARITH_OVERFLOW_REACHABLE() && d.span_start == ostart &&
            d.span_len == olen && d.file == file && str_starts_with(d.message, needle) {
@@ -1613,12 +1613,12 @@ fn build_verify_phase(
     let mut all_proven: i64 = 1;
     let mut any_skipped: i64 = 0;
     let mut fi: i64 = 0;
-    while fi < fns.len() {
+    while fi < fns.len() as i64 {
         let f: IrFunction = fns[fi];
         let vows: Vec<IrVowEntry> = f.vows;
         // Stop launching new ESBMC jobs once any in-flight verification has failed.
         if vows.len() > 0 && all_proven == 1 {
-            while in_flight_h.len() >= jobs {
+            while in_flight_h.len() as i64 >= jobs {
                 let oldest_h: i64 = in_flight_h[0];
                 let oldest_fi: i64 = in_flight_fi[0];
                 let oldest_tmp: String = in_flight_tmp[0];
@@ -1946,8 +1946,8 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
     let mut failed: i64 = 0;
     let mut total_fns: i64 = 0;
     let mut fns_with_vows: i64 = 0;
-    let mut ti: i64 = 0;
-    while ti < test_files.len() {
+    let mut ti: u64 = 0;
+    while ti < test_files.len() as u64 {
         let test_path: String = test_files[ti];
         let short_name: String = file_stem_from_path(test_path);
         let start_time: i64 = time_unix_ms();
@@ -1967,8 +1967,8 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
 
             // Count contract density
             let fns2: Vec<IrFunction> = ir_mod.functions;
-            let mut fi: i64 = 0;
-            while fi < fns2.len() {
+            let mut fi: u64 = 0;
+            while fi < fns2.len() as u64 {
                 let f: IrFunction = fns2[fi];
                 if f.name != String::from("main") {
                     total_fns = total_fns + 1;
@@ -1992,12 +1992,12 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                 let t_dctx: DiagCtx = checked.dctx;
                 let t_const_fns: Vec<i64> = detect_const_fns(ir_mod);
                 let mut vfi: i64 = 0;
-                while vfi < vfns.len() {
+                while vfi < vfns.len() as i64 {
                     let vf: IrFunction = vfns[vfi];
                     let vows: Vec<IrVowEntry> = vf.vows;
                     // Stop launching new ESBMC jobs after a failure is observed.
                     if vows.len() > 0 && !verify_failed {
-                        while vin_flight_h.len() >= t_jobs {
+                        while vin_flight_h.len() as i64 >= t_jobs {
                             let oh: i64 = vin_flight_h[0];
                             let ofi: i64 = vin_flight_fi[0];
                             let otmp: String = vin_flight_tmp[0];
@@ -2167,8 +2167,8 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
     r.push_str(String::from(",\"failed\":"));
     r.push_str(i64_to_string(failed));
     r.push_str(String::from(",\"skipped\":0,\"tests\":["));
-    let mut ji: i64 = 0;
-    while ji < entries_json.len() {
+    let mut ji: u64 = 0;
+    while ji < entries_json.len() as u64 {
         if ji > 0 {
             r.push_str(String::from(","));
         }
@@ -14230,8 +14230,8 @@ fn cq_byte_is_alpha(b: i64) -> bool {
 }
 
 fn cq_has_alpha(s: String) -> bool {
-    let n: i64 = s.len();
-    let mut i: i64 = 0;
+    let n: u64 = s.len() as u64;
+    let mut i: u64 = 0;
     while i < n {
         if cq_byte_is_alpha(s.byte_at(i)) {
             return true;
@@ -14266,9 +14266,9 @@ fn cq_without_casts(s: String) -> String {
     let marker: String = String::from(" as ");
     let mut pos: i64 = str_find_str(rest, marker);
     while pos >= 0 {
-        let n: i64 = rest.len();
+        let n: i64 = rest.len() as i64;
         let after: String = str_substring(rest, pos + 4, n);
-        let an: i64 = after.len();
+        let an: i64 = after.len() as i64;
         let mut end: i64 = 0;
         while end < an {
             let b: i64 = after.byte_at(end);
@@ -14294,11 +14294,11 @@ fn cq_without_casts(s: String) -> String {
 
 fn cq_is_int_literal(s: String) -> bool {
     let t: String = str_trim(s);
-    let n: i64 = t.len();
+    let n: u64 = t.len() as u64;
     if n == 0 {
         return false;
     }
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     if t.byte_at(0) == 45 {
         if n == 1 {
             return false;
@@ -14322,7 +14322,7 @@ fn cq_predicate(desc: String) -> String {
     if sp < 0 {
         return String::from("");
     }
-    str_trim(str_substring(desc, sp + 1, desc.len()))
+    str_trim(str_substring(desc, sp + 1, desc.len() as i64))
 }
 
 fn cq_side_has_ordering(s: String) -> bool {
@@ -14365,7 +14365,7 @@ fn cq_is_weak_result_bound(raw_pred: String) -> bool {
     if str_contains_byte(pred, 40) {
         return false;
     }
-    let n: i64 = pred.len();
+    let n: i64 = pred.len() as i64;
     let p_le: i64 = str_find_str(pred, String::from("<="));
     if p_le >= 0 {
         return cq_weak_sides(str_substring(pred, 0, p_le), str_substring(pred, p_le + 2, n));
@@ -14460,12 +14460,12 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     // 1 when a trivial `return <default>` body satisfies this ensures (#81 PR-C).
     let e_trivial: Vec<i64> = Vec::new();
 
-    let nf: i64 = ir_mod.functions.len();
-    let mut fi: i64 = 0;
+    let nf: u64 = ir_mod.functions.len() as u64;
+    let mut fi: u64 = 0;
     while fi < nf {
         let func: IrFunction = ir_mod.functions[fi];
-        let nv: i64 = func.vows.len();
-        let mut vi: i64 = 0;
+        let nv: u64 = func.vows.len() as u64;
+        let mut vi: u64 = 0;
         while vi < nv {
             let ve: IrVowEntry = func.vows[vi];
             let ve_desc: String = ve.description;
@@ -14498,8 +14498,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     };
     if do_verify {
         if !esbmc_exists(esbmc_bin) {
-            let mut ei_missing: i64 = 0;
-            while ei_missing < e_statuses.len() {
+            let mut ei_missing: u64 = 0;
+            while ei_missing < e_statuses.len() as u64 {
                 e_statuses[ei_missing] = String::from("error");
                 ei_missing = ei_missing + 1;
             }
@@ -14512,8 +14512,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                 if func.vows.len() > 0 {
                     let skip_reason: String = non_modelable_reason(func, ir_mod, const_fn_indices_c);
                     if skip_reason.len() > 0 {
-                        let mut ei: i64 = 0;
-                        while ei < e_func_ids.len() {
+                        let mut ei: u64 = 0;
+                        while ei < e_func_ids.len() as u64 {
                             if e_func_ids[ei] == func.id {
                                 e_statuses[ei] = String::from("skipped");
                             }
@@ -14532,8 +14532,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                         // Per-clause status, including the tainted-PASSED guard
                         // (esbmc/esbmc#4484): see resolve_clause_status's doc
                         // comment in compiler/verifier.vow.
-                        let mut ei: i64 = 0;
-                        while ei < e_func_ids.len() {
+                        let mut ei: u64 = 0;
+                        while ei < e_func_ids.len() as u64 {
                             if e_func_ids[ei] == func.id {
                                 e_statuses[ei] = resolve_clause_status(e_vow_ids[ei], v_ids, v_proven, overall, mpr_tainted);
                             }
@@ -14548,8 +14548,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                         // with a `requires` are eligible.
                         let vac: i64 = verify_function_vacuity(esbmc_bin, func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
                         if vac == 1 {
-                            let mut vi2: i64 = 0;
-                            while vi2 < e_func_ids.len() {
+                            let mut vi2: u64 = 0;
+                            while vi2 < e_func_ids.len() as u64 {
                                 if e_func_ids[vi2] == func.id {
                                     e_statuses[vi2] = String::from("vacuous");
                                 }
@@ -14562,8 +14562,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                         // ensures clause trivially_satisfiable (informational).
                         let triv: i64 = verify_function_trivial(esbmc_bin, func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
                         if triv == 1 {
-                            let mut ti: i64 = 0;
-                            while ti < e_func_ids.len() {
+                            let mut ti: u64 = 0;
+                            while ti < e_func_ids.len() as u64 {
                                 if e_func_ids[ti] == func.id && e_kinds[ti] == String::from("ensures") {
                                     e_trivial[ti] = 1;
                                 }
@@ -14578,7 +14578,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     }
 
     // Build JSON output
-    let total: i64 = e_vow_ids.len();
+    let total: i64 = e_vow_ids.len() as i64;
     let json: String = String::from("{\"contracts\":[");
     let mut ci: i64 = 0;
     while ci < total {

@@ -9,7 +9,7 @@ struct TestSelection {
 }
 
 fn strip_vow_ext(path: String) -> String {
-    let n: i64 = path.len();
+    let n: i64 = path.len() as i64;
     if n > 4 {
         let d: i64 = path.byte_at(n - 4);
         let v: i64 = path.byte_at(n - 3);
@@ -35,9 +35,9 @@ fn file_stem_from_path(path: String) -> String {
 // Byte-wise lexicographic order mirrors Rust PathBuf ordering for the
 // ASCII-clean paths accepted by test discovery.
 fn test_path_lt(a: String, b: String) -> bool {
-    let na: i64 = a.len();
-    let nb: i64 = b.len();
-    let mut i: i64 = 0;
+    let na: u64 = a.len() as u64;
+    let nb: u64 = b.len() as u64;
+    let mut i: u64 = 0;
     while i < na && i < nb {
         let ca: i64 = a.byte_at(i);
         let cb: i64 = b.byte_at(i);
@@ -49,11 +49,11 @@ fn test_path_lt(a: String, b: String) -> bool {
 }
 
 fn sort_test_paths(paths: Vec<String>) {
-    let n: i64 = paths.len();
-    let mut i: i64 = 1;
+    let n: u64 = paths.len() as u64;
+    let mut i: u64 = 1;
     while i < n {
         let current: String = paths[i];
-        let mut j: i64 = i;
+        let mut j: u64 = i;
         while j > 0 && test_path_lt(current, paths[j - 1]) {
             paths[j] = paths[j - 1];
             j = j - 1;
@@ -70,7 +70,7 @@ fn is_test_file(name: String) -> bool {
     if string_starts_with(name, String::from("test_")) != 0 {
         return true;
     }
-    let n: i64 = name.len();
+    let n: i64 = name.len() as i64;
     if n > 9 {
         let suffix: String = string_substr(name, n - 9, 9);
         if suffix == String::from("_test.vow") {
@@ -82,7 +82,7 @@ fn is_test_file(name: String) -> bool {
 
 fn test_path_join(dir: String, entry: String) -> String {
     let joined: String = String::from("");
-    let n: i64 = dir.len();
+    let n: i64 = dir.len() as i64;
     if n > 0 && dir.byte_at(n - 1) == 47 {
         joined.push_str(string_substr(dir, 0, n - 1));
     } else {
@@ -115,8 +115,8 @@ fn discover_selected_tests(root: String, filter: String, root_is_dir: bool) -> V
         let dir: String = stack[stack.len() - 1];
         stack.pop();
         let entries: Vec<String> = fs_listdir(dir);
-        let mut i: i64 = 0;
-        while i < entries.len() {
+        let mut i: u64 = 0;
+        while i < entries.len() as u64 {
             let entry: String = entries[i];
             let full: String = test_path_join(dir, entry);
             if fs_is_symlink(full) == 1 {
