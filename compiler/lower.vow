@@ -5445,11 +5445,11 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
         ctx.cur_vow_lid = -1;
     }
 
-    let nparams: i64 = list_len(a, params_lid) / 3;
+    let nparams: i64 = list_len(a, params_lid) / 4;
     let mut pi: i64 = 0;
     while pi < nparams {
-        let pname_sid: i64 = list_get(a, params_lid, pi * 3);
-        let ptid: i64 = list_get(a, params_lid, pi * 3 + 1);
+        let pname_sid: i64 = list_get(a, params_lid, pi * 4);
+        let ptid: i64 = list_get(a, params_lid, pi * 4 + 1);
         let pty: i64 = lctx_lower_ast_ty(ctx, ptid);
         func.params.push(pty);
         let arg_args: Vec<i64> = Vec::new();
@@ -5515,9 +5515,9 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
 
     let mut ri: i64 = 0;
     while ri < nparams {
-        let ref_eid: i64 = list_get(a, params_lid, ri * 3 + 2);
+        let ref_eid: i64 = list_get(a, params_lid, ri * 4 + 2);
         if ref_eid != -1 {
-            let rpname_sid: i64 = list_get(a, params_lid, ri * 3);
+            let rpname_sid: i64 = list_get(a, params_lid, ri * 4);
             let rpname: String = arena_str(a, rpname_sid);
             let desc: String = String::from("requires ");
             desc.push_str(print_expr_text(a, ref_eid));
@@ -5710,12 +5710,12 @@ fn lower_module_vow(
             func_ret_variant_payload_tys.push(lower_ast_type_result_wide_payload_tys(a, ret_tid, type_alias_names, type_alias_target_tids));
 
             let params_lid: i64 = fn_params_lid(a, iid);
-            let nparams: i64 = list_len(a, params_lid) / 3;
+            let nparams: i64 = list_len(a, params_lid) / 4;
             let param_tys: Vec<i64> = Vec::new();
             let param_ast_tids: Vec<i64> = Vec::new();
             let mut pi: i64 = 0;
             while pi < nparams {
-                let ptid: i64 = list_get(a, params_lid, pi * 3 + 1);
+                let ptid: i64 = list_get(a, params_lid, pi * 4 + 1);
                 param_tys.push(lower_ast_ty_linear(a, ptid, linear_owner_names, type_alias_names, type_alias_target_tids));
                 param_ast_tids.push(ptid);
                 pi = pi + 1;
