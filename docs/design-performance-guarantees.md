@@ -239,7 +239,7 @@ The `where` clause determines the generation strategy:
 
 Arguments **not** bound as size parameters get random values constrained by `requires` clauses. The generator respects preconditions — only generates inputs satisfying `requires`.
 
-Size progression: geometric (e.g., n = 16, 32, 64, 128, 256, 512, 1024, 2048). Geometric spacing gives even distribution on log-log plots and good statistical power.
+Size progression: geometric (e.g., n = 16, 32, 64, 128, 256, 512, 1024, 2048). Geometric spacing gives even distribution on log-log plots and good statistical power. This 8-point progression is illustrative only — as "Grid range as a threshold-plateau mitigation" below explains, a grid this narrow can false-`FAIL` a correct declaration when its low end sits inside a function's pre-threshold plateau. `recommended_grid` extends it to twelve points for that reason.
 
 ### Step 2: Measurement
 
@@ -269,7 +269,7 @@ Two complementary tests:
   | `O(n³ log n)` | 8·log(2n)/log(n) | ~10.00 at n=16, ~8.80 at n=1024, ~8.50 at n=65536. |
 
 - **Tolerance** is class-specific too: ±15% relative to r_class(n) for power classes, and a narrower band (±10%) where adjacent power/log-polynomial classes overlap — notably `O(n)` vs. `O(n log n)` and `O(n²)` vs. `O(n² log n)`. A flat band is not sufficient: at n=1024 the expected ratio is 2.20 for `O(n log n)`, inside a ±20% linear band `[1.6, 2.4]`, and 4.40 for `O(n² log n)`, inside a ±15% quadratic band `[3.4, 4.6]`. The fixed candidate set therefore includes the logarithmic intermediate at every supported polynomial degree, and least-squares fitting is the tiebreaker in overlap zones.
-- **Small-n exclusion.** The first one or two sizes in the progression are typically excluded from the strict pass criterion — at n=16 the `O(n log n)` ratio is 2.5, which a flat ±20% window around 2.0 would reject. The harness still records those points (the example JSON includes them) but flags them as "warmup" rather than failing on them.
+- **Small-n exclusion.** The first one or two sizes in the progression are typically excluded from the strict pass criterion — at n=16 the `O(n log n)` ratio is 2.5, which a flat ±20% window around 2.0 would reject. The harness still records those points (the example JSON includes them) but flags them as "warmup" rather than failing on them. This exclusion belongs to the doubling-ratio test above, which `analyze()` does not implement (`expected_doubling_ratio` is a standalone pure method, never called from `analyze()`); it is not a mechanism the least-squares curve-fitting path below has or needs — see "Grid range as a threshold-plateau mitigation" for that path's own approach to a related but distinct failure mode.
 - The doubling-ratio test alone **cannot** reliably separate `O(n)` from `O(n log n)`. When the observed ratios fall in the overlap zone, the verdict falls back to least-squares curve fitting (below) as the tiebreaker; if curve fitting is also ambiguous, the harness reports `AMBIGUOUS` rather than `PASS` or `FAIL`.
 
 **Least-squares curve fitting** (secondary):
@@ -393,8 +393,16 @@ Distinguishing `O(n^p)` from `O(n^p log n)` is genuinely hard empirically becaus
 1. **Use large size ranges:** n from 64 to 65536 (10 doublings). The *multiplicative* gap in `n log n` vs `n` over this range is only `log(65536) / log(64) = 16 / 6 ≈ 2.67`× (not ~16×). A wide range helps, but the shape separation remains modest — large ranges alone cannot reliably distinguish the two classes.
 2. **Use operation counts, not wall-clock time:** Eliminates measurement noise, which is much larger than the ~2.67× shape gap above.
 3. **Pair with class-specific expected ratios + curve fitting:** For polynomial degree `p`, the log-polynomial ratio is `r(n) = 2^p·log(2n)/log(n)`. For example, `O(n² log n)` decreases from ~5.00 at n=16 to ~4.25 at n=65536, and is 4.40 at n=1024 versus 4.00 for `O(n²)`. Including both candidates in least-squares fitting is essential because those absolute ratios overlap the tolerance band.
-4. **Accept ambiguity:** If both classes fit with R² ≥ 0.95 and the trend is inconclusive, the verifier reports `AMBIGUOUS` rather than picking one. The practical difference is rarely consequential, but the verifier should not pretend to certainty it doesn't have.
+4. **Grid range, not R²-tie ambiguity:** `analyze()` does not treat near-tied adjacent-class fits as `AMBIGUOUS`. Measured ΔR² gaps between genuine violations and threshold-plateau false fails are fully interleaved (see issue #1007), so no fixed epsilon separates them, and the `maximum_trend_is_ambiguous` guard above structurally only ever fires for the maximum class (`O(n³ log n)`) — it cannot apply to an adjacent non-maximum pair like `O(n)` vs. `O(n log n)`. The practical mitigation for this case is a well-ranged measurement grid rather than a tie-breaking rule; see "Grid range as a threshold-plateau mitigation" below.
 5. **Future:** If RAML-style static analysis is added later, it can disambiguate.
+
+### Grid range as a threshold-plateau mitigation
+
+A different failure mode than adjacent-class overlap: a function with a lower-order threshold effect (e.g. `n.saturating_sub(100)`, genuinely `O(n)`) can have its curve fit dominated by the degenerate near-threshold samples when the measurement grid's low end sits inside the plateau. On the example grid above (`n = 16, 32, …, 2048`), `n.saturating_sub(100)` declared `O(n)` fits `O(n log n)` with a narrowly higher R², producing a false `FAIL` — and no adjacent-class ambiguity rule can soundly catch this, because the ΔR² gaps for this case and for genuine violations are interleaved (see the "Grid range, not R²-tie ambiguity" point above and issue #1007).
+
+The grid's high end, not R²-tie detection, is the lever: extending the range so large-`n` points dominate the unweighted least-squares residual flips the best fit back to the correct class. `recommended_grid` in `vow-perf/src/lib.rs` generates a default 12-sample grid (eleven doublings from a given floor) validated to resolve this false-`FAIL` mode for thresholds up to 200 units wide, at every supported polynomial degree, with no change in verdict for genuine violations.
+
+This is a mitigation, not a guarantee: the grid range a given workload needs scales with its hidden threshold magnitude, which `analyze()` cannot observe in advance from the samples it's given. A harness that can profile a function before fixing its grid should prefer a range wide enough to dominate any threshold effect it detects; `recommended_grid`'s fixed default is a reasonable starting point for the magnitudes validated so far, not a proof for arbitrary thresholds.
 
 ## Pipeline Integration
 

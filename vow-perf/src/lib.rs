@@ -235,6 +235,15 @@ const CANDIDATES: [ComplexityClass; 8] = [
 ];
 
 /// Classify measured operation counts against a declared complexity class.
+///
+/// Assumes `samples` is a well-ranged measurement grid: best-fit selection
+/// compares candidates across the whole sample set, so a grid whose low end
+/// sits inside a function's pre-threshold plateau can make an adjacent
+/// higher-order class narrowly out-fit the correct one, producing a false
+/// `Fail`. [`recommended_grid`] generates a grid wide enough to resolve this
+/// for the threshold magnitudes this crate has validated against; callers
+/// building their own grid should prefer a similarly wide, high-end-heavy
+/// range over a narrow one.
 pub fn analyze(declared: ComplexityClass, samples: &[Sample]) -> Result<Analysis, AnalysisError> {
     if samples.len() < 3 {
         return Err(AnalysisError::TooFewSamples);
@@ -375,6 +384,66 @@ fn r_squared(class: ComplexityClass, samples: &[Sample]) -> f64 {
     }
 
     1.0 - residual_sum / total_sum
+}
+
+/// Number of geometrically-doubled sizes in `recommended_grid`'s output.
+const RECOMMENDED_GRID_SAMPLE_COUNT: u32 = 12;
+
+/// An invalid `min_input_size` for [`recommended_grid`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecommendedGridError {
+    InputSizeTooSmall { min_input_size: u64 },
+    Overflow { min_input_size: u64 },
+}
+
+impl fmt::Display for RecommendedGridError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InputSizeTooSmall { min_input_size } => write!(
+                formatter,
+                "input size {min_input_size} is too small for a measurement grid"
+            ),
+            Self::Overflow { min_input_size } => write!(
+                formatter,
+                "input size {min_input_size} is too large to double \
+                 {} times without overflow",
+                RECOMMENDED_GRID_SAMPLE_COUNT - 1
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RecommendedGridError {}
+
+/// A default measurement grid for [`analyze`]'s input.
+///
+/// Returns twelve sizes, geometrically doubling from `min_input_size` (so
+/// `min_input_size = 16` yields `[16, 32, ..., 32768]`). Empirically validated
+/// to resolve false `Fail`s caused by a flat pre-threshold cost region up to
+/// 200 units wide, for every supported polynomial degree, with no change in
+/// verdict for genuine complexity violations.
+///
+/// This is a mitigation, not a guarantee: it is bounded by how far the grid's
+/// high end sits above the workload's hidden threshold. A function whose
+/// flat region extends past this grid's high end needs a wider grid than
+/// this default provides — see `analyze`'s doc comment.
+pub fn recommended_grid(min_input_size: u64) -> Result<Vec<u64>, RecommendedGridError> {
+    if min_input_size < 2 {
+        return Err(RecommendedGridError::InputSizeTooSmall { min_input_size });
+    }
+
+    let mut sizes = Vec::with_capacity(RECOMMENDED_GRID_SAMPLE_COUNT as usize);
+    sizes.push(min_input_size);
+    for _ in 1..RECOMMENDED_GRID_SAMPLE_COUNT {
+        let next = sizes
+            .last()
+            .copied()
+            .expect("just pushed the first size above")
+            .checked_mul(2)
+            .ok_or(RecommendedGridError::Overflow { min_input_size })?;
+        sizes.push(next);
+    }
+    Ok(sizes)
 }
 
 fn basis_value(class: ComplexityClass, input_size: u64) -> f64 {
