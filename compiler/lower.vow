@@ -5519,6 +5519,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
         if ref_eid != -1 {
             let rpname_sid: i64 = list_get(a, params_lid, ri * 4);
             let rpname: String = arena_str(a, rpname_sid);
+            let rname_span: i64 = list_get(a, params_lid, ri * 4 + 3);
             let desc: String = String::from("requires ");
             desc.push_str(print_expr_text(a, ref_eid));
             desc.push_str(String::from(" (where on parameter "));
@@ -5527,7 +5528,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
             collect_free_vars_in_expr(ctx, ref_eid, binding_names, binding_ids);
-            let ref_offset: i64 = span_unpack_start(expr_span(a, ref_eid));
+            let ref_offset: i64 = span_unpack_start(rname_span);
             let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLER(), binding_ids, binding_names, ref_offset);
             let pred_id: i64 = lower_expr(ctx, ref_eid);
             let vow_args: Vec<i64> = Vec::new();
