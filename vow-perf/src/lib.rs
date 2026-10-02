@@ -20,7 +20,7 @@ mod instrumentation;
 
 use std::fmt;
 
-pub use instrumentation::{InstrumentationError, InstrumentedModule, instrument_module};
+pub use instrumentation::{instrument_module, InstrumentationError, InstrumentedModule};
 
 /// A canonical single-variable complexity class.
 ///
@@ -419,14 +419,19 @@ impl std::error::Error for RecommendedGridError {}
 ///
 /// Returns twelve sizes, geometrically doubling from `min_input_size` (so
 /// `min_input_size = 16` yields `[16, 32, ..., 32768]`). Empirically validated
-/// to resolve false `Fail`s caused by a flat pre-threshold cost region up to
-/// 200 units wide, for every supported polynomial degree, with no change in
-/// verdict for genuine complexity violations.
+/// at `min_input_size = 16` to resolve false `Fail`s caused by a flat
+/// pre-threshold cost region up to 200 units wide, for every supported
+/// polynomial degree, with no change in verdict for genuine complexity
+/// violations.
 ///
 /// This is a mitigation, not a guarantee: it is bounded by how far the grid's
 /// high end sits above the workload's hidden threshold. A function whose
 /// flat region extends past this grid's high end needs a wider grid than
-/// this default provides — see `analyze`'s doc comment.
+/// this default provides — see `analyze`'s doc comment. The floor matters
+/// too: a smaller `min_input_size` adds more samples inside the plateau and
+/// can still produce a false `Fail` for the same threshold widths this
+/// validation covers — prefer 16 unless a larger floor is already known to
+/// clear the workload's threshold.
 pub fn recommended_grid(min_input_size: u64) -> Result<Vec<u64>, RecommendedGridError> {
     if min_input_size < 2 {
         return Err(RecommendedGridError::InputSizeTooSmall { min_input_size });

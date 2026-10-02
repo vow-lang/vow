@@ -1,12 +1,36 @@
-use vow_perf::{ComplexityClass, RecommendedGridError, Sample, Verdict, analyze, recommended_grid};
+use vow_perf::{analyze, recommended_grid, ComplexityClass, RecommendedGridError, Sample, Verdict};
+
+fn plateau_samples(threshold_width: u64, degree: u32) -> Vec<Sample> {
+    recommended_grid(16)
+        .unwrap()
+        .into_iter()
+        .map(|input_size| {
+            Sample::new(
+                input_size,
+                input_size.saturating_sub(threshold_width).pow(degree),
+            )
+        })
+        .collect()
+}
+
+fn log_violation_samples(degree: u32) -> Vec<Sample> {
+    recommended_grid(16)
+        .unwrap()
+        .into_iter()
+        .map(|input_size| {
+            Sample::new(
+                input_size,
+                input_size.pow(degree) * u64::from(input_size.ilog2()),
+            )
+        })
+        .collect()
+}
 
 #[test]
 fn recommended_grid_doubles_from_the_given_floor() {
     assert_eq!(
         recommended_grid(16).unwrap(),
-        vec![
-            16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768
-        ]
+        vec![16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
     );
 }
 
@@ -42,13 +66,7 @@ fn recommended_grid_rejects_floors_that_would_overflow_while_doubling() {
 
 #[test]
 fn linear_threshold_plateau_is_no_longer_a_false_fail_on_the_recommended_grid() {
-    let samples = recommended_grid(16)
-        .unwrap()
-        .into_iter()
-        .map(|input_size| Sample::new(input_size, input_size.saturating_sub(100)))
-        .collect::<Vec<_>>();
-
-    let analysis = analyze(ComplexityClass::Linear, &samples).unwrap();
+    let analysis = analyze(ComplexityClass::Linear, &plateau_samples(100, 1)).unwrap();
 
     assert_eq!(analysis.verdict, Verdict::Pass);
     assert_eq!(analysis.observed, Some(ComplexityClass::Linear));
@@ -56,13 +74,7 @@ fn linear_threshold_plateau_is_no_longer_a_false_fail_on_the_recommended_grid() 
 
 #[test]
 fn quadratic_threshold_plateau_is_no_longer_a_false_fail_on_the_recommended_grid() {
-    let samples = recommended_grid(16)
-        .unwrap()
-        .into_iter()
-        .map(|input_size| Sample::new(input_size, input_size.saturating_sub(100).pow(2)))
-        .collect::<Vec<_>>();
-
-    let analysis = analyze(ComplexityClass::Quadratic, &samples).unwrap();
+    let analysis = analyze(ComplexityClass::Quadratic, &plateau_samples(100, 2)).unwrap();
 
     assert_eq!(analysis.verdict, Verdict::Pass);
     assert_eq!(analysis.observed, Some(ComplexityClass::Quadratic));
@@ -70,13 +82,7 @@ fn quadratic_threshold_plateau_is_no_longer_a_false_fail_on_the_recommended_grid
 
 #[test]
 fn cubic_threshold_plateau_is_no_longer_a_false_fail_on_the_recommended_grid() {
-    let samples = recommended_grid(16)
-        .unwrap()
-        .into_iter()
-        .map(|input_size| Sample::new(input_size, input_size.saturating_sub(100).pow(3)))
-        .collect::<Vec<_>>();
-
-    let analysis = analyze(ComplexityClass::Cubic, &samples).unwrap();
+    let analysis = analyze(ComplexityClass::Cubic, &plateau_samples(100, 3)).unwrap();
 
     assert_eq!(analysis.verdict, Verdict::Pass);
     assert_eq!(analysis.observed, Some(ComplexityClass::Cubic));
@@ -84,13 +90,7 @@ fn cubic_threshold_plateau_is_no_longer_a_false_fail_on_the_recommended_grid() {
 
 #[test]
 fn linear_wider_threshold_plateau_is_no_longer_a_false_fail_on_the_recommended_grid() {
-    let samples = recommended_grid(16)
-        .unwrap()
-        .into_iter()
-        .map(|input_size| Sample::new(input_size, input_size.saturating_sub(200)))
-        .collect::<Vec<_>>();
-
-    let analysis = analyze(ComplexityClass::Linear, &samples).unwrap();
+    let analysis = analyze(ComplexityClass::Linear, &plateau_samples(200, 1)).unwrap();
 
     assert_eq!(analysis.verdict, Verdict::Pass);
     assert_eq!(analysis.observed, Some(ComplexityClass::Linear));
@@ -98,13 +98,7 @@ fn linear_wider_threshold_plateau_is_no_longer_a_false_fail_on_the_recommended_g
 
 #[test]
 fn quadratic_wider_threshold_plateau_is_no_longer_a_false_fail_on_the_recommended_grid() {
-    let samples = recommended_grid(16)
-        .unwrap()
-        .into_iter()
-        .map(|input_size| Sample::new(input_size, input_size.saturating_sub(200).pow(2)))
-        .collect::<Vec<_>>();
-
-    let analysis = analyze(ComplexityClass::Quadratic, &samples).unwrap();
+    let analysis = analyze(ComplexityClass::Quadratic, &plateau_samples(200, 2)).unwrap();
 
     assert_eq!(analysis.verdict, Verdict::Pass);
     assert_eq!(analysis.observed, Some(ComplexityClass::Quadratic));
@@ -112,13 +106,7 @@ fn quadratic_wider_threshold_plateau_is_no_longer_a_false_fail_on_the_recommende
 
 #[test]
 fn cubic_wider_threshold_plateau_is_no_longer_a_false_fail_on_the_recommended_grid() {
-    let samples = recommended_grid(16)
-        .unwrap()
-        .into_iter()
-        .map(|input_size| Sample::new(input_size, input_size.saturating_sub(200).pow(3)))
-        .collect::<Vec<_>>();
-
-    let analysis = analyze(ComplexityClass::Cubic, &samples).unwrap();
+    let analysis = analyze(ComplexityClass::Cubic, &plateau_samples(200, 3)).unwrap();
 
     assert_eq!(analysis.verdict, Verdict::Pass);
     assert_eq!(analysis.observed, Some(ComplexityClass::Cubic));
@@ -126,13 +114,7 @@ fn cubic_wider_threshold_plateau_is_no_longer_a_false_fail_on_the_recommended_gr
 
 #[test]
 fn linear_log_violation_still_fails_on_the_recommended_grid() {
-    let samples = recommended_grid(16)
-        .unwrap()
-        .into_iter()
-        .map(|input_size| Sample::new(input_size, input_size * u64::from(input_size.ilog2())))
-        .collect::<Vec<_>>();
-
-    let analysis = analyze(ComplexityClass::Linear, &samples).unwrap();
+    let analysis = analyze(ComplexityClass::Linear, &log_violation_samples(1)).unwrap();
 
     assert_eq!(analysis.verdict, Verdict::Fail);
     assert_eq!(analysis.observed, Some(ComplexityClass::Linearithmic));
@@ -140,18 +122,7 @@ fn linear_log_violation_still_fails_on_the_recommended_grid() {
 
 #[test]
 fn quadratic_log_violation_still_fails_on_the_recommended_grid() {
-    let samples = recommended_grid(16)
-        .unwrap()
-        .into_iter()
-        .map(|input_size| {
-            Sample::new(
-                input_size,
-                input_size.pow(2) * u64::from(input_size.ilog2()),
-            )
-        })
-        .collect::<Vec<_>>();
-
-    let analysis = analyze(ComplexityClass::Quadratic, &samples).unwrap();
+    let analysis = analyze(ComplexityClass::Quadratic, &log_violation_samples(2)).unwrap();
 
     assert_eq!(analysis.verdict, Verdict::Fail);
     assert_eq!(
@@ -162,18 +133,7 @@ fn quadratic_log_violation_still_fails_on_the_recommended_grid() {
 
 #[test]
 fn cubic_log_violation_still_fails_on_the_recommended_grid() {
-    let samples = recommended_grid(16)
-        .unwrap()
-        .into_iter()
-        .map(|input_size| {
-            Sample::new(
-                input_size,
-                input_size.pow(3) * u64::from(input_size.ilog2()),
-            )
-        })
-        .collect::<Vec<_>>();
-
-    let analysis = analyze(ComplexityClass::Cubic, &samples).unwrap();
+    let analysis = analyze(ComplexityClass::Cubic, &log_violation_samples(3)).unwrap();
 
     assert_eq!(analysis.verdict, Verdict::Fail);
     assert_eq!(analysis.observed, Some(ComplexityClass::CubicLogarithmic));
