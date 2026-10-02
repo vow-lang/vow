@@ -478,6 +478,77 @@ fn check_wide_constants_are_non_modelable() -> i64 {
     0
 }
 
+// `bits` is the i64 reinterpretation of an f64's IEEE-754 bit pattern (i.e.
+// `<value>.to_bits() as i64`). ConstF64 stays opcode-level modelable (unlike
+// ConstI128/ConstU128 above), so the guard only shows up in the rendered C,
+// not in `non_modelable_reason`.
+fn check_nonfinite_f64_const(id: i64, name: String, bits: i64, base_code: i64) -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(ir_inst_new(
+        0, IOP_CONST_F64(), ITY_F64(), Vec::new(),
+        IDATA_CONST_F64(), bits, 0, String::from("")
+    ));
+    insts.push(mk_inst_return(1, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let f: IrFunction = mk_function(id, name, Vec::new(), ITY_F64(), blocks);
+    let functions: Vec<IrFunction> = Vec::new();
+    functions.push(f);
+    let m: IrModule = mk_module(functions);
+    let const_fn_indices: Vec<i64> = Vec::new();
+
+    let c: String = String::from("");
+    let modelable_fi_set: Vec<i64> = Vec::new();
+    emit_c_function(c, f, const_fn_indices, modelable_fi_set, m, 16, 16, 16, 16, false, false, 0);
+
+    let expected: String = str3(
+        String::from("__ESBMC_assert(0, \"vow:"),
+        unsupported_op_vow_id_str(),
+        String::from("\"")
+    );
+    if !c.contains(expected) { return base_code; }
+    let leaked_literal: bool = c.contains(String::from("= inf;"))
+        || c.contains(String::from("= -inf;"))
+        || c.contains(String::from("= NaN;"));
+    if leaked_literal { return base_code + 1; }
+    0
+}
+
+fn check_nonfinite_f64_consts_fail_closed() -> i64 {
+    let r1: i64 = check_nonfinite_f64_const(20, String::from("f64_pos_inf"), 9218868437227405312, 70);
+    if r1 != 0 { return r1; }
+    let r2: i64 = check_nonfinite_f64_const(21, String::from("f64_neg_inf"), -4503599627370496, 80);
+    if r2 != 0 { return r2; }
+    let r3: i64 = check_nonfinite_f64_const(22, String::from("f64_nan"), 9221120237041090560, 90);
+    if r3 != 0 { return r3; }
+    0
+}
+
+// f64::MAX (largest finite value, exponent bits not all-ones) must still
+// render as a normal literal, not trip the guard.
+fn check_finite_f64_max_const_still_renders() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(ir_inst_new(
+        0, IOP_CONST_F64(), ITY_F64(), Vec::new(),
+        IDATA_CONST_F64(), 9218868437227405311, 0, String::from("")
+    ));
+    insts.push(mk_inst_return(1, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let f: IrFunction = mk_function(23, String::from("f64_max"), Vec::new(), ITY_F64(), blocks);
+    let functions: Vec<IrFunction> = Vec::new();
+    functions.push(f);
+    let m: IrModule = mk_module(functions);
+    let const_fn_indices: Vec<i64> = Vec::new();
+
+    let c: String = String::from("");
+    let modelable_fi_set: Vec<i64> = Vec::new();
+    emit_c_function(c, f, const_fn_indices, modelable_fi_set, m, 16, 16, 16, 16, false, false, 0);
+
+    if c.contains(String::from("__ESBMC_assert(0")) { return 100; }
+    0
+}
+
 // Push the get/set call for an indexed container access (id `base_id`,
 // consuming `base_id` itself for the stored value in the set case) followed
 // by its return. Shared by the single-block and cross-block indexed-container
@@ -760,6 +831,10 @@ fn main() -> i32 {
     if r15 != 0 { return i64_to_i32_wrap(r15); }
     let r16: i64 = check_wide_constants_are_non_modelable();
     if r16 != 0 { return i64_to_i32_wrap(r16); }
+    let r16a: i64 = check_nonfinite_f64_consts_fail_closed();
+    if r16a != 0 { return i64_to_i32_wrap(r16a); }
+    let r16b: i64 = check_finite_f64_max_const_still_renders();
+    if r16b != 0 { return i64_to_i32_wrap(r16b); }
     let r17: i64 = check_bounds_assert_signedness();
     if r17 != 0 { return i64_to_i32_wrap(r17); }
     let r18: i64 = check_inst_ty_by_id_table();
