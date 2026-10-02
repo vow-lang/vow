@@ -6741,6 +6741,73 @@ fn area(s: Shape) -> i64 {
         }
     }
 
+    /// The for-each desugar hand-rolls its index chain, so none of it picks up
+    /// signedness from the checker: a stray `I64` payload on the `Lt` would be a
+    /// signed compare on a `u64` length with no diagnostic and no wrong answer
+    /// below `i64::MAX`. Pin every link, including the `continue` path's second
+    /// increment.
+    #[test]
+    fn for_each_desugar_index_chain_is_unsigned() {
+        let module = lower_source_to_module(
+            r#"
+module ForEachUnsignedIndex
+
+fn sum(v: Vec<i64>) -> i64 {
+    let mut s: i64 = 0;
+    for x in v {
+        if x == 7 { continue; }
+        s = s + x;
+    }
+    s
+}
+"#,
+            "for_each_unsigned_index.vow",
+        );
+
+        let func = &module.functions[0];
+        let insts = insts_of(func);
+        let count = |pred: &dyn Fn(&Inst) -> bool| insts.iter().filter(|i| pred(i)).count();
+        let unsigned = InstData::Integer(IntegerType::U64);
+
+        assert_eq!(
+            count(&|i| i.opcode == Opcode::Call
+                && i.data == InstData::CallExtern("__vow_vec_len".to_string())
+                && i.ty == Ty::U64),
+            1,
+            "len call must be U64:\n{func:#?}"
+        );
+        assert_eq!(
+            count(&|i| i.opcode == Opcode::Lt && i.data == unsigned),
+            1,
+            "idx < len must compare as U64:\n{func:#?}"
+        );
+        assert_eq!(
+            count(&|i| i.opcode == Opcode::Lt && i.data != unsigned),
+            0,
+            "no signed Lt may remain:\n{func:#?}"
+        );
+        assert_eq!(
+            count(&|i| i.opcode == Opcode::WrappingAdd && i.ty == Ty::U64 && i.data == unsigned),
+            2,
+            "loop-end and continue increments must both be U64:\n{func:#?}"
+        );
+        assert_eq!(
+            count(&|i| i.opcode == Opcode::Phi && i.ty == Ty::U64),
+            1,
+            "index phi must be U64:\n{func:#?}"
+        );
+        assert_eq!(
+            count(&|i| i.opcode == Opcode::ConstU64),
+            3,
+            "index init and both increment constants must be ConstU64:\n{func:#?}"
+        );
+        assert_eq!(
+            count(&|i| i.opcode == Opcode::WrappingAdd && i.ty == Ty::I64),
+            1,
+            "only the user's `s + x` stays I64:\n{func:#?}"
+        );
+    }
+
     /// The applier half of the `builtin_method_spec` seam: the table says *what*
     /// to emit, and this pins that the emission actually happens — every
     /// `MethodArg` branch, the operand order, and the result tag. The pure table

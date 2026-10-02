@@ -1,0 +1,78 @@
+module TestLowerForeachUnsignedIndex
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+
+fn lower_fixture(source: String, file: String) -> IrModule {
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(lex(source), arena, diag_ctx_new(), file);
+    let item_files: Vec<String> = Vec::new();
+    item_files.push(file);
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), item_files
+    )
+}
+
+fn main() -> i32 {
+    let lowered: IrModule = lower_fixture(
+        String::from("module ForEachUnsignedIndex\nfn sum(v: Vec<i64>) -> i64 {\n    let mut s: i64 = 0;\n    for x in v {\n        if x == 7 { continue; }\n        s = s + x;\n    }\n    s\n}"),
+        String::from("for_each_unsigned_index.vow")
+    );
+    if lowered.functions.len() != 1 { return 1; }
+    let function: IrFunction = lowered.functions[0];
+    let mut len_calls: i64 = 0;
+    let mut lt_unsigned: i64 = 0;
+    let mut lt_other: i64 = 0;
+    let mut add_unsigned: i64 = 0;
+    let mut add_signed: i64 = 0;
+    let mut phi_unsigned: i64 = 0;
+    let mut const_unsigned: i64 = 0;
+    let mut block_index: i64 = 0;
+    while block_index < function.blocks.len() as i64 {
+        let block: IrBlock = function.blocks[block_index];
+        let mut inst_index: i64 = 0;
+        while inst_index < block.insts.len() as i64 {
+            let inst: IrInst = block.insts[inst_index];
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == String::from("__vow_vec_len") && inst.ty == ITY_U64() {
+                len_calls = len_calls + 1;
+            }
+            if inst.op == IOP_LT() {
+                if inst.dk == IDATA_INTEGER() && inst.dv == ITY_U64() {
+                    lt_unsigned = lt_unsigned + 1;
+                } else {
+                    lt_other = lt_other + 1;
+                }
+            }
+            if inst.op == IOP_WADD() {
+                if inst.ty == ITY_U64() && inst.dk == IDATA_INTEGER() && inst.dv == ITY_U64() {
+                    add_unsigned = add_unsigned + 1;
+                }
+                if inst.ty == ITY_I64() {
+                    add_signed = add_signed + 1;
+                }
+            }
+            if inst.op == IOP_PHI() && inst.ty == ITY_U64() {
+                phi_unsigned = phi_unsigned + 1;
+            }
+            if inst.op == IOP_CONST_U64() {
+                const_unsigned = const_unsigned + 1;
+            }
+            inst_index = inst_index + 1;
+        }
+        block_index = block_index + 1;
+    }
+    if len_calls != 1 { return 10; }
+    if lt_unsigned != 1 { return 11; }
+    if lt_other != 0 { return 12; }
+    if add_unsigned != 2 { return 13; }
+    if phi_unsigned != 1 { return 14; }
+    if const_unsigned != 3 { return 15; }
+    if add_signed != 1 { return 16; }
+    0
+}
