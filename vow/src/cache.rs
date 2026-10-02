@@ -16,10 +16,16 @@ const VERIFY_CACHE_FAILURE_HEADER: &str = "FAILED v3";
 // stack slots, UTF-8-preserving string lexing, contextual narrow-integer
 // reductions, narrow Option parameter payloads, width-preserving unary
 // negation, aggregate match-payload tags (which also change FieldGet indices
-// for the same source), the fail-closed 128-bit aggregate-field guard, and
-// element-width narrowing at Vec index reads, and unsigned lowering for u64
-// checked literal expressions all make pre-cutover objects unsafe to reuse.
-const COMPILE_CACHE_ABI_VERSION: &str = "static-string-arena-slot-utf8-lexer-narrow-unary-match-aggregate-wide-guard-index-u64-literal-v8";
+// for the same source), the fail-closed 128-bit aggregate-field guard,
+// element-width narrowing at Vec index reads, unsigned lowering for u64
+// checked literal expressions, and (#1030) the wide-context propagation
+// family recognizing all integer widths narrower than i64 -- not just
+// u64/i128/u128 -- for if/match-branch markers, field/index assignment,
+// struct-literal and enum/Option/Result payload construction, plus
+// locally-constructed annotated Option/Result locals now tagging their
+// element type for post-extraction reads, all make pre-cutover objects
+// unsafe to reuse.
+const COMPILE_CACHE_ABI_VERSION: &str = "static-string-arena-slot-utf8-lexer-narrow-unary-match-aggregate-wide-guard-index-u64-literal-narrow-context-v9";
 
 pub struct CompileCache {
     dir: PathBuf,
@@ -83,7 +89,11 @@ impl CompileCache {
 
     pub fn lookup(&self, key: &str) -> Option<PathBuf> {
         let cached = self.dir.join(format!("{key}.o"));
-        if cached.exists() { Some(cached) } else { None }
+        if cached.exists() {
+            Some(cached)
+        } else {
+            None
+        }
     }
 
     pub fn store(&self, key: &str, obj: &Path) -> PathBuf {
@@ -548,26 +558,22 @@ mod tests {
         // Different unwind bound -> miss.
         assert!(vc.lookup_failure(C_SRC, 20, &base).is_none());
         // Different C source -> miss.
-        assert!(
-            vc.lookup_failure("int g(void) { return 1; }", 10, &base)
-                .is_none()
-        );
+        assert!(vc
+            .lookup_failure("int g(void) { return 1; }", 10, &base)
+            .is_none());
         // Different memory limit -> miss.
-        assert!(
-            vc.lookup_failure(
+        assert!(vc
+            .lookup_failure(
                 C_SRC,
                 10,
                 &cfg(Solver::Boolector, Encoding::Bv, None, Some(1024))
             )
-            .is_none()
-        );
+            .is_none());
         // Never-stored key -> miss.
         let empty_dir = TempDir::new().unwrap();
-        assert!(
-            cache_in(&empty_dir)
-                .lookup_failure(C_SRC, 10, &base)
-                .is_none()
-        );
+        assert!(cache_in(&empty_dir)
+            .lookup_failure(C_SRC, 10, &base)
+            .is_none());
     }
 
     #[test]
@@ -780,6 +786,25 @@ mod tests {
             "Release",
             "Off",
             "static-string-arena-slot-utf8-lexer-narrow-unary-match-aggregate-wide-guard-index-v7",
+        )
+        .unwrap();
+        let current_key = CompileCache::cache_key(&deps, "Release", "Off").unwrap();
+
+        assert_ne!(legacy_key, current_key);
+    }
+
+    #[test]
+    fn compile_cache_key_invalidates_pre_narrow_context_objects() {
+        let dir = TempDir::new().unwrap();
+        let a = dir.path().join("a.vow");
+        std::fs::write(&a, "module A").unwrap();
+
+        let deps = DependencyManifest::from_paths(vec![a]);
+        let legacy_key = CompileCache::cache_key_with_abi_seed(
+            &deps,
+            "Release",
+            "Off",
+            "static-string-arena-slot-utf8-lexer-narrow-unary-match-aggregate-wide-guard-index-u64-literal-v8",
         )
         .unwrap();
         let current_key = CompileCache::cache_key(&deps, "Release", "Off").unwrap();
