@@ -20,7 +20,7 @@ fn checked_error_count(source: String) -> i64 [io] {
     );
     let item_files: Vec<String> = Vec::new();
     let mut i: i64 = 0;
-    while i < parsed.items.len() {
+    while i < parsed.items.len() as i64 {
         item_files.push(String::from("float_lit.vow"));
         i = i + 1;
     }
@@ -72,7 +72,7 @@ fn check_lowered_constant_and_text() -> i32 [io] {
     );
     let item_files: Vec<String> = Vec::new();
     let mut item_index: i64 = 0;
-    while item_index < parsed.items.len() {
+    while item_index < parsed.items.len() as i64 {
         item_files.push(String::from("float_lower.vow"));
         item_index = item_index + 1;
     }
@@ -85,13 +85,13 @@ fn check_lowered_constant_and_text() -> i32 [io] {
     let mut saw_const: bool = false;
     let mut rendered: String = String::from("");
     let mut function_index: i64 = 0;
-    while function_index < lowered.functions.len() {
+    while function_index < lowered.functions.len() as i64 {
         let f: IrFunction = lowered.functions[function_index];
         let mut block_index: i64 = 0;
-        while block_index < f.blocks.len() {
+        while block_index < f.blocks.len() as i64 {
             let block: IrBlock = f.blocks[block_index];
             let mut inst_index: i64 = 0;
-            while inst_index < block.insts.len() {
+            while inst_index < block.insts.len() as i64 {
                 let inst: IrInst = block.insts[inst_index];
                 if inst.op == IOP_CONST_F64() {
                     if inst.dv as u64 == expected_bits {

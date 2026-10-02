@@ -712,7 +712,7 @@ fn check_bounds_assert_signedness() -> i64 {
     signed_tys.push(ITY_I64());
 
     let mut i: i64 = 0;
-    while i < unsigned_tys.len() {
+    while i < unsigned_tys.len() as i64 {
         let ty: i64 = unsigned_tys[i];
         let base: i64 = 70 + i * 10;
         let a: i64 = check_bounds_assert_unsigned(vec_len, get, vec_label, ty, base);
@@ -725,7 +725,7 @@ fn check_bounds_assert_signedness() -> i64 {
     }
 
     let mut j: i64 = 0;
-    while j < signed_tys.len() {
+    while j < signed_tys.len() as i64 {
         let ty: i64 = signed_tys[j];
         let base: i64 = 110 + j * 10;
         let a: i64 = check_bounds_assert_signed(vec_len, get, vec_label, ty, base);
@@ -768,8 +768,8 @@ fn check_inst_ty_by_id_table() -> i64 {
     if inst_ty_of(table, 2) != ITY_U8() { return 205; }
     if inst_ty_of(table, 1) != ITY_I64() { return 206; }
     if inst_ty_of(table, -1) != ITY_I64() { return 207; }
-    if inst_ty_of(table, table.len()) != ITY_I64() { return 208; }
-    if inst_ty_of(table, table.len() + 10) != ITY_I64() { return 209; }
+    if inst_ty_of(table, table.len() as i64) != ITY_I64() { return 208; }
+    if inst_ty_of(table, table.len() as i64 + 10) != ITY_I64() { return 209; }
 
     let empty: IrFunction = mk_function(
         21,

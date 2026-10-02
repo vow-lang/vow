@@ -43,10 +43,10 @@ fn check_float_binop_data() -> i64 {
     if lowered.functions.len() != 1 { return 21; }
     let function: IrFunction = lowered.functions[0];
     let mut block_index: i64 = 0;
-    while block_index < function.blocks.len() {
+    while block_index < function.blocks.len() as i64 {
         let block: IrBlock = function.blocks[block_index];
         let mut inst_index: i64 = 0;
-        while inst_index < block.insts.len() {
+        while inst_index < block.insts.len() as i64 {
             let inst: IrInst = block.insts[inst_index];
             if inst.op == IOP_ADD_F64() {
                 if inst.ty != ITY_F64() { return 22; }
