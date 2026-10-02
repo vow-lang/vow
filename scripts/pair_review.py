@@ -1177,32 +1177,51 @@ def _merge_ledger(ledger, results, date):
     return ledger, updated
 
 
+# Bound on how many times write_ledger retries a merge that lost a race
+# against a concurrent edit, before giving up and raising.
+_LEDGER_WRITE_MAX_ATTEMPTS = 5
+
+
 def write_ledger(ledger, results, date, path=LEDGER):
     """Stamp only fully reviewed pair rows into the shared ledger.
 
     The rows are merged into the ledger as it stands *now*, not into the copy
     loaded before the model calls: a review runs for minutes, and triage edits
-    issue numbers and corpus rows in the same file meanwhile.
+    issue numbers and corpus rows in the same file meanwhile. Each attempt
+    re-reads the file, merges against that snapshot, and replaces it only if
+    the file is still exactly what was read; an edit landing in between
+    (e.g. a human hand-editing the git-tracked JSON) is detected and the
+    merge retries against the fresh content instead of discarding it. This
+    narrows the race to one stat-then-read immediately before the rename; it
+    does not claim to close that sliver entirely.
     """
     path = Path(path)
-    data = _read_ledger_bytes(path)
-    if data is not None:
-        ledger = json.loads(data)
-    ledger, updated = _merge_ledger(ledger, results, date)
+    for _attempt in range(_LEDGER_WRITE_MAX_ATTEMPTS):
+        before = _read_ledger_bytes(path)
+        attempt_ledger = json.loads(before) if before is not None else ledger
+        merged, updated = _merge_ledger(attempt_ledger, results, date)
 
-    if not updated:
-        return updated
-    descriptor, temp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        if not updated:
+            return updated
+        descriptor, temp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        os.close(descriptor)
+        temp_path = Path(temp_name)
+        try:
+            temp_path.write_text(json.dumps(merged, indent=2) + "\n")
+            if _read_ledger_bytes(path) != before:
+                continue
+            os.replace(temp_path, path)
+            return updated
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    raise OSError(
+        f"ledger writeback to {path} did not converge after "
+        f"{_LEDGER_WRITE_MAX_ATTEMPTS} attempts: a concurrent edit kept "
+        "racing the merge"
     )
-    os.close(descriptor)
-    temp_path = Path(temp_name)
-    try:
-        temp_path.write_text(json.dumps(ledger, indent=2) + "\n")
-        os.replace(temp_path, path)
-    finally:
-        temp_path.unlink(missing_ok=True)
-    return updated
 
 
 # How many unmatched function labels the summary names before deferring to
