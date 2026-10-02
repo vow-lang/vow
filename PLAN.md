@@ -108,19 +108,27 @@ every field init. This is why `u64` already works at all six sites without any p
 case — the plumbing is universal; only the four leaf functions' *type recognition* excludes
 narrow widths.
 
-**Recommended fix**: broaden the four leaf points to recognize all ten integer widths (use
-`narrow_int_width(ty).is_some() || ty == Ty::U64` as the unified gate — this is the existing
-`vow-ir/src/lower/mod.rs:4230-4234` helper already used by the already-correct `let`/ident-assign
-sites), **keeping the `wide_context_contains_control_flow` sub-gate for every narrow type**
-(mirror `I128`/`U128`'s model, *not* `U64`'s unconditional one). Reasoning: straight-line narrow
-markers (`let x: i8 = 127 +! 1;`, bare `return 127 +! 1;`, plain call arguments) are **already
-correct today** via the separate post-hoc `narrow_int_width`/`lower_narrow_literal` path
-(`2201-2203`, `4897-4900`, call-args) — only control-flow-shaped markers (`if`/`match`/`loop`
-whose arms are themselves markers) are broken, because that post-hoc path's
-`lower_integer_marker_as` (`4656-4691`) has no `If`/`Match` recursion arm and never will need
-one if the eager path already resolves the width. Gating the new narrow recording to
-control-flow-containing expressions only avoids double-recording (and thus double-lowering) the
-straight-line cases that already work.
+**Recommended fix**: broaden the four leaf points to recognize all ten integer widths, using
+`narrow_int_width(ty).is_some() || ty == Ty::U64` as the unified gate (the existing
+`vow-ir/src/lower/mod.rs:4230-4234` helper). Treat every narrow type **exactly like `U64`
+today — unconditionally, with no `wide_context_contains_control_flow` requirement** — in all
+four leaf points, including `record_wide_control_flow_context`'s wrapper gate (`4479-4485`).
+
+This is *not* "only control-flow markers are broken, so only gate those." §2's own table
+contradicts that: field-assignment, struct-literal init, `Vec` index assignment, and direct
+`Option::Some(127 +! 1)`/`Wrapper::Val(127 +! 1)` construction are all **straight-line** (no
+`if`/`match`/`loop` involved) and are all still broken today. The reason straight-line `let`
+(`let x: i8 = 127 +! 1;`) and bare `return 127 +! 1;` already work is a *different*,
+already-correct post-hoc path (`narrow_int_width`/`lower_narrow_literal` called directly at
+those two call sites, `2201-2203`, `4897-4900`, `2161-2163`) — not the wide-context family. The
+wide-context family's `record_wide_expected_ast_context` → `record_wide_marker_context` path
+(the one the u64 probes in §2 confirm reaches *all six* sites, straight-line and control-flow
+alike) has **no control-flow gate at all** today: that gate exists only inside the
+`record_wide_control_flow_context` wrapper (`4479-4485`), a separate, narrower-usage entry point.
+Do not invent a new control-flow gate for narrow types in `record_wide_marker_context` itself —
+it doesn't have one for `U64` and must not grow one for narrow types either, or slices covering
+the straight-line sites (field-assign, struct-init, Vec-index, Option/enum construction) will not
+pass "for free" and the implementer will be forced into the §3c fallback for all of them.
 
 **Mandatory companion change — the short-circuit guard**: `lower_narrow_literal`
 (`mod.rs:4697-4726`, specifically `4701-4708`; self-hosted `compiler/lower.vow:2436-2456`,
@@ -163,8 +171,8 @@ match o { Option::Some(v) => v + 1, Option::None => 0 }   // must wrap to -128, 
 was never tagged — which today only happens for `GetArg` (`5088-5092`, self-hosted
 `5585-5590`), not for a `let`-annotated local built from a direct `Option::Some(...)`
 construction. Fix: in `Stmt::Let`'s `AstType::Generic` handling (`mod.rs:~4935-4954`, currently
-has a `"Vec"` arm populating `inst_vec_elem_types` and no `"Option"`/`"Result"` arm; self-hosted
-twin `compiler/lower.vow:~5051-5067`, `atag == TY_GENERIC()`), add an arm that calls the already
+has a `"Vec"` arm populating `inst_vec_elem_types` and no `"Option"` arm; self-hosted twin
+`compiler/lower.vow:~5051-5067`, `atag == TY_GENERIC()`), add an arm that calls the already
 general-purpose `option_named_elem_type(ast_ty, &ctx.type_aliases)` (`mod.rs:870-878`, already
 unrestricted — takes any scalar) / self-hosted `lower_ast_type_option_elem_ty`, then
 `ctx.inst_option_elem_ty.insert(val, elem_ty)` / `lctx_tag_option_elem(ctx, val, elem_ty)` —
@@ -173,12 +181,22 @@ than trying to infer the type from the (speculatively-i64) already-lowered paylo
 construction site. This is annotation-driven and therefore correct regardless of how the payload
 was computed (literal, binop, function call).
 
+**Scope this slice to `Option` only.** `inst_option_elem_ty` (and `option_named_elem_type`) is
+Option-specific; `Result<T, E>`'s per-variant payload types are tracked separately in
+`ctx.inst_variant_payload_tys` (`mod.rs:3294-3303`, a different side table with a different
+shape — `Vec<Option<Ty>>` indexed by variant tag, not a single `Ty`). Do not assume the same
+one-line fix covers `Result` — write a `Result`-specific repro first (`let r: Result<i8, bool> =
+Result::Ok(127); match r { Result::Ok(v) => v + 1, ... }`) and only add a matching fix if it
+actually reproduces the bug; it may already work since `EnumConstruct`'s existing
+`Result`-specific tagging (`mod.rs:3294-3303`) is not gated the same way `Option`'s is (`3290-3293`).
+
 ### 3c. Fallback (only if 3a regresses or under-delivers)
 
 If implementation reveals that broadening the wide-context family is unsafe in some corner (e.g.
-interacts badly with the `i128`/`u128` two-limb constant representation, or the control-flow gate
-doesn't cleanly separate from `wide_context_contains_control_flow`'s existing semantics), the
-per-site mechanical fallback is fully specified in the table in §2: broaden each hardcoded
+a narrow-typed literal reaches eager lowering while its sibling operand does not, producing a
+width-mismatched Cranelift instruction — see §7 — or the change interacts badly with the
+`i128`/`u128` two-limb constant representation), the per-site mechanical fallback is fully
+specified in the table in §2: broaden each hardcoded
 `Ty::I128 | Ty::U128` / `ITY_I128()||ITY_U128()` pattern to `narrow_int_width(ty).is_some()`
 (Rust) / `narrow_int_width(ty) != 0` (self-hosted) at each listed file:line, individually. This
 is strictly more sites to touch and does not fix the `if`/`match` marker-merge case (§3a's
@@ -220,63 +238,73 @@ immediate stop.
    (`fn f() -> i16 { 32768 }`). Confirms current (already-fixed) behavior and prevents silent
    regression during the slices below. Go/no-go: both already pass with zero production changes.
 
-2. **3a core: broaden the wide-context family, Rust side only, behind the existing test suite.**
-   Change the four leaf points in `vow-ir/src/lower/mod.rs` listed in §3a (gate +
-   `wide_context_contains_control_flow` requirement for every narrow type) and the
-   `lower_narrow_literal` short-circuit guard in the same commit. New fixtures:
-   `tests/run/narrow_if_branch_checked_overflow.vow` (`fn f(b: bool) -> i8 { if b { 127 +! 1 }
-   else { 0 } }`, `// TEST: exit 134`, `// TEST: stderr
-   "{\"error\":\"ArithmeticOverflow\"}"` — follow `tests/run/narrow_checked_expression_overflow.vow`'s
-   exact header convention), plus nested-if, `return if…`, and `match o { Option::Some(_) => 127
-   +! 1, Option::None => 0 }` variants in the same file or siblings. Add unsigned marker-shape
-   siblings (`u8`/`u16`/`u32`, `0 -! 1` inside the same shapes) — the signed probes above do not
-   by themselves establish unsigned correctness. **Go/no-go**: every existing
+2. **3a core, both compilers in one commit.** CLAUDE.md requires the Rust and self-hosted
+   lowerers land together — do not split this into separate Rust/self-hosted commits the way a
+   smaller mechanical fix might: if the run's turn ends after a Rust-only commit, the checkpoint
+   rule (checkpoint before you might run out of turn) would leave a pushed state where the two
+   compilers behaviorally diverge, which CLAUDE.md's dual-compiler-sync rule forbids. Change the
+   four leaf points in `vow-ir/src/lower/mod.rs` **and** their twins in `compiler/lower.vow`
+   (§3a), and the `lower_narrow_literal` short-circuit guard in both files, together.
+
+   New fixtures (`tests/run/`, same `// TEST: exit 134` / `// TEST: stderr
+   "{\"error\":\"ArithmeticOverflow\"}"` convention as `narrow_checked_expression_overflow.vow`):
+   a **straight-line** field-assignment case (`s.x = 127 +! 1;` on an `i8` field) *in this same
+   slice*, specifically because it is the cheapest way to prove the eager (no-control-flow-gate)
+   path actually reaches a straight-line site rather than only the `if`/`match` shapes; plus
+   `narrow_if_branch_checked_overflow.vow` (bare `if`, nested `if`, `return if…`, and `match o {
+   Option::Some(_) => 127 +! 1, Option::None => 0 }` variants). Add unsigned marker-shape
+   siblings (`u8`/`u16`/`u32`, `0 -! 1` in the same shapes) — the signed probes alone do not
+   establish unsigned correctness.
+
+   Add a `vow-ir` `#[cfg(test)]` unit test asserting that lowering `let x: i8 = 127 +! 1;`
+   produces **exactly one** checked-add instruction (not two) with `InstData::Integer` width
+   `I8`. This is the direct test of the mandatory short-circuit-guard fix (a missed guard update
+   emits the checked op twice, see §3a) and is what actually counts toward the `codecov/patch`
+   gate, since the `.vow` fixtures run an uninstrumented binary.
+
+   **Go/no-go — wider than "the named fixtures pass."** A missed case here is not a wrong value,
+   it is the same *Cranelift verifier crash* class the issue opened with (an i8-recorded literal
+   lowered next to a still-i64 sibling operand is an ill-typed Cranelift instruction, not just a
+   mis-signed one the way a u64/i64 mismatch would be) — so the bar is the **full existing
+   corpus**, not spot checks: `tests/run_tests.sh` (all phases) and `scripts/full_test.sh`'s
+   `run_promoted_run_tests` against **both** `./target/release/vow` and a freshly rebuilt
+   `build/vowc`, `cargo test -p vow-ir` (plus `-p vow-types`, `-p vow-codegen` for safety), and a
+   full `scripts/bootstrap.sh` stage2/stage3 SHA-256 match. Every existing
    `tests/run/if_expr_merge_width.vow`, `narrow_annotated_local.vow`, `match_arm_merge_width.vow`,
-   and every `tests/error/i128_*`/`i64_*wide*` fixture must stay green — if any regresses, stop
-   and fall back to §3c for this slice specifically rather than debugging the shared propagation
-   path under time pressure.
-3. **3a mirror: self-hosted `compiler/lower.vow`.** Same four functions' twins. Run the same new
-   `tests/run/*.vow` fixtures through `build/vowc` (rebuild via `scripts/bootstrap.sh --skip-cargo
-   --no-verify` first) — the shared harness (`scripts/full_test.sh`'s `run_promoted_run_tests`,
-   Section 4) exercises both `./target/release/vow` and the self-hosted binary against the same
-   fixture, so one `.vow` file covers both compilers once this slice lands.
-4. **3a fallout check: struct-literal, field-assign, Vec-index sites.** These should now pass
-   *without further code changes* if 3a's propagation reaches them (§2 confirms
-   `record_wide_expected_ast_context` is already called unfiltered at all three call sites). Add
-   `tests/run/narrow_field_assignment_overflow.vow`, `tests/run/narrow_struct_init_overflow.vow`,
+   and every `tests/error/i128_*`/`i64_*wide*` fixture must stay green. If anything regresses or
+   crashes (verifier or otherwise), stop and fall back to §3c for the failing site specifically
+   rather than debugging the shared propagation path further under time pressure.
+3. **3a fallout check: struct-literal and Vec-index sites.** (Field-assignment's straight-line
+   case was already proven in Slice 2.) These should now pass *without further code changes* if
+   3a's propagation reaches them (§2 confirms `record_wide_expected_ast_context` is already
+   called unfiltered at both call sites). Add `tests/run/narrow_struct_init_overflow.vow`,
    `tests/run/narrow_vec_index_assign_overflow.vow` (same `exit 134`/`ArithmeticOverflow`
-   convention) to confirm. If any of the three still fails after Slice 2/3, that specific site's
-   §2 table entry is the fallback patch (§3c) — apply it as its own small commit, it does not
-   block the others.
-5. **User-defined enum payload.** Add `tests/run/narrow_enum_payload_overflow.vow`
+   convention) to confirm. If either still fails, that specific site's §2 table entry is the
+   fallback patch (§3c) — apply it as its own small commit, it does not block the others.
+4. **User-defined enum payload.** Add `tests/run/narrow_enum_payload_overflow.vow`
    (`enum Wrapper { Val(i8) }`, construct with `127 +! 1`). Expected to pass from 3a via
    `enum_variant_payload_ast_types` (populated for user enums, `mod.rs:5344-5396`) feeding
    `record_wide_expected_ast_context` the same way struct fields do — confirm; if not, the
    fallback is broadening `payload_tys`'s filter at `mod.rs:3260-3269` directly (§2 table).
-6. **3b: Option/Result post-extraction tagging.** Add the `"Option"`/`"Result"` arm to
-   `Stmt::Let`'s `AstType::Generic` handling in both compilers (§3b). Regression fixture: the
-   issue's own literal repro, as a **stdout** fixture (not a trap fixture — this is wrapping `+`,
-   not checked `+!`):
-   `tests/run/narrow_option_annotated_local.vow` — `let o: Option<i8> = Option::Some(127); match
-   o { Option::Some(v) => print_i64((v + 1) as i64), Option::None => print_i64(0) }`,
-   `// TEST: stdout "-128\n"` (mirrors the already-passing `GetArg`-based
+5. **3b: Option post-extraction tagging.** Add the `"Option"` arm to `Stmt::Let`'s
+   `AstType::Generic` handling in both compilers (§3b — Option only; see §3b's note on checking
+   `Result` separately before assuming it needs the same fix). Regression fixture: the issue's
+   own literal repro, as a **stdout** fixture (not a trap fixture — this is wrapping `+`, not
+   checked `+!`): `tests/run/narrow_option_annotated_local.vow` — `let o: Option<i8> =
+   Option::Some(127); match o { Option::Some(v) => print_i64((v + 1) as i64), Option::None =>
+   print_i64(0) }`, `// TEST: stdout "-128\n"` (mirrors the already-passing `GetArg`-based
    `tests/run/narrow_option_parameter.vow`, same expected wraparound, just for a locally
    constructed value instead of a parameter). Also add a `+!`-checked companion
    (`tests/run/narrow_option_annotated_local_overflow.vow`) asserting the trap, to cover both the
    3a (construction-time trap) and 3b (post-extraction width) halves of the same bug
-   independently.
-7. **Cache ABI bump.** Bump `COMPILE_CACHE_ABI_VERSION` in `vow/src/cache.rs`, add the
+   independently. Add the matching `vow-ir` unit test here (asserting `inst_option_elem_ty`
+   carries `Ty::I8` for the locally-constructed case, follow the harness pattern at
+   `lower_assignment_updates_identifier_binding`, `~7854`) — this is the `codecov/patch` coverage
+   for 3b's production lines specifically (Slice 2 already covers 3a's).
+6. **Cache ABI bump.** Bump `COMPILE_CACHE_ABI_VERSION` in `vow/src/cache.rs`, add the
    `compile_cache_key_invalidates_pre_*` test following `1cac4480`. Do this last, after all
    codegen-affecting slices land, so the version string's doc comment can name this fix
    specifically (follow the existing comment's pattern of listing each prior fix it supersedes).
-8. **`vow-ir` unit test coverage (coverage-gate requirement).** Per project memory, `codecov/patch`
-   is a blocking 95%-of-new-lines gate and the `.vow` corpus runs an uninstrumented binary — the
-   `tests/run/*.vow` fixtures above do **not** count toward it. Add `#[cfg(test)]` unit tests in
-   `vow-ir/src/lower/mod.rs` directly asserting the lowered `InstData::Integer` width on the
-   checked-add instruction for at least one marker-in-if-branch case and one
-   Option-local-construction case (follow the existing style at `narrow_int_width_and_divergence_are_exhaustive_over_ty`,
-   `~6223`, and the `lower_assignment_updates_identifier_binding`-style tests, `~7854`, for the
-   harness pattern: build a tiny `FnDef` AST, lower it, assert on `ctx.func`/`InstData`).
 
 ## 6. Verification surface
 
@@ -297,9 +325,9 @@ to catch this.
 ## 7. Risk areas
 
 - **Binary fixed point.** Every slice must pass `scripts/bootstrap.sh`'s stage2/stage3 SHA-256
-  match. The self-hosted `compiler/lower.vow` mirror (Slice 3) is not optional parallel work —
-  land it in the *same* commit as the Rust change it mirrors, or the bootstrap triple-test's
-  stage-1/stage-2 binaries diverge in behavior (not just hash) until both land.
+  match. The self-hosted `compiler/lower.vow` mirror (folded into Slice 2, §5) is not optional
+  parallel work — land it in the *same* commit as the Rust change it mirrors, or the bootstrap
+  triple-test's stage-1/stage-2 binaries diverge in behavior (not just hash) until both land.
 - **`BTreeMap` determinism in `vow-clif-shim`.** This fix does not touch stack-slot allocation or
   `slot_map` — it only changes *which width* a value is computed at, not the IR's block/Upsilon
   structure. Low risk, but confirm no new `HashMap` is introduced in `LowerCtx` (use
@@ -311,15 +339,19 @@ to catch this.
 - **`cargo clippy --all -- -D warnings`.** The broadened match arms in the four leaf functions
   will likely trip `clippy::match_same_arms` if the narrow/wide cases end up identical — collapse
   with `|` patterns rather than suppressing.
-- **Scope creep via `3c`.** Do not let a single stubborn fallback site (§5 Slice 4/5) turn into
+- **Scope creep via `3c`.** Do not let a single stubborn fallback site (§5 Slice 3/4) turn into
   debugging the entire wide-context mechanism under time pressure — land the working slices,
   file a fast-follow issue for whichever single site doesn't fall out "for free" from 3a, same as
   #995 did for this class of bug.
-- **The `wide_context_contains_control_flow` gate's narrow-type behavior is a judgment call,
-  not a settled fact.** §3a recommends mirroring i128/u128's gated model over u64's unconditional
-  one, reasoned from "straight-line narrow markers already work via the post-hoc path." Slice 2's
-  go/no-go check (existing fixtures must stay green) is the actual arbiter — if gating the wrong
-  way causes a regression, the fix is changing the gate condition, not the overall architecture.
+- **Narrow types are a higher-stakes broadening than `u64` was.** `u64` shares `i64`'s Cranelift
+  register width — a `u64`-recorded literal sitting next to a not-yet-narrowed `i64` sibling
+  operand is at worst mis-signed, never ill-typed. An `i8`-recorded literal next to a still-`i64`
+  sibling operand (e.g. if only one side of a `BinaryOp` ends up reached by the broadened
+  propagation and the other doesn't) is a genuine Cranelift IR width mismatch — the same
+  verifier-crash class the issue opened with. This is why Slice 2's go/no-go is the full test
+  corpus plus a bootstrap fixed-point check, not a spot check of the new named fixtures: a
+  partial-reach bug here fails loudly (a crash), not quietly (a wrong printed value), but only if
+  something in the corpus actually exercises the mismatched shape.
 
 ## 8. Out of scope (do not bundle)
 
