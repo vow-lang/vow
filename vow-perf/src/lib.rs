@@ -220,6 +220,9 @@ impl fmt::Display for AnalysisError {
 impl std::error::Error for AnalysisError {}
 
 const MINIMUM_R_SQUARED: f64 = 0.90;
+/// Tuned against today's exact synthetic fixtures, where any non-decreasing
+/// step counts as rising; will need revisiting once real (noisy) instrumented
+/// operation counts feed [`analyze`].
 const NORMALIZED_TREND_TOLERANCE: f64 = 1.0e-9;
 const REQUIRED_RISING_SLOPE_STEPS: usize = 2;
 const REQUIRED_MAXIMUM_TREND_SAMPLES: usize = REQUIRED_RISING_SLOPE_STEPS + 2;
@@ -233,6 +236,7 @@ const CANDIDATES: [ComplexityClass; 8] = [
     ComplexityClass::Cubic,
     ComplexityClass::CubicLogarithmic,
 ];
+const MAXIMUM_CANDIDATE: ComplexityClass = CANDIDATES[CANDIDATES.len() - 1];
 
 /// Classify measured operation counts against a declared complexity class.
 ///
@@ -283,8 +287,8 @@ pub fn analyze(declared: ComplexityClass, samples: &[Sample]) -> Result<Analysis
         });
     }
 
-    let verdict = if observed == ComplexityClass::CubicLogarithmic
-        && observed <= declared
+    let verdict = if observed == MAXIMUM_CANDIDATE
+        && declared == MAXIMUM_CANDIDATE
         && maximum_trend_is_ambiguous(samples)
     {
         Verdict::Ambiguous
@@ -305,11 +309,10 @@ fn maximum_trend_is_ambiguous(samples: &[Sample]) -> bool {
         return true;
     }
 
-    let maximum = ComplexityClass::CubicLogarithmic;
     let mut slopes = samples
         .windows(2)
         .rev()
-        .map(|pair| normalized_interval_slope(maximum, &pair[0], &pair[1]));
+        .map(|pair| normalized_interval_slope(MAXIMUM_CANDIDATE, &pair[0], &pair[1]));
     let mut newer = slopes.next().expect("sample count checked above");
 
     for _ in 0..REQUIRED_RISING_SLOPE_STEPS {
@@ -462,5 +465,48 @@ fn basis_value(class: ComplexityClass, input_size: u64) -> f64 {
         ComplexityClass::QuadraticLogarithmic => n.powi(2) * log_n,
         ComplexityClass::Cubic => n.powi(3),
         ComplexityClass::CubicLogarithmic => n.powi(3) * log_n,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CANDIDATES, ComplexityClass};
+
+    /// Derives the full class set from `from_factors` (rather than hand-listing
+    /// variants a second time) so that raising its degree caps for a future
+    /// variant makes this test fail until `CANDIDATES` is updated to match.
+    #[test]
+    fn candidates_cover_every_class_from_factors_can_produce_in_ascending_order() {
+        let mut derived = Vec::new();
+        let mut polynomial_degree = 0u8;
+        loop {
+            let mut logarithmic_degree = 0u8;
+            let mut produced_any = false;
+            while let Ok(class) =
+                ComplexityClass::from_factors(polynomial_degree, logarithmic_degree)
+            {
+                derived.push(class);
+                produced_any = true;
+                logarithmic_degree += 1;
+            }
+            if !produced_any {
+                break;
+            }
+            polynomial_degree += 1;
+        }
+
+        let mut sorted_derived = derived.clone();
+        sorted_derived.sort();
+
+        assert_eq!(
+            derived.len(),
+            CANDIDATES.len(),
+            "CANDIDATES must list exactly the classes from_factors can produce"
+        );
+        assert_eq!(
+            sorted_derived,
+            CANDIDATES.to_vec(),
+            "CANDIDATES must be in ascending ComplexityClass order with no gaps or duplicates"
+        );
     }
 }
