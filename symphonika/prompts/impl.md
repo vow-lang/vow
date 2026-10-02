@@ -45,11 +45,20 @@ diff, the removal did not land — fix it before opening the PR.
 
 ## Open the PR
 
+Use a quoted heredoc for `--body-file`, not a double-quoted `--body` string — bash does not
+expand `\n` inside double quotes, so a literal `\n\nCloses` breaks GitHub's `Closes` autolink.
+The quoted `'BODY'` delimiter also blocks backtick and `$` expansion, so code spans in the
+summary can't trigger command substitution.
+
 ```sh
 git push -u origin {{branch.name}}
 gh pr create --base main --head {{branch.name}} \
   --title "<conventional title — no agent prefix like [claude] or [codex]>" \
-  --body "<summary>\n\nCloses #{{issue.number}}"
+  --body-file - <<'BODY'
+<summary>
+
+Closes #{{issue.number}}
+BODY
 ```
 
 The PR must be **non-draft**. Do not use `--web`, `--draft`, or any flag that opens a browser or
@@ -65,9 +74,16 @@ mutation.
 
 ## If you cannot proceed
 
-Write `{{workspace.path}}/BLOCKED.md` with what blocked you and what would unblock it, post the same
-explanation with `gh issue comment {{issue.number}} --body "<explanation>"`, and exit cleanly. Do not
-self-apply `needs-human` or any handoff label.
+Write `{{workspace.path}}/BLOCKED.md` with what blocked you and what would unblock it, then post the
+same explanation (use the same quoted-heredoc form as above, not a double-quoted `--body` string):
+
+```sh
+gh issue comment {{issue.number}} --body-file - <<'COMMENT'
+<explanation>
+COMMENT
+```
+
+Exit cleanly after posting. Do not self-apply `needs-human` or any handoff label.
 
 ## Defer to this contract
 
