@@ -61,15 +61,14 @@ fn min_sift_up(data: Vec<i64>, start: i64) vow {
     requires: start >= 0,
     requires: start < data.len()
 } {
-    let mut i: i64 = start;
+    let mut i: u64 = start as u64;
     let mut done: bool = false;
     while !done && i > 0 vow {
-        invariant: i >= 0,
-        invariant: i < data.len()
+        invariant: i < data.len() as u64
     } {
-        let p: i64 = min_parent_idx(i);
+        let p: u64 = min_parent_idx(i as i64) as u64;
         if data[i] < data[p] {
-            min_swap(data, i, p);
+            min_swap(data, i as i64, p as i64);
             i = p;
         } else {
             done = true;
@@ -124,20 +123,19 @@ fn min_sift_down(data: Vec<i64>, n: i64, start: i64) vow {
     requires: start >= 0,
     requires: start < n
 } {
-    let mut i: i64 = start;
+    let mut i: u64 = start as u64;
     let mut done: bool = false;
-    while !done && min_left_idx(i) < n vow {
-        invariant: i >= 0,
-        invariant: i < n,
+    while !done && min_left_idx(i as i64) < n vow {
+        invariant: i < n as u64,
         invariant: n <= data.len()
     } {
-        let l: i64 = min_left_idx(i);
-        let r: i64 = min_right_idx(i);
-        let mut smallest: i64 = i;
+        let l: u64 = min_left_idx(i as i64) as u64;
+        let r: u64 = min_right_idx(i as i64) as u64;
+        let mut smallest: u64 = i;
         if data[l] < data[smallest] {
             smallest = l;
         }
-        if r < n {
+        if r < n as u64 {
             if data[r] < data[smallest] {
                 smallest = r;
             }
@@ -145,7 +143,7 @@ fn min_sift_down(data: Vec<i64>, n: i64, start: i64) vow {
         if smallest == i {
             done = true;
         } else {
-            min_swap(data, i, smallest);
+            min_swap(data, i as i64, smallest as i64);
             i = smallest;
         }
     }
@@ -169,13 +167,13 @@ pub fn is_min_heap(h: MinHeap) -> bool vow {
     requires: h.size == h.data.len()
 } {
     let d: Vec<i64> = h.data;
-    let n: i64 = h.size;
-    let mut i: i64 = 1;
+    let n: u64 = h.size as u64;
+    let mut i: u64 = 1;
     while i < n vow {
         invariant: i >= 1,
         invariant: i <= n
     } {
-        let p: i64 = (i - 1) / 2;
+        let p: u64 = (i - 1) / 2;
         if d[p] > d[i] {
             return false;
         }
