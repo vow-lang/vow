@@ -4040,6 +4040,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let alloc_args: Vec<i64> = Vec::new();
         let alloc_ty: i64 = if owns_linear { ITY_LPTR() } else { ITY_PTR() };
         let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), alloc_ty, alloc_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
+        lctx_set_inst_span(ctx, ptr_id, expr_span(a, eid));
         lctx_tag(ctx, ptr_id, enum_name);
         if n_payload > 0 {
             let contextual_payload_ty: i64 = lctx_inst_ty(ctx, payload_values[0]);

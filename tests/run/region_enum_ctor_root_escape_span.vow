@@ -1,0 +1,20 @@
+// TEST: stdout ""
+// Issue #1026 regression: an inline user-defined enum constructor is published
+// through a parameter container, so its allocation must surface as a
+// RegionRootEscape note anchored to the constructor expression (not
+// span.length == 0).
+module RegionEnumCtorRootEscapeSpan
+
+enum Box {
+    Item(i64),
+}
+
+fn push_item(boxes: Vec<Box>) {
+    boxes.push(Box::Item(5));
+}
+
+fn main() -> i32 {
+    let boxes: Vec<Box> = Vec::new();
+    push_item(boxes);
+    0
+}
