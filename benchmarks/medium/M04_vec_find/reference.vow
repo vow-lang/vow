@@ -2,14 +2,14 @@ module VecFind
 
 fn vec_find(v: Vec<i64>, target: i64) -> i64 vow {
   ensures: result >= 0 - 1,
-  ensures: result < v.len()
+  ensures: result < v.len() as i64
 } {
   let mut found: i64 = 0 - 1;
   let mut i: u64 = 0;
   while i < v.len() as u64 vow {
     invariant: i <= v.len() as u64,
     invariant: found >= 0 - 1,
-    invariant: found < v.len()
+    invariant: found < v.len() as i64
   } {
     if v[i] == target {
       found = i as i64;

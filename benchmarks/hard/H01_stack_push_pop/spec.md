@@ -19,7 +19,7 @@ fn stack_peek_safe(v: Vec<i64>, size: i64) -> i64
 
 - `stack_size_bounded`: `requires: size >= 0`, `ensures: result >= 0`
 - `stack_is_empty`: `ensures: result >= 0, ensures: result <= 1`
-- `stack_peek_safe`: `requires: size > 0, requires: size <= v.len()`
+- `stack_peek_safe`: `requires: size > 0, requires: size <= v.len() as i64`
 
 ## Constraints
 

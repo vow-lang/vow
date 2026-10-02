@@ -3,7 +3,7 @@ module SelectionMin
 fn find_min_idx(v: Vec<i64>) -> i64 vow {
   requires: v.len() > 0,
   ensures: result >= 0,
-  ensures: result < v.len()
+  ensures: result < v.len() as i64
 } {
   let mut min_idx: u64 = 0;
   let mut i: u64 = 1;

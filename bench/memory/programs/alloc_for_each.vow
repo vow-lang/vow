@@ -14,7 +14,7 @@ fn main() -> i32 [io] {
     while round < 1500 {
         for item in items {
             let s: String = String::from("foreach-body-abcdefghijklmnopqrstuvwxyz-0123456789");
-            total = total + item + s.len();
+            total = total + item + s.len() as i64;
         }
         round = round + 1;
     }

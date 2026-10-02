@@ -20,7 +20,7 @@ fn main() -> i32 [io] {
         held.push(chosen_payload());
         i = i + 1;
     }
-    print_i64(held.len() + held[0].len() + held[11999].len());
+    print_u64(held.len() as u64 + held[0].len() as u64 + held[11999].len() as u64);
     print_str("\n");
     0
 }

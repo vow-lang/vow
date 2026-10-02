@@ -13,7 +13,7 @@ fn map_fill(n: i64) -> HashMap<i64, i64>
 ## Contracts
 
 - `requires: n >= 0` — count is non-negative
-- `ensures: result.len() == n` — map has exactly `n` entries
+- `ensures: result.len() as i64 == n` — map has exactly `n` entries
 - The loop counter `i` is a `u64` local, so it needs no `invariant: i >= 0`; bridge with `n as u64` and `i as i64`
 - Loop `invariant: i <= n as u64`
 

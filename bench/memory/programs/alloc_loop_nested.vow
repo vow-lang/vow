@@ -3,19 +3,19 @@ module AllocLoopNested
 
 fn main() -> i32 [io] {
     let mut outer: i64 = 0;
-    let mut total: i64 = 0;
+    let mut total: u64 = 0;
     while outer < 120 {
         let header: String = String::from("outer-allocation-abcdefghijklmnopqrstuvwxyz");
-        total = total + header.len();
+        total = total + header.len() as u64;
         let mut inner: i64 = 0;
         while inner < 500 {
             let payload: String = String::from("inner-allocation-abcdefghijklmnopqrstuvwxyz-0123456789");
-            total = total + payload.len();
+            total = total + payload.len() as u64;
             inner = inner + 1;
         }
         outer = outer + 1;
     }
-    print_i64(total);
+    print_u64(total);
     print_str("\n");
     0
 }

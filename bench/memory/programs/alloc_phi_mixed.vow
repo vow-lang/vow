@@ -1,7 +1,7 @@
 // BENCH: max-rss-kb 11460
 module AllocPhiMixed
 
-fn choose_len(flag: bool) -> i64 {
+fn choose_len(flag: bool) -> u64 {
     let chosen: String = if flag {
         let s: String = String::from("phi-left-abcdefghijklmnopqrstuvwxyz-0123456789");
         s
@@ -10,17 +10,17 @@ fn choose_len(flag: bool) -> i64 {
         s.push_str(String::from("-right"));
         s
     };
-    chosen.len()
+    chosen.len() as u64
 }
 
 fn main() -> i32 [io] {
     let mut i: i64 = 0;
-    let mut total: i64 = 0;
+    let mut total: u64 = 0;
     while i < 45000 {
         total = total + choose_len(i < 22500);
         i = i + 1;
     }
-    print_i64(total);
+    print_u64(total);
     print_str("\n");
     0
 }
