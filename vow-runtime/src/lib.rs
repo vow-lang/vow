@@ -283,7 +283,7 @@ pub unsafe extern "C" fn __vow_trace_vow(fn_name_ptr: *const c_char, vow_id: i64
 static PERF_OPERATION_COUNT: AtomicU64 = AtomicU64::new(0);
 
 fn perf_operation_count_add(amount: u64) {
-    let _ = PERF_OPERATION_COUNT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+    let _ = PERF_OPERATION_COUNT.try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
         Some(count.saturating_add(amount))
     });
 }
@@ -772,7 +772,7 @@ fn memory_note_arena_release(a: *mut VowArena, bytes: usize) {
 }
 
 fn memory_note_alloc_request() {
-    let _ = MEMORY_ALLOC_COUNT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+    let _ = MEMORY_ALLOC_COUNT.try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
         Some(count.saturating_add(1))
     });
 }
