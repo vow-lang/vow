@@ -10,7 +10,7 @@ module VecOfStringSkipped
 // binding is consumed by `head.len()` so the get_val result is classified as
 // a string value and the non-scalar check fires.
 fn first_word_len(words: Vec<String>) -> i64 vow {
-  ensures: result >= 0
+  ensures: result == words[0].len()
 } {
   let head: String = words[0];
   head.len()
