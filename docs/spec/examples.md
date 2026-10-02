@@ -157,12 +157,11 @@ fn fill_vec(n: i64) -> Vec<i64> vow {
     ensures: result.len() == n
 } {
     let v: Vec<i64> = Vec::new();
-    let mut i: i64 = 0;
-    while i < n vow {
-        invariant: i >= 0,
-        invariant: i <= n
+    let mut i: u64 = 0;
+    while i < n as u64 vow {
+        invariant: i <= n as u64
     } {
-        v.push(i);
+        v.push(i as i64);
         i = i + 1;
     }
     v
@@ -186,7 +185,7 @@ $ vow verify examples/vec_fill.vow
 ```
 
 **Key points:**
-- `invariant: i >= 0, invariant: i <= n` is inductive: true on entry, preserved by the loop body
+- `invariant: i <= n as u64` is inductive: true on entry, preserved by the loop body. The lower bound `i >= 0` is carried by the `u64` type, so it needs no clause (and `TautologicalComparison` rejects one)
 - The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
 - The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
 - `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
@@ -268,7 +267,7 @@ Write a line-oriented command interpreter that reads from stdin, dispatches comm
 module CmdLoop
 
 fn trim_newline(s: String) -> String {
-    let n: i64 = s.len();
+    let n: u64 = s.len() as u64;
     if n == 0 { return s; }
     let last: i64 = s.byte_at(n - 1);
     if last == 10 {
