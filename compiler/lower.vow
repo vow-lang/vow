@@ -2327,6 +2327,21 @@ fn merge_phi_ty(primary: i64, sibling: i64) -> i64 {
     primary
 }
 
+// Mirrors choose_match_result_ty's marker-aware merge rule, reduced to the
+// two arms an if/else expression has: when the then side is a speculative
+// integer-literal marker and the else side is a genuinely narrow-typed
+// value, the narrow side's type wins instead of the marker's default i64
+// width. Twin of merge_if_result_ty in vow-ir/src/lower/mod.rs.
+fn merge_if_result_ty(then_ty: i64, then_is_marker: bool, else_ty: i64) -> i64 {
+    if then_ty == ITY_LPTR() || else_ty == ITY_LPTR() {
+        return ITY_LPTR();
+    }
+    if then_is_marker && ir_ty_is_integer(else_ty) {
+        return else_ty;
+    }
+    then_ty
+}
+
 fn emit_narrow_integer_constant(ctx: LowerCtx, value: i64, ty: i64) -> i64 {
     if ty == ITY_U64() {
         let u64_args: Vec<i64> = Vec::new();
@@ -2458,6 +2473,53 @@ fn backpatch_upsilon(ctx: LowerCtx, block_id: i64, upsilon_id: i64, phi_id: i64)
         }
         i = i + 1;
     }
+}
+
+// Re-lower an if-expression branch's own result Upsilon at target_ty. The
+// branch's Upsilon still carries its speculative default-width value (see
+// expr_is_coercible_int_marker) from before the merge's real result type
+// was known. Locates the Upsilon by id, not block-tail position, since the
+// mutated-variable Phi loop earlier in the same EXPR_IF() arm may already
+// have appended extra Upsilons after it. Returns up_id unchanged if it
+// can't be found. Twin of renarrow_if_branch_result in
+// vow-ir/src/lower/mod.rs.
+fn renarrow_if_branch_result(ctx: LowerCtx, a: AstArena, block_id: i64, up_id: i64, result_eid: i64, target_ty: i64, span: i64) -> i64 {
+    let blk: IrBlock = ctx.func.blocks[block_id];
+    let n_insts: i64 = blk.insts.len();
+    let mut up_pos: i64 = -1;
+    let mut old_arg: i64 = -1;
+    let mut fj: i64 = 0;
+    while fj < n_insts {
+        let inst: IrInst = blk.insts[fj];
+        if inst.id == up_id {
+            up_pos = fj;
+            old_arg = inst.args[0];
+        }
+        fj = fj + 1;
+    }
+    if up_pos == -1 {
+        return up_id;
+    }
+    let tail: Vec<IrInst> = Vec::new();
+    let mut ti: i64 = up_pos + 1;
+    while ti < n_insts {
+        tail.push(blk.insts[ti]);
+        ti = ti + 1;
+    }
+    blk.insts.truncate(up_pos);
+    lctx_switch_to_block(ctx, block_id);
+    let narrowed: i64 = lower_narrow_literal(ctx, a, result_eid, old_arg, target_ty);
+    let new_up_args: Vec<i64> = Vec::new();
+    new_up_args.push(narrowed);
+    let new_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), new_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+    lctx_set_inst_span(ctx, new_up_id, span);
+    let blk2: IrBlock = ctx.func.blocks[block_id];
+    let mut tj: i64 = 0;
+    while tj < tail.len() {
+        blk2.insts.push(tail[tj]);
+        tj = tj + 1;
+    }
+    new_up_id
 }
 
 fn collect_if_mutations(ctx: LowerCtx, then_bid: i64, else_eid: i64) -> Vec<String> {
@@ -3037,12 +3099,38 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             backpatch_upsilon(ctx, then_exit_block, then_up_id, phi_id);
             return phi_id;
         }
+        let then_ty: i64 = lctx_inst_ty(ctx, then_result);
+        let else_ty: i64 = lctx_inst_ty(ctx, else_result);
+        let then_is_marker: bool = block_result_is_coercible_int_marker(a, then_bid);
+        let else_is_marker: bool = else_eid != -1 && expr_is_coercible_int_marker(a, else_eid);
+        let result_ty: i64 = merge_if_result_ty(then_ty, then_is_marker, else_ty);
+        let mut final_then_up_id: i64 = then_up_id;
+        let mut final_else_up_id: i64 = else_up_id;
+        // A marker branch's Upsilon still carries its default i64-width value.
+        // Now that the merge's real result type is known, re-narrow whichever
+        // branch is a mismatched marker so both Upsilons feeding the Phi share
+        // its Cranelift register width.
+        if narrow_int_width(result_ty) != 0 {
+            if then_is_marker && then_ty != result_ty {
+                let then_result_eid: i64 = block_result_eid(a, then_bid);
+                if then_result_eid != -1 {
+                    final_then_up_id = renarrow_if_branch_result(
+                        ctx, a, then_exit_block, then_up_id, then_result_eid, result_ty, expr_span(a, eid)
+                    );
+                }
+            }
+            if else_is_marker && else_ty != result_ty {
+                final_else_up_id = renarrow_if_branch_result(
+                    ctx, a, else_exit_block, else_up_id, else_eid, result_ty, expr_span(a, eid)
+                );
+            }
+            lctx_switch_to_block(ctx, merge_block);
+        }
         let phi_args: Vec<i64> = Vec::new();
-        let result_ty: i64 = merge_phi_ty(lctx_inst_ty(ctx, then_result), lctx_inst_ty(ctx, else_result));
         let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
         lctx_set_inst_span(ctx, phi_id, expr_span(a, eid));
-        backpatch_upsilon(ctx, then_exit_block, then_up_id, phi_id);
-        backpatch_upsilon(ctx, else_exit_block, else_up_id, phi_id);
+        backpatch_upsilon(ctx, then_exit_block, final_then_up_id, phi_id);
+        backpatch_upsilon(ctx, else_exit_block, final_else_up_id, phi_id);
         return phi_id;
     }
 

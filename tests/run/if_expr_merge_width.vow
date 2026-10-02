@@ -1,0 +1,41 @@
+// TEST: stdout "50\n200\n5\n10\n500\n1000\n500\n1000\n"
+module IfExprMergeWidth
+
+// A bare-literal branch (speculatively lowered at i64) merging with a
+// genuinely narrow-typed branch (u8/i32/u32) must not produce a Cranelift
+// width mismatch between the if-expression's Phi and either branch's Upsilon.
+fn clamp_u8_hi(v: u8) -> u8 {
+    if v > 200 { 200 } else { v }
+}
+
+fn clamp_u8_lo(v: u8) -> u8 {
+    if v < 10 { v } else { 10 }
+}
+
+fn clamp_i32(v: i32) -> i32 {
+    if v > 1000 { 1000 } else { v }
+}
+
+fn clamp_u32(v: u32) -> u32 {
+    if v > 1000 { 1000 } else { v }
+}
+
+fn main() -> i32 [io] {
+    print_i64(clamp_u8_hi(50) as i64);
+    print_str(String::from("\n"));
+    print_i64(clamp_u8_hi(201) as i64);
+    print_str(String::from("\n"));
+    print_i64(clamp_u8_lo(5) as i64);
+    print_str(String::from("\n"));
+    print_i64(clamp_u8_lo(50) as i64);
+    print_str(String::from("\n"));
+    print_i64(clamp_i32(500) as i64);
+    print_str(String::from("\n"));
+    print_i64(clamp_i32(2000) as i64);
+    print_str(String::from("\n"));
+    print_i64(clamp_u32(500) as i64);
+    print_str(String::from("\n"));
+    print_i64(clamp_u32(2000) as i64);
+    print_str(String::from("\n"));
+    0
+}

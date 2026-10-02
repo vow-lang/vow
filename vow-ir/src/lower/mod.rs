@@ -1508,6 +1508,22 @@ fn merge_phi_ty(primary: Ty, sibling: Ty) -> Ty {
     }
 }
 
+/// Mirrors `choose_match_result_ty`'s marker-aware merge rule, reduced to
+/// exactly the two arms an `if`/`else` expression has: when the `then` side
+/// is a speculative integer-literal marker and the `else` side is a
+/// genuinely narrow-typed value, the narrow side's type wins instead of the
+/// marker's default `i64` width.
+fn merge_if_result_ty(then_ty: Ty, then_is_marker: bool, else_ty: Ty) -> Ty {
+    if then_ty == Ty::LinearPtr || else_ty == Ty::LinearPtr {
+        return Ty::LinearPtr;
+    }
+    if then_is_marker && ir_ty_is_integer(else_ty) {
+        else_ty
+    } else {
+        then_ty
+    }
+}
+
 /// Return variables that are assigned in `then_branch` or `else_branch` AND
 /// currently exist in scope (so they're live across the branch).
 fn collect_if_mutations(
@@ -2080,7 +2096,50 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     phi_id
                 }
                 (Some(t_up), Some(e_up)) => {
-                    let phi_ty = merge_phi_ty(ctx.inst_ty(then_val), ctx.inst_ty(else_val));
+                    let then_ty = ctx.inst_ty(then_val);
+                    let else_ty = ctx.inst_ty(else_val);
+                    let then_is_marker = block_result_is_coercible_int_marker(then_branch);
+                    let else_is_marker = else_branch
+                        .as_deref()
+                        .is_some_and(expr_is_coercible_int_marker);
+                    let phi_ty = merge_if_result_ty(then_ty, then_is_marker, else_ty);
+                    let mut t_up = t_up;
+                    let mut e_up = e_up;
+                    // A marker branch's Upsilon still carries its default `i64`-width
+                    // value. Now that the merge's real result type is known,
+                    // re-narrow whichever branch is a mismatched marker so both
+                    // Upsilons feeding the Phi share its Cranelift register width.
+                    if narrow_int_width(phi_ty).is_some() {
+                        if then_is_marker
+                            && then_ty != phi_ty
+                            && let Some(result_expr) = integer_marker_from_block(then_branch)
+                            && let Some(new_up) = renarrow_if_branch_result(
+                                ctx,
+                                then_upsilon_block,
+                                t_up,
+                                result_expr,
+                                phi_ty,
+                                span,
+                            )
+                        {
+                            t_up = new_up;
+                        }
+                        if else_is_marker
+                            && else_ty != phi_ty
+                            && let Some(result_expr) = else_branch.as_deref()
+                            && let Some(new_up) = renarrow_if_branch_result(
+                                ctx,
+                                else_upsilon_block,
+                                e_up,
+                                result_expr,
+                                phi_ty,
+                                span,
+                            )
+                        {
+                            e_up = new_up;
+                        }
+                        ctx.switch_to_block(merge_block);
+                    }
                     let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
                     backpatch_upsilon(ctx, then_upsilon_block, t_up, phi_id);
                     backpatch_upsilon(ctx, else_upsilon_block, e_up, phi_id);
@@ -4666,6 +4725,44 @@ fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: T
     original
 }
 
+/// Re-lower an `if`-expression branch's own result Upsilon at `target_ty`.
+///
+/// The branch's Upsilon still carries its speculative default-width value
+/// (see `expr_is_coercible_int_marker`) from before the merge's real result
+/// type was known. Locates the Upsilon **by id**, not by block-tail
+/// position, because the mutated-variable Phi loop earlier in the same
+/// `ExprKind::If` arm may already have appended extra Upsilons after it.
+/// Returns `None` if the Upsilon can't be found (should not happen for a
+/// live branch, but callers must not panic on a missing id).
+fn renarrow_if_branch_result(
+    ctx: &mut LowerCtx,
+    block: BlockId,
+    up_id: InstId,
+    result_expr: &Expr,
+    target_ty: Ty,
+    span: Span,
+) -> Option<InstId> {
+    let block_idx = block.0 as usize;
+    let up_pos = ctx.func.blocks[block_idx]
+        .insts
+        .iter()
+        .position(|inst| inst.id == up_id)?;
+    let old_arg = ctx.func.blocks[block_idx].insts[up_pos].args[0];
+    ctx.switch_to_block(block);
+    let tail = ctx.func.blocks[block_idx].insts.split_off(up_pos + 1);
+    ctx.func.blocks[block_idx].insts.truncate(up_pos);
+    let narrowed = lower_narrow_literal(ctx, result_expr, old_arg, target_ty);
+    let new_up_id = ctx.emit(
+        Opcode::Upsilon,
+        Ty::Unit,
+        vec![narrowed],
+        InstData::PhiTarget(InstId(u32::MAX)),
+        span,
+    );
+    ctx.func.blocks[block_idx].insts.extend(tail);
+    Some(new_up_id)
+}
+
 fn binop_opcode(op: BinOp, operand_ty: &Ty) -> (Opcode, Ty, InstData) {
     let result_ty = *operand_ty;
     let float_opcode = match (op, operand_ty) {
@@ -7099,6 +7196,99 @@ fn payload(o: Option<u8>) -> u8 [panic] {
             .find(|inst| inst.opcode == Opcode::Return)
             .expect("return");
         assert_eq!(ret.args, vec![cast.id]);
+    }
+
+    #[test]
+    fn if_expr_merge_renarrows_marker_branch_to_typed_width() {
+        for (name, expected_ty) in [("u8", Ty::U8), ("i32", Ty::I32), ("u32", Ty::U32)] {
+            for marker_in_then in [true, false] {
+                let cond = Expr {
+                    kind: ExprKind::BinaryOp {
+                        op: if marker_in_then { BinOp::Gt } else { BinOp::Lt },
+                        lhs: Box::new(ident_expr("v")),
+                        rhs: Box::new(int_expr(if marker_in_then { 200 } else { 10 })),
+                    },
+                    span: sp(),
+                };
+                let (then_result, else_result) = if marker_in_then {
+                    (int_expr(200), ident_expr("v"))
+                } else {
+                    (ident_expr("v"), int_expr(10))
+                };
+                let if_expr = Expr {
+                    kind: ExprKind::If {
+                        condition: Box::new(cond),
+                        then_branch: Box::new(Block {
+                            stmts: vec![],
+                            trailing_expr: Some(Box::new(then_result)),
+                            span: sp(),
+                        }),
+                        else_branch: Some(Box::new(else_result)),
+                    },
+                    span: sp(),
+                };
+                let fn_def = make_fn(
+                    &format!("clamp_{name}_{}", if marker_in_then { "hi" } else { "lo" }),
+                    vec![make_param("v", named_ty(name))],
+                    named_ty(name),
+                    Block {
+                        stmts: vec![],
+                        trailing_expr: Some(Box::new(if_expr)),
+                        span: sp(),
+                    },
+                    vec![],
+                );
+                let (func, _, warnings) = lower_function(
+                    &fn_def,
+                    "test.vow",
+                    &HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    &HashSet::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    &HashSet::new(),
+                    &HashMap::new(),
+                );
+                assert!(warnings.is_empty(), "{name}/{marker_in_then}: {warnings:?}");
+
+                let all_insts: Vec<&Inst> = func.blocks.iter().flat_map(|b| &b.insts).collect();
+                let phis: Vec<_> = all_insts
+                    .iter()
+                    .filter(|i| i.opcode == Opcode::Phi)
+                    .collect();
+                assert_eq!(
+                    phis.len(),
+                    1,
+                    "{name}/{marker_in_then}: expected one if-result Phi"
+                );
+                let phi = phis[0];
+                assert_eq!(phi.ty, expected_ty, "{name}/{marker_in_then}: phi width");
+
+                let upsilons: Vec<_> = all_insts
+                    .iter()
+                    .filter(|i| {
+                        i.opcode == Opcode::Upsilon && i.data == InstData::PhiTarget(phi.id)
+                    })
+                    .collect();
+                assert_eq!(
+                    upsilons.len(),
+                    2,
+                    "{name}/{marker_in_then}: expected two Upsilons feeding the Phi"
+                );
+                for up in &upsilons {
+                    let arg = up.args[0];
+                    let producer = all_insts
+                        .iter()
+                        .find(|i| i.id == arg)
+                        .expect("upsilon argument producer");
+                    assert_eq!(
+                        producer.ty, phi.ty,
+                        "{name}/{marker_in_then}: upsilon argument width must match phi width"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
