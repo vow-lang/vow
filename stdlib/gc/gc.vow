@@ -45,7 +45,7 @@ fn gc_alloc(h: GcHeap, val: i64) -> i64 {
         slot
     } else {
         let vals: Vec<i64> = h.values;
-        let slot: i64 = vals.len();
+        let slot: i64 = vals.len() as i64;
         vals.push(val);
         let alv: Vec<i64> = h.alive;
         alv.push(1);
@@ -58,7 +58,7 @@ fn gc_alloc(h: GcHeap, val: i64) -> i64 {
 
 fn gc_add_root(h: GcHeap, slot: i64) vow {
     requires: slot >= 0,
-    requires: slot < h.values.len(),
+    requires: slot < h.values.len() as i64,
     requires: h.alive[slot] == 1
 } {
     let r: Vec<i64> = h.roots;
@@ -67,7 +67,7 @@ fn gc_add_root(h: GcHeap, slot: i64) vow {
 
 fn gc_remove_root(h: GcHeap, slot: i64) vow {
     requires: slot >= 0,
-    requires: slot < h.values.len()
+    requires: slot < h.values.len() as i64
 } {
     let r: Vec<i64> = h.roots;
     let len: u64 = r.len() as u64;
@@ -85,9 +85,9 @@ fn gc_remove_root(h: GcHeap, slot: i64) vow {
 
 fn gc_add_ref(h: GcHeap, from: i64, to: i64) vow {
     requires: from >= 0,
-    requires: from < h.values.len(),
+    requires: from < h.values.len() as i64,
     requires: to >= 0,
-    requires: to < h.values.len(),
+    requires: to < h.values.len() as i64,
     requires: h.alive[from] == 1,
     requires: h.alive[to] == 1
 } {
@@ -99,7 +99,7 @@ fn gc_add_ref(h: GcHeap, from: i64, to: i64) vow {
 
 fn gc_read(h: GcHeap, slot: i64) -> i64 vow {
     requires: slot >= 0,
-    requires: slot < h.values.len(),
+    requires: slot < h.values.len() as i64,
     requires: h.alive[slot] == 1
 } {
     let vals: Vec<i64> = h.values;
@@ -108,7 +108,7 @@ fn gc_read(h: GcHeap, slot: i64) -> i64 vow {
 
 fn gc_write(h: GcHeap, slot: i64, val: i64) vow {
     requires: slot >= 0,
-    requires: slot < h.values.len(),
+    requires: slot < h.values.len() as i64,
     requires: h.alive[slot] == 1
 } {
     let vals: Vec<i64> = h.values;
@@ -117,7 +117,7 @@ fn gc_write(h: GcHeap, slot: i64, val: i64) vow {
 
 fn gc_is_alive(h: GcHeap, slot: i64) -> bool vow {
     requires: slot >= 0,
-    requires: slot < h.values.len()
+    requires: slot < h.values.len() as i64
 } {
     let alv: Vec<i64> = h.alive;
     alv[slot] == 1

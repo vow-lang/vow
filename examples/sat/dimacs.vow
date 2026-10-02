@@ -75,8 +75,8 @@ fn append_formula_clause(formula: Formula, clause: Vec<i64>) {
     let starts: Vec<i64> = formula.clause_start;
     let lens: Vec<i64> = formula.clause_len;
     let lits: Vec<i64> = formula.lits;
-    starts.push(lits.len());
-    lens.push(clause.len());
+    starts.push(lits.len() as i64);
+    lens.push(clause.len() as i64);
 
     let mut i: u64 = 0;
     let n: u64 = clause.len() as u64;
@@ -136,7 +136,7 @@ fn parse_dimacs(src: String) -> ParseResult {
     let mut declared_clauses: i64 = -1;
     let mut actual_clause_count: i64 = 0;
 
-    let n: i64 = src.len();
+    let n: i64 = src.len() as i64;
     let mut line_start: i64 = 0;
     let mut line_no: i64 = 1;
     while line_start < n {

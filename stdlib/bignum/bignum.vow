@@ -74,7 +74,7 @@ fn bigmag_from_i64(val: i64) -> BigMag {
 }
 
 fn bigmag_from_string(s: String) -> BigMag {
-    let slen: i64 = s.len();
+    let slen: i64 = s.len() as i64;
     if slen == 0 {
         bigmag_zero()
     } else {
@@ -727,7 +727,7 @@ fn bigmag_shr(a: BigMag, n: i64) -> BigMag vow {
         let limb_shift: i64 = n / 32;
         let bit_shift: i64 = n - (n / 32) * 32;
         let ad: Vec<u64> = a.limbs;
-        let alen: i64 = ad.len();
+        let alen: i64 = ad.len() as i64;
         if limb_shift >= alen {
             bigmag_zero()
         } else {
@@ -833,7 +833,7 @@ fn u64_to_decimal(v: u64) -> String {
 
 fn u64_to_decimal_padded(v: u64, w: i64) -> String {
     let raw: String = u64_to_decimal(v);
-    let rlen: i64 = raw.len();
+    let rlen: i64 = raw.len() as i64;
     if rlen >= w {
         raw
     } else {
