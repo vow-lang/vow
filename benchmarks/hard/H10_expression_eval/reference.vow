@@ -4,21 +4,18 @@ fn eval_rpn(ops: Vec<i64>) -> i64 vow {
   requires: ops.len() >= 1
 } {
   let stack: Vec<i64> = Vec::new();
-  let mut j: i64 = 0;
-  while j < ops.len() vow {
-    invariant: j >= 0,
-    invariant: j <= ops.len()
+  let mut j: u64 = 0;
+  while j < ops.len() as u64 vow {
+    invariant: j <= ops.len() as u64
   } {
     stack.push(0);
     j = j + 1;
   }
-  let mut sp: i64 = 0;
-  let mut i: i64 = 0;
-  while i < ops.len() vow {
-    invariant: i >= 0,
-    invariant: i <= ops.len(),
-    invariant: sp >= 0,
-    invariant: sp <= ops.len()
+  let mut sp: u64 = 0;
+  let mut i: u64 = 0;
+  while i < ops.len() as u64 vow {
+    invariant: i <= ops.len() as u64,
+    invariant: sp <= ops.len() as u64
   } {
     if ops[i] < 100 {
       stack[sp] = ops[i];
