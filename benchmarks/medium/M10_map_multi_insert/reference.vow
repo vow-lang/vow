@@ -5,12 +5,12 @@ fn map_fill(n: i64) -> HashMap<i64, i64> vow {
   ensures: result.len() == n
 } {
   let m: HashMap<i64, i64> = HashMap::new();
-  let mut i: i64 = 0;
-  while i < n vow {
-    invariant: i >= 0,
-    invariant: i <= n
+  let mut i: u64 = 0;
+  while i < n as u64 vow {
+    invariant: i <= n as u64
   } {
-    m.insert(i, i * 10);
+    let k: i64 = i as i64;
+    m.insert(k, k * 10);
     i = i + 1;
   }
   m
