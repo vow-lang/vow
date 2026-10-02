@@ -80,12 +80,12 @@ fn luby(i: i64) -> i64 vow {
 
 fn clause_count(s: Solver) -> i64 {
     let starts: Vec<i64> = s.clause_start;
-    starts.len()
+    starts.len() as i64
 }
 
 fn current_level(s: Solver) -> i64 {
     let levels: Vec<i64> = s.trail_lim;
-    levels.len()
+    levels.len() as i64
 }
 
 fn clause_start_of(s: Solver, cid: i64) -> i64 vow {
@@ -228,7 +228,7 @@ fn rebuild_watches(s: Solver) {
     while i < s.num_vars * 2 vow {
         invariant: i >= 0,
         invariant: i <= s.num_vars * 2,
-        invariant: ws.len() == i
+        invariant: ws.len() as i64 == i
     } {
         ws.push(Vec::new());
         i = i + 1;
@@ -258,7 +258,7 @@ fn rebuild_watches(s: Solver) {
 
 fn add_clause(s: Solver, clause: Vec<i64>, learnt: i64, score: i64) -> i64 {
     let cid: i64 = clause_count(s);
-    let start: i64 = s.clause_lits.len();
+    let start: i64 = s.clause_lits.len() as i64;
     let lits: Vec<i64> = s.clause_lits;
     let mut i: u64 = 0;
     let n: u64 = clause.len() as u64;
@@ -315,7 +315,7 @@ fn add_clause(s: Solver, clause: Vec<i64>, learnt: i64, score: i64) -> i64 {
 
 fn clause_from_formula(formula: Formula, cid: i64) -> Vec<i64> vow {
     requires: cid >= 0,
-    requires: cid < formula.clause_start.len()
+    requires: cid < formula.clause_start.len() as i64
 } {
     let out: Vec<i64> = Vec::new();
     let starts: Vec<i64> = formula.clause_start;
@@ -327,7 +327,7 @@ fn clause_from_formula(formula: Formula, cid: i64) -> Vec<i64> vow {
     while i < len vow {
         invariant: i >= 0,
         invariant: i <= len,
-        invariant: out.len() == i
+        invariant: out.len() as i64 == i
     } {
         out.push(lits[start + i]);
         i = i + 1;
@@ -423,9 +423,9 @@ fn bump_var(s: Solver, var: i64) {
 fn propagate(s: Solver) -> i64 {
     let trail: Vec<i64> = s.trail;
     let ws: Vec<Vec<i64>> = s.watches;
-    while s.qhead < trail.len() vow {
+    while s.qhead < trail.len() as i64 vow {
         invariant: s.qhead >= 0,
-        invariant: s.qhead <= trail.len()
+        invariant: s.qhead <= trail.len() as i64
     } {
         let lit: i64 = trail[s.qhead];
         s.qhead = s.qhead + 1;
@@ -688,12 +688,12 @@ fn backtrack(s: Solver, target_level: i64) vow {
     let assigns: Vec<i64> = s.assigns;
     let levels: Vec<i64> = s.levels;
     let reasons: Vec<i64> = s.reasons;
-    while trail_lim.len() > target_level vow {
-        invariant: trail_lim.len() >= target_level
+    while trail_lim.len() as i64 > target_level vow {
+        invariant: trail_lim.len() as i64 >= target_level
     } {
         let start: i64 = trail_lim[trail_lim.len() - 1];
-        while trail.len() > start vow {
-            invariant: trail.len() >= start
+        while trail.len() as i64 > start vow {
+            invariant: trail.len() as i64 >= start
         } {
             let lit: i64 = trail[trail.len() - 1];
             let v: i64 = lit_var(lit);
@@ -704,7 +704,7 @@ fn backtrack(s: Solver, target_level: i64) vow {
         }
         trail_lim.pop();
     }
-    s.qhead = trail.len();
+    s.qhead = trail.len() as i64;
 }
 
 fn clause_locked(s: Solver, cid: i64) -> bool {
@@ -805,7 +805,7 @@ fn compact_database(s: Solver) {
             let old_start: i64 = clause_start_of(s, cid);
             let len: i64 = clause_len_of(s, cid);
             let starts: Vec<i64> = s.clause_start;
-            starts[cid] = new_lits.len();
+            starts[cid] = new_lits.len() as i64;
             let mut i: i64 = 0;
             while i < len vow {
                 invariant: i >= 0,
@@ -984,7 +984,7 @@ fn complete_assignment(s: Solver) -> Vec<i64> {
     while v <= s.num_vars vow {
         invariant: v >= 1,
         invariant: v <= s.num_vars + 1,
-        invariant: out.len() == v
+        invariant: out.len() as i64 == v
     } {
         let mut val: i64 = assigns[v];
         if val == VAL_UNASSIGNED {
@@ -1134,7 +1134,7 @@ fn solve_formula(formula: Formula) -> SolveResult {
             }
         } else {
             let trail_lim: Vec<i64> = s.trail_lim;
-            trail_lim.push(s.trail.len());
+            trail_lim.push(s.trail.len() as i64);
             s.decisions = s.decisions + 1;
 
             let saved: Vec<i64> = s.saved_phase;
@@ -1184,9 +1184,9 @@ fn print_assignment(assignment: Vec<i64>) [io] {
 
     let mut i: i64 = 1;
     let mut line_count: i64 = 0;
-    while i < assignment.len() vow {
+    while i < assignment.len() as i64 vow {
         invariant: i >= 1,
-        invariant: i <= assignment.len(),
+        invariant: i <= assignment.len() as i64,
         invariant: line_count >= 0
     } {
         if line_count == 0 {
@@ -1198,7 +1198,7 @@ fn print_assignment(assignment: Vec<i64>) [io] {
         print_str(String::from(" "));
 
         line_count = line_count + 1;
-        if line_count == 20 && i + 1 < assignment.len() {
+        if line_count == 20 && i + 1 < assignment.len() as i64 {
             print_str(String::from("\n"));
             line_count = 0;
         }

@@ -16,9 +16,9 @@ fn trim_newline(s: String) -> String {
     s
 }
 
-fn skip_spaces(s: String, start: i64) -> i64 {
-    let mut i: i64 = start;
-    let n: i64 = s.len();
+fn skip_spaces(s: String, start: u64) -> u64 {
+    let mut i: u64 = start;
+    let n: u64 = s.len() as u64;
     while i < n {
         if s.byte_at(i) != 32 { return i; }
         i = i + 1;
@@ -42,7 +42,7 @@ fn main() -> i32 [read, io] {
                 if cmd.len() >= 5 {
                     let prefix: String = cmd.substring(0, 5);
                     if prefix.eq(String::from("echo ")) {
-                        let start: i64 = skip_spaces(cmd, 5);
+                        let start: u64 = skip_spaces(cmd, 5);
                         let text: String = cmd.substring(start, cmd.len());
                         print_str(text);
                         print_str(String::from("\n"));
