@@ -58,7 +58,7 @@ The demo keeps its regression tests local:
 examples/sat/run_tests.sh
 ```
 
-The shell runner compiles the binary, exercises file and `stdin` modes, checks the CLI contract, and covers malformed-input cases.
+The shell runner compiles a release and a `--mode debug` binary (so runtime `invariant` checks are exercised), runs every case against both, exercises file and `stdin` modes, checks the CLI contract, and covers malformed-input and duplicate-literal cases.
 
 ## Benchmarks
 

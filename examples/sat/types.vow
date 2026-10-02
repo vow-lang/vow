@@ -141,11 +141,11 @@ fn make_zero_vec(n: i64) -> Vec<i64> vow {
     ensures: result.len() == n
 } {
     let out: Vec<i64> = Vec::new();
-    let mut i: i64 = 0;
-    while i < n vow {
-        invariant: i >= 0,
-        invariant: i <= n,
-        invariant: out.len() == i
+    let count: u64 = n as u64;
+    let mut i: u64 = 0;
+    while i < count vow {
+        invariant: i <= count,
+        invariant: out.len() as u64 == i
     } {
         out.push(0);
         i = i + 1;
@@ -158,11 +158,11 @@ fn make_i64_vec(n: i64, val: i64) -> Vec<i64> vow {
     ensures: result.len() == n
 } {
     let out: Vec<i64> = Vec::new();
-    let mut i: i64 = 0;
-    while i < n vow {
-        invariant: i >= 0,
-        invariant: i <= n,
-        invariant: out.len() == i
+    let count: u64 = n as u64;
+    let mut i: u64 = 0;
+    while i < count vow {
+        invariant: i <= count,
+        invariant: out.len() as u64 == i
     } {
         out.push(val);
         i = i + 1;
@@ -175,11 +175,11 @@ fn make_empty_buckets(n: i64) -> Vec<Vec<i64>> vow {
     ensures: result.len() == n
 } {
     let out: Vec<Vec<i64>> = Vec::new();
-    let mut i: i64 = 0;
-    while i < n vow {
-        invariant: i >= 0,
-        invariant: i <= n,
-        invariant: out.len() == i
+    let count: u64 = n as u64;
+    let mut i: u64 = 0;
+    while i < count vow {
+        invariant: i <= count,
+        invariant: out.len() as u64 == i
     } {
         out.push(Vec::new());
         i = i + 1;
