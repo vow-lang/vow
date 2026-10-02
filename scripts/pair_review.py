@@ -809,16 +809,25 @@ def confirm_soundness_pair(program, rust, self_bin, timeout):
         f"rust: {rust_result[0]} ({rust_result[1]}); "
         f"self-hosted: {self_result[0]} ({self_result[1]})"
     )
+    # A side's gate failing to run is a fact about that side, independent of
+    # what the other side concluded. A confirmed false proof on one side must
+    # not let the other side's unjudged gate go unreported.
+    unjudged = "; ".join(
+        f"{side} gate did not run: {why}"
+        for side, (verdict, why) in (
+            ("rust", rust_result),
+            ("self-hosted", self_result),
+        )
+        if verdict == "error"
+    )
     verdicts = {rust_result[0], self_result[0]}
     if "confirmed" in verdicts:
-        return "confirmed", observed
+        return "confirmed", observed, unjudged or None
     if verdicts == {"refuted"}:
-        return "refuted", observed
-    # One side's gate failing to run leaves the claim unjudged, whatever the
-    # other side said.
+        return "refuted", observed, unjudged or None
     if "error" in verdicts:
-        return "error", observed
-    return "inconclusive", observed
+        return "error", observed, unjudged or None
+    return "inconclusive", observed, unjudged or None
 
 
 @dataclass(frozen=True)
