@@ -1,0 +1,19 @@
+module WhereRefinementOffsets
+
+// 2 params, refinement on the 2nd (the common case). Predicate "0 <= n"
+// deliberately does not start with the param name, so a check that just
+// matched "starts with param name" couldn't pass by coincidence with the
+// old (predicate-anchored) offset.
+fn clamp_nonneg(bound: i64, n: i64 where 0 <= n) -> i64 {
+  if n <= bound { n } else { bound }
+}
+
+// 3 params, refinement on the 3rd (index 2). 3 params * 4 slots = 12, and
+// 12 / 3 != 12 / 4 (unlike the 2-param case above, where 8 / 3 and 8 / 4
+// truncate to the same count) — so a stray /3 left in a param-count
+// computation only shows up here, not in clamp_nonneg.
+fn clamp3(lo: i64, hi: i64, n: i64 where 0 <= n) -> i64 {
+  if n < lo { lo } else if n > hi { hi } else { n }
+}
+
+fn main() -> i32 { 0 }

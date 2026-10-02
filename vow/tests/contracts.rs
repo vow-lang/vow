@@ -23,6 +23,20 @@ fn run_contracts(file: &str) -> serde_json::Value {
         .unwrap_or_else(|e| panic!("invalid JSON from contracts: {e}\nstdout: {stdout}"))
 }
 
+fn run_contracts_src(source_text: &str) -> serde_json::Value {
+    let dir = tempfile::TempDir::new().unwrap();
+    let src = dir.path().join("anchor.vow");
+    std::fs::write(&src, source_text).unwrap();
+    let out = Command::new(vow_bin())
+        .args(["contracts", src.to_str().unwrap()])
+        .output()
+        .expect("failed to run vow");
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("invalid JSON from contracts: {e}\nstdout: {stdout}"))
+}
+
 #[test]
 fn contracts_help() {
     let out = Command::new(vow_bin())
@@ -316,23 +330,25 @@ fn contracts_json_has_all_entry_fields() {
 
 #[test]
 fn contracts_requires_offset_anchors_on_keyword_not_predicate() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let src = dir.path().join("anchor.vow");
     let source_text = "module Anchor\nfn f(x: i64) -> i64 vow {\n  requires: x >= 0\n} { x }\n";
-    std::fs::write(&src, source_text).unwrap();
-    let out = Command::new(vow_bin())
-        .args(["contracts", src.to_str().unwrap()])
-        .output()
-        .expect("failed to run vow");
-    assert_eq!(out.status.code(), Some(0));
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("invalid JSON from contracts: {e}\nstdout: {stdout}"));
+    let json = run_contracts_src(source_text);
     let c = &json["contracts"][0];
     assert_eq!(c["kind"], "requires");
     // `offset` must land on the `requires:` keyword, not 10 bytes later on the
     // predicate `x >= 0` — that's the anchor divergence #1357 fixes for self-hosted.
     let expected_offset = source_text.find("requires:").unwrap() as u64;
+    assert_eq!(c["source"]["offset"].as_u64().unwrap(), expected_offset);
+}
+
+#[test]
+fn contracts_where_refinement_offset_anchors_on_param_name() {
+    let source_text = "module Anchor\nfn f(n: i64 where 0 <= n) -> i64 { n }\n";
+    let json = run_contracts_src(source_text);
+    let c = &json["contracts"][0];
+    assert_eq!(c["kind"], "requires");
+    // `offset` must land on the parameter name `n`, not on the refinement
+    // predicate `0 <= n` — this is the anchor self-hosted must match (#1366).
+    let expected_offset = source_text.find("n: i64").unwrap() as u64;
     assert_eq!(c["source"]["offset"].as_u64().unwrap(), expected_offset);
 }
 

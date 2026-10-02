@@ -479,6 +479,8 @@ fn parse_params(p: Parser) -> i64 {
         return arena_add_list(p.arena, items);
     }
     while !at(p, tok_rparen()) && !at_end(p) {
+        let name_tok: Token = peek(p);
+        let name_span: i64 = span_pack(name_tok.span_start, name_tok.span_len);
         let name_sid: i64 = expect_ident(p);
         let _colon: bool = expect(p, tok_colon());
         let tid: i64 = parse_type(p);
@@ -490,6 +492,7 @@ fn parse_params(p: Parser) -> i64 {
         items.push(name_sid);
         items.push(tid);
         items.push(refinement_eid);
+        items.push(name_span);
         if at(p, tok_comma()) {
             let _c: Token = advance(p);
         }
