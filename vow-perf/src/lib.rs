@@ -20,7 +20,7 @@ mod instrumentation;
 
 use std::fmt;
 
-pub use instrumentation::{instrument_module, InstrumentationError, InstrumentedModule};
+pub use instrumentation::{InstrumentationError, InstrumentedModule, instrument_module};
 
 /// A canonical single-variable complexity class.
 ///
@@ -437,16 +437,14 @@ pub fn recommended_grid(min_input_size: u64) -> Result<Vec<u64>, RecommendedGrid
         return Err(RecommendedGridError::InputSizeTooSmall { min_input_size });
     }
 
+    let mut size = min_input_size;
     let mut sizes = Vec::with_capacity(RECOMMENDED_GRID_SAMPLE_COUNT as usize);
-    sizes.push(min_input_size);
+    sizes.push(size);
     for _ in 1..RECOMMENDED_GRID_SAMPLE_COUNT {
-        let next = sizes
-            .last()
-            .copied()
-            .expect("just pushed the first size above")
+        size = size
             .checked_mul(2)
             .ok_or(RecommendedGridError::Overflow { min_input_size })?;
-        sizes.push(next);
+        sizes.push(size);
     }
     Ok(sizes)
 }

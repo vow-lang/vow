@@ -1,36 +1,28 @@
-use vow_perf::{analyze, recommended_grid, ComplexityClass, RecommendedGridError, Sample, Verdict};
+use vow_perf::{ComplexityClass, RecommendedGridError, Sample, Verdict, analyze, recommended_grid};
 
-fn plateau_samples(threshold_width: u64, degree: u32) -> Vec<Sample> {
+fn grid_samples(cost: impl Fn(u64) -> u64) -> Vec<Sample> {
     recommended_grid(16)
         .unwrap()
         .into_iter()
-        .map(|input_size| {
-            Sample::new(
-                input_size,
-                input_size.saturating_sub(threshold_width).pow(degree),
-            )
-        })
+        .map(|input_size| Sample::new(input_size, cost(input_size)))
         .collect()
 }
 
+fn plateau_samples(threshold_width: u64, degree: u32) -> Vec<Sample> {
+    grid_samples(|input_size| input_size.saturating_sub(threshold_width).pow(degree))
+}
+
 fn log_violation_samples(degree: u32) -> Vec<Sample> {
-    recommended_grid(16)
-        .unwrap()
-        .into_iter()
-        .map(|input_size| {
-            Sample::new(
-                input_size,
-                input_size.pow(degree) * u64::from(input_size.ilog2()),
-            )
-        })
-        .collect()
+    grid_samples(|input_size| input_size.pow(degree) * u64::from(input_size.ilog2()))
 }
 
 #[test]
 fn recommended_grid_doubles_from_the_given_floor() {
     assert_eq!(
         recommended_grid(16).unwrap(),
-        vec![16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
+        vec![
+            16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768
+        ]
     );
 }
 
