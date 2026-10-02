@@ -1,0 +1,12 @@
+// TEST: category bounds
+// TEST: counterexample-fn "shift"
+// TEST: counterexample-blame none
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-violation "shift amount exceeds the operand's bit width"
+module ShiftCountUnattributedI128
+
+fn shift(x: i128, n: i128) -> i128 vow {
+  ensures: result == result
+} {
+  x << n
+}

@@ -242,6 +242,29 @@ fn check_narrow_shifts_use_helpers() -> i64 {
     0
 }
 
+fn check_wide_shifts_use_helpers() -> i64 {
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(shift_function(50, String::from("shl_i64"), ITY_I64(), IOP_SHL()));
+    funcs.push(shift_function(51, String::from("shr_u64"), ITY_U64(), IOP_SHR()));
+    funcs.push(shift_function(52, String::from("shl_i128"), ITY_I128(), IOP_SHL()));
+    funcs.push(shift_function(53, String::from("shr_u128"), ITY_U128(), IOP_SHR()));
+
+    let c: String = emit_c_module(mk_module(funcs), 16, 16, 16, 16);
+    if !c.contains(String::from("__vow_shl_i64(v0, v1)")) { return 50; }
+    if !c.contains(String::from("__vow_shr_u64(v0, v1)")) { return 51; }
+    if !c.contains(String::from("static inline __int128 __vow_shl_i128")) { return 52; }
+    if !c.contains(String::from("static inline unsigned __int128 __vow_shr_u128")) { return 53; }
+    if !c.contains(String::from("__vow_shl_i128(v0, v1)")) { return 54; }
+    if !c.contains(String::from("__vow_shr_u128(v0, v1)")) { return 55; }
+    // i64/u64 use the dedicated branch's helper, not the dynamic_shift
+    // helper family, but must still get the same bounds assert.
+    if !c.contains(String::from(" < 64, \"integer shift count\");")) { return 56; }
+    // i128/u128 go through the dynamic_shift helper family, which emits
+    // the assert inline with each helper call rather than once per width.
+    if !c.contains(String::from(" < 128, \"integer shift count\");")) { return 57; }
+    0
+}
+
 fn check_arena_parse_i64_option_model() -> i64 {
     let insts: Vec<IrInst> = Vec::new();
     insts.push(mk_inst_arg(0, ITY_I64(), 0));
@@ -845,5 +868,7 @@ fn main() -> i32 {
     if r20 != 0 { return i64_to_i32_wrap(r20); }
     let r21: i64 = check_process_builtins_are_not_known_to_verifier();
     if r21 != 0 { return i64_to_i32_wrap(r21); }
+    let r22: i64 = check_wide_shifts_use_helpers();
+    if r22 != 0 { return i64_to_i32_wrap(r22); }
     0
 }

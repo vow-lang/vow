@@ -1,0 +1,30 @@
+// TEST: category callee-blame
+module ShiftCountWideBounds
+
+// i128/u128 are deliberately not covered here: any i128/u128 literal in a
+// contract lowers to ConstI128/ConstU128, which both verifier C emitters
+// already treat as unmodelable (pre-existing, unrelated to dynamic shift
+// counts) — a bounded i128/u128 shift contract can't reach `Verified` on
+// either compiler today. The dynamic-shift-count regression for i128/u128 is
+// covered on the fail side instead, by tests/verify-fail/shift_count_unattributed_{i128,u128}.vow,
+// whose fixtures have no integer literals and so don't trip that gap.
+
+fn shift_i64(value: i64, count: i64) -> i64 vow {
+    requires: count >= 0 && count < 64
+    ensures: result == value >> count
+} {
+    value >> count
+}
+
+fn shift_u64(value: u64, count: u64) -> u64 vow {
+    requires: count < 64
+    ensures: result == value >> count
+} {
+    value >> count
+}
+
+fn main() -> i32 {
+    shift_i64(0, 0);
+    shift_u64(0, 0);
+    0
+}
