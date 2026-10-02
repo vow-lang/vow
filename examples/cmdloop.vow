@@ -1,7 +1,7 @@
 module CmdLoop
 
 fn trim_newline(s: String) -> String {
-    let n: i64 = s.len();
+    let n: u64 = s.len() as u64;
     if n == 0 { return s; }
     let last: i64 = s.byte_at(n - 1);
     if last == 10 {
