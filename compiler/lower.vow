@@ -2485,7 +2485,7 @@ fn backpatch_upsilon(ctx: LowerCtx, block_id: i64, upsilon_id: i64, phi_id: i64)
 // vow-ir/src/lower/mod.rs.
 fn renarrow_if_branch_result(ctx: LowerCtx, a: AstArena, block_id: i64, up_id: i64, result_eid: i64, target_ty: i64, span: i64) -> i64 {
     let blk: IrBlock = ctx.func.blocks[block_id];
-    let n_insts: i64 = blk.insts.len();
+    let n_insts: i64 = blk.insts.len() as i64;
     let mut up_pos: i64 = -1;
     let mut old_arg: i64 = -1;
     let mut fj: i64 = 0;
@@ -2515,7 +2515,7 @@ fn renarrow_if_branch_result(ctx: LowerCtx, a: AstArena, block_id: i64, up_id: i
     lctx_set_inst_span(ctx, new_up_id, span);
     let blk2: IrBlock = ctx.func.blocks[block_id];
     let mut tj: i64 = 0;
-    while tj < tail.len() {
+    while tj < tail.len() as i64 {
         blk2.insts.push(tail[tj]);
         tj = tj + 1;
     }
