@@ -15,7 +15,7 @@ fn map_fill(n: i64) -> HashMap<i64, i64>
 - `requires: n >= 0` — count is non-negative
 - `ensures: result.len() == n` — map has exactly `n` entries
 - The loop counter `i` is a `u64` local, so it needs no `invariant: i >= 0`; bridge with `n as u64` and `i as i64`
-- Loop `invariant: i <= n`
+- Loop `invariant: i <= n as u64`
 
 ## Constraints
 
@@ -24,6 +24,6 @@ fn map_fill(n: i64) -> HashMap<i64, i64>
 
 ## Hints
 
-- `m.insert(i, i * 10)` with `i` as key guarantees distinct keys
+- `m.insert(k, k * 10)` with `let k: i64 = i as i64` as key guarantees distinct keys
 - Distinct keys means each insert increases length by 1
 - Verifier unwind and HashMap-model limits are not source preconditions

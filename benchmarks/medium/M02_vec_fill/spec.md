@@ -15,7 +15,7 @@ fn fill_vec(n: i64) -> Vec<i64>
 - `requires: n >= 0` — count is non-negative
 - `ensures: result.len() == n` — resulting Vec has exactly `n` elements
 - The loop counter `i` is a `u64` local, so it needs no `invariant: i >= 0`; bridge with `n as u64` and `i as i64`
-- Loop `invariant: i <= n`
+- Loop `invariant: i <= n as u64`
 
 ## Constraints
 
@@ -24,6 +24,6 @@ fn fill_vec(n: i64) -> Vec<i64>
 
 ## Hints
 
-- Push `i` in each iteration; the Vec grows by 1 each time
+- Push `i as i64` in each iteration; the Vec grows by 1 each time
 - The loop invariant tracks `i` within `[0, n]`
 - Verifier unwind and Vec-model limits are not source preconditions
