@@ -14,9 +14,10 @@ fn ring_new(capacity: i64) -> RingBuf vow {
   ensures: result.data.len() == capacity
 } {
   let v: Vec<i64> = Vec::new();
-  let mut i: u64 = 0;
-  while i < capacity as u64 vow {
-    invariant: i <= capacity as u64
+  let mut i: i64 = 0;
+  while i < capacity vow {
+    invariant: i >= 0,
+    invariant: i <= capacity
   } {
     v.push(0);
     i = i + 1;
