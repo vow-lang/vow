@@ -247,12 +247,10 @@ fn contracts_where_clause() {
     for c in contracts {
         assert_eq!(c["kind"], "requires");
         assert_eq!(c["blame"], "Caller");
-        assert!(
-            c["description"]
-                .as_str()
-                .unwrap()
-                .contains("where on parameter")
-        );
+        assert!(c["description"]
+            .as_str()
+            .unwrap()
+            .contains("where on parameter"));
     }
 }
 
@@ -333,6 +331,28 @@ fn contracts_requires_offset_anchors_on_keyword_not_predicate() {
     // `offset` must land on the `requires:` keyword, not 10 bytes later on the
     // predicate `x >= 0` — that's the anchor divergence #1357 fixes for self-hosted.
     let expected_offset = source_text.find("requires:").unwrap() as u64;
+    assert_eq!(c["source"]["offset"].as_u64().unwrap(), expected_offset);
+}
+
+#[test]
+fn contracts_where_refinement_offset_anchors_on_param_name() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let src = dir.path().join("anchor.vow");
+    let source_text = "module Anchor\nfn f(n: i64 where 0 <= n) -> i64 { n }\n";
+    std::fs::write(&src, source_text).unwrap();
+    let out = Command::new(vow_bin())
+        .args(["contracts", src.to_str().unwrap()])
+        .output()
+        .expect("failed to run vow");
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("invalid JSON from contracts: {e}\nstdout: {stdout}"));
+    let c = &json["contracts"][0];
+    assert_eq!(c["kind"], "requires");
+    // `offset` must land on the parameter name `n`, not on the refinement
+    // predicate `0 <= n` — this is the anchor self-hosted must match (#1366).
+    let expected_offset = source_text.find("n: i64").unwrap() as u64;
     assert_eq!(c["source"]["offset"].as_u64().unwrap(), expected_offset);
 }
 
