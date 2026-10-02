@@ -1140,16 +1140,20 @@ def reviewed_completely(result):
     )
 
 
-def write_ledger(ledger, results, date, path=LEDGER):
-    """Atomically stamp only fully reviewed pair rows in the shared ledger.
+def _read_ledger_bytes(path):
+    """Read the ledger file's raw bytes, or None if it has no file yet."""
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
 
-    The rows are merged into the ledger as it stands *now*, not into the copy
-    loaded before the model calls: a review runs for minutes, and triage edits
-    issue numbers and corpus rows in the same file meanwhile.
+
+def _merge_ledger(ledger, results, date):
+    """Stamp fully reviewed pair rows into ledger, returning (ledger, updated).
+
+    Mutates and returns ledger in place so a caller can thread it through a
+    retry loop without an extra copy.
     """
-    path = Path(path)
-    if path.exists():
-        ledger = json.loads(path.read_text())
     updated = []
     for result in results:
         if not reviewed_completely(result):
@@ -1168,10 +1172,26 @@ def write_ledger(ledger, results, date, path=LEDGER):
         _validate_pair_entry(entry)
         ledger["pairs"][name] = entry
         updated.append(name)
+    if updated:
+        ledger["updated"] = date
+    return ledger, updated
+
+
+def write_ledger(ledger, results, date, path=LEDGER):
+    """Stamp only fully reviewed pair rows into the shared ledger.
+
+    The rows are merged into the ledger as it stands *now*, not into the copy
+    loaded before the model calls: a review runs for minutes, and triage edits
+    issue numbers and corpus rows in the same file meanwhile.
+    """
+    path = Path(path)
+    data = _read_ledger_bytes(path)
+    if data is not None:
+        ledger = json.loads(data)
+    ledger, updated = _merge_ledger(ledger, results, date)
 
     if not updated:
         return updated
-    ledger["updated"] = date
     descriptor, temp_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
     )
