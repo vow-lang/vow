@@ -2,9 +2,11 @@
 // TEST: error-code TypeMismatch
 module U64I64Compare
 
-fn main() -> i32 {
-  let v: Vec<u64> = Vec::new();
+fn cmp(n: i64) -> bool {
   let i: u64 = 0;
-  let b: bool = i < v.len();
+  i < n
+}
+
+fn main() -> i32 {
   0
 }

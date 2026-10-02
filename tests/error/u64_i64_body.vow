@@ -4,8 +4,8 @@
 // the declared u64 return type.
 module U64I64Body
 
-fn count(v: Vec<u64>) -> u64 {
-  v.len()
+fn count(n: i64) -> u64 {
+  n
 }
 
 fn main() -> i32 {
