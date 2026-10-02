@@ -167,7 +167,7 @@ overflow — use on bounded data, or add `requires` bounds at the call site.
 | `vec_min` / `vec_max` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | |
 | `vec_mean` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | Integer mean. |
 | `vec_dot` | `(a, b: Vec<i64>) -> i64` | `requires a.len() == b.len()` | |
-| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures 0 <= result <= v.len()` | Invariant `count <= i`. |
+| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures result >= 0, result <= v.len() as i64` | Invariant `count <= i`. |
 | `vec_all_in_range` | `(v: Vec<i64>, lo, hi: i64) -> bool` | `requires lo <= hi` | |
 | `vec_is_sorted` | `(v: Vec<i64>) -> bool` | — | Ascending. |
 | `vec_prefix_sum` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |
@@ -181,15 +181,15 @@ overflow — use on bounded data, or add `requires` bounds at the call site.
 a max-heap over `i64`), with the comparator flipped. Both are value types: every
 mutator takes a heap by value and returns a new one.
 
-The defining contract pattern is the **size-shadow invariant** `size == data.len()`,
-threaded through every mutator. This is what lets ESBMC reason about in-bounds
-`data[i]` access without a universal quantifier:
+The defining contract pattern is the **size-shadow invariant** `size == data.len() as i64`
+(`size` is `i64`, `.len()` is `u64`), threaded through every mutator. This is what
+lets ESBMC reason about in-bounds `data[i]` access without a universal quantifier:
 ```vow
 pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {
-    requires: h.size == h.data.len(),
+    requires: h.size == h.data.len() as i64,
     requires: h.size < 9223372036854775807,
     ensures: result.size == h.size + 1,
-    ensures: result.size == result.data.len()
+    ensures: result.size == result.data.len() as i64
 }
 ```
 
@@ -226,7 +226,7 @@ use it.
 | `stack_is_empty` | `(s) -> bool` | — |
 
 **Known gaps (move-verbatim; tracked follow-up):** no `stack_pop`; no size-shadow
-invariant (`size == data.len()`) like `heap` has; `stack_peek` has no `ensures`
+invariant (`size == data.len() as i64`) like `heap` has; `stack_peek` has no `ensures`
 relating the result to `data[size-1]`; functions are not marked `pub`; `node.vow` is
 unused.
 
@@ -333,12 +333,12 @@ handles returned by `gc_alloc`; never fabricate them.
 |----------|-----------|---------------|
 | `gc_new` | `() -> GcHeap` | — |
 | `gc_alloc` | `(h, val: i64) -> i64` | — (returns a slot; reuses freed slots) |
-| `gc_add_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
-| `gc_remove_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len()` (does **not** require alive — you may unroot a freed slot) |
+| `gc_add_root` | `(h, slot: i64)` | `requires slot >= 0, slot < values.len() as i64, alive[slot] == 1` |
+| `gc_remove_root` | `(h, slot: i64)` | `requires slot >= 0, slot < values.len() as i64` (does **not** require alive — you may unroot a freed slot) |
 | `gc_add_ref` | `(h, from, to: i64)` | `requires` both in range and alive |
-| `gc_read` | `(h, slot: i64) -> i64` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
-| `gc_write` | `(h, slot, val: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
-| `gc_is_alive` | `(h, slot: i64) -> bool` | `requires 0 <= slot < values.len()` |
+| `gc_read` | `(h, slot: i64) -> i64` | `requires slot >= 0, slot < values.len() as i64, alive[slot] == 1` |
+| `gc_write` | `(h, slot, val: i64)` | `requires slot >= 0, slot < values.len() as i64, alive[slot] == 1` |
+| `gc_is_alive` | `(h, slot: i64) -> bool` | `requires slot >= 0, slot < values.len() as i64` |
 | `gc_count` | `(h) -> i64` | — |
 | `gc_collect` | `(h) -> i64` | — (returns count of newly-freed objects) |
 
