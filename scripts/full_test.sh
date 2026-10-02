@@ -1512,9 +1512,10 @@ done
 # `quality_fixture` only has vow-block `requires`/`ensures` clauses (no
 # `invariant`, no parameter `where` refinements) — the keyword-prefix check
 # below assumes that anchor rule (docs/spec/cli.md, docs/spec/contracts.md).
-# A `where` refinement also reports kind "requires" but Rust anchors it on
-# the parameter name, not the keyword, so it would fail this check; keep
-# such fixtures out of `quality_fixture` or exclude them explicitly.
+# A `where` refinement also reports kind "requires" but both compilers anchor
+# it on the parameter name, not the keyword, so it would fail this check;
+# keep such fixtures out of `quality_fixture` (their parity coverage lives in
+# the separate `where-refinement/offset-parity` block below instead).
 #
 # Scoped to skip `description` on purpose — a pre-existing divergence in the
 # published contracts schema would otherwise mask a real quality regression:
