@@ -154,7 +154,7 @@ module VecFill
 
 fn fill_vec(n: i64) -> Vec<i64> vow {
     requires: n >= 0,
-    ensures: result.len() == n
+    ensures: result.len() as i64 == n
 } {
     let v: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
@@ -169,7 +169,7 @@ fn fill_vec(n: i64) -> Vec<i64> vow {
 
 fn main() -> i32 [io] {
     let v: Vec<i64> = fill_vec(5);
-    print_i64(v.len());
+    print_u64(v.len() as u64);
     0
 }
 ```
@@ -186,7 +186,7 @@ $ vow verify examples/vec_fill.vow
 
 **Key points:**
 - `invariant: i <= n as u64` is inductive: true on entry, preserved by the loop body. The lower bound `i >= 0` is carried by the `u64` type, so it needs no clause (and `TautologicalComparison` rejects one)
-- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
+- The Vec model tracks `len`, so ESBMC can reason about `result.len() as i64 == n`
 - The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
 - `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 
@@ -206,14 +206,14 @@ module Search
 fn linear_search(data: Vec<i64>, target: i64) -> i64
     vow { requires: data.len() > 0 }
 {
-    let mut i: i64 = 0;
-    let n: i64 = data.len();
+    let mut i: u64 = 0;
+    let n: u64 = data.len() as u64;
     let result: i64 = loop {
         if i >= n {
             break -1;
         }
         if data[i] == target {
-            break i;
+            break i as i64;
         }
         i = i + 1;
     };
@@ -282,9 +282,9 @@ fn trim_newline(s: String) -> String {
     s
 }
 
-fn skip_spaces(s: String, start: i64) -> i64 {
-    let mut i: i64 = start;
-    let n: i64 = s.len();
+fn skip_spaces(s: String, start: u64) -> u64 {
+    let mut i: u64 = start;
+    let n: u64 = s.len() as u64;
     while i < n {
         if s.byte_at(i) != 32 { return i; }
         i = i + 1;
@@ -308,7 +308,7 @@ fn main() -> i32 [read, io] {
                 if cmd.len() >= 5 {
                     let prefix: String = cmd.substring(0, 5);
                     if prefix.eq(String::from("echo ")) {
-                        let start: i64 = skip_spaces(cmd, 5);
+                        let start: u64 = skip_spaces(cmd, 5);
                         let text: String = cmd.substring(start, cmd.len());
                         print_str(text);
                         print_str(String::from("\n"));
@@ -393,7 +393,7 @@ fn main() -> i32 [read, io] {
     }
 
     let mut lines: i64 = 0;
-    let mut bytes: i64 = 0;
+    let mut bytes: u64 = 0;
     let mut line: String = fs_read_line(h);
     while line.len() > 0 {
         lines = lines + 1;
@@ -413,7 +413,7 @@ fn main() -> i32 [read, io] {
 
     print_i64(lines);
     print_str(String::from("\n"));
-    print_i64(bytes);
+    print_u64(bytes);
     print_str(String::from("\n"));
     0
 }
@@ -447,7 +447,7 @@ fn main() -> i32 [io] {
     let prev: Option<i64> = m.insert(7, 99);
     // prev is Some(42); the second insert overwrote the first.
     fetch(m);
-    print_i64(m.len());
+    print_u64(m.len());
     0
 }
 ```

@@ -1499,11 +1499,14 @@ pub fn api_function(x: i64) -> i64 {
 
 Vow targets 64-bit only and has no `isize`/`usize`. Excluding pointer-width
 types preserves binary fixed-point reproducibility across compilation hosts;
-see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). `Vec::len()` and
-indices currently use `i64`, but their signedness is independent of this
-determinism rationale. [ADR 0003](../adr/0003-unsigned-size-types.md) specifies
-that lengths, indices, and capacities will move to fixed-width `u64` as part of
-epic #1104.
+see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). The signedness of a
+length is independent of this determinism rationale, so
+[ADR 0003](../adr/0003-unsigned-size-types.md) makes lengths fixed-width `u64`:
+`.len()` on `Vec`, `String`, `HashMap`, and `BTreeMap` returns `u64`. An index
+expression accepts any integer type (see [Indexing](#indexing)), so `v[i]` with
+`i: u64` needs no cast. `String` offsets (`byte_at`, `substr`,
+`substring`, `matches_literal_at`) stay `i64` as a documented v1 scope
+decision; see [String offsets](#string-offsets).
 
 **128-bit implementation status:** `i128`/`u128` types and full-range literal
 representation are available to the frontend and IR. Native code generation,
@@ -1965,7 +1968,7 @@ while i > 0 {
 let mut i: u64 = 0u64;
 while i < n vow {
     invariant: i <= n,
-    invariant: v.len() as u64 == i
+    invariant: v.len() == i
 } {
     v.push(i);
     i = i + 1;
@@ -1974,9 +1977,9 @@ while i < n vow {
 
 State the bound the loop actually maintains. `invariant: i >= 0` looks like a
 lower bound but is always true once `i` is unsigned, and the type checker
-rejects it as `TautologicalComparison`. `.len()` is `i64`, so a length clause
-compared against an unsigned counter needs the same `as u64` bridge as the
-descending-loop idiom below.
+rejects it as `TautologicalComparison`. `.len()` is `u64`, so a length clause
+compares directly against a `u64` counter; a counter of any other type needs
+an explicit `as` cast.
 
 ### Descending Loops
 
@@ -1984,7 +1987,7 @@ A descending index loop guards on `> 0` and decrements as the first statement
 of the body:
 
 ```vow
-let n: u64 = v.len() as u64;
+let n: u64 = v.len();
 let mut i: u64 = n;
 let mut acc: u64 = 0u64;
 while i > 0 vow { invariant: i <= n } {
@@ -1997,11 +2000,10 @@ while i > 0 vow { invariant: i <= n } {
 before the first use. The guard is therefore also the bounds check: every
 `v[i]` in the body runs with `i < n`.
 
-Two constraints on the shape above are easy to miss. `.len()` is `i64`, so the
-`as u64` bridge is required — without it the `let` is a `TypeMismatch`. And the
-body must stay pure: a `print_*` call inside a contracted function gives that
-function an effect, and the verifier model is restricted to pure functions, so
-the contract is reported as `VerificationSkipped` rather than checked.
+One constraint on the shape above is easy to miss: the body must stay pure.
+A `print_*` call inside a contracted function gives that function an effect,
+and the verifier model is restricted to pure functions, so the contract is
+reported as `VerificationSkipped` rather than checked.
 
 This idiom does not by itself make a length-bounded loop provable. ESBMC's
 unwind bound sits below the modelled collection capacity, so this form and the
@@ -2013,15 +2015,15 @@ an unsigned index, whereas the signed form's companion clause `i >= -1` is not
 #### Never `while i >= 0`
 
 ```vow
-let mut i: u64 = v.len() as u64 - 1;   // wraps on an empty collection
-while i >= 0 { ... }                   // never exits; rejected by the checker
+let mut i: u64 = v.len() - 1;   // wraps on an empty collection
+while i >= 0 { ... }            // never exits; rejected by the checker
 ```
 
 Both lines are broken independently. `i >= 0` is universally true on an
 unsigned type, so the loop has no exit; the type checker rejects the
 comparison outright as `TautologicalComparison`, in a loop condition just as
 in a contract clause. The initializer is the half no diagnostic catches: on an
-empty collection `v.len() as u64 - 1` wraps to `18446744073709551615` and the
+empty collection `v.len() - 1` wraps to `18446744073709551615` and the
 first index read runs far out of bounds.
 
 #### `-` inside the guard, `-!` outside it
@@ -2277,7 +2279,7 @@ m.contains_key(k)
 | `Vec::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> Vec<T>` for flat scalar `T` |
 | `.push(val)`   | `(T) -> ()`                      |
 | `.pop()`       | `() -> ()`                       |
-| `.len()`       | `() -> i64`                      |
+| `.len()`       | `() -> u64`                      |
 | `.clear()`     | `() -> ()` — frees buffer, resets to empty |
 | `.truncate(n)` | `(<int>) -> ()` — shrinks to n elements, frees excess memory |
 | `v[i]`         | Index read — copies slot value; aliases heap types (panics if out of bounds) |
@@ -2292,7 +2294,7 @@ m.contains_key(k)
 | `String::from(s)`   | `(String) -> String` — mutable copy |
 | `String::new()`     | `() -> String`              |
 | `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |
-| `.len()`            | `() -> i64`                 |
+| `.len()`            | `() -> u64`                 |
 | `.byte_at(i)`       | `(<int>) -> i64`            |
 | `.push_byte(b)`     | `(<int>) -> ()`             |
 | `.push_str(s)`      | `(String) -> ()`            |
@@ -2314,7 +2316,7 @@ m.contains_key(k)
 | `.get(k)`           | `(K) -> V`                  |
 | `.contains_key(k)`  | `(K) -> bool`               |
 | `.remove(k)`        | `(K) -> ()`                 |
-| `.len()`            | `() -> i64`                 |
+| `.len()`            | `() -> u64`                 |
 
 ### BTreeMap<K, V> Methods
 
@@ -2333,7 +2335,7 @@ prefer `BTreeMap` over `HashMap` for any map whose iteration affects compiler ou
 | `.insert(k, v)`     | `(K, V) -> Option<V>` (returns the previous value bound to `k`, if any) |
 | `.get(k)`           | `(K) -> Option<V>` (returns the value bound to `k`, or `None`)          |
 | `.contains(k)`      | `(K) -> bool`               |
-| `.len()`            | `() -> i64`                 |
+| `.len()`            | `() -> u64`                 |
 
 ### Option<T> Methods
 
@@ -2359,6 +2361,29 @@ The index expression must have an **integer type**. Any width and either signedn
 The type checker also accepts a 128-bit index, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `Vec` and `String` element helpers are i64-only, so such a program fails codegen instead. Use a 64-bit or narrower index until epic #526 lands 128-bit lowering.
 
 The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).
+
+Lengths are `u64` (see [the Vec method table](#vect-methods)), so an index derived from one needs no conversion:
+
+```vow
+let n: u64 = v.len();
+let mut i: u64 = 0;
+while i < n vow { invariant: i <= n } {
+    let x: i64 = v[i];
+    i = i + 1;
+}
+```
+
+Arithmetic and comparison do not mix signedness: `i64 + u64` and `u64 < i64` are `TypeMismatch`. Convert at the binding with `as`; same-width `as` casts between `i64` and `u64` are legal.
+
+### String offsets
+
+`String` offsets stay `i64` in v1. This is a documented scope decision, not an oversight: `String::len()` is `u64`, but the runtime helpers that take an offset or span (`byte_at`, `substr`, `substring`, `matches_literal_at`) still take `i64` and keep live negative-offset behaviour — `byte_at` returns `-1` for an out-of-range offset, `substr` and `substring` clamp their arguments, and `matches_literal_at` rejects a negative position. Migrating them to `u64` means deleting those guards, which changes runtime semantics for out-of-range callers.
+
+What this means at a call site:
+
+- The `string_substr` and `string_matches_literal_at` builtins require `i64` offset arguments exactly (see the builtin signature table).
+- The `byte_at` and `substring` methods accept any integer type per the rule above, but the runtime sees an `i64`; a `u64` offset above `i64::MAX` is reinterpreted as negative, exactly as described for unsigned indices above. A length-derived `u64` offset is always in range, so `s.byte_at(i)` with `i < s.len()` is safe.
+- `byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64` regardless.
 
 Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.
 
@@ -3445,8 +3470,7 @@ fn negate(x: i64) -> i64 vow {
 ### Bounds Check
 
 ```vow
-fn get_element(v: Vec<i64>, i: i64) -> i64 vow {
-    requires: i >= 0,
+fn get_element(v: Vec<i64>, i: u64) -> i64 vow {
     requires: i < v.len()
 } {
     v[i]
@@ -3613,7 +3637,7 @@ Without a bound on loop iterations, ESBMC may timeout (default max-k-step is 50)
 ```vow
 fn fill(n: i64) -> Vec<i64> vow {
     requires: n >= 0,
-    ensures: result.len() == n
+    ensures: result.len() as i64 == n
 } { ... }
 ```
 
@@ -3793,8 +3817,8 @@ fn write_u8(out: Vec<i64>, v: i64) vow {
 **Strength:** a precondition is strong when it is the *true* domain of the
 function — no wider (which would admit miscompilation) and no narrower (a
 verifier-driven bound like `requires: n <= 8`, forbidden by `contracts.md`).
-A bounds-check precondition such as `requires: i >= 0, requires: i < v.len()` is
-the standard guard for every indexing operation.
+A bounds-check precondition such as `requires: i < v.len()` (with `i: u64`, so no
+lower-bound clause is needed) is the standard guard for every indexing operation.
 
 ### 2. Output-range postcondition (the weak default — use sparingly)
 
@@ -5164,7 +5188,7 @@ overflow — use on bounded data, or add `requires` bounds at the call site.
 | `vec_min` / `vec_max` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | |
 | `vec_mean` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | Integer mean. |
 | `vec_dot` | `(a, b: Vec<i64>) -> i64` | `requires a.len() == b.len()` | |
-| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures 0 <= result <= v.len()` | Invariant `count <= i`. |
+| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures result >= 0, result <= v.len() as i64` | Invariant `count <= i`. |
 | `vec_all_in_range` | `(v: Vec<i64>, lo, hi: i64) -> bool` | `requires lo <= hi` | |
 | `vec_is_sorted` | `(v: Vec<i64>) -> bool` | — | Ascending. |
 | `vec_prefix_sum` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |
@@ -5178,15 +5202,15 @@ overflow — use on bounded data, or add `requires` bounds at the call site.
 a max-heap over `i64`), with the comparator flipped. Both are value types: every
 mutator takes a heap by value and returns a new one.
 
-The defining contract pattern is the **size-shadow invariant** `size == data.len()`,
-threaded through every mutator. This is what lets ESBMC reason about in-bounds
-`data[i]` access without a universal quantifier:
+The defining contract pattern is the **size-shadow invariant** `size == data.len() as i64`
+(`size` is `i64`, `.len()` is `u64`), threaded through every mutator. This is what
+lets ESBMC reason about in-bounds `data[i]` access without a universal quantifier:
 ```vow
 pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {
-    requires: h.size == h.data.len(),
+    requires: h.size == h.data.len() as i64,
     requires: h.size < 9223372036854775807,
     ensures: result.size == h.size + 1,
-    ensures: result.size == result.data.len()
+    ensures: result.size == result.data.len() as i64
 }
 ```
 
@@ -5223,7 +5247,7 @@ use it.
 | `stack_is_empty` | `(s) -> bool` | — |
 
 **Known gaps (move-verbatim; tracked follow-up):** no `stack_pop`; no size-shadow
-invariant (`size == data.len()`) like `heap` has; `stack_peek` has no `ensures`
+invariant (`size == data.len() as i64`) like `heap` has; `stack_peek` has no `ensures`
 relating the result to `data[size-1]`; functions are not marked `pub`; `node.vow` is
 unused.
 
@@ -5330,12 +5354,12 @@ handles returned by `gc_alloc`; never fabricate them.
 |----------|-----------|---------------|
 | `gc_new` | `() -> GcHeap` | — |
 | `gc_alloc` | `(h, val: i64) -> i64` | — (returns a slot; reuses freed slots) |
-| `gc_add_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
-| `gc_remove_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len()` (does **not** require alive — you may unroot a freed slot) |
+| `gc_add_root` | `(h, slot: i64)` | `requires slot >= 0, slot < values.len() as i64, alive[slot] == 1` |
+| `gc_remove_root` | `(h, slot: i64)` | `requires slot >= 0, slot < values.len() as i64` (does **not** require alive — you may unroot a freed slot) |
 | `gc_add_ref` | `(h, from, to: i64)` | `requires` both in range and alive |
-| `gc_read` | `(h, slot: i64) -> i64` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
-| `gc_write` | `(h, slot, val: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
-| `gc_is_alive` | `(h, slot: i64) -> bool` | `requires 0 <= slot < values.len()` |
+| `gc_read` | `(h, slot: i64) -> i64` | `requires slot >= 0, slot < values.len() as i64, alive[slot] == 1` |
+| `gc_write` | `(h, slot, val: i64)` | `requires slot >= 0, slot < values.len() as i64, alive[slot] == 1` |
+| `gc_is_alive` | `(h, slot: i64) -> bool` | `requires slot >= 0, slot < values.len() as i64` |
 | `gc_count` | `(h) -> i64` | — |
 | `gc_collect` | `(h) -> i64` | — (returns count of newly-freed objects) |
 
@@ -5528,7 +5552,7 @@ module VecFill
 
 fn fill_vec(n: i64) -> Vec<i64> vow {
     requires: n >= 0,
-    ensures: result.len() == n
+    ensures: result.len() as i64 == n
 } {
     let v: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
@@ -5543,7 +5567,7 @@ fn fill_vec(n: i64) -> Vec<i64> vow {
 
 fn main() -> i32 [io] {
     let v: Vec<i64> = fill_vec(5);
-    print_i64(v.len());
+    print_u64(v.len() as u64);
     0
 }
 ```
@@ -5560,7 +5584,7 @@ $ vow verify examples/vec_fill.vow
 
 **Key points:**
 - `invariant: i <= n as u64` is inductive: true on entry, preserved by the loop body. The lower bound `i >= 0` is carried by the `u64` type, so it needs no clause (and `TautologicalComparison` rejects one)
-- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
+- The Vec model tracks `len`, so ESBMC can reason about `result.len() as i64 == n`
 - The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
 - `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 
@@ -5580,14 +5604,14 @@ module Search
 fn linear_search(data: Vec<i64>, target: i64) -> i64
     vow { requires: data.len() > 0 }
 {
-    let mut i: i64 = 0;
-    let n: i64 = data.len();
+    let mut i: u64 = 0;
+    let n: u64 = data.len() as u64;
     let result: i64 = loop {
         if i >= n {
             break -1;
         }
         if data[i] == target {
-            break i;
+            break i as i64;
         }
         i = i + 1;
     };
@@ -5656,9 +5680,9 @@ fn trim_newline(s: String) -> String {
     s
 }
 
-fn skip_spaces(s: String, start: i64) -> i64 {
-    let mut i: i64 = start;
-    let n: i64 = s.len();
+fn skip_spaces(s: String, start: u64) -> u64 {
+    let mut i: u64 = start;
+    let n: u64 = s.len() as u64;
     while i < n {
         if s.byte_at(i) != 32 { return i; }
         i = i + 1;
@@ -5682,7 +5706,7 @@ fn main() -> i32 [read, io] {
                 if cmd.len() >= 5 {
                     let prefix: String = cmd.substring(0, 5);
                     if prefix.eq(String::from("echo ")) {
-                        let start: i64 = skip_spaces(cmd, 5);
+                        let start: u64 = skip_spaces(cmd, 5);
                         let text: String = cmd.substring(start, cmd.len());
                         print_str(text);
                         print_str(String::from("\n"));
@@ -5767,7 +5791,7 @@ fn main() -> i32 [read, io] {
     }
 
     let mut lines: i64 = 0;
-    let mut bytes: i64 = 0;
+    let mut bytes: u64 = 0;
     let mut line: String = fs_read_line(h);
     while line.len() > 0 {
         lines = lines + 1;
@@ -5787,7 +5811,7 @@ fn main() -> i32 [read, io] {
 
     print_i64(lines);
     print_str(String::from("\n"));
-    print_i64(bytes);
+    print_u64(bytes);
     print_str(String::from("\n"));
     0
 }
@@ -5821,7 +5845,7 @@ fn main() -> i32 [io] {
     let prev: Option<i64> = m.insert(7, 99);
     // prev is Some(42); the second insert overwrote the first.
     fetch(m);
-    print_i64(m.len());
+    print_u64(m.len());
     0
 }
 ```
@@ -6748,11 +6772,14 @@ pub fn api_function(x: i64) -> i64 {
 
 Vow targets 64-bit only and has no `isize`/`usize`. Excluding pointer-width
 types preserves binary fixed-point reproducibility across compilation hosts;
-see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). `Vec::len()` and
-indices currently use `i64`, but their signedness is independent of this
-determinism rationale. [ADR 0003](../adr/0003-unsigned-size-types.md) specifies
-that lengths, indices, and capacities will move to fixed-width `u64` as part of
-epic #1104.
+see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). The signedness of a
+length is independent of this determinism rationale, so
+[ADR 0003](../adr/0003-unsigned-size-types.md) makes lengths fixed-width `u64`:
+`.len()` on `Vec`, `String`, `HashMap`, and `BTreeMap` returns `u64`. An index
+expression accepts any integer type (see [Indexing](#indexing)), so `v[i]` with
+`i: u64` needs no cast. `String` offsets (`byte_at`, `substr`,
+`substring`, `matches_literal_at`) stay `i64` as a documented v1 scope
+decision; see [String offsets](#string-offsets).
 
 **128-bit implementation status:** `i128`/`u128` types and full-range literal
 representation are available to the frontend and IR. Native code generation,
@@ -7214,7 +7241,7 @@ while i > 0 {
 let mut i: u64 = 0u64;
 while i < n vow {
     invariant: i <= n,
-    invariant: v.len() as u64 == i
+    invariant: v.len() == i
 } {
     v.push(i);
     i = i + 1;
@@ -7223,9 +7250,9 @@ while i < n vow {
 
 State the bound the loop actually maintains. `invariant: i >= 0` looks like a
 lower bound but is always true once `i` is unsigned, and the type checker
-rejects it as `TautologicalComparison`. `.len()` is `i64`, so a length clause
-compared against an unsigned counter needs the same `as u64` bridge as the
-descending-loop idiom below.
+rejects it as `TautologicalComparison`. `.len()` is `u64`, so a length clause
+compares directly against a `u64` counter; a counter of any other type needs
+an explicit `as` cast.
 
 ### Descending Loops
 
@@ -7233,7 +7260,7 @@ A descending index loop guards on `> 0` and decrements as the first statement
 of the body:
 
 ```vow
-let n: u64 = v.len() as u64;
+let n: u64 = v.len();
 let mut i: u64 = n;
 let mut acc: u64 = 0u64;
 while i > 0 vow { invariant: i <= n } {
@@ -7246,11 +7273,10 @@ while i > 0 vow { invariant: i <= n } {
 before the first use. The guard is therefore also the bounds check: every
 `v[i]` in the body runs with `i < n`.
 
-Two constraints on the shape above are easy to miss. `.len()` is `i64`, so the
-`as u64` bridge is required — without it the `let` is a `TypeMismatch`. And the
-body must stay pure: a `print_*` call inside a contracted function gives that
-function an effect, and the verifier model is restricted to pure functions, so
-the contract is reported as `VerificationSkipped` rather than checked.
+One constraint on the shape above is easy to miss: the body must stay pure.
+A `print_*` call inside a contracted function gives that function an effect,
+and the verifier model is restricted to pure functions, so the contract is
+reported as `VerificationSkipped` rather than checked.
 
 This idiom does not by itself make a length-bounded loop provable. ESBMC's
 unwind bound sits below the modelled collection capacity, so this form and the
@@ -7262,15 +7288,15 @@ an unsigned index, whereas the signed form's companion clause `i >= -1` is not
 #### Never `while i >= 0`
 
 ```vow
-let mut i: u64 = v.len() as u64 - 1;   // wraps on an empty collection
-while i >= 0 { ... }                   // never exits; rejected by the checker
+let mut i: u64 = v.len() - 1;   // wraps on an empty collection
+while i >= 0 { ... }            // never exits; rejected by the checker
 ```
 
 Both lines are broken independently. `i >= 0` is universally true on an
 unsigned type, so the loop has no exit; the type checker rejects the
 comparison outright as `TautologicalComparison`, in a loop condition just as
 in a contract clause. The initializer is the half no diagnostic catches: on an
-empty collection `v.len() as u64 - 1` wraps to `18446744073709551615` and the
+empty collection `v.len() - 1` wraps to `18446744073709551615` and the
 first index read runs far out of bounds.
 
 #### `-` inside the guard, `-!` outside it
@@ -7526,7 +7552,7 @@ m.contains_key(k)
 | `Vec::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> Vec<T>` for flat scalar `T` |
 | `.push(val)`   | `(T) -> ()`                      |
 | `.pop()`       | `() -> ()`                       |
-| `.len()`       | `() -> i64`                      |
+| `.len()`       | `() -> u64`                      |
 | `.clear()`     | `() -> ()` — frees buffer, resets to empty |
 | `.truncate(n)` | `(<int>) -> ()` — shrinks to n elements, frees excess memory |
 | `v[i]`         | Index read — copies slot value; aliases heap types (panics if out of bounds) |
@@ -7541,7 +7567,7 @@ m.contains_key(k)
 | `String::from(s)`   | `(String) -> String` — mutable copy |
 | `String::new()`     | `() -> String`              |
 | `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |
-| `.len()`            | `() -> i64`                 |
+| `.len()`            | `() -> u64`                 |
 | `.byte_at(i)`       | `(<int>) -> i64`            |
 | `.push_byte(b)`     | `(<int>) -> ()`             |
 | `.push_str(s)`      | `(String) -> ()`            |
@@ -7563,7 +7589,7 @@ m.contains_key(k)
 | `.get(k)`           | `(K) -> V`                  |
 | `.contains_key(k)`  | `(K) -> bool`               |
 | `.remove(k)`        | `(K) -> ()`                 |
-| `.len()`            | `() -> i64`                 |
+| `.len()`            | `() -> u64`                 |
 
 ### BTreeMap<K, V> Methods
 
@@ -7582,7 +7608,7 @@ prefer `BTreeMap` over `HashMap` for any map whose iteration affects compiler ou
 | `.insert(k, v)`     | `(K, V) -> Option<V>` (returns the previous value bound to `k`, if any) |
 | `.get(k)`           | `(K) -> Option<V>` (returns the value bound to `k`, or `None`)          |
 | `.contains(k)`      | `(K) -> bool`               |
-| `.len()`            | `() -> i64`                 |
+| `.len()`            | `() -> u64`                 |
 
 ### Option<T> Methods
 
@@ -7608,6 +7634,29 @@ The index expression must have an **integer type**. Any width and either signedn
 The type checker also accepts a 128-bit index, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `Vec` and `String` element helpers are i64-only, so such a program fails codegen instead. Use a 64-bit or narrower index until epic #526 lands 128-bit lowering.
 
 The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).
+
+Lengths are `u64` (see [the Vec method table](#vect-methods)), so an index derived from one needs no conversion:
+
+```vow
+let n: u64 = v.len();
+let mut i: u64 = 0;
+while i < n vow { invariant: i <= n } {
+    let x: i64 = v[i];
+    i = i + 1;
+}
+```
+
+Arithmetic and comparison do not mix signedness: `i64 + u64` and `u64 < i64` are `TypeMismatch`. Convert at the binding with `as`; same-width `as` casts between `i64` and `u64` are legal.
+
+### String offsets
+
+`String` offsets stay `i64` in v1. This is a documented scope decision, not an oversight: `String::len()` is `u64`, but the runtime helpers that take an offset or span (`byte_at`, `substr`, `substring`, `matches_literal_at`) still take `i64` and keep live negative-offset behaviour — `byte_at` returns `-1` for an out-of-range offset, `substr` and `substring` clamp their arguments, and `matches_literal_at` rejects a negative position. Migrating them to `u64` means deleting those guards, which changes runtime semantics for out-of-range callers.
+
+What this means at a call site:
+
+- The `string_substr` and `string_matches_literal_at` builtins require `i64` offset arguments exactly (see the builtin signature table).
+- The `byte_at` and `substring` methods accept any integer type per the rule above, but the runtime sees an `i64`; a `u64` offset above `i64::MAX` is reinterpreted as negative, exactly as described for unsigned indices above. A length-derived `u64` offset is always in range, so `s.byte_at(i)` with `i < s.len()` is safe.
+- `byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64` regardless.
 
 Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.
 
@@ -8696,8 +8745,7 @@ fn negate(x: i64) -> i64 vow {
 ### Bounds Check
 
 ```vow
-fn get_element(v: Vec<i64>, i: i64) -> i64 vow {
-    requires: i >= 0,
+fn get_element(v: Vec<i64>, i: u64) -> i64 vow {
     requires: i < v.len()
 } {
     v[i]
@@ -8864,7 +8912,7 @@ Without a bound on loop iterations, ESBMC may timeout (default max-k-step is 50)
 ```vow
 fn fill(n: i64) -> Vec<i64> vow {
     requires: n >= 0,
-    ensures: result.len() == n
+    ensures: result.len() as i64 == n
 } { ... }
 ```
 
@@ -9045,8 +9093,8 @@ fn write_u8(out: Vec<i64>, v: i64) vow {
 **Strength:** a precondition is strong when it is the *true* domain of the
 function — no wider (which would admit miscompilation) and no narrower (a
 verifier-driven bound like `requires: n <= 8`, forbidden by `contracts.md`).
-A bounds-check precondition such as `requires: i >= 0, requires: i < v.len()` is
-the standard guard for every indexing operation.
+A bounds-check precondition such as `requires: i < v.len()` (with `i: u64`, so no
+lower-bound clause is needed) is the standard guard for every indexing operation.
 
 ### 2. Output-range postcondition (the weak default — use sparingly)
 
@@ -10418,7 +10466,7 @@ overflow — use on bounded data, or add `requires` bounds at the call site.
 | `vec_min` / `vec_max` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | |
 | `vec_mean` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | Integer mean. |
 | `vec_dot` | `(a, b: Vec<i64>) -> i64` | `requires a.len() == b.len()` | |
-| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures 0 <= result <= v.len()` | Invariant `count <= i`. |
+| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures result >= 0, result <= v.len() as i64` | Invariant `count <= i`. |
 | `vec_all_in_range` | `(v: Vec<i64>, lo, hi: i64) -> bool` | `requires lo <= hi` | |
 | `vec_is_sorted` | `(v: Vec<i64>) -> bool` | — | Ascending. |
 | `vec_prefix_sum` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |
@@ -10432,15 +10480,15 @@ overflow — use on bounded data, or add `requires` bounds at the call site.
 a max-heap over `i64`), with the comparator flipped. Both are value types: every
 mutator takes a heap by value and returns a new one.
 
-The defining contract pattern is the **size-shadow invariant** `size == data.len()`,
-threaded through every mutator. This is what lets ESBMC reason about in-bounds
-`data[i]` access without a universal quantifier:
+The defining contract pattern is the **size-shadow invariant** `size == data.len() as i64`
+(`size` is `i64`, `.len()` is `u64`), threaded through every mutator. This is what
+lets ESBMC reason about in-bounds `data[i]` access without a universal quantifier:
 ```vow
 pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {
-    requires: h.size == h.data.len(),
+    requires: h.size == h.data.len() as i64,
     requires: h.size < 9223372036854775807,
     ensures: result.size == h.size + 1,
-    ensures: result.size == result.data.len()
+    ensures: result.size == result.data.len() as i64
 }
 ```
 
@@ -10477,7 +10525,7 @@ use it.
 | `stack_is_empty` | `(s) -> bool` | — |
 
 **Known gaps (move-verbatim; tracked follow-up):** no `stack_pop`; no size-shadow
-invariant (`size == data.len()`) like `heap` has; `stack_peek` has no `ensures`
+invariant (`size == data.len() as i64`) like `heap` has; `stack_peek` has no `ensures`
 relating the result to `data[size-1]`; functions are not marked `pub`; `node.vow` is
 unused.
 
@@ -10584,12 +10632,12 @@ handles returned by `gc_alloc`; never fabricate them.
 |----------|-----------|---------------|
 | `gc_new` | `() -> GcHeap` | — |
 | `gc_alloc` | `(h, val: i64) -> i64` | — (returns a slot; reuses freed slots) |
-| `gc_add_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
-| `gc_remove_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len()` (does **not** require alive — you may unroot a freed slot) |
+| `gc_add_root` | `(h, slot: i64)` | `requires slot >= 0, slot < values.len() as i64, alive[slot] == 1` |
+| `gc_remove_root` | `(h, slot: i64)` | `requires slot >= 0, slot < values.len() as i64` (does **not** require alive — you may unroot a freed slot) |
 | `gc_add_ref` | `(h, from, to: i64)` | `requires` both in range and alive |
-| `gc_read` | `(h, slot: i64) -> i64` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
-| `gc_write` | `(h, slot, val: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
-| `gc_is_alive` | `(h, slot: i64) -> bool` | `requires 0 <= slot < values.len()` |
+| `gc_read` | `(h, slot: i64) -> i64` | `requires slot >= 0, slot < values.len() as i64, alive[slot] == 1` |
+| `gc_write` | `(h, slot, val: i64)` | `requires slot >= 0, slot < values.len() as i64, alive[slot] == 1` |
+| `gc_is_alive` | `(h, slot: i64) -> bool` | `requires slot >= 0, slot < values.len() as i64` |
 | `gc_count` | `(h) -> i64` | — |
 | `gc_collect` | `(h) -> i64` | — (returns count of newly-freed objects) |
 
@@ -10783,7 +10831,7 @@ module VecFill
 
 fn fill_vec(n: i64) -> Vec<i64> vow {
     requires: n >= 0,
-    ensures: result.len() == n
+    ensures: result.len() as i64 == n
 } {
     let v: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
@@ -10798,7 +10846,7 @@ fn fill_vec(n: i64) -> Vec<i64> vow {
 
 fn main() -> i32 [io] {
     let v: Vec<i64> = fill_vec(5);
-    print_i64(v.len());
+    print_u64(v.len() as u64);
     0
 }
 ```
@@ -10815,7 +10863,7 @@ $ vow verify examples/vec_fill.vow
 
 **Key points:**
 - `invariant: i <= n as u64` is inductive: true on entry, preserved by the loop body. The lower bound `i >= 0` is carried by the `u64` type, so it needs no clause (and `TautologicalComparison` rejects one)
-- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
+- The Vec model tracks `len`, so ESBMC can reason about `result.len() as i64 == n`
 - The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
 - `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 
@@ -10835,14 +10883,14 @@ module Search
 fn linear_search(data: Vec<i64>, target: i64) -> i64
     vow { requires: data.len() > 0 }
 {
-    let mut i: i64 = 0;
-    let n: i64 = data.len();
+    let mut i: u64 = 0;
+    let n: u64 = data.len() as u64;
     let result: i64 = loop {
         if i >= n {
             break -1;
         }
         if data[i] == target {
-            break i;
+            break i as i64;
         }
         i = i + 1;
     };
@@ -10911,9 +10959,9 @@ fn trim_newline(s: String) -> String {
     s
 }
 
-fn skip_spaces(s: String, start: i64) -> i64 {
-    let mut i: i64 = start;
-    let n: i64 = s.len();
+fn skip_spaces(s: String, start: u64) -> u64 {
+    let mut i: u64 = start;
+    let n: u64 = s.len() as u64;
     while i < n {
         if s.byte_at(i) != 32 { return i; }
         i = i + 1;
@@ -10937,7 +10985,7 @@ fn main() -> i32 [read, io] {
                 if cmd.len() >= 5 {
                     let prefix: String = cmd.substring(0, 5);
                     if prefix.eq(String::from("echo ")) {
-                        let start: i64 = skip_spaces(cmd, 5);
+                        let start: u64 = skip_spaces(cmd, 5);
                         let text: String = cmd.substring(start, cmd.len());
                         print_str(text);
                         print_str(String::from("\n"));
@@ -11022,7 +11070,7 @@ fn main() -> i32 [read, io] {
     }
 
     let mut lines: i64 = 0;
-    let mut bytes: i64 = 0;
+    let mut bytes: u64 = 0;
     let mut line: String = fs_read_line(h);
     while line.len() > 0 {
         lines = lines + 1;
@@ -11042,7 +11090,7 @@ fn main() -> i32 [read, io] {
 
     print_i64(lines);
     print_str(String::from("\n"));
-    print_i64(bytes);
+    print_u64(bytes);
     print_str(String::from("\n"));
     0
 }
@@ -11076,7 +11124,7 @@ fn main() -> i32 [io] {
     let prev: Option<i64> = m.insert(7, 99);
     // prev is Some(42); the second insert overwrote the first.
     fetch(m);
-    print_i64(m.len());
+    print_u64(m.len());
     0
 }
 ```

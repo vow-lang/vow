@@ -144,8 +144,7 @@ fn negate(x: i64) -> i64 vow {
 ### Bounds Check
 
 ```vow
-fn get_element(v: Vec<i64>, i: i64) -> i64 vow {
-    requires: i >= 0,
+fn get_element(v: Vec<i64>, i: u64) -> i64 vow {
     requires: i < v.len()
 } {
     v[i]
@@ -312,7 +311,7 @@ Without a bound on loop iterations, ESBMC may timeout (default max-k-step is 50)
 ```vow
 fn fill(n: i64) -> Vec<i64> vow {
     requires: n >= 0,
-    ensures: result.len() == n
+    ensures: result.len() as i64 == n
 } { ... }
 ```
 
