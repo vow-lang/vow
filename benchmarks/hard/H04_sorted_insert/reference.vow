@@ -4,11 +4,10 @@ fn sorted_insert(v: Vec<i64>, val: i64) -> Vec<i64> vow {
   ensures: result.len() == v.len() + 1
 } {
   let r: Vec<i64> = Vec::new();
-  let mut i: i64 = 0;
+  let mut i: u64 = 0;
   let mut inserted: i64 = 0;
-  while i < v.len() vow {
-    invariant: i >= 0,
-    invariant: i <= v.len()
+  while i < v.len() as u64 vow {
+    invariant: i <= v.len() as u64
   } {
     if inserted == 0 {
       if v[i] >= val {
