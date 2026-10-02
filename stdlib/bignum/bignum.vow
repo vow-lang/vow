@@ -727,13 +727,13 @@ fn bigmag_shr(a: BigMag, n: i64) -> BigMag vow {
         let limb_shift: i64 = n / 32;
         let bit_shift: i64 = n - (n / 32) * 32;
         let ad: Vec<u64> = a.limbs;
-        let alen: u64 = ad.len() as u64;
-        if limb_shift >= (alen as i64) {
+        let alen: i64 = ad.len();
+        if limb_shift >= alen {
             bigmag_zero()
         } else {
             let result: Vec<u64> = Vec::new();
             if bit_shift == 0 {
-                let mut i: u64 = limb_shift as u64;
+                let mut i: i64 = limb_shift;
                 while i < alen {
                     result.push(ad[i]);
                     i = i + 1;
@@ -741,7 +741,7 @@ fn bigmag_shr(a: BigMag, n: i64) -> BigMag vow {
             } else {
                 let pow2: u64 = bigmag_pow2(bit_shift);
                 let inv: u64 = bigmag_pow2(32 - bit_shift);
-                let mut i: u64 = limb_shift as u64;
+                let mut i: i64 = limb_shift;
                 while i < alen {
                     let low: u64 = ad[i] / pow2;
                     let high: u64 = if i + 1 < alen { (ad[i + 1] % pow2) * inv } else { 0u64 };
