@@ -1,0 +1,49 @@
+// TEST: stdout "lt_max=1\nge_max=0\nlt_half=1\nvec=3\nstr=5\nmap=2\nbtree=2\n"
+module LenU64UnsignedCompare
+
+fn flag(b: bool) -> i64 {
+    if b { 1 } else { 0 }
+}
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+
+    let max: u64 = 18446744073709551615;
+    let half: u64 = 9223372036854775808;
+
+    // A signed comparison would read both bounds as negative and flip these.
+    print_str(String::from("lt_max="));
+    print_i64(flag(v.len() < max));
+    print_str(String::from("\nge_max="));
+    print_i64(flag(v.len() >= max));
+    print_str(String::from("\nlt_half="));
+    print_i64(flag(v.len() < half));
+
+    let nv: u64 = v.len();
+    print_str(String::from("\nvec="));
+    print_u64(nv);
+
+    let s: String = String::from("hello");
+    let ns: u64 = s.len();
+    print_str(String::from("\nstr="));
+    print_u64(ns);
+
+    let hm: HashMap<i64, i64> = HashMap::new();
+    hm.insert(1, 100);
+    hm.insert(2, 200);
+    let nh: u64 = hm.len();
+    print_str(String::from("\nmap="));
+    print_u64(nh);
+
+    let bm: BTreeMap<i64, i64> = BTreeMap::new();
+    bm.insert(1, 100);
+    bm.insert(2, 200);
+    let nb: u64 = bm.len();
+    print_str(String::from("\nbtree="));
+    print_u64(nb);
+    print_str(String::from("\n"));
+    0
+}

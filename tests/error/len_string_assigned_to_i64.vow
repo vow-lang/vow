@@ -1,0 +1,8 @@
+// TEST: error-code TypeMismatch
+module LenStringAssignedToI64
+
+fn main() -> i32 {
+    let s: String = String::from("abc");
+    let n: i64 = s.len();
+    0
+}

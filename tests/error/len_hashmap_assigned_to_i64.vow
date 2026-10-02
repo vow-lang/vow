@@ -1,0 +1,8 @@
+// TEST: error-code TypeMismatch
+module LenHashMapAssignedToI64
+
+fn main() -> i32 {
+    let m: HashMap<i64, i64> = HashMap::new();
+    let n: i64 = m.len();
+    0
+}

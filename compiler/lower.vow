@@ -1613,7 +1613,7 @@ fn method_spec_patches_span(spec: i64) -> bool { (spec / 8192) % 2 == 1 }
 fn builtin_method_spec(recv_tag: String, method: String) -> i64 {
     if recv_tag == "String" {
         if method == "len" {
-            return method_spec_pack(1, ITY_I64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false);
+            return method_spec_pack(1, ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false);
         }
         if method == "push_str" {
             return method_spec_pack(2, ITY_UNIT(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), false);
@@ -1642,7 +1642,7 @@ fn builtin_method_spec(recv_tag: String, method: String) -> i64 {
     }
     if recv_tag == "HashMap" {
         if method == "len" {
-            return method_spec_pack(10, ITY_I64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false);
+            return method_spec_pack(10, ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false);
         }
         if method == "get" {
             return method_spec_pack(11, ITY_I64(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), false);
@@ -1656,7 +1656,7 @@ fn builtin_method_spec(recv_tag: String, method: String) -> i64 {
     }
     if recv_tag == "BTreeMap" {
         if method == "len" {
-            return method_spec_pack(14, ITY_I64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false);
+            return method_spec_pack(14, ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false);
         }
         if method == "get" {
             return method_spec_pack(15, ITY_PTR(), METHOD_ARG_CONSUMED_UNIT(), METHOD_TAG_OPTION(), true);
@@ -1666,7 +1666,7 @@ fn builtin_method_spec(recv_tag: String, method: String) -> i64 {
         }
     }
     if method == "len" {
-        return method_spec_pack(17, ITY_I64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false);
+        return method_spec_pack(17, ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false);
     }
     if method == "pop" {
         return method_spec_pack(18, ITY_UNIT(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false);
@@ -3381,10 +3381,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         let len_args: Vec<i64> = Vec::new();
         len_args.push(iter_id);
-        let len_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), len_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_len"));
+        let len_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_U64(), len_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_len"));
 
         let idx_init_args: Vec<i64> = Vec::new();
-        let idx_init: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), idx_init_args, IDATA_CONST_I64(), 0, 0, String::from(""));
+        let idx_init: i64 = lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), idx_init_args, IDATA_CONST_U64(), 0, 0, String::from(""));
 
         let assigned: Vec<String> = collect_assigned_vars(ctx, eid);
 
@@ -3399,7 +3399,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         let idx_up_args: Vec<i64> = Vec::new();
         idx_up_args.push(idx_init);
-        let idx_up: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), idx_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+        let idx_up: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_U64(), idx_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
         lctx_set_inst_span(ctx, idx_up, expr_span(a, eid));
 
         let mut ai: u64 = 0;
@@ -3420,7 +3420,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         lctx_switch_to_block(ctx, header_block);
         let idx_phi_args: Vec<i64> = Vec::new();
-        let idx_phi: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), idx_phi_args, IDATA_NONE(), 0, 0, String::from(""));
+        let idx_phi: i64 = lctx_emit(ctx, IOP_PHI(), ITY_U64(), idx_phi_args, IDATA_NONE(), 0, 0, String::from(""));
         lctx_set_inst_span(ctx, idx_phi, expr_span(a, eid));
 
         let mut ai2: u64 = 0;
@@ -3443,7 +3443,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let cond_args: Vec<i64> = Vec::new();
         cond_args.push(idx_phi);
         cond_args.push(len_id);
-        let cond_id: i64 = lctx_emit(ctx, IOP_LT(), ITY_BOOL(), cond_args, IDATA_INTEGER(), ITY_I64(), 0, String::from(""));
+        let cond_id: i64 = lctx_emit(ctx, IOP_LT(), ITY_BOOL(), cond_args, IDATA_INTEGER(), ITY_U64(), 0, String::from(""));
 
         // Pre-emit exit-block Phis for mutation variables.
         let f_exit_phi_ids: Vec<i64> = Vec::new();
@@ -3532,14 +3532,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         if !lctx_is_terminated(ctx) {
             let one_args: Vec<i64> = Vec::new();
-            let one: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), one_args, IDATA_CONST_I64(), 1, 0, String::from(""));
+            let one: i64 = lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), one_args, IDATA_CONST_U64(), 1, 0, String::from(""));
             let add_args: Vec<i64> = Vec::new();
             add_args.push(idx_phi);
             add_args.push(one);
-            let idx_next: i64 = lctx_emit(ctx, IOP_WADD(), ITY_I64(), add_args, IDATA_INTEGER(), ITY_I64(), 0, String::from(""));
+            let idx_next: i64 = lctx_emit(ctx, IOP_WADD(), ITY_U64(), add_args, IDATA_INTEGER(), ITY_U64(), 0, String::from(""));
             let idx_up_back_args: Vec<i64> = Vec::new();
             idx_up_back_args.push(idx_next);
-            let idx_back_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), idx_up_back_args, IDATA_PHI_TARGET(), idx_phi, 0, String::from(""));
+            let idx_back_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_U64(), idx_up_back_args, IDATA_PHI_TARGET(), idx_phi, 0, String::from(""));
             lctx_set_inst_span(ctx, idx_back_up_id, expr_span(a, eid));
 
             let mut ai3: u64 = 0;
@@ -4742,14 +4742,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let idx_phi2: i64 = ctx.loop_continue_idx_phi[nlh - 1];
             if idx_phi2 != -1 {
                 let one_args: Vec<i64> = Vec::new();
-                let one: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), one_args, IDATA_CONST_I64(), 1, 0, String::from(""));
+                let one: i64 = lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), one_args, IDATA_CONST_U64(), 1, 0, String::from(""));
                 let add_args: Vec<i64> = Vec::new();
                 add_args.push(idx_phi2);
                 add_args.push(one);
-                let idx_next: i64 = lctx_emit(ctx, IOP_WADD(), ITY_I64(), add_args, IDATA_INTEGER(), ITY_I64(), 0, String::from(""));
+                let idx_next: i64 = lctx_emit(ctx, IOP_WADD(), ITY_U64(), add_args, IDATA_INTEGER(), ITY_U64(), 0, String::from(""));
                 let idx_up_args: Vec<i64> = Vec::new();
                 idx_up_args.push(idx_next);
-                let cont_idx_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), idx_up_args, IDATA_PHI_TARGET(), idx_phi2, 0, String::from(""));
+                let cont_idx_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_U64(), idx_up_args, IDATA_PHI_TARGET(), idx_phi2, 0, String::from(""));
                 lctx_set_inst_span(ctx, cont_idx_up_id, expr_span(a, eid));
             }
             let jmp_args: Vec<i64> = Vec::new();

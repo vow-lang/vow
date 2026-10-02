@@ -2639,7 +2639,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 check_method_argument_integer(e, a, args_lid, arg_tids, 0);
                 check_method_argument_integer(e, a, args_lid, arg_tids, 1);
             }
-            if mname == String::from("len") { return CTY_I64(); }
+            if mname == String::from("len") { return CTY_U64(); }
             if mname == String::from("byte_at") { return CTY_I64(); }
             if mname == String::from("push_str") { return CTY_UNIT(); }
             if mname == String::from("push_byte") { return CTY_UNIT(); }
@@ -2683,7 +2683,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if mname == String::from("get") || mname == String::from("truncate") {
                         check_method_argument_integer(e, a, args_lid, arg_tids, 0);
                     }
-                    if mname == String::from("len") { return CTY_I64(); }
+                    if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("push") { return CTY_UNIT(); }
                     if mname == String::from("pop") { return CTY_UNIT(); }
                     if mname == String::from("clear") { return CTY_UNIT(); }
@@ -2748,7 +2748,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if mname == String::from("insert") { return CTY_UNIT(); }
                     if mname == String::from("get") { return val_tid; }
                     if mname == String::from("contains_key") { return CTY_BOOL(); }
-                    if mname == String::from("len") { return CTY_I64(); }
+                    if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("remove") { return CTY_UNIT(); }
                     let herr_msg: String = String::from("unknown method '");
                     herr_msg.push_str(mname);
@@ -2782,7 +2782,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if mname == String::from("get") || mname == String::from("contains") {
                         check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0));
                     }
-                    if mname == String::from("len") { return CTY_I64(); }
+                    if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("contains") { return CTY_BOOL(); }
                     if mname == String::from("insert") {
                         let opt_base: i64 = ts_make_enum(e.ts, String::from("Option"));

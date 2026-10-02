@@ -1,0 +1,8 @@
+// TEST: error-code TypeMismatch
+module LenVecAssignedToI64
+
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    let n: i64 = v.len();
+    0
+}
