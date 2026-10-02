@@ -1,22 +1,25 @@
 // TEST: category model-drift
-// Each function reads `.len()` of a container parameter and states that the
-// result is that same length: the verifier model must treat a parameter's
-// length as one stable value, not a fresh nondeterministic read per call.
+// Each function reads `.len()` of a container parameter. The model must keep
+// a parameter's length non-negative (`result >= 0`) and treat it as one stable
+// value rather than a fresh nondeterministic read (`result == p.len()`).
 module StringParamVerify
 
 fn str_len_stable(s: String) -> i64 vow {
+  ensures: result >= 0,
   ensures: result == s.len()
 } {
   s.len()
 }
 
 fn vec_len_stable(v: Vec<i64>) -> i64 vow {
+  ensures: result >= 0,
   ensures: result == v.len()
 } {
   v.len()
 }
 
 fn map_len_stable(m: HashMap<i64, i64>) -> i64 vow {
+  ensures: result >= 0,
   ensures: result == m.len()
 } {
   m.len()

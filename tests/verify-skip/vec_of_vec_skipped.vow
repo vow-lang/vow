@@ -12,7 +12,7 @@ module VecOfVecSkipped
 // callee, so without it this file would exercise nothing (the point of moving
 // these into tests/verify-skip/, which asserts status == "Skipped").
 fn store_grid(outer: Vec<Vec<i64>>) -> i64 vow {
-  ensures: result >= 1
+  ensures: result >= 0
 } {
   outer.push(Vec::new());
   outer.len()
