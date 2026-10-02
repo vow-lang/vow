@@ -47,7 +47,7 @@ ESBMC is a *bounded* model checker. Its C model represents each collection as a
 fixed-size array:
 
 ```c
-typedef struct { int64_t len; int64_t data[VEC_MAX]; } __vow_vec_t;
+typedef struct { uint64_t len; int64_t data[VEC_MAX]; } __vow_vec_t;
 __ESBMC_assert(v.len < VEC_MAX, "vec capacity");
 ```
 
