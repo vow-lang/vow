@@ -12,6 +12,6 @@ fn map_update(k: i64, v1: i64, v2: i64) -> HashMap<i64, i64> vow {
 
 fn main() -> i32 [io] {
   let m: HashMap<i64, i64> = map_update(1, 10, 20);
-  print_i64(m.len() as i64);
+  print_u64(m.len() as u64);
   0
 }
