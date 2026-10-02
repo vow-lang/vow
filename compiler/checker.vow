@@ -2468,14 +2468,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         // that maps to the integer-only sadd_overflow-family opcodes.
         let is_checked_arith: bool = op == BINOP_ADD_CHK() || op == BINOP_SUB_CHK()
             || op == BINOP_MUL_CHK() || op == BINOP_DIV_CHK() || op == BINOP_REM_CHK();
-        if is_checked_arith {
-            let result_tag: i64 = ty_tag(e.ts, result_tid);
-            if result_tag == CTY_F32() || result_tag == CTY_F64() {
-                let msg: String = String::from("checked arithmetic operators do not support `");
-                msg.push_str(ty_tag_name(result_tag));
-                msg.push_str(String::from("`; checked overflow has no meaning for floating-point types"));
-                env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), msg, expr_span(a, eid));
-            }
+        let result_tag: i64 = ty_tag(e.ts, result_tid);
+        if is_checked_arith && (result_tag == CTY_F32() || result_tag == CTY_F64()) {
+            let msg: String = String::from("checked arithmetic operators do not support `");
+            msg.push_str(ty_tag_name(result_tag));
+            msg.push_str(String::from("`; checked overflow has no meaning for floating-point types"));
+            env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), msg, expr_span(a, eid));
         }
         return result_tid;
     }
