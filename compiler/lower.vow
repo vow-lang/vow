@@ -235,7 +235,7 @@ fn lctx_record_inst_ty(ctx: LowerCtx, inst_id: i64, ty: i64) {
     while (ctx.inst_ty_by_id.len() as i64) < inst_id {
         ctx.inst_ty_by_id.push(ITY_I64());
     }
-    if (ctx.inst_ty_by_id.len() as i64) == inst_id {
+    if ctx.inst_ty_by_id.len() as i64 == inst_id {
         ctx.inst_ty_by_id.push(ty);
     } else {
         ctx.inst_ty_by_id[inst_id] = ty;
@@ -1163,14 +1163,15 @@ fn lower_resolve_alias_index(a: AstArena, alias_names: Vec<String>, alias_target
 }
 
 fn lower_resolve_type_aliases(a: AstArena, alias_names: Vec<String>, alias_target_tids: Vec<i64>) {
+    let n_alias: u64 = alias_names.len() as u64;
     let states: Vec<i64> = Vec::new();
     let mut si: u64 = 0;
-    while si < alias_names.len() as u64 {
+    while si < n_alias {
         states.push(0);
         si = si + 1;
     }
     let mut i: u64 = 0;
-    while i < alias_names.len() as u64 {
+    while i < n_alias {
         lower_resolve_alias_index(a, alias_names, alias_target_tids, states, i as i64);
         i = i + 1;
     }
@@ -2121,7 +2122,7 @@ fn wide_context_contains_control_flow(a: AstArena, eid: i64) -> bool {
 
 fn lctx_record_wide_marker_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) {
     if eid == -1 || (ty != ITY_U64() && ty != ITY_I128() && ty != ITY_U128()) { return; }
-    while (ctx.wide_context_tys.len() as i64) <= eid {
+    while ctx.wide_context_tys.len() as i64 <= eid {
         ctx.wide_context_tys.push(-1);
     }
     ctx.wide_context_tys[eid] = ty;
@@ -2291,8 +2292,9 @@ fn choose_match_result_ty(result_tys: Vec<i64>, result_markers: Vec<bool>) -> i6
     if result_tys.len() == 0 {
         return ITY_I64();
     }
+    let n_result_tys: u64 = result_tys.len() as u64;
     let mut linear_i: u64 = 0;
-    while linear_i < result_tys.len() as u64 {
+    while linear_i < n_result_tys {
         if result_tys[linear_i] == ITY_LPTR() {
             // Empty Option/Result variants have no payload from which lowering
             // can infer ownership. Preserve the linear sibling's checked
@@ -2304,7 +2306,7 @@ fn choose_match_result_ty(result_tys: Vec<i64>, result_markers: Vec<bool>) -> i6
     let mut result_ty: i64 = result_tys[0];
     let mut result_is_marker: bool = result_markers[0];
     let mut i: u64 = 1;
-    while i < result_tys.len() as u64 {
+    while i < n_result_tys {
         let arm_ty: i64 = result_tys[i];
         let arm_is_marker: bool = result_markers[i];
         if result_is_marker && ir_ty_is_integer(arm_ty) {
@@ -3156,7 +3158,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_break_counts.push(0);
         lower_block(ctx, body_bid);
         // Save exit phi info before popping.
-        let epn_idx: i64 = (ctx.loop_exit_phi_names.len() as i64) - 1;
+        let epn_idx: i64 = ctx.loop_exit_phi_names.len() as i64 - 1;
         let w_exit_phi_names: Vec<String> = ctx.loop_exit_phi_names[epn_idx];
         let w_exit_phi_ids: Vec<i64> = ctx.loop_exit_phi_ids[epn_idx];
         ctx.loop_break_counts.pop();
@@ -3295,10 +3297,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_break_counts.push(0);
         let break_start: i64 = ctx.loop_break_up_ids.len() as i64;
         lower_block(ctx, body_bid);
-        let break_count_idx: i64 = (ctx.loop_break_counts.len() as i64) - 1;
+        let break_count_idx: i64 = ctx.loop_break_counts.len() as i64 - 1;
         let break_count: i64 = ctx.loop_break_counts[break_count_idx];
         // Save exit phi info before popping.
-        let lepn_idx: i64 = (ctx.loop_exit_phi_names.len() as i64) - 1;
+        let lepn_idx: i64 = ctx.loop_exit_phi_names.len() as i64 - 1;
         let l_saved_exit_names: Vec<String> = ctx.loop_exit_phi_names[lepn_idx];
         let l_saved_exit_ids: Vec<i64> = ctx.loop_exit_phi_ids[lepn_idx];
         ctx.loop_break_counts.pop();
@@ -3512,7 +3514,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_break_counts.push(0);
         lower_block(ctx, body_bid);
         // Save exit phi info before popping.
-        let fepn_idx: i64 = (ctx.loop_exit_phi_names.len() as i64) - 1;
+        let fepn_idx: i64 = ctx.loop_exit_phi_names.len() as i64 - 1;
         let f_saved_exit_names: Vec<String> = ctx.loop_exit_phi_names[fepn_idx];
         let f_saved_exit_ids: Vec<i64> = ctx.loop_exit_phi_ids[fepn_idx];
         ctx.loop_break_counts.pop();
@@ -4668,7 +4670,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let val_eid: i64 = expr_a(a, eid);
             if val_eid != -1 {
                 let val_id: i64 = lower_expr(ctx, val_eid);
-                let is_loop_idx: i64 = (ctx.loop_is_loop.len() as i64) - 1;
+                let is_loop_idx: i64 = ctx.loop_is_loop.len() as i64 - 1;
                 let is_loop: i64 = ctx.loop_is_loop[is_loop_idx];
                 if is_loop == 1 {
                     let val_ty: i64 = lctx_inst_ty(ctx, val_id);
@@ -4680,7 +4682,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     ctx.loop_break_up_ids.push(up_id);
                     ctx.loop_break_up_blocks.push(cur_block);
                     ctx.loop_break_up_tys.push(val_ty);
-                    let cnt_idx: i64 = (ctx.loop_break_counts.len() as i64) - 1;
+                    let cnt_idx: i64 = ctx.loop_break_counts.len() as i64 - 1;
                     let old_cnt: i64 = ctx.loop_break_counts[cnt_idx];
                     ctx.loop_break_counts[cnt_idx] = old_cnt + 1;
                 }
