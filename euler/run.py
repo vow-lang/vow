@@ -23,7 +23,10 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from benchmark_contracts import compare_skeleton  # noqa: E402
+from benchmark_contracts import (  # noqa: E402
+    build_skeleton_mismatch_prompt,
+    compare_skeleton,
+)
 
 # ---------------------------------------------------------------------------
 # LLM abstraction (inline, no dependency on bench/)
@@ -194,16 +197,6 @@ def build_cegis_prompt(verify_output: str) -> str:
 ```
 
 Fix the implementation so all contracts verify. Return ONLY the complete updated .vow file, no explanation."""
-
-
-def build_skeleton_mismatch_prompt(message: str) -> str:
-    return f"""The response changed an immutable part of the supplied skeleton:
-
-{message}
-
-Restore the exact module name, skeleton function signatures, and contracts.
-Change function bodies only; additional helper functions are allowed. Return
-ONLY the complete updated .vow file, no explanation."""
 
 
 # ---------------------------------------------------------------------------

@@ -13,15 +13,11 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from benchmark_contracts import compare_skeleton
-from llm import LLMResponse, ModelConfig, chat
-from manifest import BenchmarkInfo
-from prompts import (
-    build_cegis_user_prompt,
-    build_initial_user_prompt,
-    build_skeleton_mismatch_prompt,
-)
-from verifier import VerifyResult, run_verify
+from benchmark_contracts import build_skeleton_mismatch_prompt, compare_skeleton  # noqa: E402
+from llm import LLMResponse, ModelConfig, chat  # noqa: E402
+from manifest import BenchmarkInfo  # noqa: E402
+from prompts import build_cegis_user_prompt, build_initial_user_prompt  # noqa: E402
+from verifier import VerifyResult, run_verify  # noqa: E402
 
 
 @dataclass
