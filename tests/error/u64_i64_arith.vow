@@ -2,12 +2,7 @@
 // TEST: error-code TypeMismatch
 module U64I64Arith
 
-fn add(n: i64) -> i32 {
+fn add(n: i64) -> u64 {
   let a: u64 = 5;
-  let s: u64 = a + n;
-  0
-}
-
-fn main() -> i32 {
-  0
+  a + n
 }
