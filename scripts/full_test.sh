@@ -1607,19 +1607,12 @@ fixture_bytes = open(sys.argv[3], 'rb').read()
 r_entries = param_entries(sys.argv[1])
 s_entries = param_entries(sys.argv[2])
 errors = []
-for label, entries in (('rust', r_entries), ('self-hosted', s_entries)):
-    if len(entries) != 2:
-        errors.append(f'{label}: expected 2 parameter-refinement requires entries, got {len(entries)}: {entries}')
-
-r_tuples = [(f, o) for f, o, _ in r_entries]
-s_tuples = [(f, o) for f, o, _ in s_entries]
-if r_tuples != s_tuples:
-    errors.append(f'(function, offset) differs: rust={r_tuples} self-hosted={s_tuples}')
-
 # Pin the anchor decision itself: the byte at offset must start the
 # parameter name followed by ':' (the 'name: type' position), not land
 # inside the refinement predicate.
 for label, entries in (('rust', r_entries), ('self-hosted', s_entries)):
+    if len(entries) != 2:
+        errors.append(f'{label}: expected 2 parameter-refinement requires entries, got {len(entries)}: {entries}')
     for function, offset, description in entries:
         m = re.search(r'\(where on parameter (\w+)\)', description)
         if not m:
@@ -1630,6 +1623,11 @@ for label, entries in (('rust', r_entries), ('self-hosted', s_entries)):
             errors.append(
                 f'{function}: {label} offset {offset} does not start with {needle!r}'
             )
+
+r_tuples = [(f, o) for f, o, _ in r_entries]
+s_tuples = [(f, o) for f, o, _ in s_entries]
+if r_tuples != s_tuples:
+    errors.append(f'(function, offset) differs: rust={r_tuples} self-hosted={s_tuples}')
 print('; '.join(errors) if errors else 'OK')
 " "$rust_where_json" "$self_where_json" "$where_fixture" 2>&1) || where_parity_result="checker error: $where_parity_result"
     if [ "$where_parity_result" = "OK" ]; then
