@@ -1,0 +1,7 @@
+// TEST: error-code UnsupportedFeature
+// TEST: error-count 1
+module CheckedRemFloatUnsupported
+
+fn checked_rem(a: f64, b: f64) -> f64 {
+    a %! b
+}

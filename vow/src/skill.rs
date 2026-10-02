@@ -1647,11 +1647,12 @@ integer width. Signed `MIN % -1` is representable as `0` and does not abort.
 For `f32` and `f64`, the unchecked `+`, `-`, `*`, and `/` operators lower to
 native floating-point arithmetic. Unchecked `%` is accepted by the frontend
 and lowers to a floating-point remainder opcode, but native backends do not yet
-implement that opcode; a build fails closed with `CodegenUnsupported`. Checked
-float operators do not yet have dedicated float IR or backend lowering; the
-lowerer still maps them to the integer checked-arithmetic opcodes, which crash
-the Cranelift verifier on float operands and fail with an internal
-`CodegenFailed` error rather than a clean rejection ([#1218](https://github.com/vow-lang/vow/issues/1218)).
+implement that opcode; a build fails closed with `CodegenUnsupported`. The
+checked operators (`+!`, `-!`, `*!`, `/!`, `%!`) are rejected on `f32`/`f64`
+operands at type-check time with `UnsupportedFeature`: "checked" means "abort
+instead of wrapping on integer overflow," and IEEE-754 float arithmetic has no
+wrapping semantics to check against, so there is no principled meaning to give
+a checked float operator. Use the unchecked operators for float arithmetic.
 
 ### Checked Arithmetic
 
@@ -1663,7 +1664,9 @@ the Cranelift verifier on float operands and fail with an internal
 | `/!`     | Div (checked)     |
 | `%!`     | Rem (checked)     |
 
-Checked operators abort with `ArithmeticOverflow` on overflow.
+Checked operators abort with `ArithmeticOverflow` on overflow. Operands must be
+integer types; `f32`/`f64` operands are rejected at type-check time (see
+above).
 
 **In verification.** The abort is modelled, not ignored: a checked operator is a
 strictly different proof obligation from its wrapping sibling. An execution that
@@ -6898,11 +6901,12 @@ integer width. Signed `MIN % -1` is representable as `0` and does not abort.
 For `f32` and `f64`, the unchecked `+`, `-`, `*`, and `/` operators lower to
 native floating-point arithmetic. Unchecked `%` is accepted by the frontend
 and lowers to a floating-point remainder opcode, but native backends do not yet
-implement that opcode; a build fails closed with `CodegenUnsupported`. Checked
-float operators do not yet have dedicated float IR or backend lowering; the
-lowerer still maps them to the integer checked-arithmetic opcodes, which crash
-the Cranelift verifier on float operands and fail with an internal
-`CodegenFailed` error rather than a clean rejection ([#1218](https://github.com/vow-lang/vow/issues/1218)).
+implement that opcode; a build fails closed with `CodegenUnsupported`. The
+checked operators (`+!`, `-!`, `*!`, `/!`, `%!`) are rejected on `f32`/`f64`
+operands at type-check time with `UnsupportedFeature`: "checked" means "abort
+instead of wrapping on integer overflow," and IEEE-754 float arithmetic has no
+wrapping semantics to check against, so there is no principled meaning to give
+a checked float operator. Use the unchecked operators for float arithmetic.
 
 ### Checked Arithmetic
 
@@ -6914,7 +6918,9 @@ the Cranelift verifier on float operands and fail with an internal
 | `/!`     | Div (checked)     |
 | `%!`     | Rem (checked)     |
 
-Checked operators abort with `ArithmeticOverflow` on overflow.
+Checked operators abort with `ArithmeticOverflow` on overflow. Operands must be
+integer types; `f32`/`f64` operands are rejected at type-check time (see
+above).
 
 **In verification.** The abort is modelled, not ignored: a checked operator is a
 strictly different proof obligation from its wrapping sibling. An execution that
