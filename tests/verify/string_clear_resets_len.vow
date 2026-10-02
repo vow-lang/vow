@@ -4,15 +4,15 @@
 // contract reasoning about the post-clear length silently weakens.
 module StringClearResetsLen
 
-fn clear_makes_empty() -> i64 vow {
+fn clear_makes_empty() -> u64 vow {
   ensures: result == 0
 } {
   let s: String = String::from("hello");
   s.clear();
-  s.len()
+  s.len() as u64
 }
 
 fn main() -> i32 [io] {
-  print_i64(clear_makes_empty());
+  print_u64(clear_makes_empty());
   0
 }

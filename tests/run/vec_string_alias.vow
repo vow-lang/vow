@@ -9,13 +9,13 @@ fn main() -> i32 [io] {
     // index copies the String pointer — creates alias
     let s: String = strings[0];
     print_str("len1:");
-    print_i64(s.len());
+    print_u64(s.len() as u64);
 
     // mutate through the alias
     s.push_byte(65);
     print_str("alias_push:");
     let s2: String = strings[0];
-    print_i64(s2.len());
+    print_u64(s2.len() as u64);
 
     // verify content via equality
     let expected: String = String::from("abcA");
@@ -29,7 +29,7 @@ fn main() -> i32 [io] {
     // second string is independent
     let other: String = strings[1];
     print_str("second:");
-    print_i64(other.len());
+    print_u64(other.len() as u64);
 
     print_str("done");
     0

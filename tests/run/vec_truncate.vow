@@ -18,7 +18,7 @@ fn main() -> i32 [io] {
 
     v.truncate(3);
     print_str("trunc3:len");
-    print_i64(v.len());
+    print_u64(v.len() as u64);
     print_str(":");
     print_i64(v[0]);
     print_i64(v[1]);
@@ -27,7 +27,7 @@ fn main() -> i32 [io] {
     // no-op: same size
     v.truncate(3);
     print_str("trunc3_noop:len");
-    print_i64(v.len());
+    print_u64(v.len() as u64);
     print_str(":");
     print_i64(v[0]);
     print_i64(v[1]);
@@ -36,7 +36,7 @@ fn main() -> i32 [io] {
     // no-op: larger than current size
     v.truncate(5);
     print_str("trunc5_noop:len");
-    print_i64(v.len());
+    print_u64(v.len() as u64);
     print_str(":");
     print_i64(v[0]);
     print_i64(v[1]);
@@ -44,7 +44,7 @@ fn main() -> i32 [io] {
 
     v.truncate(0);
     print_str("trunc0:len");
-    print_i64(v.len());
+    print_u64(v.len() as u64);
     print_str(":");
 
     v.push(6);

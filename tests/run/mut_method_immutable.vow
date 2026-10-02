@@ -4,15 +4,15 @@
 // stdlib/stack/stack.vow, where `let mut d; d.push(val)` tripped UnusedMut.
 module MutMethodImmutable
 
-fn build() -> i64 {
+fn build() -> u64 {
   let v: Vec<i64> = Vec::new();
   v.push(10);
   v.push(20);
   v.push(30);
-  v.len()
+  v.len() as u64
 }
 
 fn main() -> i32 [io] {
-  print_i64(build());
+  print_u64(build());
   0
 }

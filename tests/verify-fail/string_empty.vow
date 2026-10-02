@@ -14,6 +14,6 @@ fn push_one() -> String vow {
 
 fn main() -> i32 [io] {
   let s: String = push_one();
-  print_i64(s.len());
+  print_u64(s.len() as u64);
   0
 }

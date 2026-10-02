@@ -3,7 +3,7 @@
 module CmdLoop
 
 fn trim_newline(s: String) -> String {
-    let n: i64 = s.len();
+    let n: i64 = s.len() as i64;
     if n == 0 { return s; }
     let last: i64 = s.byte_at(n - 1);
     if last == 10 {
@@ -20,7 +20,7 @@ fn trim_newline(s: String) -> String {
 
 fn skip_spaces(s: String, start: i64) -> i64 {
     let mut i: i64 = start;
-    let n: i64 = s.len();
+    let n: i64 = s.len() as i64;
     while i < n {
         if s.byte_at(i) != 32 { return i; }
         i = i + 1;

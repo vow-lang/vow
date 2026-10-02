@@ -1,13 +1,12 @@
 // TEST: stdout "5\n7\n9\n"
-// The unsuffixed-integer-literal marker (#853) survives type inference,
+// The unsuffixed-integer-literal marker (#853) survives block expressions,
 // if-expressions, and `loop { break <lit> }`, so it still context-coerces to
 // u64 at a typed site — a naive syntactic-literal gate would reject these.
 // (Genuine i64 values are rejected instead; see tests/error/u64_i64_*.vow.)
 module U64MarkerPropagation
 
 fn main() -> i32 [io] {
-    let n = 5;
-    let a: u64 = n;
+    let a: u64 = { 5 };
     print_u64(a);
     print_str("\n");
 

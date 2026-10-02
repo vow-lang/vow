@@ -21,7 +21,7 @@ fn main() -> i32 [io] {
     m.insert(1, 10);
     m.insert(9, 90);
     print_str(String::from("len="));
-    print_i64(m.len());
+    print_u64(m.len() as u64);
     print_str(String::from("\n"));
     fetch(m, 1);
     fetch(m, 2);

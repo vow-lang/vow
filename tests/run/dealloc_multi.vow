@@ -12,7 +12,7 @@ fn make_and_discard() -> i64 {
     let v: Vec<i64> = Vec::new();
     v.push(1);
     v.push(2);
-    p.x + p.y + s.len() + v.len()
+    p.x + p.y + s.len() as i64 + v.len() as i64
 }
 
 fn escaped_to_caller() -> Point {
