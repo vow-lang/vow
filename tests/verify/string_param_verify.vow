@@ -1,26 +1,32 @@
 // TEST: category model-drift
+// Each function reads `.len()` of a container parameter. The model must keep
+// a parameter's length non-negative (`result >= 0`) and treat it as one stable
+// value rather than a fresh nondeterministic read (`result == p.len()`).
 module StringParamVerify
 
-fn str_len_nonneg(s: String) -> i64 vow {
-  ensures: result >= 0
+fn str_len_stable(s: String) -> i64 vow {
+  ensures: result >= 0,
+  ensures: result == s.len()
 } {
   s.len()
 }
 
-fn vec_len_nonneg(v: Vec<i64>) -> i64 vow {
-  ensures: result >= 0
+fn vec_len_stable(v: Vec<i64>) -> i64 vow {
+  ensures: result >= 0,
+  ensures: result == v.len()
 } {
   v.len()
 }
 
-fn map_len_nonneg(m: HashMap<i64, i64>) -> i64 vow {
-  ensures: result >= 0
+fn map_len_stable(m: HashMap<i64, i64>) -> i64 vow {
+  ensures: result >= 0,
+  ensures: result == m.len()
 } {
   m.len()
 }
 
 fn main() -> i32 [io] {
   let s: String = String::from("hello");
-  print_i64(str_len_nonneg(s));
+  print_i64(str_len_stable(s));
   0
 }
