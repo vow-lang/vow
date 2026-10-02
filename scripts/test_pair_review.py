@@ -1128,6 +1128,37 @@ class LedgerWritebackTest(unittest.TestCase):
         self.assertEqual("2026-09-01", written["pairs"]["lexer"]["last_reviewed"])
         self.assertEqual([4242], written["pairs"]["parser"]["confirmed_issues"])
 
+    def test_concurrent_edit_every_attempt_exhausts_retries_cleanly(self):
+        # If a concurrent writer never stops editing, write_ledger must give
+        # up loudly and clean up after itself, rather than hang or silently
+        # drop the write.
+        stale = json.loads(self.ledger_path.read_text())
+        real_validate = pair_review._validate_pair_entry
+        counter = [0]
+
+        def inject_every_time(entry):
+            counter[0] += 1
+            live = json.loads(self.ledger_path.read_text())
+            live["pairs"]["parser"]["confirmed_issues"] = [counter[0]]
+            self.ledger_path.write_text(json.dumps(live))
+            real_validate(entry)
+
+        with mock.patch.object(
+            pair_review,
+            "_validate_pair_entry",
+            side_effect=inject_every_time,
+        ) as mocked:
+            with self.assertRaises(OSError):
+                pair_review.write_ledger(
+                    stale, [self.result()], "2026-09-01", self.ledger_path
+                )
+
+        self.assertEqual(pair_review._LEDGER_WRITE_MAX_ATTEMPTS, mocked.call_count)
+        written = json.loads(self.ledger_path.read_text())
+        self.assertEqual([counter[0]], written["pairs"]["parser"]["confirmed_issues"])
+        leftover = list(self.ledger_path.parent.glob(f".{self.ledger_path.name}.*.tmp"))
+        self.assertEqual([], leftover)
+
     def test_corpus_and_untouched_pairs_survive(self):
         self.write(self.result())
 
