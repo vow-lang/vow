@@ -388,7 +388,7 @@ fn clause_distinct_levels(s: Solver, clause: Vec<i64>) -> i64 {
             let prev_v: i64 = lit_var(clause[j]);
             if s.levels[prev_v] == level_i {
                 seen_before = 1;
-                j = i;
+                break;
             }
             j = j + 1;
         }
@@ -486,7 +486,7 @@ fn propagate(s: Solver) -> i64 {
                                     let new_bucket: Vec<i64> = ws[lit_bucket(cand)];
                                     new_bucket.push(cid);
                                     moved = 1;
-                                    scan_pos = clen;
+                                    break;
                                 }
                             }
                             scan_pos = scan_pos + 1;
@@ -581,7 +581,7 @@ fn dedupe_clause(clause: Vec<i64>) -> Vec<i64> {
         } {
             if out[j] == lit {
                 seen_lit = 1;
-                j = out.len() as u64;
+                break;
             }
             j = j + 1;
         }
@@ -903,7 +903,7 @@ fn root_pure_simplify(s: Solver) -> i64 {
                     let val: i64 = lit_assign(s, lit);
                     if val == VAL_TRUE {
                         sat = 1;
-                        i = len;
+                        break;
                     } else {
                         if val == VAL_UNASSIGNED {
                             let v: i64 = lit_var(lit);
@@ -1023,7 +1023,7 @@ fn formula_satisfied(formula: Formula, assignment: Vec<i64>) -> bool {
             let val: i64 = lit_value(assignment, lit);
             if val == VAL_TRUE {
                 sat = 1;
-                i = len;
+                break;
             }
             i = i + 1;
         }
@@ -1056,7 +1056,7 @@ fn find_unsatisfied_clause_for_assignment(s: Solver, assignment: Vec<i64>) -> i6
             } {
                 if lit_value(assignment, clause_lit_at(s, cid, i)) == VAL_TRUE {
                     sat = 1;
-                    i = len;
+                    break;
                 }
                 i = i + 1;
             }
