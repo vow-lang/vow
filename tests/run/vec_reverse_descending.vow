@@ -1,0 +1,47 @@
+// TEST: stdout "[]\n[7]\n[2 7 -1 3]\n"
+module VecReverseDescending
+
+fn vec_reverse(v: Vec<i64>) -> Vec<i64> vow {
+    ensures: result.len() == v.len()
+} {
+    let out: Vec<i64> = Vec::new();
+    let n: u64 = v.len() as u64;
+    let mut i: u64 = n;
+    while i > 0 vow {
+        invariant: i <= n
+    } {
+        i = i - 1;
+        out.push(v[i]);
+    }
+    out
+}
+
+fn show(v: Vec<i64>) [io] {
+    print_str(String::from("["));
+    let n: u64 = v.len() as u64;
+    let mut i: u64 = 0;
+    while i < n {
+        if i > 0 {
+            print_str(String::from(" "));
+        }
+        print_i64(v[i]);
+        i = i + 1;
+    }
+    print_str(String::from("]\n"));
+}
+
+fn main() [io] {
+    let empty: Vec<i64> = Vec::new();
+    show(vec_reverse(empty));
+
+    let one: Vec<i64> = Vec::new();
+    one.push(7);
+    show(vec_reverse(one));
+
+    let many: Vec<i64> = Vec::new();
+    many.push(3);
+    many.push(-1);
+    many.push(7);
+    many.push(2);
+    show(vec_reverse(many));
+}

@@ -26,7 +26,7 @@ fn stack_size(s: Stack) -> i64 {
 fn stack_peek(s: Stack) -> i64 vow {
     requires: s.size > 0
 } {
-    let idx: i64 = s.size - 1;
+    let idx: u64 = (s.size - 1) as u64;
     s.data[idx]
 }
 
