@@ -4,7 +4,7 @@ set -euo pipefail
 SAT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SAT_DIR/../.." && pwd)"
 LOCAL_DIR="$SAT_DIR/.local"
-BIN="$LOCAL_DIR/sat-test"
+VOWC="${VOWC:-$REPO_ROOT/build/vowc}"
 TMP_ROOT="${TMPDIR:-/dev/shm}"
 
 if [[ ! -d "$TMP_ROOT" ]]; then
@@ -13,16 +13,19 @@ fi
 
 mkdir -p "$LOCAL_DIR"
 
-zsh -lc "TMPDIR='$TMP_ROOT' '$REPO_ROOT/build/vowc' build --no-verify '$SAT_DIR/main.vow' -o '$BIN'" >/dev/null
+TMPDIR="$TMP_ROOT" "$VOWC" build --no-verify "$SAT_DIR/main.vow" -o "$LOCAL_DIR/sat-test-release" >/dev/null
+TMPDIR="$TMP_ROOT" "$VOWC" build --no-verify --mode debug "$SAT_DIR/main.vow" -o "$LOCAL_DIR/sat-test-debug" >/dev/null
 
 failures=0
+MODE=""
+BIN=""
 
 expect_eq() {
   local actual="$1"
   local expected="$2"
   local label="$3"
   if [[ "$actual" != "$expected" ]]; then
-    printf 'FAIL %s\nexpected:\n%s\nactual:\n%s\n' "$label" "$expected" "$actual" >&2
+    printf 'FAIL [%s] %s\nexpected:\n%s\nactual:\n%s\n' "$MODE" "$label" "$expected" "$actual" >&2
     failures=$((failures + 1))
   fi
 }
@@ -32,7 +35,7 @@ expect_contains() {
   local needle="$2"
   local label="$3"
   if [[ "$haystack" != *"$needle"* ]]; then
-    printf 'FAIL %s\nmissing substring: %s\nactual:\n%s\n' "$label" "$needle" "$haystack" >&2
+    printf 'FAIL [%s] %s\nmissing substring: %s\nactual:\n%s\n' "$MODE" "$label" "$needle" "$haystack" >&2
     failures=$((failures + 1))
   fi
 }
@@ -197,69 +200,79 @@ run_help_case() {
   expect_eq "$stderr_text" "" "help stderr"
 }
 
-run_stdin_case "sat-simple-stdin" \
-  "$SAT_DIR/tests/sat_simple.cnf" \
-  "10" \
-  $'SAT\nv 1 0' \
-  ""
+run_suite() {
+  MODE="$1"
+  BIN="$LOCAL_DIR/sat-test-$1"
+  run_stdin_case "sat-simple-stdin" \
+    "$SAT_DIR/tests/sat_simple.cnf" \
+    "10" \
+    $'SAT\nv 1 0' \
+    ""
 
-run_file_case "sat-simple-file" \
-  "$SAT_DIR/tests/sat_simple.cnf" \
-  "10" \
-  $'SAT\nv 1 0' \
-  ""
+  run_file_case "sat-simple-file" \
+    "$SAT_DIR/tests/sat_simple.cnf" \
+    "10" \
+    $'SAT\nv 1 0' \
+    ""
 
-run_file_case "sat-many-vars" \
-  "$SAT_DIR/tests/sat_many_vars.cnf" \
-  "10" \
-  $'SAT\nv 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 \nv 21 0' \
-  ""
+  run_file_case "sat-many-vars" \
+    "$SAT_DIR/tests/sat_many_vars.cnf" \
+    "10" \
+    $'SAT\nv 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 \nv 21 0' \
+    ""
 
-run_file_case "unsat-unit" \
-  "$SAT_DIR/tests/unsat_unit.cnf" \
-  "20" \
-  "UNSAT" \
-  ""
+  run_file_case "unsat-unit" \
+    "$SAT_DIR/tests/unsat_unit.cnf" \
+    "20" \
+    "UNSAT" \
+    ""
 
-run_file_case "unsat-learned" \
-  "$SAT_DIR/tests/unsat_learned.cnf" \
-  "20" \
-  "UNSAT" \
-  ""
+  run_file_case "unsat-learned" \
+    "$SAT_DIR/tests/unsat_learned.cnf" \
+    "20" \
+    "UNSAT" \
+    ""
 
-run_sat_validate_case "sat-conflict-regression" \
-  "$SAT_DIR/tests/sat_conflict_regression.cnf"
+  run_sat_validate_case "sat-conflict-regression" \
+    "$SAT_DIR/tests/sat_conflict_regression.cnf"
 
-run_sat_validate_case "sat-watch-bucket-regression" \
-  "$SAT_DIR/tests/sat_watch_bucket_regression.cnf"
+  run_sat_validate_case "sat-watch-bucket-regression" \
+    "$SAT_DIR/tests/sat_watch_bucket_regression.cnf"
 
-run_file_case "missing-header" \
-  "$SAT_DIR/tests/malformed_missing_header.cnf" \
-  "1" \
-  "" \
-  "encountered clause tokens before header"
+  run_sat_validate_case "sat-duplicate-literals" \
+    "$SAT_DIR/tests/sat_duplicate_literals.cnf"
 
-run_file_case "out-of-range" \
-  "$SAT_DIR/tests/malformed_out_of_range.cnf" \
-  "1" \
-  "" \
-  "literal out of declared variable range"
+  run_file_case "missing-header" \
+    "$SAT_DIR/tests/malformed_missing_header.cnf" \
+    "1" \
+    "" \
+    "encountered clause tokens before header"
 
-run_file_case "missing-zero" \
-  "$SAT_DIR/tests/malformed_missing_zero.cnf" \
-  "1" \
-  "" \
-  "unterminated final clause"
+  run_file_case "out-of-range" \
+    "$SAT_DIR/tests/malformed_out_of_range.cnf" \
+    "1" \
+    "" \
+    "literal out of declared variable range"
 
-run_file_case "clause-count" \
-  "$SAT_DIR/tests/malformed_clause_count.cnf" \
-  "1" \
-  "" \
-  "clause count mismatch"
+  run_file_case "missing-zero" \
+    "$SAT_DIR/tests/malformed_missing_zero.cnf" \
+    "1" \
+    "" \
+    "unterminated final clause"
 
-run_stats_case "$SAT_DIR/tests/sat_simple.cnf"
-run_pure_stats_case "$SAT_DIR/tests/sat_pure_root.cnf"
-run_help_case
+  run_file_case "clause-count" \
+    "$SAT_DIR/tests/malformed_clause_count.cnf" \
+    "1" \
+    "" \
+    "clause count mismatch"
+
+  run_stats_case "$SAT_DIR/tests/sat_simple.cnf"
+  run_pure_stats_case "$SAT_DIR/tests/sat_pure_root.cnf"
+  run_help_case
+}
+
+run_suite release
+run_suite debug
 
 if [[ "$failures" -ne 0 ]]; then
   printf 'sat demo tests failed: %s\n' "$failures" >&2
