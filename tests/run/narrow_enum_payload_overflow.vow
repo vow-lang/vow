@@ -1,0 +1,12 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module NarrowEnumPayloadOverflow
+
+enum Wrapper {
+    Val(i8),
+}
+
+fn main() -> i32 {
+    let w: Wrapper = Wrapper::Val(127 +! 1);
+    0
+}

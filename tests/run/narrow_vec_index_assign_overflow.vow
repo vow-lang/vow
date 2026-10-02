@@ -1,0 +1,10 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module NarrowVecIndexAssignOverflow
+
+fn main() -> i32 {
+    let v: Vec<i8> = Vec::new();
+    v.push(0);
+    v[0] = 127 +! 1;
+    0
+}

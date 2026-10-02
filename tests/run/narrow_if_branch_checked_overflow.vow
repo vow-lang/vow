@@ -1,0 +1,12 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module NarrowIfBranchCheckedOverflow
+
+fn f(b: bool) -> i8 {
+    if b { 127 +! 1 } else { 0 }
+}
+
+fn main() -> i32 {
+    f(true);
+    0
+}

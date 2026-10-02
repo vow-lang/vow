@@ -1,0 +1,12 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module NarrowStructInitOverflow
+
+struct S {
+    x: i8,
+}
+
+fn main() -> i32 {
+    let s: S = S { x: 127 +! 1 };
+    0
+}
