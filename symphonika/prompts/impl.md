@@ -45,11 +45,18 @@ diff, the removal did not land — fix it before opening the PR.
 
 ## Open the PR
 
+Use a quoted heredoc for `--body-file`, not a double-quoted `--body` string — bash does not
+expand `\n` inside double quotes, so a literal `\n\nCloses` breaks GitHub's `Closes` autolink.
+
 ```sh
 git push -u origin {{branch.name}}
 gh pr create --base main --head {{branch.name}} \
   --title "<conventional title — no agent prefix like [claude] or [codex]>" \
-  --body "<summary>\n\nCloses #{{issue.number}}"
+  --body-file - <<'BODY'
+<summary>
+
+Closes #{{issue.number}}
+BODY
 ```
 
 The PR must be **non-draft**. Do not use `--web`, `--draft`, or any flag that opens a browser or
