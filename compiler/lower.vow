@@ -16,7 +16,7 @@ struct LowerCtx {
     phi_next_dependent: Vec<i64>,
     scope_vars: Vec<String>,
     scope_vals: Vec<i64>,
-    scope_starts: Vec<i64>,
+    scope_starts: Vec<u64>,
     string_pool: Vec<String>,
     func_names: Vec<String>,
     func_ret_tys: Vec<i64>,
@@ -58,7 +58,7 @@ struct LowerCtx {
     loop_continue_phi_names: Vec<Vec<String>>,
     loop_continue_phi_ids: Vec<Vec<i64>>,
     loop_continue_idx_phi: Vec<i64>,
-    loop_continue_scope_depth: Vec<i64>,
+    loop_continue_scope_depth: Vec<u64>,
     loop_is_loop: Vec<i64>,
     loop_break_up_ids: Vec<i64>,
     loop_break_up_blocks: Vec<i64>,
@@ -93,9 +93,9 @@ struct LowerCtx {
 }
 
 struct ScopeSnap {
-    vars_len: i64,
-    vals_len: i64,
-    starts_len: i64,
+    vars_len: u64,
+    vals_len: u64,
+    starts_len: u64,
 }
 
 fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eids: Vec<i64>) -> LowerCtx {
@@ -192,7 +192,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
 }
 
 fn lctx_new_block(ctx: LowerCtx) -> i64 {
-    let bid: i64 = ctx.func.blocks.len();
+    let bid: i64 = ctx.func.blocks.len() as i64;
     let blk: IrBlock = ir_block_new(bid);
     ctx.func.blocks.push(blk);
     bid
@@ -204,7 +204,7 @@ fn lctx_switch_to_block(ctx: LowerCtx, bid: i64) {
 
 fn lctx_is_terminated(ctx: LowerCtx) -> bool {
     let blk: IrBlock = ctx.func.blocks[ctx.current_block];
-    let n: i64 = blk.insts.len();
+    let n: u64 = blk.insts.len() as u64;
     if n == 0 { return false; }
     let last: IrInst = blk.insts[n - 1];
     iop_is_terminal(last.op)
@@ -212,7 +212,7 @@ fn lctx_is_terminated(ctx: LowerCtx) -> bool {
 
 fn lctx_block_terminated(ctx: LowerCtx, block_id: i64) -> bool {
     let blk: IrBlock = ctx.func.blocks[block_id];
-    let n: i64 = blk.insts.len();
+    let n: u64 = blk.insts.len() as u64;
     if n == 0 { return false; }
     let last: IrInst = blk.insts[n - 1];
     iop_is_terminal(last.op)
@@ -222,7 +222,7 @@ fn lctx_inst_ty(ctx: LowerCtx, inst_id: i64) -> i64 {
     if inst_id < 0 {
         return ITY_I64();
     }
-    if inst_id >= ctx.inst_ty_by_id.len() {
+    if inst_id >= ctx.inst_ty_by_id.len() as i64 {
         return ITY_I64();
     }
     ctx.inst_ty_by_id[inst_id]
@@ -232,10 +232,10 @@ fn lctx_record_inst_ty(ctx: LowerCtx, inst_id: i64, ty: i64) {
     if inst_id < 0 {
         return;
     }
-    while ctx.inst_ty_by_id.len() < inst_id {
+    while (ctx.inst_ty_by_id.len() as i64) < inst_id {
         ctx.inst_ty_by_id.push(ITY_I64());
     }
-    if ctx.inst_ty_by_id.len() == inst_id {
+    if (ctx.inst_ty_by_id.len() as i64) == inst_id {
         ctx.inst_ty_by_id.push(ty);
     } else {
         ctx.inst_ty_by_id[inst_id] = ty;
@@ -243,7 +243,7 @@ fn lctx_record_inst_ty(ctx: LowerCtx, inst_id: i64, ty: i64) {
 }
 
 fn lctx_merge_inst_ty(ctx: LowerCtx, inst_id: i64, incoming_ty: i64) {
-    if inst_id < 0 || inst_id >= ctx.inst_ty_by_id.len() {
+    if inst_id < 0 || inst_id >= ctx.inst_ty_by_id.len() as i64 {
         return;
     }
     let current_ty: i64 = lctx_inst_ty(ctx, inst_id);
@@ -267,11 +267,11 @@ fn lctx_merge_inst_ty(ctx: LowerCtx, inst_id: i64, incoming_ty: i64) {
 }
 
 fn lctx_link_phi_input(ctx: LowerCtx, input_id: i64, target_id: i64) {
-    if target_id < 0 || target_id >= ctx.inst_ty_by_id.len() {
+    if target_id < 0 || target_id >= ctx.inst_ty_by_id.len() as i64 {
         return;
     }
-    if input_id >= 0 && input_id < ctx.phi_first_dependent.len() && input_id != target_id {
-        let edge: i64 = ctx.phi_dependent_targets.len();
+    if input_id >= 0 && input_id < ctx.phi_first_dependent.len() as i64 && input_id != target_id {
+        let edge: i64 = ctx.phi_dependent_targets.len() as i64;
         ctx.phi_dependent_targets.push(target_id);
         ctx.phi_next_dependent.push(ctx.phi_first_dependent[input_id]);
         ctx.phi_first_dependent[input_id] = edge;
@@ -293,7 +293,7 @@ fn lctx_emit(ctx: LowerCtx, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, 
     ctx.next_inst_id = id + 1;
     let inst: IrInst = ir_inst_new(id, op, ty, args, dk, dv, dv2, ds);
     let blk: IrBlock = ctx.func.blocks[ctx.current_block];
-    let inst_index: i64 = blk.insts.len();
+    let inst_index: i64 = blk.insts.len() as i64;
     blk.insts.push(inst);
     lctx_record_inst_ty(ctx, id, ty);
     ctx.inst_block_by_id.push(ctx.current_block);
@@ -317,7 +317,7 @@ fn lctx_set_inst_span(ctx: LowerCtx, inst_id: i64, span: i64) {
     let len: i64 = span_unpack_len(span);
     // Fast path: patch the last inst in current block before falling back to a full O(n) scan.
     let cur_blk: IrBlock = ctx.func.blocks[ctx.current_block];
-    let cur_n: i64 = cur_blk.insts.len();
+    let cur_n: u64 = cur_blk.insts.len() as u64;
     if cur_n > 0 {
         let last: IrInst = cur_blk.insts[cur_n - 1];
         if last.id == inst_id {
@@ -327,12 +327,12 @@ fn lctx_set_inst_span(ctx: LowerCtx, inst_id: i64, span: i64) {
             return;
         }
     }
-    let nb: i64 = ctx.func.blocks.len();
-    let mut bi: i64 = 0;
+    let nb: u64 = ctx.func.blocks.len() as u64;
+    let mut bi: u64 = 0;
     while bi < nb {
         let blk: IrBlock = ctx.func.blocks[bi];
-        let ni: i64 = blk.insts.len();
-        let mut ii: i64 = 0;
+        let ni: u64 = blk.insts.len() as u64;
+        let mut ii: u64 = 0;
         while ii < ni {
             let inst: IrInst = blk.insts[ii];
             if inst.id == inst_id {
@@ -357,15 +357,15 @@ fn lctx_emit_linear_consume_if_needed(ctx: LowerCtx, inst_id: i64, span: i64) {
 }
 
 fn lctx_push_scope(ctx: LowerCtx) {
-    ctx.scope_starts.push(ctx.scope_vars.len());
+    ctx.scope_starts.push(ctx.scope_vars.len() as u64);
 }
 
 fn lctx_pop_scope(ctx: LowerCtx) {
-    let n: i64 = ctx.scope_starts.len();
+    let n: u64 = ctx.scope_starts.len() as u64;
     if n == 0 { return; }
-    let start: i64 = ctx.scope_starts[n - 1];
-    let cur: i64 = ctx.scope_vars.len();
-    let mut i: i64 = cur;
+    let start: u64 = ctx.scope_starts[n - 1];
+    let cur: u64 = ctx.scope_vars.len() as u64;
+    let mut i: u64 = cur;
     while i > start {
         i = i - 1;
         ctx.scope_vars.pop();
@@ -380,8 +380,8 @@ fn lctx_define(ctx: LowerCtx, name: String, val: i64) {
 }
 
 fn lctx_assign(ctx: LowerCtx, name: String, val: i64) {
-    let n: i64 = ctx.scope_vars.len();
-    let mut i: i64 = n;
+    let n: u64 = ctx.scope_vars.len() as u64;
+    let mut i: u64 = n;
     while i > 0 {
         i = i - 1;
         if ctx.scope_vars[i] == name {
@@ -392,8 +392,8 @@ fn lctx_assign(ctx: LowerCtx, name: String, val: i64) {
 }
 
 fn lctx_lookup(ctx: LowerCtx, name: String) -> i64 {
-    let n: i64 = ctx.scope_vars.len();
-    let mut i: i64 = n;
+    let n: u64 = ctx.scope_vars.len() as u64;
+    let mut i: u64 = n;
     while i > 0 {
         i = i - 1;
         if ctx.scope_vars[i] == name {
@@ -403,8 +403,8 @@ fn lctx_lookup(ctx: LowerCtx, name: String) -> i64 {
     -1
 }
 
-fn lctx_lookup_at_depth(ctx: LowerCtx, name: String, depth: i64) -> i64 {
-    let mut i: i64 = depth;
+fn lctx_lookup_at_depth(ctx: LowerCtx, name: String, depth: u64) -> i64 {
+    let mut i: u64 = depth;
     while i > 0 {
         i = i - 1;
         if ctx.scope_vars[i] == name {
@@ -416,22 +416,22 @@ fn lctx_lookup_at_depth(ctx: LowerCtx, name: String, depth: i64) -> i64 {
 
 fn lctx_snapshot(ctx: LowerCtx) -> ScopeSnap {
     ScopeSnap {
-        vars_len: ctx.scope_vars.len(),
-        vals_len: ctx.scope_vals.len(),
-        starts_len: ctx.scope_starts.len(),
+        vars_len: ctx.scope_vars.len() as u64,
+        vals_len: ctx.scope_vals.len() as u64,
+        starts_len: ctx.scope_starts.len() as u64,
     }
 }
 
 fn lctx_restore(ctx: LowerCtx, snap: ScopeSnap) {
-    let cur_vars: i64 = ctx.scope_vars.len();
-    let mut i: i64 = cur_vars;
+    let cur_vars: u64 = ctx.scope_vars.len() as u64;
+    let mut i: u64 = cur_vars;
     while i > snap.vars_len {
         i = i - 1;
         ctx.scope_vars.pop();
         ctx.scope_vals.pop();
     }
-    let cur_starts: i64 = ctx.scope_starts.len();
-    let mut j: i64 = cur_starts;
+    let cur_starts: u64 = ctx.scope_starts.len() as u64;
+    let mut j: u64 = cur_starts;
     while j > snap.starts_len {
         j = j - 1;
         ctx.scope_starts.pop();
@@ -445,8 +445,8 @@ fn lctx_tag(ctx: LowerCtx, inst_id: i64, name: String) {
 }
 
 fn lctx_get_tag(ctx: LowerCtx, inst_id: i64) -> String {
-    let n: i64 = ctx.tag_inst_ids.len();
-    let mut i: i64 = n;
+    let n: u64 = ctx.tag_inst_ids.len() as u64;
+    let mut i: u64 = n;
     while i > 0 {
         i = i - 1;
         if ctx.tag_inst_ids[i] == inst_id {
@@ -463,7 +463,7 @@ fn lctx_tag_declared_ast_tid(ctx: LowerCtx, inst_id: i64, tid: i64) {
 }
 
 fn lctx_get_declared_ast_tid(ctx: LowerCtx, inst_id: i64) -> i64 {
-    let mut i: i64 = ctx.declared_ast_inst_ids.len();
+    let mut i: u64 = ctx.declared_ast_inst_ids.len() as u64;
     while i > 0 {
         i = i - 1;
         if ctx.declared_ast_inst_ids[i] == inst_id {
@@ -489,8 +489,8 @@ fn lctx_generic_ast_arg_tid(ctx: LowerCtx, tid: i64, expected_name: String, inde
 }
 
 fn lctx_is_str_eid(ctx: LowerCtx, eid: i64) -> bool {
-    let n: i64 = ctx.str_eids.len();
-    let mut i: i64 = 0;
+    let n: u64 = ctx.str_eids.len() as u64;
+    let mut i: u64 = 0;
     while i < n {
         if ctx.str_eids[i] == eid {
             return true;
@@ -512,8 +512,8 @@ fn lctx_tag_vec_elem_path(ctx: LowerCtx, inst_id: i64, path: Vec<String>) {
 }
 
 fn lctx_get_vec_elem_path(ctx: LowerCtx, inst_id: i64) -> Vec<String> {
-    let n: i64 = ctx.vec_elem_inst_ids.len();
-    let mut i: i64 = n;
+    let n: u64 = ctx.vec_elem_inst_ids.len() as u64;
+    let mut i: u64 = n;
     while i > 0 {
         i = i - 1;
         if ctx.vec_elem_inst_ids[i] == inst_id {
@@ -529,8 +529,8 @@ fn lctx_tag_vec_option_elem_ty_path(ctx: LowerCtx, inst_id: i64, path: Vec<i64>)
 }
 
 fn lctx_get_vec_option_elem_ty_path(ctx: LowerCtx, inst_id: i64) -> Vec<i64> {
-    let n: i64 = ctx.vec_option_elem_inst_ids.len();
-    let mut i: i64 = n;
+    let n: u64 = ctx.vec_option_elem_inst_ids.len() as u64;
+    let mut i: u64 = n;
     while i > 0 {
         i = i - 1;
         if ctx.vec_option_elem_inst_ids[i] == inst_id {
@@ -546,8 +546,8 @@ fn lctx_tag_vec_variant_payload_ty_path(ctx: LowerCtx, inst_id: i64, path: Vec<V
 }
 
 fn lctx_get_vec_variant_payload_ty_path(ctx: LowerCtx, inst_id: i64) -> Vec<Vec<i64>> {
-    let n: i64 = ctx.vec_variant_payload_inst_ids.len();
-    let mut i: i64 = n;
+    let n: u64 = ctx.vec_variant_payload_inst_ids.len() as u64;
+    let mut i: u64 = n;
     while i > 0 {
         i = i - 1;
         if ctx.vec_variant_payload_inst_ids[i] == inst_id {
@@ -581,16 +581,16 @@ fn lctx_project_vec_index_metadata(ctx: LowerCtx, source_id: i64, result_id: i64
     }
     if path.len() > 1 {
         let remaining: Vec<String> = Vec::new();
-        let mut i: i64 = 1;
-        while i < path.len() {
+        let mut i: u64 = 1;
+        while i < path.len() as u64 {
             remaining.push(path[i]);
             i = i + 1;
         }
         lctx_tag_vec_elem_path(ctx, result_id, remaining);
         if option_path.len() > 1 {
             let remaining_options: Vec<i64> = Vec::new();
-            let mut oi: i64 = 1;
-            while oi < option_path.len() {
+            let mut oi: u64 = 1;
+            while oi < option_path.len() as u64 {
                 remaining_options.push(option_path[oi]);
                 oi = oi + 1;
             }
@@ -598,8 +598,8 @@ fn lctx_project_vec_index_metadata(ctx: LowerCtx, source_id: i64, result_id: i64
         }
         if variant_path.len() > 1 {
             let remaining_variants: Vec<Vec<i64>> = Vec::new();
-            let mut vi: i64 = 1;
-            while vi < variant_path.len() {
+            let mut vi: u64 = 1;
+            while vi < variant_path.len() as u64 {
                 remaining_variants.push(variant_path[vi]);
                 vi = vi + 1;
             }
@@ -614,8 +614,8 @@ fn lctx_tag_option_elem(ctx: LowerCtx, inst_id: i64, elem_ty: i64) {
 }
 
 fn lctx_find_option_elem_ty(ctx: LowerCtx, inst_id: i64) -> i64 {
-    let n: i64 = ctx.option_elem_inst_ids.len();
-    let mut i: i64 = n;
+    let n: u64 = ctx.option_elem_inst_ids.len() as u64;
+    let mut i: u64 = n;
     while i > 0 {
         i = i - 1;
         if ctx.option_elem_inst_ids[i] == inst_id {
@@ -639,8 +639,8 @@ fn lctx_tag_variant_payloads(ctx: LowerCtx, inst_id: i64, payload_tys: Vec<i64>)
 }
 
 fn lctx_get_variant_payloads(ctx: LowerCtx, inst_id: i64) -> Vec<i64> {
-    let n: i64 = ctx.variant_payload_inst_ids.len();
-    let mut i: i64 = n;
+    let n: u64 = ctx.variant_payload_inst_ids.len() as u64;
+    let mut i: u64 = n;
     while i > 0 {
         i = i - 1;
         if ctx.variant_payload_inst_ids[i] == inst_id {
@@ -657,14 +657,14 @@ fn lctx_get_variant_payloads(ctx: LowerCtx, inst_id: i64) -> Vec<i64> {
 fn lctx_variant_payload_at(ctx: LowerCtx, inst_id: i64, tag: i64) -> i64 {
     if tag < 0 { return -1; }
     let payloads: Vec<i64> = lctx_get_variant_payloads(ctx, inst_id);
-    if tag >= payloads.len() { return -1; }
+    if tag >= payloads.len() as i64 { return -1; }
     payloads[tag]
 }
 
 fn string_vec_equal(a: Vec<String>, b: Vec<String>) -> bool {
     if a.len() != b.len() { return false; }
-    let mut i: i64 = 0;
-    while i < a.len() {
+    let mut i: u64 = 0;
+    while i < a.len() as u64 {
         if a[i] != b[i] { return false; }
         i = i + 1;
     }
@@ -673,8 +673,8 @@ fn string_vec_equal(a: Vec<String>, b: Vec<String>) -> bool {
 
 fn i64_vec_equal(a: Vec<i64>, b: Vec<i64>) -> bool {
     if a.len() != b.len() { return false; }
-    let mut i: i64 = 0;
-    while i < a.len() {
+    let mut i: u64 = 0;
+    while i < a.len() as u64 {
         if a[i] != b[i] { return false; }
         i = i + 1;
     }
@@ -683,8 +683,8 @@ fn i64_vec_equal(a: Vec<i64>, b: Vec<i64>) -> bool {
 
 fn i64_vec_vec_equal(a: Vec<Vec<i64>>, b: Vec<Vec<i64>>) -> bool {
     if a.len() != b.len() { return false; }
-    let mut i: i64 = 0;
-    while i < a.len() {
+    let mut i: u64 = 0;
+    while i < a.len() as u64 {
         if !i64_vec_equal(a[i], b[i]) { return false; }
         i = i + 1;
     }
@@ -702,15 +702,15 @@ fn lctx_merge_compatible_aggregate_metadata(ctx: LowerCtx, sources: Vec<i64>, re
     let variant_payloads: Vec<i64> = Vec::new();
     let mut option_elem: i64 = -1;
     let mut declared_ast_tid: i64 = -1;
-    let mut i: i64 = 0;
-    while i < sources.len() {
+    let mut i: u64 = 0;
+    while i < sources.len() as u64 {
         if lctx_get_tag(ctx, sources[i]) != aggregate_name { return; }
 
         let source_vec_elems: Vec<String> = lctx_get_vec_elem_path(ctx, sources[i]);
         if source_vec_elems.len() > 0 {
             if vec_elems.len() == 0 {
-                let mut j: i64 = 0;
-                while j < source_vec_elems.len() {
+                let mut j: u64 = 0;
+                while j < source_vec_elems.len() as u64 {
                     vec_elems.push(source_vec_elems[j]);
                     j = j + 1;
                 }
@@ -722,8 +722,8 @@ fn lctx_merge_compatible_aggregate_metadata(ctx: LowerCtx, sources: Vec<i64>, re
         let source_vec_options: Vec<i64> = lctx_get_vec_option_elem_ty_path(ctx, sources[i]);
         if source_vec_options.len() > 0 {
             if vec_options.len() == 0 {
-                let mut j2: i64 = 0;
-                while j2 < source_vec_options.len() {
+                let mut j2: u64 = 0;
+                while j2 < source_vec_options.len() as u64 {
                     vec_options.push(source_vec_options[j2]);
                     j2 = j2 + 1;
                 }
@@ -735,8 +735,8 @@ fn lctx_merge_compatible_aggregate_metadata(ctx: LowerCtx, sources: Vec<i64>, re
         let source_vec_variants: Vec<Vec<i64>> = lctx_get_vec_variant_payload_ty_path(ctx, sources[i]);
         if source_vec_variants.len() > 0 {
             if vec_variants.len() == 0 {
-                let mut j3: i64 = 0;
-                while j3 < source_vec_variants.len() {
+                let mut j3: u64 = 0;
+                while j3 < source_vec_variants.len() as u64 {
                     vec_variants.push(source_vec_variants[j3]);
                     j3 = j3 + 1;
                 }
@@ -754,8 +754,8 @@ fn lctx_merge_compatible_aggregate_metadata(ctx: LowerCtx, sources: Vec<i64>, re
         let source_variants: Vec<i64> = lctx_get_variant_payloads(ctx, sources[i]);
         if source_variants.len() > 0 {
             if variant_payloads.len() == 0 {
-                let mut j4: i64 = 0;
-                while j4 < source_variants.len() {
+                let mut j4: u64 = 0;
+                while j4 < source_variants.len() as u64 {
                     variant_payloads.push(source_variants[j4]);
                     j4 = j4 + 1;
                 }
@@ -865,108 +865,108 @@ fn lctx_apply_question_aggregate_metadata(
 }
 
 fn lctx_get_pattern_aggregate(ctx: LowerCtx, pid: i64) -> String {
-    if pid < ctx.pat_aggregate_names.len() {
+    if pid < ctx.pat_aggregate_names.len() as i64 {
         return ctx.pat_aggregate_names[pid];
     }
     String::from("")
 }
 
 fn lctx_get_pattern_vec_elem_path(ctx: LowerCtx, pid: i64) -> Vec<String> {
-    if pid < ctx.pat_vec_elem_paths.len() {
+    if pid < ctx.pat_vec_elem_paths.len() as i64 {
         return ctx.pat_vec_elem_paths[pid];
     }
     Vec::new()
 }
 
 fn lctx_get_pattern_vec_option_elem_ty_path(ctx: LowerCtx, pid: i64) -> Vec<i64> {
-    if pid < ctx.pat_vec_option_elem_ty_paths.len() {
+    if pid < ctx.pat_vec_option_elem_ty_paths.len() as i64 {
         return ctx.pat_vec_option_elem_ty_paths[pid];
     }
     Vec::new()
 }
 
 fn lctx_get_pattern_vec_variant_payload_ty_path(ctx: LowerCtx, pid: i64) -> Vec<Vec<i64>> {
-    if pid < ctx.pat_vec_variant_payload_ty_paths.len() {
+    if pid < ctx.pat_vec_variant_payload_ty_paths.len() as i64 {
         return ctx.pat_vec_variant_payload_ty_paths[pid];
     }
     Vec::new()
 }
 
 fn lctx_get_pattern_option_elem_ty(ctx: LowerCtx, pid: i64) -> i64 {
-    if pid < ctx.pat_option_elem_tys.len() {
+    if pid < ctx.pat_option_elem_tys.len() as i64 {
         return ctx.pat_option_elem_tys[pid];
     }
     -1
 }
 
 fn lctx_get_pattern_variant_payload_tys(ctx: LowerCtx, pid: i64) -> Vec<i64> {
-    if pid < ctx.pat_variant_payload_tys.len() {
+    if pid < ctx.pat_variant_payload_tys.len() as i64 {
         return ctx.pat_variant_payload_tys[pid];
     }
     Vec::new()
 }
 
 fn lctx_pattern_is_linear(ctx: LowerCtx, pid: i64) -> i64 {
-    if pid < ctx.pat_aggregate_linear.len() {
+    if pid < ctx.pat_aggregate_linear.len() as i64 {
         return ctx.pat_aggregate_linear[pid];
     }
     0
 }
 
 fn lctx_get_question_aggregate(ctx: LowerCtx, eid: i64) -> String {
-    if eid < ctx.question_aggregate_names.len() {
+    if eid < ctx.question_aggregate_names.len() as i64 {
         return ctx.question_aggregate_names[eid];
     }
     String::from("")
 }
 
 fn lctx_get_question_vec_elem_path(ctx: LowerCtx, eid: i64) -> Vec<String> {
-    if eid < ctx.question_vec_elem_paths.len() {
+    if eid < ctx.question_vec_elem_paths.len() as i64 {
         return ctx.question_vec_elem_paths[eid];
     }
     Vec::new()
 }
 
 fn lctx_get_question_vec_option_elem_ty_path(ctx: LowerCtx, eid: i64) -> Vec<i64> {
-    if eid < ctx.question_vec_option_elem_ty_paths.len() {
+    if eid < ctx.question_vec_option_elem_ty_paths.len() as i64 {
         return ctx.question_vec_option_elem_ty_paths[eid];
     }
     Vec::new()
 }
 
 fn lctx_get_question_option_elem_ty(ctx: LowerCtx, eid: i64) -> i64 {
-    if eid < ctx.question_option_elem_tys.len() {
+    if eid < ctx.question_option_elem_tys.len() as i64 {
         return ctx.question_option_elem_tys[eid];
     }
     -1
 }
 
 fn lctx_question_is_linear(ctx: LowerCtx, eid: i64) -> i64 {
-    if eid < ctx.question_aggregate_linear.len() {
+    if eid < ctx.question_aggregate_linear.len() as i64 {
         return ctx.question_aggregate_linear[eid];
     }
     0
 }
 
 fn lctx_intern_str(ctx: LowerCtx, s: String) -> i64 {
-    let n: i64 = ctx.string_pool.len();
-    let mut i: i64 = 0;
+    let n: u64 = ctx.string_pool.len() as u64;
+    let mut i: u64 = 0;
     while i < n {
         if ctx.string_pool[i] == s {
-            return i;
+            return i as i64;
         }
         i = i + 1;
     }
     ctx.string_pool.push(s);
-    n
+    n as i64
 }
 
 fn lctx_find_func(ctx: LowerCtx, name: String) -> i64 {
-    let n: i64 = ctx.func_names.len();
-    let mut i: i64 = 0;
+    let n: u64 = ctx.func_names.len() as u64;
+    let mut i: u64 = 0;
     while i < n {
         if ctx.func_names[i] == name {
-            return i;
+            return i as i64;
         }
         i = i + 1;
     }
@@ -974,11 +974,11 @@ fn lctx_find_func(ctx: LowerCtx, name: String) -> i64 {
 }
 
 fn lctx_find_struct(ctx: LowerCtx, name: String) -> i64 {
-    let n: i64 = ctx.struct_names.len();
-    let mut i: i64 = 0;
+    let n: u64 = ctx.struct_names.len() as u64;
+    let mut i: u64 = 0;
     while i < n {
         if ctx.struct_names[i] == name {
-            return i;
+            return i as i64;
         }
         i = i + 1;
     }
@@ -986,11 +986,11 @@ fn lctx_find_struct(ctx: LowerCtx, name: String) -> i64 {
 }
 
 fn lctx_find_enum(ctx: LowerCtx, name: String) -> i64 {
-    let n: i64 = ctx.enum_names.len();
-    let mut i: i64 = 0;
+    let n: u64 = ctx.enum_names.len() as u64;
+    let mut i: u64 = 0;
     while i < n {
         if ctx.enum_names[i] == name {
-            return i;
+            return i as i64;
         }
         i = i + 1;
     }
@@ -1001,11 +1001,11 @@ fn lctx_find_variant_tag(ctx: LowerCtx, enum_name: String, variant_name: String)
     let eidx: i64 = lctx_find_enum(ctx, enum_name);
     if eidx == -1 { return -1; }
     let variants: Vec<String> = ctx.enum_variant_lists[eidx];
-    let n: i64 = variants.len();
-    let mut i: i64 = 0;
+    let n: u64 = variants.len() as u64;
+    let mut i: u64 = 0;
     while i < n {
         if variants[i] == variant_name {
-            return i;
+            return i as i64;
         }
         i = i + 1;
     }
@@ -1016,12 +1016,12 @@ fn lctx_variant_payload_ty(
     ctx: LowerCtx, enum_name: String, variant_name: String, payload_index: i64
 ) -> i64 {
     let eidx: i64 = lctx_find_enum(ctx, enum_name);
-    if eidx == -1 || eidx >= ctx.enum_variant_payload_tys.len() { return -1; }
+    if eidx == -1 || eidx >= ctx.enum_variant_payload_tys.len() as i64 { return -1; }
     let variant_index: i64 = lctx_find_variant_tag(ctx, enum_name, variant_name);
     let variants: Vec<Vec<i64>> = ctx.enum_variant_payload_tys[eidx];
-    if variant_index < 0 || variant_index >= variants.len() { return -1; }
+    if variant_index < 0 || variant_index >= variants.len() as i64 { return -1; }
     let payload: Vec<i64> = variants[variant_index];
-    if payload_index < 0 || payload_index >= payload.len() { return -1; }
+    if payload_index < 0 || payload_index >= payload.len() as i64 { return -1; }
     payload[payload_index]
 }
 
@@ -1047,12 +1047,12 @@ fn lctx_variant_payload_ast_tid(
     ctx: LowerCtx, enum_name: String, variant_name: String, payload_index: i64
 ) -> i64 {
     let eidx: i64 = lctx_find_enum(ctx, enum_name);
-    if eidx == -1 || eidx >= ctx.enum_variant_payload_ast_tids.len() { return -1; }
+    if eidx == -1 || eidx >= ctx.enum_variant_payload_ast_tids.len() as i64 { return -1; }
     let variant_index: i64 = lctx_find_variant_tag(ctx, enum_name, variant_name);
     let variants: Vec<Vec<i64>> = ctx.enum_variant_payload_ast_tids[eidx];
-    if variant_index < 0 || variant_index >= variants.len() { return -1; }
+    if variant_index < 0 || variant_index >= variants.len() as i64 { return -1; }
     let payload: Vec<i64> = variants[variant_index];
-    if payload_index < 0 || payload_index >= payload.len() { return -1; }
+    if payload_index < 0 || payload_index >= payload.len() as i64 { return -1; }
     payload[payload_index]
 }
 
@@ -1068,11 +1068,11 @@ fn lctx_struct_field_index(ctx: LowerCtx, struct_name: String, field_name: Strin
         return -1;
     }
     let fields: Vec<String> = ctx.struct_field_lists[sidx];
-    let n: i64 = fields.len();
-    let mut i: i64 = 0;
+    let n: u64 = fields.len() as u64;
+    let mut i: u64 = 0;
     while i < n {
         if fields[i] == field_name {
-            return i;
+            return i as i64;
         }
         i = i + 1;
     }
@@ -1092,7 +1092,7 @@ fn lctx_struct_field_type(ctx: LowerCtx, struct_name: String, field_idx: i64) ->
     let sidx: i64 = lctx_find_struct(ctx, struct_name);
     if sidx == -1 { return String::from(""); }
     let type_names: Vec<String> = ctx.struct_field_type_names[sidx];
-    if field_idx < type_names.len() {
+    if field_idx < type_names.len() as i64 {
         return type_names[field_idx];
     }
     String::from("")
@@ -1103,7 +1103,7 @@ fn lctx_struct_field_ast_tid(ctx: LowerCtx, struct_name: String, field_idx: i64)
     let sidx: i64 = lctx_find_struct(ctx, struct_name);
     if sidx == -1 { return -1; }
     let type_tids: Vec<i64> = ctx.struct_field_ast_tids[sidx];
-    if field_idx < type_tids.len() { return type_tids[field_idx]; }
+    if field_idx < type_tids.len() as i64 { return type_tids[field_idx]; }
     -1
 }
 
@@ -1112,14 +1112,14 @@ fn lctx_struct_field_vec_elem(ctx: LowerCtx, struct_name: String, field_idx: i64
     let sidx: i64 = lctx_find_struct(ctx, struct_name);
     if sidx == -1 { return String::from(""); }
     let vec_elems: Vec<String> = ctx.struct_field_vec_elems[sidx];
-    if field_idx < vec_elems.len() {
+    if field_idx < vec_elems.len() as i64 {
         return vec_elems[field_idx];
     }
     String::from("")
 }
 
 fn lctx_alloc_vow(ctx: LowerCtx, desc: String, blame: i64, binding_ids: Vec<i64>, binding_names: Vec<String>, offset: i64) -> i64 {
-    let vid: i64 = ctx.func.vows.len();
+    let vid: i64 = ctx.func.vows.len() as i64;
     let entry: IrVowEntry = IrVowEntry {
         id: vid,
         description: desc,
@@ -1138,9 +1138,9 @@ fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
 }
 
 fn lower_find_type_alias(alias_names: Vec<String>, name: String) -> i64 {
-    let mut i: i64 = 0;
-    while i < alias_names.len() {
-        if alias_names[i] == name { return i; }
+    let mut i: u64 = 0;
+    while i < alias_names.len() as u64 {
+        if alias_names[i] == name { return i as i64; }
         i = i + 1;
     }
     -1
@@ -1164,14 +1164,14 @@ fn lower_resolve_alias_index(a: AstArena, alias_names: Vec<String>, alias_target
 
 fn lower_resolve_type_aliases(a: AstArena, alias_names: Vec<String>, alias_target_tids: Vec<i64>) {
     let states: Vec<i64> = Vec::new();
-    let mut si: i64 = 0;
-    while si < alias_names.len() {
+    let mut si: u64 = 0;
+    while si < alias_names.len() as u64 {
         states.push(0);
         si = si + 1;
     }
-    let mut i: i64 = 0;
-    while i < alias_names.len() {
-        lower_resolve_alias_index(a, alias_names, alias_target_tids, states, i);
+    let mut i: u64 = 0;
+    while i < alias_names.len() as u64 {
+        lower_resolve_alias_index(a, alias_names, alias_target_tids, states, i as i64);
         i = i + 1;
     }
 }
@@ -1460,8 +1460,8 @@ fn debug_builtin_to_extern(name: String) -> String {
 }
 
 fn lower_str_ends_with(value: String, suffix: String) -> bool {
-    let value_len: i64 = value.len();
-    let suffix_len: i64 = suffix.len();
+    let value_len: i64 = value.len() as i64;
+    let suffix_len: i64 = suffix.len() as i64;
     if value_len < suffix_len { return false; }
     let mut i: i64 = 0;
     while i < suffix_len {
@@ -2007,8 +2007,8 @@ fn collect_assigned_in_block(ctx: LowerCtx, bid: i64, out: Vec<String>) {
 }
 
 fn vec_contains_str(v: Vec<String>, s: String) -> bool {
-    let n: i64 = v.len();
-    let mut i: i64 = 0;
+    let n: u64 = v.len() as u64;
+    let mut i: u64 = 0;
     while i < n {
         if v[i] == s {
             return true;
@@ -2121,7 +2121,7 @@ fn wide_context_contains_control_flow(a: AstArena, eid: i64) -> bool {
 
 fn lctx_record_wide_marker_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) {
     if eid == -1 || (ty != ITY_U64() && ty != ITY_I128() && ty != ITY_U128()) { return; }
-    while ctx.wide_context_tys.len() <= eid {
+    while (ctx.wide_context_tys.len() as i64) <= eid {
         ctx.wide_context_tys.push(-1);
     }
     ctx.wide_context_tys[eid] = ty;
@@ -2161,8 +2161,8 @@ fn lctx_record_wide_marker_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64
     }
     if tag == EXPR_LOOP() {
         let values: Vec<i64> = loop_break_value_eids(a, expr_a(a, eid));
-        let mut i: i64 = 0;
-        while i < values.len() {
+        let mut i: u64 = 0;
+        while i < values.len() as u64 {
             lctx_record_wide_marker_context(ctx, a, values[i], ty);
             i = i + 1;
         }
@@ -2216,8 +2216,8 @@ fn lctx_record_wide_expected_ast_context(ctx: LowerCtx, a: AstArena, eid: i64, e
         }
         if expr_kind == EXPR_LOOP() {
             let values: Vec<i64> = loop_break_value_eids(a, expr_a(a, eid));
-            let mut i: i64 = 0;
-            while i < values.len() {
+            let mut i: u64 = 0;
+            while i < values.len() as u64 {
                 lctx_record_wide_expected_ast_context(ctx, a, values[i], resolved_tid);
                 i = i + 1;
             }
@@ -2263,7 +2263,7 @@ fn lctx_record_wide_expected_ast_context(ctx: LowerCtx, a: AstArena, eid: i64, e
 }
 
 fn lctx_wide_context_ty(ctx: LowerCtx, eid: i64) -> i64 {
-    if eid < 0 || eid >= ctx.wide_context_tys.len() { return -1; }
+    if eid < 0 || eid >= ctx.wide_context_tys.len() as i64 { return -1; }
     ctx.wide_context_tys[eid]
 }
 
@@ -2291,8 +2291,8 @@ fn choose_match_result_ty(result_tys: Vec<i64>, result_markers: Vec<bool>) -> i6
     if result_tys.len() == 0 {
         return ITY_I64();
     }
-    let mut linear_i: i64 = 0;
-    while linear_i < result_tys.len() {
+    let mut linear_i: u64 = 0;
+    while linear_i < result_tys.len() as u64 {
         if result_tys[linear_i] == ITY_LPTR() {
             // Empty Option/Result variants have no payload from which lowering
             // can infer ownership. Preserve the linear sibling's checked
@@ -2303,8 +2303,8 @@ fn choose_match_result_ty(result_tys: Vec<i64>, result_markers: Vec<bool>) -> i6
     }
     let mut result_ty: i64 = result_tys[0];
     let mut result_is_marker: bool = result_markers[0];
-    let mut i: i64 = 1;
-    while i < result_tys.len() {
+    let mut i: u64 = 1;
+    while i < result_tys.len() as u64 {
         let arm_ty: i64 = result_tys[i];
         let arm_is_marker: bool = result_markers[i];
         if result_is_marker && ir_ty_is_integer(arm_ty) {
@@ -2442,8 +2442,8 @@ fn lower_narrow_literal(ctx: LowerCtx, a: AstArena, eid: i64, original: i64, ty:
 
 fn backpatch_upsilon(ctx: LowerCtx, block_id: i64, upsilon_id: i64, phi_id: i64) {
     let blk: IrBlock = ctx.func.blocks[block_id];
-    let n: i64 = blk.insts.len();
-    let mut i: i64 = 0;
+    let n: u64 = blk.insts.len() as u64;
+    let mut i: u64 = 0;
     while i < n {
         let inst: IrInst = blk.insts[i];
         if inst.id == upsilon_id {
@@ -2465,8 +2465,8 @@ fn collect_if_mutations(ctx: LowerCtx, then_bid: i64, else_eid: i64) -> Vec<Stri
         collect_assigned_in_expr(ctx, else_eid, result);
     }
     let filtered: Vec<String> = Vec::new();
-    let n: i64 = result.len();
-    let mut i: i64 = 0;
+    let n: u64 = result.len() as u64;
+    let mut i: u64 = 0;
     while i < n {
         let name: String = result[i];
         let val: i64 = lctx_lookup(ctx, name);
@@ -2527,8 +2527,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
     if tag == EXPR_IDENT() {
         let name_sid: i64 = expr_a(a, eid);
         let name: String = arena_str(a, name_sid);
-        let ncnst: i64 = ctx.const_names.len();
-        let mut ci: i64 = 0;
+        let ncnst: u64 = ctx.const_names.len() as u64;
+        let mut ci: u64 = 0;
         while ci < ncnst {
             let cn: String = ctx.const_names[ci];
             if cn.eq(name) {
@@ -2795,7 +2795,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let pos_id: i64 = lower_consumed_expr(ctx, pos_eid);
                     let sid: i64 = expr_a(a, literal_eid);
                     let lit: String = arena_str(a, sid);
-                    let lit_len: i64 = lit.len();
+                    let lit_len: i64 = lit.len() as i64;
                     let pool_idx: i64 = lctx_intern_str(ctx, lit);
                     let no_args: Vec<i64> = Vec::new();
                     let literal_ptr: i64 = lctx_emit(ctx, IOP_CONST_STR(), ITY_PTR(), no_args, IDATA_CONST_STR(), pool_idx, 0, String::from(""));
@@ -2849,7 +2849,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let nargs: i64 = list_len(a, args_lid);
             let param_tys: Vec<i64> = ctx.func_param_tys[fidx];
             let param_ast_tids: Vec<i64> = ctx.func_param_ast_tids[fidx];
-            let n_param_tys: i64 = param_tys.len();
+            let n_param_tys: i64 = param_tys.len() as i64;
             let mut ai: i64 = 0;
             while ai < nargs {
                 let arg_eid: i64 = list_get(a, args_lid, ai);
@@ -2891,9 +2891,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         let mutations: Vec<String> = collect_if_mutations(ctx, then_bid, else_eid);
 
-        let nmut: i64 = mutations.len();
+        let nmut: u64 = mutations.len() as u64;
         let saved_mut_vals: Vec<i64> = Vec::new();
-        let mut smi: i64 = 0;
+        let mut smi: u64 = 0;
         while smi < nmut {
             saved_mut_vals.push(lctx_lookup(ctx, mutations[smi]));
             smi = smi + 1;
@@ -2918,13 +2918,13 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         // Collect mutation values before restoring the pre-if scope.
         let then_mut_vals: Vec<i64> = Vec::new();
-        let mut tmi: i64 = 0;
+        let mut tmi: u64 = 0;
         while tmi < nmut {
             then_mut_vals.push(lctx_lookup(ctx, mutations[tmi]));
             tmi = tmi + 1;
         }
         let mut_up_then: Vec<i64> = Vec::new();
-        let mut mi: i64 = 0;
+        let mut mi: u64 = 0;
         while mi < nmut {
             let up_args: Vec<i64> = Vec::new();
             up_args.push(then_mut_vals[mi]);
@@ -2945,7 +2945,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         lctx_restore(ctx, snap);
-        let mut rmi: i64 = 0;
+        let mut rmi: u64 = 0;
         while rmi < nmut {
             lctx_assign(ctx, mutations[rmi], saved_mut_vals[rmi]);
             rmi = rmi + 1;
@@ -2965,13 +2965,13 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         // Collect mutation values before restoring the pre-if scope.
         let else_mut_vals: Vec<i64> = Vec::new();
-        let mut emi: i64 = 0;
+        let mut emi: u64 = 0;
         while emi < nmut {
             else_mut_vals.push(lctx_lookup(ctx, mutations[emi]));
             emi = emi + 1;
         }
         let mut_up_else: Vec<i64> = Vec::new();
-        let mut mi2: i64 = 0;
+        let mut mi2: u64 = 0;
         while mi2 < nmut {
             let up_args: Vec<i64> = Vec::new();
             up_args.push(else_mut_vals[mi2]);
@@ -2992,14 +2992,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         lctx_restore(ctx, snap);
-        let mut rmi2: i64 = 0;
+        let mut rmi2: u64 = 0;
         while rmi2 < nmut {
             lctx_assign(ctx, mutations[rmi2], saved_mut_vals[rmi2]);
             rmi2 = rmi2 + 1;
         }
         lctx_switch_to_block(ctx, merge_block);
 
-        let mut mi3: i64 = 0;
+        let mut mi3: u64 = 0;
         while mi3 < nmut {
             let mname: String = mutations[mi3];
             let mphi_ty: i64 = merge_phi_ty(
@@ -3055,12 +3055,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let body_block: i64 = lctx_new_block(ctx);
         let exit_block: i64 = lctx_new_block(ctx);
 
-        let nassigned: i64 = assigned.len();
+        let nassigned: u64 = assigned.len() as u64;
         let phi_ids: Vec<i64> = Vec::new();
         let pre_up_ids: Vec<i64> = Vec::new();
         let pre_header_block: i64 = ctx.current_block;
 
-        let mut ai: i64 = 0;
+        let mut ai: u64 = 0;
         while ai < nassigned {
             let vname: String = assigned[ai];
             let cur_val: i64 = lctx_lookup(ctx, vname);
@@ -3078,7 +3078,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         lctx_switch_to_block(ctx, header_block);
 
-        let mut ai2: i64 = 0;
+        let mut ai2: u64 = 0;
         while ai2 < nassigned {
             let vname: String = assigned[ai2];
             let cur_val: i64 = lctx_lookup(ctx, vname);
@@ -3102,7 +3102,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let exit_phi_ids: Vec<i64> = Vec::new();
         let exit_phi_names: Vec<String> = Vec::new();
         lctx_switch_to_block(ctx, exit_block);
-        let mut epi: i64 = 0;
+        let mut epi: u64 = 0;
         while epi < nassigned {
             let ep_args: Vec<i64> = Vec::new();
             let ep_ty: i64 = lctx_inst_ty(ctx, phi_ids[epi]);
@@ -3115,7 +3115,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         lctx_switch_to_block(ctx, cond_block);
 
         // Upsilons for natural exit (condition false): header Phi values → exit Phis.
-        let mut eui: i64 = 0;
+        let mut eui: u64 = 0;
         while eui < nassigned {
             let up_args: Vec<i64> = Vec::new();
             up_args.push(phi_ids[eui]);
@@ -3129,7 +3129,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         br_args.push(cond_id);
         lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), body_block, exit_block, String::from(""));
 
-        let mut bpi: i64 = 0;
+        let mut bpi: u64 = 0;
         while bpi < nassigned {
             backpatch_upsilon(ctx, pre_header_block, pre_up_ids[bpi], phi_ids[bpi]);
             bpi = bpi + 1;
@@ -3140,7 +3140,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_header_blocks.push(header_block);
         let cpn: Vec<String> = Vec::new();
         let cpi: Vec<i64> = Vec::new();
-        let mut ci: i64 = 0;
+        let mut ci: u64 = 0;
         while ci < nassigned {
             cpn.push(assigned[ci]);
             cpi.push(phi_ids[ci]);
@@ -3151,12 +3151,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_exit_phi_names.push(exit_phi_names);
         ctx.loop_exit_phi_ids.push(exit_phi_ids);
         ctx.loop_continue_idx_phi.push(-1);
-        ctx.loop_continue_scope_depth.push(ctx.scope_vars.len());
+        ctx.loop_continue_scope_depth.push(ctx.scope_vars.len() as u64);
         ctx.loop_is_loop.push(0);
         ctx.loop_break_counts.push(0);
         lower_block(ctx, body_bid);
         // Save exit phi info before popping.
-        let epn_idx: i64 = ctx.loop_exit_phi_names.len() - 1;
+        let epn_idx: i64 = (ctx.loop_exit_phi_names.len() as i64) - 1;
         let w_exit_phi_names: Vec<String> = ctx.loop_exit_phi_names[epn_idx];
         let w_exit_phi_ids: Vec<i64> = ctx.loop_exit_phi_ids[epn_idx];
         ctx.loop_break_counts.pop();
@@ -3171,7 +3171,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_exit_blocks.pop();
 
         if !lctx_is_terminated(ctx) {
-            let mut ai3: i64 = 0;
+            let mut ai3: u64 = 0;
             while ai3 < nassigned {
                 let vname: String = assigned[ai3];
                 let new_val: i64 = lctx_lookup(ctx, vname);
@@ -3190,8 +3190,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         // Bind names to exit-block Phis so post-loop code reads correct values.
-        let w_nexit: i64 = w_exit_phi_names.len();
-        let mut ai4: i64 = 0;
+        let w_nexit: u64 = w_exit_phi_names.len() as u64;
+        let mut ai4: u64 = 0;
         while ai4 < w_nexit {
             let vname: String = w_exit_phi_names[ai4];
             lctx_assign(ctx, vname, w_exit_phi_ids[ai4]);
@@ -3213,12 +3213,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let header_block: i64 = lctx_new_block(ctx);
         let exit_block: i64 = lctx_new_block(ctx);
 
-        let nassigned: i64 = assigned.len();
+        let nassigned: u64 = assigned.len() as u64;
         let phi_ids: Vec<i64> = Vec::new();
         let pre_up_ids: Vec<i64> = Vec::new();
         let pre_header_block: i64 = ctx.current_block;
 
-        let mut ai: i64 = 0;
+        let mut ai: u64 = 0;
         while ai < nassigned {
             let vname: String = assigned[ai];
             let cur_val: i64 = lctx_lookup(ctx, vname);
@@ -3236,7 +3236,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         lctx_switch_to_block(ctx, header_block);
 
-        let mut ai2: i64 = 0;
+        let mut ai2: u64 = 0;
         while ai2 < nassigned {
             let vname: String = assigned[ai2];
             let cur_val: i64 = lctx_lookup(ctx, vname);
@@ -3253,7 +3253,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             lower_invariant_clauses(ctx, vow_lid);
         }
 
-        let mut bpi: i64 = 0;
+        let mut bpi: u64 = 0;
         while bpi < nassigned {
             backpatch_upsilon(ctx, pre_header_block, pre_up_ids[bpi], phi_ids[bpi]);
             bpi = bpi + 1;
@@ -3263,7 +3263,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let l_exit_phi_ids: Vec<i64> = Vec::new();
         let l_exit_phi_names: Vec<String> = Vec::new();
         lctx_switch_to_block(ctx, exit_block);
-        let mut lepi: i64 = 0;
+        let mut lepi: u64 = 0;
         while lepi < nassigned {
             let lep_args: Vec<i64> = Vec::new();
             let lep_ty: i64 = lctx_inst_ty(ctx, phi_ids[lepi]);
@@ -3279,7 +3279,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_header_blocks.push(header_block);
         let lcpn: Vec<String> = Vec::new();
         let lcpi: Vec<i64> = Vec::new();
-        let mut lci: i64 = 0;
+        let mut lci: u64 = 0;
         while lci < nassigned {
             lcpn.push(assigned[lci]);
             lcpi.push(phi_ids[lci]);
@@ -3290,15 +3290,15 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_exit_phi_names.push(l_exit_phi_names);
         ctx.loop_exit_phi_ids.push(l_exit_phi_ids);
         ctx.loop_continue_idx_phi.push(-1);
-        ctx.loop_continue_scope_depth.push(ctx.scope_vars.len());
+        ctx.loop_continue_scope_depth.push(ctx.scope_vars.len() as u64);
         ctx.loop_is_loop.push(1);
         ctx.loop_break_counts.push(0);
-        let break_start: i64 = ctx.loop_break_up_ids.len();
+        let break_start: i64 = ctx.loop_break_up_ids.len() as i64;
         lower_block(ctx, body_bid);
-        let break_count_idx: i64 = ctx.loop_break_counts.len() - 1;
+        let break_count_idx: i64 = (ctx.loop_break_counts.len() as i64) - 1;
         let break_count: i64 = ctx.loop_break_counts[break_count_idx];
         // Save exit phi info before popping.
-        let lepn_idx: i64 = ctx.loop_exit_phi_names.len() - 1;
+        let lepn_idx: i64 = (ctx.loop_exit_phi_names.len() as i64) - 1;
         let l_saved_exit_names: Vec<String> = ctx.loop_exit_phi_names[lepn_idx];
         let l_saved_exit_ids: Vec<i64> = ctx.loop_exit_phi_ids[lepn_idx];
         ctx.loop_break_counts.pop();
@@ -3313,7 +3313,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_exit_blocks.pop();
 
         if !lctx_is_terminated(ctx) {
-            let mut ai3: i64 = 0;
+            let mut ai3: u64 = 0;
             while ai3 < nassigned {
                 let vname: String = assigned[ai3];
                 let new_val: i64 = lctx_lookup(ctx, vname);
@@ -3332,8 +3332,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         // Bind names to exit-block Phis so post-loop code reads correct values.
-        let l_nexit: i64 = l_saved_exit_names.len();
-        let mut ai4: i64 = 0;
+        let l_nexit: u64 = l_saved_exit_names.len() as u64;
+        let mut ai4: u64 = 0;
         while ai4 < l_nexit {
             let vname: String = l_saved_exit_names[ai4];
             lctx_assign(ctx, vname, l_saved_exit_ids[ai4]);
@@ -3390,7 +3390,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let body_block: i64 = lctx_new_block(ctx);
         let exit_block: i64 = lctx_new_block(ctx);
 
-        let nassigned: i64 = assigned.len();
+        let nassigned: u64 = assigned.len() as u64;
         let phi_ids: Vec<i64> = Vec::new();
         let pre_up_ids: Vec<i64> = Vec::new();
         let pre_header_block: i64 = ctx.current_block;
@@ -3400,7 +3400,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let idx_up: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), idx_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
         lctx_set_inst_span(ctx, idx_up, expr_span(a, eid));
 
-        let mut ai: i64 = 0;
+        let mut ai: u64 = 0;
         while ai < nassigned {
             let vname: String = assigned[ai];
             let cur_val: i64 = lctx_lookup(ctx, vname);
@@ -3421,7 +3421,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let idx_phi: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), idx_phi_args, IDATA_NONE(), 0, 0, String::from(""));
         lctx_set_inst_span(ctx, idx_phi, expr_span(a, eid));
 
-        let mut ai2: i64 = 0;
+        let mut ai2: u64 = 0;
         while ai2 < nassigned {
             let vname: String = assigned[ai2];
             let cur_val: i64 = lctx_lookup(ctx, vname);
@@ -3447,7 +3447,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let f_exit_phi_ids: Vec<i64> = Vec::new();
         let f_exit_phi_names: Vec<String> = Vec::new();
         lctx_switch_to_block(ctx, exit_block);
-        let mut fepi: i64 = 0;
+        let mut fepi: u64 = 0;
         while fepi < nassigned {
             let fep_args: Vec<i64> = Vec::new();
             let fep_ty: i64 = lctx_inst_ty(ctx, phi_ids[fepi]);
@@ -3460,7 +3460,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         lctx_switch_to_block(ctx, header_block);
 
         // Upsilons for natural exit (condition false): header Phi values → exit Phis.
-        let mut feui: i64 = 0;
+        let mut feui: u64 = 0;
         while feui < nassigned {
             let up_args: Vec<i64> = Vec::new();
             up_args.push(phi_ids[feui]);
@@ -3475,7 +3475,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), body_block, exit_block, String::from(""));
 
         backpatch_upsilon(ctx, pre_header_block, idx_up, idx_phi);
-        let mut bpi: i64 = 0;
+        let mut bpi: u64 = 0;
         while bpi < nassigned {
             backpatch_upsilon(ctx, pre_header_block, pre_up_ids[bpi], phi_ids[bpi]);
             bpi = bpi + 1;
@@ -3488,7 +3488,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let elem_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), get_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"));
         lctx_project_vec_index_metadata(ctx, iter_id, elem_id);
 
-        let for_scope_depth: i64 = ctx.scope_vars.len();
+        let for_scope_depth: u64 = ctx.scope_vars.len() as u64;
         lctx_push_scope(ctx);
         lctx_define(ctx, binding_name, elem_id);
 
@@ -3496,7 +3496,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_header_blocks.push(header_block);
         let fcpn: Vec<String> = Vec::new();
         let fcpi: Vec<i64> = Vec::new();
-        let mut fci: i64 = 0;
+        let mut fci: u64 = 0;
         while fci < nassigned {
             fcpn.push(assigned[fci]);
             fcpi.push(phi_ids[fci]);
@@ -3512,7 +3512,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_break_counts.push(0);
         lower_block(ctx, body_bid);
         // Save exit phi info before popping.
-        let fepn_idx: i64 = ctx.loop_exit_phi_names.len() - 1;
+        let fepn_idx: i64 = (ctx.loop_exit_phi_names.len() as i64) - 1;
         let f_saved_exit_names: Vec<String> = ctx.loop_exit_phi_names[fepn_idx];
         let f_saved_exit_ids: Vec<i64> = ctx.loop_exit_phi_ids[fepn_idx];
         ctx.loop_break_counts.pop();
@@ -3540,7 +3540,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let idx_back_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), idx_up_back_args, IDATA_PHI_TARGET(), idx_phi, 0, String::from(""));
             lctx_set_inst_span(ctx, idx_back_up_id, expr_span(a, eid));
 
-            let mut ai3: i64 = 0;
+            let mut ai3: u64 = 0;
             while ai3 < nassigned {
                 let vname: String = assigned[ai3];
                 let new_val: i64 = lctx_lookup(ctx, vname);
@@ -3559,8 +3559,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         // Bind names to exit-block Phis so post-loop code reads correct values.
-        let f_nexit: i64 = f_saved_exit_names.len();
-        let mut ai4: i64 = 0;
+        let f_nexit: u64 = f_saved_exit_names.len() as u64;
+        let mut ai4: u64 = 0;
         while ai4 < f_nexit {
             let vname: String = f_saved_exit_names[ai4];
             lctx_assign(ctx, vname, f_saved_exit_ids[ai4]);
@@ -3745,7 +3745,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 Vec::new()
             }
         };
-        let n_fields: i64 = field_names.len();
+        let n_fields: i64 = field_names.len() as i64;
         let nlit: i64 = list_len(a, fields_lid) / 2;
         let actual_n: i64 = {
             if n_fields > nlit { n_fields } else { nlit }
@@ -3961,7 +3961,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let contextual_variants: Vec<i64> = Vec::new();
                     contextual_variants.push(-1);
                     contextual_variants.push(-1);
-                    if tag_val >= 0 && tag_val < contextual_variants.len() {
+                    if tag_val >= 0 && tag_val < contextual_variants.len() as i64 {
                         contextual_variants[tag_val] = contextual_payload_ty;
                     }
                     lctx_tag_variant_payloads(ctx, ptr_id, contextual_variants);
@@ -4235,17 +4235,17 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             cmi = cmi + 1;
         }
         let match_muts: Vec<String> = Vec::new();
-        let mut cmj: i64 = 0;
-        while cmj < match_mut_names.len() {
+        let mut cmj: u64 = 0;
+        while cmj < match_mut_names.len() as u64 {
             let mname: String = match_mut_names[cmj];
             if lctx_lookup(ctx, mname) != -1 {
                 match_muts.push(mname);
             }
             cmj = cmj + 1;
         }
-        let nmut: i64 = match_muts.len();
+        let nmut: u64 = match_muts.len() as u64;
         let saved_mut_vals: Vec<i64> = Vec::new();
-        let mut smi: i64 = 0;
+        let mut smi: u64 = 0;
         while smi < nmut {
             saved_mut_vals.push(lctx_lookup(ctx, match_muts[smi]));
             smi = smi + 1;
@@ -4313,7 +4313,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
                 let variant_payloads: Vec<i64> = lctx_get_variant_payloads(ctx, ptr_id);
                 let payload_ty: i64 = {
-                    if expected_tag >= 0 && expected_tag < variant_payloads.len() && variant_payloads[expected_tag] != -1 {
+                    if expected_tag >= 0 && expected_tag < variant_payloads.len() as i64 && variant_payloads[expected_tag] != -1 {
                         variant_payloads[expected_tag]
                     } else {
                         lctx_get_option_elem_ty(ctx, ptr_id)
@@ -4362,12 +4362,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
                     // Collect mutation values before restoring the pre-match scope.
                     let arm_mut_vals: Vec<i64> = Vec::new();
-                    let mut ami: i64 = 0;
+                    let mut ami: u64 = 0;
                     while ami < nmut {
                         arm_mut_vals.push(lctx_lookup(ctx, match_muts[ami]));
                         ami = ami + 1;
                     }
-                    let mut mci: i64 = 0;
+                    let mut mci: u64 = 0;
                     while mci < nmut {
                         let mu_args: Vec<i64> = Vec::new();
                         mu_args.push(arm_mut_vals[mci]);
@@ -4394,7 +4394,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 }
 
                 lctx_restore(ctx, snap);
-                let mut rmi: i64 = 0;
+                let mut rmi: u64 = 0;
                 while rmi < nmut {
                     lctx_assign(ctx, match_muts[rmi], saved_mut_vals[rmi]);
                     rmi = rmi + 1;
@@ -4422,12 +4422,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
                     // Collect mutation values before restoring the pre-match scope.
                     let arm_mut_vals2: Vec<i64> = Vec::new();
-                    let mut ami2: i64 = 0;
+                    let mut ami2: u64 = 0;
                     while ami2 < nmut {
                         arm_mut_vals2.push(lctx_lookup(ctx, match_muts[ami2]));
                         ami2 = ami2 + 1;
                     }
-                    let mut mci2: i64 = 0;
+                    let mut mci2: u64 = 0;
                     while mci2 < nmut {
                         let mu2_args: Vec<i64> = Vec::new();
                         mu2_args.push(arm_mut_vals2[mci2]);
@@ -4454,7 +4454,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 }
 
                 lctx_restore(ctx, snap);
-                let mut rmi2: i64 = 0;
+                let mut rmi2: u64 = 0;
                 while rmi2 < nmut {
                     lctx_assign(ctx, match_muts[rmi2], saved_mut_vals[rmi2]);
                     rmi2 = rmi2 + 1;
@@ -4464,7 +4464,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let u_args: Vec<i64> = Vec::new();
                 let unit_id: i64 = lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""));
 
-                let mut mci3: i64 = 0;
+                let mut mci3: u64 = 0;
                 while mci3 < nmut {
                     let mu3_args: Vec<i64> = Vec::new();
                     mu3_args.push(saved_mut_vals[mci3]);
@@ -4494,24 +4494,24 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
         lctx_switch_to_block(ctx, merge_block);
 
-        let n_merge_arms: i64 = arm_exit_blocks.len();
+        let n_merge_arms: u64 = arm_exit_blocks.len() as u64;
         if n_merge_arms == 0 {
             let u_args: Vec<i64> = Vec::new();
             return lctx_emit(ctx, IOP_UNREACHABLE(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""));
         }
 
-        let mut mpi: i64 = 0;
+        let mut mpi: u64 = 0;
         while mpi < nmut {
             let mphi_args: Vec<i64> = Vec::new();
             let mut mphi_ty: i64 = lctx_inst_ty(ctx, arm_mut_inputs[mpi]);
-            let mut mti: i64 = 1;
+            let mut mti: u64 = 1;
             while mti < n_merge_arms {
                 mphi_ty = merge_phi_ty(mphi_ty, lctx_inst_ty(ctx, arm_mut_inputs[mti * nmut + mpi]));
                 mti = mti + 1;
             }
             let mphi_id: i64 = lctx_emit(ctx, IOP_PHI(), mphi_ty, mphi_args, IDATA_NONE(), 0, 0, String::from(""));
             lctx_set_inst_span(ctx, mphi_id, expr_span(a, eid));
-            let mut bpi: i64 = 0;
+            let mut bpi: u64 = 0;
             while bpi < n_merge_arms {
                 backpatch_upsilon(ctx, arm_exit_blocks[bpi], arm_mut_ups[bpi * nmut + mpi], mphi_id);
                 bpi = bpi + 1;
@@ -4531,13 +4531,13 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         // `None => -1`) merging with a genuinely narrow-typed arm (e.g.
         // `Some(v) => v`) produces a width-mismatched Cranelift Phi.
         if narrow_int_width(result_ty) != 0 {
-            let mut fi: i64 = 0;
+            let mut fi: u64 = 0;
             while fi < n_merge_arms {
                 if reachable_result_markers[fi] && reachable_result_tys[fi] != result_ty {
                     let arm_block: i64 = arm_exit_blocks[fi];
                     let up_id: i64 = arm_up_ids[fi];
                     let blk: IrBlock = ctx.func.blocks[arm_block];
-                    let n_insts: i64 = blk.insts.len();
+                    let n_insts: i64 = blk.insts.len() as i64;
                     // Locate the arm's own result Upsilon by id rather than assuming
                     // block position: the "Phis for mutated variables" pass above may
                     // have already appended extra Upsilons after this arm's own
@@ -4574,8 +4574,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         let new_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), new_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
                         lctx_set_inst_span(ctx, new_up_id, expr_span(a, eid));
                         let blk2: IrBlock = ctx.func.blocks[arm_block];
-                        let mut tj: i64 = 0;
-                        while tj < tail.len() {
+                        let mut tj: u64 = 0;
+                        while tj < tail.len() as u64 {
                             blk2.insts.push(tail[tj]);
                             tj = tj + 1;
                         }
@@ -4591,8 +4591,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         lctx_set_inst_span(ctx, phi_id, expr_span(a, eid));
         lctx_merge_compatible_aggregate_metadata(ctx, arm_result_values, phi_id);
 
-        let n_results: i64 = arm_up_ids.len();
-        let mut ri: i64 = 0;
+        let n_results: u64 = arm_up_ids.len() as u64;
+        let mut ri: u64 = 0;
         while ri < n_results {
             backpatch_upsilon(ctx, arm_exit_blocks[ri], arm_up_ids[ri], phi_id);
             ri = ri + 1;
@@ -4662,13 +4662,13 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
     }
 
     if tag == EXPR_BREAK() {
-        let nle: i64 = ctx.loop_exit_blocks.len();
+        let nle: u64 = ctx.loop_exit_blocks.len() as u64;
         if nle > 0 {
             let exit_block: i64 = ctx.loop_exit_blocks[nle - 1];
             let val_eid: i64 = expr_a(a, eid);
             if val_eid != -1 {
                 let val_id: i64 = lower_expr(ctx, val_eid);
-                let is_loop_idx: i64 = ctx.loop_is_loop.len() - 1;
+                let is_loop_idx: i64 = (ctx.loop_is_loop.len() as i64) - 1;
                 let is_loop: i64 = ctx.loop_is_loop[is_loop_idx];
                 if is_loop == 1 {
                     let val_ty: i64 = lctx_inst_ty(ctx, val_id);
@@ -4680,7 +4680,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     ctx.loop_break_up_ids.push(up_id);
                     ctx.loop_break_up_blocks.push(cur_block);
                     ctx.loop_break_up_tys.push(val_ty);
-                    let cnt_idx: i64 = ctx.loop_break_counts.len() - 1;
+                    let cnt_idx: i64 = (ctx.loop_break_counts.len() as i64) - 1;
                     let old_cnt: i64 = ctx.loop_break_counts[cnt_idx];
                     ctx.loop_break_counts[cnt_idx] = old_cnt + 1;
                 }
@@ -4688,14 +4688,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             // Emit Upsilons for exit-block Phis with current mutation values.
             // Use lookup_at_depth to resolve from the loop header scope,
             // not the current scope, to avoid picking up shadowed bindings.
-            let nep: i64 = ctx.loop_exit_phi_names.len();
-            let nlh2: i64 = ctx.loop_continue_scope_depth.len();
-            let brk_scope_depth: i64 = ctx.loop_continue_scope_depth[nlh2 - 1];
+            let nep: u64 = ctx.loop_exit_phi_names.len() as u64;
+            let nlh2: u64 = ctx.loop_continue_scope_depth.len() as u64;
+            let brk_scope_depth: u64 = ctx.loop_continue_scope_depth[nlh2 - 1];
             if nep > 0 {
                 let ep_names: Vec<String> = ctx.loop_exit_phi_names[nep - 1];
                 let ep_ids: Vec<i64> = ctx.loop_exit_phi_ids[nep - 1];
-                let nep2: i64 = ep_names.len();
-                let mut epi: i64 = 0;
+                let nep2: u64 = ep_names.len() as u64;
+                let mut epi: u64 = 0;
                 while epi < nep2 {
                     let vname: String = ep_names[epi];
                     let cur_val: i64 = lctx_lookup_at_depth(ctx, vname, brk_scope_depth);
@@ -4718,15 +4718,15 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
     }
 
     if tag == EXPR_CONTINUE() {
-        let nlh: i64 = ctx.loop_header_blocks.len();
+        let nlh: u64 = ctx.loop_header_blocks.len() as u64;
         if nlh > 0 {
             let hdr_block: i64 = ctx.loop_header_blocks[nlh - 1];
             let phi_names: Vec<String> = ctx.loop_continue_phi_names[nlh - 1];
             let phi_ids2: Vec<i64> = ctx.loop_continue_phi_ids[nlh - 1];
-            let scope_depth: i64 = ctx.loop_continue_scope_depth[nlh - 1];
-            let nphis: i64 = phi_names.len();
+            let scope_depth: u64 = ctx.loop_continue_scope_depth[nlh - 1];
+            let nphis: u64 = phi_names.len() as u64;
 
-            let mut pi: i64 = 0;
+            let mut pi: u64 = 0;
             while pi < nphis {
                 let vname: String = phi_names[pi];
                 let cur_val: i64 = lctx_lookup_at_depth(ctx, vname, scope_depth);
@@ -5136,8 +5136,8 @@ fn print_type_text(a: AstArena, tid: i64) -> String {
 // Lit::String arm in vow-syntax/src/printer.rs.
 fn print_str_lit_text(raw: String) -> String {
     let result: String = String::from("\"");
-    let n: i64 = raw.len();
-    let mut i: i64 = 0;
+    let n: u64 = raw.len() as u64;
+    let mut i: u64 = 0;
     while i < n {
         let b: i64 = raw.byte_at(i);
         if b == 10 { result.push_str(String::from("\\n")); }
@@ -5615,8 +5615,8 @@ fn lower_module_vow(
     let enum_variant_payload_tys: Vec<Vec<Vec<i64>>> = Vec::new();
     let enum_variant_payload_ast_tids: Vec<Vec<Vec<i64>>> = Vec::new();
 
-    let n_items: i64 = m.items.len();
-    let mut alias_i: i64 = 0;
+    let n_items: u64 = m.items.len() as u64;
+    let mut alias_i: u64 = 0;
     while alias_i < n_items {
         let alias_item: i64 = m.items[alias_i];
         if item_kind(alias_item) == ITEM_TYPE_ALIAS() {
@@ -5628,7 +5628,7 @@ fn lower_module_vow(
     }
     lower_resolve_type_aliases(a, type_alias_names, type_alias_target_tids);
 
-    let mut lsi: i64 = 0;
+    let mut lsi: u64 = 0;
     while lsi < n_items {
         let item0: i64 = m.items[lsi];
         if item_kind(item0) == ITEM_STRUCT() {
@@ -5645,11 +5645,11 @@ fn lower_module_vow(
     // Close the set over enum payloads and type aliases. Each successful pass
     // adds at least one owner, so at most n_items passes are needed even for
     // forward alias chains.
-    let mut owner_pass: i64 = 0;
+    let mut owner_pass: u64 = 0;
     let mut owner_changed: bool = true;
     while owner_pass < n_items && owner_changed {
         owner_changed = false;
-        let mut oi: i64 = 0;
+        let mut oi: u64 = 0;
         while oi < n_items {
             let owner_item: i64 = m.items[oi];
             if item_kind(owner_item) == ITEM_ENUM() {
@@ -5693,7 +5693,7 @@ fn lower_module_vow(
         owner_pass = owner_pass + 1;
     }
 
-    let mut ii: i64 = 0;
+    let mut ii: u64 = 0;
     while ii < n_items {
         let item: i64 = m.items[ii];
         let ik: i64 = item_kind(item);
@@ -5869,7 +5869,7 @@ fn lower_module_vow(
     let cnames: Vec<String> = Vec::new();
     let cvals: Vec<i64> = Vec::new();
     let ctids: Vec<i64> = Vec::new();
-    let mut ci: i64 = 0;
+    let mut ci: u64 = 0;
     while ci < n_items {
         let item: i64 = m.items[ci];
         let ik: i64 = item_kind(item);
@@ -5946,7 +5946,7 @@ fn lower_module_vow(
     let all_strings: Vec<String> = Vec::new();
     let mut func_idx: i64 = 0;
 
-    let mut ii2: i64 = 0;
+    let mut ii2: u64 = 0;
     while ii2 < n_items {
         let item: i64 = m.items[ii2];
         let ik: i64 = item_kind(item);
@@ -5958,14 +5958,14 @@ fn lower_module_vow(
             let ir_func: IrFunction = lower_function_vow(ctx, iid);
             ir_func.id = func_idx;
 
-            let base: i64 = all_strings.len();
+            let base: i64 = all_strings.len() as i64;
             if base > 0 || ctx.string_pool.len() > 0 {
-                let nb: i64 = ir_func.blocks.len();
-                let mut bi: i64 = 0;
+                let nb: u64 = ir_func.blocks.len() as u64;
+                let mut bi: u64 = 0;
                 while bi < nb {
                     let blk: IrBlock = ir_func.blocks[bi];
-                    let ni: i64 = blk.insts.len();
-                    let mut ii3: i64 = 0;
+                    let ni: u64 = blk.insts.len() as u64;
+                    let mut ii3: u64 = 0;
                     while ii3 < ni {
                         let inst: IrInst = blk.insts[ii3];
                         if inst.dk == IDATA_CONST_STR() {
@@ -5977,8 +5977,8 @@ fn lower_module_vow(
                 }
             }
 
-            let npool: i64 = ctx.string_pool.len();
-            let mut si: i64 = 0;
+            let npool: u64 = ctx.string_pool.len() as u64;
+            let mut si: u64 = 0;
             while si < npool {
                 all_strings.push(ctx.string_pool[si]);
                 si = si + 1;
@@ -5992,8 +5992,8 @@ fn lower_module_vow(
     }
 
     ir_mod.strings = all_strings;
-    let nw: i64 = ctx.warnings.len();
-    let mut wi: i64 = 0;
+    let nw: u64 = ctx.warnings.len() as u64;
+    let mut wi: u64 = 0;
     while wi < nw {
         ir_mod.warnings.push(ctx.warnings[wi]);
         wi = wi + 1;
