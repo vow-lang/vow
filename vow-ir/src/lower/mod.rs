@@ -839,12 +839,13 @@ fn declared_wide_payload_ty(
         .filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
 }
 
-/// Wide `Result<T, E>` payload widths, indexed by variant tag (`Ok` = 0, `Err` = 1).
+/// `Result<T, E>` payload types that diverge from the speculative `i64`
+/// lowering width, indexed by variant tag (`Ok` = 0, `Err` = 1).
 ///
 /// `Result` is built in, so [`declared_wide_payload_ty`] finds nothing for it —
 /// its payload widths come from the instantiation rather than a declaration.
-/// Returns `None` when neither payload is 128-bit, so narrow `Result`s keep
-/// relying on the existing contextual-widening path.
+/// Returns `None` when neither payload diverges, so `i64`/`u64`-identical
+/// payloads keep relying on the existing contextual-widening path.
 fn result_wide_payload_tys(
     ast_ty: &AstType,
     type_aliases: &HashMap<String, AstType>,
@@ -861,7 +862,7 @@ fn result_wide_payload_tys(
         .take(2)
         .map(|arg| {
             let ty = lower_ty_with_linear(arg, &no_linear_owners, type_aliases);
-            matches!(ty, Ty::I128 | Ty::U128).then_some(ty)
+            diverges_from_speculative_int(ty).then_some(ty)
         })
         .collect();
     tys.iter().any(Option::is_some).then_some(tys)
@@ -4946,6 +4947,13 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
                             {
                                 ctx.inst_vec_elem_types.insert(val, vec![elem_name.clone()]);
                             }
+                            if let Some(elem_ty) = option_named_elem_type(ann, &ctx.type_aliases) {
+                                ctx.inst_option_elem_ty.insert(val, elem_ty);
+                            }
+                            if let Some(variant_tys) = result_wide_payload_tys(ann, &ctx.type_aliases)
+                            {
+                                ctx.inst_variant_payload_tys.insert(val, variant_tys);
+                            }
                         }
                         _ => {}
                     }
@@ -7281,6 +7289,68 @@ fn overflow() -> i8 {
             Ty::I8,
             "known_assignment_ast_type's unfiltered AST-type propagation must reach \
              a narrow field's RHS straight-line, with no control-flow involved:\n{func:#?}"
+        );
+    }
+
+    #[test]
+    fn let_annotated_option_local_tags_narrow_elem_ty_for_post_extraction_reads() {
+        let module = lower_source_to_module(
+            r#"
+module LetAnnotatedOptionLocalNarrowElem
+
+fn f() -> i8 {
+    let o: Option<i8> = Option::Some(127);
+    match o {
+        Option::Some(v) => v + 1,
+        Option::None => 0,
+    }
+}
+"#,
+            "let_annotated_option_local_narrow_elem.vow",
+        );
+
+        let func = &module.functions[0];
+        let add = insts_of(func)
+            .into_iter()
+            .find(|inst| inst.opcode == Opcode::WrappingAdd)
+            .expect("post-extraction add");
+        assert_eq!(
+            add.ty,
+            Ty::I8,
+            "inst_option_elem_ty must carry Ty::I8 for a locally-constructed, \
+             let-annotated Option so the post-extraction read computes at the \
+             declared width instead of the speculative i64:\n{func:#?}"
+        );
+    }
+
+    #[test]
+    fn let_annotated_result_local_tags_narrow_ok_ty_for_post_extraction_reads() {
+        let module = lower_source_to_module(
+            r#"
+module LetAnnotatedResultLocalNarrowOk
+
+fn f() -> i8 {
+    let r: Result<i8, ()> = Result::Ok(127);
+    match r {
+        Result::Ok(v) => v + 1,
+        Result::Err(_) => 0,
+    }
+}
+"#,
+            "let_annotated_result_local_narrow_ok.vow",
+        );
+
+        let func = &module.functions[0];
+        let add = insts_of(func)
+            .into_iter()
+            .find(|inst| inst.opcode == Opcode::WrappingAdd)
+            .expect("post-extraction add");
+        assert_eq!(
+            add.ty,
+            Ty::I8,
+            "inst_variant_payload_tys must carry Ty::I8 for the Ok variant of a \
+             locally-constructed, let-annotated Result so the post-extraction read \
+             computes at the declared width instead of the speculative i64:\n{func:#?}"
         );
     }
 

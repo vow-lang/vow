@@ -1,0 +1,12 @@
+// TEST: stdout "-128\n"
+module NarrowResultAnnotatedLocal
+
+fn main() -> i32 [io] {
+    let r: Result<i8, ()> = Result::Ok(127);
+    match r {
+        Result::Ok(v) => print_i64((v + 1) as i64),
+        Result::Err(_) => print_i64(0),
+    }
+    print_str(String::from("\n"));
+    0
+}

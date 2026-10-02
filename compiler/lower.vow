@@ -1314,12 +1314,15 @@ fn lower_ast_type_option_elem_ty(a: AstArena, tid: i64, alias_names: Vec<String>
     elem_ty
 }
 
-// Wide Result<T, E> payload widths, indexed by variant tag (Ok = 0, Err = 1).
+// Result<T, E> payload types that diverge from the speculative i64 lowering
+// width, indexed by variant tag (Ok = 0, Err = 1).
 //
 // Result is built in, so the declared per-enum payload table is empty for it --
 // its payload widths come from the instantiation rather than a declaration.
-// Narrow payloads get the -1 sentinel, and an all-narrow Result yields an empty
-// vector so it keeps relying on the existing contextual-widening path.
+// Non-diverging payloads get the -1 sentinel, and an all-i64/non-integer
+// Result yields an empty vector so it keeps relying on the existing
+// contextual-widening path. Twin of result_wide_payload_tys in
+// vow-ir/src/lower/mod.rs.
 fn lower_ast_type_result_wide_payload_tys(
     a: AstArena, tid: i64, alias_names: Vec<String>, alias_target_tids: Vec<i64>
 ) -> Vec<i64> {
@@ -1338,7 +1341,7 @@ fn lower_ast_type_result_wide_payload_tys(
     while i < n_args && i < 2 {
         let arg_tid: i64 = list_get(a, args_lid, i);
         let arg_ty: i64 = lower_ast_ty_linear(a, arg_tid, Vec::new(), alias_names, alias_target_tids);
-        if arg_ty == ITY_I128() || arg_ty == ITY_U128() {
+        if diverges_from_speculative_int(arg_ty) {
             tys.push(arg_ty);
             has_wide = true;
         } else {
@@ -5064,6 +5067,18 @@ fn lower_let_binding(ctx: LowerCtx, pat_id: i64, ann_tid: i64, init_eid: i64, sp
                                 lctx_tag_vec_elem(ctx, val, elem_name);
                             }
                         }
+                    }
+                    let opt_elem_ty: i64 = lower_ast_type_option_elem_ty(
+                        a, resolved_ann_tid, ctx.type_alias_names, ctx.type_alias_target_tids
+                    );
+                    if opt_elem_ty != -1 {
+                        lctx_tag_option_elem(ctx, val, opt_elem_ty);
+                    }
+                    let result_payload_tys: Vec<i64> = lower_ast_type_result_wide_payload_tys(
+                        a, resolved_ann_tid, ctx.type_alias_names, ctx.type_alias_target_tids
+                    );
+                    if result_payload_tys.len() > 0 {
+                        lctx_tag_variant_payloads(ctx, val, result_payload_tys);
                     }
                 }
             }
