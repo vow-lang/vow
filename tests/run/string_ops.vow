@@ -9,9 +9,9 @@ fn main() [io] {
     print_str(String::from("\n"));
 
     let parts: Vec<String> = string_split(s, String::from(", "));
-    let n: i64 = parts.len();
+    let n: u64 = parts.len() as u64;
     print_str(String::from("split parts: "));
-    print_i64(n);
+    print_u64(n);
     print_str(String::from("\n"));
 
     let sw: i64 = string_starts_with(s, String::from("Hello"));

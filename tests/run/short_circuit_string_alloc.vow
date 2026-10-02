@@ -27,9 +27,9 @@ fn main() -> i32 [io] {
     tags.push(String::from("String"));
     tags.push(String::from("other"));
 
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     let mut sum: i64 = 0;
-    while i < tags.len() {
+    while i < tags.len() as u64 {
         sum = sum + classify(tags[i]);
         i = i + 1;
     }
