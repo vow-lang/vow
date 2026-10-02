@@ -990,7 +990,11 @@ fn emit_inst(
         }
         Opcode::ConstF64 => {
             if let InstData::ConstF64(v) = inst.data {
-                out.push_str(&format!("  v{} = {};\n", id, v));
+                if v.is_finite() {
+                    out.push_str(&format!("  v{} = {};\n", id, v));
+                } else {
+                    emit_unsupported_for_verification(inst, out);
+                }
             }
         }
         Opcode::ConstBool => {
@@ -4612,6 +4616,34 @@ mod tests {
             c.contains("/* opcode ConstU128 not modelled */"),
             "ConstU128 must use the deferred verifier fallback: {c}"
         );
+    }
+
+    #[test]
+    fn non_finite_const_f64_fails_closed() {
+        for (data, name) in [
+            (InstData::ConstF64(f64::INFINITY), "+inf"),
+            (InstData::ConstF64(f64::NEG_INFINITY), "-inf"),
+            (InstData::ConstF64(f64::NAN), "NaN"),
+        ] {
+            let func = make_func(
+                "f",
+                vec![],
+                Ty::Unit,
+                vec![
+                    inst(0, Opcode::ConstF64, Ty::F64, vec![], data),
+                    inst(1, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            );
+            let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+            assert!(
+                c.contains(&format!("vow:{UNSUPPORTED_OP_VOW_ID}")),
+                "non-finite ConstF64 ({name}) must fail closed: {c}"
+            );
+            assert!(
+                !c.contains("v0 = inf;") && !c.contains("v0 = -inf;") && !c.contains("v0 = NaN;"),
+                "non-finite ConstF64 ({name}) must not emit an invalid C literal: {c}"
+            );
+        }
     }
 
     #[test]
