@@ -839,12 +839,13 @@ fn declared_wide_payload_ty(
         .filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
 }
 
-/// Wide `Result<T, E>` payload widths, indexed by variant tag (`Ok` = 0, `Err` = 1).
+/// `Result<T, E>` payload types that diverge from the speculative `i64`
+/// lowering width, indexed by variant tag (`Ok` = 0, `Err` = 1).
 ///
 /// `Result` is built in, so [`declared_wide_payload_ty`] finds nothing for it —
 /// its payload widths come from the instantiation rather than a declaration.
-/// Returns `None` when neither payload is 128-bit, so narrow `Result`s keep
-/// relying on the existing contextual-widening path.
+/// Returns `None` when neither payload diverges, so `i64`/`u64`-identical
+/// payloads keep relying on the existing contextual-widening path.
 fn result_wide_payload_tys(
     ast_ty: &AstType,
     type_aliases: &HashMap<String, AstType>,
@@ -861,7 +862,7 @@ fn result_wide_payload_tys(
         .take(2)
         .map(|arg| {
             let ty = lower_ty_with_linear(arg, &no_linear_owners, type_aliases);
-            matches!(ty, Ty::I128 | Ty::U128).then_some(ty)
+            diverges_from_speculative_int(ty).then_some(ty)
         })
         .collect();
     tys.iter().any(Option::is_some).then_some(tys)
@@ -1561,7 +1562,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .get(&(expr as *const _ as usize))
                 .copied()
             {
-                Some(ty @ (Ty::U64 | Ty::I128 | Ty::U128)) => {
+                Some(ty) if diverges_from_speculative_int(ty) => {
                     emit_narrow_integer_constant(ctx, *v, ty, span)
                 }
                 _ => ctx.emit(
@@ -4431,7 +4432,7 @@ fn wide_context_contains_control_flow(expr: &Expr) -> bool {
 }
 
 fn record_wide_marker_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
-    if !matches!(ty, Ty::U64 | Ty::I128 | Ty::U128) {
+    if !diverges_from_speculative_int(ty) {
         return;
     }
     ctx.wide_literal_contexts
@@ -4478,6 +4479,7 @@ fn record_wide_marker_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
 
 fn record_wide_control_flow_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
     if ty == Ty::U64
+        || narrow_int_width(ty).is_some()
         || (matches!(ty, Ty::I128 | Ty::U128) && wide_context_contains_control_flow(expr))
     {
         record_wide_marker_context(ctx, expr, ty);
@@ -4524,15 +4526,7 @@ fn record_wide_expected_ast_context(ctx: &mut LowerCtx, expr: &Expr, expected: &
     }
     match expected {
         AstType::Named { name, .. } => {
-            let ty = match name.as_str() {
-                "u64" => Some(Ty::U64),
-                "i128" => Some(Ty::I128),
-                "u128" => Some(Ty::U128),
-                _ => None,
-            };
-            if let Some(ty) = ty {
-                record_wide_marker_context(ctx, expr, ty);
-            }
+            record_wide_marker_context(ctx, expr, scalar_ty_for_field_type_name(&name));
         }
         AstType::Generic { name, args, .. } => {
             let ExprKind::EnumConstruct { path, fields } = &expr.kind else {
@@ -4692,13 +4686,16 @@ fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<In
 
 /// Coerce an expression into an admitted contextual narrow integer type.
 /// Marker expressions are re-lowered at that width so checked operations keep
-/// their overflow behavior; control-flow results are explicitly reduced after
-/// their Phi so later users observe the annotated type.
+/// their overflow behavior. Markers whose context was already recorded by the
+/// wide-context family (`record_wide_expected_ast_context` and friends) were
+/// already lowered at `ty` the first time, straight-line or control-flow
+/// alike; this is a no-op for those. Only markers the wide-context family
+/// never reached fall through to the re-lowering below.
 fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: Ty) -> InstId {
     if !diverges_from_speculative_int(ty) {
         return original;
     }
-    if matches!(ty, Ty::U64 | Ty::I128 | Ty::U128)
+    if expr_is_coercible_int_marker(expr)
         && ctx
             .wide_literal_contexts
             .get(&(expr as *const _ as usize))
@@ -4949,6 +4946,14 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
                                 )
                             {
                                 ctx.inst_vec_elem_types.insert(val, vec![elem_name.clone()]);
+                            }
+                            if let Some(elem_ty) = option_named_elem_type(ann, &ctx.type_aliases) {
+                                ctx.inst_option_elem_ty.insert(val, elem_ty);
+                            }
+                            if let Some(variant_tys) =
+                                result_wide_payload_tys(ann, &ctx.type_aliases)
+                            {
+                                ctx.inst_variant_payload_tys.insert(val, variant_tys);
                             }
                         }
                         _ => {}
@@ -7196,7 +7201,7 @@ fn payload(o: Option<u8>) -> u8 [panic] {
     }
 
     #[test]
-    fn annotated_narrow_local_reduces_control_flow_result() {
+    fn annotated_narrow_local_merges_branches_at_declared_width() {
         let init = Expr {
             kind: ExprKind::If {
                 condition: Box::new(bool_expr(true)),
@@ -7246,23 +7251,175 @@ fn payload(o: Option<u8>) -> u8 [panic] {
 
         assert!(warnings.is_empty(), "{warnings:?}");
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
-        let cast = all_insts
+        assert!(
+            !all_insts.iter().any(|inst| inst.opcode == Opcode::IntCast),
+            "both branches are literal markers narrowed to i8 before the merge; \
+             no post-hoc reduction should be needed:\n{all_insts:#?}"
+        );
+        let phi = all_insts
             .iter()
-            .find(|inst| {
-                inst.opcode == Opcode::IntCast
-                    && inst.ty == Ty::I8
-                    && inst.data
-                        == InstData::IntegerCast {
-                            from: IntegerType::I64,
-                            to: IntegerType::I8,
-                        }
-            })
-            .expect("i64 Phi reduced to annotated i8");
+            .find(|inst| inst.opcode == Opcode::Phi && inst.ty == Ty::I8)
+            .expect("branches merge directly into an i8 phi");
         let ret = all_insts
             .iter()
             .find(|inst| inst.opcode == Opcode::Return)
             .expect("return");
-        assert_eq!(ret.args, vec![cast.id]);
+        assert_eq!(ret.args, vec![phi.id]);
+    }
+
+    #[test]
+    fn let_annotated_narrow_checked_add_lowers_exactly_once() {
+        let module = lower_source_to_module(
+            r#"
+module LetAnnotatedNarrowCheckedAddOnce
+
+fn overflow() -> i8 {
+    let x: i8 = 127 +! 1;
+    x
+}
+"#,
+            "let_annotated_narrow_checked_add_once.vow",
+        );
+
+        let func = &module.functions[0];
+        let checked: Vec<_> = insts_of(func)
+            .into_iter()
+            .filter(|inst| inst.opcode == Opcode::CheckedAdd)
+            .collect();
+        assert_eq!(
+            checked.len(),
+            1,
+            "a missed short-circuit-guard update re-lowers the marker twice:\n{func:#?}"
+        );
+        assert_eq!(checked[0].ty, Ty::I8);
+        assert_eq!(checked[0].data, InstData::Integer(IntegerType::I8));
+    }
+
+    #[test]
+    fn if_branch_checked_add_narrows_before_merge() {
+        let module = lower_source_to_module(
+            r#"
+module IfBranchCheckedAddNarrowsBeforeMerge
+
+fn f(b: bool) -> i8 {
+    if b { 127 +! 1 } else { 0 }
+}
+"#,
+            "if_branch_checked_add_narrows_before_merge.vow",
+        );
+
+        let func = &module.functions[0];
+        let checked: Vec<_> = insts_of(func)
+            .into_iter()
+            .filter(|inst| inst.opcode == Opcode::CheckedAdd)
+            .collect();
+        assert_eq!(checked.len(), 1, "{func:#?}");
+        assert_eq!(
+            checked[0].ty,
+            Ty::I8,
+            "record_wide_control_flow_context must reach a narrow-typed if-branch \
+             unconditionally, with no control-flow sub-gate, exactly like u64:\n{func:#?}"
+        );
+        let phi = insts_of(func)
+            .into_iter()
+            .find(|inst| inst.opcode == Opcode::Phi)
+            .expect("if-expr merge phi");
+        assert_eq!(phi.ty, Ty::I8, "{func:#?}");
+    }
+
+    #[test]
+    fn struct_field_assignment_narrows_checked_add_at_declared_width() {
+        let module = lower_source_to_module(
+            r#"
+module StructFieldAssignmentNarrowsCheckedAdd
+
+struct S {
+    x: i8,
+}
+
+fn overflow() -> i8 {
+    let s: S = S { x: 0 };
+    s.x = 127 +! 1;
+    s.x
+}
+"#,
+            "struct_field_assignment_narrows_checked_add.vow",
+        );
+
+        let func = &module.functions[0];
+        let checked: Vec<_> = insts_of(func)
+            .into_iter()
+            .filter(|inst| inst.opcode == Opcode::CheckedAdd)
+            .collect();
+        assert_eq!(checked.len(), 1, "{func:#?}");
+        assert_eq!(
+            checked[0].ty,
+            Ty::I8,
+            "known_assignment_ast_type's unfiltered AST-type propagation must reach \
+             a narrow field's RHS straight-line, with no control-flow involved:\n{func:#?}"
+        );
+    }
+
+    #[test]
+    fn let_annotated_option_local_tags_narrow_elem_ty_for_post_extraction_reads() {
+        let module = lower_source_to_module(
+            r#"
+module LetAnnotatedOptionLocalNarrowElem
+
+fn f() -> i8 {
+    let o: Option<i8> = Option::Some(127);
+    match o {
+        Option::Some(v) => v + 1,
+        Option::None => 0,
+    }
+}
+"#,
+            "let_annotated_option_local_narrow_elem.vow",
+        );
+
+        let func = &module.functions[0];
+        let add = insts_of(func)
+            .into_iter()
+            .find(|inst| inst.opcode == Opcode::WrappingAdd)
+            .expect("post-extraction add");
+        assert_eq!(
+            add.ty,
+            Ty::I8,
+            "inst_option_elem_ty must carry Ty::I8 for a locally-constructed, \
+             let-annotated Option so the post-extraction read computes at the \
+             declared width instead of the speculative i64:\n{func:#?}"
+        );
+    }
+
+    #[test]
+    fn let_annotated_result_local_tags_narrow_ok_ty_for_post_extraction_reads() {
+        let module = lower_source_to_module(
+            r#"
+module LetAnnotatedResultLocalNarrowOk
+
+fn f() -> i8 {
+    let r: Result<i8, ()> = Result::Ok(127);
+    match r {
+        Result::Ok(v) => v + 1,
+        Result::Err(_) => 0,
+    }
+}
+"#,
+            "let_annotated_result_local_narrow_ok.vow",
+        );
+
+        let func = &module.functions[0];
+        let add = insts_of(func)
+            .into_iter()
+            .find(|inst| inst.opcode == Opcode::WrappingAdd)
+            .expect("post-extraction add");
+        assert_eq!(
+            add.ty,
+            Ty::I8,
+            "inst_variant_payload_tys must carry Ty::I8 for the Ok variant of a \
+             locally-constructed, let-annotated Result so the post-extraction read \
+             computes at the declared width instead of the speculative i64:\n{func:#?}"
+        );
     }
 
     #[test]

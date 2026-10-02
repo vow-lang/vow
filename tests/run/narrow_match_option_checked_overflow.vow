@@ -1,0 +1,15 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module NarrowMatchOptionCheckedOverflow
+
+fn f(o: Option<i8>) -> i8 {
+    match o {
+        Option::Some(_) => 127 +! 1,
+        Option::None => 0,
+    }
+}
+
+fn main() -> i32 {
+    f(Option::Some(0));
+    0
+}

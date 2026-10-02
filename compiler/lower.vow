@@ -1314,12 +1314,15 @@ fn lower_ast_type_option_elem_ty(a: AstArena, tid: i64, alias_names: Vec<String>
     elem_ty
 }
 
-// Wide Result<T, E> payload widths, indexed by variant tag (Ok = 0, Err = 1).
+// Result<T, E> payload types that diverge from the speculative i64 lowering
+// width, indexed by variant tag (Ok = 0, Err = 1).
 //
 // Result is built in, so the declared per-enum payload table is empty for it --
 // its payload widths come from the instantiation rather than a declaration.
-// Narrow payloads get the -1 sentinel, and an all-narrow Result yields an empty
-// vector so it keeps relying on the existing contextual-widening path.
+// Non-diverging payloads get the -1 sentinel, and an all-i64/non-integer
+// Result yields an empty vector so it keeps relying on the existing
+// contextual-widening path. Twin of result_wide_payload_tys in
+// vow-ir/src/lower/mod.rs.
 fn lower_ast_type_result_wide_payload_tys(
     a: AstArena, tid: i64, alias_names: Vec<String>, alias_target_tids: Vec<i64>
 ) -> Vec<i64> {
@@ -1338,7 +1341,7 @@ fn lower_ast_type_result_wide_payload_tys(
     while i < n_args && i < 2 {
         let arg_tid: i64 = list_get(a, args_lid, i);
         let arg_ty: i64 = lower_ast_ty_linear(a, arg_tid, Vec::new(), alias_names, alias_target_tids);
-        if arg_ty == ITY_I128() || arg_ty == ITY_U128() {
+        if diverges_from_speculative_int(arg_ty) {
             tys.push(arg_ty);
             has_wide = true;
         } else {
@@ -2121,7 +2124,7 @@ fn wide_context_contains_control_flow(a: AstArena, eid: i64) -> bool {
 }
 
 fn lctx_record_wide_marker_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) {
-    if eid == -1 || (ty != ITY_U64() && ty != ITY_I128() && ty != ITY_U128()) { return; }
+    if eid == -1 || !diverges_from_speculative_int(ty) { return; }
     while ctx.wide_context_tys.len() as i64 <= eid {
         ctx.wide_context_tys.push(-1);
     }
@@ -2171,7 +2174,7 @@ fn lctx_record_wide_marker_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64
 }
 
 fn lctx_record_wide_control_flow_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) {
-    if ty == ITY_U64() ||
+    if ty == ITY_U64() || narrow_int_width(ty) != 0 ||
        ((ty == ITY_I128() || ty == ITY_U128()) && wide_context_contains_control_flow(a, eid)) {
         lctx_record_wide_marker_context(ctx, a, eid, ty);
     }
@@ -2228,9 +2231,7 @@ fn lctx_record_wide_expected_ast_context(ctx: LowerCtx, a: AstArena, eid: i64, e
     if expected_tag == TY_NAMED() {
         let name: String = arena_str(a, type_a(a, resolved_tid));
         let expected_ty: i64 = ity_for_scalar_type_name(name);
-        if expected_ty == ITY_U64() || expected_ty == ITY_I128() || expected_ty == ITY_U128() {
-            lctx_record_wide_marker_context(ctx, a, eid, expected_ty);
-        }
+        lctx_record_wide_marker_context(ctx, a, eid, expected_ty);
         return;
     }
     if expected_tag != TY_GENERIC() || expr_tag(a, eid) != EXPR_ECTOR() {
@@ -2431,8 +2432,12 @@ fn lower_integer_marker_as(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) -> i64
 }
 
 // Coerce an expression into an admitted contextual narrow integer type.
-// Control-flow expressions are reduced after their Phi so subsequent users
-// observe the annotation's logical width.
+// Markers whose context the wide-context family already recorded (via
+// lctx_record_wide_expected_ast_context and friends) were already lowered at
+// ty the first time, straight-line or control-flow alike; this is a no-op
+// for those. Only markers the wide-context family never reached fall through
+// to the re-lowering below. Twin of lower_narrow_literal in
+// vow-ir/src/lower/mod.rs.
 fn lower_narrow_literal(ctx: LowerCtx, a: AstArena, eid: i64, original: i64, ty: i64) -> i64 {
     if eid == -1 {
         return original;
@@ -2440,8 +2445,7 @@ fn lower_narrow_literal(ctx: LowerCtx, a: AstArena, eid: i64, original: i64, ty:
     if !diverges_from_speculative_int(ty) {
         return original;
     }
-    if (ty == ITY_U64() || ty == ITY_I128() || ty == ITY_U128()) &&
-       lctx_wide_context_ty(ctx, eid) == ty {
+    if expr_is_coercible_int_marker(a, eid) && lctx_wide_context_ty(ctx, eid) == ty {
         return original;
     }
     let marker: i64 = lower_integer_marker_as(ctx, a, eid, ty);
@@ -2548,11 +2552,11 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
     if tag == EXPR_LIT_INT() {
         let context_ty: i64 = lctx_wide_context_ty(ctx, eid);
-        if context_ty == ITY_U64() {
-            return emit_narrow_integer_constant(ctx, expr_a(a, eid), context_ty);
-        }
         if context_ty == ITY_I128() || context_ty == ITY_U128() {
             return emit_wide_integer_constant(ctx, a, eid, context_ty);
+        }
+        if diverges_from_speculative_int(context_ty) {
+            return emit_narrow_integer_constant(ctx, expr_a(a, eid), context_ty);
         }
         let val: i64 = expr_a(a, eid);
         let args: Vec<i64> = Vec::new();
@@ -4040,6 +4044,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let alloc_args: Vec<i64> = Vec::new();
         let alloc_ty: i64 = if owns_linear { ITY_LPTR() } else { ITY_PTR() };
         let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), alloc_ty, alloc_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
+        lctx_set_inst_span(ctx, ptr_id, expr_span(a, eid));
         lctx_tag(ctx, ptr_id, enum_name);
         if n_payload > 0 {
             let contextual_payload_ty: i64 = lctx_inst_ty(ctx, payload_values[0]);
@@ -5063,6 +5068,18 @@ fn lower_let_binding(ctx: LowerCtx, pat_id: i64, ann_tid: i64, init_eid: i64, sp
                                 lctx_tag_vec_elem(ctx, val, elem_name);
                             }
                         }
+                    }
+                    let opt_elem_ty: i64 = lower_ast_type_option_elem_ty(
+                        a, resolved_ann_tid, ctx.type_alias_names, ctx.type_alias_target_tids
+                    );
+                    if opt_elem_ty != -1 {
+                        lctx_tag_option_elem(ctx, val, opt_elem_ty);
+                    }
+                    let result_payload_tys: Vec<i64> = lower_ast_type_result_wide_payload_tys(
+                        a, resolved_ann_tid, ctx.type_alias_names, ctx.type_alias_target_tids
+                    );
+                    if result_payload_tys.len() > 0 {
+                        lctx_tag_variant_payloads(ctx, val, result_payload_tys);
                     }
                 }
             }

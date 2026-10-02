@@ -220,6 +220,9 @@ impl fmt::Display for AnalysisError {
 impl std::error::Error for AnalysisError {}
 
 const MINIMUM_R_SQUARED: f64 = 0.90;
+/// Tuned against today's exact synthetic fixtures, where any non-decreasing
+/// step counts as rising; will need revisiting once real (noisy) instrumented
+/// operation counts feed [`analyze`].
 const NORMALIZED_TREND_TOLERANCE: f64 = 1.0e-9;
 const REQUIRED_RISING_SLOPE_STEPS: usize = 2;
 const REQUIRED_MAXIMUM_TREND_SAMPLES: usize = REQUIRED_RISING_SLOPE_STEPS + 2;
@@ -233,8 +236,18 @@ const CANDIDATES: [ComplexityClass; 8] = [
     ComplexityClass::Cubic,
     ComplexityClass::CubicLogarithmic,
 ];
+const MAXIMUM_CANDIDATE: ComplexityClass = CANDIDATES[CANDIDATES.len() - 1];
 
 /// Classify measured operation counts against a declared complexity class.
+///
+/// Assumes `samples` is a well-ranged measurement grid: best-fit selection
+/// compares candidates across the whole sample set, so a grid whose low end
+/// sits inside a function's pre-threshold plateau can make an adjacent
+/// higher-order class narrowly out-fit the correct one, producing a false
+/// `Fail`. [`recommended_grid`] generates a grid wide enough to resolve this
+/// for the threshold magnitudes this crate has validated against; callers
+/// building their own grid should prefer a similarly wide, high-end-heavy
+/// range over a narrow one.
 pub fn analyze(declared: ComplexityClass, samples: &[Sample]) -> Result<Analysis, AnalysisError> {
     if samples.len() < 3 {
         return Err(AnalysisError::TooFewSamples);
@@ -274,8 +287,8 @@ pub fn analyze(declared: ComplexityClass, samples: &[Sample]) -> Result<Analysis
         });
     }
 
-    let verdict = if observed == ComplexityClass::CubicLogarithmic
-        && observed <= declared
+    let verdict = if observed == MAXIMUM_CANDIDATE
+        && declared == MAXIMUM_CANDIDATE
         && maximum_trend_is_ambiguous(samples)
     {
         Verdict::Ambiguous
@@ -296,11 +309,10 @@ fn maximum_trend_is_ambiguous(samples: &[Sample]) -> bool {
         return true;
     }
 
-    let maximum = ComplexityClass::CubicLogarithmic;
     let mut slopes = samples
         .windows(2)
         .rev()
-        .map(|pair| normalized_interval_slope(maximum, &pair[0], &pair[1]));
+        .map(|pair| normalized_interval_slope(MAXIMUM_CANDIDATE, &pair[0], &pair[1]));
     let mut newer = slopes.next().expect("sample count checked above");
 
     for _ in 0..REQUIRED_RISING_SLOPE_STEPS {
@@ -377,6 +389,69 @@ fn r_squared(class: ComplexityClass, samples: &[Sample]) -> f64 {
     1.0 - residual_sum / total_sum
 }
 
+/// Number of geometrically-doubled sizes in `recommended_grid`'s output.
+const RECOMMENDED_GRID_SAMPLE_COUNT: u32 = 12;
+
+/// An invalid `min_input_size` for [`recommended_grid`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecommendedGridError {
+    InputSizeTooSmall { min_input_size: u64 },
+    Overflow { min_input_size: u64 },
+}
+
+impl fmt::Display for RecommendedGridError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InputSizeTooSmall { min_input_size } => write!(
+                formatter,
+                "input size {min_input_size} is too small for a measurement grid"
+            ),
+            Self::Overflow { min_input_size } => write!(
+                formatter,
+                "input size {min_input_size} is too large to double \
+                 {} times without overflow",
+                RECOMMENDED_GRID_SAMPLE_COUNT - 1
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RecommendedGridError {}
+
+/// A default measurement grid for [`analyze`]'s input.
+///
+/// Returns twelve sizes, geometrically doubling from `min_input_size` (so
+/// `min_input_size = 16` yields `[16, 32, ..., 32768]`). Empirically validated
+/// at `min_input_size = 16` to resolve false `Fail`s caused by a flat
+/// pre-threshold cost region up to 200 units wide, for every supported
+/// polynomial degree, with no change in verdict for genuine complexity
+/// violations.
+///
+/// This is a mitigation, not a guarantee: it is bounded by how far the grid's
+/// high end sits above the workload's hidden threshold. A function whose
+/// flat region extends past this grid's high end needs a wider grid than
+/// this default provides — see `analyze`'s doc comment. The floor matters
+/// too: a smaller `min_input_size` adds more samples inside the plateau and
+/// can still produce a false `Fail` for the same threshold widths this
+/// validation covers — prefer 16 unless a larger floor is already known to
+/// clear the workload's threshold.
+pub fn recommended_grid(min_input_size: u64) -> Result<Vec<u64>, RecommendedGridError> {
+    if min_input_size < 2 {
+        return Err(RecommendedGridError::InputSizeTooSmall { min_input_size });
+    }
+
+    let mut size = min_input_size;
+    let mut sizes = Vec::with_capacity(RECOMMENDED_GRID_SAMPLE_COUNT as usize);
+    sizes.push(size);
+    for _ in 1..RECOMMENDED_GRID_SAMPLE_COUNT {
+        size = size
+            .checked_mul(2)
+            .ok_or(RecommendedGridError::Overflow { min_input_size })?;
+        sizes.push(size);
+    }
+    Ok(sizes)
+}
+
 fn basis_value(class: ComplexityClass, input_size: u64) -> f64 {
     let n = input_size as f64;
     let log_n = n.log2();
@@ -390,5 +465,48 @@ fn basis_value(class: ComplexityClass, input_size: u64) -> f64 {
         ComplexityClass::QuadraticLogarithmic => n.powi(2) * log_n,
         ComplexityClass::Cubic => n.powi(3),
         ComplexityClass::CubicLogarithmic => n.powi(3) * log_n,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CANDIDATES, ComplexityClass};
+
+    /// Derives the full class set from `from_factors` (rather than hand-listing
+    /// variants a second time) so that raising its degree caps for a future
+    /// variant makes this test fail until `CANDIDATES` is updated to match.
+    #[test]
+    fn candidates_cover_every_class_from_factors_can_produce_in_ascending_order() {
+        let mut derived = Vec::new();
+        let mut polynomial_degree = 0u8;
+        loop {
+            let mut logarithmic_degree = 0u8;
+            let mut produced_any = false;
+            while let Ok(class) =
+                ComplexityClass::from_factors(polynomial_degree, logarithmic_degree)
+            {
+                derived.push(class);
+                produced_any = true;
+                logarithmic_degree += 1;
+            }
+            if !produced_any {
+                break;
+            }
+            polynomial_degree += 1;
+        }
+
+        let mut sorted_derived = derived.clone();
+        sorted_derived.sort();
+
+        assert_eq!(
+            derived.len(),
+            CANDIDATES.len(),
+            "CANDIDATES must list exactly the classes from_factors can produce"
+        );
+        assert_eq!(
+            sorted_derived,
+            CANDIDATES.to_vec(),
+            "CANDIDATES must be in ascending ComplexityClass order with no gaps or duplicates"
+        );
     }
 }

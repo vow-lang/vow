@@ -6,7 +6,8 @@ signature and top-level vow clauses, and any nested loop-invariant vow
 clauses inside its body. Nested clauses are compared as a per-function
 multiset, so a preserved invariant may move to a different loop or pick up
 siblings; only dropping or weakening one is rejected. Ordinary body code and
-additional helper functions remain free for a model to implement.
+additional helper functions remain free for a model to implement. This
+module also owns the repair prompt emitted when a fidelity check fails.
 """
 
 from __future__ import annotations
@@ -72,6 +73,16 @@ def compare_skeleton(skeleton: str, candidate: str) -> FidelityResult:
             return FidelityResult(False, f"nested contracts of `{name}` changed")
 
     return FidelityResult(True, "")
+
+
+def build_skeleton_mismatch_prompt(message: str) -> str:
+    return f"""The response changed an immutable part of the supplied skeleton:
+
+{message}
+
+Restore the exact module name, skeleton function signatures, and contracts.
+Change function bodies only; additional helper functions are allowed. Return
+ONLY the complete updated .vow file, no explanation."""
 
 
 def _is_multiset_subset(

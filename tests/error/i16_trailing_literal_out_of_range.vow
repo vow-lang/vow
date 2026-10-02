@@ -1,0 +1,10 @@
+// TEST: error-code LiteralOutOfRange
+module I16TrailingLiteralOutOfRange
+
+fn too_large() -> i16 {
+    32768
+}
+
+fn main() -> i32 {
+    0
+}

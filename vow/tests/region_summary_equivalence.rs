@@ -1237,6 +1237,80 @@ fn selfhosted_string_trim_root_escape_note_span_is_call_site_not_whole_function(
     );
 }
 
+/// Issue #1026 (generic enum-constructor fallback): the `RegionAlloc` +
+/// `FIELD_SET` path taken for every user-defined enum-variant construction
+/// that is not one of the seven named builtin collection constructors
+/// (#991/#331) must also stamp its allocation's span. This fixture publishes
+/// an inline `Box::Item(5)` through a parameter container, making the
+/// constructor the `RegionRootEscape` source. Like
+/// `selfhosted_string_trim_root_escape_note_span_is_call_site_not_whole_function`,
+/// this pins the exact span length (12, `Box::Item(5)`) rather than merely
+/// nonzero — the unfixed `ptr_id` allocation never gets a span patched onto
+/// it at all, so it falls through to the raw `ir_inst_new` default of
+/// `ostart: 0, olen: 0`.
+#[test]
+fn selfhosted_enum_ctor_root_escape_note_span_is_call_site_not_zero_length() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_enum_ctor_root_escape_span.vow");
+    let vowc = root.join("build").join("vowc");
+    if !vowc.exists() {
+        eprintln!(
+            "skipping {}: build/vowc not present (run scripts/bootstrap.sh)",
+            module_path!()
+        );
+        return;
+    }
+
+    let out = Command::new(&vowc)
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run build/vowc");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "diagnostics missing and build did not fail with the recognized \
+             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
+        );
+        eprintln!(
+            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
+             (no diagnostics to check)"
+        );
+        return;
+    };
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        !notes.is_empty(),
+        "inline Box::Item(5) published through a parameter container must emit \
+         a RegionRootEscape note; diagnostics: {diagnostics:?}"
+    );
+    let bad_len: Vec<_> = notes
+        .iter()
+        .filter(|n| n["span"]["length"].as_i64() != Some(12))
+        .collect();
+    assert!(
+        bad_len.is_empty(),
+        "Box::Item(5)-sourced RegionRootEscape notes must carry span.length == 12 \
+         (exactly `Box::Item(5)`, issue #1026); {} of {} notes had a different length: {bad_len:?}",
+        bad_len.len(),
+        notes.len()
+    );
+}
+
 /// Issue #318 regression guard — Rust↔self-hosted RegionRootEscape
 /// note-count parity on a fixture exercising mixed store-effect source
 /// kinds (ConstantGlobal + AliasOf).

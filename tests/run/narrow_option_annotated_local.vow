@@ -1,0 +1,12 @@
+// TEST: stdout "-128\n"
+module NarrowOptionAnnotatedLocal
+
+fn main() -> i32 [io] {
+    let o: Option<i8> = Option::Some(127);
+    match o {
+        Option::Some(v) => print_i64((v + 1) as i64),
+        Option::None => print_i64(0),
+    }
+    print_str(String::from("\n"));
+    0
+}

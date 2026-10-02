@@ -1,6 +1,6 @@
 import unittest
 
-from benchmark_contracts import compare_skeleton
+from benchmark_contracts import build_skeleton_mismatch_prompt, compare_skeleton
 
 
 class SkeletonFidelityTests(unittest.TestCase):
@@ -233,6 +233,24 @@ class ExternBlockTests(unittest.TestCase):
 
         self.assertFalse(result.matches)
         self.assertEqual(result.message, "contracts of `write` changed")
+
+
+class SkeletonMismatchPromptTests(unittest.TestCase):
+    def test_matches_the_text_both_runners_currently_duplicate(self):
+        message = "module name changed from Example to Foo"
+
+        result = build_skeleton_mismatch_prompt(message)
+
+        self.assertEqual(
+            result,
+            f"""The response changed an immutable part of the supplied skeleton:
+
+{message}
+
+Restore the exact module name, skeleton function signatures, and contracts.
+Change function bodies only; additional helper functions are allowed. Return
+ONLY the complete updated .vow file, no explanation.""",
+        )
 
 
 if __name__ == "__main__":
