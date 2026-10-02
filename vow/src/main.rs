@@ -1913,7 +1913,7 @@ pub fn main() -> i32 {
 
 pub fn sum(v: Vec<i64>) -> i64 {
     let mut total: i64 = 0;
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     let n = v.len();
     while i < n {
         total = total + v[i];

@@ -381,7 +381,8 @@ fn method_result_type(receiver: &Ty, method: &str) -> Option<Ty> {
     let option_of = |inner: Ty| Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![inner]);
     match receiver {
         Ty::Str => match method {
-            "len" | "byte_at" => Some(Ty::I64),
+            "len" => Some(Ty::U64),
+            "byte_at" => Some(Ty::I64),
             "push_str" | "clear" | "push_byte" => Some(Ty::Unit),
             "eq" | "contains" => Some(Ty::Bool),
             "substring" => Some(Ty::Str),
@@ -391,13 +392,13 @@ fn method_result_type(receiver: &Ty, method: &str) -> Option<Ty> {
         },
         Ty::Applied(base, args) => match base.as_ref() {
             Ty::Struct(name) if name == "Vec" => match method {
-                "len" => Some(Ty::I64),
+                "len" => Some(Ty::U64),
                 "push" | "pop" | "clear" | "truncate" => Some(Ty::Unit),
                 "get" => Some(option_of(args.first().cloned().unwrap_or(Ty::I64))),
                 _ => None,
             },
             Ty::Struct(name) if name == "HashMap" => match method {
-                "len" => Some(Ty::I64),
+                "len" => Some(Ty::U64),
                 "insert" | "remove" => Some(Ty::Unit),
                 "get" => Some(Ty::I64),
                 "contains_key" => Some(Ty::Bool),
@@ -406,7 +407,7 @@ fn method_result_type(receiver: &Ty, method: &str) -> Option<Ty> {
             Ty::Struct(name) if name == "BTreeMap" => {
                 let value_ty = args.get(1).cloned().unwrap_or(Ty::I64);
                 match method {
-                    "len" => Some(Ty::I64),
+                    "len" => Some(Ty::U64),
                     "insert" | "get" => Some(option_of(value_ty)),
                     "contains" => Some(Ty::Bool),
                     _ => None,
@@ -7787,7 +7788,7 @@ mod tests {
     #[test]
     fn builtin_method_result_types_are_resolved_per_receiver() {
         // String
-        assert_eq!(method_result_type(&Ty::Str, "len"), Some(Ty::I64));
+        assert_eq!(method_result_type(&Ty::Str, "len"), Some(Ty::U64));
         assert_eq!(method_result_type(&Ty::Str, "byte_at"), Some(Ty::I64));
         assert_eq!(method_result_type(&Ty::Str, "push_str"), Some(Ty::Unit));
         assert_eq!(method_result_type(&Ty::Str, "clear"), Some(Ty::Unit));
@@ -7806,7 +7807,7 @@ mod tests {
 
         // Vec<i64>: element type flows into `get`'s Option payload.
         let vec_i64 = vec_of(Ty::I64);
-        assert_eq!(method_result_type(&vec_i64, "len"), Some(Ty::I64));
+        assert_eq!(method_result_type(&vec_i64, "len"), Some(Ty::U64));
         assert_eq!(method_result_type(&vec_i64, "push"), Some(Ty::Unit));
         assert_eq!(method_result_type(&vec_i64, "pop"), Some(Ty::Unit));
         assert_eq!(method_result_type(&vec_i64, "clear"), Some(Ty::Unit));
@@ -7820,7 +7821,7 @@ mod tests {
 
         // HashMap: `get` returns the value type directly (pre-existing shape).
         let map = map_of("HashMap", Ty::I64, Ty::Bool);
-        assert_eq!(method_result_type(&map, "len"), Some(Ty::I64));
+        assert_eq!(method_result_type(&map, "len"), Some(Ty::U64));
         assert_eq!(method_result_type(&map, "insert"), Some(Ty::Unit));
         assert_eq!(method_result_type(&map, "remove"), Some(Ty::Unit));
         assert_eq!(method_result_type(&map, "get"), Some(Ty::I64));
@@ -7829,7 +7830,7 @@ mod tests {
 
         // BTreeMap: value type flows into `insert`/`get` Option payloads.
         let bmap = map_of("BTreeMap", Ty::I64, Ty::Bool);
-        assert_eq!(method_result_type(&bmap, "len"), Some(Ty::I64));
+        assert_eq!(method_result_type(&bmap, "len"), Some(Ty::U64));
         assert_eq!(method_result_type(&bmap, "insert"), Some(opt_of(Ty::Bool)));
         assert_eq!(method_result_type(&bmap, "get"), Some(opt_of(Ty::Bool)));
         assert_eq!(method_result_type(&bmap, "contains"), Some(Ty::Bool));
