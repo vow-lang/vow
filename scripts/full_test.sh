@@ -1575,6 +1575,70 @@ print('; '.join(errors) if errors else 'OK')
 fi
 echo ""
 
+# where-refinement/offset-parity: a parameter's inline `where` refinement
+# (e.g. `n: i64 where 0 <= n`) also reports kind "requires" in `vow contracts`
+# JSON, but it is anchored on the parameter name's byte offset, not on the
+# clause keyword that `contract-quality/parity` above checks for vow-block
+# clauses. Cover that separately here with a fixture that has no vow-block
+# clauses at all, so every "requires" entry it produces is a parameter
+# refinement.
+where_fixture="tests/fixtures/contracts/where_refinement_offsets.vow"
+rust_where_json="$TMPDIR/where_parity_rust.json"
+self_where_json="$TMPDIR/where_parity_self.json"
+if ! $RUST contracts "$where_fixture" >"$rust_where_json" 2>/dev/null \
+    || ! run_self contracts "$where_fixture" >"$self_where_json" 2>/dev/null; then
+    fail "where-refinement/offset-parity" "vow contracts failed on $where_fixture (rust or self-hosted)"
+else
+    where_parity_result=$(python3 -c "
+import json, re, sys
+
+def param_entries(path):
+    with open(path) as f:
+        d = json.load(f)
+    return sorted(
+        (c['function'], c['source']['offset'], c['description'])
+        for c in d['contracts']
+        if '(where on parameter' in c['description']
+    )
+
+fixture_bytes = open(sys.argv[3], 'rb').read()
+
+r_entries = param_entries(sys.argv[1])
+s_entries = param_entries(sys.argv[2])
+errors = []
+for label, entries in (('rust', r_entries), ('self-hosted', s_entries)):
+    if len(entries) != 2:
+        errors.append(f'{label}: expected 2 parameter-refinement requires entries, got {len(entries)}: {entries}')
+
+r_tuples = [(f, o) for f, o, _ in r_entries]
+s_tuples = [(f, o) for f, o, _ in s_entries]
+if r_tuples != s_tuples:
+    errors.append(f'(function, offset) differs: rust={r_tuples} self-hosted={s_tuples}')
+
+# Pin the anchor decision itself: the byte at offset must start the
+# parameter name followed by ':' (the 'name: type' position), not land
+# inside the refinement predicate.
+for label, entries in (('rust', r_entries), ('self-hosted', s_entries)):
+    for function, offset, description in entries:
+        m = re.search(r'\(where on parameter (\w+)\)', description)
+        if not m:
+            errors.append(f'{function}: {label} description missing parameter name: {description!r}')
+            continue
+        needle = (m.group(1) + ':').encode()
+        if not fixture_bytes[offset:].startswith(needle):
+            errors.append(
+                f'{function}: {label} offset {offset} does not start with {needle!r}'
+            )
+print('; '.join(errors) if errors else 'OK')
+" "$rust_where_json" "$self_where_json" "$where_fixture" 2>&1) || where_parity_result="checker error: $where_parity_result"
+    if [ "$where_parity_result" = "OK" ]; then
+        pass "where-refinement/offset-parity"
+    else
+        fail "where-refinement/offset-parity" "$where_parity_result"
+    fi
+fi
+echo ""
+
 # ─── Section 9: Bootstrap Triple Test ──────────────────────────────
 
 section_begin "Section 9: Bootstrap Triple Test"
