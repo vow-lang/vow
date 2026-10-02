@@ -14,8 +14,8 @@ fn cx_int_flag(argv: Vec<String>, name: String, dflt: i64) -> i64 {
 }
 
 fn cx_flag_present(argv: Vec<String>, name: String) -> bool {
-    let n: i64 = argv.len();
-    let mut i: i64 = 1;
+    let n: u64 = argv.len() as u64;
+    let mut i: u64 = 1;
     while i < n {
         if argv[i] == name { return true; }
         i = i + 1;
@@ -37,8 +37,8 @@ fn cx_int_flag_ok(argv: Vec<String>, name: String) -> bool {
 // Look up an IR-derived per-function value by name (parallel name/value Vecs).
 // Returns -1 if the function has no IR (e.g. a body-less declaration).
 fn cx_ir_val_for(name: String, ir_names: Vec<String>, ir_vals: Vec<i64>) -> i64 {
-    let n: i64 = ir_names.len();
-    let mut i: i64 = 0;
+    let n: u64 = ir_names.len() as u64;
+    let mut i: u64 = 0;
     while i < n {
         let nm: String = ir_names[i];
         if nm == name { return ir_vals[i]; }
@@ -224,17 +224,17 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
         return 1;
     }
     let src: String = source_read.src;
-    let file_nloc: i64 = diag_compute_line(src, src.len());
+    let file_nloc: i64 = diag_compute_line(src, src.len() as i64);
     let m: Module = fr.merged;
     let a: AstArena = m.arena;
     let items: Vec<i64> = m.items;
     let item_files: Vec<String> = fr.item_files;
-    let n: i64 = items.len();
+    let n: u64 = items.len() as u64;
 
     // Struct definitions (name -> is_linear) for linear-value counting.
     let struct_names: Vec<String> = Vec::new();
     let struct_linear: Vec<i64> = Vec::new();
-    let mut si: i64 = 0;
+    let mut si: u64 = 0;
     while si < n {
         let it2: i64 = items[si];
         if item_kind(it2) == ITEM_STRUCT() {
@@ -250,7 +250,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     // effect bitsets.
     let ir_mod: IrModule = fr.ir_mod;
     let ir_funcs: Vec<IrFunction> = ir_mod.functions;
-    let nirf: i64 = ir_funcs.len();
+    let nirf: i64 = ir_funcs.len() as i64;
     let ir_names: Vec<String> = Vec::new();
     let ir_cyclo: Vec<i64> = Vec::new();
     let ir_consumes: Vec<i64> = Vec::new();
@@ -280,11 +280,11 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let mut z: i64 = 0;
     while z < nirf {
         let cs: Vec<i64> = ir_callees[z];
-        ir_fanout.push(cs.len());
+        ir_fanout.push(cs.len() as i64);
         ir_fanin.push(cx_ir_fan_in_lookup(ir_fanin_counts, z));
         let mut efo: i64 = 0;
-        let mut ci: i64 = 0;
-        let ncs: i64 = cs.len();
+        let mut ci: u64 = 0;
+        let ncs: u64 = cs.len() as u64;
         while ci < ncs {
             let callee: i64 = cs[ci];
             if callee >= 0 && callee < nirf {
@@ -298,7 +298,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
 
     // Pass 1: analyze + score every function; match IR metrics by name.
     let rows: Vec<CxRow> = Vec::new();
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < n {
         let it: i64 = items[i];
         if item_kind(it) == ITEM_FN() {
@@ -314,7 +314,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     }
 
     // File-level aggregates + exit-gating.
-    let nf: i64 = rows.len();
+    let nf: i64 = rows.len() as i64;
     let mut file_max: i64 = 0;
     let mut over_count: i64 = 0;
     let mut exit_code: i32 = 0;
