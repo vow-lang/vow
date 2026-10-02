@@ -621,23 +621,24 @@ fn inst_ty_of(inst_ty_by_id: Vec<i64>, id: i64) -> i64 {
 
 // Emit the bounds assert for an indexed container access (Vec or String).
 //
-// The comparison is keyed off the index instruction's IR type so that the
-// emitted C says what it means. For an unsigned index `v{idx} >= 0` is
-// vacuous, and comparing it against the int64_t `.len` field would leave the
-// conversion to C's usual arithmetic conversions; emit a single explicit
-// comparison instead. Signed indices keep the two-sided form unchanged.
+// `.len` is uint64_t, so the comparison is keyed off the index instruction's
+// IR type to avoid leaving signed/unsigned conversion to C's usual arithmetic
+// conversions. An unsigned index is compared directly, and `v{idx} >= 0` would
+// be vacuous. A signed index keeps its `>= 0` guard so a negative index is
+// still caught, and compares against `.len` converted to int64_t, which is
+// lossless because every `.len` is bounded by the model capacity.
 fn emit_bounds_assert(out: String, idx: i64, container: i64, idx_ty: i64, label: String) {
     let is: String = i64_to_string(idx);
     let cs: String = i64_to_string(container);
     if ity_is_unsigned(idx_ty) {
         out.push_str(str6(String::from("  __ESBMC_assert(v"), is,
-            String::from(" < (uint64_t)v"), cs, String::from(".len, \""),
+            String::from(" < v"), cs, String::from(".len, \""),
             cemit_str2(label, String::from("\");\n"))));
         return;
     }
     out.push_str(str7(String::from("  __ESBMC_assert(v"), is,
         String::from(" >= 0 && v"), is,
-        String::from(" < v"), cs,
+        String::from(" < (int64_t)v"), cs,
         cemit_str2(String::from(".len, \""), cemit_str2(label, String::from("\");\n")))));
 }
 
@@ -1690,32 +1691,32 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>,
     if op == IOP_FIELD_GET() {
         if vec_contains_i64(vec_vars, id) {
             let ids: String = i64_to_string(id);
-            out.push_str(str3(String::from("  /* FieldGet -> vec */ v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
-            out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
-            out.push_str(str4(ids, String::from(".len <= "), i64_to_string(vec_max), String::from(");\n")));
+            out.push_str(str3(String::from("  /* FieldGet -> vec */ v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
+            out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
+            out.push_str(cemit_str2(i64_to_string(vec_max), String::from(");\n")));
             return;
         }
         if vec_contains_i64(string_vars, id) {
             let ids: String = i64_to_string(id);
-            out.push_str(str3(String::from("  /* FieldGet -> string */ v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
-            out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
-            out.push_str(str4(ids, String::from(".len <= "), i64_to_string(string_max), String::from(");\n")));
+            out.push_str(str3(String::from("  /* FieldGet -> string */ v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
+            out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
+            out.push_str(cemit_str2(i64_to_string(string_max), String::from(");\n")));
             return;
         }
         if vec_contains_i64(hashmap_vars, id) {
             let ids: String = i64_to_string(id);
-            out.push_str(str3(String::from("  /* FieldGet -> hashmap */ v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
-            out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
-            out.push_str(str4(ids, String::from(".len <= "), i64_to_string(hashmap_max), String::from(");\n")));
+            out.push_str(str3(String::from("  /* FieldGet -> hashmap */ v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
+            out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
+            out.push_str(cemit_str2(i64_to_string(hashmap_max), String::from(");\n")));
             return;
         }
         if vec_contains_i64(btreemap_vars, id) {
             let ids: String = i64_to_string(id);
-            out.push_str(str3(String::from("  /* FieldGet -> btreemap */ v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
-            out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
-            out.push_str(str4(ids, String::from(".len <= "), i64_to_string(btreemap_max), String::from(");\n")));
+            out.push_str(str3(String::from("  /* FieldGet -> btreemap */ v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
+            out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
+            out.push_str(cemit_str2(i64_to_string(btreemap_max), String::from(");\n")));
             // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
-            out.push_str(str3(String::from("  for (int64_t __si = 0; __si + 1 < v"), ids, String::from(".len; __si++)\n")));
+            out.push_str(str3(String::from("  for (uint64_t __si = 0; __si + 1 < v"), ids, String::from(".len; __si++)\n")));
             out.push_str(str3(String::from("    __ESBMC_assume(v"), ids, String::from(".keys[__si] < v")));
             out.push_str(str3(ids, String::from(".keys[__si + 1]);\n"), String::from("")));
             return;
@@ -1941,10 +1942,9 @@ fn emit_string_eq_invalidate(out: String, operand: i64, eq_lo: Vec<i64>, eq_hi: 
 
 fn emit_nondet_string_len(out: String, id: i64, string_max: i64) {
     let ids: String = i64_to_string(id);
-    out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
-    out.push_str(str5(String::from("  __ESBMC_assume(v"), ids,
-        String::from(".len >= 0 && v"), ids,
-        str3(String::from(".len < "), i64_to_string(string_max), String::from(");\n"))));
+    out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
+    out.push_str(str4(String::from("  __ESBMC_assume(v"), ids,
+        String::from(".len < "), cemit_str2(i64_to_string(string_max), String::from(");\n"))));
 }
 
 fn const_str_index_for(ids: Vec<i64>, idxs: Vec<i64>, id: i64) -> i64 {
@@ -1991,10 +1991,9 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
     if ds == String::from("__vow_string_from_cstr")
         || ds == String::from("__vow_string_from_cstr_in_arena") {
         let ids: String = i64_to_string(id);
-        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
-        out.push_str(str5(String::from("  __ESBMC_assume(v"), ids,
-            String::from(".len >= 0 && v"), ids,
-            str3(String::from(".len < "), i64_to_string(string_max), String::from(");\n"))));
+        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
+        out.push_str(str4(String::from("  __ESBMC_assume(v"), ids,
+            String::from(".len < "), cemit_str2(i64_to_string(string_max), String::from(");\n"))));
         return;
     }
     if ds == String::from("__vow_string_literal") {
@@ -2014,10 +2013,9 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
                 return;
             }
         }
-        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
-        out.push_str(str5(String::from("  __ESBMC_assume(v"), ids,
-            String::from(".len >= 0 && v"), ids,
-            str3(String::from(".len < "), i64_to_string(string_max), String::from(");\n"))));
+        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
+        out.push_str(str4(String::from("  __ESBMC_assume(v"), ids,
+            String::from(".len < "), cemit_str2(i64_to_string(string_max), String::from(");\n"))));
         return;
     }
     if ds == String::from("__vow_string_from_raw_parts_copy") {
@@ -2039,10 +2037,9 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
     }
     if ds == String::from("__vow_string_from_i64") || ds == String::from("__vow_string_from_i64_in_arena") || ds == String::from("__vow_string_from_u64") || ds == String::from("__vow_string_from_u64_in_arena") {
         let ids: String = i64_to_string(id);
-        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
-        out.push_str(str5(String::from("  __ESBMC_assume(v"), ids,
-            String::from(".len >= 0 && v"), ids,
-            str3(String::from(".len < "), i64_to_string(string_max), String::from(");\n"))));
+        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
+        out.push_str(str4(String::from("  __ESBMC_assume(v"), ids,
+            String::from(".len < "), cemit_str2(i64_to_string(string_max), String::from(");\n"))));
         return;
     }
     if ds == String::from("__vow_string_parse_i64_opt")
@@ -2144,10 +2141,10 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
         out.push_str(cemit_str2(ids, String::from(" = 1; }\n")));
         out.push_str(str5(String::from("  else if (v"), ns,
             String::from(".len <= v"), hs, String::from(".len) {\n")));
-        out.push_str(str5(String::from("    for (int64_t __i = 0; __i <= v"), hs,
+        out.push_str(str5(String::from("    for (uint64_t __i = 0; __i <= v"), hs,
             String::from(".len - v"), ns, String::from(".len; __i++) {\n")));
         out.push_str(String::from("      _Bool __match = 1;\n"));
-        out.push_str(str3(String::from("      for (int64_t __j = 0; __j < v"), ns, String::from(".len; __j++) {\n")));
+        out.push_str(str3(String::from("      for (uint64_t __j = 0; __j < v"), ns, String::from(".len; __j++) {\n")));
         out.push_str(str6(String::from("        if (v"), hs,
             String::from(".data[__i + __j] != v"), ns,
             String::from(".data[__j]) { __match = 0; break; }\n"),
@@ -2195,8 +2192,8 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
         let len: u64 = literal.len() as u64;
         out.push_str(str3(String::from("  v"), ids, String::from(" = 0;\n")));
         out.push_str(str3(String::from("  if (v"), ps, String::from(" >= 0 && v")));
-        out.push_str(str5(ps, String::from(" <= v"), ss, String::from(".len && "), i64_to_string(len as i64)));
-        out.push_str(str5(String::from("LL <= v"), ss, String::from(".len - v"), ps, String::from(") {\n")));
+        out.push_str(str5(ps, String::from(" <= (int64_t)v"), ss, String::from(".len && "), i64_to_string(len as i64)));
+        out.push_str(str5(String::from("LL <= (int64_t)v"), ss, String::from(".len - v"), ps, String::from(") {\n")));
         if len == 0 {
             out.push_str(str3(String::from("    v"), ids, String::from(" = 1;\n")));
         } else {
@@ -2227,16 +2224,16 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
         let max_tmp: String = cemit_str2(String::from("__substr_max_len_"), ids);
         out.push_str(str5(String::from("  int64_t "), start_tmp, String::from(" = v"), starts, String::from(";\n")));
         out.push_str(str5(String::from("  if ("), start_tmp, String::from(" < 0) { "), start_tmp, String::from(" = 0; }\n")));
-        out.push_str(str7(String::from("  if ("), start_tmp, String::from(" > v"), ss, String::from(".len) { "), start_tmp, String::from(" = v")));
+        out.push_str(str7(String::from("  if ("), start_tmp, String::from(" > (int64_t)v"), ss, String::from(".len) { "), start_tmp, String::from(" = (int64_t)v")));
         out.push_str(cemit_str2(ss, String::from(".len; }\n")));
         out.push_str(str5(String::from("  int64_t "), len_tmp, String::from(" = v"), lens, String::from(";\n")));
         out.push_str(str5(String::from("  if ("), len_tmp, String::from(" < 0) { "), len_tmp, String::from(" = 0; }\n")));
-        out.push_str(str5(String::from("  int64_t "), max_tmp, String::from(" = v"), ss, String::from(".len - ")));
+        out.push_str(str5(String::from("  int64_t "), max_tmp, String::from(" = (int64_t)v"), ss, String::from(".len - ")));
         out.push_str(cemit_str2(start_tmp, String::from(";\n")));
         out.push_str(str5(String::from("  if ("), len_tmp, String::from(" > "), max_tmp, String::from(") { ")));
         out.push_str(str5(len_tmp, String::from(" = "), max_tmp, String::from("; }\n"), String::from("")));
         out.push_str(str5(String::from("  v"), ids, String::from(".len = "), len_tmp, String::from(";\n")));
-        out.push_str(str5(String::from("  for (int64_t __i = 0; __i < v"), ids,
+        out.push_str(str5(String::from("  for (uint64_t __i = 0; __i < v"), ids,
             String::from(".len && __i < "), i64_to_string(string_max), String::from("; __i++) {\n")));
         out.push_str(str5(String::from("    v"), ids, String::from(".data[__i] = v"), ss, String::from(".data[")));
         out.push_str(cemit_str2(start_tmp, String::from(" + __i];\n")));
@@ -2255,16 +2252,16 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
         let end_tmp2: String = cemit_str2(String::from("__substring_end_"), ids2);
         out.push_str(str5(String::from("  int64_t "), start_tmp2, String::from(" = v"), starts2, String::from(";\n")));
         out.push_str(str5(String::from("  if ("), start_tmp2, String::from(" < 0) { "), start_tmp2, String::from(" = 0; }\n")));
-        out.push_str(str7(String::from("  if ("), start_tmp2, String::from(" > v"), ss2, String::from(".len) { "), start_tmp2, String::from(" = v")));
+        out.push_str(str7(String::from("  if ("), start_tmp2, String::from(" > (int64_t)v"), ss2, String::from(".len) { "), start_tmp2, String::from(" = (int64_t)v")));
         out.push_str(cemit_str2(ss2, String::from(".len; }\n")));
         out.push_str(str5(String::from("  int64_t "), end_tmp2, String::from(" = v"), ends2, String::from(";\n")));
         out.push_str(str5(String::from("  if ("), end_tmp2, String::from(" < "), start_tmp2, String::from(") { ")));
         out.push_str(str5(end_tmp2, String::from(" = "), start_tmp2, String::from("; }\n"), String::from("")));
-        out.push_str(str7(String::from("  if ("), end_tmp2, String::from(" > v"), ss2, String::from(".len) { "), end_tmp2, String::from(" = v")));
+        out.push_str(str7(String::from("  if ("), end_tmp2, String::from(" > (int64_t)v"), ss2, String::from(".len) { "), end_tmp2, String::from(" = (int64_t)v")));
         out.push_str(cemit_str2(ss2, String::from(".len; }\n")));
         out.push_str(str5(String::from("  v"), ids2, String::from(".len = "), end_tmp2, String::from(" - ")));
         out.push_str(cemit_str2(start_tmp2, String::from(";\n")));
-        out.push_str(str5(String::from("  for (int64_t __i = 0; __i < v"), ids2,
+        out.push_str(str5(String::from("  for (uint64_t __i = 0; __i < v"), ids2,
             String::from(".len && __i < "), i64_to_string(string_max), String::from("; __i++) {\n")));
         out.push_str(str5(String::from("    v"), ids2, String::from(".data[__i] = v"), ss2, String::from(".data[")));
         out.push_str(cemit_str2(start_tmp2, String::from(" + __i];\n")));
@@ -2344,7 +2341,7 @@ fn emit_map_op(out: String, inst: IrInst, hashmap_max: i64) {
         let vs: String = i64_to_string(v);
         out.push_str(String::from("  {\n"));
         out.push_str(String::from("    _Bool __found = 0;\n"));
-        out.push_str(str3(String::from("    for (int64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
+        out.push_str(str3(String::from("    for (uint64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
         out.push_str(str6(String::from("      if (v"), ms, String::from(".keys[__i] == v"),
             ks, String::from(") { v"), cemit_str2(ms, String::from(".vals[__i] = v"))));
         out.push_str(cemit_str2(vs, String::from("; __found = 1; break; }\n")));
@@ -2368,7 +2365,7 @@ fn emit_map_op(out: String, inst: IrInst, hashmap_max: i64) {
         let ks: String = i64_to_string(k);
         let ids: String = i64_to_string(id);
         out.push_str(str3(String::from("  v"), ids, String::from(" = 0;\n")));
-        out.push_str(str3(String::from("  for (int64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
+        out.push_str(str3(String::from("  for (uint64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
         out.push_str(str6(String::from("    if (v"), ms, String::from(".keys[__i] == v"),
             ks, String::from(") { v"), cemit_str2(ids, String::from(" = v"))));
         out.push_str(str3(ms, String::from(".vals[__i]; break; }\n"), String::from("")));
@@ -2382,7 +2379,7 @@ fn emit_map_op(out: String, inst: IrInst, hashmap_max: i64) {
         let ks: String = i64_to_string(k);
         let ids: String = i64_to_string(id);
         out.push_str(str3(String::from("  v"), ids, String::from(" = 0;\n")));
-        out.push_str(str3(String::from("  for (int64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
+        out.push_str(str3(String::from("  for (uint64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
         out.push_str(str6(String::from("    if (v"), ms, String::from(".keys[__i] == v"),
             ks, String::from(") { v"), cemit_str2(ids, String::from(" = 1; break; }\n"))));
         out.push_str(String::from("  }\n"));
@@ -2393,7 +2390,7 @@ fn emit_map_op(out: String, inst: IrInst, hashmap_max: i64) {
         let k: i64 = iargs[arg_offset + 1];
         let ms: String = i64_to_string(mp);
         let ks: String = i64_to_string(k);
-        out.push_str(str3(String::from("  for (int64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
+        out.push_str(str3(String::from("  for (uint64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
         out.push_str(str4(String::from("    if (v"), ms, String::from(".keys[__i] == v"),
             cemit_str2(ks, String::from(") {\n"))));
         out.push_str(str5(String::from("      v"), ms, String::from(".keys[__i] = v"), ms,
@@ -2439,8 +2436,8 @@ fn emit_btreemap_op(out: String, inst: IrInst, btreemap_max: i64) {
         out.push_str(str3(ids, String::from(".payload = 0;\n"), String::from("")));
         out.push_str(String::from("  {\n"));
         out.push_str(String::from("    _Bool __found = 0;\n"));
-        out.push_str(str3(String::from("    int64_t __pos = v"), ms, String::from(".len;\n")));
-        out.push_str(str3(String::from("    for (int64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
+        out.push_str(str3(String::from("    uint64_t __pos = v"), ms, String::from(".len;\n")));
+        out.push_str(str3(String::from("    for (uint64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
         out.push_str(str3(String::from("      if (v"), ms, String::from(".keys[__i] == v")));
         out.push_str(str3(ks, String::from(") { v"), ids));
         out.push_str(str3(String::from(".tag = 1; v"), ids, String::from(".payload = v")));
@@ -2452,7 +2449,7 @@ fn emit_btreemap_op(out: String, inst: IrInst, btreemap_max: i64) {
         out.push_str(String::from("    if (!__found) {\n"));
         out.push_str(str5(String::from("      __ESBMC_assert(v"), ms,
             String::from(".len < "), bms, String::from(", \"btreemap capacity\");\n")));
-        out.push_str(str3(String::from("      for (int64_t __j = v"), ms, String::from(".len; __j > __pos; __j--) {\n")));
+        out.push_str(str3(String::from("      for (uint64_t __j = v"), ms, String::from(".len; __j > __pos; __j--) {\n")));
         out.push_str(str3(String::from("        v"), ms, String::from(".keys[__j] = v")));
         out.push_str(str3(ms, String::from(".keys[__j - 1]; v"), ms));
         out.push_str(str3(String::from(".vals[__j] = v"), ms, String::from(".vals[__j - 1];\n")));
@@ -2472,7 +2469,7 @@ fn emit_btreemap_op(out: String, inst: IrInst, btreemap_max: i64) {
         let ks: String = i64_to_string(k);
         out.push_str(str3(String::from("  v"), ids, String::from(".tag = 0; v")));
         out.push_str(str3(ids, String::from(".payload = 0;\n"), String::from("")));
-        out.push_str(str3(String::from("  for (int64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
+        out.push_str(str3(String::from("  for (uint64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
         out.push_str(str3(String::from("    if (v"), ms, String::from(".keys[__i] == v")));
         out.push_str(str3(ks, String::from(") { v"), ids));
         out.push_str(str3(String::from(".tag = 1; v"), ids, String::from(".payload = v")));
@@ -2488,7 +2485,7 @@ fn emit_btreemap_op(out: String, inst: IrInst, btreemap_max: i64) {
         let ms: String = i64_to_string(mp);
         let ks: String = i64_to_string(k);
         out.push_str(str3(String::from("  v"), ids, String::from(" = 0;\n")));
-        out.push_str(str3(String::from("  for (int64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
+        out.push_str(str3(String::from("  for (uint64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
         out.push_str(str3(String::from("    if (v"), ms, String::from(".keys[__i] == v")));
         out.push_str(str3(ks, String::from(") { v"), ids));
         out.push_str(String::from(" = 1; break; }\n"));
@@ -2581,29 +2578,29 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
                     if vec_contains_i64(vec_vars, iid) {
                         let ids: String = i64_to_string(iid);
                         out.push_str(str3(String::from("  __vow_vec_t v"), ids, String::from(";\n")));
-                        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
-                        out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
-                        out.push_str(str4(ids, String::from(".len <= "), i64_to_string(vec_max), String::from(");\n")));
+                        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
+                        out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
+                        out.push_str(cemit_str2(i64_to_string(vec_max), String::from(");\n")));
                     } else if vec_contains_i64(string_vars, iid) {
                         let ids: String = i64_to_string(iid);
                         out.push_str(str3(String::from("  __vow_string_t v"), ids, String::from(";\n")));
-                        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
-                        out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
-                        out.push_str(str4(ids, String::from(".len <= "), i64_to_string(string_max), String::from(");\n")));
+                        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
+                        out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
+                        out.push_str(cemit_str2(i64_to_string(string_max), String::from(");\n")));
                     } else if vec_contains_i64(hashmap_vars, iid) {
                         let ids: String = i64_to_string(iid);
                         out.push_str(str3(String::from("  __vow_hashmap_t v"), ids, String::from(";\n")));
-                        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
-                        out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
-                        out.push_str(str4(ids, String::from(".len <= "), i64_to_string(hashmap_max), String::from(");\n")));
+                        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
+                        out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
+                        out.push_str(cemit_str2(i64_to_string(hashmap_max), String::from(");\n")));
                     } else if vec_contains_i64(btreemap_vars, iid) {
                         let ids: String = i64_to_string(iid);
                         out.push_str(str3(String::from("  __vow_btreemap_t v"), ids, String::from(";\n")));
-                        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
-                        out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
-                        out.push_str(str4(ids, String::from(".len <= "), i64_to_string(btreemap_max), String::from(");\n")));
+                        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
+                        out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
+                        out.push_str(cemit_str2(i64_to_string(btreemap_max), String::from(");\n")));
                         // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
-                        out.push_str(str3(String::from("  for (int64_t __si = 0; __si + 1 < v"), ids, String::from(".len; __si++)\n")));
+                        out.push_str(str3(String::from("  for (uint64_t __si = 0; __si + 1 < v"), ids, String::from(".len; __si++)\n")));
                         out.push_str(str3(String::from("    __ESBMC_assume(v"), ids, String::from(".keys[__si] < v")));
                         out.push_str(str3(ids, String::from(".keys[__si + 1]);\n"), String::from("")));
                     } else {
@@ -3470,24 +3467,24 @@ fn cemit_preamble_with_limits(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64
     out.push_str(String::from("extern double __VERIFIER_nondet_double(void);\n"));
     out.push_str(String::from("extern _Bool __VERIFIER_nondet_bool(void);\n\n"));
     out.push_str(str3(
-        String::from("typedef struct { int64_t len; int64_t data["),
+        String::from("typedef struct { uint64_t len; int64_t data["),
         i64_to_string(vec_max),
         String::from("]; } __vow_vec_t;\n")
     ));
     out.push_str(str3(
-        String::from("typedef struct { int64_t len; int8_t data["),
+        String::from("typedef struct { uint64_t len; int8_t data["),
         i64_to_string(string_max),
         String::from("]; } __vow_string_t;\n")
     ));
     out.push_str(str5(
-        String::from("typedef struct { int64_t len; int64_t keys["),
+        String::from("typedef struct { uint64_t len; int64_t keys["),
         i64_to_string(hashmap_max),
         String::from("]; int64_t vals["),
         i64_to_string(hashmap_max),
         String::from("]; } __vow_hashmap_t;\n")
     ));
     out.push_str(str5(
-        String::from("typedef struct { int64_t len; int64_t keys["),
+        String::from("typedef struct { uint64_t len; int64_t keys["),
         i64_to_string(btreemap_max),
         String::from("]; int64_t vals["),
         i64_to_string(btreemap_max),
