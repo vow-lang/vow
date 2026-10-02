@@ -8,7 +8,7 @@ fn fill_map() -> i64 {
         m.insert(i, i * 100);
         i = i + 1;
     }
-    m.len() + m.get(0) + m.get(15)
+    m.len() as i64 + m.get(0) + m.get(15)
 }
 
 fn main() -> i32 [io] {

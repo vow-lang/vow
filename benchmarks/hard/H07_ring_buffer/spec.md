@@ -15,8 +15,8 @@ fn ring_count(rb: RingBuf) -> i64
 
 ## Contracts
 
-- `ring_new`: `requires: capacity > 0`, `ensures: result.count == 0, ensures: result.capacity == capacity, ensures: result.data.len() == capacity`
-- `ring_write`: requires a non-negative count, available capacity, a valid write position, and `rb.data.len() == rb.capacity`; ensures count increments and capacity/data length are preserved
+- `ring_new`: `requires: capacity > 0`, `ensures: result.count == 0, ensures: result.capacity == capacity, ensures: result.data.len() as i64 == capacity`
+- `ring_write`: requires a non-negative count, available capacity, a valid write position, and `rb.data.len() as i64 == rb.capacity`; ensures count increments and capacity/data length are preserved
 - `ring_count`: `requires: rb.count >= 0`, `ensures: result >= 0`
 
 ## Constraints

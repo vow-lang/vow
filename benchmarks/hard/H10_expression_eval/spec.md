@@ -22,9 +22,8 @@ Operations are encoded as integers:
 - `requires: ops.len() >= 1` — an expression must contain at least one operation
 - No result postcondition is stated until the contract language can express
   validity and semantics of the encoded operation sequence
-- Loop `invariant: i >= 0`
-- Loop `invariant: i <= ops.len()`
-- Loop `invariant: sp >= 0`
+- Loop `invariant: i <= ops.len() as u64` (`i` is a `u64` counter)
+- Loop `invariant: sp <= ops.len() as u64` (`sp` is a `u64` stack pointer)
 
 ## Constraints
 

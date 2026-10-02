@@ -8,7 +8,7 @@ fn fill_vec() -> i64 {
         nums.push(i);
         i = i + 1;
     }
-    nums.len() + nums[0] + nums[31]
+    nums.len() as i64 + nums[0] + nums[31]
 }
 
 fn main() -> i32 [io] {

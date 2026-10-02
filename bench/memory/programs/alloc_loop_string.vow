@@ -10,13 +10,13 @@ fn make_piece() -> String {
 
 fn main() -> i32 [io] {
     let mut i: i64 = 0;
-    let mut total: i64 = 0;
+    let mut total: u64 = 0;
     while i < 60000 {
         let s: String = make_piece();
-        total = total + s.len();
+        total = total + s.len() as u64;
         i = i + 1;
     }
-    print_i64(total);
+    print_u64(total);
     print_str("\n");
     0
 }

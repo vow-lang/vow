@@ -21,7 +21,7 @@ fn main() -> i32 [io] {
         store_line(held, make_line());
         i = i + 1;
     }
-    print_i64(held.len() + held[0].len() + held[9999].len());
+    print_u64(held.len() as u64 + held[0].len() as u64 + held[9999].len() as u64);
     print_str("\n");
     0
 }

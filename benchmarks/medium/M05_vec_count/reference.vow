@@ -2,7 +2,7 @@ module VecCount
 
 fn vec_count_pos(v: Vec<i64>) -> i64 vow {
   ensures: result >= 0,
-  ensures: result <= v.len()
+  ensures: result <= v.len() as i64
 } {
   let mut count: u64 = 0;
   let mut i: u64 = 0;

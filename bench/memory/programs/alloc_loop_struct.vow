@@ -16,7 +16,7 @@ fn main() -> i32 [io] {
             b: i + 1,
             label: String::from("struct-entry-abcdefghijklmnopqrstuvwxyz-0123456789"),
         };
-        total = total + e.a + e.b + e.label.len();
+        total = total + e.a + e.b + e.label.len() as i64;
         i = i + 1;
     }
     print_i64(total);
