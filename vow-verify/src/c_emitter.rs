@@ -140,19 +140,21 @@ fn ty_is_unsigned(ty: Ty) -> bool {
 
 /// Emit the bounds assert for an indexed container access (`Vec` or `String`).
 ///
-/// The comparison is keyed off the index instruction's IR type so that the
-/// emitted C says what it means. For an unsigned index `v{idx} >= 0` is
-/// vacuous, and comparing it against the `int64_t` `.len` field would leave
-/// the conversion to C's usual arithmetic conversions; emit a single explicit
-/// comparison instead. Signed indices keep the two-sided form unchanged.
+/// `.len` is `uint64_t`, so the comparison is keyed off the index
+/// instruction's IR type to avoid leaving signed/unsigned conversion to C's
+/// usual arithmetic conversions. An unsigned index is compared directly, and
+/// `v{idx} >= 0` would be vacuous. A signed index keeps its `>= 0` guard so a
+/// negative index is still caught, and compares against `.len` converted to
+/// `int64_t`, which is lossless because every `.len` is bounded by the model
+/// capacity.
 fn emit_bounds_assert(idx: u32, container: u32, idx_ty: Ty, label: &str, out: &mut String) {
     if ty_is_unsigned(idx_ty) {
         out.push_str(&format!(
-            "  __ESBMC_assert(v{idx} < (uint64_t)v{container}.len, \"{label}\");\n"
+            "  __ESBMC_assert(v{idx} < v{container}.len, \"{label}\");\n"
         ));
     } else {
         out.push_str(&format!(
-            "  __ESBMC_assert(v{idx} >= 0 && v{idx} < v{container}.len, \"{label}\");\n"
+            "  __ESBMC_assert(v{idx} >= 0 && v{idx} < (int64_t)v{container}.len, \"{label}\");\n"
         ));
     }
 }
@@ -1544,9 +1546,9 @@ fn emit_inst(
                             "  v{id} = 0;\n\
                              \x20 if (v{n}.len == 0) {{ v{id} = 1; }}\n\
                              \x20 else if (v{n}.len <= v{h}.len) {{\n\
-                             \x20   for (int64_t __i = 0; __i <= v{h}.len - v{n}.len; __i++) {{\n\
+                             \x20   for (uint64_t __i = 0; __i <= v{h}.len - v{n}.len; __i++) {{\n\
                              \x20     _Bool __match = 1;\n\
-                             \x20     for (int64_t __j = 0; __j < v{n}.len; __j++) {{\n\
+                             \x20     for (uint64_t __j = 0; __j < v{n}.len; __j++) {{\n\
                              \x20       if (v{h}.data[__i + __j] != v{n}.data[__j]) {{ __match = 0; break; }}\n\
                              \x20     }}\n\
                              \x20     if (__match) {{ v{id} = 1; break; }}\n\
@@ -1570,7 +1572,7 @@ fn emit_inst(
                             let len = bytes.len();
                             out.push_str(&format!("  v{id} = 0;\n"));
                             out.push_str(&format!(
-                                "  if (v{pos} >= 0 && v{pos} <= v{s}.len && {len}LL <= v{s}.len - v{pos}) {{\n"
+                                "  if (v{pos} >= 0 && v{pos} <= (int64_t)v{s}.len && {len}LL <= (int64_t)v{s}.len - v{pos}) {{\n"
                             ));
                             if bytes.is_empty() {
                                 out.push_str(&format!("    v{id} = 1;\n"));
@@ -1602,13 +1604,13 @@ fn emit_inst(
                         out.push_str(&format!(
                             "  int64_t __substr_start_{id} = v{start};\n\
                              \x20 if (__substr_start_{id} < 0) {{ __substr_start_{id} = 0; }}\n\
-                             \x20 if (__substr_start_{id} > v{s}.len) {{ __substr_start_{id} = v{s}.len; }}\n\
+                             \x20 if (__substr_start_{id} > (int64_t)v{s}.len) {{ __substr_start_{id} = (int64_t)v{s}.len; }}\n\
                              \x20 int64_t __substr_len_{id} = v{len};\n\
                              \x20 if (__substr_len_{id} < 0) {{ __substr_len_{id} = 0; }}\n\
-                             \x20 int64_t __substr_max_len_{id} = v{s}.len - __substr_start_{id};\n\
+                             \x20 int64_t __substr_max_len_{id} = (int64_t)v{s}.len - __substr_start_{id};\n\
                              \x20 if (__substr_len_{id} > __substr_max_len_{id}) {{ __substr_len_{id} = __substr_max_len_{id}; }}\n\
                              \x20 v{id}.len = __substr_len_{id};\n\
-                             \x20 for (int64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
+                             \x20 for (uint64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
                              \x20   v{id}.data[__i] = v{s}.data[__substr_start_{id} + __i];\n\
                              \x20 }}\n",
                         ));
@@ -1627,12 +1629,12 @@ fn emit_inst(
                         out.push_str(&format!(
                             "  int64_t __substring_start_{id} = v{start};\n\
                              \x20 if (__substring_start_{id} < 0) {{ __substring_start_{id} = 0; }}\n\
-                             \x20 if (__substring_start_{id} > v{s}.len) {{ __substring_start_{id} = v{s}.len; }}\n\
+                             \x20 if (__substring_start_{id} > (int64_t)v{s}.len) {{ __substring_start_{id} = (int64_t)v{s}.len; }}\n\
                              \x20 int64_t __substring_end_{id} = v{end};\n\
                              \x20 if (__substring_end_{id} < __substring_start_{id}) {{ __substring_end_{id} = __substring_start_{id}; }}\n\
-                             \x20 if (__substring_end_{id} > v{s}.len) {{ __substring_end_{id} = v{s}.len; }}\n\
+                             \x20 if (__substring_end_{id} > (int64_t)v{s}.len) {{ __substring_end_{id} = (int64_t)v{s}.len; }}\n\
                              \x20 v{id}.len = __substring_end_{id} - __substring_start_{id};\n\
-                             \x20 for (int64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
+                             \x20 for (uint64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
                              \x20   v{id}.data[__i] = v{s}.data[__substring_start_{id} + __i];\n\
                              \x20 }}\n",
                         ));
@@ -1732,7 +1734,7 @@ fn emit_inst(
                         out.push_str(&format!(
                             "  {{\n\
                              \x20   _Bool __found = 0;\n\
-                             \x20   for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20   for (uint64_t __i = 0; __i < v{m}.len; __i++) {{\n\
                              \x20     if (v{m}.keys[__i] == v{k}) {{ v{m}.vals[__i] = v{v}; __found = 1; break; }}\n\
                              \x20   }}\n\
                              \x20   if (!__found) {{\n\
@@ -1747,7 +1749,7 @@ fn emit_inst(
                         let k = arg(1);
                         out.push_str(&format!(
                             "  v{id} = 0;\n\
-                             \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20 for (uint64_t __i = 0; __i < v{m}.len; __i++) {{\n\
                              \x20   if (v{m}.keys[__i] == v{k}) {{ v{id} = v{m}.vals[__i]; break; }}\n\
                              \x20 }}\n"
                         ));
@@ -1757,7 +1759,7 @@ fn emit_inst(
                         let k = arg(1);
                         out.push_str(&format!(
                             "  v{id} = 0;\n\
-                             \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20 for (uint64_t __i = 0; __i < v{m}.len; __i++) {{\n\
                              \x20   if (v{m}.keys[__i] == v{k}) {{ v{id} = 1; break; }}\n\
                              \x20 }}\n"
                         ));
@@ -1766,7 +1768,7 @@ fn emit_inst(
                         let m = arg(0);
                         let k = arg(1);
                         out.push_str(&format!(
-                            "  for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                            "  for (uint64_t __i = 0; __i < v{m}.len; __i++) {{\n\
                              \x20   if (v{m}.keys[__i] == v{k}) {{\n\
                              \x20     v{m}.keys[__i] = v{m}.keys[v{m}.len - 1];\n\
                              \x20     v{m}.vals[__i] = v{m}.vals[v{m}.len - 1];\n\
@@ -1805,8 +1807,8 @@ fn emit_inst(
                             "  v{id}.tag = 0; v{id}.payload = 0;\n\
                              \x20 {{\n\
                              \x20   _Bool __found = 0;\n\
-                             \x20   int64_t __pos = v{m}.len;\n\
-                             \x20   for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20   uint64_t __pos = v{m}.len;\n\
+                             \x20   for (uint64_t __i = 0; __i < v{m}.len; __i++) {{\n\
                              \x20     if (v{m}.keys[__i] == v{k}) {{\n\
                              \x20       v{id}.tag = 1; v{id}.payload = v{m}.vals[__i];\n\
                              \x20       v{m}.vals[__i] = v{v};\n\
@@ -1816,7 +1818,7 @@ fn emit_inst(
                              \x20   }}\n\
                              \x20   if (!__found) {{\n\
                              \x20     __ESBMC_assert(v{m}.len < {btreemap_max}, \"btreemap capacity\");\n\
-                             \x20     for (int64_t __j = v{m}.len; __j > __pos; __j--) {{\n\
+                             \x20     for (uint64_t __j = v{m}.len; __j > __pos; __j--) {{\n\
                              \x20       v{m}.keys[__j] = v{m}.keys[__j - 1];\n\
                              \x20       v{m}.vals[__j] = v{m}.vals[__j - 1];\n\
                              \x20     }}\n\
@@ -1830,7 +1832,7 @@ fn emit_inst(
                         let k = inst.args[1].0;
                         out.push_str(&format!(
                             "  v{id}.tag = 0; v{id}.payload = 0;\n\
-                             \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20 for (uint64_t __i = 0; __i < v{m}.len; __i++) {{\n\
                              \x20   if (v{m}.keys[__i] == v{k}) {{ v{id}.tag = 1; v{id}.payload = v{m}.vals[__i]; break; }}\n\
                              \x20   if (v{m}.keys[__i] > v{k}) {{ break; }}\n\
                              \x20 }}\n"
@@ -1841,7 +1843,7 @@ fn emit_inst(
                         let k = inst.args[1].0;
                         out.push_str(&format!(
                             "  v{id} = 0;\n\
-                             \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20 for (uint64_t __i = 0; __i < v{m}.len; __i++) {{\n\
                              \x20   if (v{m}.keys[__i] == v{k}) {{ v{id} = 1; break; }}\n\
                              \x20   if (v{m}.keys[__i] > v{k}) {{ break; }}\n\
                              \x20 }}\n"
@@ -1940,28 +1942,28 @@ fn emit_inst(
             if vec_vars.contains(&id) {
                 let vec_max = limits.vec_max;
                 out.push_str(&format!(
-                    "  /* FieldGet -> vec */ v{id}.len = __VERIFIER_nondet_long();\n\
-                     \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {vec_max});\n"
+                    "  /* FieldGet -> vec */ v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
+                     \x20 __ESBMC_assume(v{id}.len <= {vec_max});\n"
                 ));
             } else if string_vars.contains(&id) {
                 let string_max = limits.string_max;
                 out.push_str(&format!(
-                    "  /* FieldGet -> string */ v{id}.len = __VERIFIER_nondet_long();\n\
-                     \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {string_max});\n"
+                    "  /* FieldGet -> string */ v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
+                     \x20 __ESBMC_assume(v{id}.len <= {string_max});\n"
                 ));
             } else if hashmap_vars.contains(&id) {
                 let hashmap_max = limits.hashmap_max;
                 out.push_str(&format!(
-                    "  /* FieldGet -> hashmap */ v{id}.len = __VERIFIER_nondet_long();\n\
-                     \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {hashmap_max});\n"
+                    "  /* FieldGet -> hashmap */ v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
+                     \x20 __ESBMC_assume(v{id}.len <= {hashmap_max});\n"
                 ));
             } else if btreemap_vars.contains(&id) {
                 let btreemap_max = limits.btreemap_max;
                 // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
                 out.push_str(&format!(
-                    "  /* FieldGet -> btreemap */ v{id}.len = __VERIFIER_nondet_long();\n\
-                     \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {btreemap_max});\n\
-                     \x20 for (int64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
+                    "  /* FieldGet -> btreemap */ v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
+                     \x20 __ESBMC_assume(v{id}.len <= {btreemap_max});\n\
+                     \x20 for (uint64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
                      \x20   __ESBMC_assume(v{id}.keys[__si] < v{id}.keys[__si + 1]);\n"
                 ));
             } else if let Some(&src_id) = inst.args.first() {
@@ -2050,8 +2052,8 @@ fn emit_string_eq_invalidate(operand: u32, eq_pairs: &[(u32, u32)], out: &mut St
 
 fn emit_nondet_string_len(id: u32, string_max: usize, out: &mut String) {
     out.push_str(&format!(
-        "  v{id}.len = __VERIFIER_nondet_long();\n\
-         \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < {string_max});\n",
+        "  v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
+         \x20 __ESBMC_assume(v{id}.len < {string_max});\n",
     ));
 }
 
@@ -2264,28 +2266,28 @@ pub fn emit_c_function_full(
                     if vec_vars.contains(&id) {
                         let vec_max = limits.vec_max;
                         out.push_str(&format!(
-                            "  __vow_vec_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {vec_max});\n"
+                            "  __vow_vec_t v{id};\n  v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
+                             \x20 __ESBMC_assume(v{id}.len <= {vec_max});\n"
                         ));
                     } else if string_vars.contains(&id) {
                         let string_max = limits.string_max;
                         out.push_str(&format!(
-                            "  __vow_string_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {string_max});\n"
+                            "  __vow_string_t v{id};\n  v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
+                             \x20 __ESBMC_assume(v{id}.len <= {string_max});\n"
                         ));
                     } else if hashmap_vars.contains(&id) {
                         let hashmap_max = limits.hashmap_max;
                         out.push_str(&format!(
-                            "  __vow_hashmap_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {hashmap_max});\n"
+                            "  __vow_hashmap_t v{id};\n  v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
+                             \x20 __ESBMC_assume(v{id}.len <= {hashmap_max});\n"
                         ));
                     } else if btreemap_vars.contains(&id) {
                         let btreemap_max = limits.btreemap_max;
                         // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
                         out.push_str(&format!(
-                            "  __vow_btreemap_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {btreemap_max});\n\
-                             \x20 for (int64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
+                            "  __vow_btreemap_t v{id};\n  v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
+                             \x20 __ESBMC_assume(v{id}.len <= {btreemap_max});\n\
+                             \x20 for (uint64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
                              \x20   __ESBMC_assume(v{id}.keys[__si] < v{id}.keys[__si + 1]);\n"
                         ));
                     } else {
@@ -2978,16 +2980,16 @@ fn emit_c_preamble(out: &mut String, helpers: &ModelHelpers, limits: &VerifyLimi
     let hashmap_max = limits.hashmap_max;
     let btreemap_max = limits.btreemap_max;
     out.push_str(&format!(
-        "typedef struct {{ int64_t len; int64_t data[{vec_max}]; }} __vow_vec_t;\n",
+        "typedef struct {{ uint64_t len; int64_t data[{vec_max}]; }} __vow_vec_t;\n",
     ));
     out.push_str(&format!(
-        "typedef struct {{ int64_t len; int8_t data[{string_max}]; }} __vow_string_t;\n",
+        "typedef struct {{ uint64_t len; int8_t data[{string_max}]; }} __vow_string_t;\n",
     ));
     out.push_str(&format!(
-        "typedef struct {{ int64_t len; int64_t keys[{hashmap_max}]; int64_t vals[{hashmap_max}]; }} __vow_hashmap_t;\n",
+        "typedef struct {{ uint64_t len; int64_t keys[{hashmap_max}]; int64_t vals[{hashmap_max}]; }} __vow_hashmap_t;\n",
     ));
     out.push_str(&format!(
-        "typedef struct {{ int64_t len; int64_t keys[{btreemap_max}]; int64_t vals[{btreemap_max}]; }} __vow_btreemap_t;\n",
+        "typedef struct {{ uint64_t len; int64_t keys[{btreemap_max}]; int64_t vals[{btreemap_max}]; }} __vow_btreemap_t;\n",
     ));
     out.push_str("typedef struct { int64_t tag; int64_t payload; } __vow_option_t;\n");
     for &(is_shl, signedness, width) in &helpers.shifts {
@@ -3975,7 +3977,10 @@ mod tests {
             c.contains("v4 = 0;") && !c.contains("v4 = __VERIFIER_nondet_long"),
             "literal helper should be modeled deterministically: {c}"
         );
-        assert!(c.contains("3LL <= v0.len - v1"), "byte length guard: {c}");
+        assert!(
+            c.contains("3LL <= (int64_t)v0.len - v1"),
+            "byte length guard: {c}"
+        );
         assert!(
             c.contains("(unsigned char)v0.data[v1 + 0] != 97")
                 && c.contains("(unsigned char)v0.data[v1 + 1] != 0")
@@ -5174,11 +5179,37 @@ mod tests {
         );
         let out = emit_c_module(&[&f], &HashMap::new(), &VerifyLimits::default());
         assert!(out.contains("__vow_vec_t"), "vec typedef: {out}");
-        assert!(out.contains("int64_t len"), "vec len field: {out}");
+        assert!(out.contains("uint64_t len"), "vec len field: {out}");
         assert!(
             out.contains("int64_t data[128]"),
             "vec data array field: {out}"
         );
+    }
+
+    #[test]
+    fn emit_c_module_len_fields_are_unsigned_in_every_container() {
+        let f = make_func(
+            "f",
+            vec![],
+            Ty::Unit,
+            vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
+        );
+        let out = emit_c_module(&[&f], &HashMap::new(), &VerifyLimits::default());
+        for ty in [
+            "__vow_vec_t",
+            "__vow_string_t",
+            "__vow_hashmap_t",
+            "__vow_btreemap_t",
+        ] {
+            let line = out
+                .lines()
+                .find(|l| l.contains(&format!("}} {ty};")))
+                .unwrap_or_else(|| panic!("{ty} typedef missing: {out}"));
+            assert!(
+                line.starts_with("typedef struct { uint64_t len;"),
+                "{ty} len field must be uint64_t: {line}"
+            );
+        }
     }
 
     #[test]
@@ -5439,7 +5470,7 @@ mod tests {
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
-            c.contains("__ESBMC_assert(v3 >= 0 && v3 < v2.len"),
+            c.contains("__ESBMC_assert(v3 >= 0 && v3 < (int64_t)v2.len"),
             "bounds check: {c}"
         );
         assert!(c.contains("v4 = v2.data[v3]"), "get access: {c}");
@@ -5518,7 +5549,7 @@ mod tests {
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
-            c.contains("__ESBMC_assert(v3 >= 0 && v3 < v2.len"),
+            c.contains("__ESBMC_assert(v3 >= 0 && v3 < (int64_t)v2.len"),
             "bounds check: {c}"
         );
         assert!(c.contains("v2.data[v3] = v4"), "set store: {c}");
@@ -5663,7 +5694,7 @@ mod tests {
         };
         let c = emit_c_function(&str_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
-            c.contains("__ESBMC_assume(v0.len >= 0 && v0.len <= 256)"),
+            c.contains("__ESBMC_assume(v0.len <= 256)"),
             "GetArg bound must include len == string_max (reachable via push_byte): {c}"
         );
         assert!(
@@ -5706,7 +5737,7 @@ mod tests {
         };
         let c = emit_c_function(&vec_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
-            c.contains("__ESBMC_assume(v0.len >= 0 && v0.len <= 128)"),
+            c.contains("__ESBMC_assume(v0.len <= 128)"),
             "GetArg bound must include len == vec_max: {c}"
         );
         assert!(!c.contains("v0.data = "), "no data assignment: {c}");
@@ -5742,7 +5773,7 @@ mod tests {
         };
         let c = emit_c_function(&map_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
-            c.contains("__ESBMC_assume(v0.len >= 0 && v0.len <= 64)"),
+            c.contains("__ESBMC_assume(v0.len <= 64)"),
             "GetArg bound must include len == hashmap_max: {c}"
         );
         assert!(!c.contains("v0.keys = "), "no keys assignment: {c}");
@@ -6037,9 +6068,7 @@ mod tests {
                 "{name} result should use the String model: {c}"
             );
             assert!(
-                c.contains(&format!(
-                    "__ESBMC_assume(v{call_id}.len >= 0 && v{call_id}.len < 256)"
-                )),
+                c.contains(&format!("__ESBMC_assume(v{call_id}.len < 256)")),
                 "{name} result length should be bounded by string_max: {c}"
             );
         }
@@ -6493,7 +6522,7 @@ mod tests {
         };
         let c = emit_c_function(&str_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
-            c.contains("__ESBMC_assume(v1.len >= 0 && v1.len <= 256)"),
+            c.contains("__ESBMC_assume(v1.len <= 256)"),
             "FieldGet string bound must include string_max: {c}"
         );
         assert!(
@@ -6541,7 +6570,7 @@ mod tests {
         };
         let c = emit_c_function(&vec_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
-            c.contains("__ESBMC_assume(v1.len >= 0 && v1.len <= 128)"),
+            c.contains("__ESBMC_assume(v1.len <= 128)"),
             "FieldGet vec bound must include vec_max: {c}"
         );
         assert!(
@@ -6589,7 +6618,7 @@ mod tests {
         };
         let c = emit_c_function(&map_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
-            c.contains("__ESBMC_assume(v1.len >= 0 && v1.len <= 64)"),
+            c.contains("__ESBMC_assume(v1.len <= 64)"),
             "FieldGet map bound must include hashmap_max: {c}"
         );
         assert!(
@@ -6663,11 +6692,11 @@ mod tests {
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__vow_string_t v1;"), "string struct decl: {c}");
         assert!(
-            c.contains("v1.len = __VERIFIER_nondet_long()"),
+            c.contains("v1.len = __VERIFIER_nondet_unsigned_long()"),
             "nondet len: {c}"
         );
         assert!(
-            c.contains("__ESBMC_assume(v1.len >= 0 && v1.len < 256)"),
+            c.contains("__ESBMC_assume(v1.len < 256)"),
             "len bounded by string_max: {c}"
         );
         assert!(
@@ -6765,7 +6794,7 @@ mod tests {
             false,
         );
         assert!(
-            c.contains("typedef struct { int64_t len; int8_t data[5]; } __vow_string_t;"),
+            c.contains("typedef struct { uint64_t len; int8_t data[5]; } __vow_string_t;"),
             "literal bytes must fit in the string model: {c}"
         );
         assert!(
@@ -6867,12 +6896,12 @@ mod tests {
                 "string result: {c}"
             );
             assert!(
-                c.contains(&format!("v{id}.len = __VERIFIER_nondet_long();")),
+                c.contains(&format!("v{id}.len = __VERIFIER_nondet_unsigned_long();")),
                 "nondeterministic length: {c}"
             );
             assert!(
                 c.contains(&format!(
-                    "__ESBMC_assume(v{id}.len >= 0 && v{id}.len < {});",
+                    "__ESBMC_assume(v{id}.len < {});",
                     limits.string_max
                 )),
                 "bounded length: {c}"
@@ -7146,7 +7175,7 @@ mod tests {
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
-            c.contains("__ESBMC_assert(v2 >= 0 && v2 < v1.len"),
+            c.contains("__ESBMC_assert(v2 >= 0 && v2 < (int64_t)v1.len"),
             "bounds check: {c}"
         );
         assert!(
@@ -8370,11 +8399,11 @@ mod tests {
         }
     }
 
-    /// An unsigned index drops the vacuous `>= 0` conjunct and converts the
-    /// signed `.len` field explicitly, so the emitted C carries no
+    /// An unsigned index drops the vacuous `>= 0` conjunct and compares
+    /// directly against the `uint64_t` `.len` field, so the emitted C carries no
     /// mixed-signedness comparison (#1113).
     #[test]
-    fn bounds_assert_unsigned_index_is_explicitly_converted() {
+    fn bounds_assert_unsigned_index_compares_directly() {
         let cases = [
             ("__vow_vec_len", "__vow_vec_get_val", "vec bounds"),
             ("__vow_vec_len", "__vow_vec_set_val", "vec bounds"),
@@ -8384,23 +8413,27 @@ mod tests {
             for idx_ty in [Ty::U8, Ty::U16, Ty::U32, Ty::U64] {
                 let func = indexed_container_fn(len_extern, index_extern, idx_ty);
                 let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
-                let expected = format!("__ESBMC_assert(v2 < (uint64_t)v0.len, \"{label}\");");
+                let expected = format!("__ESBMC_assert(v2 < v0.len, \"{label}\");");
                 assert!(
                     c.contains(&expected),
                     "{index_extern} with {idx_ty:?} index must emit `{expected}`: {c}"
                 );
                 assert!(
-                    !c.contains(&format!("v2 >= 0 && v2 < v0.len, \"{label}\"")),
+                    !c.contains("v2 >= 0")
+                        && !c.contains("(uint64_t)")
+                        && !c.contains("(int64_t)v0.len"),
                     "{index_extern} with {idx_ty:?} index must not emit the vacuous \
-                     signed form: {c}"
+                     signed form or a conversion: {c}"
                 );
             }
         }
     }
 
-    /// A signed index keeps the two-sided form byte-for-byte (#1113).
+    /// A signed index keeps its `>= 0` guard and converts `.len` to `int64_t`
+    /// explicitly, so a negative index is still caught without a mixed-signedness
+    /// comparison (#1113).
     #[test]
-    fn bounds_assert_signed_index_is_unchanged() {
+    fn bounds_assert_signed_index_keeps_guard() {
         let cases = [
             ("__vow_vec_len", "__vow_vec_get_val", "vec bounds"),
             ("__vow_vec_len", "__vow_vec_set_val", "vec bounds"),
@@ -8410,14 +8443,15 @@ mod tests {
             for idx_ty in [Ty::I8, Ty::I16, Ty::I32, Ty::I64] {
                 let func = indexed_container_fn(len_extern, index_extern, idx_ty);
                 let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
-                let expected = format!("__ESBMC_assert(v2 >= 0 && v2 < v0.len, \"{label}\");");
+                let expected =
+                    format!("__ESBMC_assert(v2 >= 0 && v2 < (int64_t)v0.len, \"{label}\");");
                 assert!(
                     c.contains(&expected),
                     "{index_extern} with {idx_ty:?} index must emit `{expected}`: {c}"
                 );
                 assert!(
-                    !c.contains("(uint64_t)v0.len"),
-                    "{index_extern} with {idx_ty:?} index must not cast .len: {c}"
+                    !c.contains("(uint64_t)"),
+                    "{index_extern} with {idx_ty:?} index must not cast to unsigned: {c}"
                 );
             }
         }
