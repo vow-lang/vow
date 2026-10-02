@@ -509,7 +509,7 @@ fn check_nonfinite_f64_const(id: i64, name: String, bits: i64, base_code: i64) -
     if !c.contains(expected) { return base_code; }
     if c.contains(String::from("= inf;")) { return base_code + 1; }
     if c.contains(String::from("= -inf;")) { return base_code + 2; }
-    if c.contains(String::from("= nan;")) { return base_code + 3; }
+    if c.contains(String::from("= NaN;")) { return base_code + 3; }
     0
 }
 
