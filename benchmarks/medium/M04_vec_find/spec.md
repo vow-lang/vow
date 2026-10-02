@@ -14,7 +14,7 @@ fn vec_find(v: Vec<i64>, target: i64) -> i64
 
 - `ensures: result >= 0 - 1` — result is -1 or a valid index
 - `ensures: result < v.len()` — if found, index is valid (also true for -1 < len when len >= 0)
-- Loop `invariant: i >= 0`
+- The loop counter `i` is a `u64` local, so it needs no `invariant: i >= 0`; bridge with `v.len() as u64` and `found = i as i64`
 - Loop `invariant: i <= v.len()`
 
 ## Constraints

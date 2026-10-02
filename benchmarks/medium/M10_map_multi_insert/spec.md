@@ -14,7 +14,7 @@ fn map_fill(n: i64) -> HashMap<i64, i64>
 
 - `requires: n >= 0` — count is non-negative
 - `ensures: result.len() == n` — map has exactly `n` entries
-- Loop `invariant: i >= 0`
+- The loop counter `i` is a `u64` local, so it needs no `invariant: i >= 0`; bridge with `n as u64` and `i as i64`
 - Loop `invariant: i <= n`
 
 ## Constraints
