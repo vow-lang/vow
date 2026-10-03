@@ -1477,8 +1477,8 @@ fn selfhosted_btreemap_new_root_escape_note() {
 }
 
 /// Issue #1265: `__vow_btreemap_insert`/`__vow_btreemap_get` return a fresh
-/// `Option<i64>` via `alloc_option_i64` — byte-identical in shape to
-/// `__vow_string_parse_i64_opt`'s allocation — but were absent from every
+/// `Option<i64>` — the same cell shape `__vow_string_parse_i64_opt` allocates —
+/// but were absent from every
 /// `heap_producing_extern` sub-list, so `RegionRootEscape` never fired when
 /// one of these results escaped through a parameter container.
 #[test]
@@ -1630,12 +1630,12 @@ fn selfhosted_hashmap_get_root_escape_note() {
     assert_hashmap_get_root_escape_note(&vowc, "self-hosted");
 }
 
-/// Issue #1265: `option_creation_extern` only recognized
+/// Issue #1265: region inference only recognized
 /// `__vow_string_parse_i64_opt`/`_in_arena`, omitting `__vow_string_parse_u64_opt`
 /// and the narrow-integer family (`parse_i8/u8/i16/u16/i32/u32_opt`), all of
-/// which build their `Option<N>` via the same `__vow_vec_new(8, 8)` shape as
-/// the already-tracked `parse_i64_opt`. `parse_u64` is the representative
-/// fixture for this allocation-shape family.
+/// which build their `Option<N>` as the same fresh cell as the already-tracked
+/// `parse_i64_opt`. `parse_u64` is the representative fixture for this
+/// allocation-shape family.
 #[test]
 fn rust_parse_u64_opt_root_escape_note() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
