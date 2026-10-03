@@ -2347,11 +2347,26 @@ fn merge_if_result_ty(then_ty: i64, then_is_marker: bool, else_ty: i64) -> i64 {
     then_ty
 }
 
-fn emit_narrow_integer_constant(ctx: LowerCtx, value: i64, ty: i64) -> i64 {
+// Stored data bits of a narrow integer constant: the low byte for i8/u8, the
+// low 32 bits sign-extended for i16/u16/i32/u32. Twin of the casts inside
+// emit_narrow_integer_constant in vow-ir/src/lower/mod.rs.
+fn narrow_const_bits(value: i64, ty: i64) -> i64 {
+    if ty == ITY_I8() || ty == ITY_U8() {
+        return value & 255;
+    }
+    let low: i64 = value & 4294967295;
+    if low >= 2147483648 {
+        return low - 4294967296;
+    }
+    low
+}
+
+fn emit_narrow_integer_constant(ctx: LowerCtx, raw_value: i64, ty: i64) -> i64 {
     if ty == ITY_U64() {
         let u64_args: Vec<i64> = Vec::new();
-        return lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), u64_args, IDATA_CONST_U64(), value, 0, String::from(""));
+        return lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), u64_args, IDATA_CONST_U64(), raw_value, 0, String::from(""));
     }
+    let value: i64 = narrow_const_bits(raw_value, ty);
     let narrow_op: i64 = if ty == ITY_I8() || ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
     let narrow_data: i64 = if ty == ITY_I8() || ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
     let const_args: Vec<i64> = Vec::new();
@@ -2661,9 +2676,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 }
                 if ct == ITY_I128() || ct == ITY_U128() {
                     return emit_wide_limbs_constant(ctx, ct, cv, ctx.const_his[ci]);
-                }
-                if ct == ITY_I8() || ct == ITY_U8() {
-                    return emit_narrow_integer_constant(ctx, cv & 255, ct);
                 }
                 if diverges_from_speculative_int(ct) {
                     return emit_narrow_integer_constant(ctx, cv, ct);
