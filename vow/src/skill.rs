@@ -1940,7 +1940,7 @@ if x > 0 {
 }
 ```
 
-`if`/`else` is an expression — both branches must have the same type. There is no `else if` keyword; nest `if` inside `else`:
+`if`/`else` is an expression — both branches must have the same type. The condition must have type `bool` (or `never`). There is no `else if` keyword; nest `if` inside `else`:
 
 ```vow
 if x < lo {
@@ -7253,7 +7253,7 @@ if x > 0 {
 }
 ```
 
-`if`/`else` is an expression — both branches must have the same type. There is no `else if` keyword; nest `if` inside `else`:
+`if`/`else` is an expression — both branches must have the same type. The condition must have type `bool` (or `never`). There is no `else if` keyword; nest `if` inside `else`:
 
 ```vow
 if x < lo {

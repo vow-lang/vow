@@ -1,0 +1,6 @@
+// TEST: stderr "TypeMismatch"
+module IfCondNotBool
+
+fn main() -> i32 {
+    if 5 { 0 } else { 1 }
+}

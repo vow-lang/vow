@@ -4082,7 +4082,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`if`/`else` is an expression -- both branches must have the same type. There is no `else if` keyword; nest `if` inside `else`:\n"));
+    r.push_str(String::from("`if`/`else` is an expression -- both branches must have the same type. The condition must have type `bool` (or `never`). There is no `else if` keyword; nest `if` inside `else`:\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("if x < lo {\n"));
@@ -9417,7 +9417,7 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`if`/`else` is an expression -- both branches must have the same type. There is no `else if` keyword; nest `if` inside `else`:\n"));
+    r.push_str(String::from("`if`/`else` is an expression -- both branches must have the same type. The condition must have type `bool` (or `never`). There is no `else if` keyword; nest `if` inside `else`:\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("if x < lo {\n"));
