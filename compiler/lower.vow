@@ -51,6 +51,7 @@ struct LowerCtx {
     cur_vow_lid: i64,
     str_eids: Vec<i64>,
     const_names: Vec<String>,
+    // low and high 64-bit limbs of the 128-bit two's-complement literal pattern
     const_values: Vec<i64>,
     const_his: Vec<i64>,
     const_tids: Vec<i64>,

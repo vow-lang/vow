@@ -64,7 +64,7 @@ fn check_lowered_const_data() -> i64 {
     );
     let item_files: Vec<String> = Vec::new();
     let mut item_i: u64 = 0;
-    while item_i < 18 {
+    while item_i < parsed.items.len() {
         item_files.push(String::from("const_data.vow"));
         item_i = item_i + 1;
     }

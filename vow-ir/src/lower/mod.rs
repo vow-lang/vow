@@ -965,7 +965,8 @@ pub(crate) struct LowerCtx {
     struct_field_ast_types: Rc<HashMap<String, Vec<AstType>>>,
     // expr addresses whose resolved type is String (from checker)
     string_exprs: StringExprSet,
-    // const name → (compile-time value, declared type)
+    // const name → (128-bit two's-complement pattern of the literal, declared
+    // type); the emitters truncate the pattern to the declared width
     const_map: HashMap<String, (u128, Ty)>,
     // loop exit block stack for break
     loop_exit_blocks: Vec<BlockId>,
