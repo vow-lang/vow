@@ -22,7 +22,7 @@ fn main() -> i32 [io] {
     v.push(ExprData::Const(30));
 
     let mut i: u64 = 0;
-    while i < v.len() as u64 {
+    while i < v.len() {
         let e: ExprData = v[i];
         print_i64(expr_tag(e));
         i = i + 1;
@@ -31,7 +31,7 @@ fn main() -> i32 [io] {
     v.pop();
     print_str("after_pop:");
     let mut j: u64 = 0;
-    while j < v.len() as u64 {
+    while j < v.len() {
         let e2: ExprData = v[j];
         print_i64(expr_tag(e2));
         j = j + 1;

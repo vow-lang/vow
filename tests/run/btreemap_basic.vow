@@ -13,11 +13,11 @@ fn fetch(m: BTreeMap<i64, i64>) -> Option<i64> [io] {
 fn main() -> i32 [io] {
     let m: BTreeMap<i64, i64> = BTreeMap::new();
     print_str(String::from("len_before="));
-    print_u64(m.len() as u64);
+    print_u64(m.len());
     print_str(String::from("\n"));
     m.insert(7, 42);
     print_str(String::from("len_after="));
-    print_u64(m.len() as u64);
+    print_u64(m.len());
     print_str(String::from("\n"));
     fetch(m);
     0

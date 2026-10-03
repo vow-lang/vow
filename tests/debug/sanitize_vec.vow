@@ -11,7 +11,7 @@ fn main() -> i32 [io] {
   v.push(20);
   v.push(30);
   let mut i: u64 = 0;
-  while i < v.len() as u64 {
+  while i < v.len() {
     print_i64(v[i]);
     i = i + 1;
   };

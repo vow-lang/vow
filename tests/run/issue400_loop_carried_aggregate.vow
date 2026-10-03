@@ -46,7 +46,7 @@ fn box_sum(b: Box) -> i64 {
     let d: Vec<i64> = b.data;
     let mut s: i64 = 0;
     let mut i: u64 = 0;
-    while i < d.len() as u64 {
+    while i < d.len() {
         s = s + d[i];
         i = i + 1;
     }

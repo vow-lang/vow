@@ -6,7 +6,7 @@ fn cat() -> u64 vow {
 } {
   let s: String = String::from("hi");
   s.push_str(String::from(" there"));
-  s.len() as u64
+  s.len()
 }
 
 fn main() -> i32 [io] {

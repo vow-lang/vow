@@ -8,7 +8,7 @@ fn main() -> i32 [io] {
 
     // && must short-circuit: 5 < 2 is false, v[5] must NOT be evaluated
     let idx: u64 = 5;
-    if idx < v.len() as u64 && v[idx] == 10 {
+    if idx < v.len() && v[idx] == 10 {
         print_str("FAIL");
         return 1i32;
     }

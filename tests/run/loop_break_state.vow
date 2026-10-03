@@ -8,7 +8,7 @@ fn main() -> i32 [io] {
     let mut found: i64 = 0;
     let mut value: i64 = 0;
     loop {
-        if idx >= xs.len() as u64 {
+        if idx >= xs.len() {
             break;
         }
         let cand: i64 = xs[idx];

@@ -23,7 +23,7 @@ fn hex_value(b: i64) -> i64 vow {
 fn compact_hex(s: String) -> String {
     let out: String = String::new();
     let mut i: u64 = 0;
-    let n: u64 = s.len() as u64;
+    let n: u64 = s.len();
     while i < n vow {
         invariant: i <= n
     } {
@@ -39,7 +39,7 @@ fn compact_hex(s: String) -> String {
 fn hex_encode_bytes(bytes: Vec<i64>) -> String {
     let out: String = String::new();
     let mut i: u64 = 0;
-    let n: u64 = bytes.len() as u64;
+    let n: u64 = bytes.len();
     while i < n vow {
         invariant: i <= n
     } {
@@ -65,7 +65,7 @@ fn hex_decode_bytes(hex: String) -> Vec<i64> [panic] {
     }
     let out: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
-    let n: u64 = clean.len() as u64;
+    let n: u64 = clean.len();
     while i < n vow {
         invariant: i <= n
     } {
