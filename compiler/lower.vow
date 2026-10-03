@@ -492,6 +492,40 @@ fn lctx_generic_ast_arg_tid(ctx: LowerCtx, tid: i64, expected_name: String, inde
     list_get(ctx.arena, args_lid, index)
 }
 
+// The one accessor for map-typed declarations: the map tag ("HashMap" or
+// "BTreeMap", else "") of a declared AST type. Method dispatch keys on the
+// receiver tag, so an instruction whose only evidence of being a map is its
+// declared type (a `Vec<HashMap<..>>` element) would otherwise drop
+// `get`/`contains_key`/`insert` silently. Mirrors Rust `declared_map`.
+fn lctx_map_tag_of_ast_tid(ctx: LowerCtx, tid: i64) -> String {
+    if tid == -1 { return String::from(""); }
+    if lctx_generic_ast_arg_tid(ctx, tid, String::from("HashMap"), 0) != -1 {
+        return String::from("HashMap");
+    }
+    if lctx_generic_ast_arg_tid(ctx, tid, String::from("BTreeMap"), 0) != -1 {
+        return String::from("BTreeMap");
+    }
+    String::from("")
+}
+
+// A map stores each value in one 64-bit slot, so the `Option<V>` that `get` and
+// `BTreeMap::insert` return carries the value at full width. For a narrow
+// integer `V` the payload is typed at `V`'s width, or an unwrapped value mixes
+// an i64 with V-typed operands and fails Cranelift verification. Mirrors Rust
+// `record_map_value_option_ty`.
+fn lctx_tag_map_value_option_elem(ctx: LowerCtx, map_id: i64, result: i64) {
+    let map_ast_tid: i64 = lctx_get_declared_ast_tid(ctx, map_id);
+    let map_name: String = lctx_map_tag_of_ast_tid(ctx, map_ast_tid);
+    if map_name == String::from("") { return; }
+    let value_ast_tid: i64 = lctx_generic_ast_arg_tid(ctx, map_ast_tid, map_name, 1);
+    if value_ast_tid == -1 { return; }
+    let value_ty: i64 = lctx_lower_ast_ty(ctx, value_ast_tid);
+    let width: i64 = narrow_int_width(value_ty);
+    if width == 8 || width == 16 || width == 32 {
+        lctx_tag_option_elem(ctx, result, value_ty);
+    }
+}
+
 fn lctx_is_str_eid(ctx: LowerCtx, eid: i64) -> bool {
     let n: u64 = ctx.str_eids.len();
     let mut i: u64 = 0;
@@ -3658,6 +3692,18 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         get_args.push(idx_phi);
         let elem_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), get_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"));
         lctx_project_vec_index_metadata(ctx, iter_id, elem_id);
+        let iter_elem_ast_tid: i64 = lctx_generic_ast_arg_tid(
+            ctx, lctx_get_declared_ast_tid(ctx, iter_id), String::from("Vec"), 0
+        );
+        // A collection element keeps its declared type, as an indexed element
+        // does, so the binding dispatches map methods and indexes into an inner
+        // `Vec<Map>`. Mirrors Rust `record_collection_foreach_element`.
+        if iter_elem_ast_tid != -1 {
+            if lctx_map_tag_of_ast_tid(ctx, iter_elem_ast_tid) != String::from("")
+                || lctx_generic_ast_arg_tid(ctx, iter_elem_ast_tid, String::from("Vec"), 0) != -1 {
+                lctx_tag_declared_ast_tid(ctx, elem_id, iter_elem_ast_tid);
+            }
+        }
 
         let for_scope_depth: u64 = ctx.scope_vars.len();
         lctx_push_scope(ctx);
@@ -4158,6 +4204,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if recv_tag_str == String::from("") && lctx_is_str_eid(ctx, recv_eid) {
             recv_tag_str = String::from("String");
         }
+        if recv_tag_str == String::from("") {
+            recv_tag_str = lctx_map_tag_of_ast_tid(ctx, lctx_get_declared_ast_tid(ctx, recv_id));
+        }
 
         let method_spec: i64 = builtin_method_spec(recv_tag_str, method_name);
         if method_spec != 0 {
@@ -4198,6 +4247,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             }
             if method_spec_result_tag(method_spec) == METHOD_TAG_OPTION() {
                 lctx_tag(ctx, result, String::from("Option"));
+                lctx_tag_map_value_option_elem(ctx, recv_id, result);
             }
             return result;
         }
@@ -4301,6 +4351,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_insert"));
                 lctx_set_inst_span(ctx, result, expr_span(a, eid));
                 lctx_tag(ctx, result, String::from("Option"));
+                lctx_tag_map_value_option_elem(ctx, recv_id, result);
                 return result;
             }
         }
@@ -5020,14 +5071,7 @@ fn lower_consumed_expr_with_expected_ast_tid(
     ctx: LowerCtx, eid: i64, expected_tid: i64
 ) -> i64 {
     lctx_record_wide_expected_ast_context(ctx, ctx.arena, eid, expected_tid);
-    let expected_ty: i64 = {
-        if expected_tid == -1 { -1 } else { lctx_lower_ast_ty(ctx, expected_tid) }
-    };
-    let original: i64 = lower_consumed_expr(ctx, eid);
-    if expected_ty == ITY_I128() || expected_ty == ITY_U128() {
-        return lower_narrow_literal(ctx, ctx.arena, eid, original, expected_ty);
-    }
-    original
+    lower_consumed_expr(ctx, eid)
 }
 
 fn lower_stmt(ctx: LowerCtx, sid: i64) {

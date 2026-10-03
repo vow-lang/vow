@@ -1,0 +1,17 @@
+// TEST: category model-drift
+module MapNarrowValue
+
+fn store_narrow() -> HashMap<i64, u8> vow {
+  ensures: result.contains_key(1),
+  ensures: result.get(1).unwrap() == 200
+} {
+  let m: HashMap<i64, u8> = HashMap::new();
+  m.insert(1, 200);
+  m
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i64, u8> = store_narrow();
+  print_u64(m.len());
+  0
+}

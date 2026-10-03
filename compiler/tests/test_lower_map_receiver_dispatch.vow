@@ -1,0 +1,76 @@
+module TestLowerMapReceiverDispatch
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+
+fn lower_fixture(source: String, file: String) -> IrModule {
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(lex(source), arena, diag_ctx_new(), file);
+    let item_files: Vec<String> = Vec::new();
+    item_files.push(file);
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), item_files
+    )
+}
+
+fn probe_function(lowered: IrModule) -> IrFunction {
+    let mut fi: u64 = 0;
+    while fi < lowered.functions.len() {
+        let f: IrFunction = lowered.functions[fi];
+        if f.name == String::from("probe") { return f; }
+        fi = fi + 1;
+    }
+    lowered.functions[0]
+}
+
+fn count_extern_calls(function: IrFunction, symbol: String) -> i64 {
+    let mut n: i64 = 0;
+    let mut block_index: u64 = 0;
+    while block_index < function.blocks.len() {
+        let block: IrBlock = function.blocks[block_index];
+        let mut inst_index: u64 = 0;
+        while inst_index < block.insts.len() {
+            let inst: IrInst = block.insts[inst_index];
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == symbol {
+                n = n + 1;
+            }
+            inst_index = inst_index + 1;
+        }
+        block_index = block_index + 1;
+    }
+    n
+}
+
+fn routed(params: String, body: String, symbol: String) -> bool {
+    let source: String = String::from("module MapElem\nfn probe(");
+    source.push_str(params);
+    source.push_str(String::from(") -> bool [panic] { "));
+    source.push_str(body);
+    source.push_str(String::from(" }\n"));
+    let function: IrFunction = probe_function(lower_fixture(source, String::from("map_elem.vow")));
+    count_extern_calls(function, symbol) >= 1
+}
+
+// Symbol routing only. Twin of the Rust unit test
+// `map_methods_on_collection_element_receivers_route_to_the_map_runtime` in
+// vow-ir/src/lower/mod.rs; the payload width and runtime behaviour of every
+// receiver shape are pinned by tests/run/map_receiver_shapes.vow and
+// tests/run/map_narrow_values.vow under both compilers.
+fn main() -> i32 {
+    let hash_vec: String = String::from("v: Vec<HashMap<i64, u8>>");
+    let contains_key: String = String::from("__vow_map_contains");
+    if !routed(hash_vec, String::from("v[0].contains_key(1)"), contains_key) { return 1; }
+    if !routed(String::from("v: Vec<BTreeMap<i64, u8>>"), String::from("v[0].contains(1)"), String::from("__vow_btreemap_contains")) { return 2; }
+    if !routed(String::from("v: Vec<Vec<HashMap<i64, u8>>>"), String::from("v[0][0].contains_key(1)"), contains_key) { return 3; }
+    if !routed(hash_vec, String::from("(v[0]).contains_key(1)"), contains_key) { return 4; }
+    if !routed(hash_vec, String::from("{ let m = v[0]; m.contains_key(1) }"), contains_key) { return 5; }
+    if !routed(hash_vec, String::from("{ let mut r: bool = false; for m in v { r = m.contains_key(1); } r }"), contains_key) { return 6; }
+    if !routed(String::from("vv: Vec<Vec<HashMap<i64, u8>>>"), String::from("{ let mut r: bool = false; for inner in vv { r = inner[0].contains_key(1); } r }"), contains_key) { return 7; }
+    0
+}

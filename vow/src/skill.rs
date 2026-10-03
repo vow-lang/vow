@@ -1534,8 +1534,8 @@ extern wrappers.
 | `Option<T>`        | Optional value (Some/None)      |
 | `Result<T, E>`     | Success or error                |
 | `String`           | UTF-8 string (backed by Vec<u8>)|
-| `HashMap<K, V>`    | Key-value map (linear scan)     |
-| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). `K` must be `i64`; `V` may be any non-linear type |
+| `HashMap<K, V>`    | Key-value map (linear scan). `K` must be an integer type of at most 64 bits or `bool`; `V` may be any non-linear type except `i128`/`u128`/`f32`/`f64` |
+| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). `K` must be `i64`; `V` may be any non-linear type except `i128`/`u128`/`f32`/`f64` |
 
 ### User-Defined Types
 
@@ -2290,6 +2290,8 @@ s.byte_at(0)
 m.contains_key(k)
 ```
 
+**Collection constructors take their type from an annotation.** `Vec::new()`, `HashMap::new()`, and `BTreeMap::new()` carry no element, key, or value type of their own; it comes from the binding's annotation (`let m: HashMap<i64, i64> = HashMap::new();`). Calling a method on a collection whose type was never written (`let m = HashMap::new(); m.insert(1, 2);`) is a `TypeMismatch` in both compilers (`cannot infer the collection type of the receiver of ...`), one error per call, so a map can never silently default its key and value to `i64` and bypass the [key and value type](#hashmap-methods) checks.
+
 ### Vec<T> Methods
 
 | Method         | Signature                        |
@@ -2341,12 +2343,15 @@ m.contains_key(k)
 | `.remove(k)`        | `(K) -> ()`                 |
 | `.len()`            | `() -> u64`                 |
 
+**Key and value types.** The runtime stores each key and each value in one 64-bit slot and compares keys by value. A `HashMap` key must therefore be `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, or `bool`; every other key type is an `UnsupportedFeature` error in both compilers. `String`, `Vec`, struct, enum, `Option`, and tuple keys are heap-backed handles that would compare by pointer, so a lookup with an equal-but-distinct `String` would silently miss (and a mutable `String` mutated after insertion would corrupt the map). `i128`/`u128` keys would be truncated, and `f32`/`f64` have no total equality. Hash or intern such keys to a `u64` at the call site and keep a side table for the originals. A `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64` is likewise an `UnsupportedFeature` error: map values occupy a single 64-bit integer slot, so a 128-bit value would lose its high word and a float has no slot encoding. A `HashMap` value that is or transitively contains a `linear struct` is an `UnsupportedFeature` error for the same reason `BTreeMap` rejects it (`BTreeMapValueMustBeNonLinear`): the map copies values bitwise and `get` would hand out a second copy of the linear obligation. Narrow integer values (`i8` … `u32`) are stored widened and read back at their declared width. The check applies wherever the map type is written (annotations, parameters, returns, fields, aliases, constants), including nested inside `Vec`, `Option`, tuples, and other maps. A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
+
 `HashMap::get` returns `Option<V>`, exactly like `BTreeMap::get`: a missing key is `None`, never a default value, so `let a: i64 = m.get(k);` is a `TypeMismatch` in both compilers. Handle both cases with `match` (or `?`), or call `.unwrap()` to assert the key is present: it aborts with `UnwrapOnNone` on a missing key and requires the `[panic]` effect. A contract can state a binding as `result.get(k).unwrap() == v`; guard it with an earlier `result.contains_key(k)` clause (as in the examples), because the verifier reports a missing key there as a failed `unwrap()` on `None`, which carries no contract blame.
 
 ### BTreeMap<K, V> Methods
 
 Keys must be `i64` (K violations raise `BTreeMapKeyTypeMustBeI64`). Values may be any
-non-linear type — primitives, structs, `Vec<T>`, `Option<T>`, or nested combinations.
+non-linear type other than `i128`/`u128`/`f32`/`f64` (rejected with `UnsupportedFeature`, because a
+value occupies a single 64-bit integer slot) — integers, `bool`, structs, `Vec<T>`, `Option<T>`, or nested combinations.
 A `V` that is or transitively contains a `linear struct` is rejected with
 `BTreeMapValueMustBeNonLinear`, because the runtime/verifier shift values bitwise and
 would silently duplicate a linear obligation.
@@ -2384,6 +2389,8 @@ v[i] = new_val;
 The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method argument of `Vec::truncate`, which takes exactly `u64`.
 
 The `Vec` runtime helpers take a pointer-width unsigned index, so a `u64` index is never reinterpreted as negative: an index at or beyond `v.len()` is out of bounds, including values above `i64::MAX`.
+
+Indexing `v[i]` is defined only for `Vec<T>`. A `HashMap`, `BTreeMap`, `String`, `Option`, or any other type has no index operator: `m[k]` is a `TypeMismatch` ("index operation on non-indexable type") in both compilers, for reads and for assignments. Read a map entry with `m.get(k)`, which returns an `Option<V>` so a missing key is never a default value or a runtime trap, and write one with `insert`. Read a `String` byte with `byte_at`.
 
 Lengths are `u64` (see [the Vec method table](#vec-methods)), so an index derived from one needs no conversion:
 
@@ -4405,6 +4412,27 @@ coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`,
 and `push_byte` takes exactly `u8`; see
 [String offsets](grammar.md#string-offsets).
 
+Only `Vec<T>` has an index operator. Indexing any other type (`HashMap`,
+`BTreeMap`, `String`, `Option`, ...) is a `TypeMismatch` whose message begins
+`index operation on non-indexable type` and prints the full receiver type (for example `HashMap<i64, i64>` or `String`, identically in both compilers); read a map entry
+with `m.get(k)` and a string byte with `s.byte_at(i)`.
+
+`Vec::new()`, `HashMap::new()`, and `BTreeMap::new()` take their element, key,
+and value types from the binding's annotation. A method call on a collection
+whose type was never annotated is a `TypeMismatch` in both compilers, one per
+call:
+
+```vow
+fn f() -> () {
+    let m = HashMap::new();
+    m.insert(1, 2);
+}
+```
+
+**Output:** `cannot infer the collection type of the receiver of `insert`: annotate its binding with a full type`
+
+**Fix:** Annotate the binding: `let m: HashMap<i64, i64> = HashMap::new();`.
+
 ### LiteralOutOfRange
 
 **Phase:** Type Checker
@@ -4702,7 +4730,7 @@ fn f() -> () {
 ### UnsupportedFeature
 
 **Phase:** Type Checker
-**Meaning:** A language feature that is not supported in Vow was used.
+**Meaning:** A language feature that is not supported in Vow was used, or a `HashMap`/`BTreeMap` was written with a key or value type the runtime cannot store (see [Map key and value types](#map-key-and-value-types)).
 
 ```vow
 trait Foo {
@@ -4713,6 +4741,22 @@ trait Foo {
 **Output:** `trait blocks are not supported in Vow`
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
+
+#### Map key and value types
+
+The same code reports a map type whose key or value cannot be stored in the runtime's single 64-bit map slot: a `HashMap` key that is not an integer type of at most 64 bits or `bool`, a `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64`, and a `HashMap` value that is or contains a `linear struct` (see [HashMap key and value types](grammar.md#hashmap-methods)).
+
+```vow
+fn f() -> () {
+    let m: HashMap<String, i64> = HashMap::new();
+}
+```
+
+**Output:** ``HashMap key type `String` is not supported: keys are compared by value as a single machine word``
+
+**Fix:** Hash or intern the key to a `u64` at the call site and keep a side table for the originals. For a 128-bit value, store the two `u64` halves separately. For a linear value, keep it in a local binding and store only an integer handle in the map.
+
+A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
 
 ### BTreeMapKeyTypeMustBeI64
 
@@ -6921,8 +6965,8 @@ extern wrappers.
 | `Option<T>`        | Optional value (Some/None)      |
 | `Result<T, E>`     | Success or error                |
 | `String`           | UTF-8 string (backed by Vec<u8>)|
-| `HashMap<K, V>`    | Key-value map (linear scan)     |
-| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). `K` must be `i64`; `V` may be any non-linear type |
+| `HashMap<K, V>`    | Key-value map (linear scan). `K` must be an integer type of at most 64 bits or `bool`; `V` may be any non-linear type except `i128`/`u128`/`f32`/`f64` |
+| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). `K` must be `i64`; `V` may be any non-linear type except `i128`/`u128`/`f32`/`f64` |
 
 ### User-Defined Types
 
@@ -7677,6 +7721,8 @@ s.byte_at(0)
 m.contains_key(k)
 ```
 
+**Collection constructors take their type from an annotation.** `Vec::new()`, `HashMap::new()`, and `BTreeMap::new()` carry no element, key, or value type of their own; it comes from the binding's annotation (`let m: HashMap<i64, i64> = HashMap::new();`). Calling a method on a collection whose type was never written (`let m = HashMap::new(); m.insert(1, 2);`) is a `TypeMismatch` in both compilers (`cannot infer the collection type of the receiver of ...`), one error per call, so a map can never silently default its key and value to `i64` and bypass the [key and value type](#hashmap-methods) checks.
+
 ### Vec<T> Methods
 
 | Method         | Signature                        |
@@ -7728,12 +7774,15 @@ m.contains_key(k)
 | `.remove(k)`        | `(K) -> ()`                 |
 | `.len()`            | `() -> u64`                 |
 
+**Key and value types.** The runtime stores each key and each value in one 64-bit slot and compares keys by value. A `HashMap` key must therefore be `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, or `bool`; every other key type is an `UnsupportedFeature` error in both compilers. `String`, `Vec`, struct, enum, `Option`, and tuple keys are heap-backed handles that would compare by pointer, so a lookup with an equal-but-distinct `String` would silently miss (and a mutable `String` mutated after insertion would corrupt the map). `i128`/`u128` keys would be truncated, and `f32`/`f64` have no total equality. Hash or intern such keys to a `u64` at the call site and keep a side table for the originals. A `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64` is likewise an `UnsupportedFeature` error: map values occupy a single 64-bit integer slot, so a 128-bit value would lose its high word and a float has no slot encoding. A `HashMap` value that is or transitively contains a `linear struct` is an `UnsupportedFeature` error for the same reason `BTreeMap` rejects it (`BTreeMapValueMustBeNonLinear`): the map copies values bitwise and `get` would hand out a second copy of the linear obligation. Narrow integer values (`i8` … `u32`) are stored widened and read back at their declared width. The check applies wherever the map type is written (annotations, parameters, returns, fields, aliases, constants), including nested inside `Vec`, `Option`, tuples, and other maps. A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
+
 `HashMap::get` returns `Option<V>`, exactly like `BTreeMap::get`: a missing key is `None`, never a default value, so `let a: i64 = m.get(k);` is a `TypeMismatch` in both compilers. Handle both cases with `match` (or `?`), or call `.unwrap()` to assert the key is present: it aborts with `UnwrapOnNone` on a missing key and requires the `[panic]` effect. A contract can state a binding as `result.get(k).unwrap() == v`; guard it with an earlier `result.contains_key(k)` clause (as in the examples), because the verifier reports a missing key there as a failed `unwrap()` on `None`, which carries no contract blame.
 
 ### BTreeMap<K, V> Methods
 
 Keys must be `i64` (K violations raise `BTreeMapKeyTypeMustBeI64`). Values may be any
-non-linear type — primitives, structs, `Vec<T>`, `Option<T>`, or nested combinations.
+non-linear type other than `i128`/`u128`/`f32`/`f64` (rejected with `UnsupportedFeature`, because a
+value occupies a single 64-bit integer slot) — integers, `bool`, structs, `Vec<T>`, `Option<T>`, or nested combinations.
 A `V` that is or transitively contains a `linear struct` is rejected with
 `BTreeMapValueMustBeNonLinear`, because the runtime/verifier shift values bitwise and
 would silently duplicate a linear obligation.
@@ -7771,6 +7820,8 @@ v[i] = new_val;
 The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method argument of `Vec::truncate`, which takes exactly `u64`.
 
 The `Vec` runtime helpers take a pointer-width unsigned index, so a `u64` index is never reinterpreted as negative: an index at or beyond `v.len()` is out of bounds, including values above `i64::MAX`.
+
+Indexing `v[i]` is defined only for `Vec<T>`. A `HashMap`, `BTreeMap`, `String`, `Option`, or any other type has no index operator: `m[k]` is a `TypeMismatch` ("index operation on non-indexable type") in both compilers, for reads and for assignments. Read a map entry with `m.get(k)`, which returns an `Option<V>` so a missing key is never a default value or a runtime trap, and write one with `insert`. Read a `String` byte with `byte_at`.
 
 Lengths are `u64` (see [the Vec method table](#vec-methods)), so an index derived from one needs no conversion:
 
@@ -9796,6 +9847,27 @@ coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`,
 and `push_byte` takes exactly `u8`; see
 [String offsets](grammar.md#string-offsets).
 
+Only `Vec<T>` has an index operator. Indexing any other type (`HashMap`,
+`BTreeMap`, `String`, `Option`, ...) is a `TypeMismatch` whose message begins
+`index operation on non-indexable type` and prints the full receiver type (for example `HashMap<i64, i64>` or `String`, identically in both compilers); read a map entry
+with `m.get(k)` and a string byte with `s.byte_at(i)`.
+
+`Vec::new()`, `HashMap::new()`, and `BTreeMap::new()` take their element, key,
+and value types from the binding's annotation. A method call on a collection
+whose type was never annotated is a `TypeMismatch` in both compilers, one per
+call:
+
+```vow
+fn f() -> () {
+    let m = HashMap::new();
+    m.insert(1, 2);
+}
+```
+
+**Output:** `cannot infer the collection type of the receiver of `insert`: annotate its binding with a full type`
+
+**Fix:** Annotate the binding: `let m: HashMap<i64, i64> = HashMap::new();`.
+
 ### LiteralOutOfRange
 
 **Phase:** Type Checker
@@ -10093,7 +10165,7 @@ fn f() -> () {
 ### UnsupportedFeature
 
 **Phase:** Type Checker
-**Meaning:** A language feature that is not supported in Vow was used.
+**Meaning:** A language feature that is not supported in Vow was used, or a `HashMap`/`BTreeMap` was written with a key or value type the runtime cannot store (see [Map key and value types](#map-key-and-value-types)).
 
 ```vow
 trait Foo {
@@ -10104,6 +10176,22 @@ trait Foo {
 **Output:** `trait blocks are not supported in Vow`
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
+
+#### Map key and value types
+
+The same code reports a map type whose key or value cannot be stored in the runtime's single 64-bit map slot: a `HashMap` key that is not an integer type of at most 64 bits or `bool`, a `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64`, and a `HashMap` value that is or contains a `linear struct` (see [HashMap key and value types](grammar.md#hashmap-methods)).
+
+```vow
+fn f() -> () {
+    let m: HashMap<String, i64> = HashMap::new();
+}
+```
+
+**Output:** ``HashMap key type `String` is not supported: keys are compared by value as a single machine word``
+
+**Fix:** Hash or intern the key to a `u64` at the call site and keep a side table for the originals. For a 128-bit value, store the two `u64` halves separately. For a linear value, keep it in a local binding and store only an integer handle in the map.
+
+A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
 
 ### BTreeMapKeyTypeMustBeI64
 

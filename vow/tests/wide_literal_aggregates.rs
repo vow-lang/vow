@@ -196,12 +196,12 @@ fn assign_wrapped(target: WrappedWide) {
     target.value = Option::Some(340282366920938463463374607431768211438);
 }
 
-fn insert_hashmap(values: HashMap<i64, u128>) {
-    values.insert(0, 340282366920938463463374607431768211437);
+fn insert_hashmap(values: HashMap<i64, Option<u128>>) {
+    values.insert(0, Option::Some(340282366920938463463374607431768211437));
 }
 
-fn insert_btreemap(values: BTreeMap<i64, u128>) {
-    values.insert(0, 340282366920938463463374607431768211436);
+fn insert_btreemap(values: BTreeMap<i64, Option<u128>>) {
+    values.insert(0, Option::Some(340282366920938463463374607431768211436));
 }
 
 fn assign_option_vec(values: Vec<Option<u128>>) {

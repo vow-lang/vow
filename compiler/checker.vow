@@ -48,6 +48,49 @@ fn ty_value_display_name(ts: TyStore, tid: i64) -> String {
     ty_tag_name(tag)
 }
 
+// The full user-facing spelling of a type, identical to Rust `Ty::user_name`:
+// `String`, `HashMap<i64, i64>`, `&T`, `(i64, i64)`, `!`. Diagnostics that name
+// a type use it so both compilers print the same text. The applied case copies
+// the base name before appending: `ty_struct_name` returns the interned string
+// itself, and pushing onto it would corrupt the type store.
+fn ty_full_display_name(ts: TyStore, tid: i64) -> String {
+    let tag: i64 = ty_tag(ts, tid);
+    if tag == CTY_APPLIED() {
+        let out: String = String::from(ty_full_display_name(ts, ty_a(ts, tid)));
+        out.push_str(String::from("<"));
+        let args_lid: i64 = ty_b(ts, tid);
+        let n: i64 = ts_arg_len(ts, args_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            if i > 0 { out.push_str(String::from(", ")); }
+            out.push_str(ty_full_display_name(ts, ts_arg_get(ts, args_lid, i)));
+            i = i + 1;
+        }
+        out.push_str(String::from(">"));
+        return out;
+    }
+    if tag == CTY_REF() {
+        let out: String = String::from("&");
+        out.push_str(ty_full_display_name(ts, ty_a(ts, tid)));
+        return out;
+    }
+    if tag == CTY_TUPLE() {
+        let out: String = String::from("(");
+        let elems_lid: i64 = ty_a(ts, tid);
+        let n: i64 = ts_arg_len(ts, elems_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            if i > 0 { out.push_str(String::from(", ")); }
+            out.push_str(ty_full_display_name(ts, ts_arg_get(ts, elems_lid, i)));
+            i = i + 1;
+        }
+        out.push_str(String::from(")"));
+        return out;
+    }
+    if tag == CTY_NEVER() { return String::from("!"); }
+    ty_value_display_name(ts, tid)
+}
+
 // Returns 1 if `tid` is or transitively contains a linear struct.
 // Mirrors vow-types/src/check.rs::is_linear_ty. Used to gate BTreeMap value
 // payloads: bitwise shift/copy in the runtime/verifier would silently
@@ -310,31 +353,16 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
             return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
         }
         if name == String::from("HashMap") || name == String::from("BTreeMap") {
-            // Mirrors Rust env.rs: BTreeMap requires exactly two type arguments,
-            // K must be i64, V must be non-linear (linear V rejected because
-            // bitwise shift/copy would silently duplicate the obligation).
-            if name == String::from("BTreeMap") {
-                if arg_tids.len() != 2 {
-                    env_emit_error_code(e, EC_TYPE_MISMATCH(),
-                        String::from("BTreeMap requires two type arguments"),
-                        type_span(a, ast_tid));
-                } else {
-                    let bkey_tid: i64 = arg_tids[0];
-                    let bkey_tag: i64 = ty_tag(e.ts, bkey_tid);
-                    if bkey_tag != CTY_I64() && bkey_tag != CTY_NEVER() {
-                        let kerr_msg: String = String::from("BTreeMap key type must be i64; found '");
-                        kerr_msg.push_str(ty_tag_name(bkey_tag));
-                        kerr_msg.push_str(String::from("'"));
-                        env_emit_error_code(e, EC_BTREEMAP_KEY_TYPE_MUST_BE_I64(), kerr_msg, type_span(a, ast_tid));
-                    }
-                    let bval_tid: i64 = arg_tids[1];
-                    if is_linear_ty(e, bval_tid) == 1 {
-                        let verr_msg: String = String::from("BTreeMap value type must be non-linear; found '");
-                        verr_msg.push_str(ty_value_display_name(e.ts, bval_tid));
-                        verr_msg.push_str(String::from("'"));
-                        env_emit_error_code(e, EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR(), verr_msg, type_span(a, ast_tid));
-                    }
-                }
+            // Mirrors Rust env.rs: BTreeMap requires exactly two type arguments;
+            // every per-map key/value rule lives in check_map_slot_types.
+            if name == String::from("BTreeMap") && arg_tids.len() != 2 {
+                env_emit_error_code(e, EC_TYPE_MISMATCH(),
+                    String::from("BTreeMap requires two type arguments"),
+                    type_span(a, ast_tid));
+            } else {
+                let mkey_tid: i64 = if arg_tids.len() > 0 { arg_tids[0] } else { -1 };
+                let mval_tid: i64 = if arg_tids.len() > 1 { arg_tids[1] } else { -1 };
+                check_map_slot_types(e, name, mkey_tid, mval_tid, type_span(a, ast_tid));
             }
             return ts_make_applied(e.ts, ts_make_struct(e.ts, name), arg_tids);
         }
@@ -365,6 +393,69 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         return ty_add(e.ts, CTY_TUPLE(), lid, 0);
     }
     CTY_UNIT()
+}
+
+fn hashmap_key_tag_supported(tag: i64) -> bool {
+    (tag >= CTY_I8() && tag <= CTY_U64() && tag != CTY_I128())
+        || tag == CTY_BOOL()
+        || tag == CTY_NEVER()
+        || tag == CTY_UNKNOWN()
+}
+
+// The one place every per-map rule lives, for a single `HashMap`/`BTreeMap`
+// type. Diagnostics are emitted in this order: key, linear value, wide value.
+// A BTreeMap key must be i64 and a linear BTreeMap value uses the dedicated
+// BTreeMap codes; the runtime stores every other key and value in one 64-bit
+// slot, so a HashMap key that is not a by-value scalar (<= 64-bit integer or
+// bool), a linear HashMap value (copied bitwise), and a 128-bit or float value
+// in either map are UnsupportedFeature. A tid of -1 means the type argument is
+// absent. Mirrors Rust `check_map_slot_types`.
+fn check_map_slot_types(e: CheckEnv, name: String, key_tid: i64, val_tid: i64, span: i64) {
+    let is_btree: bool = name == String::from("BTreeMap");
+    if key_tid >= 0 {
+        let ktag: i64 = ty_tag(e.ts, key_tid);
+        if is_btree {
+            if ktag != CTY_I64() && ktag != CTY_NEVER() {
+                let kerr: String = String::from("BTreeMap key type must be i64; found '");
+                kerr.push_str(ty_full_display_name(e.ts, key_tid));
+                kerr.push_str(String::from("'"));
+                env_emit_error_code(e, EC_BTREEMAP_KEY_TYPE_MUST_BE_I64(), kerr, span);
+            }
+        } else if !hashmap_key_tag_supported(ktag) {
+            let kmsg: String = String::from("HashMap key type `");
+            kmsg.push_str(ty_full_display_name(e.ts, key_tid));
+            kmsg.push_str(String::from("` is not supported: keys are compared by value as a single machine word"));
+            env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), kmsg, span);
+        }
+    }
+    if val_tid < 0 { return; }
+    if !e.defer_map_linear && is_linear_ty(e, val_tid) == 1 {
+        emit_map_linear_value_error(e, name, val_tid, span);
+    }
+    let vtag: i64 = ty_tag(e.ts, val_tid);
+    if vtag == CTY_I128() || vtag == CTY_U128() || vtag == CTY_F32() || vtag == CTY_F64() {
+        let vmsg: String = String::from(name);
+        vmsg.push_str(String::from(" value type `"));
+        vmsg.push_str(ty_full_display_name(e.ts, val_tid));
+        vmsg.push_str(String::from("` is not supported: map values occupy a single 64-bit integer slot"));
+        env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), vmsg, span);
+    }
+}
+
+// The linear-value diagnostic shared by the first-pass map check and the
+// post-definition re-check: BTreeMap uses its dedicated code, HashMap
+// UnsupportedFeature.
+fn emit_map_linear_value_error(e: CheckEnv, name: String, val_tid: i64, span: i64) {
+    let msg: String = String::from(name);
+    msg.push_str(String::from(" value type must be non-linear; found '"));
+    msg.push_str(ty_full_display_name(e.ts, val_tid));
+    msg.push_str(String::from("'"));
+    let code: i64 = if name == String::from("BTreeMap") {
+        EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR()
+    } else {
+        EC_UNSUPPORTED_FEATURE()
+    };
+    env_emit_error_code(e, code, msg, span);
 }
 
 fn is_opaque(tid: i64) -> bool vow {
@@ -414,25 +505,24 @@ fn is_vec_raw_parts_copy_expr(a: AstArena, eid: i64) -> bool {
     arena_str(a, first_sid) == String::from("Vec") && arena_str(a, second_sid) == String::from("from_raw_parts_copy")
 }
 
-// Walk a resolved tid; if it is BTreeMap<K, V>, check that V is non-linear.
-// Called from the post-definition re-validation pass.
-fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
+// Walk a resolved tid; if it is HashMap<K, V> or BTreeMap<K, V>, check that V is
+// non-linear. The only linearity check for struct fields, enum payloads and
+// aliases (resolved with defer_map_linear set); runs once every definition is
+// complete. Mirrors the Rust Pass 1b-fixup.
+fn recheck_tid_map_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
     let tag: i64 = ty_tag(e.ts, tid);
     if tag == CTY_APPLIED() {
         let base: i64 = ty_a(e.ts, tid);
         let base_tag: i64 = ty_tag(e.ts, base);
         if base_tag == CTY_STRUCT() {
             let bname: String = ty_struct_name(e.ts, base);
-            if bname == String::from("BTreeMap") {
+            if bname == String::from("BTreeMap") || bname == String::from("HashMap") {
                 let lid: i64 = ty_b(e.ts, tid);
                 let nargs: i64 = ts_arg_len(e.ts, lid);
                 if nargs == 2 {
                     let vtid: i64 = ts_arg_get(e.ts, lid, 1);
                     if is_linear_ty(e, vtid) == 1 {
-                        let msg: String = String::from("BTreeMap value type must be non-linear; found '");
-                        msg.push_str(ty_value_display_name(e.ts, vtid));
-                        msg.push_str(String::from("'"));
-                        env_emit_error_code(e, EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR(), msg, span);
+                        emit_map_linear_value_error(e, bname, vtid, span);
                     }
                 }
             }
@@ -441,7 +531,7 @@ fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
         let an: i64 = ts_arg_len(e.ts, alid);
         let mut ai: i64 = 0;
         while ai < an {
-            recheck_tid_btreemap_linearity(e, ts_arg_get(e.ts, alid, ai), span);
+            recheck_tid_map_linearity(e, ts_arg_get(e.ts, alid, ai), span);
             ai = ai + 1;
         }
     }
@@ -450,12 +540,12 @@ fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
         let tn: i64 = ts_arg_len(e.ts, lid);
         let mut ti: i64 = 0;
         while ti < tn {
-            recheck_tid_btreemap_linearity(e, ts_arg_get(e.ts, lid, ti), span);
+            recheck_tid_map_linearity(e, ts_arg_get(e.ts, lid, ti), span);
             ti = ti + 1;
         }
     }
     if tag == CTY_REF() {
-        recheck_tid_btreemap_linearity(e, ty_a(e.ts, tid), span);
+        recheck_tid_map_linearity(e, ty_a(e.ts, tid), span);
     }
 }
 
@@ -498,7 +588,7 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
         i = i + 1;
     }
 
-    // Re-validate BTreeMap value linearity now that all struct/enum
+    // Validate map value linearity now that all struct/enum
     // definitions are complete. During register_struct, forward-referenced
     // structs may not have had their fields or is_linear flag populated.
     i = 0u64;
@@ -519,7 +609,7 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
                 let mut fi: i64 = 0;
                 while fi < nf {
                     let ftid: i64 = ts_arg_get(e.ts, ftid_lid, fi);
-                    recheck_tid_btreemap_linearity(e, ftid, sdef_span(a, id));
+                    recheck_tid_map_linearity(e, ftid, sdef_span(a, id));
                     if is_linear_owner_ty(e, ftid) == 1 {
                         let field_name: String = arena_str(a, list_get(a, fields_lid, fi * 2));
                         let ast_ftid: i64 = list_get(a, fields_lid, fi * 2 + 1);
@@ -546,7 +636,7 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
                     let mut pi: i64 = 0;
                     while pi < pn {
                         let ptid: i64 = ts_arg_get(e.ts, payload_lid, pi);
-                        recheck_tid_btreemap_linearity(e, ptid, edef_span(a, id));
+                        recheck_tid_map_linearity(e, ptid, edef_span(a, id));
                         pi = pi + 1;
                     }
                     vi = vi + 1;
@@ -556,7 +646,7 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
             let a: AstArena = m.arena;
             let alias_tid: i64 = env_lookup_alias(e, arena_str(a, alias_name_sid(a, id)));
             if alias_tid != -1 {
-                recheck_tid_btreemap_linearity(e, alias_tid, alias_span(a, id));
+                recheck_tid_map_linearity(e, alias_tid, alias_span(a, id));
             }
         }
         i = i + 1;
@@ -632,7 +722,9 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
 fn register_alias(e: CheckEnv, m: Module, aid: i64) [io] {
     let a: AstArena = m.arena;
     let name: String = arena_str(a, alias_name_sid(a, aid));
+    e.defer_map_linear = true;
     let tid: i64 = resolve_ast_ty(e, m, alias_type_tid(a, aid));
+    e.defer_map_linear = false;
     if tid != CTY_UNKNOWN() {
         env_define_alias(e, name, tid);
     }
@@ -727,7 +819,9 @@ fn register_struct(e: CheckEnv, m: Module, sid: i64) [io] {
         let fname: String = arena_str(a, fsid);
         let ast_ftid: i64 = list_get(a, fields_lid, i * 2 + 1);
         fnames.push(fname);
+        e.defer_map_linear = true;
         ftids.push(resolve_ast_ty(e, m, ast_ftid));
+        e.defer_map_linear = false;
         i = i + 1;
     }
     let is_linear: i64 = sdef_is_linear(a, sid);
@@ -754,7 +848,9 @@ fn register_enum(e: CheckEnv, m: Module, eid: i64) [io] {
         let mut fi: i64 = 0;
         while fi < n_fields {
             let ast_tid: i64 = list_get(a, payload_lid, fi);
+            e.defer_map_linear = true;
             let resolved: i64 = resolve_ast_ty(e, m, ast_tid);
+            e.defer_map_linear = false;
             resolved_fields.push(resolved);
             fi = fi + 1;
         }
@@ -2655,6 +2751,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             i = i + 1;
         }
         if is_opaque(recv_tid) {
+            if recv_tid == CTY_NEVER() {
+                let nmsg: String = String::from("cannot infer the collection type of the receiver of `");
+                nmsg.push_str(mname);
+                nmsg.push_str(String::from("`: annotate its binding with a full type"));
+                env_emit_error_code(e, EC_TYPE_MISMATCH(), nmsg, expr_span(a, eid));
+            }
             return recv_tid;
         }
         let recv_tag: i64 = ty_tag(e.ts, recv_tid);
@@ -2754,11 +2856,6 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 }
                 if base_name == String::from("HashMap") {
                     let hargs_lid: i64 = ty_b(e.ts, recv_tid);
-                    let key_tid: i64 = if ts_arg_len(e.ts, hargs_lid) > 0 {
-                        ts_arg_get(e.ts, hargs_lid, 0)
-                    } else {
-                        CTY_I64()
-                    };
                     let val_tid: i64 = if ts_arg_len(e.ts, hargs_lid) > 1 {
                         ts_arg_get(e.ts, hargs_lid, 1)
                     } else {
@@ -2791,23 +2888,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 }
                 if base_name == String::from("BTreeMap") {
                     let bargs_lid: i64 = ty_b(e.ts, recv_tid);
-                    let bkey_tid: i64 = if ts_arg_len(e.ts, bargs_lid) > 0 {
-                        ts_arg_get(e.ts, bargs_lid, 0)
-                    } else {
-                        CTY_I64()
-                    };
                     let bval_tid: i64 = if ts_arg_len(e.ts, bargs_lid) > 1 {
                         ts_arg_get(e.ts, bargs_lid, 1)
                     } else {
                         CTY_I64()
                     };
-                    let bkey_tag: i64 = ty_tag(e.ts, bkey_tid);
-                    if bkey_tag != CTY_I64() && bkey_tag != CTY_NEVER() {
-                        let kerr_msg: String = String::from("BTreeMap key type must be i64; found '");
-                        kerr_msg.push_str(ty_tag_name(bkey_tag));
-                        kerr_msg.push_str(String::from("'"));
-                        env_emit_error_code(e, EC_BTREEMAP_KEY_TYPE_MUST_BE_I64(), kerr_msg, expr_span(a, eid));
-                    }
                     if mname == String::from("insert") {
                         check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0));
                         check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, bargs_lid, 1));
@@ -2890,17 +2975,22 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if is_opaque(recv_tid) {
             return recv_tid;
         }
-        let recv_tag: i64 = ty_tag(e.ts, recv_tid);
-        if recv_tag == CTY_APPLIED() {
-            let hargs_lid: i64 = ty_b(e.ts, recv_tid);
-            if ts_arg_len(e.ts, hargs_lid) > 0 {
-                return ts_arg_get(e.ts, hargs_lid, 0);
+        if ty_tag(e.ts, recv_tid) == CTY_APPLIED() {
+            let ibase_tid: i64 = ty_a(e.ts, recv_tid);
+            let ibase_tag: i64 = ty_tag(e.ts, ibase_tid);
+            if (ibase_tag == CTY_STRUCT() || ibase_tag == CTY_ENUM()) && ty_struct_name(e.ts, ibase_tid) == String::from("Vec") {
+                let hargs_lid: i64 = ty_b(e.ts, recv_tid);
+                if ts_arg_len(e.ts, hargs_lid) > 0 {
+                    return ts_arg_get(e.ts, hargs_lid, 0);
+                }
+                return CTY_UNIT();
             }
         }
-        if recv_tag == CTY_STR() {
-            return CTY_I64();
-        }
-        return CTY_UNIT();
+        let inmsg: String = String::from("index operation on non-indexable type `");
+        inmsg.push_str(ty_full_display_name(e.ts, recv_tid));
+        inmsg.push_str(String::from("`"));
+        env_emit_error_code(e, EC_TYPE_MISMATCH(), inmsg, expr_span(a, eid));
+        return CTY_NEVER();
     }
 
     if tag == EXPR_IF() {
@@ -3342,6 +3432,15 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64());
                     return CTY_NEVER();
                 }
+            }
+        }
+        if n_path > 1 && (first_name == String::from("Vec") || first_name == String::from("HashMap") || first_name == String::from("BTreeMap")) {
+            let ctor_sid: i64 = list_get(a, path_lid, 1);
+            if arena_str(a, ctor_sid) == String::from("new") {
+                // The element types come from the binding's annotation, so the
+                // bare constructor is the unresolved marker; mirrors Rust
+                // `builtin_constructor`.
+                return CTY_NEVER();
             }
         }
         if first_name == String::from("String") {
