@@ -253,7 +253,7 @@ fn span_len(pos: u64, start: i64) -> i64 vow {
 
 fn lex(src: String) -> Vec<Token> {
     let mut pos: u64 = 0u64;
-    let src_len: u64 = src.len() as u64;
+    let src_len: u64 = src.len();
     let tokens: Vec<Token> = Vec::new();
 
     while pos < src_len {

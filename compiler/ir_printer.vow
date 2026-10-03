@@ -11,7 +11,7 @@ fn u64_to_str(v: u64) -> String {
         digits.push(n % 10u64);
         n = n / 10u64;
     }
-    let mut i: u64 = digits.len() as u64;
+    let mut i: u64 = digits.len();
     while i > 0 {
         i = i - 1;
         let digit: i64 = digits[i] as i64;
@@ -34,7 +34,7 @@ fn pad_right(s: String, width: i64) -> String {
 fn debug_escape_str(s: String) -> String {
     let out: String = String::from("");
     out.push_byte(34);
-    let n: u64 = s.len() as u64;
+    let n: u64 = s.len();
     let mut i: u64 = 0u64;
     while i < n {
         let b: i64 = s.byte_at(i as i64);
@@ -291,7 +291,7 @@ fn format_data(inst: IrInst) -> String {
 
 fn format_args(args: Vec<i64>) -> String {
     let out: String = String::from("");
-    let n: u64 = args.len() as u64;
+    let n: u64 = args.len();
     let mut i: u64 = 0u64;
     while i < n {
         if i > 0 { out.push_str(String::from(", ")); }
@@ -359,7 +359,7 @@ fn print_block(blk: IrBlock, is_entry: i64) -> String {
         out.push_str(i64_to_string(blk.id));
         out.push_byte(58);
     }
-    let n: u64 = blk.insts.len() as u64;
+    let n: u64 = blk.insts.len();
     let mut i: u64 = 0u64;
     while i < n {
         out.push_byte(10);
@@ -374,7 +374,7 @@ fn print_function(f: IrFunction) -> String {
     let out: String = String::from("fn ");
     out.push_str(f.name);
     out.push_byte(40);
-    let np: u64 = f.params.len() as u64;
+    let np: u64 = f.params.len();
     let mut i: u64 = 0u64;
     while i < np {
         if i > 0 { out.push_str(String::from(", ")); }
@@ -386,7 +386,7 @@ fn print_function(f: IrFunction) -> String {
     out.push_str(String::from(" ["));
     out.push_str(effects_str(f.effects));
     out.push_str(String::from("]:"));
-    let nb: u64 = f.blocks.len() as u64;
+    let nb: u64 = f.blocks.len();
     i = 0u64;
     while i < nb {
         out.push_byte(10);
@@ -400,7 +400,7 @@ fn print_function(f: IrFunction) -> String {
 
 fn print_module(m: IrModule) -> String {
     let out: String = String::from("");
-    let ns: u64 = m.strings.len() as u64;
+    let ns: u64 = m.strings.len();
     if ns > 0 {
         out.push_str(String::from("strings:"));
         let mut i: u64 = 0u64;
@@ -413,7 +413,7 @@ fn print_module(m: IrModule) -> String {
         }
     }
 
-    let nsl: u64 = m.struct_layouts.len() as u64;
+    let nsl: u64 = m.struct_layouts.len();
     let mut si: u64 = 0u64;
     while si < nsl {
         if out.len() > 0 { out.push_str(String::from("\n\n")); }
@@ -421,7 +421,7 @@ fn print_module(m: IrModule) -> String {
         out.push_str(String::from("struct "));
         out.push_str(sl.name);
         out.push_str(String::from(" { "));
-        let nf: u64 = sl.fields.len() as u64;
+        let nf: u64 = sl.fields.len();
         let mut fi: u64 = 0u64;
         while fi < nf {
             if fi > 0 { out.push_str(String::from(", ")); }
@@ -435,7 +435,7 @@ fn print_module(m: IrModule) -> String {
         si = si + 1;
     }
 
-    let nel: u64 = m.enum_layouts.len() as u64;
+    let nel: u64 = m.enum_layouts.len();
     let mut ei: u64 = 0u64;
     while ei < nel {
         if out.len() > 0 { out.push_str(String::from("\n\n")); }
@@ -443,7 +443,7 @@ fn print_module(m: IrModule) -> String {
         out.push_str(String::from("enum "));
         out.push_str(el.name);
         out.push_str(String::from(" { "));
-        let nv: u64 = el.variants.len() as u64;
+        let nv: u64 = el.variants.len();
         let mut vi: u64 = 0u64;
         while vi < nv {
             if vi > 0 { out.push_str(String::from(", ")); }
@@ -451,7 +451,7 @@ fn print_module(m: IrModule) -> String {
             out.push_str(vr.name);
             out.push_str(String::from("(tag="));
             out.push_str(i64_to_string(vr.tag));
-            let npay: u64 = vr.payload.len() as u64;
+            let npay: u64 = vr.payload.len();
             if npay > 0 {
                 out.push_str(String::from(", "));
                 let mut pi: u64 = 0u64;
@@ -469,7 +469,7 @@ fn print_module(m: IrModule) -> String {
         ei = ei + 1;
     }
 
-    let nfn: u64 = m.functions.len() as u64;
+    let nfn: u64 = m.functions.len();
     let mut fi: u64 = 0u64;
     while fi < nfn {
         if out.len() > 0 { out.push_str(String::from("\n\n")); }

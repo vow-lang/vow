@@ -72,7 +72,7 @@ struct MultiPropertyResult {
 }
 
 fn str_contains_byte(s: String, b: i64) -> bool {
-    let n: u64 = s.len() as u64;
+    let n: u64 = s.len();
     let mut i: u64 = 0u64;
     while i < n {
         if s.byte_at(i as i64) == b {
@@ -114,7 +114,7 @@ fn ascii_lower_byte(b: i64) -> i64 {
 
 fn str_ascii_lower(s: String) -> String {
     let out: String = String::from("");
-    let n: u64 = s.len() as u64;
+    let n: u64 = s.len();
     let mut i: u64 = 0u64;
     while i < n {
         out.push_byte(ascii_lower_byte(s.byte_at(i as i64)));
@@ -191,7 +191,7 @@ fn emit_harness(f: IrFunction) -> String {
     out.push_str(verifier_c_func_name(f));
     out.push_byte(40);
     let params: Vec<i64> = f.params;
-    let np: u64 = params.len() as u64;
+    let np: u64 = params.len();
     let mut count: i64 = 0;
     let mut pi: u64 = 0u64;
     while pi < np {
@@ -218,7 +218,7 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
         if callee_fis.len() > 0 {
             let modelable_fi_set: Vec<i64> = Vec::new();
             let mut ci: u64 = 0u64;
-            while ci < callee_fis.len() as u64 {
+            while ci < callee_fis.len() {
                 modelable_fi_set.push(callee_fis[ci]);
                 ci = ci + 1;
             }
@@ -448,7 +448,7 @@ fn run_esbmc(esbmc_bin: String, c_source: String, max_k_step: String, tmp_path: 
     esbmc_args.push(max_k_step);
     esbmc_args.push(String::from("--64"));
     let mut ea: u64 = 0u64;
-    while ea < extra_args.len() as u64 {
+    while ea < extra_args.len() {
         esbmc_args.push(extra_args[ea]);
         ea = ea + 1;
     }
@@ -597,7 +597,7 @@ fn output_has_memory_limit(combined: String) -> bool {
 fn parse_solver_error_reason(combined: String) -> String {
     let lines: Vec<String> = Vec::new();
     split_lines(combined, lines);
-    let n: u64 = lines.len() as u64;
+    let n: u64 = lines.len();
     let mut i: u64 = 0u64;
     while i < n {
         let line: String = str_trim(lines[i]);
@@ -621,7 +621,7 @@ fn parse_unknown_reason(combined: String) -> String {
     }
     let lines: Vec<String> = Vec::new();
     split_lines(combined, lines);
-    let n: u64 = lines.len() as u64;
+    let n: u64 = lines.len();
     let mut reason: String = String::from("");
     let mut i: u64 = 0u64;
     while i < n {
@@ -688,7 +688,7 @@ fn parse_vow_label_text(rest: String) -> ParsedVowLabel {
 fn parse_vow_label(output: String) -> ParsedVowLabel {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
-    let n: u64 = lines.len() as u64;
+    let n: u64 = lines.len();
     let mut in_violated: bool = false;
     let mut i: u64 = 0u64;
     while i < n {
@@ -740,7 +740,7 @@ fn describe_assert_label(label: String) -> String {
 fn parse_assert_label(output: String) -> String {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
-    let n: u64 = lines.len() as u64;
+    let n: u64 = lines.len();
     let mut in_violated: bool = false;
     let mut i: u64 = 0u64;
     while i < n {
@@ -804,7 +804,7 @@ fn parse_arith_label_text(rest: String) -> ParsedArithSite {
 fn parse_arith_site(output: String) -> ParsedArithSite {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
-    let n: u64 = lines.len() as u64;
+    let n: u64 = lines.len();
     let mut in_violated: bool = false;
     let mut i: u64 = 0u64;
     while i < n {
@@ -907,7 +907,7 @@ fn find_vow_claim_id(line: String) -> i64 {
 fn parse_multi_property_verdicts(output: String, ids: Vec<i64>, proven: Vec<i64>) {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
-    let n: u64 = lines.len() as u64;
+    let n: u64 = lines.len();
     let mut i: u64 = 0u64;
     while i < n {
         let line: String = str_trim(lines[i]);
@@ -925,10 +925,10 @@ fn parse_multi_property_verdicts(output: String, ids: Vec<i64>, proven: Vec<i64>
             if id >= 0 {
                 let mut found: i64 = -1;
                 let mut k: u64 = 0u64;
-                while k < ids.len() as u64 {
+                while k < ids.len() {
                     if ids[k] == id {
                         found = k as i64;
-                        k = ids.len() as u64;
+                        k = ids.len();
                     } else {
                         k = k + 1;
                     }
@@ -1002,7 +1002,7 @@ fn verify_function_multi_property(esbmc_bin: String, f: IrFunction, m: IrModule,
 // is still trusted regardless of taint -- a real counterexample can never be
 // a false proof.
 fn resolve_clause_status(vow_id: i64, verdict_ids: Vec<i64>, verdict_proven: Vec<i64>, overall: i64, tainted: bool) -> String {
-    let n: u64 = verdict_ids.len() as u64;
+    let n: u64 = verdict_ids.len();
     let mut verdict: i64 = -1;
     let mut k: u64 = 0u64;
     while k < n {
@@ -1035,12 +1035,12 @@ fn resolve_clause_status(vow_id: i64, verdict_ids: Vec<i64>, verdict_proven: Vec
 // function_has_requires in vow-verify/src/esbmc.rs.
 fn function_has_requires(f: IrFunction) -> bool {
     let blocks: Vec<IrBlock> = f.blocks;
-    let nb: u64 = blocks.len() as u64;
+    let nb: u64 = blocks.len();
     let mut bi: u64 = 0u64;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: u64 = insts.len() as u64;
+        let ni: u64 = insts.len();
         let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
@@ -1091,12 +1091,12 @@ fn verify_function_vacuity(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_
 // function_has_ensures in vow-verify/src/esbmc.rs (#81 PR-C).
 fn function_has_ensures(f: IrFunction) -> bool {
     let blocks: Vec<IrBlock> = f.blocks;
-    let nb: u64 = blocks.len() as u64;
+    let nb: u64 = blocks.len();
     let mut bi: u64 = 0u64;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: u64 = insts.len() as u64;
+        let ni: u64 = insts.len();
         let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
@@ -1122,14 +1122,14 @@ fn returns_scalar(f: IrFunction) -> bool {
 // parameters and empty returns are skipped — sound but incomplete (#81 PR-C).
 fn body_replaceable_result(f: IrFunction) -> bool {
     let blocks: Vec<IrBlock> = f.blocks;
-    let nb: u64 = blocks.len() as u64;
+    let nb: u64 = blocks.len();
     let mut result_id: i64 = -1;
     let mut n_returns: i64 = 0;
     let mut bi: u64 = 0u64;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: u64 = insts.len() as u64;
+        let ni: u64 = insts.len();
         let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
@@ -1159,7 +1159,7 @@ fn body_replaceable_result(f: IrFunction) -> bool {
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: u64 = insts.len() as u64;
+        let ni: u64 = insts.len();
         let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
@@ -1212,7 +1212,7 @@ fn verify_function_trivial(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_
 fn parse_assignments(output: String, names: Vec<String>, values: Vec<String>) {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
-    let n: u64 = lines.len() as u64;
+    let n: u64 = lines.len();
     let mut in_ce: bool = false;
     let mut i: u64 = 0u64;
     while i < n {
@@ -1253,7 +1253,7 @@ fn parse_assignments(output: String, names: Vec<String>, values: Vec<String>) {
 fn parse_block_visits(output: String, visits: Vec<i64>) {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
-    let n: u64 = lines.len() as u64;
+    let n: u64 = lines.len();
     let mut in_ce: bool = false;
     let mut i: u64 = 0u64;
     while i < n {
@@ -1283,7 +1283,7 @@ fn parse_block_visits(output: String, visits: Vec<i64>) {
 }
 
 fn map_lookup(keys: Vec<String>, vals: Vec<String>, key: String) -> String {
-    let n: u64 = keys.len() as u64;
+    let n: u64 = keys.len();
     let mut i: u64 = 0u64;
     while i < n {
         if keys[i] == key {
@@ -1295,7 +1295,7 @@ fn map_lookup(keys: Vec<String>, vals: Vec<String>, key: String) -> String {
 }
 
 fn map_has_key(keys: Vec<String>, key: String) -> bool {
-    let n: u64 = keys.len() as u64;
+    let n: u64 = keys.len();
     let mut i: u64 = 0u64;
     while i < n {
         if keys[i] == key {
@@ -1309,13 +1309,13 @@ fn map_has_key(keys: Vec<String>, key: String) -> bool {
 fn build_name_map(f: IrFunction, map_keys: Vec<String>, map_vals: Vec<String>) {
     let params: Vec<i64> = f.params;
     let param_names: Vec<String> = f.param_names;
-    let np: u64 = params.len() as u64;
+    let np: u64 = params.len();
     let mut cl_idx: i64 = 0;
     let mut ir_idx: u64 = 0u64;
     while ir_idx < np {
         let pty: i64 = params[ir_idx];
         if pty != ITY_UNIT() {
-            if ir_idx < param_names.len() as u64 {
+            if ir_idx < param_names.len() {
                 let pk: String = String::from("p");
                 pk.push_str(i64_to_string(cl_idx));
                 map_keys.push(pk);
@@ -1326,12 +1326,12 @@ fn build_name_map(f: IrFunction, map_keys: Vec<String>, map_vals: Vec<String>) {
         ir_idx = ir_idx + 1;
     }
     let blocks: Vec<IrBlock> = f.blocks;
-    let nb: u64 = blocks.len() as u64;
+    let nb: u64 = blocks.len();
     let mut bi: u64 = 0u64;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: u64 = insts.len() as u64;
+        let ni: u64 = insts.len();
         let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
@@ -1350,7 +1350,7 @@ fn build_name_map(f: IrFunction, map_keys: Vec<String>, map_vals: Vec<String>) {
     }
     let ln_ids: Vec<i64> = f.local_names_ids;
     let ln_strs: Vec<String> = f.local_names_strs;
-    let nln: u64 = ln_ids.len() as u64;
+    let nln: u64 = ln_ids.len();
     let mut li: u64 = 0u64;
     while li < nln {
         let lk: String = String::from("v");
@@ -1364,7 +1364,7 @@ fn build_name_map(f: IrFunction, map_keys: Vec<String>, map_vals: Vec<String>) {
 }
 
 fn map_ce_values(c_names: Vec<String>, c_values: Vec<String>, map_keys: Vec<String>, map_vals: Vec<String>, out_names: Vec<String>, out_values: Vec<String>) {
-    let n: u64 = c_names.len() as u64;
+    let n: u64 = c_names.len();
     let mut i: u64 = 0u64;
     while i < n {
         let src: String = map_lookup(map_keys, map_vals, c_names[i]);

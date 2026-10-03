@@ -693,7 +693,7 @@ fn find_generate_end(src: String, start: i64, name: String) -> i64 {
 
 // True if [off, off+len) intersects any (start, end) pair in ranges.
 fn is_skipped(off: i64, len: i64, ranges: Vec<i64>) -> bool {
-    let n: u64 = ranges.len() as u64;
+    let n: u64 = ranges.len();
     let mut i: u64 = 0u64;
     let site_end: i64 = off + len;
     while i + 1 < n {
@@ -715,7 +715,7 @@ fn enumerate_sites(src: String, file_path: String) -> Vec<Site> {
         return raw;
     }
     let kept: Vec<Site> = Vec::new();
-    let n: u64 = raw.len() as u64;
+    let n: u64 = raw.len();
     let mut i: u64 = 0u64;
     while i < n {
         let s: Site = raw[i];

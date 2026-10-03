@@ -78,8 +78,8 @@ fn vid(id: i64) -> String {
 }
 
 fn str_starts_with(s: String, prefix: String) -> bool {
-    let plen: u64 = prefix.len() as u64;
-    if (s.len() as u64) < plen { return false; }
+    let plen: u64 = prefix.len();
+    if s.len() < plen { return false; }
     let mut i: u64 = 0u64;
     while i < plen {
         if s.byte_at(i as i64) != prefix.byte_at(i as i64) { return false; }
@@ -89,8 +89,8 @@ fn str_starts_with(s: String, prefix: String) -> bool {
 }
 
 fn str_ends_with(s: String, suffix: String) -> bool {
-    let slen: u64 = s.len() as u64;
-    let n: u64 = suffix.len() as u64;
+    let slen: u64 = s.len();
+    let n: u64 = suffix.len();
     if slen < n { return false; }
     let mut i: u64 = 0u64;
     while i < n {
@@ -142,7 +142,7 @@ fn cemit_narrow_intrinsic_target(name: String) -> i64 {
 }
 
 fn vec_contains_i64(v: Vec<i64>, val: i64) -> bool {
-    let n: u64 = v.len() as u64;
+    let n: u64 = v.len();
     let mut i: u64 = 0u64;
     while i < n {
         if v[i] == val { return true; }
@@ -293,7 +293,7 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
     }
 
     let fid: i64 = f.id;
-    let nc: u64 = modelable_cache_ids.len() as u64;
+    let nc: u64 = modelable_cache_ids.len();
     let mut ci: u64 = 0u64;
     while ci < nc {
         if modelable_cache_ids[ci] == fid {
@@ -317,11 +317,11 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
 
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: u64 = 0u64;
-    while bi < blocks.len() as u64 {
+    while bi < blocks.len() {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
             let op: i64 = inst.op;
             let ok: bool = {
@@ -367,11 +367,11 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                             let fns: Vec<IrFunction> = m.functions;
                             let mut found: bool = false;
                             let mut fi: u64 = 0u64;
-                            while fi < fns.len() as u64 {
+                            while fi < fns.len() {
                                 let callee: IrFunction = fns[fi];
                                 if callee.id == target_fi {
                                     found = is_modelable(callee, m, const_fn_indices, modelable_cache_ids, modelable_cache_vals);
-                                    fi = fns.len() as u64;
+                                    fi = fns.len();
                                 }
                                 fi = fi + 1;
                             }
@@ -400,7 +400,7 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
         bi = bi + 1;
     }
 
-    let nc2: u64 = modelable_cache_ids.len() as u64;
+    let nc2: u64 = modelable_cache_ids.len();
     let mut ci2: u64 = 0u64;
     while ci2 < nc2 {
         if modelable_cache_ids[ci2] == fid {
@@ -438,11 +438,11 @@ fn first_unsupported_opcode_name(f: IrFunction, m: IrModule, const_fn_indices: V
     let wide_vars: Vec<i64> = collect_wide_vars(f);
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: u64 = 0u64;
-    while bi < blocks.len() as u64 {
+    while bi < blocks.len() {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
             let op: i64 = inst.op;
             let name: String = iop_unsupported_name(op);
@@ -472,14 +472,14 @@ fn first_unsupported_opcode_name(f: IrFunction, m: IrModule, const_fn_indices: V
                         let mut found_modelable: bool = false;
                         let mut callee_name: String = String::from("");
                         let mut fi: u64 = 0u64;
-                        while fi < fns.len() as u64 {
+                        while fi < fns.len() {
                             let callee: IrFunction = fns[fi];
                             if callee.id == target_fi {
                                 callee_name = callee.name;
                                 let cache_ids: Vec<i64> = Vec::new();
                                 let cache_vals: Vec<i64> = Vec::new();
                                 found_modelable = is_modelable(callee, m, const_fn_indices, cache_ids, cache_vals);
-                                fi = fns.len() as u64;
+                                fi = fns.len();
                             }
                             fi = fi + 1;
                         }
@@ -539,18 +539,18 @@ fn collect_callees_dfs(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>,
                        visited: Vec<i64>, order: Vec<i64>) {
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: u64 = 0u64;
-    while bi < blocks.len() as u64 {
+    while bi < blocks.len() {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
                 let target_fi: i64 = inst.dv;
                 if !vec_contains_i64(const_fn_indices, target_fi) && !vec_contains_i64(visited, target_fi) {
                     let fns: Vec<IrFunction> = m.functions;
                     let mut fi: u64 = 0u64;
-                    while fi < fns.len() as u64 {
+                    while fi < fns.len() {
                         let callee: IrFunction = fns[fi];
                         if callee.id == target_fi {
                             if is_modelable(callee, m, const_fn_indices, modelable_cache_ids, modelable_cache_vals) {
@@ -558,7 +558,7 @@ fn collect_callees_dfs(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>,
                                 collect_callees_dfs(callee, m, const_fn_indices, modelable_cache_ids, modelable_cache_vals, visited, order);
                                 order.push(target_fi);
                             }
-                            fi = fns.len() as u64;
+                            fi = fns.len();
                         }
                         fi = fi + 1;
                     }
@@ -591,11 +591,11 @@ fn build_inst_ty_by_id(f: IrFunction) -> Vec<i64> {
     let inst_ty_by_id: Vec<i64> = Vec::new();
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: u64 = 0u64;
-    while bi < blocks.len() as u64 {
+    while bi < blocks.len() {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
             if inst.id >= 0 {
                 while inst_ty_by_id.len() as i64 <= inst.id {
@@ -771,7 +771,7 @@ fn detect_const_fns(m: IrModule) -> Vec<i64> {
     let result: Vec<i64> = Vec::new();
     let fns: Vec<IrFunction> = m.functions;
     let mut fi: u64 = 0u64;
-    while fi < fns.len() as u64 {
+    while fi < fns.len() {
         let f: IrFunction = fns[fi];
         let blocks: Vec<IrBlock> = f.blocks;
         if blocks.len() == 1 {
@@ -779,7 +779,7 @@ fn detect_const_fns(m: IrModule) -> Vec<i64> {
             let insts: Vec<IrInst> = blk.insts;
             let non_arg: Vec<i64> = Vec::new();
             let mut ii: u64 = 0u64;
-            while ii < insts.len() as u64 {
+            while ii < insts.len() {
                 let inst: IrInst = insts[ii];
                 if inst.op != IOP_GET_ARG() {
                     non_arg.push(ii as i64);
@@ -811,7 +811,7 @@ fn const_fn_value_str(m: IrModule, fi: i64) -> String {
     let blk: IrBlock = f.blocks[0];
     let insts: Vec<IrInst> = blk.insts;
     let mut ii: u64 = 0u64;
-    while ii < insts.len() as u64 {
+    while ii < insts.len() {
         let inst: IrInst = insts[ii];
         if inst.op == IOP_CONST_I32() {
             return i64_to_string(inst.dv);
@@ -836,7 +836,7 @@ fn const_fn_type_str(m: IrModule, fi: i64) -> String {
     let blk: IrBlock = f.blocks[0];
     let insts: Vec<IrInst> = blk.insts;
     let mut ii: u64 = 0u64;
-    while ii < insts.len() as u64 {
+    while ii < insts.len() {
         let inst: IrInst = insts[ii];
         if inst.op == IOP_CONST_I32() { return String::from("int32_t"); }
         if inst.op == IOP_CONST_I64() { return String::from("int64_t"); }
@@ -851,11 +851,11 @@ fn collect_modelled_vars(f: IrFunction, constructor: String, prefix: String) -> 
     let vars: Vec<i64> = Vec::new();
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: u64 = 0u64;
-    while bi < blocks.len() as u64 {
+    while bi < blocks.len() {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
                 let ds: String = inst.ds;
@@ -875,11 +875,11 @@ fn collect_modelled_vars(f: IrFunction, constructor: String, prefix: String) -> 
         bi = bi + 1;
     }
     bi = 0u64;
-    while bi < blocks.len() as u64 {
+    while bi < blocks.len() {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
                 let ds: String = inst.ds;
@@ -915,11 +915,11 @@ fn collect_modelled_vars(f: IrFunction, constructor: String, prefix: String) -> 
     while changed {
         changed = false;
         bi = 0u64;
-        while bi < blocks.len() as u64 {
+        while bi < blocks.len() {
             let blk: IrBlock = blocks[bi];
             let insts: Vec<IrInst> = blk.insts;
             let mut ii: u64 = 0u64;
-            while ii < insts.len() as u64 {
+            while ii < insts.len() {
                 let inst: IrInst = insts[ii];
                 if inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET() {
                     let iargs: Vec<i64> = inst.args;
@@ -979,11 +979,11 @@ fn collect_option_vars(f: IrFunction) -> Vec<i64> {
     let result: Vec<i64> = Vec::new();
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: u64 = 0u64;
-    while bi < blocks.len() as u64 {
+    while bi < blocks.len() {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && is_option_returning_extern(inst.ds) {
                 result.push(inst.id);
@@ -997,11 +997,11 @@ fn collect_option_vars(f: IrFunction) -> Vec<i64> {
     while changed {
         changed = false;
         bi = 0u64;
-        while bi < blocks.len() as u64 {
+        while bi < blocks.len() {
             let blk: IrBlock = blocks[bi];
             let insts: Vec<IrInst> = blk.insts;
             let mut ii: u64 = 0u64;
-            while ii < insts.len() as u64 {
+            while ii < insts.len() {
                 let inst: IrInst = insts[ii];
                 if inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET() {
                     let iargs: Vec<i64> = inst.args;
@@ -1030,11 +1030,11 @@ fn collect_wide_vars(f: IrFunction) -> Vec<i64> {
     let result: Vec<i64> = Vec::new();
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: u64 = 0u64;
-    while bi < blocks.len() as u64 {
+    while bi < blocks.len() {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
             if ity_is_wide(inst.ty) {
                 result.push(inst.id);
@@ -1652,15 +1652,15 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>,
             if vec_contains_i64(modelable_fi_set, func_idx) {
                 let fns: Vec<IrFunction> = m.functions;
                 let mut fi: u64 = 0u64;
-                while fi < fns.len() as u64 {
+                while fi < fns.len() {
                     let callee: IrFunction = fns[fi];
                     if callee.id == func_idx {
                         let args_str: String = String::from("");
                         let callee_params: Vec<i64> = callee.params;
                         let mut arg_count: i64 = 0;
                         let mut ai: u64 = 0u64;
-                        while ai < iargs.len() as u64 {
-                            if ai < callee_params.len() as u64 && callee_params[ai] != ITY_UNIT() {
+                        while ai < iargs.len() {
+                            if ai < callee_params.len() && callee_params[ai] != ITY_UNIT() {
                                 if arg_count > 0 {
                                     args_str.push_str(String::from(", "));
                                 }
@@ -1677,7 +1677,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>,
                             out.push_str(str4(String::from("  "), verifier_c_func_name(callee),
                                 String::from("("), cemit_str2(args_str, String::from(");\n"))));
                         }
-                        fi = fns.len() as u64;
+                        fi = fns.len();
                     }
                     fi = fi + 1;
                 }
@@ -1886,13 +1886,13 @@ fn emit_vec_op(out: String, inst: IrInst, inst_ty_by_id: Vec<i64>, vec_max: i64)
 // IR-traversal order with linear deduplication. Mirrors the Rust emitter's
 // `compute_string_eq_pairs`.
 fn compute_string_eq_pairs(blocks: Vec<IrBlock>, eq_lo: Vec<i64>, eq_hi: Vec<i64>) {
-    let n_blocks: u64 = blocks.len() as u64;
+    let n_blocks: u64 = blocks.len();
     let mut bi: u64 = 0u64;
     while bi < n_blocks {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
                 && inst.ds == String::from("__vow_string_eq") {
@@ -1905,7 +1905,7 @@ fn compute_string_eq_pairs(blocks: Vec<IrBlock>, eq_lo: Vec<i64>, eq_hi: Vec<i64
                         let hi: i64 = if a < b { b } else { a };
                         let mut found: bool = false;
                         let mut pi: u64 = 0u64;
-                        while pi < eq_lo.len() as u64 {
+                        while pi < eq_lo.len() {
                             if eq_lo[pi] == lo && eq_hi[pi] == hi { found = true; }
                             pi = pi + 1;
                         }
@@ -1926,7 +1926,7 @@ fn compute_string_eq_pairs(blocks: Vec<IrBlock>, eq_lo: Vec<i64>, eq_hi: Vec<i64
 // Called immediately after each modeled string mutation so the verifier
 // cannot prove a stale equality across the mutation.
 fn emit_string_eq_invalidate(out: String, operand: i64, eq_lo: Vec<i64>, eq_hi: Vec<i64>) {
-    let n: u64 = eq_lo.len() as u64;
+    let n: u64 = eq_lo.len();
     let mut i: u64 = 0u64;
     while i < n {
         let lo: i64 = eq_lo[i];
@@ -1949,7 +1949,7 @@ fn emit_nondet_string_len(out: String, id: i64, string_max: i64) {
 
 fn const_str_index_for(ids: Vec<i64>, idxs: Vec<i64>, id: i64) -> i64 {
     let mut i: u64 = 0u64;
-    while i < ids.len() as u64 {
+    while i < ids.len() {
         if ids[i] == id {
             return idxs[i];
         }
@@ -2001,7 +2001,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
             let strings: Vec<String> = m.strings;
             if lit_idx < strings.len() as i64 {
                 let literal: String = strings[lit_idx];
-                let len: u64 = literal.len() as u64;
+                let len: u64 = literal.len();
                 out.push_str(str5(String::from("  v"), ids, String::from(".len = "), i64_to_string(len as i64), String::from(";\n")));
                 let mut j: u64 = 0u64;
                 while j < len {
@@ -2160,12 +2160,12 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
         let mut literal: String = String::from("");
         let blocks: Vec<IrBlock> = f.blocks;
         let mut bi: u64 = 0u64;
-        while bi < blocks.len() as u64 {
+        while bi < blocks.len() {
             if found { break; }
             let blk: IrBlock = blocks[bi];
             let insts: Vec<IrInst> = blk.insts;
             let mut ii: u64 = 0u64;
-            while ii < insts.len() as u64 {
+            while ii < insts.len() {
                 let candidate: IrInst = insts[ii];
                 if candidate.id == literal_ptr && candidate.op == IOP_CONST_STR() && candidate.dk == IDATA_CONST_STR() {
                     let strings: Vec<String> = m.strings;
@@ -2183,7 +2183,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
             emit_unmodelled(out, inst);
             return;
         }
-        let len: u64 = literal.len() as u64;
+        let len: u64 = literal.len();
         out.push_str(str3(String::from("  v"), ids, String::from(" = 0;\n")));
         out.push_str(str3(String::from("  if (v"), ps, String::from(" >= 0 && v")));
         out.push_str(str5(ps, String::from(" <= (int64_t)v"), ss, String::from(".len && "), i64_to_string(len as i64)));
@@ -2512,7 +2512,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
 
     let params_list: String = String::from("");
     let param_tys: Vec<i64> = f.params;
-    let n_params: u64 = param_tys.len() as u64;
+    let n_params: u64 = param_tys.len();
     let arg_map_ir: Vec<i64> = Vec::new();
     let arg_map_cl: Vec<i64> = Vec::new();
     let mut cl_idx: i64 = 0;
@@ -2542,7 +2542,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
 
     let blocks: Vec<IrBlock> = f.blocks;
     let inst_ty_by_id: Vec<i64> = build_inst_ty_by_id(f);
-    let n_blocks: u64 = blocks.len() as u64;
+    let n_blocks: u64 = blocks.len();
     let const_str_ids: Vec<i64> = Vec::new();
     let const_str_idxs: Vec<i64> = Vec::new();
 
@@ -2551,7 +2551,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_CONST_STR() && inst.dk == IDATA_CONST_STR() {
                 const_str_ids.push(inst.id);
@@ -2562,7 +2562,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
                 let iid: i64 = inst.id;
                 let mut found_cl: i64 = -1;
                 let mut ai: u64 = 0u64;
-                while ai < arg_map_ir.len() as u64 {
+                while ai < arg_map_ir.len() {
                     if arg_map_ir[ai] == arg_idx {
                         found_cl = arg_map_cl[ai];
                     }
@@ -2624,7 +2624,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_GET_ARG() || inst.op == IOP_UPSILON()
                || iop_is_terminal(inst.op)
@@ -2672,7 +2672,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         let hblk: IrBlock = blocks[bi];
         let hinsts: Vec<IrInst> = hblk.insts;
         let mut hi: u64 = 0u64;
-        while hi < hinsts.len() as u64 {
+        while hi < hinsts.len() {
             let hinst: IrInst = hinsts[hi];
             let hop: i64 = hinst.op;
             if hop == IOP_REGION_ALLOC() || hop == IOP_FIELD_SET() {
@@ -2705,7 +2705,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET() {
                 let u_args: Vec<i64> = inst.args;
@@ -2721,7 +2721,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         bi = bi + 1;
     }
     let mut ui: u64 = 0u64;
-    while ui < ups_sources.len() as u64 {
+    while ui < ups_sources.len() {
         let src: i64 = ups_sources[ui];
         // Upsilon temps must share the source's struct type; struct-to-int64 assignment corrupts the payload.
         if vec_contains_i64(option_vars, src) {
@@ -2748,7 +2748,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
     let eq_hi: Vec<i64> = Vec::new();
     compute_string_eq_pairs(blocks, eq_lo, eq_hi);
     let mut ei: u64 = 0u64;
-    while ei < eq_lo.len() as u64 {
+    while ei < eq_lo.len() {
         out.push_str(str5(String::from("  _Bool __str_eq_"), i64_to_string(eq_lo[ei]),
             String::from("_"), i64_to_string(eq_hi[ei]),
             String::from(" = __VERIFIER_nondet_bool();\n")));
@@ -2784,7 +2784,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
             let rblk: IrBlock = blocks[rbi];
             let rinsts: Vec<IrInst> = rblk.insts;
             let mut rii: u64 = 0u64;
-            while rii < rinsts.len() as u64 {
+            while rii < rinsts.len() {
                 let rinst: IrInst = rinsts[rii];
                 // Match Rust's `.find()` (vow-verify/src/c_emitter.rs): take the
                 // FIRST `Return`, then stop. A trailing scan keeps the LAST
@@ -2793,7 +2793,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
                     let rargs: Vec<i64> = rinst.args;
                     if rargs.len() > 0 {
                         result_after = rargs[0];
-                        rii = rinsts.len() as u64;
+                        rii = rinsts.len();
                         rbi = n_blocks;
                     }
                 }
@@ -2817,7 +2817,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         let ups_src: Vec<i64> = Vec::new();
         let mut terminal_idx: i64 = -1;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_GET_ARG() {
                 ii = ii + 1;
@@ -2848,7 +2848,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         let mut reach_after_idx: i64 = -1;
         if reach_label && blk.id == first_block_id {
             let mut qi: u64 = 0u64;
-            while qi < insts.len() as u64 {
+            while qi < insts.len() {
                 let qinst: IrInst = insts[qi];
                 if qinst.op == IOP_VOW_REQ() {
                     reach_after_idx = qi as i64;
@@ -2858,7 +2858,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         }
 
         let mut ri: u64 = 0u64;
-        while ri < regular.len() as u64 {
+        while ri < regular.len() {
             let inst: IrInst = insts[regular[ri]];
             emit_inst(out, inst, f, inst_ty_by_id, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, const_str_ids, const_str_idxs, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max, requires_as_assert);
             if regular[ri] == reach_after_idx {
@@ -2872,14 +2872,14 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
 
         if ups_phi.len() > 0 {
             let mut ui: u64 = 0u64;
-            while ui < ups_src.len() as u64 {
+            while ui < ups_src.len() {
                 let src: i64 = ups_src[ui];
                 out.push_str(str5(String::from("  __ups_"), i64_to_string(src),
                     String::from(" = v"), i64_to_string(src), String::from(";\n")));
                 ui = ui + 1;
             }
             ui = 0u64;
-            while ui < ups_phi.len() as u64 {
+            while ui < ups_phi.len() {
                 let phi: i64 = ups_phi[ui];
                 let src: i64 = ups_src[ui];
                 out.push_str(str5(String::from("  v"), i64_to_string(phi),
@@ -3069,11 +3069,11 @@ fn cemit_arith_overflow_helper(target_op: i64, target_ty: i64) -> String {
 fn func_has_checked_arith_op(f: IrFunction, target_op: i64, target_ty: i64) -> i64 {
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: u64 = 0u64;
-    while bi < blocks.len() as u64 {
+    while bi < blocks.len() {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
             if inst.op == target_op && checked_arith_ty(inst) == target_ty {
                 return 1;
@@ -3142,14 +3142,14 @@ fn append_arith_helpers_for_function(out: String, f: IrFunction) {
 // function count.
 fn scan_arith_op_in_module_fns(fns: Vec<IrFunction>, target_fi: i64, callee_fis: Vec<i64>, target_op: i64, target_ty: i64) -> i64 {
     let mut fi: u64 = 0u64;
-    while fi < fns.len() as u64 {
+    while fi < fns.len() {
         let f: IrFunction = fns[fi];
         let mut check: i64 = 0;
         if f.id == target_fi { check = 1; }
         if check == 0 {
             let mut ci: u64 = 0u64;
-            while ci < callee_fis.len() as u64 {
-                if callee_fis[ci] == f.id { check = 1; ci = callee_fis.len() as u64; }
+            while ci < callee_fis.len() {
+                if callee_fis[ci] == f.id { check = 1; ci = callee_fis.len(); }
                 ci = ci + 1;
             }
         }
@@ -3289,11 +3289,11 @@ fn contracts_only_source(c_src: String) -> String {
 fn func_has_integer_shift_op(f: IrFunction, target_op: i64, target_ty: i64) -> i64 {
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: u64 = 0u64;
-    while bi < blocks.len() as u64 {
+    while bi < blocks.len() {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
             if inst.op == target_op && inst.dk == IDATA_INTEGER() && inst.dv == target_ty {
                 return 1;
@@ -3541,7 +3541,7 @@ fn string_max_for_literals(m: IrModule, string_max: i64) -> i64 {
     let strings: Vec<String> = m.strings;
     let mut max_len: i64 = string_max;
     let mut i: u64 = 0u64;
-    while i < strings.len() as u64 {
+    while i < strings.len() {
         let len: i64 = strings[i].len() as i64;
         if len > max_len {
             max_len = len;
@@ -3565,7 +3565,7 @@ fn emit_forward_declaration(out: String, f: IrFunction) {
     let param_tys: Vec<i64> = f.params;
     let mut cl_idx: i64 = 0;
     let mut pi: u64 = 0u64;
-    while pi < param_tys.len() as u64 {
+    while pi < param_tys.len() {
         let pty: i64 = param_tys[pi];
         if pty != ITY_UNIT() {
             if cl_idx > 0 { params_list.push_str(String::from(", ")); }
@@ -3589,7 +3589,7 @@ fn emit_forward_declaration(out: String, f: IrFunction) {
 fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
     let fns: Vec<IrFunction> = m.functions;
     let model_string_max: i64 = string_max_for_literals(m, string_max);
-    let n: u64 = fns.len() as u64;
+    let n: u64 = fns.len();
     let need_shl_i64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL(), ITY_I64());
     let need_shr_i64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR(), ITY_I64());
     let need_shl_u64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL(), ITY_U64());
@@ -3615,14 +3615,14 @@ fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, b
 
 fn scan_shift_op_in_module_fns(fns: Vec<IrFunction>, target_fi: i64, callee_fis: Vec<i64>, target_op: i64, target_ty: i64) -> i64 {
     let mut fi: u64 = 0u64;
-    while fi < fns.len() as u64 {
+    while fi < fns.len() {
         let f: IrFunction = fns[fi];
         let mut check: i64 = 0;
         if f.id == target_fi { check = 1; }
         if check == 0 {
             let mut ci: u64 = 0u64;
-            while ci < callee_fis.len() as u64 {
-                if callee_fis[ci] == f.id { check = 1; ci = callee_fis.len() as u64; }
+            while ci < callee_fis.len() {
+                if callee_fis[ci] == f.id { check = 1; ci = callee_fis.len(); }
                 ci = ci + 1;
             }
         }
@@ -3669,14 +3669,14 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
 
     let mut ci: u64 = 0u64;
-    while ci < callee_fis.len() as u64 {
+    while ci < callee_fis.len() {
         let cfid: i64 = callee_fis[ci];
         let mut fi: u64 = 0u64;
-        while fi < fns.len() as u64 {
+        while fi < fns.len() {
             let callee: IrFunction = fns[fi];
             if callee.id == cfid {
                 emit_forward_declaration(out, callee);
-                fi = fns.len() as u64;
+                fi = fns.len();
             }
             fi = fi + 1;
         }
@@ -3687,15 +3687,15 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
     }
 
     ci = 0u64;
-    while ci < callee_fis.len() as u64 {
+    while ci < callee_fis.len() {
         let cfid: i64 = callee_fis[ci];
         let mut fi: u64 = 0u64;
-        while fi < fns.len() as u64 {
+        while fi < fns.len() {
             let callee: IrFunction = fns[fi];
             if callee.id == cfid {
                 emit_c_function(out, callee, const_fn_indices, modelable_fi_set, m, vec_max, model_string_max, hashmap_max, btreemap_max, false, false, 1);
                 out.push_byte(10);
-                fi = fns.len() as u64;
+                fi = fns.len();
             }
             fi = fi + 1;
         }
@@ -3703,12 +3703,12 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
     }
 
     let mut fi: u64 = 0u64;
-    while fi < fns.len() as u64 {
+    while fi < fns.len() {
         let f: IrFunction = fns[fi];
         if f.id == target_fi {
             emit_c_function(out, f, const_fn_indices, modelable_fi_set, m, vec_max, model_string_max, hashmap_max, btreemap_max, target_reach_label, target_body_replace, 0);
             out.push_byte(10);
-            fi = fns.len() as u64;
+            fi = fns.len();
         }
         fi = fi + 1;
     }

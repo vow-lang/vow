@@ -35,8 +35,8 @@ fn file_stem_from_path(path: String) -> String {
 // Byte-wise lexicographic order mirrors Rust PathBuf ordering for the
 // ASCII-clean paths accepted by test discovery.
 fn test_path_lt(a: String, b: String) -> bool {
-    let na: u64 = a.len() as u64;
-    let nb: u64 = b.len() as u64;
+    let na: u64 = a.len();
+    let nb: u64 = b.len();
     let mut i: u64 = 0;
     while i < na && i < nb {
         let ca: i64 = a.byte_at(i);
@@ -49,7 +49,7 @@ fn test_path_lt(a: String, b: String) -> bool {
 }
 
 fn sort_test_paths(paths: Vec<String>) {
-    let n: u64 = paths.len() as u64;
+    let n: u64 = paths.len();
     let mut i: u64 = 1;
     while i < n {
         let current: String = paths[i];
@@ -116,7 +116,7 @@ fn discover_selected_tests(root: String, filter: String, root_is_dir: bool) -> V
         stack.pop();
         let entries: Vec<String> = fs_listdir(dir);
         let mut i: u64 = 0;
-        while i < entries.len() as u64 {
+        while i < entries.len() {
             let entry: String = entries[i];
             let full: String = test_path_join(dir, entry);
             if fs_is_symlink(full) == 1 {
