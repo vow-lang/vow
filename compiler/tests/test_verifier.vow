@@ -268,6 +268,15 @@ fn check_resolve_clause_status_falls_back_to_overall_when_clause_unreported() ->
     0
 }
 
+fn check_parse_digits_at_edges() -> i64 {
+    if parse_digits_at(String::from("vow:12"), 4) != 12 { return 60; }
+    if parse_digits_at(String::from("vow:12"), 0) != -1 { return 61; }
+    if parse_digits_at(String::from("vow:12"), -1) != -1 { return 62; }
+    if parse_digits_at(String::from("vow:12"), 6) != -1 { return 63; }
+    if parse_digits_at(String::from("123"), -3) != -1 { return 64; }
+    0
+}
+
 fn main() -> i32 [io] {
     let r1: i64 = check_known_nondet_calls();
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -311,5 +320,7 @@ fn main() -> i32 [io] {
     if r20 != 0 { return i64_to_i32_wrap(r20); }
     let r21: i64 = check_resolve_clause_status_falls_back_to_overall_when_clause_unreported();
     if r21 != 0 { return i64_to_i32_wrap(r21); }
+    let r22: i64 = check_parse_digits_at_edges();
+    if r22 != 0 { return i64_to_i32_wrap(r22); }
     0
 }

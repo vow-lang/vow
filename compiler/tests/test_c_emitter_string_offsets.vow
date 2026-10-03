@@ -88,7 +88,7 @@ fn check_matches_literal_at_is_unsigned() -> i64 {
     let modelable_fi_set: Vec<i64> = Vec::new();
     emit_c_function(c, f, const_fn_indices, modelable_fi_set, m, 16, 16, 16, 16, false, false, 0);
     if !c.contains(String::from("v4 = 0;")) { return 21; }
-    if c.contains(String::from("__VERIFIER_nondet_long")) { return 22; }
+    if c.contains(String::from("v4 = __VERIFIER_nondet_long")) { return 22; }
     if !c.contains(String::from("if ((uint64_t)v1 <= (uint64_t)v0.len && 3ULL <= (uint64_t)v0.len - (uint64_t)v1) {")) { return 23; }
     if !c.contains(String::from("(unsigned char)v0.data[v1 + 0] != 97")) { return 24; }
     if !c.contains(String::from("(unsigned char)v0.data[v1 + 1] != 0")) { return 25; }

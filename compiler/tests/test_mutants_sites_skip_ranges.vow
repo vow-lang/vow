@@ -5,10 +5,12 @@ use clif
 use c_emitter
 use mutants_sites
 
-// A `// GENERATE:START` line has the `// GENERATE:` prefix and the `:START`
-// suffix overlapping, so it has no NAME and must never open a skip range.
+// A line with the `// GENERATE:` prefix and the `:START` suffix is 17 bytes
+// only when the two share their `:` (`// GENERATE:START`); that shape has no
+// NAME and must never open a skip range, whether it is closed by the
+// empty-name `// GENERATE::END` or by `// GENERATE:START:END`.
 fn check_degenerate_start_is_not_a_block() -> i64 {
-    let src: String = String::from("// GENERATE:START\nfn a() {}\n// GENERATE:END\n");
+    let src: String = String::from("// GENERATE:START\nfn a() {}\n// GENERATE::END\n// GENERATE:START:END\n");
     let ranges: Vec<u64> = compute_skip_ranges(src);
     if ranges.len() != 0 { return 1; }
     let padded: String = String::from("// GENERATE:xx:START\nfn a() {}\n// GENERATE:xx:END\n");
