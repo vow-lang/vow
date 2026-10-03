@@ -64,7 +64,7 @@ fn min_sift_up(data: Vec<i64>, start: i64) vow {
     let mut i: u64 = start as u64;
     let mut done: bool = false;
     while !done && i > 0 vow {
-        invariant: i < data.len() as u64
+        invariant: i < data.len()
     } {
         let p: u64 = min_parent_idx(i as i64) as u64;
         if data[i] < data[p] {
