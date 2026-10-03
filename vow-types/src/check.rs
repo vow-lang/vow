@@ -964,6 +964,11 @@ pub struct Checker<'e> {
     /// merely misplace a lowering hint.
     nonneg_casts: HashMap<usize, (Ty, Ty)>,
     in_loop: u32,
+    /// Nesting depth of contract predicates (`requires`/`ensures`/`invariant`
+    /// clause expressions) currently being checked. Tuple values have no IR
+    /// representation, so a tuple expression inside a predicate is rejected
+    /// while this is non-zero rather than reaching lowering.
+    contract_depth: u32,
     /// Stack of break-value type collectors. `Some(vec)` for `loop` (collects
     /// break types), `None` for `while` (break-with-value is an error).
     break_types_stack: Vec<Option<Vec<Ty>>>,
@@ -1009,6 +1014,7 @@ impl<'e> Checker<'e> {
             pattern_aggregates: HashMap::new(),
             nonneg_casts: HashMap::new(),
             in_loop: 0,
+            contract_depth: 0,
             break_types_stack: Vec::new(),
             const_types: HashMap::new(),
         }
@@ -1458,6 +1464,13 @@ impl<'e> Checker<'e> {
         }
     }
 
+    fn check_contract_expr(&mut self, expr: &Expr) -> Ty {
+        self.contract_depth += 1;
+        let ty = self.check_expr(expr);
+        self.contract_depth -= 1;
+        ty
+    }
+
     fn check_vow_clauses(&mut self, vow: &VowBlock, context: &str) {
         for clause in &vow.clauses {
             let (expr, span, kind) = match clause {
@@ -1465,7 +1478,7 @@ impl<'e> Checker<'e> {
                 VowClause::Ensures { expr, span } => (expr, *span, "ensures"),
                 VowClause::Invariant { expr, span } => (expr, *span, "invariant"),
             };
-            let ty = self.check_expr(expr);
+            let ty = self.check_contract_expr(expr);
             if ty != Ty::Bool && ty != Ty::Never {
                 self.emit_error_with_hints(
                     ErrorCode::ContractTypeMismatch,
@@ -1504,7 +1517,7 @@ impl<'e> Checker<'e> {
         if let Some(ref vow) = fn_def.vow {
             for clause in &vow.clauses {
                 if let VowClause::Requires { expr, span } = clause {
-                    let ty = self.check_expr(expr);
+                    let ty = self.check_contract_expr(expr);
                     if ty != Ty::Bool && ty != Ty::Never {
                         self.emit_error_with_hints(
                             ErrorCode::ContractTypeMismatch,
@@ -1541,7 +1554,7 @@ impl<'e> Checker<'e> {
             self.env.define("result", self.current_return_ty.clone());
             for clause in &vow.clauses {
                 if let VowClause::Ensures { expr, span } = clause {
-                    let ty = self.check_expr(expr);
+                    let ty = self.check_contract_expr(expr);
                     if ty != Ty::Bool && ty != Ty::Never {
                         self.emit_error_with_hints(
                             ErrorCode::ContractTypeMismatch,
@@ -2945,6 +2958,13 @@ impl<'e> Checker<'e> {
                 Ty::Unit
             }
             ExprKind::Tuple(elems) => {
+                if self.contract_depth > 0 && !elems.is_empty() {
+                    self.emit_error(
+                        ErrorCode::UnsupportedFeature,
+                        "tuple expressions are not supported in contract predicates",
+                        expr.span,
+                    );
+                }
                 let elem_tys: Vec<Ty> = elems.iter().map(|e| self.check_expr(e)).collect();
                 Ty::Tuple(elem_tys)
             }

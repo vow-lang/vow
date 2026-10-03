@@ -3484,6 +3484,15 @@ postcondition that depends on it is verified only within that bound.
 
 A clause must not write through any argument while it is being evaluated — not just avoid declared effects. Vow passes structs, `Vec`, `String`, and maps by pointer, so a plain helper with no declared effect can still perform a real heap write (a field assignment, a `Vec`/map element write, a mutating builtin method) through a parameter. If such a write were allowed in a contract clause, it would happen every time the clause is evaluated — under `vow verify`, under `--mode debug`, and (today, since nothing elides a predicate's side effects at codegen time) in release too — making the clause's own evaluation an unaccounted-for part of the program's real behavior rather than a side-effect-free check of it. Rejecting this at type-check time (`EffectViolation`, `Blame::Callee`) keeps the predicate a predicate: see `docs/spec/grammar.md` → "Contract Purity" for the exact rule and the `mark(p)` example, and `docs/adr/2026-10-02-2348-contract-heap-write-purity.md` (ADR-2026-10-02-2348) for why this is checked for every clause rather than deferred to a write-footprint mechanism.
 
+## Tuples in Clauses
+
+Tuples are not first-class values (see the `let` tuple-pattern rules in `grammar.md`), so a
+non-empty tuple expression cannot appear anywhere inside a `requires`, `ensures` or `invariant`
+clause — not as a comparison operand (`requires: t != (1, 2)`) and not as the initializer of a
+`let` inside a clause block. Both compilers reject it at type-check time with
+`UnsupportedFeature` ("tuple expressions are not supported in contract predicates") at the
+tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.
+
 ## Counterexample Replay (Differential Test)
 
 `vow verify --replay-cex` (also `vow build --replay-cex`) cross-checks a counterexample against the executable's runtime semantics. After ESBMC reports a violation, Vow maps the symbolic assignment to concrete Vow inputs, builds a `--mode debug` harness that calls the failing function with them, and checks whether the runtime `VowViolation` matches — **same `vow_id` and same blame**.
@@ -4726,6 +4735,21 @@ trait Foo {
 **Output:** `trait blocks are not supported in Vow`
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
+
+A non-empty tuple expression inside a contract clause is also `UnsupportedFeature`, because tuples
+have no runtime or verifier representation:
+
+```vow
+fn f(a: i64, b: i64) -> i64 vow {
+    requires: (a, b) != (1, 2)
+} {
+    a
+}
+```
+
+**Output:** `tuple expressions are not supported in contract predicates`
+
+**Fix:** Compare the elements individually, e.g. `requires: a != 1 || b != 2`.
 
 ### BTreeMapKeyTypeMustBeI64
 
@@ -8886,6 +8910,15 @@ postcondition that depends on it is verified only within that bound.
 
 A clause must not write through any argument while it is being evaluated — not just avoid declared effects. Vow passes structs, `Vec`, `String`, and maps by pointer, so a plain helper with no declared effect can still perform a real heap write (a field assignment, a `Vec`/map element write, a mutating builtin method) through a parameter. If such a write were allowed in a contract clause, it would happen every time the clause is evaluated — under `vow verify`, under `--mode debug`, and (today, since nothing elides a predicate's side effects at codegen time) in release too — making the clause's own evaluation an unaccounted-for part of the program's real behavior rather than a side-effect-free check of it. Rejecting this at type-check time (`EffectViolation`, `Blame::Callee`) keeps the predicate a predicate: see `docs/spec/grammar.md` → "Contract Purity" for the exact rule and the `mark(p)` example, and `docs/adr/2026-10-02-2348-contract-heap-write-purity.md` (ADR-2026-10-02-2348) for why this is checked for every clause rather than deferred to a write-footprint mechanism.
 
+## Tuples in Clauses
+
+Tuples are not first-class values (see the `let` tuple-pattern rules in `grammar.md`), so a
+non-empty tuple expression cannot appear anywhere inside a `requires`, `ensures` or `invariant`
+clause — not as a comparison operand (`requires: t != (1, 2)`) and not as the initializer of a
+`let` inside a clause block. Both compilers reject it at type-check time with
+`UnsupportedFeature` ("tuple expressions are not supported in contract predicates") at the
+tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.
+
 ## Counterexample Replay (Differential Test)
 
 `vow verify --replay-cex` (also `vow build --replay-cex`) cross-checks a counterexample against the executable's runtime semantics. After ESBMC reports a violation, Vow maps the symbolic assignment to concrete Vow inputs, builds a `--mode debug` harness that calls the failing function with them, and checks whether the runtime `VowViolation` matches — **same `vow_id` and same blame**.
@@ -10130,6 +10163,21 @@ trait Foo {
 **Output:** `trait blocks are not supported in Vow`
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
+
+A non-empty tuple expression inside a contract clause is also `UnsupportedFeature`, because tuples
+have no runtime or verifier representation:
+
+```vow
+fn f(a: i64, b: i64) -> i64 vow {
+    requires: (a, b) != (1, 2)
+} {
+    a
+}
+```
+
+**Output:** `tuple expressions are not supported in contract predicates`
+
+**Fix:** Compare the elements individually, e.g. `requires: a != 1 || b != 2`.
 
 ### BTreeMapKeyTypeMustBeI64
 

@@ -816,7 +816,9 @@ fn check_vow_clause(e: CheckEnv, m: Module, vow_lid: i64, kind: i64, context: St
         let ck: i64 = vow_clause_kind(a, cid);
         if ck == kind {
             let clause_eid: i64 = vow_clause_expr(a, cid);
+            e.contract_depth = e.contract_depth + 1;
             let clause_tid: i64 = check_expr(e, m, clause_eid);
+            e.contract_depth = e.contract_depth - 1;
             if clause_tid != CTY_BOOL() && !is_opaque(clause_tid) {
                 let msg: String = String::from("`");
                 if kind == CLAUSE_REQUIRES() {
@@ -3447,6 +3449,14 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     if tag == EXPR_TUPLE() {
         let elems_lid: i64 = expr_a(a, eid);
         let n: i64 = list_len(a, elems_lid);
+        if e.contract_depth > 0 && n > 0 {
+            env_emit_error_code(
+                e,
+                EC_UNSUPPORTED_FEATURE(),
+                String::from("tuple expressions are not supported in contract predicates"),
+                expr_span(a, eid),
+            );
+        }
         let elem_tids: Vec<i64> = Vec::new();
         let mut i: i64 = 0;
         while i < n {
