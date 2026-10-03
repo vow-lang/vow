@@ -103,6 +103,25 @@ fn f() -> i32 {
 **Fix:** Change the expression or declared type to match. For an enum pattern,
 qualify the variant with the scrutinee's enum name.
 
+A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::get` / `Vec::truncate`
+arguments must have exactly the type `u64`. An index of any other integer type
+(for example an `i64` counter) or of a non-integer type is a `TypeMismatch`
+in both compilers:
+
+```vow
+fn f(v: Vec<i64>, i: i64) -> i64 {
+    v[i]
+}
+```
+
+**Output:** `index has type 'i64' but must be 'u64'`
+
+**Fix:** Keep index counters `u64` (`.len()` is already `u64`), or convert at
+the index site with `as u64` (`v[i as u64]`). Unsuffixed integer literals
+coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`) are
+not `u64` in v1 and are unaffected; see
+[String offsets](grammar.md#string-offsets).
+
 ### LiteralOutOfRange
 
 **Phase:** Type Checker

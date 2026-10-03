@@ -128,6 +128,62 @@ and bounded, but it is a cost, not a saving.
   itself changes is a later phase of epic #1104; the documented idiom carries
   the bridge until then.
 
+## Implementation record
+
+Epic #1104 landed as dependency-ordered seams. Each was independently correct
+and independently landable; the cast bridge is what let the corpus migrate
+against an unmodified compiler.
+
+1. **Blockers (#1111-#1115, #585).** The checker rejects tautological unsigned
+   comparisons with `0` as `TautologicalComparison` (#1129, #1142), the
+   descending-loop idiom and this ADR were written (#1158), and the index
+   expression's type became checked, initially accepting any integer type.
+2. **Phase A prep (module PRs within #1374-#1393).** Size-shaped locals and parameters moved to
+   `u64` module by module, with a same-width `as u64` cast of the length at
+   every consuming site. That cast type-checks under both the `i64` and the
+   `u64` length rule, which is what let each module land before the flip.
+3. **The flip (#1443).** `.len()` returns `u64` on `Vec`, `String`, `HashMap`,
+   and `BTreeMap` in both compilers and the C verifier model. #1444 landed
+   alongside it and classifies `BTreeMap` and `parse_opt` externs as
+   heap-producing in the region model.
+4. **Phase C, bridge deletion (#1445, #1447, #1449-#1452, #1454).** The
+   length casts were deleted per directory. ` as i64` casts are not bridge and
+   were deliberately kept: they mark signed boundaries and arena ids.
+5. **D2 (#1446).** `byte_at` and `push_byte` got separate checker arms in both
+   compilers: the first takes an offset, the second a byte value.
+6. **D3 (#1448).** The `from_raw_parts_copy` length argument is `u64` for `Vec`
+   and `String`; the pointer stays `i64`.
+7. **Index prep (#1457-#1463).** Every `Vec` index site in `compiler/`,
+   `tests/`, `stdlib/`, `examples/`, and `benchmarks/` was made to compile under
+   both the old and the new index rule.
+8. **D1 (this seam).** A `Vec` index expression, and the `Vec::get` and
+   `Vec::truncate` arguments, must have exactly the type `u64` in both
+   compilers. Unsuffixed literals still coerce; a literal that does not fit is
+   `LiteralOutOfRange`; any other integer type or a non-integer is
+   `TypeMismatch`.
+
+**What deliberately remains `i64`.** `String` offsets are `i64` in v1:
+`byte_at`, `substr`, `substring`, and `matches_literal_at`. `push_byte` takes a
+byte value in `0..=255` and is not a size at all, and `byte_at` returns a byte
+value in `-1..=255`. The runtime still carries the guards that make the signed
+type meaningful there: the negative-index check in `__vow_string_byte_at`, the
+clamping in `__vow_string_substr` and `__vow_string_substring`, and the
+negative-position rejection in `__vow_string_matches_literal_at`
+(`vow-runtime/src/lib.rs`). The `Vec` runtime helpers already took `usize`.
+
+The follow-up for String offsets is a deletion list, not a design question:
+the ` as i64` casts at `byte_at` / `substr` / `substring` /
+`matches_literal_at` call sites, and the runtime negative guards above. It
+changes the runtime behaviour of out-of-range callers, so it needs its own
+seam. It does not touch Decision 1: ADR 0001's `isize`/`usize` exclusion is
+unchanged.
+
+**Superseded text.** Decision 4's remark that an index expression accepts any
+width and either signedness described the state before D1 and no longer holds
+for `Vec`; its inventory warning still applies to `String`
+offsets. The second item under *Open follow-ups* is resolved: the
+`as u64` bridge is deleted.
+
 ## Amendments
 
 None yet.
