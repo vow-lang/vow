@@ -716,6 +716,33 @@ The structured counterexample's `violation` field carries the stable property de
 
 **Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
 
+### ModelCapacityAssumed
+
+**Phase:** Verification (Note; the build status stays `Verified`)
+**Meaning:** The function's contracts were proved, but the proof's model restricts at least one capacity to the verifier's model capacity (`Vec<T>` 128, `String` 256, `HashMap<K, V>` and `BTreeMap<K, V>` 64, user-struct `Heap` 1024 slots; see [`contracts.md`](contracts.md#collection-models-for-verification)). A parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled as nondeterministic *within* its capacity, and struct allocations stop at the heap capacity, so executions with longer collections or more struct allocations were pruned, not checked: `Verified` means "verified for executions up to the capacities".
+
+```json
+{
+  "error_code": "ModelCapacityAssumed",
+  "severity": "note",
+  "message": "proof of `first_or_zero` is bounded: only executions within the verifier model capacity were checked (Vec<T>: 128)",
+  "hints": [
+    "the bound belongs to the bounded model checker, not to the program or its contracts; executions beyond it (longer collections, more struct allocations) were not checked",
+    "do not add a length bound to a contract to silence this note; an unbounded verifier removes it without any source change"
+  ]
+}
+```
+
+The `message` lists every bounded kind as `Kind: capacity`, in the fixed order `Vec<T>`, `String`, `HashMap<K, V>`, `BTreeMap<K, V>`, `Heap`, one entry per kind. When a model applied several capacities to one kind, the smallest is listed: the proof is claimed only for executions within every bound the model applied. At most one note is emitted per proved function. The span is empty (the note describes the model, not a source location).
+
+**Why this is a Note and not a failure.** The verdict is genuine for every execution inside the bound and the verifier never changes a verdict because of the note. It is informational so that an agent or CEGIS loop can tell a bounded proof from an unbounded one — for example, to treat a `Verified` function that handles untrusted-length collections with extra scrutiny, or to test it with the runtime checks of `--mode debug`.
+
+**Fix:** None is required. Do **not** add `requires: v.len() <= 128` (or any other capacity) to silence it: that distorts a true contract to fit a prover limitation, and an unbounded backend removes the note without any source change.
+
+**Ordering and presence.** Notes describe a *completed* proof run, so they are emitted only when the overall `status` is `Verified`, one per proved function, after every other diagnostic and in function declaration order. A run that ends in a counterexample, `unknown`, `timeout`, `error`, or a fail-closed skip carries no note: a halt cuts the set of verified functions short in a scheduling-dependent way, and a note about one of them would be noise next to the real failure.
+
+**Not emitted when:** the function's model restricts no capacity (scalar-only functions that allocate no struct, and collections built by the function itself from constant lengths or from a null source), or the overall status is not `Verified`. The same note is emitted by `vow verify` and `vow build`.
+
 ## Runtime Errors
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).

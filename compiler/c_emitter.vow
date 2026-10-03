@@ -1,6 +1,7 @@
 module CEmitter
 
 use ir
+use const_fold
 use ir_printer
 use verifier_ids
 
@@ -643,62 +644,67 @@ fn emit_bounds_assert(out: String, idx: i64, container: i64, idx_ty: i64, label:
         cemit_str2(String::from(".len, \""), cemit_str2(label, String::from("\");\n")))));
 }
 
-// Per-instruction constant integer value indexed by instruction id, built once
-// per function. A u64 constant >= 2^63 (stored negative) saturates to i64::MAX
-// so every entry that is not -1 compares correctly against a model capacity.
-// -1 marks an instruction that is not an integer constant.
-fn build_const_len_by_id(f: IrFunction) -> Vec<i64> {
-    let const_len_by_id: Vec<i64> = Vec::new();
-    let blocks: Vec<IrBlock> = f.blocks;
-    let mut bi: u64 = 0u64;
-    while bi < blocks.len() {
-        let blk: IrBlock = blocks[bi];
-        let insts: Vec<IrInst> = blk.insts;
-        let mut ii: u64 = 0u64;
-        while ii < insts.len() {
-            let inst: IrInst = insts[ii];
-            if inst.id >= 0 {
-                while const_len_by_id.len() as i64 <= inst.id {
-                    const_len_by_id.push(0 - 1);
-                }
-                if inst.op == IOP_CONST_U64() || inst.op == IOP_CONST_I64() {
-                    const_len_by_id[inst.id as u64] = { if inst.dv < 0 { 9223372036854775807 } else { inst.dv } };
-                }
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    const_len_by_id
+// Tail of an emitted capacity `__ESBMC_assume(...)`: the capacity, the closing
+// parenthesis, and the marker the structured "proof is bounded" note is read
+// from. Shared wire format with vow-verify's `model_bound_marker`.
+fn bound_tail(kind: String, cap: i64) -> String {
+    let cs: String = i64_to_string(cap);
+    str5(cs, String::from("); /* vow:model-bound "), kind, String::from(" "), str3(cs, String::from(" */"), String::from("\n")))
 }
 
-// A constant length >= max (or a negative / >= 2^63 one) is outside the model
-// capacity.
-fn raw_parts_const_len_exceeds_model(const_len_by_id: Vec<i64>, len_arg: i64, max: i64) -> bool {
-    if len_arg < 0 || len_arg >= const_len_by_id.len() as i64 {
-        return false;
-    }
-    let v: i64 = const_len_by_id[len_arg as u64];
-    v >= 0 && v >= max
+// The collection kind ("Vec" or "String") a raw-parts style constructor builds
+// and the model capacity its length is checked against.
+struct CapacityModel {
+    kind: String,
+    max: i64,
 }
 
-// Length model for from_raw_parts_copy. A constant length outside the model
-// capacity fails closed with the capacity label (an assumption would be
-// unsatisfiable and prove everything after it). A u64 length drops the vacuous
-// >= 0 lower bound.
-fn emit_raw_parts_len(out: String, const_len_by_id: Vec<i64>, id: i64, len_arg: i64, len_ty: i64, max: i64, capacity_label: String) {
+// The instruction ids and length type of one constructor call.
+struct RawParts {
+    id: i64,
+    ptr: i64,
+    len: i64,
+    len_ty: i64,
+}
+
+// Model for a constructor copying len elements from ptr (from_raw_parts_copy,
+// String::new). The runtime returns an empty value for a null ptr whatever len
+// is, so the model does too: a provably null source is empty, and otherwise the
+// capacity restriction only applies to a non-null source. A length that is
+// provably constant and outside the model capacity cannot be assumed (the
+// assumption would be unsatisfiable and prove everything after it), so a
+// non-null source fails closed with the capacity label. A u64 length drops the
+// vacuous >= 0 lower bound.
+fn emit_raw_parts_len(out: String, const_len_by_id: Vec<i64>, model: CapacityModel, parts: RawParts) {
+    let id: i64 = parts.id;
+    let ptr_arg: i64 = parts.ptr;
+    let len_arg: i64 = parts.len;
+    let len_ty: i64 = parts.len_ty;
+    let kind: String = model.kind;
+    let max: i64 = model.max;
     let ids: String = i64_to_string(id);
+    if raw_parts_null_source(const_len_by_id, ptr_arg) {
+        out.push_str(str3(String::from("  v"), ids, String::from(".len = 0;\n")));
+        return;
+    }
+    let ps: String = i64_to_string(ptr_arg);
     if raw_parts_const_len_exceeds_model(const_len_by_id, len_arg, max) {
-        out.push_str(str3(String::from("  __ESBMC_assert(0, \""), capacity_label, String::from("\");\n")));
+        let label: String = { if kind == String::from("Vec") { String::from("vec capacity") } else { String::from("string capacity") } };
+        out.push_str(str5(String::from("  __ESBMC_assert(v"), ps, String::from(" == 0, \""), label, String::from("\");\n")));
         out.push_str(str3(String::from("  v"), ids, String::from(".len = 0;\n")));
         return;
     }
     let ls: String = i64_to_string(len_arg);
     let lower: String = { if ity_is_unsigned(len_ty) { String::new() } else { str3(String::from("v"), ls, String::from(" >= 0 && ")) } };
-    out.push_str(str5(String::from("  __ESBMC_assume("), lower,
-        String::from("v"), ls,
-        str3(String::from(" < "), i64_to_string(max), String::from(");\n"))));
-    out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), ls, String::from(";\n")));
+    let marker: String = {
+        if len_is_const(const_len_by_id, len_arg) { String::new() }
+        else { str5(String::from(" /* vow:model-bound "), kind, String::from(" "), i64_to_string(max), String::from(" */")) }
+    };
+    out.push_str(str5(String::from("  __ESBMC_assume(v"), ps,
+        String::from(" == 0 || ("), lower,
+        str5(String::from("v"), ls, String::from(" < "), i64_to_string(max), str3(String::from("));"), marker, String::from("\n")))));
+    out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), ps,
+        str5(String::from(" == 0 ? 0 : v"), ls, String::from(";\n"), String::new(), String::new())));
 }
 
 fn ir_ty_to_c(ty: i64) -> String {
@@ -1771,28 +1777,28 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, 
             let ids: String = i64_to_string(id);
             out.push_str(str3(String::from("  /* FieldGet -> vec */ v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
             out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-            out.push_str(cemit_str2(i64_to_string(vec_max), String::from(");\n")));
+            out.push_str(bound_tail(String::from("Vec"), vec_max));
             return;
         }
         if vec_contains_i64(string_vars, id) {
             let ids: String = i64_to_string(id);
             out.push_str(str3(String::from("  /* FieldGet -> string */ v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
             out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-            out.push_str(cemit_str2(i64_to_string(string_max), String::from(");\n")));
+            out.push_str(bound_tail(String::from("String"), string_max));
             return;
         }
         if vec_contains_i64(hashmap_vars, id) {
             let ids: String = i64_to_string(id);
             out.push_str(str3(String::from("  /* FieldGet -> hashmap */ v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
             out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-            out.push_str(cemit_str2(i64_to_string(hashmap_max), String::from(");\n")));
+            out.push_str(bound_tail(String::from("HashMap"), hashmap_max));
             return;
         }
         if vec_contains_i64(btreemap_vars, id) {
             let ids: String = i64_to_string(id);
             out.push_str(str3(String::from("  /* FieldGet -> btreemap */ v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
             out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-            out.push_str(cemit_str2(i64_to_string(btreemap_max), String::from(");\n")));
+            out.push_str(bound_tail(String::from("BTreeMap"), btreemap_max));
             // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
             out.push_str(str3(String::from("  for (uint64_t __si = 0; __si + 1 < v"), ids, String::from(".len; __si++)\n")));
             out.push_str(str3(String::from("    __ESBMC_assume(v"), ids, String::from(".keys[__si] < v")));
@@ -1838,8 +1844,8 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, 
         out.push_str(str5(String::from("  v"), ids,
             String::from(" = __vow_heap_top;\n  __vow_heap_top += "),
             i64_to_string(slots), String::from(";\n")));
-        out.push_str(str3(String::from("  __ESBMC_assume(__vow_heap_top <= "),
-            i64_to_string(VOW_HEAP_MAX()), String::from(");\n")));
+        out.push_str(String::from("  __ESBMC_assume(__vow_heap_top <= "));
+        out.push_str(bound_tail(String::from("Heap"), VOW_HEAP_MAX()));
         return;
     }
 
@@ -1877,7 +1883,9 @@ fn emit_vec_op(out: String, inst: IrInst, inst_ty_by_id: Vec<i64>, const_len_by_
     }
     if ds == String::from("__vow_vec_from_raw_parts_copy_val") {
         let len_arg: i64 = iargs[1];
-        emit_raw_parts_len(out, const_len_by_id, id, len_arg, inst_ty_of(inst_ty_by_id, len_arg), vec_max, String::from("vec capacity"));
+        emit_raw_parts_len(out, const_len_by_id,
+            CapacityModel { kind: String::from("Vec"), max: vec_max },
+            RawParts { id: id, ptr: iargs[0], len: len_arg, len_ty: inst_ty_of(inst_ty_by_id, len_arg) });
         return;
     }
     if ds == String::from("__vow_vec_pin_to_root_val") {
@@ -2017,7 +2025,7 @@ fn emit_nondet_string_len(out: String, id: i64, string_max: i64) {
     let ids: String = i64_to_string(id);
     out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
     out.push_str(str4(String::from("  __ESBMC_assume(v"), ids,
-        String::from(".len < "), cemit_str2(i64_to_string(string_max), String::from(");\n"))));
+        String::from(".len < "), bound_tail(String::from("String"), string_max)));
 }
 
 fn const_str_index_for(ids: Vec<i64>, idxs: Vec<i64>, id: i64) -> i64 {
@@ -2052,13 +2060,11 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
     let iargs: Vec<i64> = inst.args;
 
     if ds == String::from("__vow_string_new") || ds == String::from("__vow_string_new_in_arena") {
+        let ptr_arg: i64 = if ds == String::from("__vow_string_new_in_arena") { iargs[1] } else { iargs[0] };
         let len_arg: i64 = if ds == String::from("__vow_string_new_in_arena") { iargs[2] } else { iargs[1] };
-        let ids: String = i64_to_string(id);
-        let ls: String = i64_to_string(len_arg);
-        out.push_str(str5(String::from("  __ESBMC_assume(v"), ls,
-            String::from(" >= 0 && v"), ls,
-            str3(String::from(" < "), i64_to_string(string_max), String::from(");\n"))));
-        out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), ls, String::from(";\n")));
+        emit_raw_parts_len(out, const_len_by_id,
+            CapacityModel { kind: String::from("String"), max: string_max },
+            RawParts { id: id, ptr: ptr_arg, len: len_arg, len_ty: inst_ty_of(inst_ty_by_id, len_arg) });
         return;
     }
     if ds == String::from("__vow_string_from_cstr")
@@ -2089,7 +2095,9 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
     }
     if ds == String::from("__vow_string_from_raw_parts_copy") {
         let len_arg: i64 = iargs[1];
-        emit_raw_parts_len(out, const_len_by_id, id, len_arg, inst_ty_of(inst_ty_by_id, len_arg), string_max, String::from("string capacity"));
+        emit_raw_parts_len(out, const_len_by_id,
+            CapacityModel { kind: String::from("String"), max: string_max },
+            RawParts { id: id, ptr: iargs[0], len: len_arg, len_ty: inst_ty_of(inst_ty_by_id, len_arg) });
         return;
     }
     if ds == String::from("__vow_string_clone") || ds == String::from("__vow_string_clone_in_arena") || ds == String::from("__vow_string_pin_to_root") {
@@ -2646,25 +2654,25 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
                         out.push_str(str3(String::from("  __vow_vec_t v"), ids, String::from(";\n")));
                         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
                         out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-                        out.push_str(cemit_str2(i64_to_string(vec_max), String::from(");\n")));
+                        out.push_str(bound_tail(String::from("Vec"), vec_max));
                     } else if vec_contains_i64(string_vars, iid) {
                         let ids: String = i64_to_string(iid);
                         out.push_str(str3(String::from("  __vow_string_t v"), ids, String::from(";\n")));
                         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
                         out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-                        out.push_str(cemit_str2(i64_to_string(string_max), String::from(");\n")));
+                        out.push_str(bound_tail(String::from("String"), string_max));
                     } else if vec_contains_i64(hashmap_vars, iid) {
                         let ids: String = i64_to_string(iid);
                         out.push_str(str3(String::from("  __vow_hashmap_t v"), ids, String::from(";\n")));
                         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
                         out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-                        out.push_str(cemit_str2(i64_to_string(hashmap_max), String::from(");\n")));
+                        out.push_str(bound_tail(String::from("HashMap"), hashmap_max));
                     } else if vec_contains_i64(btreemap_vars, iid) {
                         let ids: String = i64_to_string(iid);
                         out.push_str(str3(String::from("  __vow_btreemap_t v"), ids, String::from(";\n")));
                         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
                         out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-                        out.push_str(cemit_str2(i64_to_string(btreemap_max), String::from(");\n")));
+                        out.push_str(bound_tail(String::from("BTreeMap"), btreemap_max));
                         // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
                         out.push_str(str3(String::from("  for (uint64_t __si = 0; __si + 1 < v"), ids, String::from(".len; __si++)\n")));
                         out.push_str(str3(String::from("    __ESBMC_assume(v"), ids, String::from(".keys[__si] < v")));

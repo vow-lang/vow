@@ -16,20 +16,22 @@ use std::thread;
 
 use vow_verify::{
     ArithOverflowSite, ConstantValue, Encoding, Solver, SolverConfig, VerificationResult,
-    VerifyLimits, VerifyRequest, contracts_only_source, detect_constant_functions,
-    emit_verify_c_source, find_esbmc, non_modelable_reason, run_with_fallback, verify,
+    VerifyLimits, contracts_only_source, detect_constant_functions, emit_verify_c_source,
+    find_esbmc, model_capacity_bounds, non_modelable_reason, run_with_fallback,
 };
 
 use crate::cache::VerifyCache;
-use crate::verify_outcome::{ArithOverflowWarning, SkippedFunction, VerifyOutcome, VerifyWarning};
+use crate::verify_outcome::{
+    ArithOverflowWarning, CapacityBoundNote, SkippedFunction, VerifyOutcome, VerifyWarning,
+};
 use crate::{counterexample, perfetto};
 
 /// Per-function verdict: continue, continue-with-warning, or halt.
 enum PerFuncResult {
     Ok,
-    /// The function verified (or was skipped) but produced a non-fatal finding.
-    /// Aggregated by the pool and surfaced as Warnings in the build JSON.
-    Warn(VerifyWarning),
+    /// The function verified (or was skipped) but produced non-fatal findings.
+    /// Aggregated by the pool and surfaced as diagnostics in the build JSON.
+    Warn(Vec<VerifyWarning>),
     Halt(VerifyOutcome),
 }
 
@@ -66,12 +68,14 @@ fn classify_verification_result(
         VerificationResult::ToolNotFound => {
             complete(PerFuncResult::Halt(VerifyOutcome::ToolNotFound))
         }
-        VerificationResult::Skipped { reason } => complete(PerFuncResult::Warn(
-            VerifyWarning::Skipped(SkippedFunction {
-                function: function.to_string(),
-                reason,
-            }),
-        )),
+        VerificationResult::Skipped { reason } => {
+            complete(PerFuncResult::Warn(vec![VerifyWarning::Skipped(
+                SkippedFunction {
+                    function: function.to_string(),
+                    reason,
+                },
+            )]))
+        }
     }
 }
 
@@ -92,10 +96,10 @@ fn verify_one_function(
 ) -> PerFuncResult {
     // Non-modelable vowed functions must be skipped here; the C emitter would emit __ESBMC_assert(0) traps for them.
     if let Some(reason) = non_modelable_reason(func, ir_module, const_fns) {
-        return PerFuncResult::Warn(VerifyWarning::Skipped(SkippedFunction {
+        return PerFuncResult::Warn(vec![VerifyWarning::Skipped(SkippedFunction {
             function: func.name.clone(),
             reason,
-        }));
+        })]);
     }
 
     // Resolve Auto solver via heuristic (Phase B).
@@ -112,36 +116,31 @@ fn verify_one_function(
         *config
     };
 
-    let result = if let Some(vc) = verify_cache {
-        let c_src = emit_verify_c_source(func, ir_module, const_fns, limits);
+    // The model is emitted once: it is what ESBMC proves, what the failure cache
+    // is keyed on, and what the capacity-bound note is read from.
+    let c_src = emit_verify_c_source(func, ir_module, const_fns, limits);
 
-        // Lookup under the pre-fallback `func_config`; only FAILED entries come
-        // back (a forged PROVEN file is discarded inside the cache, so it can
-        // never bypass ESBMC).
-        if let Some(ce) = vc.lookup_failure(&c_src, limits.max_k_step, &func_config) {
-            VerificationResult::Failed(ce)
-        } else {
-            let esbmc = match find_esbmc() {
-                Some(p) => p,
-                None => return PerFuncResult::Halt(VerifyOutcome::ToolNotFound),
-            };
-            let (res, resolved_config) =
-                run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, &func_config);
-            // Store under the config that actually produced the result. Only a
-            // Counterexample can be handed to `store_failure`, so a PROVEN
-            // result is structurally uncacheable and can never bypass ESBMC on a
-            // later run.
-            if let VerificationResult::Failed(ce) = &res {
-                vc.store_failure(&c_src, limits.max_k_step, &resolved_config, ce);
-            }
-            res
-        }
+    // Lookup under the pre-fallback `func_config`; only FAILED entries come
+    // back (a forged PROVEN file is discarded inside the cache, so it can never
+    // bypass ESBMC).
+    let cached =
+        verify_cache.and_then(|vc| vc.lookup_failure(&c_src, limits.max_k_step, &func_config));
+    let result = if let Some(ce) = cached {
+        VerificationResult::Failed(ce)
     } else {
-        verify(&VerifyRequest {
-            const_fns: Some(const_fns),
-            config: Some(&func_config),
-            ..VerifyRequest::new(func, ir_module, limits)
-        })
+        let esbmc = match find_esbmc() {
+            Some(p) => p,
+            None => return PerFuncResult::Halt(VerifyOutcome::ToolNotFound),
+        };
+        let (res, resolved_config) =
+            run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, &func_config);
+        // Store under the config that actually produced the result. Only a
+        // Counterexample can be handed to `store_failure`, so a PROVEN result is
+        // structurally uncacheable and can never bypass ESBMC on a later run.
+        if let (Some(vc), VerificationResult::Failed(ce)) = (verify_cache, &res) {
+            vc.store_failure(&c_src, limits.max_k_step, &resolved_config, ce);
+        }
+        res
     };
 
     // #585: an `arith:` counterexample reports a checked operator whose
@@ -154,14 +153,8 @@ fn verify_one_function(
         VerificationResult::Failed(ce) if ce.arith_overflow.is_some() => {
             let site = ce.arith_overflow.expect("matched Some above");
             let warning = arith_overflow_warning(ir_module, func, file, site);
-            let contract_result = verify_contracts_only(
-                func,
-                ir_module,
-                const_fns,
-                verify_cache,
-                limits,
-                &func_config,
-            );
+            let contract_result =
+                verify_contracts_only(func, &c_src, verify_cache, limits, &func_config);
             (contract_result, Some(warning))
         }
         other => (Some(other), None),
@@ -173,7 +166,9 @@ fn verify_one_function(
     };
     let (result, arith_warning) = result;
     if let Some(warning) = arith_warning {
-        return PerFuncResult::Warn(VerifyWarning::ArithOverflow(warning));
+        let mut findings = vec![VerifyWarning::ArithOverflow(warning)];
+        findings.extend(capacity_bound_note(func, &c_src));
+        return PerFuncResult::Warn(findings);
     }
 
     match classify_verification_result(&func.name, result) {
@@ -191,8 +186,23 @@ fn verify_one_function(
                 counterexamples: vec![sce],
             })
         }
+        VerificationDisposition::Complete(PerFuncResult::Ok) => {
+            match capacity_bound_note(func, &c_src) {
+                Some(note) => PerFuncResult::Warn(vec![note]),
+                None => PerFuncResult::Ok,
+            }
+        }
         VerificationDisposition::Complete(result) => result,
     }
+}
+
+/// The `ModelCapacityAssumed` note for a function that has just been proved, or
+/// `None` when its model restricts no collection length. Read off the model
+/// that was proved (`c_src`), so the note describes exactly the bound that was
+/// checked.
+fn capacity_bound_note(func: &vow_ir::Function, c_src: &str) -> Option<VerifyWarning> {
+    CapacityBoundNote::new(&func.name, &model_capacity_bounds(c_src))
+        .map(VerifyWarning::CapacityBound)
 }
 
 /// Decide what a contracts-only re-run means, given the pending abort warning.
@@ -270,13 +280,12 @@ fn arith_overflow_warning(
 /// returns? Returns `None` when ESBMC cannot be located.
 fn verify_contracts_only(
     func: &vow_ir::Function,
-    ir_module: &vow_ir::Module,
-    const_fns: &std::collections::HashMap<vow_ir::FuncId, ConstantValue>,
+    full_c_src: &str,
     verify_cache: Option<&VerifyCache>,
     limits: &VerifyLimits,
     func_config: &SolverConfig,
 ) -> Option<VerificationResult> {
-    let c_src = contracts_only_source(&emit_verify_c_source(func, ir_module, const_fns, limits));
+    let c_src = contracts_only_source(full_c_src);
 
     // The suppressed source hashes to its own cache key, so replaying it can
     // never be confused with the full obligation set.
@@ -418,7 +427,7 @@ fn run_pool(
             );
             match result {
                 PerFuncResult::Ok => {}
-                PerFuncResult::Warn(w) => warnings.push(w),
+                PerFuncResult::Warn(w) => warnings.extend(w),
                 PerFuncResult::Halt(out) => return (out, warnings),
             }
         }
@@ -437,8 +446,8 @@ fn run_pool(
     let stop = AtomicBool::new(false);
     let halts: StdMutex<Vec<Option<VerifyOutcome>>> =
         StdMutex::new((0..count).map(|_| None).collect());
-    let warn_acc: StdMutex<Vec<Option<VerifyWarning>>> =
-        StdMutex::new((0..count).map(|_| None).collect());
+    let warn_acc: StdMutex<Vec<Vec<VerifyWarning>>> =
+        StdMutex::new((0..count).map(|_| Vec::new()).collect());
 
     thread::scope(|scope| {
         for w in 0..jobs {
@@ -469,7 +478,7 @@ fn run_pool(
                         PerFuncResult::Warn(w) => {
                             let mut guard =
                                 warn_acc.lock().expect("verify warnings mutex poisoned");
-                            guard[idx] = Some(w);
+                            guard[idx] = w;
                         }
                         PerFuncResult::Halt(out) => {
                             let mut guard = halts.lock().expect("verify halts mutex poisoned");
@@ -521,22 +530,22 @@ mod tests {
     }
 
     fn skip(function: &str) -> PerFuncResult {
-        PerFuncResult::Warn(VerifyWarning::Skipped(SkippedFunction {
+        PerFuncResult::Warn(vec![VerifyWarning::Skipped(SkippedFunction {
             function: function.to_string(),
             reason: "non-modelable".to_string(),
-        }))
+        })])
     }
 
     /// A reachable checked-arithmetic abort: a warning that must NOT lift the
     /// build status, unlike a skip.
     fn arith_warn(function: &str) -> PerFuncResult {
-        PerFuncResult::Warn(VerifyWarning::ArithOverflow(ArithOverflowWarning {
+        PerFuncResult::Warn(vec![VerifyWarning::ArithOverflow(ArithOverflowWarning {
             function: function.to_string(),
             cause: "addition overflows",
             file: "t.vow".to_string(),
             offset: 0,
             length: 0,
-        }))
+        })])
     }
 
     fn warned_functions(warnings: &[VerifyWarning]) -> Vec<&str> {
@@ -545,6 +554,7 @@ mod tests {
             .map(|w| match w {
                 VerifyWarning::Skipped(s) => s.function.as_str(),
                 VerifyWarning::ArithOverflow(a) => a.function.as_str(),
+                VerifyWarning::CapacityBound(n) => n.function.as_str(),
             })
             .collect()
     }
@@ -856,6 +866,53 @@ mod tests {
         }
     }
 
+    fn bounded(function: &str) -> VerifyWarning {
+        VerifyWarning::CapacityBound(
+            CapacityBoundNote::new(
+                function,
+                &[vow_verify::ModelCapacityBound {
+                    collection: "Vec",
+                    capacity: 128,
+                }],
+            )
+            .expect("note"),
+        )
+    }
+
+    // A capacity-bounded proof is a note on a proof, not an unproved obligation:
+    // it must not lift the status, and one function can carry several findings
+    // (an arith warning and a capacity note) that all survive aggregation in
+    // function-index order, serial or parallel.
+    #[test]
+    fn run_pool_capacity_note_keeps_proof_and_all_findings_in_order() {
+        let names = ["f0", "f1", "f2"];
+        for jobs in [1, 3] {
+            let (outcome, warnings) = run_pool(jobs, None, 0, &names, |idx| match idx {
+                0 => PerFuncResult::Warn(vec![bounded("f0")]),
+                1 => PerFuncResult::Ok,
+                _ => PerFuncResult::Warn(vec![
+                    VerifyWarning::ArithOverflow(ArithOverflowWarning {
+                        function: "f2".to_string(),
+                        cause: "addition overflows",
+                        file: "t.vow".to_string(),
+                        offset: 0,
+                        length: 0,
+                    }),
+                    bounded("f2"),
+                ]),
+            });
+            assert!(
+                matches!(outcome, VerifyOutcome::Proven),
+                "jobs={jobs}: a capacity note must leave the outcome Proven"
+            );
+            assert_eq!(
+                warned_functions(&warnings),
+                ["f0", "f2", "f2"],
+                "jobs={jobs}"
+            );
+        }
+    }
+
     // A skip alongside an arith warning still fails closed: the skip is the kind
     // that means something went unproved.
     #[test]
@@ -951,9 +1008,12 @@ mod tests {
         );
         assert!(matches!(
             skipped,
-            VerificationDisposition::Complete(PerFuncResult::Warn(VerifyWarning::Skipped(
-                SkippedFunction { function, reason }
-            ))) if function == "f" && reason == "unsupported opcode"
+            VerificationDisposition::Complete(PerFuncResult::Warn(findings))
+                if matches!(
+                    &findings[..],
+                    [VerifyWarning::Skipped(SkippedFunction { function, reason })]
+                        if function == "f" && reason == "unsupported opcode"
+                )
         ));
     }
 

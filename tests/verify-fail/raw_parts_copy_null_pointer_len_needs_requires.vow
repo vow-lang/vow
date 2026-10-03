@@ -1,0 +1,17 @@
+// TEST: category callee-blame
+// TEST: counterexample-fn "copy_len"
+// TEST: counterexample-blame callee
+// TEST: counterexample-violation "ensures result == n"
+// from_raw_parts_copy of a null pointer is empty whatever the length is (the
+// runtime guard), and the verifier models that. `result == n` is therefore only
+// true for a non-null source: without `requires: p != 0` the counterexample is
+// the null pointer with a non-zero length. Before the model mirrored the
+// runtime, this postcondition was "proved" for p == 0 as well.
+module RawPartsCopyNullPointerLenNeedsRequires
+
+fn copy_len(p: i64, n: u64) -> u64 vow {
+    ensures: result == n
+} {
+    let s: String = String::from_raw_parts_copy(p, n);
+    s.len()
+}

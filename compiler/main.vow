@@ -1099,6 +1099,7 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
     let in_flight_h: Vec<i64> = Vec::new();
     let in_flight_fi: Vec<i64> = Vec::new();
     let in_flight_tmp: Vec<String> = Vec::new();
+    let model_bounds: Vec<String> = model_bounds_table(fns.len() as i64);
     let mut fi: i64 = 0;
     while fi < fns.len() as i64 {
         let f: IrFunction = fns[fi as u64];
@@ -1125,6 +1126,7 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
                 } else {
                     eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
                     let started: EsbmcStart = verify_start(esbmc_bin, f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                    model_bounds[fi as u64] = started.bounds;
                     in_flight_h.push(started.handle);
                     in_flight_fi.push(fi);
                     in_flight_tmp.push(started.tmp_path);
@@ -1146,9 +1148,10 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
             all_proven = 0;
         }
     }
-    if all_proven == 0 { 1 }
-    else if any_skipped == 1 { 2 }
-    else { 0 }
+    if all_proven == 0 { return 1; }
+    if any_skipped == 1 { return 2; }
+    report_capacity_notes(fns, model_bounds, dctx);
+    0
 }
 
 fn emit_ir_warnings(ir_mod: IrModule, dctx: DiagCtx) [io] {
@@ -1349,6 +1352,53 @@ fn report_arith_overflow(f: IrFunction, ir_mod: IrModule, path: String, site: Pa
     diag_add_hint(d, String::from("the contract is proved for every execution that returns; this abort is a separate runtime outcome"));
     diag_add_hint(d, String::from("constrain the operands in `requires` to rule the abort out, or use the wrapping operator if wrapping is intended"));
     diag_ctx_emit(dctx, d);
+}
+
+// One zeroed-out model-bounds slot per function: `bounds[fi]` is "" until
+// `verify_start` reports the bounds of the model it sent to ESBMC.
+fn model_bounds_table(n: i64) -> Vec<String> {
+    let table: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n {
+        table.push(String::from(""));
+        i = i + 1;
+    }
+    table
+}
+
+// Report that a proof was obtained from a model restricting collection lengths
+// to the model capacity (the structured "this proof is bounded" Note). A Note,
+// not a failure: the contracts are proved, only for executions within the bound.
+// `bounds` is read off the model that was proved (its `vow:model-bound`
+// markers), so it describes exactly what was checked. Mirrors
+// `CapacityBoundNote` in the Rust driver, which `compare_json` holds
+// byte-identical.
+fn report_capacity_bound(function: String, bounds: String, dctx: DiagCtx) [io] {
+    if bounds.len() == 0 { return; }
+    let msg: String = str5(
+        String::from("proof of `"),
+        function,
+        String::from("` is bounded: only executions within the verifier model capacity were checked ("),
+        bounds,
+        String::from(")"),
+    );
+    let d: Diagnostic = diag_new(SEV_NOTE(), EC_MODEL_CAPACITY_ASSUMED(), msg, String::from(""), 0, 0, DIAG_BLAME_NONE());
+    diag_add_hint(d, String::from("the bound belongs to the bounded model checker, not to the program or its contracts; executions beyond it (longer collections, more struct allocations) were not checked"));
+    diag_add_hint(d, String::from("do not add a length bound to a contract to silence this note; an unbounded verifier removes it without any source change"));
+    diag_ctx_emit(dctx, d);
+}
+
+// Capacity notes describe a completed proof run: they follow every other
+// finding, in function order, and exist only when every function was proved and
+// none was skipped. Shared by `vowc verify` and `vowc build`, mirroring
+// `to_output_with_warnings` in the Rust driver.
+fn report_capacity_notes(fns: Vec<IrFunction>, model_bounds: Vec<String>, dctx: DiagCtx) [io] {
+    let mut ni: i64 = 0;
+    while ni < fns.len() as i64 && ni < model_bounds.len() as i64 {
+        let nf: IrFunction = fns[ni as u64];
+        report_capacity_bound(nf.name, model_bounds[ni as u64], dctx);
+        ni = ni + 1;
+    }
 }
 
 fn verify_collect_and_report(
@@ -1601,6 +1651,8 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
 //     full. Remaining entries are drained by `build_drain_verify_phase` after codegen.
 //   - `ces`, `soft_meta`: counterexample + soft-fail accumulators threaded
 //     through to `verify_collect_and_report`.
+//   - `model_bounds`: per-function model-bound text, filled at launch and read
+//     by `report_capacity_notes` once the whole run is proved.
 // Returns `[all_proven, any_skipped]`.
 fn build_verify_phase(
     esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String,
@@ -1608,7 +1660,7 @@ fn build_verify_phase(
     in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>,
     max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
     vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64,
-    verify_origin: i64, t: TraceCtx
+    verify_origin: i64, t: TraceCtx, model_bounds: Vec<String>
 ) -> Vec<i64> [io] {
     let mut all_proven: i64 = 1;
     let mut any_skipped: i64 = 0;
@@ -1638,6 +1690,7 @@ fn build_verify_phase(
                 } else {
                     eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
                     let started: EsbmcStart = verify_start(esbmc_bin, f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                    model_bounds[fi as u64] = started.bounds;
                     in_flight_h.push(started.handle);
                     in_flight_fi.push(fi);
                     in_flight_tmp.push(started.tmp_path);
@@ -1817,8 +1870,9 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     let in_flight_tmp: Vec<String> = Vec::new();
     let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
     let verify_origin: i64 = trace_now(tctx);
+    let model_bounds: Vec<String> = model_bounds_table(fns.len() as i64);
     if do_verify {
-        let phase_result: Vec<i64> = build_verify_phase(esbmc_bin, fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, in_flight_h, in_flight_fi, in_flight_tmp, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, verify_origin, tctx);
+        let phase_result: Vec<i64> = build_verify_phase(esbmc_bin, fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, in_flight_h, in_flight_fi, in_flight_tmp, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, verify_origin, tctx, model_bounds);
         if phase_result[0] == 0 { all_proven = 0; }
         if phase_result[1] == 1 { any_skipped = 1; }
     }
@@ -1834,6 +1888,9 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     }
     all_proven = build_drain_verify_phase(esbmc_bin, in_flight_h, in_flight_fi, in_flight_tmp, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven, verify_origin, tctx, dctx);
     trace_span(tctx, String::from("verification"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, trace_now(tctx) - verify_origin, String::from(""));
+    if all_proven == 1 && any_skipped == 0 {
+        report_capacity_notes(fns, model_bounds, dctx);
+    }
     let status_str: String = {
         if all_proven == 0 { String::from("VerifyFailed") }
         else if any_skipped == 1 { String::from("Skipped") }
@@ -5160,7 +5217,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Status          | Meaning                                     |\n"));
     r.push_str(String::from("|-----------------|---------------------------------------------|\n"));
-    r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |\n"));
+    r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* (`severity: \"note\"`, emitted only on a `Verified` result of `verify` or `build`, after the other diagnostics) per proved function whose model assumed a capacity: a parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled only up to the verifier's model capacity (`Vec<T>` 128, `String` 256, maps 64), and struct allocations only up to a 1024-slot `Heap`, so that proof covers executions within those capacities. The note names each bounded kind and its capacity and changes neither the status nor the exit code. Agents and CEGIS loops should read it as \"bounded proof\", never as a reason to add a length bound to a contract. See [`errors.md`](errors.md#modelcapacityassumed). |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
     r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
@@ -5585,11 +5642,54 @@ fn skill_bundle() -> String {
     r.push_str(String::from("length (0 to max-1). `string_matches_literal_at` is modeled against the\n"));
     r.push_str(String::from("literal's concrete bytes and byte length; the third argument must be a string\n"));
     r.push_str(String::from("literal so the verifier never has to infer static text from a dynamic `String`.\n"));
-    r.push_str(String::from("A constant length passed to `String::from_raw_parts_copy` or\n"));
-    r.push_str(String::from("`Vec::from_raw_parts_copy` that does not fit the model capacity fails closed\n"));
-    r.push_str(String::from("with the capacity-limit diagnostic rather than being assumed away. A\n"));
-    r.push_str(String::from("non-constant length is still assumed to be below the model capacity, so a\n"));
-    r.push_str(String::from("postcondition that depends on it is verified only within that bound.\n"));
+    r.push_str(String::from("A length passed to `String::from_raw_parts_copy` or\n"));
+    r.push_str(String::from("`Vec::from_raw_parts_copy` that is *provably constant* and does not fit the\n"));
+    r.push_str(String::from("model capacity fails closed with the capacity-limit diagnostic rather than being\n"));
+    r.push_str(String::from("assumed away. \"Provably constant\" covers a literal, `+`/`-`/`*` (wrapping or\n"));
+    r.push_str(String::from("checked) over constants, an integer cast of a constant, and a `let mut` whose\n"));
+    r.push_str(String::from("every assignment is the same constant; it is computed over the IR, so\n"));
+    r.push_str(String::from("`n + 300` with a constant `n` is recognised exactly like `301`. Both emitters\n"));
+    r.push_str(String::from("fold identically, so the emitted model stays byte-identical.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`from_raw_parts_copy` models the runtime's null-pointer behaviour: a null source\n"));
+    r.push_str(String::from("(`ptr == 0`) yields an empty value whatever the length is, and the capacity\n"));
+    r.push_str(String::from("restriction applies only to a non-null source. `ensures: result.len() == n`\n"));
+    r.push_str(String::from("therefore needs a real `requires: p != 0`, exactly as the runtime does. A\n"));
+    r.push_str(String::from("source that is provably the null constant (a literal `0`, or a phi of them) is\n"));
+    r.push_str(String::from("empty with no assumption at all. `String::new` shares the same model: it is a\n"));
+    r.push_str(String::from("null source with a zero length, and a constant length outside the capacity\n"));
+    r.push_str(String::from("fails closed for a non-null source just like `from_raw_parts_copy`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**A proof is bounded when the model had to assume a capacity.** Any *non-constant*\n"));
+    r.push_str(String::from("collection length -- a `Vec`/`String`/`HashMap`/`BTreeMap` parameter, a\n"));
+    r.push_str(String::from("collection read from a struct field, `String::from_cstr`, a non-constant\n"));
+    r.push_str(String::from("`from_raw_parts_copy` length -- is modelled as nondeterministic but restricted to\n"));
+    r.push_str(String::from("the capacity above (`__ESBMC_assume(len <= CAP)`). The user-struct heap is\n"));
+    r.push_str(String::from("bounded the same way: every struct allocation bump-allocates slots from a model\n"));
+    r.push_str(String::from("heap of 1024 slots and prunes executions that allocate more\n"));
+    r.push_str(String::from("(`__ESBMC_assume(__vow_heap_top <= 1024)`). That prunes every longer or larger\n"));
+    r.push_str(String::from("execution, so a `Verified` result for such a function means \"verified for\n"));
+    r.push_str(String::from("collections no longer than the model capacity and at most 1024 struct slots\",\n"));
+    r.push_str(String::from("not \"verified for all collections\". The verifier makes this explicit rather than\n"));
+    r.push_str(String::from("silent: every function proved from a model that carries such an assumption adds\n"));
+    r.push_str(String::from("one [`ModelCapacityAssumed`](errors.md#modelcapacityassumed) **note** (severity\n"));
+    r.push_str(String::from("`note`, on a `Verified` result) to the result's `diagnostics[]`, naming each\n"));
+    r.push_str(String::from("bounded kind and its capacity. The note changes neither the `status` nor the\n"));
+    r.push_str(String::from("exit code, and the verdict itself is never altered. The note is read off the\n"));
+    r.push_str(String::from("emitted model (every pruning capacity assumption is tagged\n"));
+    r.push_str(String::from("`/* vow:model-bound <Kind> <digits> */` in the C source), so it cannot disagree\n"));
+    r.push_str(String::from("with what was actually checked. It is a statement about the *prover*, never\n"));
+    r.push_str(String::from("about the program: do not respond to it by adding a length bound to a contract\n"));
+    r.push_str(String::from("(see the anti-pattern below) -- an unbounded verifier removes the note without\n"));
+    r.push_str(String::from("any source change.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The marker is the *only* way the model prunes by capacity. Every other\n"));
+    r.push_str(String::from("`__ESBMC_assume` in the emitted C encodes something that is not a capacity: a\n"));
+    r.push_str(String::from("`requires` clause, an unreachable point or a checked-arithmetic abort (an\n"));
+    r.push_str(String::from("aborting execution never returns), the range of a nondeterministic value of its\n"));
+    r.push_str(String::from("own type (an `Option` tag and payload, a byte read from a `String`), or the\n"));
+    r.push_str(String::from("sorted-key representation invariant of a `BTreeMap`. None of these removes an\n"));
+    r.push_str(String::from("execution the runtime can produce, so none is reported.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Blame Model\n"));
     r.push_str(String::from("\n"));
@@ -7130,6 +7230,33 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("### ModelCapacityAssumed\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Verification (Note; the build status stays `Verified`)\n"));
+    r.push_str(String::from("**Meaning:** The function's contracts were proved, but the proof's model restricts at least one capacity to the verifier's model capacity (`Vec<T>` 128, `String` 256, `HashMap<K, V>` and `BTreeMap<K, V>` 64, user-struct `Heap` 1024 slots; see [`contracts.md`](contracts.md#collection-models-for-verification)). A parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled as nondeterministic *within* its capacity, and struct allocations stop at the heap capacity, so executions with longer collections or more struct allocations were pruned, not checked: `Verified` means \"verified for executions up to the capacities\".\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```json\n"));
+    r.push_str(String::from("{\n"));
+    r.push_str(String::from("  \"error_code\": \"ModelCapacityAssumed\",\n"));
+    r.push_str(String::from("  \"severity\": \"note\",\n"));
+    r.push_str(String::from("  \"message\": \"proof of `first_or_zero` is bounded: only executions within the verifier model capacity were checked (Vec<T>: 128)\",\n"));
+    r.push_str(String::from("  \"hints\": [\n"));
+    r.push_str(String::from("    \"the bound belongs to the bounded model checker, not to the program or its contracts; executions beyond it (longer collections, more struct allocations) were not checked\",\n"));
+    r.push_str(String::from("    \"do not add a length bound to a contract to silence this note; an unbounded verifier removes it without any source change\"\n"));
+    r.push_str(String::from("  ]\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The `message` lists every bounded kind as `Kind: capacity`, in the fixed order `Vec<T>`, `String`, `HashMap<K, V>`, `BTreeMap<K, V>`, `Heap`, one entry per kind. When a model applied several capacities to one kind, the smallest is listed: the proof is claimed only for executions within every bound the model applied. At most one note is emitted per proved function. The span is empty (the note describes the model, not a source location).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Why this is a Note and not a failure.** The verdict is genuine for every execution inside the bound and the verifier never changes a verdict because of the note. It is informational so that an agent or CEGIS loop can tell a bounded proof from an unbounded one -- for example, to treat a `Verified` function that handles untrusted-length collections with extra scrutiny, or to test it with the runtime checks of `--mode debug`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** None is required. Do **not** add `requires: v.len() <= 128` (or any other capacity) to silence it: that distorts a true contract to fit a prover limitation, and an unbounded backend removes the note without any source change.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Ordering and presence.** Notes describe a *completed* proof run, so they are emitted only when the overall `status` is `Verified`, one per proved function, after every other diagnostic and in function declaration order. A run that ends in a counterexample, `unknown`, `timeout`, `error`, or a fail-closed skip carries no note: a halt cuts the set of verified functions short in a scheduling-dependent way, and a note about one of them would be noise next to the real failure.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Not emitted when:** the function's model restricts no capacity (scalar-only functions that allocate no struct, and collections built by the function itself from constant lengths or from a null source), or the overall status is not `Verified`. The same note is emitted by `vow verify` and `vow build`.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## Runtime Errors\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).\n"));
@@ -8619,7 +8746,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"RegionConflict\",\n"));
     r.push_str(String::from("        \"RegionLinear\",\n"));
     r.push_str(String::from("        \"RegionRootEscape\",\n"));
-    r.push_str(String::from("        \"VerifierAssertionUnattributed\"\n"));
+    r.push_str(String::from("        \"VerifierAssertionUnattributed\",\n"));
+    r.push_str(String::from("        \"ModelCapacityAssumed\"\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"description\": \"Machine-readable error code\"\n"));
     r.push_str(String::from("    },\n"));
@@ -10560,7 +10688,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Status          | Meaning                                     |\n"));
     r.push_str(String::from("|-----------------|---------------------------------------------|\n"));
-    r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |\n"));
+    r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* (`severity: \"note\"`, emitted only on a `Verified` result of `verify` or `build`, after the other diagnostics) per proved function whose model assumed a capacity: a parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled only up to the verifier's model capacity (`Vec<T>` 128, `String` 256, maps 64), and struct allocations only up to a 1024-slot `Heap`, so that proof covers executions within those capacities. The note names each bounded kind and its capacity and changes neither the status nor the exit code. Agents and CEGIS loops should read it as \"bounded proof\", never as a reason to add a length bound to a contract. See [`errors.md`](errors.md#modelcapacityassumed). |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
     r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
@@ -10987,11 +11115,54 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("length (0 to max-1). `string_matches_literal_at` is modeled against the\n"));
     r.push_str(String::from("literal's concrete bytes and byte length; the third argument must be a string\n"));
     r.push_str(String::from("literal so the verifier never has to infer static text from a dynamic `String`.\n"));
-    r.push_str(String::from("A constant length passed to `String::from_raw_parts_copy` or\n"));
-    r.push_str(String::from("`Vec::from_raw_parts_copy` that does not fit the model capacity fails closed\n"));
-    r.push_str(String::from("with the capacity-limit diagnostic rather than being assumed away. A\n"));
-    r.push_str(String::from("non-constant length is still assumed to be below the model capacity, so a\n"));
-    r.push_str(String::from("postcondition that depends on it is verified only within that bound.\n"));
+    r.push_str(String::from("A length passed to `String::from_raw_parts_copy` or\n"));
+    r.push_str(String::from("`Vec::from_raw_parts_copy` that is *provably constant* and does not fit the\n"));
+    r.push_str(String::from("model capacity fails closed with the capacity-limit diagnostic rather than being\n"));
+    r.push_str(String::from("assumed away. \"Provably constant\" covers a literal, `+`/`-`/`*` (wrapping or\n"));
+    r.push_str(String::from("checked) over constants, an integer cast of a constant, and a `let mut` whose\n"));
+    r.push_str(String::from("every assignment is the same constant; it is computed over the IR, so\n"));
+    r.push_str(String::from("`n + 300` with a constant `n` is recognised exactly like `301`. Both emitters\n"));
+    r.push_str(String::from("fold identically, so the emitted model stays byte-identical.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`from_raw_parts_copy` models the runtime's null-pointer behaviour: a null source\n"));
+    r.push_str(String::from("(`ptr == 0`) yields an empty value whatever the length is, and the capacity\n"));
+    r.push_str(String::from("restriction applies only to a non-null source. `ensures: result.len() == n`\n"));
+    r.push_str(String::from("therefore needs a real `requires: p != 0`, exactly as the runtime does. A\n"));
+    r.push_str(String::from("source that is provably the null constant (a literal `0`, or a phi of them) is\n"));
+    r.push_str(String::from("empty with no assumption at all. `String::new` shares the same model: it is a\n"));
+    r.push_str(String::from("null source with a zero length, and a constant length outside the capacity\n"));
+    r.push_str(String::from("fails closed for a non-null source just like `from_raw_parts_copy`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**A proof is bounded when the model had to assume a capacity.** Any *non-constant*\n"));
+    r.push_str(String::from("collection length -- a `Vec`/`String`/`HashMap`/`BTreeMap` parameter, a\n"));
+    r.push_str(String::from("collection read from a struct field, `String::from_cstr`, a non-constant\n"));
+    r.push_str(String::from("`from_raw_parts_copy` length -- is modelled as nondeterministic but restricted to\n"));
+    r.push_str(String::from("the capacity above (`__ESBMC_assume(len <= CAP)`). The user-struct heap is\n"));
+    r.push_str(String::from("bounded the same way: every struct allocation bump-allocates slots from a model\n"));
+    r.push_str(String::from("heap of 1024 slots and prunes executions that allocate more\n"));
+    r.push_str(String::from("(`__ESBMC_assume(__vow_heap_top <= 1024)`). That prunes every longer or larger\n"));
+    r.push_str(String::from("execution, so a `Verified` result for such a function means \"verified for\n"));
+    r.push_str(String::from("collections no longer than the model capacity and at most 1024 struct slots\",\n"));
+    r.push_str(String::from("not \"verified for all collections\". The verifier makes this explicit rather than\n"));
+    r.push_str(String::from("silent: every function proved from a model that carries such an assumption adds\n"));
+    r.push_str(String::from("one [`ModelCapacityAssumed`](errors.md#modelcapacityassumed) **note** (severity\n"));
+    r.push_str(String::from("`note`, on a `Verified` result) to the result's `diagnostics[]`, naming each\n"));
+    r.push_str(String::from("bounded kind and its capacity. The note changes neither the `status` nor the\n"));
+    r.push_str(String::from("exit code, and the verdict itself is never altered. The note is read off the\n"));
+    r.push_str(String::from("emitted model (every pruning capacity assumption is tagged\n"));
+    r.push_str(String::from("`/* vow:model-bound <Kind> <digits> */` in the C source), so it cannot disagree\n"));
+    r.push_str(String::from("with what was actually checked. It is a statement about the *prover*, never\n"));
+    r.push_str(String::from("about the program: do not respond to it by adding a length bound to a contract\n"));
+    r.push_str(String::from("(see the anti-pattern below) -- an unbounded verifier removes the note without\n"));
+    r.push_str(String::from("any source change.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The marker is the *only* way the model prunes by capacity. Every other\n"));
+    r.push_str(String::from("`__ESBMC_assume` in the emitted C encodes something that is not a capacity: a\n"));
+    r.push_str(String::from("`requires` clause, an unreachable point or a checked-arithmetic abort (an\n"));
+    r.push_str(String::from("aborting execution never returns), the range of a nondeterministic value of its\n"));
+    r.push_str(String::from("own type (an `Option` tag and payload, a byte read from a `String`), or the\n"));
+    r.push_str(String::from("sorted-key representation invariant of a `BTreeMap`. None of these removes an\n"));
+    r.push_str(String::from("execution the runtime can produce, so none is reported.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Blame Model\n"));
     r.push_str(String::from("\n"));
@@ -12536,6 +12707,33 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("### ModelCapacityAssumed\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Verification (Note; the build status stays `Verified`)\n"));
+    r.push_str(String::from("**Meaning:** The function's contracts were proved, but the proof's model restricts at least one capacity to the verifier's model capacity (`Vec<T>` 128, `String` 256, `HashMap<K, V>` and `BTreeMap<K, V>` 64, user-struct `Heap` 1024 slots; see [`contracts.md`](contracts.md#collection-models-for-verification)). A parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled as nondeterministic *within* its capacity, and struct allocations stop at the heap capacity, so executions with longer collections or more struct allocations were pruned, not checked: `Verified` means \"verified for executions up to the capacities\".\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```json\n"));
+    r.push_str(String::from("{\n"));
+    r.push_str(String::from("  \"error_code\": \"ModelCapacityAssumed\",\n"));
+    r.push_str(String::from("  \"severity\": \"note\",\n"));
+    r.push_str(String::from("  \"message\": \"proof of `first_or_zero` is bounded: only executions within the verifier model capacity were checked (Vec<T>: 128)\",\n"));
+    r.push_str(String::from("  \"hints\": [\n"));
+    r.push_str(String::from("    \"the bound belongs to the bounded model checker, not to the program or its contracts; executions beyond it (longer collections, more struct allocations) were not checked\",\n"));
+    r.push_str(String::from("    \"do not add a length bound to a contract to silence this note; an unbounded verifier removes it without any source change\"\n"));
+    r.push_str(String::from("  ]\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The `message` lists every bounded kind as `Kind: capacity`, in the fixed order `Vec<T>`, `String`, `HashMap<K, V>`, `BTreeMap<K, V>`, `Heap`, one entry per kind. When a model applied several capacities to one kind, the smallest is listed: the proof is claimed only for executions within every bound the model applied. At most one note is emitted per proved function. The span is empty (the note describes the model, not a source location).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Why this is a Note and not a failure.** The verdict is genuine for every execution inside the bound and the verifier never changes a verdict because of the note. It is informational so that an agent or CEGIS loop can tell a bounded proof from an unbounded one -- for example, to treat a `Verified` function that handles untrusted-length collections with extra scrutiny, or to test it with the runtime checks of `--mode debug`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** None is required. Do **not** add `requires: v.len() <= 128` (or any other capacity) to silence it: that distorts a true contract to fit a prover limitation, and an unbounded backend removes the note without any source change.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Ordering and presence.** Notes describe a *completed* proof run, so they are emitted only when the overall `status` is `Verified`, one per proved function, after every other diagnostic and in function declaration order. A run that ends in a counterexample, `unknown`, `timeout`, `error`, or a fail-closed skip carries no note: a halt cuts the set of verified functions short in a scheduling-dependent way, and a note about one of them would be noise next to the real failure.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Not emitted when:** the function's model restricts no capacity (scalar-only functions that allocate no struct, and collections built by the function itself from constant lengths or from a null source), or the overall status is not `Verified`. The same note is emitted by `vow verify` and `vow build`.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## Runtime Errors\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).\n"));
@@ -14026,7 +14224,8 @@ fn skill_support_content_schemas_diagnostic_schema_json_a46eae68() -> String {
     r.push_str(String::from("        \"RegionConflict\",\n"));
     r.push_str(String::from("        \"RegionLinear\",\n"));
     r.push_str(String::from("        \"RegionRootEscape\",\n"));
-    r.push_str(String::from("        \"VerifierAssertionUnattributed\"\n"));
+    r.push_str(String::from("        \"VerifierAssertionUnattributed\",\n"));
+    r.push_str(String::from("        \"ModelCapacityAssumed\"\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"description\": \"Machine-readable error code\"\n"));
     r.push_str(String::from("    },\n"));

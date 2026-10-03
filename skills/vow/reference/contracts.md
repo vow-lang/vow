@@ -71,11 +71,54 @@ not statically known, such as `String::from_cstr`, produce a nondeterministic
 length (0 to max-1). `string_matches_literal_at` is modeled against the
 literal's concrete bytes and byte length; the third argument must be a string
 literal so the verifier never has to infer static text from a dynamic `String`.
-A constant length passed to `String::from_raw_parts_copy` or
-`Vec::from_raw_parts_copy` that does not fit the model capacity fails closed
-with the capacity-limit diagnostic rather than being assumed away. A
-non-constant length is still assumed to be below the model capacity, so a
-postcondition that depends on it is verified only within that bound.
+A length passed to `String::from_raw_parts_copy` or
+`Vec::from_raw_parts_copy` that is *provably constant* and does not fit the
+model capacity fails closed with the capacity-limit diagnostic rather than being
+assumed away. "Provably constant" covers a literal, `+`/`-`/`*` (wrapping or
+checked) over constants, an integer cast of a constant, and a `let mut` whose
+every assignment is the same constant; it is computed over the IR, so
+`n + 300` with a constant `n` is recognised exactly like `301`. Both emitters
+fold identically, so the emitted model stays byte-identical.
+
+`from_raw_parts_copy` models the runtime's null-pointer behaviour: a null source
+(`ptr == 0`) yields an empty value whatever the length is, and the capacity
+restriction applies only to a non-null source. `ensures: result.len() == n`
+therefore needs a real `requires: p != 0`, exactly as the runtime does. A
+source that is provably the null constant (a literal `0`, or a phi of them) is
+empty with no assumption at all. `String::new` shares the same model: it is a
+null source with a zero length, and a constant length outside the capacity
+fails closed for a non-null source just like `from_raw_parts_copy`.
+
+**A proof is bounded when the model had to assume a capacity.** Any *non-constant*
+collection length — a `Vec`/`String`/`HashMap`/`BTreeMap` parameter, a
+collection read from a struct field, `String::from_cstr`, a non-constant
+`from_raw_parts_copy` length — is modelled as nondeterministic but restricted to
+the capacity above (`__ESBMC_assume(len <= CAP)`). The user-struct heap is
+bounded the same way: every struct allocation bump-allocates slots from a model
+heap of 1024 slots and prunes executions that allocate more
+(`__ESBMC_assume(__vow_heap_top <= 1024)`). That prunes every longer or larger
+execution, so a `Verified` result for such a function means "verified for
+collections no longer than the model capacity and at most 1024 struct slots",
+not "verified for all collections". The verifier makes this explicit rather than
+silent: every function proved from a model that carries such an assumption adds
+one [`ModelCapacityAssumed`](errors.md#modelcapacityassumed) **note** (severity
+`note`, on a `Verified` result) to the result's `diagnostics[]`, naming each
+bounded kind and its capacity. The note changes neither the `status` nor the
+exit code, and the verdict itself is never altered. The note is read off the
+emitted model (every pruning capacity assumption is tagged
+`/* vow:model-bound <Kind> <digits> */` in the C source), so it cannot disagree
+with what was actually checked. It is a statement about the *prover*, never
+about the program: do not respond to it by adding a length bound to a contract
+(see the anti-pattern below) — an unbounded verifier removes the note without
+any source change.
+
+The marker is the *only* way the model prunes by capacity. Every other
+`__ESBMC_assume` in the emitted C encodes something that is not a capacity: a
+`requires` clause, an unreachable point or a checked-arithmetic abort (an
+aborting execution never returns), the range of a nondeterministic value of its
+own type (an `Option` tag and payload, a byte read from a `String`), or the
+sorted-key representation invariant of a `BTreeMap`. None of these removes an
+execution the runtime can produce, so none is reported.
 
 ## Blame Model
 

@@ -1,4 +1,8 @@
 // TEST: category bounds
+// `requires: p != 0` is a real precondition, not a verifier workaround: the runtime
+// (and so the model) returns an empty value for a null source, so `result == n`
+// can only hold for a non-null `p`. See raw_parts_copy_null_pointer_empty.vow and
+// tests/verify-fail/raw_parts_copy_null_pointer_len_needs_requires.vow.
 module RawPartsCopyU64LenVerify
 
 fn string_copy_len(p: i64, n: u64) -> u64 vow {

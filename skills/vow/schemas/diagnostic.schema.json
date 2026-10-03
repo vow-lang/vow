@@ -38,7 +38,8 @@
         "RegionConflict",
         "RegionLinear",
         "RegionRootEscape",
-        "VerifierAssertionUnattributed"
+        "VerifierAssertionUnattributed",
+        "ModelCapacityAssumed"
       ],
       "description": "Machine-readable error code"
     },
