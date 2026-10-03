@@ -1721,10 +1721,7 @@ fn selfhosted_parse_u64_opt_root_escape_note() {
          container must emit a RegionRootEscape note; diagnostics: {diagnostics:?}"
     );
 }
-/// Build `fixture` under `tests/run/` with `compiler` and assert the build
-/// reports at least one `RegionRootEscape` note, i.e. that `what` is a
-/// heap-producing extern for region inference. Self-hosted builds without
-/// `libvow_runtime.a` skip, like the sibling tests above.
+/// Asserts building `fixture` with `compiler` reports a `RegionRootEscape` note for `what`.
 fn assert_fixture_root_escape_note(
     compiler: &std::path::Path,
     label: &str,
@@ -1778,9 +1775,7 @@ fn self_hosted_vowc() -> Option<PathBuf> {
     vowc.exists().then_some(vowc)
 }
 
-/// The `*_try` narrowing conversions return a fresh Option cell that is now
-/// allocated in the inferred region, so region inference must track them like
-/// `parse_*`: an escaping cell would otherwise be freed with its block.
+/// `*_try` conversions must be tracked by region inference like `parse_*`.
 #[test]
 fn rust_try_conversion_root_escape_note() {
     assert_fixture_root_escape_note(
