@@ -1,4 +1,5 @@
 // TEST: error-code UnsupportedFeature
+// TEST: error-count 1
 // TEST: stderr "HashMap value type must be non-linear"
 module HashMapValueLinear
 

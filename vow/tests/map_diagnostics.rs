@@ -51,10 +51,57 @@ fn assert_diagnostics(name: &str, expected: &[(&str, &str)]) {
     assert_eq!(actual, expected, "{name}");
 }
 
-// The `// TEST:` directives in tests/error fixtures pin the error code, the error
-// count and a stderr substring. These tests pin what they cannot: the full message
-// text, which the self-hosted checker's unit tests assert verbatim, and the order
-// the diagnostics come out in.
+// Only `tests/run_tests.sh` reads the `// TEST: error-code` and `error-count`
+// directives, and no workflow runs it; CI's parity run compares the two compilers'
+// error-code multisets but not absolute counts. This test is the CI check that the
+// Rust compiler reports exactly the pinned code and count for every map fixture,
+// which together with parity pins the self-hosted compiler too.
+const DIRECTIVE_FIXTURES: &[&str] = &[
+    "map_bad_type_once_per_site.vow",
+    "hashmap_key_string_reported_once.vow",
+    "btreemap_key_string_reported_once.vow",
+    "hashmap_key_unsupported.vow",
+    "map_value_unsupported.vow",
+    "hashmap_value_linear.vow",
+    "hashmap_value_option_u128.vow",
+    "map_value_linear_forward_ref.vow",
+    "hashmap_new_unannotated.vow",
+    "btreemap_new_unannotated.vow",
+    "vec_new_unannotated.vow",
+    "index_non_indexable.vow",
+    "index_hashmap_vec_key.vow",
+];
+
+fn directive(source: &str, key: &str) -> Option<String> {
+    let prefix = format!("// TEST: {key} ");
+    source
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .map(str::to_string)
+}
+
+#[test]
+fn map_fixtures_report_their_directive_code_and_count() {
+    for name in DIRECTIVE_FIXTURES {
+        let source = std::fs::read_to_string(fixture(name)).unwrap();
+        let diagnostics = error_diagnostics(name);
+        let count: usize = directive(&source, "error-count")
+            .unwrap_or_else(|| panic!("{name} has no error-count directive"))
+            .parse()
+            .unwrap();
+        assert_eq!(diagnostics.len(), count, "{name}: {diagnostics:?}");
+        if let Some(code) = directive(&source, "error-code") {
+            assert!(
+                diagnostics.iter().any(|(actual, _)| *actual == code),
+                "{name}: expected {code} in {diagnostics:?}"
+            );
+        }
+    }
+}
+
+// The directives also pin a stderr substring. These tests pin what they cannot: the
+// full message text, which the self-hosted checker's unit tests assert verbatim, and
+// the order the diagnostics come out in.
 
 const KEY_STRING: &str = "HashMap key type `String` is not supported: keys are compared by value as a single machine word";
 
