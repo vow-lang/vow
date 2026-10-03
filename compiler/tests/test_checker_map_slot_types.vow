@@ -159,6 +159,16 @@ fn check_unannotated_collections() -> i32 [io] {
     0
 }
 
+fn check_bad_map_type_reported_once() -> i32 [io] {
+    let hm: String = body_probe(String::from("let m: HashMap<String, i64> = HashMap::new(); m.insert(String::from(\"a\"), 1); m.insert(String::from(\"b\"), 2); m.len(); 0"));
+    if diagnostics_of(hm).len() != 1 { return 81; }
+    let bt: String = body_probe(String::from("let m: BTreeMap<String, i64> = BTreeMap::new(); m.insert(String::from(\"a\"), 1); m.insert(String::from(\"b\"), 2); 0"));
+    if diagnostics_of(bt).len() != 1 { return 82; }
+    let sites: String = String::from("module MapSlot\ntype Names = HashMap<String, i64>;\nstruct Holder { names: HashMap<String, i64> }\nenum Shape { Tuple(HashMap<String, i64>), Fields { names: HashMap<String, i64> } }\nfn make() -> HashMap<String, i64> { let m: HashMap<String, i64> = HashMap::new(); m }\nfn count(m: HashMap<String, i64>) -> u64 { m.len() }\nfn nested(v: Vec<HashMap<String, i64>>) -> u64 { v.len() }\nfn main() -> i32 { let m: HashMap<String, i64> = HashMap::new(); 0 }");
+    if diagnostics_of(sites).len() != 9 { return 83; }
+    0
+}
+
 fn main() -> i32 [io] {
     let keys: i32 = check_hashmap_keys();
     if keys != 0 { return keys; }
@@ -170,5 +180,7 @@ fn main() -> i32 [io] {
     if methods != 0 { return methods; }
     let indexing: i32 = check_map_index_rejected();
     if indexing != 0 { return indexing; }
-    check_unannotated_collections()
+    let unannotated: i32 = check_unannotated_collections();
+    if unannotated != 0 { return unannotated; }
+    check_bad_map_type_reported_once()
 }

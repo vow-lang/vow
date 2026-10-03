@@ -68,3 +68,28 @@ fn an_unannotated_collection_is_one_clear_error_per_call() {
     assert_diagnostics("btreemap_new_unannotated.vow", &[("TypeMismatch", &insert)]);
     assert_diagnostics("vec_new_unannotated.vow", &[("TypeMismatch", &push)]);
 }
+
+const KEY_STRING: &str = "HashMap key type `String` is not supported: keys are compared by value as a single machine word";
+
+#[test]
+fn a_bad_map_type_is_reported_once_however_often_the_map_is_used() {
+    assert_diagnostics(
+        "hashmap_key_string_reported_once.vow",
+        &[("UnsupportedFeature", KEY_STRING)],
+    );
+    let btree = error_diagnostics("btreemap_key_string_reported_once.vow");
+    let codes: Vec<&str> = btree.iter().map(|(code, _)| code.as_str()).collect();
+    assert_eq!(codes, vec!["BTreeMapKeyTypeMustBeI64"], "{btree:?}");
+}
+
+#[test]
+fn a_bad_map_type_is_reported_once_per_written_site() {
+    let sites = error_diagnostics("map_bad_type_once_per_site.vow");
+    assert_eq!(sites.len(), 9, "{sites:?}");
+    assert!(
+        sites
+            .iter()
+            .all(|(code, message)| code == "UnsupportedFeature" && message == KEY_STRING),
+        "{sites:?}"
+    );
+}

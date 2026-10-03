@@ -1147,10 +1147,7 @@ impl<'e> Checker<'e> {
                         .iter()
                         .map(|f| {
                             let ty = match self.env.resolve(&f.ty) {
-                                Ok(ty) => {
-                                    self.check_map_types_in_ty(&ty, f.span);
-                                    ty
-                                }
+                                Ok(ty) => ty,
                                 Err(msg) => {
                                     self.emit_error(ErrorCode::TypeMismatch, msg, f.span);
                                     Ty::Unit
@@ -1178,10 +1175,7 @@ impl<'e> Checker<'e> {
                                     let resolved: Vec<Ty> = types
                                         .iter()
                                         .map(|t| match self.env.resolve(t) {
-                                            Ok(ty) => {
-                                                self.check_map_types_in_ty(&ty, t.span());
-                                                ty
-                                            }
+                                            Ok(ty) => ty,
                                             Err(msg) => {
                                                 self.emit_error(
                                                     ErrorCode::TypeMismatch,
@@ -1199,10 +1193,7 @@ impl<'e> Checker<'e> {
                                         .iter()
                                         .map(|f| {
                                             let ty = match self.env.resolve(&f.ty) {
-                                                Ok(ty) => {
-                                                    self.check_map_types_in_ty(&ty, f.span);
-                                                    ty
-                                                }
+                                                Ok(ty) => ty,
                                                 Err(msg) => {
                                                     self.emit_error(
                                                         ErrorCode::TypeMismatch,
@@ -1237,8 +1228,9 @@ impl<'e> Checker<'e> {
             }
         }
 
-        // Pass 1b-fixup: Re-validate BTreeMap value linearity now that all
-        // struct fields are populated. During Pass 1b, forward-referenced
+        // Pass 1b-fixup: Validate map key/value types and BTreeMap value
+        // linearity now that all struct fields are populated; this is the one
+        // pass that checks struct fields, enum payloads and aliases. During Pass 1b, forward-referenced
         // structs had empty field lists, so transitive linearity could be
         // missed. Re-scanning with complete definitions closes the hole.
         for (i, item) in module.items.iter().enumerate() {
@@ -2510,20 +2502,6 @@ impl<'e> Checker<'e> {
                 // Result-type and known-method policy live in the pure
                 // `method_result_type` / `builtin_method_names` seams; the arm
                 // keeps only the diagnostics and side effects those cannot own.
-                if is_btreemap
-                    && let Ty::Applied(_, args) = &recv_ty
-                    && let Some(key_ty) = args.first()
-                    && !matches!(key_ty, Ty::I64 | Ty::Never)
-                {
-                    self.emit_error(
-                        ErrorCode::BTreeMapKeyTypeMustBeI64,
-                        format!("BTreeMap key type must be i64; found '{key_ty}'"),
-                        expr.span,
-                    );
-                }
-
-                self.check_map_slot_types(&recv_ty, expr.span);
-
                 let result_ty = method_result_type(&recv_ty, method);
 
                 if is_option_or_result {
