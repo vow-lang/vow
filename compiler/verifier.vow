@@ -86,12 +86,13 @@ fn str_contains_byte(s: String, b: i64) -> bool {
     false
 }
 
-fn str_find_str(haystack: String, needle: String) -> i64 {
+// Index of the first occurrence of `needle` at or after `from`, or -1.
+fn str_find_from(haystack: String, from: i64, needle: String) -> i64 {
     let hlen: i64 = haystack.len() as i64;
     let nlen: i64 = needle.len() as i64;
-    if nlen == 0 { return 0; }
+    if nlen == 0 { return from; }
     if nlen > hlen { return -1; }
-    let mut i: i64 = 0;
+    let mut i: i64 = from;
     while i <= hlen - nlen {
         let mut j: i64 = 0;
         let mut matched: bool = true;
@@ -106,6 +107,10 @@ fn str_find_str(haystack: String, needle: String) -> i64 {
         i = i + 1;
     }
     -1
+}
+
+fn str_find_str(haystack: String, needle: String) -> i64 {
+    str_find_from(haystack, 0, needle)
 }
 
 fn ascii_lower_byte(b: i64) -> i64 {
@@ -248,54 +253,21 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
     out
 }
 
-// The model-bound kinds, in the fixed order the note reports them: the four
-// collections, then the user-struct heap. Mirrors `MODEL_BOUND_KINDS` in
-// vow-verify/src/model_bounds.rs.
-fn model_bound_kind_count() -> i64 { 5 }
-
-fn model_bound_kind_name(k: i64) -> String {
-    if k == 0 { return String::from("Vec"); }
-    if k == 1 { return String::from("String"); }
-    if k == 2 { return String::from("HashMap"); }
-    if k == 3 { return String::from("BTreeMap"); }
-    String::from("Heap")
-}
-
+// The name of a model-bound kind in the user-facing bounded-proof note. The
+// kind constants and wire names live in c_emitter.vow, next to the writer.
 fn model_bound_kind_display(k: i64) -> String {
-    if k == 0 { return String::from("Vec<T>"); }
-    if k == 2 { return String::from("HashMap<K, V>"); }
-    if k == 3 { return String::from("BTreeMap<K, V>"); }
+    if k == MB_VEC() { return String::from("Vec<T>"); }
+    if k == MB_HASHMAP() { return String::from("HashMap<K, V>"); }
+    if k == MB_BTREEMAP() { return String::from("BTreeMap<K, V>"); }
     model_bound_kind_name(k)
-}
-
-fn bytes_match_at(hay: String, at: i64, needle: String) -> bool {
-    let nlen: i64 = needle.len() as i64;
-    if at < 0 || at + nlen > hay.len() as i64 { return false; }
-    let mut j: i64 = 0;
-    while j < nlen {
-        if hay.byte_at(at + j) != needle.byte_at(j) { return false; }
-        j = j + 1;
-    }
-    true
-}
-
-// Index of the first occurrence of `needle` at or after `from`, or -1.
-fn find_from(hay: String, from: i64, needle: String) -> i64 {
-    let last: i64 = (hay.len() as i64) - (needle.len() as i64);
-    let mut i: i64 = from;
-    while i <= last {
-        if bytes_match_at(hay, i, needle) { return i; }
-        i = i + 1;
-    }
-    -1
 }
 
 // Index of the kind named by `c_src[from, to)`, or -1 when it names none.
 fn model_bound_kind_in(c_src: String, from: i64, to: i64) -> i64 {
+    let name: String = str_substring(c_src, from, to);
     let mut k: i64 = 0;
-    while k < model_bound_kind_count() {
-        let name: String = model_bound_kind_name(k);
-        if (name.len() as i64) == to - from && bytes_match_at(c_src, from, name) { return k; }
+    while k < MB_KIND_COUNT() {
+        if name == model_bound_kind_name(k) { return k; }
         k = k + 1;
     }
     -1
@@ -338,27 +310,22 @@ fn record_model_bound(c_src: String, body: i64, end: i64, caps: Vec<i64>) {
 fn model_bound_caps(c_src: String) -> Vec<i64> {
     let caps: Vec<i64> = Vec::new();
     let mut k: i64 = 0;
-    while k < model_bound_kind_count() {
+    while k < MB_KIND_COUNT() {
         caps.push(-1);
         k = k + 1;
     }
-    let prefix: String = String::from("/* vow:model-bound ");
-    let terminator: String = String::from(" */");
+    let prefix: String = model_bound_prefix();
+    let terminator: String = model_bound_suffix();
     let plen: i64 = prefix.len() as i64;
-    let n: i64 = c_src.len() as i64;
-    let mut i: i64 = 0;
-    while i < n {
-        if c_src.byte_at(i) == 47 && bytes_match_at(c_src, i, prefix) {
-            let body: i64 = i + plen;
-            let end: i64 = find_from(c_src, body, terminator);
-            if end < 0 {
-                i = n;
-            } else {
-                record_model_bound(c_src, body, end, caps);
-                i = body;
-            }
+    let mut at: i64 = str_find_from(c_src, 0, prefix);
+    while at >= 0 {
+        let body: i64 = at + plen;
+        let end: i64 = str_find_from(c_src, body, terminator);
+        if end < 0 {
+            at = -1;
         } else {
-            i = i + 1;
+            record_model_bound(c_src, body, end, caps);
+            at = str_find_from(c_src, body, prefix);
         }
     }
     caps
@@ -371,7 +338,7 @@ fn model_bounds_text(c_src: String) -> String {
     let caps: Vec<i64> = model_bound_caps(c_src);
     let out: String = String::from("");
     let mut k: i64 = 0;
-    while k < model_bound_kind_count() {
+    while k < MB_KIND_COUNT() {
         let cap: i64 = caps[k as u64];
         if cap >= 0 {
             if out.len() > 0 { out.push_str(String::from(", ")); }

@@ -160,6 +160,12 @@ fn ity_int_width_bits(ty: i64) -> i64 {
     0
 }
 
+// True for the unsigned integer type codes. Twin of `ty_is_unsigned` in
+// vow-verify/src/c_emitter.rs.
+fn ity_is_unsigned(ty: i64) -> bool {
+    ty == ITY_U8() || ty == ITY_U16() || ty == ITY_U32() || ty == ITY_U64() || ty == ITY_U128()
+}
+
 // IDATA_* are the **in-memory** data-kind tags for the self-hosted IR
 // (`IrInst.dk`). They are a separate numbering space from the on-disk
 // `.vmod` discriminants in `vow-ir/src/serialize.rs::read_inst_data`
