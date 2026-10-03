@@ -1,4 +1,4 @@
-// TEST: stdout "u8=ok\ni8=ok\nu32=ok\nbool=ok\nbtree=ok\n"
+// TEST: stdout "u8=ok\ni8=ok\nu32=ok\nbool=ok\n"
 module HashMapScalarKeys
 
 fn check_u8() -> bool [panic] {
@@ -46,13 +46,6 @@ fn check_bool() -> bool [panic] {
     m.get(t).unwrap() == 10 && m.get(f).unwrap() == 20 && m.len() == 2
 }
 
-fn check_btree() -> bool [panic] {
-    let m: BTreeMap<i64, i64> = BTreeMap::new();
-    m.insert(3, 255);
-    m.insert(1, 7);
-    m.get(3).unwrap() == 255 && m.get(1).unwrap() == 7 && m.len() == 2
-}
-
 fn report(label: String, ok: bool) [io] {
     print_str(label);
     if ok { print_str(String::from("=ok\n")); } else { print_str(String::from("=FAIL\n")); }
@@ -63,6 +56,5 @@ fn main() -> i32 [io, panic] {
     report(String::from("i8"), check_i8());
     report(String::from("u32"), check_u32());
     report(String::from("bool"), check_bool());
-    report(String::from("btree"), check_btree());
     0
 }

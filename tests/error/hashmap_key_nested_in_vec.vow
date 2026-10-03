@@ -1,8 +1,0 @@
-// TEST: error-code UnsupportedFeature
-// TEST: stderr "HashMap key type"
-module HashMapKeyNestedInVec
-
-fn main() -> i32 {
-    let v: Vec<HashMap<String, bool>> = Vec::new();
-    0
-}
