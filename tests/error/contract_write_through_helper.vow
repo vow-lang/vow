@@ -1,0 +1,26 @@
+// TEST: error-code EffectViolation
+// TEST: stderr "may write through a shared argument"
+module ContractWriteThroughHelper
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn mark(p: Point) -> bool {
+    p.x = 1;
+    true
+}
+
+fn make_point(x: i64, y: i64) -> Point
+vow {
+    ensures: mark(result)
+}
+{
+    Point { x: x, y: y }
+}
+
+fn main() -> () [io] {
+    let p: Point = make_point(0, 0);
+    print_i64(p.x);
+}

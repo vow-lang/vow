@@ -199,7 +199,7 @@ fn f(s: String, key: String) -> i64 {
 ### EffectViolation
 
 **Phase:** Type Checker
-**Meaning:** A function calls another function with effects not declared in its own signature.
+**Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write — not the caller.
 
 ```vow
 fn f() -> () {
@@ -208,6 +208,21 @@ fn f() -> () {
 ```
 
 **Fix:** Add the required effect to the function signature: `fn f() -> () [io]`.
+
+```vow
+fn mark(p: Point) -> bool {
+    p.x = 1;
+    true
+}
+
+fn make_point(x: i64, y: i64) -> Point vow {
+    ensures: mark(result)
+} {
+    Point { x: x, y: y }
+}
+```
+
+**Fix:** Move the write out of the clause — contracts may only read, e.g. `ensures: result.x == x`. See `docs/spec/grammar.md` → "Contract Purity".
 
 ### LinearTypeViolation
 

@@ -1100,6 +1100,25 @@ If `caller` omitted `[io]`, the type checker would emit `EffectViolation`.
 
 Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they cannot call effectful functions.
 
+They also cannot write through any argument, even when the write happens inside a helper that declares no effect. Declared effects (`read`, `write`, `io`, `panic`, `unsafe`) cover filesystem/stdio/panic/FFI only — a plain struct-field assignment, a `Vec`/map element write, or a mutating builtin method call (`push`, `insert`, `clear`, …) through a parameter is invisible to that check, since Vow passes structs, `Vec`, `String`, and maps by pointer. For example:
+
+```vow
+fn mark(p: Point) -> bool {
+    p.x = 1;
+    true
+}
+
+fn make_point(x: i64, y: i64) -> Point
+vow {
+    ensures: mark(result)
+}
+{
+    Point { x: x, y: y }
+}
+```
+
+`mark` declares no effect, so the declared-effect check alone would accept `ensures: mark(result)`. But `mark` writes `result.x` as a side effect of being evaluated for the check itself — a write that is not part of `make_point`'s own body and that a caller relying on `result.x == 1` would never see if contract evaluation were ever skipped. This is rejected with `EffectViolation`, the same diagnostic the declared-effect check uses, blamed on the callee. The check is transitive: a helper that only writes through another helper it calls is rejected too, and the search for a reachable write looks through — not into — control flow (`if`/`match`/loops inside a clause are still searched for writes, not forbidden outright). Builtin read-only methods (`len`, `get`, `contains`, `contains_key`, `eq`, `byte_at`, `substring`, `parse_i64`, `parse_u64`, `unwrap`) are unaffected; an unresolvable callee is rejected (fails closed) rather than silently assumed pure.
+
 ### Builtin Function Signatures
 
 #### FFI Wrapper Intrinsics

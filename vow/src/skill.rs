@@ -2458,6 +2458,25 @@ If `caller` omitted `[io]`, the type checker would emit `EffectViolation`.
 
 Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they cannot call effectful functions.
 
+They also cannot write through any argument, even when the write happens inside a helper that declares no effect. Declared effects (`read`, `write`, `io`, `panic`, `unsafe`) cover filesystem/stdio/panic/FFI only — a plain struct-field assignment, a `Vec`/map element write, or a mutating builtin method call (`push`, `insert`, `clear`, …) through a parameter is invisible to that check, since Vow passes structs, `Vec`, `String`, and maps by pointer. For example:
+
+```vow
+fn mark(p: Point) -> bool {
+    p.x = 1;
+    true
+}
+
+fn make_point(x: i64, y: i64) -> Point
+vow {
+    ensures: mark(result)
+}
+{
+    Point { x: x, y: y }
+}
+```
+
+`mark` declares no effect, so the declared-effect check alone would accept `ensures: mark(result)`. But `mark` writes `result.x` as a side effect of being evaluated for the check itself — a write that is not part of `make_point`'s own body and that a caller relying on `result.x == 1` would never see if contract evaluation were ever skipped. This is rejected with `EffectViolation`, the same diagnostic the declared-effect check uses, blamed on the callee. The check is transitive: a helper that only writes through another helper it calls is rejected too, and the search for a reachable write looks through — not into — control flow (`if`/`match`/loops inside a clause are still searched for writes, not forbidden outright). Builtin read-only methods (`len`, `get`, `contains`, `contains_key`, `eq`, `byte_at`, `substring`, `parse_i64`, `parse_u64`, `unwrap`) are unaffected; an unresolvable callee is rejected (fails closed) rather than silently assumed pure.
+
 ### Builtin Function Signatures
 
 #### FFI Wrapper Intrinsics
@@ -3407,6 +3426,10 @@ literal so the verifier never has to infer static text from a dynamic `String`.
 | `requires`  | Caller | The caller passed invalid arguments                |
 | `ensures`   | Callee | The function body doesn't satisfy the postcondition|
 | `invariant` | Callee | The loop body breaks the invariant                 |
+
+## Clause Purity and Heap Writes
+
+A clause must not write through any argument while it is being evaluated — not just avoid declared effects. Vow passes structs, `Vec`, `String`, and maps by pointer, so a plain helper with no declared effect can still perform a real heap write (a field assignment, a `Vec`/map element write, a mutating builtin method) through a parameter. If such a write were allowed in a contract clause, it would happen every time the clause is evaluated — under `vow verify`, under `--mode debug`, and (today, since nothing elides a predicate's side effects at codegen time) in release too — making the clause's own evaluation an unaccounted-for part of the program's real behavior rather than a side-effect-free check of it. Rejecting this at type-check time (`EffectViolation`, `Blame::Callee`) keeps the predicate a predicate: see `docs/spec/grammar.md` → "Contract Purity" for the exact rule and the `mark(p)` example, and `docs/adr/2026-10-02-2348-contract-heap-write-purity.md` (ADR-2026-10-02-2348) for why this is checked for every clause rather than deferred to a write-footprint mechanism.
 
 ## Counterexample Replay (Differential Test)
 
@@ -4403,7 +4426,7 @@ fn f(s: String, key: String) -> i64 {
 ### EffectViolation
 
 **Phase:** Type Checker
-**Meaning:** A function calls another function with effects not declared in its own signature.
+**Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write — not the caller.
 
 ```vow
 fn f() -> () {
@@ -4412,6 +4435,21 @@ fn f() -> () {
 ```
 
 **Fix:** Add the required effect to the function signature: `fn f() -> () [io]`.
+
+```vow
+fn mark(p: Point) -> bool {
+    p.x = 1;
+    true
+}
+
+fn make_point(x: i64, y: i64) -> Point vow {
+    ensures: mark(result)
+} {
+    Point { x: x, y: y }
+}
+```
+
+**Fix:** Move the write out of the clause — contracts may only read, e.g. `ensures: result.x == x`. See `docs/spec/grammar.md` → "Contract Purity".
 
 ### LinearTypeViolation
 
@@ -7733,6 +7771,25 @@ If `caller` omitted `[io]`, the type checker would emit `EffectViolation`.
 
 Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they cannot call effectful functions.
 
+They also cannot write through any argument, even when the write happens inside a helper that declares no effect. Declared effects (`read`, `write`, `io`, `panic`, `unsafe`) cover filesystem/stdio/panic/FFI only — a plain struct-field assignment, a `Vec`/map element write, or a mutating builtin method call (`push`, `insert`, `clear`, …) through a parameter is invisible to that check, since Vow passes structs, `Vec`, `String`, and maps by pointer. For example:
+
+```vow
+fn mark(p: Point) -> bool {
+    p.x = 1;
+    true
+}
+
+fn make_point(x: i64, y: i64) -> Point
+vow {
+    ensures: mark(result)
+}
+{
+    Point { x: x, y: y }
+}
+```
+
+`mark` declares no effect, so the declared-effect check alone would accept `ensures: mark(result)`. But `mark` writes `result.x` as a side effect of being evaluated for the check itself — a write that is not part of `make_point`'s own body and that a caller relying on `result.x == 1` would never see if contract evaluation were ever skipped. This is rejected with `EffectViolation`, the same diagnostic the declared-effect check uses, blamed on the callee. The check is transitive: a helper that only writes through another helper it calls is rejected too, and the search for a reachable write looks through — not into — control flow (`if`/`match`/loops inside a clause are still searched for writes, not forbidden outright). Builtin read-only methods (`len`, `get`, `contains`, `contains_key`, `eq`, `byte_at`, `substring`, `parse_i64`, `parse_u64`, `unwrap`) are unaffected; an unresolvable callee is rejected (fails closed) rather than silently assumed pure.
+
 ### Builtin Function Signatures
 
 #### FFI Wrapper Intrinsics
@@ -8684,6 +8741,10 @@ literal so the verifier never has to infer static text from a dynamic `String`.
 | `requires`  | Caller | The caller passed invalid arguments                |
 | `ensures`   | Callee | The function body doesn't satisfy the postcondition|
 | `invariant` | Callee | The loop body breaks the invariant                 |
+
+## Clause Purity and Heap Writes
+
+A clause must not write through any argument while it is being evaluated — not just avoid declared effects. Vow passes structs, `Vec`, `String`, and maps by pointer, so a plain helper with no declared effect can still perform a real heap write (a field assignment, a `Vec`/map element write, a mutating builtin method) through a parameter. If such a write were allowed in a contract clause, it would happen every time the clause is evaluated — under `vow verify`, under `--mode debug`, and (today, since nothing elides a predicate's side effects at codegen time) in release too — making the clause's own evaluation an unaccounted-for part of the program's real behavior rather than a side-effect-free check of it. Rejecting this at type-check time (`EffectViolation`, `Blame::Callee`) keeps the predicate a predicate: see `docs/spec/grammar.md` → "Contract Purity" for the exact rule and the `mark(p)` example, and `docs/adr/2026-10-02-2348-contract-heap-write-purity.md` (ADR-2026-10-02-2348) for why this is checked for every clause rather than deferred to a write-footprint mechanism.
 
 ## Counterexample Replay (Differential Test)
 
@@ -9682,7 +9743,7 @@ fn f(s: String, key: String) -> i64 {
 ### EffectViolation
 
 **Phase:** Type Checker
-**Meaning:** A function calls another function with effects not declared in its own signature.
+**Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write — not the caller.
 
 ```vow
 fn f() -> () {
@@ -9691,6 +9752,21 @@ fn f() -> () {
 ```
 
 **Fix:** Add the required effect to the function signature: `fn f() -> () [io]`.
+
+```vow
+fn mark(p: Point) -> bool {
+    p.x = 1;
+    true
+}
+
+fn make_point(x: i64, y: i64) -> Point vow {
+    ensures: mark(result)
+} {
+    Point { x: x, y: y }
+}
+```
+
+**Fix:** Move the write out of the clause — contracts may only read, e.g. `ensures: result.x == x`. See `docs/spec/grammar.md` → "Contract Purity".
 
 ### LinearTypeViolation
 

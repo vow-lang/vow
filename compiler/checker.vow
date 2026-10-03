@@ -575,6 +575,17 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
         i = i + 1;
     }
 
+    // Also collects every ITEM_FN id for the may-write pass below, in the
+    // same scan (issue #1032) — whether calling each module function can
+    // write through its own parameters. That pass must run after every
+    // function's signature is registered here (so env_lookup_fn can tell a
+    // builtin free function apart from an unresolvable name) and before the
+    // check_fn loop below, whose check_clause_purity calls consume the table
+    // via e.may_write_fns. Declarations are included (not filtered out) —
+    // compute_may_write_table seeds them straight to 1, since an
+    // `fn f(..) -> T;` stub's "body" is an empty placeholder, not evidence of
+    // purity.
+    let write_fids: Vec<i64> = Vec::new();
     i = 0u64;
     while i < n {
         let cur: String = item_files[i];
@@ -584,6 +595,7 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
         let id: i64 = item_id(item);
         if kind == ITEM_FN() {
             register_fn(e, m, id);
+            write_fids.push(id);
         } else if kind == ITEM_EXTERN() {
             let a: AstArena = m.arena;
             let fns_lid: i64 = ext_fns_lid(a, id);
@@ -601,6 +613,7 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
         }
         i = i + 1;
     }
+    compute_may_write_table(e, m, write_fids);
 
     i = 0u64;
     while i < n {
@@ -790,6 +803,17 @@ fn check_clause_purity(e: CheckEnv, m: Module, clause_eid: i64) [io] {
             }
         }
         i = i + 1;
+    }
+
+    let write_sites: Vec<i64> = Vec::new();
+    collect_may_write_sites_in_expr(e, m, clause_eid, write_sites);
+    let n_writes: u64 = write_sites.len() as u64;
+    let mut wi: u64 = 0u64;
+    while wi < n_writes {
+        let site_eid: i64 = write_sites[wi];
+        let msg: String = String::from("vow predicate must be pure but this expression may write through a shared argument");
+        env_emit_error_code(e, EC_EFFECT_VIOLATION(), msg, expr_span(a, site_eid));
+        wi = wi + 1;
     }
 }
 
@@ -3450,6 +3474,292 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     }
 
     CTY_UNIT()
+}
+
+// Builtin methods that never write through their receiver or arguments.
+// Allowlist, not a denylist, mirroring the Rust frontend's READ_ONLY_METHODS
+// in vow-types/src/effects.rs: a builtin method not on this list is
+// write-suspect until proven otherwise, so a newly added mutating method
+// ships guarded by default. Exhaustive against the builtin method tables
+// (Str, Vec, HashMap, BTreeMap, Option/Result) — Vow has no user-defined
+// methods.
+fn is_read_only_method(name: String) -> bool {
+    name == String::from("len")
+        || name == String::from("get")
+        || name == String::from("eq")
+        || name == String::from("contains")
+        || name == String::from("contains_key")
+        || name == String::from("byte_at")
+        || name == String::from("substring")
+        || name == String::from("parse_i64")
+        || name == String::from("parse_u64")
+        || name == String::from("unwrap")
+}
+
+// Collects every sub-expression of `eid` that, when evaluated, performs a
+// write reachable from a parameter: a FieldAccess/Index assignment target, a
+// builtin method call not in is_read_only_method, or a call to a function
+// whose own may-write bit (e.may_write_fns, see compute_may_write_table) is
+// set or unresolvable. Mirrors collect_calls_in_expr's traversal shape and
+// EXPR_* arms one-for-one so a new expression kind can't silently escape one
+// walker but not the other (issue #1032).
+fn collect_may_write_sites_in_expr(e: CheckEnv, m: Module, eid: i64, sites: Vec<i64>) [io] {
+    let a: AstArena = m.arena;
+    let tag: i64 = expr_tag(a, eid);
+
+    if tag == EXPR_ASSIGN() {
+        let lhs_eid: i64 = expr_a(a, eid);
+        let rhs_eid: i64 = expr_b(a, eid);
+        let lhs_tag: i64 = expr_tag(a, lhs_eid);
+        if lhs_tag == EXPR_FIELD() || lhs_tag == EXPR_INDEX() {
+            sites.push(eid);
+        }
+        collect_may_write_sites_in_expr(e, m, lhs_eid, sites);
+        collect_may_write_sites_in_expr(e, m, rhs_eid, sites);
+        return;
+    }
+
+    if tag == EXPR_METHOD() {
+        let recv_eid: i64 = expr_a(a, eid);
+        let mname_sid: i64 = expr_b(a, eid);
+        let args_lid: i64 = expr_c(a, eid);
+        let mname: String = arena_str(a, mname_sid);
+        if !is_read_only_method(mname) {
+            sites.push(eid);
+        }
+        collect_may_write_sites_in_expr(e, m, recv_eid, sites);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            collect_may_write_sites_in_expr(e, m, list_get(a, args_lid, i), sites);
+            i = i + 1;
+        }
+        return;
+    }
+
+    if tag == EXPR_CALL() {
+        let callee_eid: i64 = expr_a(a, eid);
+        let args_lid: i64 = expr_b(a, eid);
+        let callee_tag: i64 = expr_tag(a, callee_eid);
+        let mut may_write: bool = true;
+        if callee_tag == EXPR_IDENT() {
+            let name_sid: i64 = expr_a(a, callee_eid);
+            let name: String = arena_str(a, name_sid);
+            let fidx: i64 = env_lookup_fn(e, name);
+            if fidx == -1 {
+                may_write = true;
+            } else {
+                may_write = e.may_write_fns[fidx] != 0;
+            }
+        }
+        if may_write {
+            sites.push(eid);
+        }
+        collect_may_write_sites_in_expr(e, m, callee_eid, sites);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            collect_may_write_sites_in_expr(e, m, list_get(a, args_lid, i), sites);
+            i = i + 1;
+        }
+        return;
+    }
+
+    if tag == EXPR_BINOP() {
+        collect_may_write_sites_in_expr(e, m, expr_b(a, eid), sites);
+        collect_may_write_sites_in_expr(e, m, expr_c(a, eid), sites);
+        return;
+    }
+
+    if tag == EXPR_UNOP() {
+        collect_may_write_sites_in_expr(e, m, expr_b(a, eid), sites);
+        return;
+    }
+
+    if tag == EXPR_FIELD() || tag == EXPR_QUESTION() {
+        collect_may_write_sites_in_expr(e, m, expr_a(a, eid), sites);
+        return;
+    }
+
+    if tag == EXPR_INDEX() {
+        collect_may_write_sites_in_expr(e, m, expr_a(a, eid), sites);
+        collect_may_write_sites_in_expr(e, m, expr_b(a, eid), sites);
+        return;
+    }
+
+    if tag == EXPR_IF() {
+        collect_may_write_sites_in_expr(e, m, expr_a(a, eid), sites);
+        collect_may_write_sites_in_block(e, m, expr_b(a, eid), sites);
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid != -1 {
+            collect_may_write_sites_in_expr(e, m, else_eid, sites);
+        }
+        return;
+    }
+
+    if tag == EXPR_WHILE() {
+        collect_may_write_sites_in_expr(e, m, expr_a(a, eid), sites);
+        collect_may_write_sites_in_block(e, m, expr_b(a, eid), sites);
+        return;
+    }
+
+    if tag == EXPR_LOOP() {
+        collect_may_write_sites_in_block(e, m, expr_a(a, eid), sites);
+        return;
+    }
+
+    if tag == EXPR_FOR() {
+        collect_may_write_sites_in_expr(e, m, expr_a(a, eid), sites);
+        collect_may_write_sites_in_block(e, m, expr_b(a, eid), sites);
+        return;
+    }
+
+    if tag == EXPR_MATCH() {
+        collect_may_write_sites_in_expr(e, m, expr_a(a, eid), sites);
+        let arms_lid: i64 = expr_b(a, eid);
+        let n_pairs: i64 = list_len(a, arms_lid);
+        let n_arms: i64 = n_pairs / 2;
+        let mut i: i64 = 0;
+        while i < n_arms {
+            collect_may_write_sites_in_expr(e, m, list_get(a, arms_lid, i * 2 + 1), sites);
+            i = i + 1;
+        }
+        return;
+    }
+
+    if tag == EXPR_RETURN() {
+        let val_eid: i64 = expr_a(a, eid);
+        if val_eid != -1 {
+            collect_may_write_sites_in_expr(e, m, val_eid, sites);
+        }
+        return;
+    }
+
+    if tag == EXPR_BLOCK() {
+        collect_may_write_sites_in_block(e, m, expr_a(a, eid), sites);
+        return;
+    }
+
+    if tag == EXPR_SLIT() {
+        let fields_lid: i64 = expr_b(a, eid);
+        let n_pairs: i64 = list_len(a, fields_lid);
+        let n_fields: i64 = n_pairs / 2;
+        let mut i: i64 = 0;
+        while i < n_fields {
+            collect_may_write_sites_in_expr(e, m, list_get(a, fields_lid, i * 2 + 1), sites);
+            i = i + 1;
+        }
+        return;
+    }
+
+    if tag == EXPR_ECTOR() {
+        let args_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            collect_may_write_sites_in_expr(e, m, list_get(a, args_lid, i), sites);
+            i = i + 1;
+        }
+        return;
+    }
+
+    if tag == EXPR_CAST() {
+        collect_may_write_sites_in_expr(e, m, expr_a(a, eid), sites);
+        return;
+    }
+
+    if tag == EXPR_TUPLE() {
+        let elems_lid: i64 = expr_a(a, eid);
+        let n: i64 = list_len(a, elems_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            collect_may_write_sites_in_expr(e, m, list_get(a, elems_lid, i), sites);
+            i = i + 1;
+        }
+        return;
+    }
+
+    if tag == EXPR_BREAK() {
+        let val_eid: i64 = expr_a(a, eid);
+        if val_eid != -1 {
+            collect_may_write_sites_in_expr(e, m, val_eid, sites);
+        }
+        return;
+    }
+}
+
+fn collect_may_write_sites_in_block(e: CheckEnv, m: Module, bid: i64, sites: Vec<i64>) [io] {
+    let a: AstArena = m.arena;
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, stmts_lid, i);
+        let stag: i64 = stmt_tag(a, sid);
+        if stag == STMT_LET() {
+            collect_may_write_sites_in_expr(e, m, stmt_c(a, sid), sites);
+        } else {
+            collect_may_write_sites_in_expr(e, m, stmt_a(a, sid), sites);
+        }
+        i = i + 1;
+    }
+    let trail: i64 = blk_trail(a, bid);
+    if trail != -1 {
+        collect_may_write_sites_in_expr(e, m, trail, sites);
+    }
+}
+
+// Computes, for every function id in `fids` (declarations included — the
+// caller must pass every ITEM_FN, not just the ones with a real body),
+// whether calling it can perform a write reachable from its own parameters —
+// a monotone fixed point over the call graph (0 -> 1 only), so (mutual)
+// recursion is handled by construction: a cycle with one writing member
+// taints the whole cycle, and the loop terminates because each bit only ever
+// flips once. A declaration (`fn f(..) -> T;`, no body — the `.vow.d` stub
+// form `use` can load instead of a module's real source, see
+// tests/multi/decl_stub_preference/) is seeded straight to 1: its "body" is a
+// parsed-but-empty placeholder block, so analyzing it would find no writes
+// and fail *open* on a function this translation unit has no definition for.
+// Iterates `fids` in caller-supplied (module item) order, not a hash-keyed
+// structure, so the fixed point is deterministic — required for the stage
+// A/B/C binary fixed point. Mutates e.may_write_fns in place; must run after
+// every function's signature is registered (env_define_fn) and before any
+// check_fn/check_clause_purity call consumes the table.
+fn compute_may_write_table(e: CheckEnv, m: Module, fids: Vec<i64>) [io] {
+    let a: AstArena = m.arena;
+    let n: u64 = fids.len() as u64;
+    let fidxs: Vec<i64> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < n {
+        let fid: i64 = fids[i];
+        let name: String = arena_str(a, fn_name_sid(a, fid));
+        let fidx: i64 = env_lookup_fn(e, name);
+        fidxs.push(fidx);
+        if fidx != -1 && fn_is_declaration(a, fid) {
+            e.may_write_fns[fidx] = 1;
+        }
+        i = i + 1;
+    }
+
+    let mut changed: bool = true;
+    while changed {
+        changed = false;
+        i = 0u64;
+        while i < n {
+            let fidx: i64 = fidxs[i];
+            let fid: i64 = fids[i];
+            if fidx != -1 && e.may_write_fns[fidx] == 0 && !fn_is_declaration(a, fid) {
+                let body_bid: i64 = fn_body_bid(a, fid);
+                let sites: Vec<i64> = Vec::new();
+                collect_may_write_sites_in_block(e, m, body_bid, sites);
+                if sites.len() as u64 > 0u64 {
+                    e.may_write_fns[fidx] = 1;
+                    changed = true;
+                }
+            }
+            i = i + 1;
+        }
+    }
 }
 
 fn collect_calls_in_expr(e: CheckEnv, m: Module, eid: i64, calls: Vec<String>) [io] {
