@@ -766,10 +766,6 @@ fn first_arg_route(
         .unwrap_or(ReceiverRoute::Direct(RegionId::Root))
 }
 
-/// `BTreeMap::insert` routed to a region: takes the map-growth arena and the
-/// result-option arena, in that order, ahead of the ordinary arguments.
-const BTREEMAP_INSERT_IN_ARENA: &str = "__vow_btreemap_insert_in_arena";
-
 fn routed_vec_extern<'a>(
     sym: &'a str,
     inst: &Inst,
@@ -897,22 +893,6 @@ fn routed_vec_extern<'a>(
             RegionId::Root => (sym, None),
             region => ("__vow_btreemap_new_in_arena", Some(region)),
         },
-        "__vow_btreemap_insert" => {
-            // Two owners: the returned option lives in `inst.region` (the call
-            // site appends that arena after the one returned here), while
-            // growth of the map's buffers belongs to the receiver's region.
-            let growth = match first_arg_route(inst, inst_index, current_summary, phi_data) {
-                ReceiverRoute::Direct(region @ (RegionId::Block(_) | RegionId::Caller(_))) => {
-                    region
-                }
-                _ => RegionId::Root,
-            };
-            if growth == RegionId::Root && inst.region == RegionId::Root {
-                (sym, None)
-            } else {
-                (BTREEMAP_INSERT_IN_ARENA, Some(growth))
-            }
-        }
         _ => {
             if let Some(variant) = fresh_arena_variant(sym) {
                 match inst.region {
@@ -1641,16 +1621,6 @@ fn lower_inst(
                     ctx.root_arena_gv,
                 )?;
                 call_args.push(arena);
-                if matches!(&inst.data, InstData::CallExtern(sym) if sym == "__vow_btreemap_insert")
-                {
-                    call_args.push(region_to_arena_value(
-                        builder,
-                        inst.region,
-                        ctx.hidden_region_values,
-                        ctx.block_arena_slots,
-                        ctx.root_arena_gv,
-                    )?);
-                }
             }
             let hidden_arg_offset = call_args.len();
             for (i, id) in inst.args.iter().enumerate() {
@@ -3027,14 +2997,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_btreemap_new_in_arena" => {
             sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.returns.push(AbiParam::new(types::I64)); // *VowBTreeMap
-        }
-        "__vow_btreemap_insert_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // map-growth arena
-            sig.params.push(AbiParam::new(types::I64)); // result-option arena
-            sig.params.push(AbiParam::new(types::I64)); // map ptr
-            sig.params.push(AbiParam::new(types::I64)); // key
-            sig.params.push(AbiParam::new(types::I64)); // value
-            sig.returns.push(AbiParam::new(types::I64)); // *VowOption (prev)
         }
         "__vow_btreemap_len" => {
             sig.params.push(AbiParam::new(types::I64)); // map ptr
@@ -5739,11 +5701,7 @@ mod tests {
             assert!(!base_sig.returns.is_empty(), "{base} must be declared");
         }
         let insert = make_extern_sig("__vow_btreemap_insert_in_arena", &obj_module);
-        assert_eq!(
-            insert.params.len(),
-            5,
-            "growth arena, option arena, map, key, value"
-        );
+        assert_eq!(insert.params.len(), 4, "arena, map, key, value");
         assert_eq!(insert.returns.len(), 1);
     }
 

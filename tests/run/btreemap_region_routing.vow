@@ -1,4 +1,4 @@
-// TEST: stdout "sum=20540\nlookup=49\nprev=20\nkept=13\nbuilt=2000\nput=780\nnested=28\n"
+// TEST: stdout "sum=20540\nlookup=49\nprev=20\nkept=13\nbuilt=2000\nput=780\nnested=28\ngrown=89\n"
 // BTreeMap::new/insert/get allocate in the region the analysis assigns them:
 // a map built in a callee escapes to the caller, a callee grows the caller's
 // map (growth belongs to the map's arena while each returned Option belongs to
@@ -102,6 +102,23 @@ fn nested() -> i64 {
     decode(m.get(h.tag)) + decode(m.get(h.tag + 1)) + decode(m.get(10)) + 4
 }
 
+// Growing a map reached through a struct field: the receiver has no provable
+// region, so the buffers must grow in the arena recorded in the map itself.
+fn grown() -> i64 {
+    let h: Holder = Holder { map: build(10), tag: 3 };
+    let m: BTreeMap<i64, i64> = h.map;
+    fill_from(m, 10, 50);
+    decode(m.get(39)) + (m.len() as i64)
+}
+
+fn fill_from(m: BTreeMap<i64, i64>, from: i64, to: i64) {
+    let mut i: i64 = from;
+    while i < to {
+        m.insert(i, i);
+        i = i + 1;
+    }
+}
+
 fn main() -> i32 [io] {
     let m: BTreeMap<i64, i64> = build(40);
     print_str(String::from("sum="));
@@ -120,6 +137,8 @@ fn main() -> i32 [io] {
     print_i64(put_many(60));
     print_str(String::from("\nnested="));
     print_i64(nested());
+    print_str(String::from("\ngrown="));
+    print_i64(grown());
     print_str(String::from("\n"));
     0
 }

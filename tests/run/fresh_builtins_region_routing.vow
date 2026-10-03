@@ -91,11 +91,21 @@ fn proc_len(n: i64) -> u64 [io] {
 }
 
 fn main() -> i32 [io, read, write] {
-    let dir: String = String::from("/tmp/vow_fresh_builtins_region_routing");
-    fs_mkdir(dir);
-    let path: String = String::from("/tmp/vow_fresh_builtins_region_routing/data.txt");
+    // A per-run directory the test owns: refuse to reuse anything that exists.
+    let dir: String = String::from("/tmp/vow_fresh_builtins_");
+    dir.push_str(i64_to_string(time_unix_ms()));
+    if fs_exists(dir) == 1 {
+        return 1;
+    }
+    if fs_mkdir(dir) != 0 {
+        return 1;
+    }
+    let path: String = String::from(dir);
+    path.push_str(String::from("/data.txt"));
+    let other: String = String::from(dir);
+    other.push_str(String::from("/other.txt"));
     fs_write(path, String::from("alpha\nbeta\n"));
-    fs_write(String::from("/tmp/vow_fresh_builtins_region_routing/other.txt"), String::from("x"));
+    fs_write(other, String::from("x"));
     print_str(String::from("read="));
     print_u64(read_many(path, 1000));
     print_str(String::from("\nlines="));
@@ -115,10 +125,10 @@ fn main() -> i32 [io, read, write] {
     print_str(String::from("\nargs="));
     print_u64(if args().len() > 0 { 1 } else { 0 });
     print_str(String::from("\nproc="));
-    print_u64(proc_len(20) - 0);
+    print_u64(proc_len(20));
     print_str(String::from("\n"));
     fs_remove(path);
-    fs_remove(String::from("/tmp/vow_fresh_builtins_region_routing/other.txt"));
+    fs_remove(other);
     fs_remove_dir(dir);
     0
 }

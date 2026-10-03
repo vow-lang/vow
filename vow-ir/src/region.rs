@@ -1999,6 +1999,7 @@ pub const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[
     ),
     ("__vow_map_get", "__vow_map_get_in_arena"),
     ("__vow_btreemap_get", "__vow_btreemap_get_in_arena"),
+    ("__vow_btreemap_insert", "__vow_btreemap_insert_in_arena"),
     ("__vow_i128_to_u8_try", "__vow_i128_to_u8_try_in_arena"),
     ("__vow_i16_to_i8_try", "__vow_i16_to_i8_try_in_arena"),
     ("__vow_i16_to_u8_try", "__vow_i16_to_u8_try_in_arena"),
@@ -2070,12 +2071,7 @@ pub fn fresh_arena_base(sym: &str) -> Option<&'static str> {
 }
 
 fn fresh_builtin_extern(sym: &str) -> bool {
-    fresh_arena_variant(sym).is_some()
-        || fresh_arena_base(sym).is_some()
-        || matches!(
-            sym,
-            "__vow_btreemap_insert" | "__vow_btreemap_insert_in_arena"
-        )
+    fresh_arena_variant(sym).is_some() || fresh_arena_base(sym).is_some()
 }
 
 fn map_creation_extern(sym: &str) -> bool {
@@ -2109,9 +2105,9 @@ fn for_each_extern_store_edge(sym: &str, args: &[InstId], mut visit: impl FnMut(
             visit(args[1], args[2]);
             visit(args[1], args[3]);
         }
-        "__vow_btreemap_insert_in_arena" if args.len() >= 5 => {
-            visit(args[2], args[3]);
-            visit(args[2], args[4]);
+        "__vow_btreemap_insert_in_arena" if args.len() >= 4 => {
+            visit(args[1], args[2]);
+            visit(args[1], args[3]);
         }
         _ => {}
     }
@@ -2132,7 +2128,7 @@ fn extern_growth_target(sym: &str, args: &[InstId]) -> Option<InstId> {
         "__vow_map_insert" if !args.is_empty() => Some(args[0]),
         "__vow_map_insert_in_arena" if args.len() >= 2 => Some(args[1]),
         "__vow_btreemap_insert" if !args.is_empty() => Some(args[0]),
-        "__vow_btreemap_insert_in_arena" if args.len() >= 3 => Some(args[2]),
+        "__vow_btreemap_insert_in_arena" if args.len() >= 2 => Some(args[1]),
         _ => None,
     }
 }

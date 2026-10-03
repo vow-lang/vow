@@ -388,16 +388,6 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         }
         return String::from("__vow_btreemap_new_in_arena");
     }
-    if sym == String::from("__vow_btreemap_insert") {
-        let br2: i64 = clif_receiver_route(f, inst);
-        let bk2: i64 = region_kind(br2);
-        let grows_in_arena: bool = !clif_route_is_candidate(br2)
-            && (bk2 == REGION_KIND_BLOCK() || bk2 == REGION_KIND_CALLER());
-        if !grows_in_arena && region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_btreemap_insert_in_arena");
-    }
     if sym == String::from("__vow_map_insert") {
         let mr: i64 = clif_receiver_route(f, inst);
         if clif_route_is_candidate(mr) { return sym; }

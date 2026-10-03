@@ -16,7 +16,17 @@ fn hex_len(v: Vec<u8>) -> u64 {
 }
 
 fn main() -> i32 [io, read, write] {
-    let path: String = String::from("/tmp/vow_bench_alloc_loop_fresh_builtins.txt");
+    // A per-run directory the benchmark owns; refuse to reuse anything that exists.
+    let dir: String = String::from("/tmp/vow_bench_fresh_builtins_");
+    dir.push_str(i64_to_string(time_unix_ms()));
+    if fs_exists(dir) == 1 {
+        return 1;
+    }
+    if fs_mkdir(dir) != 0 {
+        return 1;
+    }
+    let path: String = String::from(dir);
+    path.push_str(String::from("/payload.txt"));
     fs_write(path, String::from("payload"));
     let nums: Vec<i64> = Vec::new();
     nums.push(5);
@@ -32,6 +42,7 @@ fn main() -> i32 [io, read, write] {
         i = i + 1;
     }
     fs_remove(path);
+    fs_remove_dir(dir);
     print_u64(total);
     print_str("\n");
     0

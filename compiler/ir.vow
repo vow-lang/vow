@@ -400,6 +400,7 @@ fn fresh_arena_base_extern(sym: String) -> bool {
         || sym == String::from("__vow_string_parse_u32_opt")
         || sym == String::from("__vow_map_get")
         || sym == String::from("__vow_btreemap_get")
+        || sym == String::from("__vow_btreemap_insert")
         || sym == String::from("__vow_i128_to_u8_try")
         || sym == String::from("__vow_i16_to_i8_try")
         || sym == String::from("__vow_i16_to_u8_try")

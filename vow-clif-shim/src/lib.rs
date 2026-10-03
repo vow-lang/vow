@@ -662,6 +662,7 @@ const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[
     ),
     ("__vow_map_get", "__vow_map_get_in_arena"),
     ("__vow_btreemap_get", "__vow_btreemap_get_in_arena"),
+    ("__vow_btreemap_insert", "__vow_btreemap_insert_in_arena"),
     ("__vow_i128_to_u8_try", "__vow_i128_to_u8_try_in_arena"),
     ("__vow_i16_to_i8_try", "__vow_i16_to_i8_try_in_arena"),
     ("__vow_i16_to_u8_try", "__vow_i16_to_u8_try_in_arena"),
@@ -729,10 +730,6 @@ fn fresh_arena_base(sym: &str) -> Option<&'static str> {
         .find(|(_, variant)| *variant == sym)
         .map(|(base, _)| *base)
 }
-
-/// `BTreeMap::insert` routed to a region: takes the map-growth arena and the
-/// result-option arena, in that order, ahead of the ordinary arguments.
-const BTREEMAP_INSERT_IN_ARENA: &str = "__vow_btreemap_insert_in_arena";
 
 fn routed_vec_extern(
     sym: &str,
@@ -918,24 +915,6 @@ fn routed_vec_extern(
                 (sym, None)
             } else {
                 ("__vow_btreemap_new_in_arena", Some(inst_rgn))
-            }
-        }
-        "__vow_btreemap_insert" => {
-            // Two owners: the returned option lives in `inst_rgn` (the call
-            // site appends that arena after the one returned here), while
-            // growth of the map's buffers belongs to the receiver's region.
-            let kind = receiver_rgn & 3;
-            let growth = if !receiver_route.projection_candidate
-                && (kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER)
-            {
-                receiver_rgn
-            } else {
-                region_root()
-            };
-            if (growth & 3) == REGION_KIND_ROOT && (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                (BTREEMAP_INSERT_IN_ARENA, Some(growth))
             }
         }
         _ => {
@@ -2636,7 +2615,6 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                 // Function calls
                 IOP_CALL => {
                     let mut extern_target_region: Option<i64> = None;
-                    let mut extern_takes_option_arena = false;
                     let func_ref = match dk {
                         IDATA_CALL_TARGET => {
                             let target_idx = dv;
@@ -2699,7 +2677,6 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                             let (routed_sym, target_region) =
                                 routed_vec_extern(sym, inst_rgns[ii], receiver_route);
                             extern_target_region = target_region;
-                            extern_takes_option_arena = routed_sym == BTREEMAP_INSERT_IN_ARENA;
                             if let Some(&fr) = extern_func_refs.get(routed_sym) {
                                 fr
                             } else {
@@ -2730,18 +2707,6 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                             return -1;
                         };
                         call_args.push(arena);
-                        if extern_takes_option_arena {
-                            let Some(option_arena) = arena_value_for_region(
-                                &mut builder,
-                                inst_rgns[ii],
-                                &hidden_region_values,
-                                &mut block_arena_slots,
-                                root_arena_gv,
-                            ) else {
-                                return -1;
-                            };
-                            call_args.push(option_arena);
-                        }
                     }
                     let hidden_arg_offset = call_args.len();
                     for i in 0..alen {
@@ -4037,14 +4002,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "__vow_btreemap_insert_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // map-growth arena
-            sig.params.push(AbiParam::new(types::I64)); // result-option arena
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
         "__vow_btreemap_len" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
@@ -4265,45 +4222,6 @@ mod tests {
     }
 
     #[test]
-    fn btreemap_insert_routes_growth_to_the_receiver_and_option_to_the_result() {
-        let root = region_root();
-        let map_block = region_pack(REGION_KIND_BLOCK, 1);
-        let call_block = region_pack(REGION_KIND_BLOCK, 2);
-        let insert = "__vow_btreemap_insert";
-        let routed = "__vow_btreemap_insert_in_arena";
-
-        assert_eq!(
-            routed_vec_extern(insert, root, ReceiverRoute::direct(root)),
-            (insert, None),
-            "root map and root result keep the wrapper"
-        );
-        assert_eq!(
-            routed_vec_extern(insert, call_block, ReceiverRoute::direct(map_block)),
-            (routed, Some(map_block)),
-            "growth arena is the map's region; the call site adds the result arena"
-        );
-        assert_eq!(
-            routed_vec_extern(insert, root, ReceiverRoute::direct(map_block)),
-            (routed, Some(map_block)),
-            "block-owned map with an escaping result still grows in the map's arena"
-        );
-        assert_eq!(
-            routed_vec_extern(insert, call_block, ReceiverRoute::direct(root)),
-            (routed, Some(root)),
-            "root-owned map with a block-owned result grows in the root arena"
-        );
-        assert_eq!(
-            routed_vec_extern(
-                insert,
-                call_block,
-                ReceiverRoute::projection_candidate(map_block)
-            ),
-            (routed, Some(root)),
-            "an unproven projection receiver never grows through a guessed arena"
-        );
-    }
-
-    #[test]
     fn fresh_arena_extern_signatures_prepend_the_arena_to_the_base() {
         let ctx = __vow_clif_create(0, 0);
         assert_ne!(ctx, 0);
@@ -4322,7 +4240,7 @@ mod tests {
             assert_eq!(variant_sig.params[1..], base_sig.params[..], "{variant}");
         }
         let insert = make_extern_sig("__vow_btreemap_insert_in_arena", &module_ctx.obj_module);
-        assert_eq!(insert.params.len(), 5);
+        assert_eq!(insert.params.len(), 4, "arena, map, key, value");
         assert!(insert.params.iter().all(|p| p.value_type == types::I64));
         let new = make_extern_sig("__vow_btreemap_new_in_arena", &module_ctx.obj_module);
         assert_eq!(new.params.len(), 1);

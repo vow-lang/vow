@@ -476,7 +476,8 @@ Every explicit-arena HashMap entry traps with
 `RuntimeInvariantViolation` and `reason = "null arena"` before
 dereferencing a null arena pointer. The bucket array and the map
 header are both allocated in the supplied arena: a fresh `HashMap`
-allocates a 24-byte header plus an initial 8-entry × 16-byte backing.
+allocates a 32-byte header (backing pointer, length, capacity and the owning
+arena) plus an initial 8-entry × 16-byte backing.
 Growth on `insert` uses the shared arena grow path — first
 `__vow_arena_try_extend` against the current backing, then
 `__vow_arena_alloc` + memcpy on fallback — and the new bucket array
@@ -494,32 +495,31 @@ is wired through the runtime.
 ### 3.3.1. BTreeMap and fresh-aggregate builtins
 
 `BTreeMap<i64, V>` follows the HashMap contract: its header and both parallel
-backing buffers (keys and values) live in one arena, and growth on `insert`
-uses the shared arena grow path in the **map's own** arena.
+backing buffers (keys and values) live in one arena.
 
 ```c
 void* __vow_btreemap_new(void);
 void* __vow_btreemap_new_in_arena(struct VowArena* arena);
 void* __vow_btreemap_insert(void* map, int64_t key, int64_t val);
-void* __vow_btreemap_insert_in_arena(struct VowArena* grow_arena,
-                                     struct VowArena* option_arena,
-                                     void* map, int64_t key, int64_t val);
+void* __vow_btreemap_insert_in_arena(struct VowArena* arena, void* map,
+                                     int64_t key, int64_t val);
 void* __vow_btreemap_get(const void* map, int64_t key);
 void* __vow_btreemap_get_in_arena(struct VowArena* arena, const void* map,
                                   int64_t key);
 ```
 
-`BTreeMap::insert` is the one builtin with **two independent owners**: growth
-of the map's buffers belongs to the receiver's region, while the returned
-`Option` (the replaced value, or `None`) belongs to the region of the call's
-result. They are deliberately not unified: tying the `Option` to the map would
-leak one cell per `insert` into a long-lived map. Codegen passes the
-growth arena first and the result arena second. The growth arena is the
-receiver's arena when the receiver route is a proven block or caller region,
-otherwise the root arena; the root wrapper passes the root arena twice. A
-`BTreeMap::new` is routed to its allocation region together with this
-receiver-routed growth in the same change, so a block-arena map never grows
-through the root arena.
+**A map grows in the arena that owns it.** Both `HashMap` and `BTreeMap`
+headers record their owning arena (`owner`, set by `*_new_in_arena`), and
+`insert` grows the backing buffers there, whatever arena the entry point was
+handed. The arena argument of `*_insert_in_arena` is therefore only the
+destination of the returned `Option` (`BTreeMap::insert` returns the replaced
+value) and the null-arena trap: the cell belongs to the call's region and is
+not tied to the map's lifetime, while growth belongs to the map's. Recording
+the owner in the header, instead of routing growth by the receiver's inferred
+region, keeps the buffers out of the root arena (and out of the wrong block) for
+receivers with no provable region, such as a map read from a struct field or a
+`Vec` element. A root-owned map reached through a non-root entry point takes the
+root-arena lock for the growth; the root wrappers already hold it.
 
 An `Option` cell produced by a builtin is the same bare 16-byte
 `[tag: i64, payload: i64]` object (8-byte aligned) that the lowerers allocate
@@ -567,9 +567,9 @@ arena lock unless it really is root-owned. A loop of 10^6 non-escaping
 calls therefore no longer grows resident memory (`bench/memory`
 `alloc_loop_btreemap_get`, `alloc_loop_btreemap_insert`,
 `alloc_loop_btreemap_new`, `alloc_loop_hashmap_get`, `alloc_loop_option_conv`
-and `alloc_loop_fresh_builtins`). The root-wrapper locking order is root lock
-first, then any runtime handle-table lock (`fs_read_line`, `process_*_for`); no
-path takes the root lock while holding a table lock.
+and `alloc_loop_fresh_builtins`). The I/O builtins in the table gather their data (file reads, stdin, process
+capture, handle-table access) before allocating, so a root wrapper never holds
+the root-arena lock across blocking I/O or while holding a handle-table lock.
 
 ### 3.4. Determinism
 
