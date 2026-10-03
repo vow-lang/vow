@@ -2958,7 +2958,7 @@ impl<'e> Checker<'e> {
                 Ty::Unit
             }
             ExprKind::Tuple(elems) => {
-                if self.contract_depth > 0 && !elems.is_empty() {
+                if self.contract_depth > 0 {
                     self.emit_error(
                         ErrorCode::UnsupportedFeature,
                         "tuple expressions are not supported in contract predicates",

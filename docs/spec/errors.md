@@ -432,8 +432,8 @@ trait Foo {
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
 
-A non-empty tuple expression inside a contract clause is also `UnsupportedFeature`, because tuples
-have no runtime or verifier representation:
+A tuple expression, including the empty tuple `()`, inside a contract clause is also
+`UnsupportedFeature`, because tuples have no runtime or verifier representation:
 
 ```vow
 fn f(a: i64, b: i64) -> i64 vow {

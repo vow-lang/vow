@@ -92,9 +92,9 @@ A clause must not write through any argument while it is being evaluated — not
 ## Tuples in Clauses
 
 Tuples are not first-class values (see the `let` tuple-pattern rules in `grammar.md`), so a
-non-empty tuple expression cannot appear anywhere inside a `requires`, `ensures` or `invariant`
-clause — not as a comparison operand (`requires: t != (1, 2)`) and not as the initializer of a
-`let` inside a clause block. Both compilers reject it at type-check time with
+tuple expression, including the empty tuple `()`, cannot appear anywhere inside a `requires`,
+`ensures` or `invariant` clause — not as a comparison operand (`requires: t != (1, 2)`) and not as
+the initializer of a `let` inside a clause block. Both compilers reject it at type-check time with
 `UnsupportedFeature` ("tuple expressions are not supported in contract predicates") at the
 tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.
 

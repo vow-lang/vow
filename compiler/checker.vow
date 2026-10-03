@@ -3449,7 +3449,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     if tag == EXPR_TUPLE() {
         let elems_lid: i64 = expr_a(a, eid);
         let n: i64 = list_len(a, elems_lid);
-        if e.contract_depth > 0 && n > 0 {
+        if e.contract_depth > 0 {
             env_emit_error_code(
                 e,
                 EC_UNSUPPORTED_FEATURE(),

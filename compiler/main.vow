@@ -5625,9 +5625,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("## Tuples in Clauses\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Tuples are not first-class values (see the `let` tuple-pattern rules in `grammar.md`), so a\n"));
-    r.push_str(String::from("non-empty tuple expression cannot appear anywhere inside a `requires`, `ensures` or `invariant`\n"));
-    r.push_str(String::from("clause -- not as a comparison operand (`requires: t != (1, 2)`) and not as the initializer of a\n"));
-    r.push_str(String::from("`let` inside a clause block. Both compilers reject it at type-check time with\n"));
+    r.push_str(String::from("tuple expression, including the empty tuple `()`, cannot appear anywhere inside a `requires`,\n"));
+    r.push_str(String::from("`ensures` or `invariant` clause -- not as a comparison operand (`requires: t != (1, 2)`) and not as\n"));
+    r.push_str(String::from("the initializer of a `let` inside a clause block. Both compilers reject it at type-check time with\n"));
     r.push_str(String::from("`UnsupportedFeature` (\"tuple expressions are not supported in contract predicates\") at the\n"));
     r.push_str(String::from("tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.\n"));
     r.push_str(String::from("\n"));
@@ -6874,8 +6874,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("A non-empty tuple expression inside a contract clause is also `UnsupportedFeature`, because tuples\n"));
-    r.push_str(String::from("have no runtime or verifier representation:\n"));
+    r.push_str(String::from("A tuple expression, including the empty tuple `()`, inside a contract clause is also\n"));
+    r.push_str(String::from("`UnsupportedFeature`, because tuples have no runtime or verifier representation:\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn f(a: i64, b: i64) -> i64 vow {\n"));
@@ -11075,9 +11075,9 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("## Tuples in Clauses\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Tuples are not first-class values (see the `let` tuple-pattern rules in `grammar.md`), so a\n"));
-    r.push_str(String::from("non-empty tuple expression cannot appear anywhere inside a `requires`, `ensures` or `invariant`\n"));
-    r.push_str(String::from("clause -- not as a comparison operand (`requires: t != (1, 2)`) and not as the initializer of a\n"));
-    r.push_str(String::from("`let` inside a clause block. Both compilers reject it at type-check time with\n"));
+    r.push_str(String::from("tuple expression, including the empty tuple `()`, cannot appear anywhere inside a `requires`,\n"));
+    r.push_str(String::from("`ensures` or `invariant` clause -- not as a comparison operand (`requires: t != (1, 2)`) and not as\n"));
+    r.push_str(String::from("the initializer of a `let` inside a clause block. Both compilers reject it at type-check time with\n"));
     r.push_str(String::from("`UnsupportedFeature` (\"tuple expressions are not supported in contract predicates\") at the\n"));
     r.push_str(String::from("tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.\n"));
     r.push_str(String::from("\n"));
@@ -12328,8 +12328,8 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("A non-empty tuple expression inside a contract clause is also `UnsupportedFeature`, because tuples\n"));
-    r.push_str(String::from("have no runtime or verifier representation:\n"));
+    r.push_str(String::from("A tuple expression, including the empty tuple `()`, inside a contract clause is also\n"));
+    r.push_str(String::from("`UnsupportedFeature`, because tuples have no runtime or verifier representation:\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn f(a: i64, b: i64) -> i64 vow {\n"));
