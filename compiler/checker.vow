@@ -807,7 +807,7 @@ fn check_clause_purity(e: CheckEnv, m: Module, clause_eid: i64) [io] {
 
     let write_sites: Vec<i64> = Vec::new();
     collect_may_write_sites_in_expr(e, m, clause_eid, write_sites);
-    let n_writes: u64 = write_sites.len() as u64;
+    let n_writes: u64 = write_sites.len();
     let mut wi: u64 = 0u64;
     while wi < n_writes {
         let site_eid: i64 = write_sites[wi];
@@ -2879,7 +2879,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if !is_opaque(idx_tid) && !is_coercible(e.ts, idx_tid, CTY_U64()) {
             let imsg: String = String::from("index has type '");
             imsg.push_str(ty_tag_name(ty_tag(e.ts, idx_tid)));
-            imsg.push_str(String::from("' but must be u64"));
+            imsg.push_str(String::from("' but must be 'u64'"));
             env_emit_error_code(e, EC_TYPE_MISMATCH(), imsg, expr_span(a, idx_eid));
         }
         if is_opaque(recv_tid) {
@@ -3734,7 +3734,7 @@ fn collect_may_write_sites_in_block(e: CheckEnv, m: Module, bid: i64, sites: Vec
 // check_fn/check_clause_purity call consumes the table.
 fn compute_may_write_table(e: CheckEnv, m: Module, fids: Vec<i64>) [io] {
     let a: AstArena = m.arena;
-    let n: u64 = fids.len() as u64;
+    let n: u64 = fids.len();
     let fidxs: Vec<i64> = Vec::new();
     let mut i: u64 = 0u64;
     while i < n {
@@ -3759,7 +3759,7 @@ fn compute_may_write_table(e: CheckEnv, m: Module, fids: Vec<i64>) [io] {
                 let body_bid: i64 = fn_body_bid(a, fid);
                 let sites: Vec<i64> = Vec::new();
                 collect_may_write_sites_in_block(e, m, body_bid, sites);
-                if sites.len() as u64 > 0u64 {
+                if sites.len() > 0u64 {
                     e.may_write_fns[fidx as u64] = 1;
                     changed = true;
                 }
