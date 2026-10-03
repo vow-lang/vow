@@ -1721,7 +1721,7 @@ echo ""
 # the same expected file, one escaped description per clause in declaration
 # order (`\` as `\\`, newline as `\n`); the Rust integration test
 # vow-ir/tests/contract_text_forms.rs reads the same files.
-for text_name in contract_text_forms contract_text_blocks; do
+for text_name in contract_text_forms contract_text_blocks contract_text_atoms; do
     text_fixture="tests/fixtures/contracts/${text_name}.vow"
     text_expected="tests/fixtures/contracts/${text_name}.expected"
     for text_compiler in rust self; do

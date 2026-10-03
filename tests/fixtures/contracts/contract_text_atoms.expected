@@ -1,0 +1,35 @@
+requires true
+requires false || x > 0
+requires f != 0.5
+requires f != 2.0
+requires f != 0.0
+requires f != 123456.789
+requires s != "plain"
+requires s != "tab\\there"
+requires s != "line\\nbreak"
+requires s != "quote\\"s and \\\\ back"
+requires s != "cr\\rnul\\0"
+requires s != ""
+requires v.len() > 0 as u64
+requires v[0 as u64] == x
+requires v[(x + 1) as u64] + v[x as u64] > 0
+requires p.x == p.y
+requires add(x, 1) > 0
+requires add(add(x, 1), x + 1) > 0
+requires v.len() as i64 + x > 0
+requires {\n    let z: i64 = o?;\n    z > 0\n}
+ensures result == o
+ensures result == o
+requires {\n    let _ = x;\n    true\n}
+requires {\n    let u: () = nop();\n    true\n}
+requires {\n    nop();\n    true\n}
+requires {\n    let z: ! = return o;\n    true\n}
+requires {\n    let e: Unit = Unit {};\n    true\n}
+requires {\n    let z: i64 = if x > 0 {\n    1\n} else {\n    return o\n};\n    z > 0\n}
+requires (-x) as i128 != 0
+requires x as u64 as i128 != 3
+requires y as i64 != x
+ensures (result + 1) as i128 != 0
+requires {\n    let mut i: i64 = 0;\n    while i < 3 vow {\n    requires: i >= 0\n    ensures: i >= 0\n    invariant: i >= 0\n} {\n    i = i + 1;\n}\n    i == 3\n}
+invariant i >= 0
+requires {\n    if x > 0 {\n    return;\n}\n    true\n}

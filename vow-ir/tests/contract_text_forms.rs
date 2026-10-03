@@ -7,6 +7,9 @@ const BLOCKS_FIXTURE: &str =
     include_str!("../../tests/fixtures/contracts/contract_text_blocks.vow");
 const BLOCKS_EXPECTED: &str =
     include_str!("../../tests/fixtures/contracts/contract_text_blocks.expected");
+const ATOMS_FIXTURE: &str = include_str!("../../tests/fixtures/contracts/contract_text_atoms.vow");
+const ATOMS_EXPECTED: &str =
+    include_str!("../../tests/fixtures/contracts/contract_text_atoms.expected");
 
 fn descriptions(source: &str, file: &str) -> Vec<String> {
     let (ast, diagnostics) = vow_syntax::parser::parse_module(source, file);
@@ -52,6 +55,12 @@ fn contract_descriptions_match_the_shared_expected_text() {
 fn compound_expression_descriptions_match_the_shared_expected_text() {
     let got = escaped_descriptions(BLOCKS_FIXTURE, "contract_text_blocks.vow");
     assert_eq!(got, expected_lines(BLOCKS_EXPECTED));
+}
+
+#[test]
+fn leaf_and_binding_descriptions_match_the_shared_expected_text() {
+    let got = escaped_descriptions(ATOMS_FIXTURE, "contract_text_atoms.vow");
+    assert_eq!(got, expected_lines(ATOMS_EXPECTED));
 }
 
 #[test]
