@@ -5,10 +5,6 @@ use ir
 // Constant folding of integer instructions for the verifier model. Mirrors
 // vow-verify/src/const_fold.rs; both emitters must fold identically.
 
-fn fold_is_unsigned(ty: i64) -> bool {
-    ty == ITY_U8() || ty == ITY_U16() || ty == ITY_U32() || ty == ITY_U64()
-}
-
 // Width in bits of an integer IR type the constant folder understands; 0 for
 // anything else (128-bit, floats, pointers), which is never folded by arithmetic.
 fn fold_width(ty: i64) -> i64 {
@@ -21,13 +17,13 @@ fn fold_width(ty: i64) -> i64 {
 
 // Wrap a 64-bit pattern into the value range of `ty` (sign-extended when
 // signed, zero-extended when unsigned). Mirrors `normalize_const_bits` in
-// vow-verify/src/c_emitter.rs.
+// vow-verify/src/const_fold.rs.
 fn fold_normalize(bits: i64, ty: i64) -> i64 {
     let w: i64 = fold_width(ty);
     if w == 0 || w >= 64 { return bits; }
     let p: i64 = { if w == 8 { 256 } else { if w == 16 { 65536 } else { 4294967296 } } };
     let r: i64 = ((bits % p) + p) % p;
-    if fold_is_unsigned(ty) { return r; }
+    if ity_is_unsigned(ty) { return r; }
     if r >= p / 2 { return r - p; }
     r
 }
@@ -63,7 +59,7 @@ fn fold_wrap(kind: i64, a: i64, b: i64) -> i64 {
 fn fold_checked_ok(kind: i64, a: i64, b: i64, ty: i64) -> bool {
     let r: i64 = fold_wrap(kind, a, b);
     let mut exact: bool = true;
-    if fold_is_unsigned(ty) {
+    if ity_is_unsigned(ty) {
         let ua: u64 = a as u64;
         let ub: u64 = b as u64;
         let ur: u64 = r as u64;
@@ -101,12 +97,12 @@ fn fold_known(known: Vec<i64>, id: i64) -> bool {
 // wrapping and checked + - * over constants, integer casts of constants, and a
 // Phi whose every Upsilon carries the same constant. Facts only grow from known
 // operands, so the fixpoint is sound and cyclic phis stay unknown. Mirrors
-// `fold_const_bits` in vow-verify/src/c_emitter.rs.
+// `fold_const_bits` in vow-verify/src/const_fold.rs.
 //
 // Result is indexed by instruction id. A pattern >= 2^63 saturates to i64::MAX
 // so every entry that is not -1 compares correctly against a model capacity.
 // -1 marks an instruction that is not a provable integer constant.
-fn build_const_len_by_id(f: IrFunction) -> Vec<i64> {
+fn build_const_value_by_id(f: IrFunction) -> Vec<i64> {
     let blocks: Vec<IrBlock> = f.blocks;
     let known: Vec<i64> = Vec::new();
     let bits: Vec<i64> = Vec::new();
@@ -217,41 +213,15 @@ fn build_const_len_by_id(f: IrFunction) -> Vec<i64> {
             k = k + 1;
         }
     }
-    let const_len_by_id: Vec<i64> = Vec::new();
+    let const_value_by_id: Vec<i64> = Vec::new();
     let mut ri: i64 = 0;
     while ri < n {
         if known[ri as u64] == 1 {
-            const_len_by_id.push({ if bits[ri as u64] < 0 { 9223372036854775807 } else { bits[ri as u64] } });
+            const_value_by_id.push({ if bits[ri as u64] < 0 { 9223372036854775807 } else { bits[ri as u64] } });
         } else {
-            const_len_by_id.push(0 - 1);
+            const_value_by_id.push(0 - 1);
         }
         ri = ri + 1;
     }
-    const_len_by_id
-}
-
-// A constant length >= max (or a negative / >= 2^63 one) is outside the model
-// capacity.
-fn raw_parts_const_len_exceeds_model(const_len_by_id: Vec<i64>, len_arg: i64, max: i64) -> bool {
-    if len_arg < 0 || len_arg >= const_len_by_id.len() as i64 {
-        return false;
-    }
-    let v: i64 = const_len_by_id[len_arg as u64];
-    v >= 0 && v >= max
-}
-
-fn len_is_const(const_len_by_id: Vec<i64>, len_arg: i64) -> bool {
-    if len_arg < 0 || len_arg >= const_len_by_id.len() as i64 {
-        return false;
-    }
-    const_len_by_id[len_arg as u64] >= 0
-}
-
-// True when the source pointer is provably the null constant, so the model's
-// capacity assumption restricts nothing.
-fn raw_parts_null_source(const_len_by_id: Vec<i64>, ptr_arg: i64) -> bool {
-    if ptr_arg < 0 || ptr_arg >= const_len_by_id.len() as i64 {
-        return false;
-    }
-    const_len_by_id[ptr_arg as u64] == 0
+    const_value_by_id
 }

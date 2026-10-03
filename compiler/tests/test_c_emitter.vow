@@ -857,11 +857,11 @@ fn fold_u64_op(id: i64, op: i64, a: i64, b: i64) -> IrInst {
     ir_inst_new(id, op, ITY_U64(), args, IDATA_NONE(), 0, 0, String::from(""))
 }
 
-fn fold_phi_of_two(a: i64, b: i64) -> Vec<IrInst> {
+fn fold_phi_of_two_typed(a: i64, b: i64, phi_ty: i64) -> Vec<IrInst> {
     let body: Vec<IrInst> = Vec::new();
     body.push(fold_const_u64(1, a));
     body.push(fold_const_u64(2, b));
-    body.push(ir_inst_new(3, IOP_PHI(), ITY_U64(), Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+    body.push(ir_inst_new(3, IOP_PHI(), phi_ty, Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
     let a1: Vec<i64> = Vec::new();
     a1.push(1);
     body.push(ir_inst_new(4, IOP_UPSILON(), ITY_UNIT(), a1, IDATA_PHI_TARGET(), 3, 0, String::from("")));
@@ -869,6 +869,10 @@ fn fold_phi_of_two(a: i64, b: i64) -> Vec<IrInst> {
     a2.push(2);
     body.push(ir_inst_new(5, IOP_UPSILON(), ITY_UNIT(), a2, IDATA_PHI_TARGET(), 3, 0, String::from("")));
     body
+}
+
+fn fold_phi_of_two(a: i64, b: i64) -> Vec<IrInst> {
+    fold_phi_of_two_typed(a, b, ITY_U64())
 }
 
 fn fails_closed(c: String, label: String) -> bool {
@@ -1015,15 +1019,12 @@ fn check_raw_parts_phi_of_null_is_empty(extern_name: String, base_code: i64) -> 
         let phi_ty: i64 = { if which == 0 { ITY_U64() } else { ITY_PTR() } };
         let insts: Vec<IrInst> = Vec::new();
         insts.push(mk_inst_arg(0, ITY_U64(), 0));
-        insts.push(fold_const_u64(1, 0));
-        insts.push(fold_const_u64(2, 0));
-        insts.push(ir_inst_new(3, IOP_PHI(), phi_ty, Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
-        let a1: Vec<i64> = Vec::new();
-        a1.push(1);
-        insts.push(ir_inst_new(4, IOP_UPSILON(), ITY_UNIT(), a1, IDATA_PHI_TARGET(), 3, 0, String::from("")));
-        let a2: Vec<i64> = Vec::new();
-        a2.push(2);
-        insts.push(ir_inst_new(5, IOP_UPSILON(), ITY_UNIT(), a2, IDATA_PHI_TARGET(), 3, 0, String::from("")));
+        let phi_body: Vec<IrInst> = fold_phi_of_two_typed(0, 0, phi_ty);
+        let mut pi: u64 = 0u64;
+        while pi < phi_body.len() {
+            insts.push(phi_body[pi]);
+            pi = pi + 1u64;
+        }
         let call_args: Vec<i64> = Vec::new();
         call_args.push(3);
         call_args.push(0);
@@ -1083,18 +1084,57 @@ fn check_string_new_model(extern_name: String, in_arena: bool, base_code: i64) -
     0
 }
 
-// The null-pointer model mirrors the runtime: from_raw_parts_copy of a null
-// pointer is empty whatever the length, and the capacity assumption does not
-// constrain that case. Mirrors raw_parts_copy_null_pointer_is_empty in
+// `len_extern(c)` over a collection that is parameter 0 (a GetArg), or, when
+// via_field_get, a FieldGet of a constant base. The caps are all 16.
+fn collection_len_c(len_extern: String, via_field_get: bool) -> String {
+    let insts: Vec<IrInst> = Vec::new();
+    let params: Vec<i64> = Vec::new();
+    let mut coll: i64 = 0;
+    if via_field_get {
+        insts.push(ir_inst_new(0, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from("")));
+        let fargs: Vec<i64> = Vec::new();
+        fargs.push(0);
+        insts.push(ir_inst_new(1, IOP_FIELD_GET(), ITY_PTR(), fargs, IDATA_FIELD(), 0, 0, String::from("")));
+        coll = 1;
+    } else {
+        insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+        params.push(ITY_PTR());
+    }
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(coll);
+    insts.push(mk_inst_call_extern(10, ITY_I64(), call_args, len_extern));
+    insts.push(mk_inst_return(11, 10));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(0, String::from("collection_len"), params, ITY_I64(), blocks));
+    emit_c_module(mk_module(funcs), 16, 16, 16, 16)
+}
+
+// Every site that restricts a collection length to the model capacity carries a
+// marker, for every kind and on both the parameter and the struct-field path.
+// Mirrors collection_lengths_carry_model_bound_markers in
 // vow-verify/src/c_emitter.rs.
-fn check_raw_parts_null_pointer_is_empty(extern_name: String, base_code: i64) -> i64 {
-    let c: String = emit_raw_parts_copy_c(extern_name, ITY_U64());
-    if !c.contains(String::from("v2.len = v0 == 0 ? 0 : v1;")) { return base_code; }
-    if !c.contains(String::from("__ESBMC_assume(v0 == 0 || (v1 <")) { return base_code + 1; }
+fn check_collection_length_markers(len_extern: String, name: String, slug: String, base_code: i64) -> i64 {
+    let mut which: i64 = 0;
+    while which < 2 {
+        let via_field_get: bool = which == 1;
+        let c: String = collection_len_c(len_extern, via_field_get);
+        let ids: String = { if via_field_get { String::from("1") } else { String::from("0") } };
+        let lead: String = { if via_field_get { str3(String::from("  /* FieldGet -> "), slug, String::from(" */ ")) } else { str3(String::from("  __vow_"), slug, String::from("_t v0;\n  ")) } };
+        let want: String = str5(lead, String::from("v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n  __ESBMC_assume(v"),
+            str5(ids, String::from(".len <= 16); /* vow:model-bound "), name, String::from(" 16 */\n"), String::new()));
+        if !c.contains(want) { return base_code + which; }
+        let sorted: String = str3(String::from("  for (uint64_t __si = 0; __si + 1 < v"), ids, String::from(".len; __si++)\n    __ESBMC_assume(v"));
+        let is_btree: bool = name == String::from("BTreeMap");
+        if is_btree && !c.contains(sorted) { return base_code + 2 + which; }
+        if !is_btree && c.contains(String::from("__si")) { return base_code + 4 + which; }
+        which = which + 1;
+    }
     0
 }
 
-fn check_const_len_by_id_table() -> i64 {
+fn check_const_value_by_id_table() -> i64 {
     let insts: Vec<IrInst> = Vec::new();
     insts.push(mk_inst_arg(0, ITY_I64(), 0));
     insts.push(ir_inst_new(1, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 15, 0, String::from("")));
@@ -1105,7 +1145,7 @@ fn check_const_len_by_id_table() -> i64 {
     blocks.push(mk_block(0, insts));
     let f: IrFunction = mk_function(30, String::from("const_lens"), Vec::new(), ITY_UNIT(), blocks);
 
-    let table: Vec<i64> = build_const_len_by_id(f);
+    let table: Vec<i64> = build_const_value_by_id(f);
     if table.len() != 6 { return 260; }
     if raw_parts_const_len_exceeds_model(table, 0, 16) { return 261; }
     if raw_parts_const_len_exceeds_model(table, 1, 16) { return 262; }
@@ -1119,7 +1159,7 @@ fn check_const_len_by_id_table() -> i64 {
     if raw_parts_const_len_exceeds_model(table, 0 - 1, 16) { return 270; }
 
     let empty: IrFunction = mk_function(31, String::from("empty_lens"), Vec::new(), ITY_UNIT(), Vec::new());
-    if build_const_len_by_id(empty).len() != 0 { return 271; }
+    if build_const_value_by_id(empty).len() != 0 { return 271; }
     0
 }
 
@@ -1370,7 +1410,7 @@ fn main() -> i32 {
     if r25 != 0 { return i64_to_i32_wrap(r25); }
     let r26: i64 = check_raw_parts_copy_const_len(String::from("__vow_string_from_raw_parts_copy"), String::from("string capacity"), 250);
     if r26 != 0 { return i64_to_i32_wrap(r26); }
-    let r27: i64 = check_const_len_by_id_table();
+    let r27: i64 = check_const_value_by_id_table();
     if r27 != 0 { return i64_to_i32_wrap(r27); }
     let r28: i64 = check_str_starts_with();
     if r28 != 0 { return i64_to_i32_wrap(r28); }
@@ -1382,10 +1422,6 @@ fn main() -> i32 {
     if r31 != 0 { return i64_to_i32_wrap(r31); }
     let r32: i64 = check_raw_parts_folded_len(String::from("__vow_string_from_raw_parts_copy"), String::from("string capacity"), 320);
     if r32 != 0 { return i64_to_i32_wrap(r32); }
-    let r33: i64 = check_raw_parts_null_pointer_is_empty(String::from("__vow_vec_from_raw_parts_copy_val"), 340);
-    if r33 != 0 { return i64_to_i32_wrap(r33); }
-    let r34: i64 = check_raw_parts_null_pointer_is_empty(String::from("__vow_string_from_raw_parts_copy"), 342);
-    if r34 != 0 { return i64_to_i32_wrap(r34); }
     let r35: i64 = check_raw_parts_literal_null_is_empty(String::from("__vow_vec_from_raw_parts_copy_val"), 400);
     if r35 != 0 { return i64_to_i32_wrap(r35); }
     let r36: i64 = check_raw_parts_literal_null_is_empty(String::from("__vow_string_from_raw_parts_copy"), 420);
@@ -1398,5 +1434,13 @@ fn main() -> i32 {
     if r39 != 0 { return i64_to_i32_wrap(r39); }
     let r40: i64 = check_string_new_model(String::from("__vow_string_new_in_arena"), true, 460);
     if r40 != 0 { return i64_to_i32_wrap(r40); }
+    let r41: i64 = check_collection_length_markers(String::from("__vow_vec_len"), String::from("Vec"), String::from("vec"), 500);
+    if r41 != 0 { return i64_to_i32_wrap(r41); }
+    let r42: i64 = check_collection_length_markers(String::from("__vow_string_len"), String::from("String"), String::from("string"), 510);
+    if r42 != 0 { return i64_to_i32_wrap(r42); }
+    let r43: i64 = check_collection_length_markers(String::from("__vow_map_len"), String::from("HashMap"), String::from("hashmap"), 520);
+    if r43 != 0 { return i64_to_i32_wrap(r43); }
+    let r44: i64 = check_collection_length_markers(String::from("__vow_btreemap_len"), String::from("BTreeMap"), String::from("btreemap"), 530);
+    if r44 != 0 { return i64_to_i32_wrap(r44); }
     0
 }
