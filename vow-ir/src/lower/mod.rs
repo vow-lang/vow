@@ -6825,7 +6825,7 @@ fn sum(v: Vec<i64>) -> i64 {
 module TabledMethodLowering
 
 fn exercise(hay: String, needle: String, m: BTreeMap<i64, i64>) -> i64 {
-    let n: i64 = hay.len();
+    let n: i64 = hay.len() as i64;
     let found: bool = hay.contains(needle);
     let hit: Option<i64> = m.get(n);
     let mut v: Vec<i64> = Vec::new();
