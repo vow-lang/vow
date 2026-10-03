@@ -3399,6 +3399,10 @@ not statically known, such as `String::from_cstr`, produce a nondeterministic
 length (0 to max-1). `string_matches_literal_at` is modeled against the
 literal's concrete bytes and byte length; the third argument must be a string
 literal so the verifier never has to infer static text from a dynamic `String`.
+A constant length passed to `String::from_raw_parts_copy` or
+`Vec::from_raw_parts_copy` that does not fit the model capacity fails closed
+with the capacity-limit diagnostic rather than being assumed away, so no
+postcondition after the call is proven vacuously.
 
 ## Blame Model
 
@@ -8676,6 +8680,10 @@ not statically known, such as `String::from_cstr`, produce a nondeterministic
 length (0 to max-1). `string_matches_literal_at` is modeled against the
 literal's concrete bytes and byte length; the third argument must be a string
 literal so the verifier never has to infer static text from a dynamic `String`.
+A constant length passed to `String::from_raw_parts_copy` or
+`Vec::from_raw_parts_copy` that does not fit the model capacity fails closed
+with the capacity-limit diagnostic rather than being assumed away, so no
+postcondition after the call is proven vacuously.
 
 ## Blame Model
 

@@ -642,13 +642,38 @@ fn emit_bounds_assert(out: String, idx: i64, container: i64, idx_ty: i64, label:
         cemit_str2(String::from(".len, \""), cemit_str2(label, String::from("\");\n")))));
 }
 
-// Emit the length assumption and result length for from_raw_parts_copy.
-//
-// A u64 length argument is bounded only from above because `v{len} >= 0`
-// would be vacuous. A signed argument (an i64 literal constant) keeps its
-// `>= 0` guard.
-fn emit_raw_parts_len(out: String, id: i64, len_arg: i64, len_ty: i64, max: i64) {
+// A constant length >= max (or a u64 constant >= 2^63, stored negative) is
+// outside the model capacity.
+fn raw_parts_const_len_exceeds_model(f: IrFunction, len_arg: i64, max: i64) -> bool {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: u64 = 0u64;
+    while bi < blocks.len() as u64 {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let mut ii: u64 = 0u64;
+        while ii < insts.len() as u64 {
+            let inst: IrInst = insts[ii];
+            if inst.id == len_arg && (inst.op == IOP_CONST_U64() || inst.op == IOP_CONST_I64()) {
+                return inst.dv < 0 || inst.dv >= max;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}
+
+// Length model for from_raw_parts_copy. A constant length outside the model
+// capacity fails closed with the capacity label (an assumption would be
+// unsatisfiable and prove everything after it). A u64 length drops the vacuous
+// >= 0 lower bound.
+fn emit_raw_parts_len(out: String, f: IrFunction, id: i64, len_arg: i64, len_ty: i64, max: i64, capacity_label: String) {
     let ids: String = i64_to_string(id);
+    if raw_parts_const_len_exceeds_model(f, len_arg, max) {
+        out.push_str(str3(String::from("  __ESBMC_assert(0, \""), capacity_label, String::from("\");\n")));
+        out.push_str(str3(String::from("  v"), ids, String::from(".len = 0;\n")));
+        return;
+    }
     let ls: String = i64_to_string(len_arg);
     let lower: String = { if ity_is_unsigned(len_ty) { String::new() } else { str3(String::from("v"), ls, String::from(" >= 0 && ")) } };
     out.push_str(str5(String::from("  __ESBMC_assume("), lower,
@@ -1638,7 +1663,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>,
                 return;
             }
             if str_starts_with(ds, String::from("__vow_vec_")) {
-                emit_vec_op(out, inst, inst_ty_by_id, vec_max);
+                emit_vec_op(out, inst, f, inst_ty_by_id, vec_max);
                 return;
             }
             if str_starts_with(ds, String::from("__vow_string_")) {
@@ -1799,7 +1824,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>,
     emit_unsupported_for_verification(out, inst);
 }
 
-fn emit_vec_op(out: String, inst: IrInst, inst_ty_by_id: Vec<i64>, vec_max: i64) {
+fn emit_vec_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, vec_max: i64) {
     let id: i64 = inst.id;
     let ds: String = inst.ds;
     let iargs: Vec<i64> = inst.args;
@@ -1814,7 +1839,7 @@ fn emit_vec_op(out: String, inst: IrInst, inst_ty_by_id: Vec<i64>, vec_max: i64)
     }
     if ds == String::from("__vow_vec_from_raw_parts_copy_val") {
         let len_arg: i64 = iargs[1];
-        emit_raw_parts_len(out, id, len_arg, inst_ty_of(inst_ty_by_id, len_arg), vec_max);
+        emit_raw_parts_len(out, f, id, len_arg, inst_ty_of(inst_ty_by_id, len_arg), vec_max, String::from("vec capacity"));
         return;
     }
     if ds == String::from("__vow_vec_pin_to_root_val") {
@@ -2026,7 +2051,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
     }
     if ds == String::from("__vow_string_from_raw_parts_copy") {
         let len_arg: i64 = iargs[1];
-        emit_raw_parts_len(out, id, len_arg, inst_ty_of(inst_ty_by_id, len_arg), string_max);
+        emit_raw_parts_len(out, f, id, len_arg, inst_ty_of(inst_ty_by_id, len_arg), string_max, String::from("string capacity"));
         return;
     }
     if ds == String::from("__vow_string_clone") || ds == String::from("__vow_string_clone_in_arena") || ds == String::from("__vow_string_pin_to_root") {

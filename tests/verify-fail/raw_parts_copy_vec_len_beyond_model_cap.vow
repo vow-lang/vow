@@ -1,0 +1,14 @@
+// TEST: category overflow
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-fn "big"
+// TEST: counterexample-blame none
+// A constant length outside the verifier's model capacity must fail closed;
+// assuming it away would make the (true) postcondition below vacuous.
+module RawPartsCopyVecLenBeyondModelCap
+
+fn big() -> i64 vow {
+    ensures: result == 1
+} {
+    let v: Vec<i64> = Vec::from_raw_parts_copy(0, 300);
+    1
+}

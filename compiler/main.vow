@@ -5541,6 +5541,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("length (0 to max-1). `string_matches_literal_at` is modeled against the\n"));
     r.push_str(String::from("literal's concrete bytes and byte length; the third argument must be a string\n"));
     r.push_str(String::from("literal so the verifier never has to infer static text from a dynamic `String`.\n"));
+    r.push_str(String::from("A constant length passed to `String::from_raw_parts_copy` or\n"));
+    r.push_str(String::from("`Vec::from_raw_parts_copy` that does not fit the model capacity fails closed\n"));
+    r.push_str(String::from("with the capacity-limit diagnostic rather than being assumed away, so no\n"));
+    r.push_str(String::from("postcondition after the call is proven vacuously.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Blame Model\n"));
     r.push_str(String::from("\n"));
@@ -10842,6 +10846,10 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("length (0 to max-1). `string_matches_literal_at` is modeled against the\n"));
     r.push_str(String::from("literal's concrete bytes and byte length; the third argument must be a string\n"));
     r.push_str(String::from("literal so the verifier never has to infer static text from a dynamic `String`.\n"));
+    r.push_str(String::from("A constant length passed to `String::from_raw_parts_copy` or\n"));
+    r.push_str(String::from("`Vec::from_raw_parts_copy` that does not fit the model capacity fails closed\n"));
+    r.push_str(String::from("with the capacity-limit diagnostic rather than being assumed away, so no\n"));
+    r.push_str(String::from("postcondition after the call is proven vacuously.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Blame Model\n"));
     r.push_str(String::from("\n"));

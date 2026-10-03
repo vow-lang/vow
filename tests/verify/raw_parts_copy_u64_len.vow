@@ -1,0 +1,18 @@
+// TEST: category bounds
+module RawPartsCopyU64LenVerify
+
+fn string_copy_len(p: i64, n: u64) -> u64 vow {
+    requires: p != 0
+    ensures: result == n
+} {
+    let s: String = String::from_raw_parts_copy(p, n);
+    s.len()
+}
+
+fn vec_copy_len(p: i64, n: u64) -> u64 vow {
+    requires: p != 0
+    ensures: result == n
+} {
+    let v: Vec<u8> = Vec::from_raw_parts_copy(p, n);
+    v.len()
+}

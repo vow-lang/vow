@@ -159,13 +159,31 @@ fn emit_bounds_assert(idx: u32, container: u32, idx_ty: Ty, label: &str, out: &m
     }
 }
 
-/// Emit the length assumption and result length for `from_raw_parts_copy`.
-///
-/// A `u64` length argument is bounded only from above because `v{len} >= 0`
-/// would be vacuous. A signed argument (an `i64` literal constant) keeps its
-/// `>= 0` guard.
-fn emit_raw_parts_len(id: u32, len: u32, len_ty: Ty, max: usize, out: &mut String) {
-    let lower = if ty_is_unsigned(len_ty) {
+/// Length model for `from_raw_parts_copy`. A constant length outside the model
+/// capacity fails closed with the capacity label (an assumption would be
+/// unsatisfiable and prove everything after it). A `u64` length drops the
+/// vacuous `>= 0` lower bound.
+fn emit_raw_parts_len(
+    id: u32,
+    len: u32,
+    inst_by_id: &HashMap<u32, &Inst>,
+    max: usize,
+    capacity_label: &str,
+    out: &mut String,
+) {
+    let cap = max as u64;
+    let constant_exceeds_model = inst_by_id.get(&len).is_some_and(|i| match i.data {
+        InstData::ConstU64(v) => v >= cap,
+        InstData::ConstI64(v) => v < 0 || v as u64 >= cap,
+        _ => false,
+    });
+    if constant_exceeds_model {
+        out.push_str(&format!(
+            "  __ESBMC_assert(0, \"{capacity_label}\");\n  v{id}.len = 0;\n"
+        ));
+        return;
+    }
+    let lower = if ty_is_unsigned(operand_ty(len, inst_by_id)) {
         String::new()
     } else {
         format!("v{len} >= 0 && ")
@@ -1358,8 +1376,9 @@ fn emit_inst(
                         emit_raw_parts_len(
                             id,
                             len,
-                            operand_ty(len, inst_by_id),
+                            inst_by_id,
                             limits.vec_max,
+                            "vec capacity",
                             out,
                         );
                     }
@@ -1469,8 +1488,9 @@ fn emit_inst(
                         emit_raw_parts_len(
                             id,
                             len,
-                            operand_ty(len, inst_by_id),
+                            inst_by_id,
                             limits.string_max,
+                            "string capacity",
                             out,
                         );
                     }
@@ -8480,6 +8500,14 @@ mod tests {
     }
 
     fn raw_parts_copy_fn(extern_name: &str, len_ty: Ty) -> Function {
+        raw_parts_copy_fn_with_len(extern_name, len_ty, None)
+    }
+
+    fn raw_parts_copy_fn_with_len(
+        extern_name: &str,
+        len_ty: Ty,
+        constant_len: Option<(Opcode, InstData)>,
+    ) -> Function {
         use vow_ir::InstId;
         let inst = |id: u32, opcode: Opcode, ty: Ty, args: Vec<u32>, data: InstData| Inst {
             id: InstId(id),
@@ -8502,7 +8530,10 @@ mod tests {
                 id: BlockId(0),
                 insts: vec![
                     inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
-                    inst(1, Opcode::GetArg, len_ty, vec![], InstData::ArgIndex(1)),
+                    match constant_len {
+                        Some((opcode, data)) => inst(1, opcode, len_ty, vec![], data),
+                        None => inst(1, Opcode::GetArg, len_ty, vec![], InstData::ArgIndex(1)),
+                    },
                     inst(
                         2,
                         Opcode::Call,
@@ -8538,6 +8569,55 @@ mod tests {
             let c = emit_c_function(&signed, &HashMap::new(), &VerifyLimits::default());
             let expected = format!("__ESBMC_assume(v1 >= 0 && v1 < {cap});\n  v2.len = v1;");
             assert!(c.contains(&expected), "{extern_name} i64 len: {c}");
+        }
+    }
+
+    /// A constant length outside the model capacity cannot be assumed (the
+    /// assumption would be unsatisfiable and prove everything after it), so it
+    /// fails closed with the capacity label; in-range constants keep the assume.
+    #[test]
+    fn raw_parts_copy_constant_len_beyond_model_fails_closed() {
+        let cases = [
+            (
+                "__vow_vec_from_raw_parts_copy_val",
+                VEC_MODEL_CAP,
+                "vec capacity",
+            ),
+            (
+                "__vow_string_from_raw_parts_copy",
+                STRING_MODEL_CAP,
+                "string capacity",
+            ),
+        ];
+        for (extern_name, cap, label) in cases {
+            let beyond = [
+                (Ty::U64, Opcode::ConstU64, InstData::ConstU64(cap as u64)),
+                (Ty::U64, Opcode::ConstU64, InstData::ConstU64(u64::MAX)),
+                (
+                    Ty::U64,
+                    Opcode::ConstU64,
+                    InstData::ConstU64(10_000_000_000_000_000_000),
+                ),
+                (Ty::I64, Opcode::ConstI64, InstData::ConstI64(cap as i64)),
+                (Ty::I64, Opcode::ConstI64, InstData::ConstI64(-1)),
+            ];
+            for (ty, opcode, data) in beyond {
+                let f = raw_parts_copy_fn_with_len(extern_name, ty, Some((opcode, data.clone())));
+                let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
+                let expected = format!("__ESBMC_assert(0, \"{label}\");\n  v2.len = 0;");
+                assert!(c.contains(&expected), "{extern_name} {data:?}: {c}");
+                assert!(
+                    !c.contains("__ESBMC_assume(v1"),
+                    "{extern_name} {data:?}: {c}"
+                );
+            }
+
+            let in_range = (Opcode::ConstU64, InstData::ConstU64(cap as u64 - 1));
+            let f = raw_parts_copy_fn_with_len(extern_name, Ty::U64, Some(in_range));
+            let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
+            let expected = format!("__ESBMC_assume(v1 < {cap});\n  v2.len = v1;");
+            assert!(c.contains(&expected), "{extern_name} in range: {c}");
+            assert!(!c.contains(label), "{extern_name} in range: {c}");
         }
     }
 }

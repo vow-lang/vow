@@ -1,0 +1,14 @@
+// TEST: category callee-blame
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-fn "small"
+// TEST: counterexample-blame callee
+// An in-range constant length keeps the plain assumption, so a false
+// postcondition after the call is still reported.
+module RawPartsCopyStringInRangeLenStillChecked
+
+fn small() -> i64 vow {
+    ensures: result == 2
+} {
+    let s: String = String::from_raw_parts_copy(0, 5);
+    1
+}
