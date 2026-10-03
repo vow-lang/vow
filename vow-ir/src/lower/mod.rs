@@ -6490,11 +6490,11 @@ fn unsigned_max() -> u128 {
 module ConstWidths
 
 const A: u64 = 18446744073709551615;
-const B: i8 = -128;
-const C: u32 = 7;
-const D: i128 = -5;
+const B: i8 = -1;
+const C: u32 = 3000000000;
+const D: i128 = -18446744073709551625;
 const E: i64 = -1;
-const F: u128 = 340282366920938463463374607431768211455;
+const F: u128 = 55340232221128654855;
 const G: i16 = -2;
 
 fn a() -> u64 { A }
@@ -6510,11 +6510,15 @@ fn g() -> i16 { G }
 
         let expected = [
             ("a", Ty::U64, InstData::ConstU64(u64::MAX)),
-            ("b", Ty::I8, InstData::ConstU8(128)),
-            ("c", Ty::U32, InstData::ConstI32(7)),
-            ("d", Ty::I128, InstData::ConstI128(-5)),
+            ("b", Ty::I8, InstData::ConstU8(255)),
+            ("c", Ty::U32, InstData::ConstI32(3_000_000_000_u32 as i32)),
+            (
+                "d",
+                Ty::I128,
+                InstData::ConstI128(-18_446_744_073_709_551_625),
+            ),
             ("e", Ty::I64, InstData::ConstI64(-1)),
-            ("f", Ty::U128, InstData::ConstU128(u128::MAX)),
+            ("f", Ty::U128, InstData::ConstU128((3_u128 << 64) | 7)),
             ("g", Ty::I16, InstData::ConstI32(-2)),
         ];
         for (name, ty, data) in expected {
@@ -6523,12 +6527,15 @@ fn g() -> i16 { G }
                 .iter()
                 .find(|func| func.name == name)
                 .unwrap_or_else(|| panic!("missing function {name}"));
-            assert!(
-                insts_of(func)
-                    .iter()
-                    .any(|inst| inst.ty == ty && inst.data == data),
-                "function {name} must lower its const as {ty:?} {data:?}"
+            let insts = insts_of(func);
+            assert_eq!(
+                insts.len(),
+                2,
+                "function {name} must lower to exactly a const and a return"
             );
+            let inst = insts[0];
+            assert_eq!(inst.ty, ty, "function {name} const type");
+            assert_eq!(inst.data, data, "function {name} const data");
         }
     }
 
