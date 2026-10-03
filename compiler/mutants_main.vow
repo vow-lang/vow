@@ -426,7 +426,8 @@ fn write_outcomes_json(output_dir: String, sites: Vec<Site>, statuses: Vec<i64>,
         // Outcome.id is the position within THIS shard's mutants.json array,
         // per the schema. Use the local index `i` rather than the global
         // mutant id (which would only be valid for shard 0/1).
-        body.push_str(outcome_record_json(i, sites[i as u64], statuses[i as u64], tiers[i as u64], oracle_mss[i as u64]));
+        let iu: u64 = i as u64;
+        body.push_str(outcome_record_json(i, sites[iu], statuses[iu], tiers[iu], oracle_mss[iu]));
         i = i + 1;
     }
     body.push_str(String::from("\n]}\n"));

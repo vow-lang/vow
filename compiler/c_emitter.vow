@@ -2356,7 +2356,7 @@ fn emit_map_op(out: String, inst: IrInst, hashmap_max: i64) {
 
     // _in_arena variants share their bodies with the root forms; the leading
     // arena pointer is opaque to the verifier and is consumed via arg_offset.
-    let arg_offset: i64 = {
+    let arg_offset: u64 = {
         if ds == String::from("__vow_map_new_in_arena") { 1 }
         else if ds == String::from("__vow_map_insert_in_arena") { 1 }
         else if ds == String::from("__vow_map_remove_in_arena") { 1 }
@@ -2375,9 +2375,9 @@ fn emit_map_op(out: String, inst: IrInst, hashmap_max: i64) {
         return;
     }
     if ds == String::from("__vow_map_insert") || ds == String::from("__vow_map_insert_in_arena") {
-        let mp: i64 = iargs[arg_offset as u64];
-        let k: i64 = iargs[(arg_offset + 1) as u64];
-        let v: i64 = iargs[(arg_offset + 2) as u64];
+        let mp: i64 = iargs[arg_offset];
+        let k: i64 = iargs[arg_offset + 1];
+        let v: i64 = iargs[arg_offset + 2];
         let ms: String = i64_to_string(mp);
         let ks: String = i64_to_string(k);
         let vs: String = i64_to_string(v);
@@ -2428,8 +2428,8 @@ fn emit_map_op(out: String, inst: IrInst, hashmap_max: i64) {
         return;
     }
     if ds == String::from("__vow_map_remove") || ds == String::from("__vow_map_remove_in_arena") {
-        let mp: i64 = iargs[arg_offset as u64];
-        let k: i64 = iargs[(arg_offset + 1) as u64];
+        let mp: i64 = iargs[arg_offset];
+        let k: i64 = iargs[arg_offset + 1];
         let ms: String = i64_to_string(mp);
         let ks: String = i64_to_string(k);
         out.push_str(str3(String::from("  for (uint64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
