@@ -935,7 +935,7 @@ fn parse_multi_property_verdicts(output: String, ids: Vec<i64>, proven: Vec<i64>
                 }
                 if found >= 0 {
                     if !is_proven {
-                        proven[found] = 0;
+                        proven[found as u64] = 0;
                     }
                 } else {
                     ids.push(id);
@@ -1341,7 +1341,7 @@ fn build_name_map(f: IrFunction, map_keys: Vec<String>, map_vals: Vec<String>) {
                     let vk: String = String::from("v");
                     vk.push_str(i64_to_string(inst.id));
                     map_keys.push(vk);
-                    map_vals.push(param_names[arg_idx]);
+                    map_vals.push(param_names[arg_idx as u64]);
                 }
             }
             ii = ii + 1;

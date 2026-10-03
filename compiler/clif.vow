@@ -32,13 +32,13 @@ fn clif_store_effect_advance(flat: Vec<i64>, start: i64) -> i64 {
     if start + 1 >= flat_len {
         return flat_len;
     }
-    let kind: i64 = flat[start + 1];
+    let kind: i64 = flat[(start + 1) as u64];
     let mut i: i64 = start + 2;
     if kind == RSUM_KIND_ALIAS_OF() {
         i = i + 1;
     } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
         if i < flat_len {
-            let raw_n: i64 = flat[i];
+            let raw_n: i64 = flat[i as u64];
             let n: i64 = {
                 if raw_n < 0 {
                     0
@@ -85,7 +85,7 @@ fn clif_hidden_store_targets(flat: Vec<i64>) -> Vec<i64> {
     let targets: Vec<i64> = Vec::new();
     let mut i: i64 = 0;
     while i + 1 < flat.len() as i64 {
-        let target: i64 = flat[i];
+        let target: i64 = flat[i as u64];
         // Rust collects all targets then sorts/dedups; this dedups before sorting.
         // Both paths produce the same sorted unique slot order.
         if !clif_i64_vec_contains(targets, target) {
