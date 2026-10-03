@@ -14634,29 +14634,30 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     let json: String = String::from("{\"contracts\":[");
     let mut ci: i64 = 0;
     while ci < total {
+        let cu: u64 = ci as u64;
         if ci > 0 {
             json.push_str(String::from(","));
         }
         json.push_str(String::from("{\"vow_id\":"));
-        json.push_str(i64_to_string(e_vow_ids[ci as u64]));
+        json.push_str(i64_to_string(e_vow_ids[cu]));
         json.push_str(String::from(",\"function\":\""));
-        json.push_str(diag_json_escape_str(e_func_names[ci as u64]));
+        json.push_str(diag_json_escape_str(e_func_names[cu]));
         json.push_str(String::from("\",\"kind\":\""));
-        json.push_str(e_kinds[ci as u64]);
+        json.push_str(e_kinds[cu]);
         json.push_str(String::from("\",\"description\":\""));
-        json.push_str(diag_json_escape_str(e_descs[ci as u64]));
+        json.push_str(diag_json_escape_str(e_descs[cu]));
         json.push_str(String::from("\",\"blame\":\""));
-        json.push_str(e_blames[ci as u64]);
+        json.push_str(e_blames[cu]);
         json.push_str(String::from("\",\"source\":{\"file\":\""));
-        json.push_str(diag_json_escape_str(e_files[ci as u64]));
+        json.push_str(diag_json_escape_str(e_files[cu]));
         json.push_str(String::from("\",\"offset\":"));
-        json.push_str(i64_to_string(e_offsets[ci as u64]));
+        json.push_str(i64_to_string(e_offsets[cu]));
         json.push_str(String::from("},\"status\":\""));
-        json.push_str(e_statuses[ci as u64]);
+        json.push_str(e_statuses[cu]);
         json.push_str(String::from("\",\"quality\":\""));
-        json.push_str(e_qualities[ci as u64]);
+        json.push_str(e_qualities[cu]);
         json.push_str(String::from("\",\"trivially_satisfiable\":"));
-        if e_trivial[ci as u64] == 1 {
+        if e_trivial[cu] == 1 {
             json.push_str(String::from("true"));
         } else {
             json.push_str(String::from("false"));
