@@ -8,6 +8,11 @@ use parser
 use checker
 use env
 
+// Reject-only cases that tests/error fixtures already pin under the two-compiler
+// parity run (code and count) are not repeated here. This file keeps the accept
+// cases, the exact message text the Rust harness in vow/tests/map_diagnostics.rs
+// asserts verbatim, and diagnostic ordering.
+
 fn diagnostics_of(source: String) -> Vec<Diagnostic> [io] {
     let dctx: DiagCtx = diag_ctx_new();
     let arena: AstArena = arena_new();
@@ -33,20 +38,7 @@ fn only_message(source: String) -> String [io] {
 }
 
 fn count_code(source: String, code: i64) -> i64 [io] {
-    let dctx: DiagCtx = diag_ctx_new();
-    let arena: AstArena = arena_new();
-    let parsed: Module = parse_module_into(
-        lex(source), arena, dctx, String::from("map_slot.vow")
-    );
-    let item_files: Vec<String> = Vec::new();
-    let mut i: u64 = 0u64;
-    while i < parsed.items.len() {
-        item_files.push(String::from("map_slot.vow"));
-        i = i + 1;
-    }
-    let check_env: CheckEnv = env_new(dctx, String::from("map_slot.vow"));
-    check_module(check_env, parsed, item_files);
-    let diags: Vec<Diagnostic> = dctx.diags;
+    let diags: Vec<Diagnostic> = diagnostics_of(source);
     let mut found: i64 = 0;
     let mut j: u64 = 0u64;
     while j < diags.len() {
@@ -75,132 +67,144 @@ fn unsupported(ty: String) -> i64 [io] {
     count_code(param_probe(ty), EC_UNSUPPORTED_FEATURE())
 }
 
-fn check_hashmap_keys() -> i32 [io] {
+fn check_accepted_map_types() -> i32 [io] {
     if unsupported(String::from("HashMap<i64, i64>")) != 0 { return 1; }
     if unsupported(String::from("HashMap<u8, i64>")) != 0 { return 2; }
     if unsupported(String::from("HashMap<i8, i64>")) != 0 { return 3; }
     if unsupported(String::from("HashMap<u32, bool>")) != 0 { return 4; }
     if unsupported(String::from("HashMap<u64, String>")) != 0 { return 5; }
     if unsupported(String::from("HashMap<bool, i64>")) != 0 { return 6; }
-    if unsupported(String::from("HashMap<String, i64>")) == 0 { return 11; }
-    if unsupported(String::from("HashMap<i128, i64>")) == 0 { return 12; }
-    if unsupported(String::from("HashMap<u128, i64>")) == 0 { return 13; }
-    if unsupported(String::from("HashMap<f64, i64>")) == 0 { return 14; }
-    if unsupported(String::from("HashMap<Vec<i64>, i64>")) == 0 { return 15; }
-    if unsupported(String::from("HashMap<Option<i64>, i64>")) == 0 { return 16; }
-    if unsupported(String::from("Vec<HashMap<String, bool>>")) == 0 { return 17; }
+    if unsupported(String::from("BTreeMap<i64, i64>")) != 0 { return 7; }
+    if unsupported(String::from("BTreeMap<i64, Vec<i128>>")) != 0 { return 8; }
+    if unsupported(String::from("HashMap<i64, String>")) != 0 { return 9; }
+    if unsupported(String::from("HashMap<i64, u8>")) != 0 { return 10; }
+    if unsupported(String::from("BTreeMap<i64, i16>")) != 0 { return 11; }
     0
 }
 
-fn check_map_values() -> i32 [io] {
-    if unsupported(String::from("HashMap<i64, i128>")) == 0 { return 21; }
-    if unsupported(String::from("HashMap<i64, u128>")) == 0 { return 22; }
-    if unsupported(String::from("BTreeMap<i64, i128>")) == 0 { return 23; }
-    if unsupported(String::from("BTreeMap<i64, u128>")) == 0 { return 24; }
-    if unsupported(String::from("BTreeMap<i64, i64>")) != 0 { return 25; }
-    if unsupported(String::from("BTreeMap<i64, Vec<i128>>")) != 0 { return 26; }
-    if unsupported(String::from("HashMap<i64, String>")) != 0 { return 27; }
-    if unsupported(String::from("HashMap<i64, f64>")) == 0 { return 28; }
-    if unsupported(String::from("HashMap<i64, f32>")) == 0 { return 29; }
-    if unsupported(String::from("BTreeMap<i64, f64>")) == 0 { return 30; }
-    if unsupported(String::from("HashMap<i64, u8>")) != 0 { return 31; }
-    if unsupported(String::from("BTreeMap<i64, i16>")) != 0 { return 32; }
+fn rejected_keys() -> i32 [io] {
+    if unsupported(String::from("HashMap<String, i64>")) == 0 { return 21; }
+    if unsupported(String::from("HashMap<i128, i64>")) == 0 { return 22; }
+    if unsupported(String::from("HashMap<u128, i64>")) == 0 { return 23; }
+    if unsupported(String::from("HashMap<f64, i64>")) == 0 { return 24; }
+    if unsupported(String::from("HashMap<Vec<i64>, i64>")) == 0 { return 25; }
+    if unsupported(String::from("HashMap<Option<i64>, i64>")) == 0 { return 26; }
+    if unsupported(String::from("HashMap<(i64, i64), i64>")) == 0 { return 27; }
+    if unsupported(String::from("Vec<HashMap<String, bool>>")) == 0 { return 28; }
     0
 }
 
-fn linear_param(ty: String) -> i64 [io] {
+fn rejected_values() -> i32 [io] {
+    if unsupported(String::from("HashMap<i64, i128>")) == 0 { return 31; }
+    if unsupported(String::from("HashMap<i64, u128>")) == 0 { return 32; }
+    if unsupported(String::from("BTreeMap<i64, i128>")) == 0 { return 33; }
+    if unsupported(String::from("BTreeMap<i64, u128>")) == 0 { return 34; }
+    if unsupported(String::from("HashMap<i64, f64>")) == 0 { return 35; }
+    if unsupported(String::from("HashMap<i64, f32>")) == 0 { return 36; }
+    if unsupported(String::from("BTreeMap<i64, f64>")) == 0 { return 37; }
+    0
+}
+
+fn linear_param(ty: String) -> String {
     let src: String = String::from("module MapSlot\nlinear struct Token { id: i64 }\nstruct Plain { id: i64 }\nfn probe(m: ");
     src.push_str(ty);
     src.push_str(String::from(") -> u64 { m.len() }"));
-    count_code(src, EC_UNSUPPORTED_FEATURE())
+    src
 }
 
-fn check_hashmap_linear_values() -> i32 [io] {
-    if linear_param(String::from("HashMap<i64, Token>")) == 0 { return 51; }
-    if linear_param(String::from("HashMap<i64, Plain>")) != 0 { return 52; }
-    if linear_param(String::from("HashMap<i64, i64>")) != 0 { return 53; }
+fn check_linear_values() -> i32 [io] {
+    if count_code(linear_param(String::from("HashMap<i64, Token>")), EC_UNSUPPORTED_FEATURE()) != 1 { return 41; }
+    if count_code(linear_param(String::from("HashMap<i64, Plain>")), EC_UNSUPPORTED_FEATURE()) != 0 { return 42; }
+    if count_code(linear_param(String::from("HashMap<i64, i64>")), EC_UNSUPPORTED_FEATURE()) != 0 { return 43; }
+    if count_code(linear_param(String::from("BTreeMap<i64, Token>")), EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR()) != 1 { return 44; }
+    let hm: String = only_message(linear_param(String::from("HashMap<i64, Token>")));
+    if !hm.contains(String::from("HashMap value type must be non-linear; found 'Token'")) { return 45; }
+    let bt: String = only_message(linear_param(String::from("BTreeMap<i64, Token>")));
+    if !bt.contains(String::from("BTreeMap value type must be non-linear; found 'Token'")) { return 46; }
     0
 }
 
-fn check_method_site() -> i32 [io] {
-    let hm: String = body_probe(String::from("let m: HashMap<String, i64> = HashMap::new(); 0"));
-    if count_code(hm, EC_UNSUPPORTED_FEATURE()) == 0 { return 61; }
+fn check_forward_referenced_linear_value() -> i32 [io] {
+    let src: String = String::from("module MapSlot\nstruct Holder { m: BTreeMap<i64, Wrap> }\nstruct Wrap { t: Token }\nlinear struct Token { id: i64 }\nfn main() -> i32 { 0 }");
+    let msgs: Vec<Diagnostic> = diagnostics_of(src);
+    let mut found: i64 = 0;
+    let mut j: u64 = 0u64;
+    while j < msgs.len() {
+        let d: Diagnostic = msgs[j];
+        if d.code == EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR() {
+            if d.message.contains(String::from("found 'Wrap'")) { found = found + 1; }
+        }
+        j = j + 1;
+    }
+    if found == 0 { return 51; }
+    0
+}
+
+fn check_annotated_method_site_accepted() -> i32 [io] {
     let ok: String = body_probe(String::from("let m: HashMap<u16, i64> = HashMap::new(); m.insert(1, 2); 0"));
-    if count_code(ok, EC_UNSUPPORTED_FEATURE()) != 0 { return 62; }
-    0
-}
-
-fn check_map_index_rejected() -> i32 [io] {
-    let hm_read: String = body_probe(String::from("let m: HashMap<i64, i64> = HashMap::new(); let x: i64 = m[1]; x"));
-    if count_code(hm_read, EC_TYPE_MISMATCH()) == 0 { return 41; }
-    let hm_write: String = body_probe(String::from("let m: HashMap<i64, i64> = HashMap::new(); m[1] = 5; 0"));
-    if count_code(hm_write, EC_TYPE_MISMATCH()) == 0 { return 42; }
-    let bt_read: String = body_probe(String::from("let m: BTreeMap<i64, i64> = BTreeMap::new(); let x: Option<i64> = m[1]; 0"));
-    if count_code(bt_read, EC_TYPE_MISMATCH()) == 0 { return 43; }
-    let str_read: String = body_probe(String::from("let s: String = String::from(\"a\"); let c: i64 = s[0]; c"));
-    if count_code(str_read, EC_TYPE_MISMATCH()) == 0 { return 44; }
+    if diagnostics_of(ok).len() != 0 { return 61; }
+    let annotated: String = body_probe(String::from("let m: HashMap<i64, i64> = HashMap::new(); m.insert(1, 2); 0"));
+    if diagnostics_of(annotated).len() != 0 { return 62; }
     let vec_read: String = body_probe(String::from("let v: Vec<i64> = Vec::new(); v.push(1); v[0]"));
-    if count_code(vec_read, EC_TYPE_MISMATCH()) != 0 { return 45; }
+    if diagnostics_of(vec_read).len() != 0 { return 63; }
     0
 }
 
-fn check_unannotated_collections() -> i32 [io] {
+fn check_unannotated_message() -> i32 [io] {
     let hm: String = body_probe(String::from("let m = HashMap::new(); m.insert(1, 2); 0"));
     if !only_message(hm).contains(String::from("cannot infer the collection type of the receiver of `insert`: annotate its binding with a full type")) { return 71; }
-    let bt: String = body_probe(String::from("let m = BTreeMap::new(); m.insert(1, 2); 0"));
-    if !only_message(bt).contains(String::from("cannot infer the collection type of the receiver of `insert`: annotate its binding with a full type")) { return 72; }
     let vc: String = body_probe(String::from("let v = Vec::new(); v.push(1); 0"));
-    if !only_message(vc).contains(String::from("cannot infer the collection type of the receiver of `push`: annotate its binding with a full type")) { return 73; }
-    let two: String = body_probe(String::from("let m = HashMap::new(); m.insert(String::from(\"a\"), 1); let o: Option<i64> = m.get(String::from(\"a\")); 0"));
-    if count_code(two, EC_TYPE_MISMATCH()) != 2 { return 74; }
-    if diagnostics_of(two).len() != 2 { return 75; }
-    let annotated: String = body_probe(String::from("let m: HashMap<i64, i64> = HashMap::new(); m.insert(1, 2); 0"));
-    if diagnostics_of(annotated).len() != 0 { return 76; }
-    0
-}
-
-fn check_bad_map_type_reported_once() -> i32 [io] {
-    let hm: String = body_probe(String::from("let m: HashMap<String, i64> = HashMap::new(); m.insert(String::from(\"a\"), 1); m.insert(String::from(\"b\"), 2); m.len(); 0"));
-    if diagnostics_of(hm).len() != 1 { return 81; }
-    let bt: String = body_probe(String::from("let m: BTreeMap<String, i64> = BTreeMap::new(); m.insert(String::from(\"a\"), 1); m.insert(String::from(\"b\"), 2); 0"));
-    if diagnostics_of(bt).len() != 1 { return 82; }
-    let sites: String = String::from("module MapSlot\ntype Names = HashMap<String, i64>;\nstruct Holder { names: HashMap<String, i64> }\nenum Shape { Tuple(HashMap<String, i64>), Fields { names: HashMap<String, i64> } }\nfn make() -> HashMap<String, i64> { let m: HashMap<String, i64> = HashMap::new(); m }\nfn count(m: HashMap<String, i64>) -> u64 { m.len() }\nfn nested(v: Vec<HashMap<String, i64>>) -> u64 { v.len() }\nfn main() -> i32 { let m: HashMap<String, i64> = HashMap::new(); 0 }");
-    if diagnostics_of(sites).len() != 9 { return 83; }
+    if !only_message(vc).contains(String::from("cannot infer the collection type of the receiver of `push`: annotate its binding with a full type")) { return 72; }
     0
 }
 
 fn check_diagnostic_text() -> i32 [io] {
     let key: String = String::from("HashMap key type `String` is not supported: keys are compared by value as a single machine word");
-    if !only_message(param_probe(String::from("HashMap<String, i64>"))).contains(key) { return 91; }
+    if !only_message(param_probe(String::from("HashMap<String, i64>"))).contains(key) { return 81; }
     let vec_key: String = String::from("HashMap key type `Vec<i64>` is not supported: keys are compared by value as a single machine word");
-    if !only_message(param_probe(String::from("HashMap<Vec<i64>, i64>"))).contains(vec_key) { return 92; }
-    if !only_message(param_probe(String::from("BTreeMap<String, i64>"))).contains(String::from("BTreeMap key type must be i64; found 'String'")) { return 93; }
+    if !only_message(param_probe(String::from("HashMap<Vec<i64>, i64>"))).contains(vec_key) { return 82; }
+    let tuple_key: String = String::from("HashMap key type `(i64, i64)` is not supported: keys are compared by value as a single machine word");
+    if !only_message(param_probe(String::from("HashMap<(i64, i64), i64>"))).contains(tuple_key) { return 83; }
+    if !only_message(param_probe(String::from("BTreeMap<String, i64>"))).contains(String::from("BTreeMap key type must be i64; found 'String'")) { return 84; }
+    if !only_message(param_probe(String::from("BTreeMap<(i64, i64), i64>"))).contains(String::from("BTreeMap key type must be i64; found '(i64, i64)'")) { return 85; }
+    let value: String = String::from("HashMap value type `i128` is not supported: map values occupy a single 64-bit integer slot");
+    if !only_message(param_probe(String::from("HashMap<i64, i128>"))).contains(value) { return 86; }
     let hm_index: String = body_probe(String::from("let m: HashMap<i64, i64> = HashMap::new(); let x: i64 = m[1]; x"));
-    if !only_message(hm_index).contains(String::from("index operation on non-indexable type `HashMap<i64, i64>`")) { return 94; }
+    if !only_message(hm_index).contains(String::from("index operation on non-indexable type `HashMap<i64, i64>`")) { return 87; }
     let str_index: String = body_probe(String::from("let s: String = String::from(\"a\"); let c: i64 = s[0]; c"));
-    if !only_message(str_index).contains(String::from("index operation on non-indexable type `String`")) { return 95; }
-    let vec_key_index: String = body_probe(String::from("let m: HashMap<Vec<i64>, i64> = HashMap::new(); let x: i64 = m[1]; x"));
-    let diags: Vec<Diagnostic> = diagnostics_of(vec_key_index);
-    if diags.len() != 2 { return 96; }
+    if !only_message(str_index).contains(String::from("index operation on non-indexable type `String`")) { return 88; }
+    let tuple_index: String = body_probe(String::from("let t: (i64, i64) = (1, 2); let x: i64 = t[0]; x"));
+    if !only_message(tuple_index).contains(String::from("index operation on non-indexable type `(i64, i64)`")) { return 89; }
+    0
+}
+
+fn check_diagnostic_order() -> i32 [io] {
+    let src: String = body_probe(String::from("let m: HashMap<(i64, i64), i64> = HashMap::new(); let x: i64 = m[1]; x"));
+    let diags: Vec<Diagnostic> = diagnostics_of(src);
+    if diags.len() != 2 { return 91; }
+    let first: Diagnostic = diags[0];
+    if first.code != EC_UNSUPPORTED_FEATURE() { return 92; }
     let second: Diagnostic = diags[1];
-    if !second.message.contains(String::from("index operation on non-indexable type `HashMap<Vec<i64>, i64>`")) { return 97; }
+    if !second.message.contains(String::from("index operation on non-indexable type `HashMap<(i64, i64), i64>`")) { return 93; }
     0
 }
 
 fn main() -> i32 [io] {
-    let keys: i32 = check_hashmap_keys();
+    let accepted: i32 = check_accepted_map_types();
+    if accepted != 0 { return accepted; }
+    let keys: i32 = rejected_keys();
     if keys != 0 { return keys; }
-    let values: i32 = check_map_values();
+    let values: i32 = rejected_values();
     if values != 0 { return values; }
-    let linears: i32 = check_hashmap_linear_values();
+    let linears: i32 = check_linear_values();
     if linears != 0 { return linears; }
-    let methods: i32 = check_method_site();
-    if methods != 0 { return methods; }
-    let indexing: i32 = check_map_index_rejected();
-    if indexing != 0 { return indexing; }
-    let unannotated: i32 = check_unannotated_collections();
+    let forward: i32 = check_forward_referenced_linear_value();
+    if forward != 0 { return forward; }
+    let sites: i32 = check_annotated_method_site_accepted();
+    if sites != 0 { return sites; }
+    let unannotated: i32 = check_unannotated_message();
     if unannotated != 0 { return unannotated; }
-    let once: i32 = check_bad_map_type_reported_once();
-    if once != 0 { return once; }
-    check_diagnostic_text()
+    let text: i32 = check_diagnostic_text();
+    if text != 0 { return text; }
+    check_diagnostic_order()
 }
