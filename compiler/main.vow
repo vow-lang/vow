@@ -4418,7 +4418,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| Method         | Signature                        |\n"));
     r.push_str(String::from("|----------------|----------------------------------|\n"));
     r.push_str(String::from("| `Vec::new()`   | `() -> Vec<T>`                   |\n"));
-    r.push_str(String::from("| `Vec::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> Vec<T>` for flat scalar `T` |\n"));
+    r.push_str(String::from("| `Vec::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> Vec<T>` for flat scalar `T` |\n"));
     r.push_str(String::from("| `.push(val)`   | `(T) -> ()`                      |\n"));
     r.push_str(String::from("| `.pop()`       | `() -> ()`                       |\n"));
     r.push_str(String::from("| `.len()`       | `() -> u64`                      |\n"));
@@ -4435,7 +4435,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("|---------------------|-----------------------------|\n"));
     r.push_str(String::from("| `String::from(s)`   | `(String) -> String` -- mutable copy |\n"));
     r.push_str(String::from("| `String::new()`     | `() -> String`              |\n"));
-    r.push_str(String::from("| `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |\n"));
+    r.push_str(String::from("| `String::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> String` |\n"));
     r.push_str(String::from("| `.len()`            | `() -> u64`                 |\n"));
     r.push_str(String::from("| `.byte_at(i)`       | `(<int>) -> i64`            |\n"));
     r.push_str(String::from("| `.push_byte(b)`     | `(<int>) -> ()` -- appends one byte; `b` is a byte value in `0..=255` |\n"));
@@ -4610,7 +4610,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("`pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a flat scalar slot type (`i*`, `u*`, `f32`, `f64`, `bool`). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`String::from_raw_parts_copy(ptr: i64, len: i64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: i64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The surface length type is `i64`; the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.\n"));
+    r.push_str(String::from("`String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("For pointer-containing C payloads, a wrapper must be written per type: call the extern, recursively copy every Vow-owned heap subobject into the target region, free every C-owned pointer according to the extern's ownership contract, then return the Vow-placed value. A bytewise copy of a pointer-containing payload is unsound because it preserves stale pointers into C-owned storage.\n"));
     r.push_str(String::from("\n"));
@@ -9715,7 +9715,7 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("| Method         | Signature                        |\n"));
     r.push_str(String::from("|----------------|----------------------------------|\n"));
     r.push_str(String::from("| `Vec::new()`   | `() -> Vec<T>`                   |\n"));
-    r.push_str(String::from("| `Vec::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> Vec<T>` for flat scalar `T` |\n"));
+    r.push_str(String::from("| `Vec::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> Vec<T>` for flat scalar `T` |\n"));
     r.push_str(String::from("| `.push(val)`   | `(T) -> ()`                      |\n"));
     r.push_str(String::from("| `.pop()`       | `() -> ()`                       |\n"));
     r.push_str(String::from("| `.len()`       | `() -> u64`                      |\n"));
@@ -9732,7 +9732,7 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("|---------------------|-----------------------------|\n"));
     r.push_str(String::from("| `String::from(s)`   | `(String) -> String` -- mutable copy |\n"));
     r.push_str(String::from("| `String::new()`     | `() -> String`              |\n"));
-    r.push_str(String::from("| `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |\n"));
+    r.push_str(String::from("| `String::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> String` |\n"));
     r.push_str(String::from("| `.len()`            | `() -> u64`                 |\n"));
     r.push_str(String::from("| `.byte_at(i)`       | `(<int>) -> i64`            |\n"));
     r.push_str(String::from("| `.push_byte(b)`     | `(<int>) -> ()` -- appends one byte; `b` is a byte value in `0..=255` |\n"));
@@ -9907,7 +9907,7 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("`pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a flat scalar slot type (`i*`, `u*`, `f32`, `f64`, `bool`). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`String::from_raw_parts_copy(ptr: i64, len: i64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: i64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The surface length type is `i64`; the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.\n"));
+    r.push_str(String::from("`String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("For pointer-containing C payloads, a wrapper must be written per type: call the extern, recursively copy every Vow-owned heap subobject into the target region, free every C-owned pointer according to the extern's ownership contract, then return the Vow-placed value. A bytewise copy of a pointer-containing payload is unsound because it preserves stale pointers into C-owned storage.\n"));
     r.push_str(String::from("\n"));

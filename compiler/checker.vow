@@ -3303,7 +3303,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
                     }
                     check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64());
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_I64());
+                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64());
                     return CTY_NEVER();
                 }
             }
@@ -3317,7 +3317,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
                     }
                     check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64());
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_I64());
+                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64());
                     return CTY_STR();
                 }
                 if second_name == String::from("from") {

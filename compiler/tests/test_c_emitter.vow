@@ -741,6 +741,38 @@ fn check_bounds_assert_signedness() -> i64 {
     0
 }
 
+// from_raw_parts_copy's length assumption follows the argument's signedness: a
+// u64 length drops the vacuous `>= 0` conjunct, a signed (literal) one keeps
+// it. Mirrors raw_parts_copy_len_assumption_follows_argument_signedness in
+// vow-verify/src/c_emitter.rs.
+fn emit_raw_parts_copy_c(extern_name: String, len_ty: i64) -> String {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    insts.push(mk_inst_arg(1, len_ty, 1));
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(0);
+    call_args.push(1);
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), call_args, extern_name));
+    insts.push(mk_inst_return(3, 2));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_I64());
+    params.push(len_ty);
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(0, String::from("raw_parts"), params, ITY_PTR(), blocks));
+    emit_c_module(mk_module(funcs), 16, 16, 16, 16)
+}
+
+fn check_raw_parts_copy_len_assumption(extern_name: String, base_code: i64) -> i64 {
+    let unsigned_c: String = emit_raw_parts_copy_c(extern_name, ITY_U64());
+    if !unsigned_c.contains(String::from("  __ESBMC_assume(v1 < 16);\n  v2.len = v1;\n")) { return base_code; }
+    if unsigned_c.contains(String::from("v1 >= 0")) { return base_code + 1; }
+    let signed_c: String = emit_raw_parts_copy_c(extern_name, ITY_I64());
+    if !signed_c.contains(String::from("  __ESBMC_assume(v1 >= 0 && v1 < 16);\n  v2.len = v1;\n")) { return base_code + 2; }
+    0
+}
+
 fn check_inst_ty_by_id_table() -> i64 {
     let first_insts: Vec<IrInst> = Vec::new();
     first_insts.push(mk_inst_arg(0, ITY_I32(), 0));
@@ -886,5 +918,9 @@ fn main() -> i32 {
     if r21 != 0 { return i64_to_i32_wrap(r21); }
     let r22: i64 = check_wide_shifts_use_helpers();
     if r22 != 0 { return i64_to_i32_wrap(r22); }
+    let r23: i64 = check_raw_parts_copy_len_assumption(String::from("__vow_vec_from_raw_parts_copy_val"), 230);
+    if r23 != 0 { return i64_to_i32_wrap(r23); }
+    let r24: i64 = check_raw_parts_copy_len_assumption(String::from("__vow_string_from_raw_parts_copy"), 235);
+    if r24 != 0 { return i64_to_i32_wrap(r24); }
     0
 }

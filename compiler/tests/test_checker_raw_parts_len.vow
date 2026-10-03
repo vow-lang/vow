@@ -1,0 +1,88 @@
+module TestCheckerRawPartsLen
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use checker
+use env
+
+fn checked_error_count(source: String) -> i64 [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("raw_parts.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < parsed.items.len() {
+        item_files.push(String::from("raw_parts.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("raw_parts.vow"));
+    check_module(check_env, parsed, item_files);
+    dctx.error_count
+}
+
+fn check_string_form() -> i32 [io] {
+    let unsigned_len: String = String::from(
+        "module RawParts\nfn value(ptr: i64, len: u64) -> String { String::from_raw_parts_copy(ptr, len) }"
+    );
+    if checked_error_count(unsigned_len) != 0 { return 1; }
+
+    let signed_len: String = String::from(
+        "module RawParts\nfn value(ptr: i64, len: i64) -> String { String::from_raw_parts_copy(ptr, len) }"
+    );
+    if checked_error_count(signed_len) == 0 { return 2; }
+
+    let cast_len: String = String::from(
+        "module RawParts\nfn value(ptr: i64, len: i64) -> String { String::from_raw_parts_copy(ptr, len as u64) }"
+    );
+    if checked_error_count(cast_len) != 0 { return 3; }
+
+    let unsigned_ptr: String = String::from(
+        "module RawParts\nfn value(ptr: u64, len: u64) -> String { String::from_raw_parts_copy(ptr, len) }"
+    );
+    if checked_error_count(unsigned_ptr) == 0 { return 4; }
+
+    let literal_len: String = String::from(
+        "module RawParts\nfn value() -> String { String::from_raw_parts_copy(0, 0) }"
+    );
+    if checked_error_count(literal_len) != 0 { return 5; }
+    0
+}
+
+fn check_vec_form() -> i32 [io] {
+    let unsigned_len: String = String::from(
+        "module RawParts\nfn value(ptr: i64, len: u64) -> Vec<i64> { Vec::from_raw_parts_copy(ptr, len) }"
+    );
+    if checked_error_count(unsigned_len) != 0 { return 11; }
+
+    let signed_len: String = String::from(
+        "module RawParts\nfn value(ptr: i64, len: i64) -> Vec<i64> { Vec::from_raw_parts_copy(ptr, len) }"
+    );
+    if checked_error_count(signed_len) == 0 { return 12; }
+
+    let cast_len: String = String::from(
+        "module RawParts\nfn value(ptr: i64, len: i64) -> Vec<i64> { Vec::from_raw_parts_copy(ptr, len as u64) }"
+    );
+    if checked_error_count(cast_len) != 0 { return 13; }
+
+    let unsigned_ptr: String = String::from(
+        "module RawParts\nfn value(ptr: u64, len: u64) -> Vec<i64> { Vec::from_raw_parts_copy(ptr, len) }"
+    );
+    if checked_error_count(unsigned_ptr) == 0 { return 14; }
+
+    let literal_len: String = String::from(
+        "module RawParts\nfn value() -> Vec<i64> { Vec::from_raw_parts_copy(0, 0) }"
+    );
+    if checked_error_count(literal_len) != 0 { return 15; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let string_result: i32 = check_string_form();
+    if string_result != 0 { return string_result; }
+    check_vec_form()
+}

@@ -642,6 +642,21 @@ fn emit_bounds_assert(out: String, idx: i64, container: i64, idx_ty: i64, label:
         cemit_str2(String::from(".len, \""), cemit_str2(label, String::from("\");\n")))));
 }
 
+// Emit the length assumption and result length for from_raw_parts_copy.
+//
+// A u64 length argument is bounded only from above because `v{len} >= 0`
+// would be vacuous. A signed argument (an i64 literal constant) keeps its
+// `>= 0` guard.
+fn emit_raw_parts_len(out: String, id: i64, len_arg: i64, len_ty: i64, max: i64) {
+    let ids: String = i64_to_string(id);
+    let ls: String = i64_to_string(len_arg);
+    let lower: String = { if ity_is_unsigned(len_ty) { String::new() } else { str3(String::from("v"), ls, String::from(" >= 0 && ")) } };
+    out.push_str(str5(String::from("  __ESBMC_assume("), lower,
+        String::from("v"), ls,
+        str3(String::from(" < "), i64_to_string(max), String::from(");\n"))));
+    out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), ls, String::from(";\n")));
+}
+
 fn ir_ty_to_c(ty: i64) -> String {
     if ty == ITY_I8() { return String::from("int8_t"); }
     if ty == ITY_U8() { return String::from("uint8_t"); }
@@ -1799,12 +1814,7 @@ fn emit_vec_op(out: String, inst: IrInst, inst_ty_by_id: Vec<i64>, vec_max: i64)
     }
     if ds == String::from("__vow_vec_from_raw_parts_copy_val") {
         let len_arg: i64 = iargs[1];
-        let ids: String = i64_to_string(id);
-        let ls: String = i64_to_string(len_arg);
-        out.push_str(str5(String::from("  __ESBMC_assume(v"), ls,
-            String::from(" >= 0 && v"), ls,
-            str3(String::from(" < "), i64_to_string(vec_max), String::from(");\n"))));
-        out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), ls, String::from(";\n")));
+        emit_raw_parts_len(out, id, len_arg, inst_ty_of(inst_ty_by_id, len_arg), vec_max);
         return;
     }
     if ds == String::from("__vow_vec_pin_to_root_val") {
@@ -2016,12 +2026,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
     }
     if ds == String::from("__vow_string_from_raw_parts_copy") {
         let len_arg: i64 = iargs[1];
-        let ids: String = i64_to_string(id);
-        let ls: String = i64_to_string(len_arg);
-        out.push_str(str5(String::from("  __ESBMC_assume(v"), ls,
-            String::from(" >= 0 && v"), ls,
-            str3(String::from(" < "), i64_to_string(string_max), String::from(");\n"))));
-        out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), ls, String::from(";\n")));
+        emit_raw_parts_len(out, id, len_arg, inst_ty_of(inst_ty_by_id, len_arg), string_max);
         return;
     }
     if ds == String::from("__vow_string_clone") || ds == String::from("__vow_string_clone_in_arena") || ds == String::from("__vow_string_pin_to_root") {
