@@ -7,23 +7,23 @@ Implement a function `count_steps` that counts from 0 to `n` using a loop, provi
 ## Signature
 
 ```vow
-fn count_steps(n: i64) -> i64
+fn count_steps(n: u64) -> u64
 ```
 
 ## Contracts
 
-- `requires: n >= 0` — `n` is non-negative
+- `n` is a `u64` count, so the type already says it is non-negative; no `requires: n >= 0` is needed
 - `ensures: result == n` — result equals `n`
-- The loop counter `i` is a `u64` local, so it needs no `invariant: i >= 0`; convert with `n as u64` and `i as i64`
-- Loop `invariant: i <= n as u64`
+- The loop counter `i` is a `u64` local, so it needs no `invariant: i >= 0`
+- Loop `invariant: i <= n`
 
 ## Constraints
 
 - Use a while loop incrementing `i` from 0 to `n`
-- Return `i as i64` after the loop
+- Return `i` after the loop
 
 ## Hints
 
-- The loop condition is `i < n as u64`; after the loop `i == n`
-- The invariant `i <= n as u64` is key to proving the ensures clause
+- The loop condition is `i < n`; after the loop `i == n`
+- The invariant `i <= n` is key to proving the ensures clause
 - Verifier unwind limits are not source preconditions

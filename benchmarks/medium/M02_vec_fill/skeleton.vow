@@ -1,8 +1,7 @@
 module VecFill
 
-fn fill_vec(n: i64) -> Vec<i64> vow {
-  requires: n >= 0,
-  ensures: result.len() as i64 == n
+fn fill_vec(n: u64) -> Vec<i64> vow {
+  ensures: result.len() == n
 } {
   let v: Vec<i64> = Vec::new();
   v

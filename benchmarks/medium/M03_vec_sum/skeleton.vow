@@ -1,12 +1,10 @@
 module VecSum
 
-fn make_vec(n: i64) -> Vec<i64> vow {
-  requires: n >= 0
-} {
+fn make_vec(n: u64) -> Vec<i64> {
   let v: Vec<i64> = Vec::new();
   let mut i: u64 = 0;
-  while i < n as u64 vow {
-    invariant: i <= n as u64
+  while i < n vow {
+    invariant: i <= n
   } {
     v.push(i as i64);
     i = i + 1;

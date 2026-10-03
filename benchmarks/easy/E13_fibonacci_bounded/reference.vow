@@ -1,7 +1,6 @@
 module FibonacciBounded
 
-fn fib(n: i64) -> i64 vow {
-  requires: n >= 0,
+fn fib(n: u64) -> i64 vow {
   requires: n <= 92,
   ensures: result >= 0
 } {
@@ -10,7 +9,7 @@ fn fib(n: i64) -> i64 vow {
   } else {
     let mut prev: i64 = 0;
     let mut curr: i64 = 1;
-    let mut i: i64 = 1;
+    let mut i: u64 = 1;
     while i < n vow {
       invariant: prev >= 0,
       invariant: curr >= 1,

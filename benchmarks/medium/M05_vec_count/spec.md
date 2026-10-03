@@ -7,14 +7,13 @@ Implement a function `vec_count_pos` that counts the number of positive elements
 ## Signature
 
 ```vow
-fn vec_count_pos(v: Vec<i64>) -> i64
+fn vec_count_pos(v: Vec<i64>) -> u64
 ```
 
 ## Contracts
 
-- `ensures: result >= 0` — count is non-negative
-- `ensures: result <= v.len() as i64` — count is at most the Vec length
-- `count` and `i` are `u64` locals, so they need no `>= 0` invariants; convert with `count as i64`
+- `ensures: result <= v.len()` — count is at most the Vec length; the `u64` return type already makes it non-negative
+- `count` and `i` are `u64` locals, so they need no `>= 0` invariants
 - Loop `invariant: count <= i`
 - Loop `invariant: i <= v.len()`
 

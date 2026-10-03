@@ -1,13 +1,12 @@
 module MapMultiInsert
 
-fn map_fill(n: i64) -> HashMap<i64, i64> vow {
-  requires: n >= 0,
-  ensures: result.len() as i64 == n
+fn map_fill(n: u64) -> HashMap<i64, i64> vow {
+  ensures: result.len() == n
 } {
   let m: HashMap<i64, i64> = HashMap::new();
   let mut i: u64 = 0;
-  while i < n as u64 vow {
-    invariant: i <= n as u64
+  while i < n vow {
+    invariant: i <= n
   } {
     let k: i64 = i as i64;
     m.insert(k, k * 10);

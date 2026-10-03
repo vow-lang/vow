@@ -1,8 +1,7 @@
 module VecCount
 
-fn vec_count_pos(v: Vec<i64>) -> i64 vow {
-  ensures: result >= 0,
-  ensures: result <= v.len() as i64
+fn vec_count_pos(v: Vec<i64>) -> u64 vow {
+  ensures: result <= v.len()
 } {
   0
 }
@@ -12,6 +11,6 @@ fn main() -> i32 [io] {
   v.push(1);
   v.push(0 - 2);
   v.push(3);
-  print_i64(vec_count_pos(v));
+  print_u64(vec_count_pos(v));
   0
 }

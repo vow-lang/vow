@@ -1,15 +1,14 @@
 module CollatzBounded
 
-fn collatz_steps(n: i64) -> i64 vow {
+fn collatz_steps(n: i64) -> u64 vow {
   requires: n >= 1,
-  requires: n <= 27,
-  ensures: result >= 0
+  requires: n <= 27
 } {
   0
 }
 
 fn main() -> i32 [io] {
-  print_i64(collatz_steps(1));
-  print_i64(collatz_steps(4));
+  print_u64(collatz_steps(1));
+  print_u64(collatz_steps(4));
   0
 }
