@@ -219,39 +219,62 @@ pub fn model_capacity_bounds(c_src: &str) -> Vec<ModelCapacityBound> {
     found
 }
 
-/// Model for `from_raw_parts_copy(ptr, len)`. The runtime returns an empty
-/// value for a null `ptr` whatever `len` is, so the model does too: the
-/// capacity restriction only applies to a non-null source. A length that is
-/// provably constant and outside the model capacity cannot be assumed (the
-/// assumption would be unsatisfiable and prove everything after it), so a
-/// non-null source fails closed with the capacity label. A `u64` length drops
-/// the vacuous `>= 0` lower bound.
-#[allow(clippy::too_many_arguments)]
-fn emit_raw_parts_len(
+/// The collection kind a raw-parts style constructor builds and the model
+/// capacity its length is checked against.
+#[derive(Clone, Copy)]
+struct CapacityModel {
+    kind: &'static str,
+    max: usize,
+}
+
+/// The instruction ids and length type of one constructor call.
+#[derive(Clone, Copy)]
+struct RawParts {
     id: u32,
     ptr: u32,
     len: u32,
+    len_ty: Ty,
+}
+
+/// Model for a constructor copying `len` elements from `ptr`
+/// (`from_raw_parts_copy`, `String::new`). The runtime returns an empty value
+/// for a null `ptr` whatever `len` is, so the model does too: a provably null
+/// source is empty, and otherwise the capacity restriction only applies to a
+/// non-null source. A length that is provably constant and outside the model
+/// capacity cannot be assumed (the assumption would be unsatisfiable and prove
+/// everything after it), so a non-null source fails closed with the capacity
+/// label. A `u64` length drops the vacuous `>= 0` lower bound.
+fn emit_raw_parts_len(
+    model: CapacityModel,
+    parts: RawParts,
     const_bits: &HashMap<u32, u64>,
-    inst_by_id: &HashMap<u32, &Inst>,
-    max: usize,
-    kind: &str,
     out: &mut String,
 ) {
+    let RawParts {
+        id,
+        ptr,
+        len,
+        len_ty,
+    } = parts;
+    let CapacityModel { kind, max } = model;
+    if const_bits.get(&ptr) == Some(&0) {
+        out.push_str(&format!("  v{id}.len = 0;\n"));
+        return;
+    }
     let cap = max as u64;
-    let label = format!("{} capacity", kind.to_lowercase());
     if const_bits.get(&len).is_some_and(|&bits| bits >= cap) {
+        let label = format!("{} capacity", kind.to_lowercase());
         out.push_str(&format!(
             "  __ESBMC_assert(v{ptr} == 0, \"{label}\");\n  v{id}.len = 0;\n"
         ));
         return;
     }
-    let lower = if ty_is_unsigned(operand_ty(len, inst_by_id)) {
+    let lower = if ty_is_unsigned(len_ty) {
         String::new()
     } else {
         format!("v{len} >= 0 && ")
     };
-    let null_source = const_bits.get(&ptr) == Some(&0);
-    let marker = if const_bits.contains_key(&len) || null_source {
+    let marker = if const_bits.contains_key(&len) {
         String::new()
     } else {
         model_bound_marker(kind, max)
@@ -1449,13 +1472,17 @@ fn emit_inst(
                         let ptr = inst.args[0].0;
                         let len = inst.args[1].0;
                         emit_raw_parts_len(
-                            id,
-                            ptr,
-                            len,
+                            CapacityModel {
+                                kind: "Vec",
+                                max: limits.vec_max,
+                            },
+                            RawParts {
+                                id,
+                                ptr,
+                                len,
+                                len_ty: operand_ty(len, inst_by_id),
+                            },
                             const_bits,
-                            inst_by_id,
-                            limits.vec_max,
-                            "Vec",
                             out,
                         );
                     }
@@ -1531,21 +1558,23 @@ fn emit_inst(
             if let InstData::CallExtern(ref name) = inst.data {
                 match name.as_str() {
                     "__vow_string_new" | "__vow_string_new_in_arena" => {
-                        let len_arg = if name == "__vow_string_new_in_arena" {
-                            2
-                        } else {
-                            1
-                        };
-                        let len = inst.args[len_arg].0;
-                        let string_max = limits.string_max;
-                        let marker = if const_bits.contains_key(&len) {
-                            String::new()
-                        } else {
-                            model_bound_marker("String", string_max)
-                        };
-                        out.push_str(&format!(
-                            "  __ESBMC_assume(v{len} >= 0 && v{len} < {string_max});{marker}\n  v{id}.len = v{len};\n"
-                        ));
+                        let ptr_arg = usize::from(name == "__vow_string_new_in_arena");
+                        let ptr = inst.args[ptr_arg].0;
+                        let len = inst.args[ptr_arg + 1].0;
+                        emit_raw_parts_len(
+                            CapacityModel {
+                                kind: "String",
+                                max: limits.string_max,
+                            },
+                            RawParts {
+                                id,
+                                ptr,
+                                len,
+                                len_ty: operand_ty(len, inst_by_id),
+                            },
+                            const_bits,
+                            out,
+                        );
                     }
                     "__vow_string_from_cstr" | "__vow_string_from_cstr_in_arena" => {
                         emit_nondet_string_len(id, limits.string_max, out);
@@ -1569,13 +1598,17 @@ fn emit_inst(
                         let ptr = inst.args[0].0;
                         let len = inst.args[1].0;
                         emit_raw_parts_len(
-                            id,
-                            ptr,
-                            len,
+                            CapacityModel {
+                                kind: "String",
+                                max: limits.string_max,
+                            },
+                            RawParts {
+                                id,
+                                ptr,
+                                len,
+                                len_ty: operand_ty(len, inst_by_id),
+                            },
                             const_bits,
-                            inst_by_id,
-                            limits.string_max,
-                            "String",
                             out,
                         );
                     }
@@ -8972,21 +9005,186 @@ mod tests {
         }
     }
 
-    /// A literal null source is empty whatever the length, so the capacity
-    /// assumption restricts nothing and the proof is not reported as bounded.
+    /// `extern_name(ptr, len)` over an instruction `ptr` (id 1) and `len` (id 2),
+    /// with a leading arena argument when `in_arena`.
+    fn ctor_fn(extern_name: &str, in_arena: bool, ptr: Inst, len: Inst) -> Function {
+        let mut f = raw_parts_copy_fn(extern_name, Ty::U64);
+        let args: &[u32] = if in_arena { &[0, 1, 2] } else { &[1, 2] };
+        f.params = vec![Ty::Ptr, ptr.ty, len.ty];
+        f.param_names = vec!["a".to_string(), "p".to_string(), "n".to_string()];
+        f.blocks[0].insts = vec![
+            test_inst(0, Opcode::GetArg, Ty::Ptr, &[], InstData::ArgIndex(0)),
+            ptr,
+            len,
+            test_inst(
+                3,
+                Opcode::Call,
+                Ty::Ptr,
+                args,
+                InstData::CallExtern(extern_name.to_string()),
+            ),
+            test_inst(4, Opcode::Return, Ty::Unit, &[3], InstData::None),
+        ];
+        f
+    }
+
+    fn ptr_param() -> Inst {
+        test_inst(1, Opcode::GetArg, Ty::I64, &[], InstData::ArgIndex(1))
+    }
+
+    fn null_ptr_forms() -> Vec<(&'static str, Inst)> {
+        vec![
+            (
+                "i64 zero",
+                test_inst(1, Opcode::ConstI64, Ty::I64, &[], InstData::ConstI64(0)),
+            ),
+            (
+                "ptr-typed i64 zero",
+                test_inst(1, Opcode::ConstI64, Ty::Ptr, &[], InstData::ConstI64(0)),
+            ),
+            (
+                "ptr-typed u64 zero",
+                test_inst(1, Opcode::ConstU64, Ty::Ptr, &[], InstData::ConstU64(0)),
+            ),
+            (
+                "linear-ptr-typed i64 zero",
+                test_inst(
+                    1,
+                    Opcode::ConstI64,
+                    Ty::LinearPtr,
+                    &[],
+                    InstData::ConstI64(0),
+                ),
+            ),
+        ]
+    }
+
+    /// A provably null source is empty whatever the length, so no capacity
+    /// assumption is emitted at all and the proof is not reported as bounded.
+    /// A null literal is recognised whether the IR types it as an integer or as
+    /// a pointer.
     #[test]
-    fn raw_parts_copy_literal_null_source_carries_no_bound() {
-        for (extern_name, _, _) in RAW_PARTS_CASES {
-            let mut f = raw_parts_copy_fn(extern_name, Ty::U64);
+    fn raw_parts_copy_literal_null_source_is_empty_without_a_bound() {
+        for (extern_name, _, cap) in RAW_PARTS_CASES {
+            let lens = [
+                test_inst(2, Opcode::GetArg, Ty::U64, &[], InstData::ArgIndex(2)),
+                test_inst(2, Opcode::ConstU64, Ty::U64, &[], InstData::ConstU64(3)),
+                test_inst(
+                    2,
+                    Opcode::ConstU64,
+                    Ty::U64,
+                    &[],
+                    InstData::ConstU64(cap as u64 + 5),
+                ),
+            ];
+            for (what, null) in null_ptr_forms() {
+                for len in &lens {
+                    let f = ctor_fn(extern_name, false, null.clone(), len.clone());
+                    let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
+                    assert!(c.contains("  v3.len = 0;\n"), "{extern_name} {what}: {c}");
+                    assert!(
+                        !c.contains("__ESBMC_assume(v1 == 0")
+                            && !c.contains("__ESBMC_assert(v1 == 0")
+                            && !c.contains("vow:model-bound"),
+                        "{extern_name} {what}: {c}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A phi of null constants is a null source too, whatever type it carries.
+    #[test]
+    fn raw_parts_copy_phi_of_null_constants_is_empty() {
+        for ty in [Ty::U64, Ty::Ptr] {
+            let mut f =
+                raw_parts_fn_with_body("__vow_vec_from_raw_parts_copy_val", phi_of_two(0, 0), 3);
             f.params = vec![Ty::U64];
             f.param_names = vec!["n".to_string()];
-            f.blocks[0].insts[0] =
-                test_inst(0, Opcode::ConstI64, Ty::I64, &[], InstData::ConstI64(0));
-            f.blocks[0].insts[1] =
-                test_inst(1, Opcode::GetArg, Ty::U64, &[], InstData::ArgIndex(0));
+            let insts = &mut f.blocks[0].insts;
+            insts[0] = test_inst(0, Opcode::GetArg, Ty::U64, &[], InstData::ArgIndex(0));
+            for inst in insts.iter_mut() {
+                match inst.opcode {
+                    Opcode::Phi => inst.ty = ty,
+                    Opcode::Call => inst.args = vec![vow_ir::InstId(3), vow_ir::InstId(0)],
+                    _ => {}
+                }
+            }
             let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
-            assert!(c.contains("__ESBMC_assume(v0 == 0 || (v1 <"), "{c}");
+            assert!(c.contains("  v6.len = 0;\n"), "{ty:?}: {c}");
+            assert!(!c.contains("vow:model-bound"), "{ty:?}: {c}");
+            assert!(!c.contains("__ESBMC_assume(v3 == 0"), "{ty:?}: {c}");
+        }
+    }
+
+    /// `String::new(ptr, len)` shares the raw-parts model: a constant length
+    /// outside the model capacity fails closed for a non-null source (negative
+    /// lengths are huge unsigned values), a null source is empty, and a
+    /// non-constant length is a tagged capacity assumption.
+    #[test]
+    fn string_new_follows_the_raw_parts_model() {
+        let cap = STRING_MODEL_CAP as u64;
+        for (extern_name, in_arena) in [
+            ("__vow_string_new", false),
+            ("__vow_string_new_in_arena", true),
+        ] {
+            let beyond = [
+                test_inst(
+                    2,
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    &[],
+                    InstData::ConstI64(cap as i64),
+                ),
+                test_inst(2, Opcode::ConstI64, Ty::I64, &[], InstData::ConstI64(-1)),
+                test_inst(
+                    2,
+                    Opcode::ConstU64,
+                    Ty::U64,
+                    &[],
+                    InstData::ConstU64(u64::MAX),
+                ),
+            ];
+            for len in beyond {
+                let f = ctor_fn(extern_name, in_arena, ptr_param(), len.clone());
+                let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
+                assert!(
+                    c.contains("__ESBMC_assert(v1 == 0, \"string capacity\");\n  v3.len = 0;\n"),
+                    "{extern_name} {:?}: {c}",
+                    len.data
+                );
+                assert!(
+                    !c.contains("__ESBMC_assume(v1 == 0") && !c.contains("vow:model-bound"),
+                    "{extern_name} {:?}: {c}",
+                    len.data
+                );
+            }
+
+            let in_range = test_inst(2, Opcode::ConstI64, Ty::I64, &[], InstData::ConstI64(0));
+            let f = ctor_fn(extern_name, in_arena, ptr_param(), in_range);
+            let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
+            let expected = format!("__ESBMC_assume(v1 == 0 || (v2 >= 0 && v2 < {cap}));\n");
+            assert!(c.contains(&expected), "{extern_name} in range: {c}");
             assert!(!c.contains("vow:model-bound"), "{extern_name}: {c}");
+
+            let var = test_inst(2, Opcode::GetArg, Ty::U64, &[], InstData::ArgIndex(2));
+            let f = ctor_fn(extern_name, in_arena, ptr_param(), var.clone());
+            let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
+            let expected = format!(
+                "__ESBMC_assume(v1 == 0 || (v2 < {cap})); /* vow:model-bound String {cap} */\n  \
+                 v3.len = v1 == 0 ? 0 : v2;"
+            );
+            assert!(c.contains(&expected), "{extern_name} variable: {c}");
+
+            let zero = test_inst(2, Opcode::ConstI64, Ty::I64, &[], InstData::ConstI64(0));
+            let null = test_inst(1, Opcode::ConstI64, Ty::I64, &[], InstData::ConstI64(0));
+            let c = emit_c_function(
+                &ctor_fn(extern_name, in_arena, null, zero),
+                &HashMap::new(),
+                &VerifyLimits::default(),
+            );
+            assert!(c.contains("  v3.len = 0;\n"), "String::new(): {c}");
+            assert!(!c.contains("__ESBMC_assume(v"), "String::new(): {c}");
         }
     }
 
