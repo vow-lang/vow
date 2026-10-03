@@ -173,7 +173,8 @@ against an unmodified compiler.
    type-level fact (never weakened or bounded). The survivors are genuine
    signed domains: i64 value and arithmetic-result clauses, `-1` sentinels,
    bit-packed handles, the documented-opaque `stdlib/gc` slots, a bound taken
-   from a named const (both compilers reject unsigned-typed consts today), i64
+   from a named const (both compilers rejected unsigned-typed consts when this
+   sweep ran; they now accept every integer type), i64
    dynamic shift counts, String offsets, and
    `examples/vec_bounds.vow` (Decision 4's case).
 

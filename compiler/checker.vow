@@ -651,7 +651,7 @@ fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
     }
     let val: i64 = {
         if val_tag == EXPR_LIT_INT() {
-            if resolved_tid != CTY_I64() && resolved_tid != CTY_I32() {
+            if !ty_is_integer(e.ts, resolved_tid) {
                 env_emit_error(e, String::from("const has integer value but non-integer type"), cdef_span(a, cid));
             }
             expr_a(a, val_eid)
@@ -666,7 +666,7 @@ fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
                 env_emit_error(e, String::from("const value must be a literal"), expr_span(a, val_eid));
                 0
             } else {
-                if resolved_tid != CTY_I64() && resolved_tid != CTY_I32() {
+                if !ty_is_integer(e.ts, resolved_tid) {
                     env_emit_error(e, String::from("const has negated value but non-integer type"), cdef_span(a, cid));
                 }
                 let inner_eid: i64 = expr_b(a, val_eid);

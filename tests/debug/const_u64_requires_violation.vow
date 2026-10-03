@@ -1,0 +1,19 @@
+// TEST: exit 134
+// TEST: stderr "blame=Caller"
+module ConstU64RequiresViolation
+
+const SLOTS: u64 = 8;
+
+fn advance(i: u64) -> u64 vow {
+  requires: i < SLOTS
+  ensures: result == i + 1
+} {
+  i + 1
+}
+
+fn main() -> i32 [io] {
+  print_u64(advance(7));
+  print_str("\n");
+  print_u64(advance(8));
+  0
+}

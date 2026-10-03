@@ -34,9 +34,11 @@ Named constants with compile-time values:
 const MAX_SIZE: i64 = 1024;
 const NEG_ONE: i64 = -1;
 const DEBUG: bool = true;
+const SLOTS: u64 = 8;
+const MAX_BYTE: u8 = 255;
 ```
 
-Supported value forms: integer literals, boolean literals, negated integer literals. Constants are inlined at every use site (zero runtime cost). The type must be any of the 10 integer types (`i8`, `i16`, `i32`, `i64`, `i128`, `u8`, `u16`, `u32`, `u64`, `u128`) or `bool`. Integer constants are subject to the same compile-time range check as integer literals. Constants are referenced by name in expressions like any other identifier.
+Supported value forms: integer literals, boolean literals, negated integer literals. Constants are inlined at every use site (zero runtime cost). The type must be any of the 10 integer types (`i8`, `i16`, `i32`, `i64`, `i128`, `u8`, `u16`, `u32`, `u64`, `u128`) or `bool`. Integer constants are subject to the same compile-time range check as integer literals: a value outside the declared type's range, including a negative value for an unsigned type, is `LiteralOutOfRange`. A constant keeps its declared type at every use (it does not context-coerce like an unsuffixed literal), so a `u64` constant indexes a `Vec` directly and an `i64` constant does not. Constants are referenced by name in expressions like any other identifier.
 
 ## Functions
 
