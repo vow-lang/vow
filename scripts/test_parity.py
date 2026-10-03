@@ -89,6 +89,17 @@ def _as_json(document_or_text):
     return json.dumps(document_or_text)
 
 
+def run_empty_output_cli(*args):
+    """Invoke `parity.py empty-output ...` as full_test.sh's check_empty_output
+    helper does."""
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), "empty-output", *args],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 class CompareJsonCharacterizationTest(unittest.TestCase):
     def test_process_exit_codes_must_match(self):
         errors = parity.compare_json(document(), document(), 0, 1)
@@ -1180,12 +1191,44 @@ KNOWN_CEX_COUNT_FIXTURE = (
 KNOWN_CEX_COMBINED_FIXTURE = KNOWN_CEX_FIXTURE + KNOWN_CEX_COUNT_FIXTURE
 
 
+class ClassifyEmptyOutputTest(unittest.TestCase):
+    def test_both_empty_is_a_skip(self):
+        self.assertEqual("SKIP", parity.classify_empty_output(True, True))
+
+    def test_rust_empty_alone_is_a_fail(self):
+        self.assertEqual("FAIL", parity.classify_empty_output(True, False))
+
+    def test_self_empty_alone_is_a_fail(self):
+        self.assertEqual("FAIL", parity.classify_empty_output(False, True))
+
+
 class ParityCliCharacterizationTest(unittest.TestCase):
     def test_malformed_json_fails_closed(self):
         completed = run_parity_cli("json", "{", document(), 0, 0)
 
         self.assertEqual(1, completed.returncode)
         self.assertIn("FAIL: JSON parse error:", completed.stdout)
+
+    def test_empty_output_cli_reports_skip_for_both_empty(self):
+        completed = run_empty_output_cli("1", "1")
+
+        self.assertEqual((0, "SKIP"), (completed.returncode, completed.stdout.strip()))
+
+    def test_empty_output_cli_reports_fail_for_rust_side_alone(self):
+        completed = run_empty_output_cli("1", "0")
+
+        self.assertEqual((0, "FAIL"), (completed.returncode, completed.stdout.strip()))
+
+    def test_empty_output_cli_reports_fail_for_self_side_alone(self):
+        completed = run_empty_output_cli("0", "1")
+
+        self.assertEqual((0, "FAIL"), (completed.returncode, completed.stdout.strip()))
+
+    def test_empty_output_wrong_arity_exits_2(self):
+        completed = run_empty_output_cli("1")
+
+        self.assertEqual(2, completed.returncode)
+        self.assertIn("usage:", completed.stderr)
 
     def test_known_counterexample_value_divergence_is_a_loud_skip(self):
         completed = run_parity_cli(
