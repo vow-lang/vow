@@ -3740,13 +3740,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "__vow_string_trim_in_arena"
-        | "__vow_string_to_upper_in_arena"
-        | "__vow_string_to_lower_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
         "__vow_string_replace" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -4075,8 +4068,6 @@ mod tests {
         let insert = make_extern_sig("__vow_btreemap_insert_in_arena", &module_ctx.obj_module);
         assert_eq!(insert.params.len(), 4, "arena, map, key, value");
         assert!(insert.params.iter().all(|p| p.value_type == types::I64));
-        let new = make_extern_sig("__vow_btreemap_new_in_arena", &module_ctx.obj_module);
-        assert_eq!(new.params.len(), 1);
         unsafe { __vow_clif_destroy(ctx) };
     }
 
