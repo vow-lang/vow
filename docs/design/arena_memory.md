@@ -1487,14 +1487,14 @@ The stdlib MUST provide:
   producing a silent dangling reference the type checker cannot
   see. The intrinsic's monomorphisation therefore synthesises a
   per-type deep-copy walk at each call site.
-- `String::from_raw_parts_copy(ptr: *const u8, len: i64) -> String`
+- `String::from_raw_parts_copy(ptr: *const u8, len: u64) -> String`
   — copies bytes from a raw C pointer into `target_region` as a
-  `String`. `FreshInCaller`. `len` is declared as `i64` to match
-  the existing length-bearing APIs in `docs/spec/grammar.md`
-  (Vow has no `usize` surface type today); at the FFI boundary
-  the value is converted to `uintptr_t` before calling C, the
-  same conversion every existing length-aware extern uses.
-- `Vec::from_raw_parts_copy(ptr, len: i64) -> Vec<T>` for each
+  `String`. `FreshInCaller`. `len` is declared as `u64` (lengths are unsigned,
+  per ADR 0003; Vow has no `usize` surface type); `ptr` stays `i64`.
+  At the FFI boundary the value is converted to `uintptr_t` before
+  calling C, the same conversion every existing length-aware extern
+  uses.
+- `Vec::from_raw_parts_copy(ptr, len: u64) -> Vec<T>` for each
   supported element type `T` — analogous for `Vec`. Also a
   compiler intrinsic, monomorphised per call site. Same
   `i64 ↔ uintptr_t` ABI conversion at the FFI boundary.

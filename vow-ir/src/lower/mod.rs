@@ -3098,18 +3098,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             span,
                         )
                     });
-                let len_id = fields
-                    .get(1)
-                    .map(|e| lower_expr(ctx, e))
-                    .unwrap_or_else(|| {
-                        ctx.emit(
-                            Opcode::ConstI64,
-                            Ty::I64,
-                            vec![],
-                            InstData::ConstI64(0),
-                            span,
-                        )
-                    });
+                let len_id = lower_raw_parts_len(ctx, fields.get(1), span);
                 let result = ctx.emit(
                     Opcode::Call,
                     Ty::Ptr,
@@ -3209,18 +3198,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             span,
                         )
                     });
-                let len_id = fields
-                    .get(1)
-                    .map(|e| lower_expr(ctx, e))
-                    .unwrap_or_else(|| {
-                        ctx.emit(
-                            Opcode::ConstI64,
-                            Ty::I64,
-                            vec![],
-                            InstData::ConstI64(0),
-                            span,
-                        )
-                    });
+                let len_id = lower_raw_parts_len(ctx, fields.get(1), span);
                 let result = ctx.emit(
                     Opcode::Call,
                     Ty::Ptr,
@@ -4565,6 +4543,17 @@ fn lower_consumed_expr_with_expected_ast_type(
     wide_ty
         .map(|ty| lower_narrow_literal(ctx, expr, original, ty))
         .unwrap_or(original)
+}
+
+/// Lower a `from_raw_parts_copy` length argument in its `u64` context so an
+/// integer literal becomes a `ConstU64` rather than a wrapped `ConstI64`.
+fn lower_raw_parts_len(ctx: &mut LowerCtx, len: Option<&Expr>, span: Span) -> InstId {
+    let Some(expr) = len else {
+        return emit_integer_zero(ctx, Ty::U64, span);
+    };
+    record_wide_control_flow_context(ctx, expr, Ty::U64);
+    let original = lower_consumed_expr(ctx, expr);
+    lower_narrow_literal(ctx, expr, original, Ty::U64)
 }
 
 fn emit_narrow_integer_constant(ctx: &mut LowerCtx, value: u128, ty: Ty, span: Span) -> InstId {
@@ -6811,6 +6800,47 @@ fn sum(v: Vec<i64>) -> i64 {
             1,
             "only the user's `s + x` stays I64:\n{func:#?}"
         );
+    }
+
+    /// A `from_raw_parts_copy` length literal is lowered in its `u64` context.
+    /// A wrapped negative `ConstI64` here made the C model's `>= 0` guard
+    /// unsatisfiable and so proved everything after the call.
+    #[test]
+    fn raw_parts_copy_length_literal_lowers_as_u64() {
+        for (ctor, extern_sym, ty) in [
+            (
+                "String::from_raw_parts_copy",
+                "__vow_string_from_raw_parts_copy",
+                "String",
+            ),
+            (
+                "Vec::from_raw_parts_copy",
+                "__vow_vec_from_raw_parts_copy_val",
+                "Vec<i64>",
+            ),
+        ] {
+            for (literal, expected) in [
+                ("5", 5u64),
+                ("10000000000000000000", 10_000_000_000_000_000_000u64),
+            ] {
+                let source = format!(
+                    "module RawPartsLen\n\nfn f() -> {ty} {{\n    {ctor}(0, {literal})\n}}\n"
+                );
+                let module = lower_source_to_module(&source, "raw_parts_len.vow");
+                let insts = insts_of(&module.functions[0]);
+                let call = insts
+                    .iter()
+                    .find(|i| i.data == InstData::CallExtern(extern_sym.to_string()))
+                    .unwrap_or_else(|| panic!("{extern_sym} call missing"));
+                let len = insts
+                    .iter()
+                    .find(|i| i.id == call.args[1])
+                    .expect("length operand");
+                assert_eq!(len.opcode, Opcode::ConstU64, "{ctor}({literal})");
+                assert_eq!(len.ty, Ty::U64, "{ctor}({literal})");
+                assert_eq!(len.data, InstData::ConstU64(expected), "{ctor}({literal})");
+            }
+        }
     }
 
     /// The applier half of the `builtin_method_spec` seam: the table says *what*

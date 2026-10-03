@@ -2276,7 +2276,7 @@ m.contains_key(k)
 | Method         | Signature                        |
 |----------------|----------------------------------|
 | `Vec::new()`   | `() -> Vec<T>`                   |
-| `Vec::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> Vec<T>` for flat scalar `T` |
+| `Vec::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> Vec<T>` for flat scalar `T` |
 | `.push(val)`   | `(T) -> ()`                      |
 | `.pop()`       | `() -> ()`                       |
 | `.len()`       | `() -> u64`                      |
@@ -2293,7 +2293,7 @@ m.contains_key(k)
 |---------------------|-----------------------------|
 | `String::from(s)`   | `(String) -> String` — mutable copy |
 | `String::new()`     | `() -> String`              |
-| `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |
+| `String::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> String` |
 | `.len()`            | `() -> u64`                 |
 | `.byte_at(i)`       | `(<int>) -> i64`            |
 | `.push_byte(b)`     | `(<int>) -> ()` — appends one byte; `b` is a byte value in `0..=255` |
@@ -2487,7 +2487,7 @@ vow {
 
 `pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a flat scalar slot type (`i*`, `u*`, `f32`, `f64`, `bool`). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.
 
-`String::from_raw_parts_copy(ptr: i64, len: i64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: i64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The surface length type is `i64`; the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.
+`String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.
 
 For pointer-containing C payloads, a wrapper must be written per type: call the extern, recursively copy every Vow-owned heap subobject into the target region, free every C-owned pointer according to the extern's ownership contract, then return the Vow-placed value. A bytewise copy of a pointer-containing payload is unsound because it preserves stale pointers into C-owned storage.
 
@@ -3418,6 +3418,11 @@ not statically known, such as `String::from_cstr`, produce a nondeterministic
 length (0 to max-1). `string_matches_literal_at` is modeled against the
 literal's concrete bytes and byte length; the third argument must be a string
 literal so the verifier never has to infer static text from a dynamic `String`.
+A constant length passed to `String::from_raw_parts_copy` or
+`Vec::from_raw_parts_copy` that does not fit the model capacity fails closed
+with the capacity-limit diagnostic rather than being assumed away. A
+non-constant length is still assumed to be below the model capacity, so a
+postcondition that depends on it is verified only within that bound.
 
 ## Blame Model
 
@@ -7589,7 +7594,7 @@ m.contains_key(k)
 | Method         | Signature                        |
 |----------------|----------------------------------|
 | `Vec::new()`   | `() -> Vec<T>`                   |
-| `Vec::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> Vec<T>` for flat scalar `T` |
+| `Vec::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> Vec<T>` for flat scalar `T` |
 | `.push(val)`   | `(T) -> ()`                      |
 | `.pop()`       | `() -> ()`                       |
 | `.len()`       | `() -> u64`                      |
@@ -7606,7 +7611,7 @@ m.contains_key(k)
 |---------------------|-----------------------------|
 | `String::from(s)`   | `(String) -> String` — mutable copy |
 | `String::new()`     | `() -> String`              |
-| `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |
+| `String::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> String` |
 | `.len()`            | `() -> u64`                 |
 | `.byte_at(i)`       | `(<int>) -> i64`            |
 | `.push_byte(b)`     | `(<int>) -> ()` — appends one byte; `b` is a byte value in `0..=255` |
@@ -7800,7 +7805,7 @@ vow {
 
 `pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a flat scalar slot type (`i*`, `u*`, `f32`, `f64`, `bool`). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.
 
-`String::from_raw_parts_copy(ptr: i64, len: i64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: i64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The surface length type is `i64`; the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.
+`String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.
 
 For pointer-containing C payloads, a wrapper must be written per type: call the extern, recursively copy every Vow-owned heap subobject into the target region, free every C-owned pointer according to the extern's ownership contract, then return the Vow-placed value. A bytewise copy of a pointer-containing payload is unsound because it preserves stale pointers into C-owned storage.
 
@@ -8733,6 +8738,11 @@ not statically known, such as `String::from_cstr`, produce a nondeterministic
 length (0 to max-1). `string_matches_literal_at` is modeled against the
 literal's concrete bytes and byte length; the third argument must be a string
 literal so the verifier never has to infer static text from a dynamic `String`.
+A constant length passed to `String::from_raw_parts_copy` or
+`Vec::from_raw_parts_copy` that does not fit the model capacity fails closed
+with the capacity-limit diagnostic rather than being assumed away. A
+non-constant length is still assumed to be below the model capacity, so a
+postcondition that depends on it is verified only within that bound.
 
 ## Blame Model
 

@@ -1,0 +1,10 @@
+// TEST: error-code TypeMismatch
+module VecRawPartsCopyI64Len
+
+fn copy(p: i64, n: i64) -> Vec<i64> {
+    Vec::from_raw_parts_copy(p, n)
+}
+
+fn main() -> i32 {
+    0
+}

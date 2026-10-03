@@ -914,10 +914,12 @@ enum BuiltinConstructor {
     /// result `Str`. Its wrong-arity path evaluates the fields then returns,
     /// suppressing the per-argument check.
     StringFrom,
-    /// `String`/`Vec::from_raw_parts_copy`: arity 2, every field is contextually
-    /// coerced to `i64` (the check runs even on wrong arity). `display` prefixes
-    /// the diagnostics, `signature` is the arity hint, `result` is the built type
-    /// (`Str` for `String`, `Never` for `Vec`).
+    /// `String`/`Vec::from_raw_parts_copy`: arity 2, the pointer field is
+    /// contextually coerced to `i64` and the length field to `u64`. The check
+    /// runs even on wrong arity; fields past the second are only evaluated, so
+    /// an extra argument adds no diagnostic beyond the arity error. `display`
+    /// prefixes the diagnostics, `signature` is the arity hint, `result` is the
+    /// built type (`Str` for `String`, `Never` for `Vec`).
     RawParts {
         display: &'static str,
         signature: &'static str,
@@ -942,12 +944,12 @@ fn builtin_constructor(enum_name: &str, variant_name: &str) -> Option<BuiltinCon
         ("String", "from") => StringFrom,
         ("String", "from_raw_parts_copy") => RawParts {
             display: "String::from_raw_parts_copy",
-            signature: "expected signature: (ptr: i64, len: i64) -> String",
+            signature: "expected signature: (ptr: i64, len: u64) -> String",
             result: Ty::Str,
         },
         ("Vec", "from_raw_parts_copy") => RawParts {
             display: "Vec::from_raw_parts_copy",
-            signature: "expected signature: (ptr: i64, len: i64) -> Vec<T>",
+            signature: "expected signature: (ptr: i64, len: u64) -> Vec<T>",
             result: Ty::Never,
         },
         _ => return None,
@@ -3113,20 +3115,25 @@ impl<'e> Checker<'e> {
                                     vec![signature.to_string()],
                                 );
                             }
-                            for field in fields {
+                            for (position, field) in fields.iter().enumerate() {
                                 let arg_ty = self.check_expr(field);
-                                self.check_contextual_integer_literal_ranges(field, &Ty::I64);
-                                if !can_context_coerce(&arg_ty, &Ty::I64) {
+                                let (expected, hint) = match position {
+                                    0 => (Ty::I64, "raw pointers cross the FFI boundary as i64"),
+                                    1 => (
+                                        Ty::U64,
+                                        "lengths are unsigned; convert a signed value with `as u64`",
+                                    ),
+                                    _ => continue,
+                                };
+                                self.check_contextual_integer_literal_ranges(field, &expected);
+                                if !can_context_coerce(&arg_ty, &expected) {
                                     self.emit_error_with_hints(
                                         ErrorCode::TypeMismatch,
                                         format!(
-                                            "{display} argument has type `{arg_ty}` but expects `i64`"
+                                            "{display} argument has type `{arg_ty}` but expects `{expected}`"
                                         ),
                                         field.span,
-                                        vec![
-                                            "raw pointers and lengths cross the FFI boundary as i64"
-                                                .to_string(),
-                                        ],
+                                        vec![hint.to_string()],
                                     );
                                 }
                             }
@@ -6682,6 +6689,67 @@ mod tests {
             fields: vec![ident("ptr"), int_lit()],
         }));
         assert!(checker.has_errors());
+    }
+
+    #[test]
+    fn raw_parts_copy_len_is_u64_and_pointer_is_i64() {
+        for ty_name in ["String", "Vec"] {
+            let path = || vec![ty_name.to_string(), "from_raw_parts_copy".to_string()];
+
+            let mut emitter = TestEmitter(vec![]);
+            let mut checker = new_checker(&mut emitter);
+            checker.env.define("ptr", Ty::I64);
+            checker.env.define("len", Ty::U64);
+            checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+                path: path(),
+                fields: vec![ident("ptr"), ident("len")],
+            }));
+            assert!(!checker.has_errors(), "{ty_name}: i64 ptr + u64 len");
+
+            let mut emitter = TestEmitter(vec![]);
+            let mut checker = new_checker(&mut emitter);
+            checker.env.define("ptr", Ty::I64);
+            checker.env.define("len", Ty::I64);
+            checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+                path: path(),
+                fields: vec![ident("ptr"), ident("len")],
+            }));
+            assert_eq!(emitter.0.len(), 1, "{ty_name}: i64 len");
+            assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
+            assert!(emitter.0[0].message.contains("expects `u64`"));
+
+            let mut emitter = TestEmitter(vec![]);
+            let mut checker = new_checker(&mut emitter);
+            checker.env.define("ptr", Ty::U64);
+            checker.env.define("len", Ty::U64);
+            checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+                path: path(),
+                fields: vec![ident("ptr"), ident("len")],
+            }));
+            assert_eq!(emitter.0.len(), 1, "{ty_name}: u64 ptr");
+            assert!(emitter.0[0].message.contains("expects `i64`"));
+        }
+    }
+
+    #[test]
+    fn raw_parts_copy_extra_argument_reports_only_the_arity_error() {
+        for ty_name in ["String", "Vec"] {
+            let mut emitter = TestEmitter(vec![]);
+            let mut checker = new_checker(&mut emitter);
+            checker.env.define("ptr", Ty::I64);
+            checker.env.define("len", Ty::U64);
+            checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+                path: vec![ty_name.to_string(), "from_raw_parts_copy".to_string()],
+                fields: vec![ident("ptr"), ident("len"), ident("len")],
+            }));
+            assert_eq!(emitter.0.len(), 1, "{ty_name}: {:?}", emitter.0);
+            assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
+            assert!(
+                emitter.0[0]
+                    .message
+                    .contains("expects 2 arguments but got 3")
+            );
+        }
     }
 
     #[test]

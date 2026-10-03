@@ -1,0 +1,11 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: error-count 1
+module VecRawPartsCopyLenLiteralAboveU64
+
+fn copy() -> Vec<i64> {
+    Vec::from_raw_parts_copy(0, 18446744073709551616)
+}
+
+fn main() -> i32 {
+    0
+}

@@ -1,0 +1,29 @@
+// TEST: stdout "ok"
+module RawPartsCopyU64Len
+
+fn empty_string(n: u64) -> String {
+    String::from_raw_parts_copy(0, n)
+}
+
+fn empty_vec(n: u64) -> Vec<i64> {
+    Vec::from_raw_parts_copy(0, n)
+}
+
+fn main() -> i32 [io] {
+    let zero: u64 = 0;
+    let s: String = empty_string(zero);
+    if s.len() != zero { return 1; }
+
+    let v: Vec<i64> = empty_vec(zero);
+    if v.len() != zero { return 2; }
+
+    let signed: i64 = 0;
+    let from_signed: String = empty_string(signed as u64);
+    if from_signed.len() != 0 { return 3; }
+
+    let from_len: Vec<i64> = empty_vec(s.len());
+    if from_len.len() != 0 { return 4; }
+
+    print_str(String::from("ok"));
+    0
+}

@@ -1,0 +1,10 @@
+// TEST: error-code TypeMismatch
+module StringRawPartsCopyU64Ptr
+
+fn copy(p: u64, n: u64) -> String {
+    String::from_raw_parts_copy(p, n)
+}
+
+fn main() -> i32 {
+    0
+}
