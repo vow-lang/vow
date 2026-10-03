@@ -1,0 +1,9 @@
+// TEST: error-code CodegenUnsupported
+// TEST: error-count 1
+module HashMapValueOptionU128
+
+fn main() -> i32 [panic] {
+    let m: HashMap<i64, Option<u128>> = HashMap::new();
+    m.insert(1, Option::Some(340282366920938463463374607431768211455));
+    0
+}

@@ -5066,14 +5066,7 @@ fn lower_consumed_expr_with_expected_ast_tid(
     ctx: LowerCtx, eid: i64, expected_tid: i64
 ) -> i64 {
     lctx_record_wide_expected_ast_context(ctx, ctx.arena, eid, expected_tid);
-    let expected_ty: i64 = {
-        if expected_tid == -1 { -1 } else { lctx_lower_ast_ty(ctx, expected_tid) }
-    };
-    let original: i64 = lower_consumed_expr(ctx, eid);
-    if expected_ty == ITY_I128() || expected_ty == ITY_U128() {
-        return lower_narrow_literal(ctx, ctx.arena, eid, original, expected_ty);
-    }
-    original
+    lower_consumed_expr(ctx, eid)
 }
 
 fn lower_stmt(ctx: LowerCtx, sid: i64) {

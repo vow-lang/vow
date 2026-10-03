@@ -4620,16 +4620,10 @@ fn lower_consumed_expr_with_expected_ast_type(
     expr: &Expr,
     expected: Option<&AstType>,
 ) -> InstId {
-    let wide_ty = expected
-        .map(|ast_ty| {
-            record_wide_expected_ast_context(ctx, expr, ast_ty);
-            lower_ty_with_linear(ast_ty, &ctx.linear_owner_names, &ctx.type_aliases)
-        })
-        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128));
-    let original = lower_consumed_expr(ctx, expr);
-    wide_ty
-        .map(|ty| lower_narrow_literal(ctx, expr, original, ty))
-        .unwrap_or(original)
+    if let Some(ast_ty) = expected {
+        record_wide_expected_ast_context(ctx, expr, ast_ty);
+    }
+    lower_consumed_expr(ctx, expr)
 }
 
 /// Lower a `from_raw_parts_copy` length argument in its `u64` context so an
