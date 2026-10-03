@@ -2,6 +2,7 @@ module Verifier
 
 use c_emitter
 use clif
+use diag
 use ir
 use ir_printer
 use perfetto
@@ -105,7 +106,7 @@ fn str_find_str(haystack: String, needle: String) -> i64 {
     -1
 }
 
-fn ascii_lower_byte(b: i64) -> i64 {
+fn ascii_lower_byte(b: u8) -> u8 {
     if b >= 65 && b <= 90 {
         return b + 32;
     }
@@ -117,7 +118,7 @@ fn str_ascii_lower(s: String) -> String {
     let n: u64 = s.len();
     let mut i: u64 = 0u64;
     while i < n {
-        out.push_byte(i64_to_u8_wrap(ascii_lower_byte(s.byte_at(i))));
+        out.push_byte(ascii_lower_byte(byte_at_u8(s, i)));
         i = i + 1;
     }
     out

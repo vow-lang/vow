@@ -5311,14 +5311,15 @@ fn print_str_lit_text(raw: String) -> String {
     let n: u64 = raw.len();
     let mut i: u64 = 0;
     while i < n {
-        let b: i64 = raw.byte_at(i);
+        let bu: u8 = byte_at_u8(raw, i);
+        let b: i64 = bu as i64;
         if b == 10 { result.push_str(String::from("\\n")); }
         else if b == 9 { result.push_str(String::from("\\t")); }
         else if b == 13 { result.push_str(String::from("\\r")); }
         else if b == 92 { result.push_str(String::from("\\\\")); }
         else if b == 34 { result.push_str(String::from("\\\"")); }
         else if b == 0 { result.push_str(String::from("\\0")); }
-        else { result.push_byte(i64_to_u8_wrap(b)); }
+        else { result.push_byte(bu); }
         i = i + 1;
     }
     result.push_str(String::from("\""));

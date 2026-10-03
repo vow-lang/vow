@@ -1,5 +1,6 @@
 module IrPrinter
 
+use diag
 use ir
 
 fn u64_to_str(v: u64) -> String {
@@ -36,7 +37,8 @@ fn debug_escape_str(s: String) -> String {
     let n: u64 = s.len();
     let mut i: u64 = 0u64;
     while i < n {
-        let b: i64 = s.byte_at(i);
+        let bu: u8 = byte_at_u8(s, i);
+        let b: i64 = bu as i64;
         if b == 34 {
             out.push_byte(92);
             out.push_byte(34);
@@ -56,7 +58,7 @@ fn debug_escape_str(s: String) -> String {
             out.push_byte(92);
             out.push_byte(48);
         } else {
-            out.push_byte(i64_to_u8_wrap(b));
+            out.push_byte(bu);
         }
         i = i + 1;
     }

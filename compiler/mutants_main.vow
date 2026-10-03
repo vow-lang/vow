@@ -271,14 +271,15 @@ fn shell_quote(s: String) -> String {
     let n: u64 = s.len();
     let mut i: u64 = 0u64;
     while i < n {
-        let b: i64 = s.byte_at(i);
+        let bu: u8 = byte_at_u8(s, i);
+        let b: i64 = bu as i64;
         if b == 39 {
             r.push_byte(39);
             r.push_byte(92);
             r.push_byte(39);
             r.push_byte(39);
         } else {
-            r.push_byte(i64_to_u8_wrap(b));
+            r.push_byte(bu);
         }
         i = i + 1;
     }

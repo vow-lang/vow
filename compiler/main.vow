@@ -106,11 +106,7 @@ fn default_output(path: String) -> String {
         }
     };
     let r: String = String::from("build/");
-    let mut i: u64 = start;
-    while i < end {
-        r.push_byte(i64_to_u8_wrap(path.byte_at(i)));
-        i = i + 1;
-    };
+    r.push_str(path.substring(start, end));
     r
 }
 
