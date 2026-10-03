@@ -1,0 +1,32 @@
+// TEST: stdout "2 2 2 2 1 32 0\n"
+module ShiftCountWideMasks
+
+fn shl_i16(x: i16, s: u32) -> i16 { x << s }
+fn shl_i32(x: i32, s: u32) -> i32 { x << s }
+fn shl_i64(x: i64, s: u32) -> i64 { x << s }
+fn shl_u64(x: u64, s: u32) -> u64 { x << s }
+fn shl_i128(x: i128, s: u32) -> i128 { x << s }
+fn shr_u64(x: u64, s: u32) -> u64 { x >> s }
+
+fn main() -> i32 [io] {
+    let s16: u32 = 17;
+    let s32: u32 = 33;
+    let s64: u32 = 65;
+    let s66: u32 = 66;
+    let s128: u32 = 129;
+    print_i64(shl_i16(1 as i16, s16) as i64);
+    print_str(String::from(" "));
+    print_i64(shl_i32(1, s32) as i64);
+    print_str(String::from(" "));
+    print_i64(shl_i64(1, s64));
+    print_str(String::from(" "));
+    print_u64(shl_u64(1u64, s64));
+    print_str(String::from(" "));
+    if shl_i128(1 as i128, s128) == (2 as i128) { print_i64(1); } else { print_i64(0); }
+    print_str(String::from(" "));
+    print_u64(shr_u64(128u64, s66));
+    print_str(String::from(" "));
+    print_u64(shr_u64(1u64, s64));
+    print_str(String::from("\n"));
+    0
+}
