@@ -3,10 +3,9 @@
 // struct literals and every type form a `let` annotation can carry. The expected
 // text lives in contract_text_blocks.expected, one escaped line per clause
 // (backslash as `\\`, newline as `\n`); the Rust integration test
-// (vow-ir/tests/contract_text_forms.rs), the self-hosted unit test
-// (compiler/tests/test_lower_contract_text.vow) and the `contract-text/parity`
-// block of scripts/full_test.sh all compare against it. Nested blocks restart at
-// column 0, exactly as the canonical printer renders them.
+// (vow-ir/tests/contract_text_forms.rs) and the `contract-text/parity` block of
+// scripts/full_test.sh (both compilers) compare against it. Nested blocks
+// restart at column 0, exactly as the canonical printer renders them.
 module ContractTextBlocks
 
 enum Shape { Empty, Circle(i64), Rect(i64, i64) }

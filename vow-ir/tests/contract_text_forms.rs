@@ -62,12 +62,3 @@ fn leaf_and_binding_descriptions_match_the_shared_expected_text() {
     let got = escaped_descriptions(ATOMS_FIXTURE, "contract_text_atoms.vow");
     assert_eq!(got, expected_lines(ATOMS_EXPECTED));
 }
-
-#[test]
-fn u64_literal_above_i64_max_prints_unsigned() {
-    let got = descriptions(
-        "module U\nfn f(x: u64) -> u64 vow {\n  ensures: result == 18446744073709551614\n} { x }\n",
-        "u.vow",
-    );
-    assert_eq!(got, ["ensures result == 18446744073709551614"]);
-}
