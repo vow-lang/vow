@@ -533,10 +533,11 @@ Every runtime builtin that returns a fresh heap aggregate is a pair: the root
 wrapper (`__vow_string_parse_i64_opt`, `__vow_map_get`, `__vow_btreemap_get`,
 `__vow_i64_to_u8_try`, `__vow_fs_read`, `__vow_vec_sort`, ...) and
 `<name>_in_arena`, which takes the target arena as its first argument and
-otherwise keeps the base parameters. The set is the table
-`vow_ir::FRESH_ARENA_VARIANTS` (twin: `fresh_arena_base_extern` in
-`compiler/ir.vow`, plus a copy in `vow-clif-shim`; a test keeps all copies and
-the runtime exports in sync):
+otherwise keeps the base parameters. The set is the `arena_routes` section of
+`docs/spec/operations.json`; `scripts/generate_operations.py` generates
+`vow_ir::FRESH_ARENA_VARIANTS` (and its lookups), the copy in `vow-clif-shim`
+and `fresh_arena_base_extern` / `fresh_arena_variant_extern` in
+`compiler/ir.vow`, and its `--check` verifies the runtime defines every symbol:
 
 - `Option` cells: the `parse_*_opt` family, `HashMap::get`, `BTreeMap::get` and
   every `<src>_to_<tgt>_try` narrowing conversion.

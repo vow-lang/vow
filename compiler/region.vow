@@ -4305,7 +4305,7 @@ fn string_creation_extern(sym: String) -> bool {
 }
 
 fn fresh_builtin_extern(sym: String) -> bool {
-    fresh_arena_base_extern(sym) || fresh_arena_variant_base(sym).len() > 0
+    fresh_arena_base_extern(sym) || fresh_arena_variant_extern(sym)
 }
 
 fn map_creation_extern(sym: String) -> bool {

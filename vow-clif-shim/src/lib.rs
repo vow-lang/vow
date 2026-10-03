@@ -622,115 +622,6 @@ fn arena_value_for_region(
     }
 }
 
-/// Every runtime builtin whose result is a fresh heap aggregate (`Option` cell,
-/// `String` or `Vec`), paired with its `<name>_in_arena` variant (target arena
-/// first, then the base parameters).
-/// Mirrors `vow_ir::FRESH_ARENA_VARIANTS`; this crate cannot depend on
-/// `vow-ir`, so `fresh_arena_variants_match_vow_ir` keeps the copies in sync.
-const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[
-    (
-        "__vow_string_parse_i64_opt",
-        "__vow_string_parse_i64_opt_in_arena",
-    ),
-    (
-        "__vow_string_parse_u64_opt",
-        "__vow_string_parse_u64_opt_in_arena",
-    ),
-    (
-        "__vow_string_parse_i8_opt",
-        "__vow_string_parse_i8_opt_in_arena",
-    ),
-    (
-        "__vow_string_parse_u8_opt",
-        "__vow_string_parse_u8_opt_in_arena",
-    ),
-    (
-        "__vow_string_parse_i16_opt",
-        "__vow_string_parse_i16_opt_in_arena",
-    ),
-    (
-        "__vow_string_parse_u16_opt",
-        "__vow_string_parse_u16_opt_in_arena",
-    ),
-    (
-        "__vow_string_parse_i32_opt",
-        "__vow_string_parse_i32_opt_in_arena",
-    ),
-    (
-        "__vow_string_parse_u32_opt",
-        "__vow_string_parse_u32_opt_in_arena",
-    ),
-    ("__vow_map_get", "__vow_map_get_in_arena"),
-    ("__vow_btreemap_get", "__vow_btreemap_get_in_arena"),
-    ("__vow_btreemap_insert", "__vow_btreemap_insert_in_arena"),
-    ("__vow_i128_to_u8_try", "__vow_i128_to_u8_try_in_arena"),
-    ("__vow_i16_to_i8_try", "__vow_i16_to_i8_try_in_arena"),
-    ("__vow_i16_to_u8_try", "__vow_i16_to_u8_try_in_arena"),
-    ("__vow_i32_to_i16_try", "__vow_i32_to_i16_try_in_arena"),
-    ("__vow_i32_to_i8_try", "__vow_i32_to_i8_try_in_arena"),
-    ("__vow_i32_to_u16_try", "__vow_i32_to_u16_try_in_arena"),
-    ("__vow_i32_to_u8_try", "__vow_i32_to_u8_try_in_arena"),
-    ("__vow_i64_to_i16_try", "__vow_i64_to_i16_try_in_arena"),
-    ("__vow_i64_to_i32_try", "__vow_i64_to_i32_try_in_arena"),
-    ("__vow_i64_to_i8_try", "__vow_i64_to_i8_try_in_arena"),
-    ("__vow_i64_to_u16_try", "__vow_i64_to_u16_try_in_arena"),
-    ("__vow_i64_to_u32_try", "__vow_i64_to_u32_try_in_arena"),
-    ("__vow_i64_to_u8_try", "__vow_i64_to_u8_try_in_arena"),
-    ("__vow_u128_to_u8_try", "__vow_u128_to_u8_try_in_arena"),
-    ("__vow_u16_to_i8_try", "__vow_u16_to_i8_try_in_arena"),
-    ("__vow_u16_to_u8_try", "__vow_u16_to_u8_try_in_arena"),
-    ("__vow_u32_to_i16_try", "__vow_u32_to_i16_try_in_arena"),
-    ("__vow_u32_to_i32_try", "__vow_u32_to_i32_try_in_arena"),
-    ("__vow_u32_to_i8_try", "__vow_u32_to_i8_try_in_arena"),
-    ("__vow_u32_to_u16_try", "__vow_u32_to_u16_try_in_arena"),
-    ("__vow_u32_to_u8_try", "__vow_u32_to_u8_try_in_arena"),
-    ("__vow_u64_to_i16_try", "__vow_u64_to_i16_try_in_arena"),
-    ("__vow_u64_to_i32_try", "__vow_u64_to_i32_try_in_arena"),
-    ("__vow_u64_to_i8_try", "__vow_u64_to_i8_try_in_arena"),
-    ("__vow_u64_to_u16_try", "__vow_u64_to_u16_try_in_arena"),
-    ("__vow_u64_to_u32_try", "__vow_u64_to_u32_try_in_arena"),
-    ("__vow_u64_to_u8_try", "__vow_u64_to_u8_try_in_arena"),
-    ("__vow_vec_sort", "__vow_vec_sort_in_arena"),
-    ("__vow_hex_encode", "__vow_hex_encode_in_arena"),
-    ("__vow_hex_decode", "__vow_hex_decode_in_arena"),
-    ("__vow_format_f64_bits", "__vow_format_f64_bits_in_arena"),
-    ("__vow_fs_read", "__vow_fs_read_in_arena"),
-    ("__vow_fs_read_line", "__vow_fs_read_line_in_arena"),
-    ("__vow_fs_listdir", "__vow_fs_listdir_in_arena"),
-    ("__vow_stdin_read", "__vow_stdin_read_in_arena"),
-    ("__vow_args", "__vow_args_in_arena"),
-    (
-        "__vow_process_get_stdout",
-        "__vow_process_get_stdout_in_arena",
-    ),
-    (
-        "__vow_process_get_stderr",
-        "__vow_process_get_stderr_in_arena",
-    ),
-    (
-        "__vow_process_stdout_for",
-        "__vow_process_stdout_for_in_arena",
-    ),
-    (
-        "__vow_process_stderr_for",
-        "__vow_process_stderr_for_in_arena",
-    ),
-];
-
-fn fresh_arena_variant(sym: &str) -> Option<&'static str> {
-    FRESH_ARENA_VARIANTS
-        .iter()
-        .find(|(base, _)| *base == sym)
-        .map(|(_, variant)| *variant)
-}
-
-fn fresh_arena_base(sym: &str) -> Option<&'static str> {
-    FRESH_ARENA_VARIANTS
-        .iter()
-        .find(|(_, variant)| *variant == sym)
-        .map(|(base, _)| *base)
-}
-
 fn routed_vec_extern(
     sym: &str,
     inst_rgn: i64,
@@ -3588,6 +3479,215 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
         _ => false,
     }
 }
+
+/// Builtins returning a fresh heap aggregate, paired with their
+/// `<name>_in_arena` variant (target arena first, then the base parameters).
+#[cfg(test)]
+const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[
+    (
+        "__vow_string_parse_i64_opt",
+        "__vow_string_parse_i64_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_u64_opt",
+        "__vow_string_parse_u64_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_i8_opt",
+        "__vow_string_parse_i8_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_u8_opt",
+        "__vow_string_parse_u8_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_i16_opt",
+        "__vow_string_parse_i16_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_u16_opt",
+        "__vow_string_parse_u16_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_i32_opt",
+        "__vow_string_parse_i32_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_u32_opt",
+        "__vow_string_parse_u32_opt_in_arena",
+    ),
+    ("__vow_map_get", "__vow_map_get_in_arena"),
+    ("__vow_btreemap_get", "__vow_btreemap_get_in_arena"),
+    ("__vow_btreemap_insert", "__vow_btreemap_insert_in_arena"),
+    ("__vow_i128_to_u8_try", "__vow_i128_to_u8_try_in_arena"),
+    ("__vow_i16_to_i8_try", "__vow_i16_to_i8_try_in_arena"),
+    ("__vow_i16_to_u8_try", "__vow_i16_to_u8_try_in_arena"),
+    ("__vow_i32_to_i16_try", "__vow_i32_to_i16_try_in_arena"),
+    ("__vow_i32_to_i8_try", "__vow_i32_to_i8_try_in_arena"),
+    ("__vow_i32_to_u16_try", "__vow_i32_to_u16_try_in_arena"),
+    ("__vow_i32_to_u8_try", "__vow_i32_to_u8_try_in_arena"),
+    ("__vow_i64_to_i16_try", "__vow_i64_to_i16_try_in_arena"),
+    ("__vow_i64_to_i32_try", "__vow_i64_to_i32_try_in_arena"),
+    ("__vow_i64_to_i8_try", "__vow_i64_to_i8_try_in_arena"),
+    ("__vow_i64_to_u16_try", "__vow_i64_to_u16_try_in_arena"),
+    ("__vow_i64_to_u32_try", "__vow_i64_to_u32_try_in_arena"),
+    ("__vow_i64_to_u8_try", "__vow_i64_to_u8_try_in_arena"),
+    ("__vow_u128_to_u8_try", "__vow_u128_to_u8_try_in_arena"),
+    ("__vow_u16_to_i8_try", "__vow_u16_to_i8_try_in_arena"),
+    ("__vow_u16_to_u8_try", "__vow_u16_to_u8_try_in_arena"),
+    ("__vow_u32_to_i16_try", "__vow_u32_to_i16_try_in_arena"),
+    ("__vow_u32_to_i32_try", "__vow_u32_to_i32_try_in_arena"),
+    ("__vow_u32_to_i8_try", "__vow_u32_to_i8_try_in_arena"),
+    ("__vow_u32_to_u16_try", "__vow_u32_to_u16_try_in_arena"),
+    ("__vow_u32_to_u8_try", "__vow_u32_to_u8_try_in_arena"),
+    ("__vow_u64_to_i16_try", "__vow_u64_to_i16_try_in_arena"),
+    ("__vow_u64_to_i32_try", "__vow_u64_to_i32_try_in_arena"),
+    ("__vow_u64_to_i8_try", "__vow_u64_to_i8_try_in_arena"),
+    ("__vow_u64_to_u16_try", "__vow_u64_to_u16_try_in_arena"),
+    ("__vow_u64_to_u32_try", "__vow_u64_to_u32_try_in_arena"),
+    ("__vow_u64_to_u8_try", "__vow_u64_to_u8_try_in_arena"),
+    ("__vow_vec_sort", "__vow_vec_sort_in_arena"),
+    ("__vow_hex_encode", "__vow_hex_encode_in_arena"),
+    ("__vow_hex_decode", "__vow_hex_decode_in_arena"),
+    ("__vow_format_f64_bits", "__vow_format_f64_bits_in_arena"),
+    ("__vow_fs_read", "__vow_fs_read_in_arena"),
+    ("__vow_fs_read_line", "__vow_fs_read_line_in_arena"),
+    ("__vow_fs_listdir", "__vow_fs_listdir_in_arena"),
+    ("__vow_stdin_read", "__vow_stdin_read_in_arena"),
+    ("__vow_args", "__vow_args_in_arena"),
+    (
+        "__vow_process_get_stdout",
+        "__vow_process_get_stdout_in_arena",
+    ),
+    (
+        "__vow_process_get_stderr",
+        "__vow_process_get_stderr_in_arena",
+    ),
+    (
+        "__vow_process_stdout_for",
+        "__vow_process_stdout_for_in_arena",
+    ),
+    (
+        "__vow_process_stderr_for",
+        "__vow_process_stderr_for_in_arena",
+    ),
+];
+
+/// The `_in_arena` variant of a fresh-aggregate builtin, if it has one.
+fn fresh_arena_variant(sym: &str) -> Option<&'static str> {
+    match sym {
+        "__vow_string_parse_i64_opt" => Some("__vow_string_parse_i64_opt_in_arena"),
+        "__vow_string_parse_u64_opt" => Some("__vow_string_parse_u64_opt_in_arena"),
+        "__vow_string_parse_i8_opt" => Some("__vow_string_parse_i8_opt_in_arena"),
+        "__vow_string_parse_u8_opt" => Some("__vow_string_parse_u8_opt_in_arena"),
+        "__vow_string_parse_i16_opt" => Some("__vow_string_parse_i16_opt_in_arena"),
+        "__vow_string_parse_u16_opt" => Some("__vow_string_parse_u16_opt_in_arena"),
+        "__vow_string_parse_i32_opt" => Some("__vow_string_parse_i32_opt_in_arena"),
+        "__vow_string_parse_u32_opt" => Some("__vow_string_parse_u32_opt_in_arena"),
+        "__vow_map_get" => Some("__vow_map_get_in_arena"),
+        "__vow_btreemap_get" => Some("__vow_btreemap_get_in_arena"),
+        "__vow_btreemap_insert" => Some("__vow_btreemap_insert_in_arena"),
+        "__vow_i128_to_u8_try" => Some("__vow_i128_to_u8_try_in_arena"),
+        "__vow_i16_to_i8_try" => Some("__vow_i16_to_i8_try_in_arena"),
+        "__vow_i16_to_u8_try" => Some("__vow_i16_to_u8_try_in_arena"),
+        "__vow_i32_to_i16_try" => Some("__vow_i32_to_i16_try_in_arena"),
+        "__vow_i32_to_i8_try" => Some("__vow_i32_to_i8_try_in_arena"),
+        "__vow_i32_to_u16_try" => Some("__vow_i32_to_u16_try_in_arena"),
+        "__vow_i32_to_u8_try" => Some("__vow_i32_to_u8_try_in_arena"),
+        "__vow_i64_to_i16_try" => Some("__vow_i64_to_i16_try_in_arena"),
+        "__vow_i64_to_i32_try" => Some("__vow_i64_to_i32_try_in_arena"),
+        "__vow_i64_to_i8_try" => Some("__vow_i64_to_i8_try_in_arena"),
+        "__vow_i64_to_u16_try" => Some("__vow_i64_to_u16_try_in_arena"),
+        "__vow_i64_to_u32_try" => Some("__vow_i64_to_u32_try_in_arena"),
+        "__vow_i64_to_u8_try" => Some("__vow_i64_to_u8_try_in_arena"),
+        "__vow_u128_to_u8_try" => Some("__vow_u128_to_u8_try_in_arena"),
+        "__vow_u16_to_i8_try" => Some("__vow_u16_to_i8_try_in_arena"),
+        "__vow_u16_to_u8_try" => Some("__vow_u16_to_u8_try_in_arena"),
+        "__vow_u32_to_i16_try" => Some("__vow_u32_to_i16_try_in_arena"),
+        "__vow_u32_to_i32_try" => Some("__vow_u32_to_i32_try_in_arena"),
+        "__vow_u32_to_i8_try" => Some("__vow_u32_to_i8_try_in_arena"),
+        "__vow_u32_to_u16_try" => Some("__vow_u32_to_u16_try_in_arena"),
+        "__vow_u32_to_u8_try" => Some("__vow_u32_to_u8_try_in_arena"),
+        "__vow_u64_to_i16_try" => Some("__vow_u64_to_i16_try_in_arena"),
+        "__vow_u64_to_i32_try" => Some("__vow_u64_to_i32_try_in_arena"),
+        "__vow_u64_to_i8_try" => Some("__vow_u64_to_i8_try_in_arena"),
+        "__vow_u64_to_u16_try" => Some("__vow_u64_to_u16_try_in_arena"),
+        "__vow_u64_to_u32_try" => Some("__vow_u64_to_u32_try_in_arena"),
+        "__vow_u64_to_u8_try" => Some("__vow_u64_to_u8_try_in_arena"),
+        "__vow_vec_sort" => Some("__vow_vec_sort_in_arena"),
+        "__vow_hex_encode" => Some("__vow_hex_encode_in_arena"),
+        "__vow_hex_decode" => Some("__vow_hex_decode_in_arena"),
+        "__vow_format_f64_bits" => Some("__vow_format_f64_bits_in_arena"),
+        "__vow_fs_read" => Some("__vow_fs_read_in_arena"),
+        "__vow_fs_read_line" => Some("__vow_fs_read_line_in_arena"),
+        "__vow_fs_listdir" => Some("__vow_fs_listdir_in_arena"),
+        "__vow_stdin_read" => Some("__vow_stdin_read_in_arena"),
+        "__vow_args" => Some("__vow_args_in_arena"),
+        "__vow_process_get_stdout" => Some("__vow_process_get_stdout_in_arena"),
+        "__vow_process_get_stderr" => Some("__vow_process_get_stderr_in_arena"),
+        "__vow_process_stdout_for" => Some("__vow_process_stdout_for_in_arena"),
+        "__vow_process_stderr_for" => Some("__vow_process_stderr_for_in_arena"),
+        _ => None,
+    }
+}
+
+/// The base symbol a fresh-aggregate `_in_arena` variant routes from.
+fn fresh_arena_base(sym: &str) -> Option<&'static str> {
+    match sym {
+        "__vow_string_parse_i64_opt_in_arena" => Some("__vow_string_parse_i64_opt"),
+        "__vow_string_parse_u64_opt_in_arena" => Some("__vow_string_parse_u64_opt"),
+        "__vow_string_parse_i8_opt_in_arena" => Some("__vow_string_parse_i8_opt"),
+        "__vow_string_parse_u8_opt_in_arena" => Some("__vow_string_parse_u8_opt"),
+        "__vow_string_parse_i16_opt_in_arena" => Some("__vow_string_parse_i16_opt"),
+        "__vow_string_parse_u16_opt_in_arena" => Some("__vow_string_parse_u16_opt"),
+        "__vow_string_parse_i32_opt_in_arena" => Some("__vow_string_parse_i32_opt"),
+        "__vow_string_parse_u32_opt_in_arena" => Some("__vow_string_parse_u32_opt"),
+        "__vow_map_get_in_arena" => Some("__vow_map_get"),
+        "__vow_btreemap_get_in_arena" => Some("__vow_btreemap_get"),
+        "__vow_btreemap_insert_in_arena" => Some("__vow_btreemap_insert"),
+        "__vow_i128_to_u8_try_in_arena" => Some("__vow_i128_to_u8_try"),
+        "__vow_i16_to_i8_try_in_arena" => Some("__vow_i16_to_i8_try"),
+        "__vow_i16_to_u8_try_in_arena" => Some("__vow_i16_to_u8_try"),
+        "__vow_i32_to_i16_try_in_arena" => Some("__vow_i32_to_i16_try"),
+        "__vow_i32_to_i8_try_in_arena" => Some("__vow_i32_to_i8_try"),
+        "__vow_i32_to_u16_try_in_arena" => Some("__vow_i32_to_u16_try"),
+        "__vow_i32_to_u8_try_in_arena" => Some("__vow_i32_to_u8_try"),
+        "__vow_i64_to_i16_try_in_arena" => Some("__vow_i64_to_i16_try"),
+        "__vow_i64_to_i32_try_in_arena" => Some("__vow_i64_to_i32_try"),
+        "__vow_i64_to_i8_try_in_arena" => Some("__vow_i64_to_i8_try"),
+        "__vow_i64_to_u16_try_in_arena" => Some("__vow_i64_to_u16_try"),
+        "__vow_i64_to_u32_try_in_arena" => Some("__vow_i64_to_u32_try"),
+        "__vow_i64_to_u8_try_in_arena" => Some("__vow_i64_to_u8_try"),
+        "__vow_u128_to_u8_try_in_arena" => Some("__vow_u128_to_u8_try"),
+        "__vow_u16_to_i8_try_in_arena" => Some("__vow_u16_to_i8_try"),
+        "__vow_u16_to_u8_try_in_arena" => Some("__vow_u16_to_u8_try"),
+        "__vow_u32_to_i16_try_in_arena" => Some("__vow_u32_to_i16_try"),
+        "__vow_u32_to_i32_try_in_arena" => Some("__vow_u32_to_i32_try"),
+        "__vow_u32_to_i8_try_in_arena" => Some("__vow_u32_to_i8_try"),
+        "__vow_u32_to_u16_try_in_arena" => Some("__vow_u32_to_u16_try"),
+        "__vow_u32_to_u8_try_in_arena" => Some("__vow_u32_to_u8_try"),
+        "__vow_u64_to_i16_try_in_arena" => Some("__vow_u64_to_i16_try"),
+        "__vow_u64_to_i32_try_in_arena" => Some("__vow_u64_to_i32_try"),
+        "__vow_u64_to_i8_try_in_arena" => Some("__vow_u64_to_i8_try"),
+        "__vow_u64_to_u16_try_in_arena" => Some("__vow_u64_to_u16_try"),
+        "__vow_u64_to_u32_try_in_arena" => Some("__vow_u64_to_u32_try"),
+        "__vow_u64_to_u8_try_in_arena" => Some("__vow_u64_to_u8_try"),
+        "__vow_vec_sort_in_arena" => Some("__vow_vec_sort"),
+        "__vow_hex_encode_in_arena" => Some("__vow_hex_encode"),
+        "__vow_hex_decode_in_arena" => Some("__vow_hex_decode"),
+        "__vow_format_f64_bits_in_arena" => Some("__vow_format_f64_bits"),
+        "__vow_fs_read_in_arena" => Some("__vow_fs_read"),
+        "__vow_fs_read_line_in_arena" => Some("__vow_fs_read_line"),
+        "__vow_fs_listdir_in_arena" => Some("__vow_fs_listdir"),
+        "__vow_stdin_read_in_arena" => Some("__vow_stdin_read"),
+        "__vow_args_in_arena" => Some("__vow_args"),
+        "__vow_process_get_stdout_in_arena" => Some("__vow_process_get_stdout"),
+        "__vow_process_get_stderr_in_arena" => Some("__vow_process_get_stderr"),
+        "__vow_process_stdout_for_in_arena" => Some("__vow_process_stdout_for"),
+        "__vow_process_stderr_for_in_arena" => Some("__vow_process_stderr_for"),
+        _ => None,
+    }
+}
 // GENERATE:OPERATIONS:END
 
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
@@ -4245,27 +4345,6 @@ mod tests {
         let new = make_extern_sig("__vow_btreemap_new_in_arena", &module_ctx.obj_module);
         assert_eq!(new.params.len(), 1);
         unsafe { __vow_clif_destroy(ctx) };
-    }
-
-    #[test]
-    fn fresh_arena_variants_match_vow_ir() {
-        let region_rs = include_str!("../../vow-ir/src/region.rs")
-            .split_whitespace()
-            .collect::<String>()
-            .replace(",)", ")");
-        let start = region_rs
-            .find("FRESH_ARENA_VARIANTS:&[(&str,&str)]=&[")
-            .expect("vow_ir::FRESH_ARENA_VARIANTS");
-        let table = &region_rs[start..start + region_rs[start..].find("];").unwrap()];
-        for (base, variant) in FRESH_ARENA_VARIANTS {
-            let row = format!("(\"{base}\",\"{variant}\")");
-            assert!(table.contains(&row), "vow_ir table is missing {row}");
-        }
-        assert_eq!(
-            table.matches("_in_arena\")").count(),
-            FRESH_ARENA_VARIANTS.len(),
-            "vow_ir table has rows the shim table lacks"
-        );
     }
 
     #[test]

@@ -385,84 +385,527 @@ fn ir_module_new(name: String) -> IrModule {
     }
 }
 
-// Every runtime builtin whose result is a fresh heap aggregate (an Option
-// cell, a String or a Vec). Each has an `<name>_in_arena` variant that takes
-// the target arena first and otherwise keeps the base parameters; vow-ir's
-// FRESH_ARENA_VARIANTS is the Rust twin of this list.
+// GENERATE:OPERATIONS:START
 fn fresh_arena_base_extern(sym: String) -> bool {
-    sym == String::from("__vow_string_parse_i64_opt")
-        || sym == String::from("__vow_string_parse_u64_opt")
-        || sym == String::from("__vow_string_parse_i8_opt")
-        || sym == String::from("__vow_string_parse_u8_opt")
-        || sym == String::from("__vow_string_parse_i16_opt")
-        || sym == String::from("__vow_string_parse_u16_opt")
-        || sym == String::from("__vow_string_parse_i32_opt")
-        || sym == String::from("__vow_string_parse_u32_opt")
-        || sym == String::from("__vow_map_get")
-        || sym == String::from("__vow_btreemap_get")
-        || sym == String::from("__vow_btreemap_insert")
-        || sym == String::from("__vow_i128_to_u8_try")
-        || sym == String::from("__vow_i16_to_i8_try")
-        || sym == String::from("__vow_i16_to_u8_try")
-        || sym == String::from("__vow_i32_to_i16_try")
-        || sym == String::from("__vow_i32_to_i8_try")
-        || sym == String::from("__vow_i32_to_u16_try")
-        || sym == String::from("__vow_i32_to_u8_try")
-        || sym == String::from("__vow_i64_to_i16_try")
-        || sym == String::from("__vow_i64_to_i32_try")
-        || sym == String::from("__vow_i64_to_i8_try")
-        || sym == String::from("__vow_i64_to_u16_try")
-        || sym == String::from("__vow_i64_to_u32_try")
-        || sym == String::from("__vow_i64_to_u8_try")
-        || sym == String::from("__vow_u128_to_u8_try")
-        || sym == String::from("__vow_u16_to_i8_try")
-        || sym == String::from("__vow_u16_to_u8_try")
-        || sym == String::from("__vow_u32_to_i16_try")
-        || sym == String::from("__vow_u32_to_i32_try")
-        || sym == String::from("__vow_u32_to_i8_try")
-        || sym == String::from("__vow_u32_to_u16_try")
-        || sym == String::from("__vow_u32_to_u8_try")
-        || sym == String::from("__vow_u64_to_i16_try")
-        || sym == String::from("__vow_u64_to_i32_try")
-        || sym == String::from("__vow_u64_to_i8_try")
-        || sym == String::from("__vow_u64_to_u16_try")
-        || sym == String::from("__vow_u64_to_u32_try")
-        || sym == String::from("__vow_u64_to_u8_try")
-        || sym == String::from("__vow_vec_sort")
-        || sym == String::from("__vow_hex_encode")
-        || sym == String::from("__vow_hex_decode")
-        || sym == String::from("__vow_format_f64_bits")
-        || sym == String::from("__vow_fs_read")
-        || sym == String::from("__vow_fs_read_line")
-        || sym == String::from("__vow_fs_listdir")
-        || sym == String::from("__vow_stdin_read")
-        || sym == String::from("__vow_args")
-        || sym == String::from("__vow_process_get_stdout")
-        || sym == String::from("__vow_process_get_stderr")
-        || sym == String::from("__vow_process_stdout_for")
-        || sym == String::from("__vow_process_stderr_for")
+    let n: u64 = sym.len();
+    if n == 10 {
+        return sym == String::from("__vow_args");
+    }
+    if n == 13 {
+        let c0: i64 = sym.byte_at(6);
+        if c0 == 102 {
+            return sym == String::from("__vow_fs_read");
+        }
+        if c0 == 109 {
+            return sym == String::from("__vow_map_get");
+        }
+    }
+    if n == 14 {
+        return sym == String::from("__vow_vec_sort");
+    }
+    if n == 16 {
+        let c0: i64 = sym.byte_at(10);
+        if c0 == 100 {
+            return sym == String::from("__vow_hex_decode");
+        }
+        if c0 == 101 {
+            return sym == String::from("__vow_hex_encode");
+        }
+        if c0 == 105 {
+            return sym == String::from("__vow_fs_listdir");
+        }
+        if c0 == 110 {
+            return sym == String::from("__vow_stdin_read");
+        }
+    }
+    if n == 18 {
+        let c0: i64 = sym.byte_at(6);
+        if c0 == 98 {
+            return sym == String::from("__vow_btreemap_get");
+        }
+        if c0 == 102 {
+            return sym == String::from("__vow_fs_read_line");
+        }
+    }
+    if n == 19 {
+        let c0: i64 = sym.byte_at(7);
+        if c0 == 49 {
+            let c1: i64 = sym.byte_at(6);
+            if c1 == 105 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    return sym == String::from("__vow_i16_to_i8_try");
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_i16_to_u8_try");
+                }
+            }
+            if c1 == 117 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    return sym == String::from("__vow_u16_to_i8_try");
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_u16_to_u8_try");
+                }
+            }
+        }
+        if c0 == 51 {
+            let c1: i64 = sym.byte_at(6);
+            if c1 == 105 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    return sym == String::from("__vow_i32_to_i8_try");
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_i32_to_u8_try");
+                }
+            }
+            if c1 == 117 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    return sym == String::from("__vow_u32_to_i8_try");
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_u32_to_u8_try");
+                }
+            }
+        }
+        if c0 == 54 {
+            let c1: i64 = sym.byte_at(6);
+            if c1 == 105 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    return sym == String::from("__vow_i64_to_i8_try");
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_i64_to_u8_try");
+                }
+            }
+            if c1 == 117 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    return sym == String::from("__vow_u64_to_i8_try");
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_u64_to_u8_try");
+                }
+            }
+        }
+    }
+    if n == 20 {
+        let c0: i64 = sym.byte_at(7);
+        if c0 == 49 {
+            let c1: i64 = sym.byte_at(6);
+            if c1 == 105 {
+                return sym == String::from("__vow_i128_to_u8_try");
+            }
+            if c1 == 117 {
+                return sym == String::from("__vow_u128_to_u8_try");
+            }
+        }
+        if c0 == 51 {
+            let c1: i64 = sym.byte_at(6);
+            if c1 == 105 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    return sym == String::from("__vow_i32_to_i16_try");
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_i32_to_u16_try");
+                }
+            }
+            if c1 == 117 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    let c3: i64 = sym.byte_at(14);
+                    if c3 == 49 {
+                        return sym == String::from("__vow_u32_to_i16_try");
+                    }
+                    if c3 == 51 {
+                        return sym == String::from("__vow_u32_to_i32_try");
+                    }
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_u32_to_u16_try");
+                }
+            }
+        }
+        if c0 == 54 {
+            let c1: i64 = sym.byte_at(6);
+            if c1 == 105 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    let c3: i64 = sym.byte_at(14);
+                    if c3 == 49 {
+                        return sym == String::from("__vow_i64_to_i16_try");
+                    }
+                    if c3 == 51 {
+                        return sym == String::from("__vow_i64_to_i32_try");
+                    }
+                }
+                if c2 == 117 {
+                    let c3: i64 = sym.byte_at(14);
+                    if c3 == 49 {
+                        return sym == String::from("__vow_i64_to_u16_try");
+                    }
+                    if c3 == 51 {
+                        return sym == String::from("__vow_i64_to_u32_try");
+                    }
+                }
+            }
+            if c1 == 117 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    let c3: i64 = sym.byte_at(14);
+                    if c3 == 49 {
+                        return sym == String::from("__vow_u64_to_i16_try");
+                    }
+                    if c3 == 51 {
+                        return sym == String::from("__vow_u64_to_i32_try");
+                    }
+                }
+                if c2 == 117 {
+                    let c3: i64 = sym.byte_at(14);
+                    if c3 == 49 {
+                        return sym == String::from("__vow_u64_to_u16_try");
+                    }
+                    if c3 == 51 {
+                        return sym == String::from("__vow_u64_to_u32_try");
+                    }
+                }
+            }
+        }
+    }
+    if n == 21 {
+        let c0: i64 = sym.byte_at(6);
+        if c0 == 98 {
+            return sym == String::from("__vow_btreemap_insert");
+        }
+        if c0 == 102 {
+            return sym == String::from("__vow_format_f64_bits");
+        }
+    }
+    if n == 24 {
+        let c0: i64 = sym.byte_at(17);
+        if c0 == 95 {
+            let c1: i64 = sym.byte_at(21);
+            if c1 == 101 {
+                return sym == String::from("__vow_process_get_stderr");
+            }
+            if c1 == 111 {
+                return sym == String::from("__vow_process_get_stdout");
+            }
+        }
+        if c0 == 101 {
+            return sym == String::from("__vow_process_stderr_for");
+        }
+        if c0 == 111 {
+            return sym == String::from("__vow_process_stdout_for");
+        }
+    }
+    if n == 25 {
+        let c0: i64 = sym.byte_at(19);
+        if c0 == 105 {
+            return sym == String::from("__vow_string_parse_i8_opt");
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_string_parse_u8_opt");
+        }
+    }
+    if n == 26 {
+        let c0: i64 = sym.byte_at(20);
+        if c0 == 49 {
+            let c1: i64 = sym.byte_at(19);
+            if c1 == 105 {
+                return sym == String::from("__vow_string_parse_i16_opt");
+            }
+            if c1 == 117 {
+                return sym == String::from("__vow_string_parse_u16_opt");
+            }
+        }
+        if c0 == 51 {
+            let c1: i64 = sym.byte_at(19);
+            if c1 == 105 {
+                return sym == String::from("__vow_string_parse_i32_opt");
+            }
+            if c1 == 117 {
+                return sym == String::from("__vow_string_parse_u32_opt");
+            }
+        }
+        if c0 == 54 {
+            let c1: i64 = sym.byte_at(19);
+            if c1 == 105 {
+                return sym == String::from("__vow_string_parse_i64_opt");
+            }
+            if c1 == 117 {
+                return sym == String::from("__vow_string_parse_u64_opt");
+            }
+        }
+    }
+    return false;
 }
 
-fn fresh_arena_variant_base(sym: String) -> String {
-    let suffix: String = String::from("_in_arena");
+fn fresh_arena_variant_extern(sym: String) -> bool {
     let n: u64 = sym.len();
-    let k: u64 = suffix.len();
-    if n <= k {
-        return String::from("");
+    if n == 19 {
+        return sym == String::from("__vow_args_in_arena");
     }
-    let mut i: u64 = 0;
-    while i < k {
-        if sym.byte_at(n - k + i) != suffix.byte_at(i) {
-            return String::from("");
+    if n == 22 {
+        let c0: i64 = sym.byte_at(6);
+        if c0 == 102 {
+            return sym == String::from("__vow_fs_read_in_arena");
         }
-        i = i + 1;
+        if c0 == 109 {
+            return sym == String::from("__vow_map_get_in_arena");
+        }
     }
-    let base: String = sym.substring(0, n - k);
-    if fresh_arena_base_extern(base) {
-        return base;
+    if n == 23 {
+        return sym == String::from("__vow_vec_sort_in_arena");
     }
-    String::from("")
+    if n == 25 {
+        let c0: i64 = sym.byte_at(10);
+        if c0 == 100 {
+            return sym == String::from("__vow_hex_decode_in_arena");
+        }
+        if c0 == 101 {
+            return sym == String::from("__vow_hex_encode_in_arena");
+        }
+        if c0 == 105 {
+            return sym == String::from("__vow_fs_listdir_in_arena");
+        }
+        if c0 == 110 {
+            return sym == String::from("__vow_stdin_read_in_arena");
+        }
+    }
+    if n == 27 {
+        let c0: i64 = sym.byte_at(6);
+        if c0 == 98 {
+            return sym == String::from("__vow_btreemap_get_in_arena");
+        }
+        if c0 == 102 {
+            return sym == String::from("__vow_fs_read_line_in_arena");
+        }
+    }
+    if n == 28 {
+        let c0: i64 = sym.byte_at(7);
+        if c0 == 49 {
+            let c1: i64 = sym.byte_at(6);
+            if c1 == 105 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    return sym == String::from("__vow_i16_to_i8_try_in_arena");
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_i16_to_u8_try_in_arena");
+                }
+            }
+            if c1 == 117 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    return sym == String::from("__vow_u16_to_i8_try_in_arena");
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_u16_to_u8_try_in_arena");
+                }
+            }
+        }
+        if c0 == 51 {
+            let c1: i64 = sym.byte_at(6);
+            if c1 == 105 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    return sym == String::from("__vow_i32_to_i8_try_in_arena");
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_i32_to_u8_try_in_arena");
+                }
+            }
+            if c1 == 117 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    return sym == String::from("__vow_u32_to_i8_try_in_arena");
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_u32_to_u8_try_in_arena");
+                }
+            }
+        }
+        if c0 == 54 {
+            let c1: i64 = sym.byte_at(6);
+            if c1 == 105 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    return sym == String::from("__vow_i64_to_i8_try_in_arena");
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_i64_to_u8_try_in_arena");
+                }
+            }
+            if c1 == 117 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    return sym == String::from("__vow_u64_to_i8_try_in_arena");
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_u64_to_u8_try_in_arena");
+                }
+            }
+        }
+    }
+    if n == 29 {
+        let c0: i64 = sym.byte_at(7);
+        if c0 == 49 {
+            let c1: i64 = sym.byte_at(6);
+            if c1 == 105 {
+                return sym == String::from("__vow_i128_to_u8_try_in_arena");
+            }
+            if c1 == 117 {
+                return sym == String::from("__vow_u128_to_u8_try_in_arena");
+            }
+        }
+        if c0 == 51 {
+            let c1: i64 = sym.byte_at(6);
+            if c1 == 105 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    return sym == String::from("__vow_i32_to_i16_try_in_arena");
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_i32_to_u16_try_in_arena");
+                }
+            }
+            if c1 == 117 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    let c3: i64 = sym.byte_at(14);
+                    if c3 == 49 {
+                        return sym == String::from("__vow_u32_to_i16_try_in_arena");
+                    }
+                    if c3 == 51 {
+                        return sym == String::from("__vow_u32_to_i32_try_in_arena");
+                    }
+                }
+                if c2 == 117 {
+                    return sym == String::from("__vow_u32_to_u16_try_in_arena");
+                }
+            }
+        }
+        if c0 == 54 {
+            let c1: i64 = sym.byte_at(6);
+            if c1 == 105 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    let c3: i64 = sym.byte_at(14);
+                    if c3 == 49 {
+                        return sym == String::from("__vow_i64_to_i16_try_in_arena");
+                    }
+                    if c3 == 51 {
+                        return sym == String::from("__vow_i64_to_i32_try_in_arena");
+                    }
+                }
+                if c2 == 117 {
+                    let c3: i64 = sym.byte_at(14);
+                    if c3 == 49 {
+                        return sym == String::from("__vow_i64_to_u16_try_in_arena");
+                    }
+                    if c3 == 51 {
+                        return sym == String::from("__vow_i64_to_u32_try_in_arena");
+                    }
+                }
+            }
+            if c1 == 117 {
+                let c2: i64 = sym.byte_at(13);
+                if c2 == 105 {
+                    let c3: i64 = sym.byte_at(14);
+                    if c3 == 49 {
+                        return sym == String::from("__vow_u64_to_i16_try_in_arena");
+                    }
+                    if c3 == 51 {
+                        return sym == String::from("__vow_u64_to_i32_try_in_arena");
+                    }
+                }
+                if c2 == 117 {
+                    let c3: i64 = sym.byte_at(14);
+                    if c3 == 49 {
+                        return sym == String::from("__vow_u64_to_u16_try_in_arena");
+                    }
+                    if c3 == 51 {
+                        return sym == String::from("__vow_u64_to_u32_try_in_arena");
+                    }
+                }
+            }
+        }
+    }
+    if n == 30 {
+        let c0: i64 = sym.byte_at(6);
+        if c0 == 98 {
+            return sym == String::from("__vow_btreemap_insert_in_arena");
+        }
+        if c0 == 102 {
+            return sym == String::from("__vow_format_f64_bits_in_arena");
+        }
+    }
+    if n == 33 {
+        let c0: i64 = sym.byte_at(17);
+        if c0 == 95 {
+            let c1: i64 = sym.byte_at(21);
+            if c1 == 101 {
+                return sym == String::from("__vow_process_get_stderr_in_arena");
+            }
+            if c1 == 111 {
+                return sym == String::from("__vow_process_get_stdout_in_arena");
+            }
+        }
+        if c0 == 101 {
+            return sym == String::from("__vow_process_stderr_for_in_arena");
+        }
+        if c0 == 111 {
+            return sym == String::from("__vow_process_stdout_for_in_arena");
+        }
+    }
+    if n == 34 {
+        let c0: i64 = sym.byte_at(19);
+        if c0 == 105 {
+            return sym == String::from("__vow_string_parse_i8_opt_in_arena");
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_string_parse_u8_opt_in_arena");
+        }
+    }
+    if n == 35 {
+        let c0: i64 = sym.byte_at(20);
+        if c0 == 49 {
+            let c1: i64 = sym.byte_at(19);
+            if c1 == 105 {
+                return sym == String::from("__vow_string_parse_i16_opt_in_arena");
+            }
+            if c1 == 117 {
+                return sym == String::from("__vow_string_parse_u16_opt_in_arena");
+            }
+        }
+        if c0 == 51 {
+            let c1: i64 = sym.byte_at(19);
+            if c1 == 105 {
+                return sym == String::from("__vow_string_parse_i32_opt_in_arena");
+            }
+            if c1 == 117 {
+                return sym == String::from("__vow_string_parse_u32_opt_in_arena");
+            }
+        }
+        if c0 == 54 {
+            let c1: i64 = sym.byte_at(19);
+            if c1 == 105 {
+                return sym == String::from("__vow_string_parse_i64_opt_in_arena");
+            }
+            if c1 == 117 {
+                return sym == String::from("__vow_string_parse_u64_opt_in_arena");
+            }
+        }
+    }
+    return false;
 }
+// GENERATE:OPERATIONS:END
 
 fn fresh_arena_variant_name(base: String) -> String {
     let variant: String = String::from("");
