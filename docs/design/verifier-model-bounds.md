@@ -175,7 +175,9 @@ made visible in the structured output:
 - A length that is provably constant carries no marker: an in-range constant
   restricts nothing, and an out-of-range constant fails closed instead of being
   assumed (`from_raw_parts_copy`, with constant folding over the IR so
-  `n + 300` is treated like `301`).
+  `n + 300` is treated like `301`). Both compilers fold identically
+  (`vow-verify/src/const_fold.rs`, `compiler/const_fold.vow`), so the emitted
+  model stays byte-identical.
 
 Backend independence is preserved: a stronger or unbounded verifier emits no
 markers, so the note disappears without any source or contract change.
