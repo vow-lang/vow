@@ -643,13 +643,102 @@ fn emit_bounds_assert(out: String, idx: i64, container: i64, idx_ty: i64, label:
         cemit_str2(String::from(".len, \""), cemit_str2(label, String::from("\");\n")))));
 }
 
-// Per-instruction constant integer value indexed by instruction id, built once
-// per function. A u64 constant >= 2^63 (stored negative) saturates to i64::MAX
+// Width in bits of an integer IR type the constant folder understands; 0 for
+// anything else (128-bit, floats, pointers), which is never folded.
+fn fold_width(ty: i64) -> i64 {
+    if ty == ITY_I8() || ty == ITY_U8() { return 8; }
+    if ty == ITY_I16() || ty == ITY_U16() { return 16; }
+    if ty == ITY_I32() || ty == ITY_U32() { return 32; }
+    if ty == ITY_I64() || ty == ITY_U64() { return 64; }
+    0
+}
+
+// Wrap a 64-bit pattern into the value range of `ty` (sign-extended when
+// signed, zero-extended when unsigned). Mirrors `normalize_const_bits` in
+// vow-verify/src/c_emitter.rs.
+fn fold_normalize(bits: i64, ty: i64) -> i64 {
+    let w: i64 = fold_width(ty);
+    if w == 0 || w >= 64 { return bits; }
+    let p: i64 = { if w == 8 { 256 } else { if w == 16 { 65536 } else { 4294967296 } } };
+    let r: i64 = ((bits % p) + p) % p;
+    if ity_is_unsigned(ty) { return r; }
+    if r >= p / 2 { return r - p; }
+    r
+}
+
+fn fold_is_leaf(inst: IrInst) -> bool {
+    if fold_width(inst.ty) == 0 { return false; }
+    inst.op == IOP_CONST_I32() || inst.op == IOP_CONST_I64() || inst.op == IOP_CONST_U64() || inst.op == IOP_CONST_U8()
+}
+
+// 0 add, 1 sub, 2 mul; -1 for any other opcode.
+fn fold_arith_kind(op: i64) -> i64 {
+    if op == IOP_WADD() || op == IOP_CADD() { return 0; }
+    if op == IOP_WSUB() || op == IOP_CSUB() { return 1; }
+    if op == IOP_WMUL() || op == IOP_CMUL() { return 2; }
+    0 - 1
+}
+
+fn fold_wrap(kind: i64, a: i64, b: i64) -> i64 {
+    if kind == 0 { return a + b; }
+    if kind == 1 { return a - b; }
+    a * b
+}
+
+// True when the checked operator `kind` on `a`, `b` (type-normalized patterns)
+// does not overflow `ty`; an overflowing execution aborts, so no value flows on.
+fn fold_checked_ok(kind: i64, a: i64, b: i64, ty: i64) -> bool {
+    let r: i64 = fold_wrap(kind, a, b);
+    let mut exact: bool = true;
+    if ity_is_unsigned(ty) {
+        let ua: u64 = a as u64;
+        let ub: u64 = b as u64;
+        let ur: u64 = r as u64;
+        if kind == 0 {
+            exact = ur >= ua;
+        } else if kind == 1 {
+            exact = ua >= ub;
+        } else if ua != 0u64 && ub != 0u64 {
+            exact = ur / ua == ub;
+        }
+    } else {
+        let max: i64 = 9223372036854775807;
+        let min: i64 = 0 - 9223372036854775807 - 1;
+        if kind == 0 {
+            exact = !((b > 0 && a > max - b) || (b < 0 && a < min - b));
+        } else if kind == 1 {
+            exact = !((b < 0 && a > max + b) || (b > 0 && a < min + b));
+        } else if a != 0 && b != 0 {
+            if (a == 0 - 1 && b == min) || (b == 0 - 1 && a == min) {
+                exact = false;
+            } else {
+                exact = r / b == a;
+            }
+        }
+    }
+    exact && fold_normalize(r, ty) == r
+}
+
+fn fold_known(known: Vec<i64>, id: i64) -> bool {
+    id >= 0 && id < known.len() as i64 && known[id as u64] == 1
+}
+
+// Constant integer value (as a 64-bit pattern normalized to the instruction's
+// type) of every instruction that provably always computes one: literals,
+// wrapping and checked + - * over constants, integer casts of constants, and a
+// Phi whose every Upsilon carries the same constant. Facts only grow from known
+// operands, so the fixpoint is sound and cyclic phis stay unknown. Mirrors
+// `fold_const_bits` in vow-verify/src/c_emitter.rs.
+//
+// Result is indexed by instruction id. A pattern >= 2^63 saturates to i64::MAX
 // so every entry that is not -1 compares correctly against a model capacity.
-// -1 marks an instruction that is not an integer constant.
+// -1 marks an instruction that is not a provable integer constant.
 fn build_const_len_by_id(f: IrFunction) -> Vec<i64> {
-    let const_len_by_id: Vec<i64> = Vec::new();
     let blocks: Vec<IrBlock> = f.blocks;
+    let known: Vec<i64> = Vec::new();
+    let bits: Vec<i64> = Vec::new();
+    let ups_phi: Vec<i64> = Vec::new();
+    let ups_src: Vec<i64> = Vec::new();
     let mut bi: u64 = 0u64;
     while bi < blocks.len() {
         let blk: IrBlock = blocks[bi];
@@ -658,16 +747,112 @@ fn build_const_len_by_id(f: IrFunction) -> Vec<i64> {
         while ii < insts.len() {
             let inst: IrInst = insts[ii];
             if inst.id >= 0 {
-                while const_len_by_id.len() as i64 <= inst.id {
-                    const_len_by_id.push(0 - 1);
+                while known.len() as i64 <= inst.id {
+                    known.push(0);
+                    bits.push(0);
                 }
-                if inst.op == IOP_CONST_U64() || inst.op == IOP_CONST_I64() {
-                    const_len_by_id[inst.id as u64] = { if inst.dv < 0 { 9223372036854775807 } else { inst.dv } };
+            }
+            if inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET() {
+                let uargs: Vec<i64> = inst.args;
+                if uargs.len() > 0 {
+                    ups_phi.push(inst.dv);
+                    ups_src.push(uargs[0]);
                 }
             }
             ii = ii + 1;
         }
         bi = bi + 1;
+    }
+    let n: i64 = known.len() as i64;
+    let mut changed: bool = true;
+    while changed {
+        changed = false;
+        bi = 0u64;
+        while bi < blocks.len() {
+            let blk: IrBlock = blocks[bi];
+            let insts: Vec<IrInst> = blk.insts;
+            let mut ii: u64 = 0u64;
+            while ii < insts.len() {
+                let inst: IrInst = insts[ii];
+                if inst.id >= 0 && known[inst.id as u64] == 0 {
+                    let iargs: Vec<i64> = inst.args;
+                    let kind: i64 = fold_arith_kind(inst.op);
+                    let mut value: i64 = 0;
+                    let mut folded: bool = false;
+                    if fold_is_leaf(inst) {
+                        value = fold_normalize(inst.dv, inst.ty);
+                        folded = true;
+                    } else if kind >= 0 && fold_width(inst.ty) != 0 && iargs.len() >= 2 {
+                        if fold_known(known, iargs[0]) && fold_known(known, iargs[1]) {
+                            let a: i64 = bits[iargs[0] as u64];
+                            let b: i64 = bits[iargs[1] as u64];
+                            let checked: bool = inst.op == IOP_CADD() || inst.op == IOP_CSUB() || inst.op == IOP_CMUL();
+                            if !checked || fold_checked_ok(kind, a, b, inst.ty) {
+                                value = fold_normalize(fold_wrap(kind, a, b), inst.ty);
+                                folded = true;
+                            }
+                        }
+                    } else if inst.op == IOP_INT_CAST() && fold_width(inst.ty) != 0 && iargs.len() >= 1 {
+                        if fold_known(known, iargs[0]) {
+                            value = fold_normalize(bits[iargs[0] as u64], inst.ty);
+                            folded = true;
+                        }
+                    }
+                    if folded {
+                        known[inst.id as u64] = 1;
+                        bits[inst.id as u64] = value;
+                        changed = true;
+                    }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+        let seen: Vec<i64> = Vec::new();
+        let first: Vec<i64> = Vec::new();
+        let bad: Vec<i64> = Vec::new();
+        let mut k: i64 = 0;
+        while k < n {
+            seen.push(0);
+            first.push(0);
+            bad.push(0);
+            k = k + 1;
+        }
+        let mut ui: u64 = 0u64;
+        while ui < ups_phi.len() {
+            let p: i64 = ups_phi[ui];
+            let s: i64 = ups_src[ui];
+            if p >= 0 && p < n {
+                if !fold_known(known, s) {
+                    bad[p as u64] = 1;
+                } else if seen[p as u64] == 0 {
+                    seen[p as u64] = 1;
+                    first[p as u64] = bits[s as u64];
+                } else if first[p as u64] != bits[s as u64] {
+                    bad[p as u64] = 1;
+                }
+            }
+            ui = ui + 1;
+        }
+        k = 0;
+        while k < n {
+            if seen[k as u64] == 1 && bad[k as u64] == 0 && known[k as u64] == 0 {
+                known[k as u64] = 1;
+                bits[k as u64] = first[k as u64];
+                changed = true;
+            }
+            k = k + 1;
+        }
+    }
+    let const_len_by_id: Vec<i64> = Vec::new();
+    let mut ri: i64 = 0;
+    while ri < n {
+        if known[ri as u64] == 1 {
+            const_len_by_id.push({ if bits[ri as u64] < 0 { 9223372036854775807 } else { bits[ri as u64] } });
+        } else {
+            const_len_by_id.push(0 - 1);
+        }
+        ri = ri + 1;
     }
     const_len_by_id
 }
@@ -682,23 +867,57 @@ fn raw_parts_const_len_exceeds_model(const_len_by_id: Vec<i64>, len_arg: i64, ma
     v >= 0 && v >= max
 }
 
-// Length model for from_raw_parts_copy. A constant length outside the model
-// capacity fails closed with the capacity label (an assumption would be
-// unsatisfiable and prove everything after it). A u64 length drops the vacuous
-// >= 0 lower bound.
-fn emit_raw_parts_len(out: String, const_len_by_id: Vec<i64>, id: i64, len_arg: i64, len_ty: i64, max: i64, capacity_label: String) {
+fn len_is_const(const_len_by_id: Vec<i64>, len_arg: i64) -> bool {
+    if len_arg < 0 || len_arg >= const_len_by_id.len() as i64 {
+        return false;
+    }
+    const_len_by_id[len_arg as u64] >= 0
+}
+
+// True when the source pointer is provably the null constant, so the model's
+// capacity assumption restricts nothing.
+fn raw_parts_null_source(const_len_by_id: Vec<i64>, ptr_arg: i64) -> bool {
+    if ptr_arg < 0 || ptr_arg >= const_len_by_id.len() as i64 {
+        return false;
+    }
+    const_len_by_id[ptr_arg as u64] == 0
+}
+
+// Tail of an emitted capacity `__ESBMC_assume(...)`: the capacity, the closing
+// parenthesis, and the marker the structured "proof is bounded" note is read
+// from. Shared wire format with vow-verify's `model_bound_marker`.
+fn bound_tail(kind: String, cap: i64) -> String {
+    let cs: String = i64_to_string(cap);
+    str5(cs, String::from("); /* vow:model-bound "), kind, String::from(" "), str3(cs, String::from(" */"), String::from("\n")))
+}
+
+// Model for from_raw_parts_copy(ptr, len). The runtime returns an empty value
+// for a null ptr whatever len is, so the model does too: the capacity
+// restriction only applies to a non-null source. A length that is provably
+// constant and outside the model capacity cannot be assumed (the assumption
+// would be unsatisfiable and prove everything after it), so a non-null source
+// fails closed with the capacity label. A u64 length drops the vacuous >= 0
+// lower bound.
+fn emit_raw_parts_len(out: String, const_len_by_id: Vec<i64>, id: i64, ptr_arg: i64, len_arg: i64, len_ty: i64, max: i64, kind: String) {
     let ids: String = i64_to_string(id);
+    let ps: String = i64_to_string(ptr_arg);
     if raw_parts_const_len_exceeds_model(const_len_by_id, len_arg, max) {
-        out.push_str(str3(String::from("  __ESBMC_assert(0, \""), capacity_label, String::from("\");\n")));
+        let label: String = { if kind == String::from("Vec") { String::from("vec capacity") } else { String::from("string capacity") } };
+        out.push_str(str5(String::from("  __ESBMC_assert(v"), ps, String::from(" == 0, \""), label, String::from("\");\n")));
         out.push_str(str3(String::from("  v"), ids, String::from(".len = 0;\n")));
         return;
     }
     let ls: String = i64_to_string(len_arg);
     let lower: String = { if ity_is_unsigned(len_ty) { String::new() } else { str3(String::from("v"), ls, String::from(" >= 0 && ")) } };
-    out.push_str(str5(String::from("  __ESBMC_assume("), lower,
-        String::from("v"), ls,
-        str3(String::from(" < "), i64_to_string(max), String::from(");\n"))));
-    out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), ls, String::from(";\n")));
+    let marker: String = {
+        if len_is_const(const_len_by_id, len_arg) || raw_parts_null_source(const_len_by_id, ptr_arg) { String::new() }
+        else { str5(String::from(" /* vow:model-bound "), kind, String::from(" "), i64_to_string(max), String::from(" */")) }
+    };
+    out.push_str(str5(String::from("  __ESBMC_assume(v"), ps,
+        String::from(" == 0 || ("), lower,
+        str5(String::from("v"), ls, String::from(" < "), i64_to_string(max), str3(String::from("));"), marker, String::from("\n")))));
+    out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), ps,
+        str5(String::from(" == 0 ? 0 : v"), ls, String::from(";\n"), String::new(), String::new())));
 }
 
 fn ir_ty_to_c(ty: i64) -> String {
@@ -1771,28 +1990,28 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, 
             let ids: String = i64_to_string(id);
             out.push_str(str3(String::from("  /* FieldGet -> vec */ v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
             out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-            out.push_str(cemit_str2(i64_to_string(vec_max), String::from(");\n")));
+            out.push_str(bound_tail(String::from("Vec"), vec_max));
             return;
         }
         if vec_contains_i64(string_vars, id) {
             let ids: String = i64_to_string(id);
             out.push_str(str3(String::from("  /* FieldGet -> string */ v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
             out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-            out.push_str(cemit_str2(i64_to_string(string_max), String::from(");\n")));
+            out.push_str(bound_tail(String::from("String"), string_max));
             return;
         }
         if vec_contains_i64(hashmap_vars, id) {
             let ids: String = i64_to_string(id);
             out.push_str(str3(String::from("  /* FieldGet -> hashmap */ v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
             out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-            out.push_str(cemit_str2(i64_to_string(hashmap_max), String::from(");\n")));
+            out.push_str(bound_tail(String::from("HashMap"), hashmap_max));
             return;
         }
         if vec_contains_i64(btreemap_vars, id) {
             let ids: String = i64_to_string(id);
             out.push_str(str3(String::from("  /* FieldGet -> btreemap */ v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
             out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-            out.push_str(cemit_str2(i64_to_string(btreemap_max), String::from(");\n")));
+            out.push_str(bound_tail(String::from("BTreeMap"), btreemap_max));
             // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
             out.push_str(str3(String::from("  for (uint64_t __si = 0; __si + 1 < v"), ids, String::from(".len; __si++)\n")));
             out.push_str(str3(String::from("    __ESBMC_assume(v"), ids, String::from(".keys[__si] < v")));
@@ -1877,7 +2096,7 @@ fn emit_vec_op(out: String, inst: IrInst, inst_ty_by_id: Vec<i64>, const_len_by_
     }
     if ds == String::from("__vow_vec_from_raw_parts_copy_val") {
         let len_arg: i64 = iargs[1];
-        emit_raw_parts_len(out, const_len_by_id, id, len_arg, inst_ty_of(inst_ty_by_id, len_arg), vec_max, String::from("vec capacity"));
+        emit_raw_parts_len(out, const_len_by_id, id, iargs[0], len_arg, inst_ty_of(inst_ty_by_id, len_arg), vec_max, String::from("Vec"));
         return;
     }
     if ds == String::from("__vow_vec_pin_to_root_val") {
@@ -2017,7 +2236,7 @@ fn emit_nondet_string_len(out: String, id: i64, string_max: i64) {
     let ids: String = i64_to_string(id);
     out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
     out.push_str(str4(String::from("  __ESBMC_assume(v"), ids,
-        String::from(".len < "), cemit_str2(i64_to_string(string_max), String::from(");\n"))));
+        String::from(".len < "), bound_tail(String::from("String"), string_max)));
 }
 
 fn const_str_index_for(ids: Vec<i64>, idxs: Vec<i64>, id: i64) -> i64 {
@@ -2055,9 +2274,13 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
         let len_arg: i64 = if ds == String::from("__vow_string_new_in_arena") { iargs[2] } else { iargs[1] };
         let ids: String = i64_to_string(id);
         let ls: String = i64_to_string(len_arg);
+        let string_new_marker: String = {
+            if len_is_const(const_len_by_id, len_arg) { String::new() }
+            else { str5(String::from(" /* vow:model-bound String "), i64_to_string(string_max), String::from(" */"), String::new(), String::new()) }
+        };
         out.push_str(str5(String::from("  __ESBMC_assume(v"), ls,
             String::from(" >= 0 && v"), ls,
-            str3(String::from(" < "), i64_to_string(string_max), String::from(");\n"))));
+            str3(String::from(" < "), i64_to_string(string_max), str3(String::from(");"), string_new_marker, String::from("\n")))));
         out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), ls, String::from(";\n")));
         return;
     }
@@ -2089,7 +2312,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
     }
     if ds == String::from("__vow_string_from_raw_parts_copy") {
         let len_arg: i64 = iargs[1];
-        emit_raw_parts_len(out, const_len_by_id, id, len_arg, inst_ty_of(inst_ty_by_id, len_arg), string_max, String::from("string capacity"));
+        emit_raw_parts_len(out, const_len_by_id, id, iargs[0], len_arg, inst_ty_of(inst_ty_by_id, len_arg), string_max, String::from("String"));
         return;
     }
     if ds == String::from("__vow_string_clone") || ds == String::from("__vow_string_clone_in_arena") || ds == String::from("__vow_string_pin_to_root") {
@@ -2646,25 +2869,25 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
                         out.push_str(str3(String::from("  __vow_vec_t v"), ids, String::from(";\n")));
                         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
                         out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-                        out.push_str(cemit_str2(i64_to_string(vec_max), String::from(");\n")));
+                        out.push_str(bound_tail(String::from("Vec"), vec_max));
                     } else if vec_contains_i64(string_vars, iid) {
                         let ids: String = i64_to_string(iid);
                         out.push_str(str3(String::from("  __vow_string_t v"), ids, String::from(";\n")));
                         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
                         out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-                        out.push_str(cemit_str2(i64_to_string(string_max), String::from(");\n")));
+                        out.push_str(bound_tail(String::from("String"), string_max));
                     } else if vec_contains_i64(hashmap_vars, iid) {
                         let ids: String = i64_to_string(iid);
                         out.push_str(str3(String::from("  __vow_hashmap_t v"), ids, String::from(";\n")));
                         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
                         out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-                        out.push_str(cemit_str2(i64_to_string(hashmap_max), String::from(");\n")));
+                        out.push_str(bound_tail(String::from("HashMap"), hashmap_max));
                     } else if vec_contains_i64(btreemap_vars, iid) {
                         let ids: String = i64_to_string(iid);
                         out.push_str(str3(String::from("  __vow_btreemap_t v"), ids, String::from(";\n")));
                         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
                         out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len <= ")));
-                        out.push_str(cemit_str2(i64_to_string(btreemap_max), String::from(");\n")));
+                        out.push_str(bound_tail(String::from("BTreeMap"), btreemap_max));
                         // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
                         out.push_str(str3(String::from("  for (uint64_t __si = 0; __si + 1 < v"), ids, String::from(".len; __si++)\n")));
                         out.push_str(str3(String::from("    __ESBMC_assume(v"), ids, String::from(".keys[__si] < v")));

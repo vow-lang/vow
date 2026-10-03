@@ -1,0 +1,19 @@
+// TEST: category overflow
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-fn "big"
+// TEST: counterexample-blame none
+// A length that is provably constant through arithmetic (here 1 + 300) is as
+// far outside the verifier's model capacity as the literal 301, so it must fail
+// closed the same way. Assuming it away would make the (true) postcondition
+// below vacuous. 301 must stay above both VEC_MODEL_CAP (128) and the model
+// capacity of the string variant (STRING_MODEL_CAP, 256) in
+// vow-verify/src/c_emitter.rs.
+module RawPartsCopyFoldedArithLenBeyondModelCap
+
+fn big(p: i64) -> i64 vow {
+    ensures: result == 1
+} {
+    let n: u64 = 1;
+    let v: Vec<i64> = Vec::from_raw_parts_copy(p, n + 300);
+    1
+}

@@ -268,6 +268,19 @@ fn check_resolve_clause_status_falls_back_to_overall_when_clause_unreported() ->
     0
 }
 
+// The note's bound list is read off the `vow:model-bound` markers in the emitted
+// model: fixed kind order, first capacity per kind, nothing for unknown kinds or
+// unparsable capacities. Mirrors model_capacity_bounds_reads_markers_in_fixed_order
+// in vow-verify/src/c_emitter.rs.
+fn check_model_bounds_text() -> i64 {
+    let src: String = String::from("x; /* vow:model-bound String 256 */\n y; /* vow:model-bound Vec 128 */\n z; /* vow:model-bound Vec 128 */\n w; /* vow:model-bound BTreeMap 64 */\n v; /* vow:model-bound Bogus 1 */\n");
+    if model_bounds_text(src) != String::from("Vec<T>: 128, String: 256, BTreeMap<K, V>: 64") { return 60; }
+    if model_bounds_text(String::from("no markers here")) != String::from("") { return 61; }
+    if model_bounds_text(String::from("a; /* vow:model-bound Vec nope */\n")) != String::from("") { return 62; }
+    if model_bounds_text(String::from("m; /* vow:model-bound HashMap 64 */\n")) != String::from("HashMap<K, V>: 64") { return 63; }
+    0
+}
+
 fn main() -> i32 [io] {
     let r1: i64 = check_known_nondet_calls();
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -311,5 +324,7 @@ fn main() -> i32 [io] {
     if r20 != 0 { return i64_to_i32_wrap(r20); }
     let r21: i64 = check_resolve_clause_status_falls_back_to_overall_when_clause_unreported();
     if r21 != 0 { return i64_to_i32_wrap(r21); }
+    let r22: i64 = check_model_bounds_text();
+    if r22 != 0 { return i64_to_i32_wrap(r22); }
     0
 }

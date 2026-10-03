@@ -71,11 +71,38 @@ not statically known, such as `String::from_cstr`, produce a nondeterministic
 length (0 to max-1). `string_matches_literal_at` is modeled against the
 literal's concrete bytes and byte length; the third argument must be a string
 literal so the verifier never has to infer static text from a dynamic `String`.
-A constant length passed to `String::from_raw_parts_copy` or
-`Vec::from_raw_parts_copy` that does not fit the model capacity fails closed
-with the capacity-limit diagnostic rather than being assumed away. A
-non-constant length is still assumed to be below the model capacity, so a
-postcondition that depends on it is verified only within that bound.
+A length passed to `String::from_raw_parts_copy` or
+`Vec::from_raw_parts_copy` that is *provably constant* and does not fit the
+model capacity fails closed with the capacity-limit diagnostic rather than being
+assumed away. "Provably constant" covers a literal, `+`/`-`/`*` (wrapping or
+checked) over constants, an integer cast of a constant, and a `let mut` whose
+every assignment is the same constant; it is computed over the IR, so
+`n + 300` with a constant `n` is recognised exactly like `301`. Both emitters
+fold identically, so the emitted model stays byte-identical.
+
+`from_raw_parts_copy` models the runtime's null-pointer behaviour: a null source
+(`ptr == 0`) yields an empty value whatever the length is, and the capacity
+restriction applies only to a non-null source. `ensures: result.len() == n`
+therefore needs a real `requires: p != 0`, exactly as the runtime does.
+
+**A proof is bounded when the model had to assume a length.** Any *non-constant*
+collection length — a `Vec`/`String`/`HashMap`/`BTreeMap` parameter, a
+collection read from a struct field, `String::from_cstr`, a non-constant
+`from_raw_parts_copy` length — is modelled as nondeterministic but restricted to
+the capacity above (`__ESBMC_assume(len <= CAP)`). That prunes every longer
+execution, so a `Verified` result for such a function means "verified for
+collections no longer than the model capacity", not "verified for all
+collections". The verifier makes this explicit rather than silent: every
+function proved from a model that carries such an assumption adds one
+[`ModelCapacityAssumed`](errors.md#modelcapacityassumed) **note** (severity
+`note`, on a `Verified` result) to the result's `diagnostics[]`, naming each bounded collection kind and
+its capacity. The note changes neither the `status` nor the exit code, and the
+verdict itself is never altered. The note is read off the emitted model (every
+capacity assumption is tagged in the C source), so it cannot disagree with what
+was actually checked. It is a statement about the *prover*, never about the
+program: do not respond to it by adding a length bound to a contract (see the
+anti-pattern below) — an unbounded verifier removes the note without any source
+change.
 
 ## Blame Model
 

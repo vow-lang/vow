@@ -245,6 +245,43 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
     out
 }
 
+// One `Kind: capacity` entry of the model-bound note, read off the first
+// `vow:model-bound <kind> <cap>` marker in an emitted model, or "" when the model
+// carries none for that kind. Mirrors `model_capacity_bounds` in
+// vow-verify/src/c_emitter.rs; the effective capacity is uniform within a model,
+// so the first marker per kind is the only one.
+fn model_bound_entry(c_src: String, kind: String, display: String) -> String {
+    let needle: String = str3(String::from("/* vow:model-bound "), kind, String::from(" "));
+    let at: i64 = str_find_str(c_src, needle);
+    if at < 0 { return String::from(""); }
+    let cap: i64 = parse_digits_at(c_src, at + needle.len() as i64);
+    if cap < 0 { return String::from(""); }
+    str3(display, String::from(": "), i64_to_string(cap))
+}
+
+// The collection kinds whose length the emitted model restricts to the model
+// capacity, rendered `Vec<T>: 128, String: 256` in the fixed kind order, or ""
+// when it restricts none.
+fn model_bounds_text(c_src: String) -> String {
+    let parts: Vec<String> = Vec::new();
+    let vec_e: String = model_bound_entry(c_src, String::from("Vec"), String::from("Vec<T>"));
+    let str_e: String = model_bound_entry(c_src, String::from("String"), String::from("String"));
+    let hm_e: String = model_bound_entry(c_src, String::from("HashMap"), String::from("HashMap<K, V>"));
+    let bt_e: String = model_bound_entry(c_src, String::from("BTreeMap"), String::from("BTreeMap<K, V>"));
+    if vec_e.len() > 0 { parts.push(vec_e); }
+    if str_e.len() > 0 { parts.push(str_e); }
+    if hm_e.len() > 0 { parts.push(hm_e); }
+    if bt_e.len() > 0 { parts.push(bt_e); }
+    let out: String = String::from("");
+    let mut i: u64 = 0u64;
+    while i < parts.len() {
+        if i > 0u64 { out.push_str(String::from(", ")); }
+        out.push_str(parts[i]);
+        i = i + 1u64;
+    }
+    out
+}
+
 // Locate ESBMC by shelling out to `command -v`. The runtime has no getenv
 // builtin, so we cannot inspect PATH directly; `sh -c` does the lookup for us.
 // Returns the empty string when ESBMC is not on PATH; callers treat that as
