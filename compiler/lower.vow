@@ -2461,6 +2461,18 @@ fn lower_narrow_literal(ctx: LowerCtx, a: AstArena, eid: i64, original: i64, ty:
     original
 }
 
+// Lower a from_raw_parts_copy length argument in its u64 context so an
+// integer literal becomes a ConstU64 rather than a wrapped ConstI64.
+fn lower_raw_parts_len(ctx: LowerCtx, a: AstArena, fields_lid: i64, nargs: i64) -> i64 {
+    if nargs <= 1 {
+        return emit_integer_zero(ctx, ITY_U64());
+    }
+    let len_eid: i64 = list_get(a, fields_lid, 1);
+    lctx_record_wide_control_flow_context(ctx, a, len_eid, ITY_U64());
+    let original: i64 = lower_consumed_expr(ctx, len_eid);
+    lower_narrow_literal(ctx, a, len_eid, original, ITY_U64())
+}
+
 fn backpatch_upsilon(ctx: LowerCtx, block_id: i64, upsilon_id: i64, phi_id: i64) {
     let blk: IrBlock = ctx.func.blocks[block_id];
     let n: u64 = blk.insts.len();
@@ -3934,13 +3946,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let zero_args: Vec<i64> = Vec::new();
                 call_args.push(lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), zero_args, IDATA_CONST_I64(), 0, 0, String::from("")));
             }
-            if nargs > 1 {
-                let len_eid: i64 = list_get(a, fields_lid, 1);
-                call_args.push(lower_expr(ctx, len_eid));
-            } else {
-                let zero_args2: Vec<i64> = Vec::new();
-                call_args.push(lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), zero_args2, IDATA_CONST_I64(), 0, 0, String::from("")));
-            }
+            call_args.push(lower_raw_parts_len(ctx, a, fields_lid, nargs));
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_from_raw_parts_copy"));
             lctx_set_inst_span(ctx, result, expr_span(a, eid));
             lctx_tag(ctx, result, String::from("String"));
@@ -4000,13 +4006,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let zero_args: Vec<i64> = Vec::new();
                 call_args.push(lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), zero_args, IDATA_CONST_I64(), 0, 0, String::from("")));
             }
-            if nargs > 1 {
-                let len_eid: i64 = list_get(a, fields_lid, 1);
-                call_args.push(lower_expr(ctx, len_eid));
-            } else {
-                let zero_args2: Vec<i64> = Vec::new();
-                call_args.push(lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), zero_args2, IDATA_CONST_I64(), 0, 0, String::from("")));
-            }
+            call_args.push(lower_raw_parts_len(ctx, a, fields_lid, nargs));
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_from_raw_parts_copy_val"));
             lctx_set_inst_span(ctx, result, expr_span(a, eid));
             lctx_tag(ctx, result, String::from("Vec"));

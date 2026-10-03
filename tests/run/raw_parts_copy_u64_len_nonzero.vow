@@ -1,0 +1,34 @@
+// TEST: stdout "ok"
+module RawPartsCopyU64LenNonzero
+
+// A null source pointer yields an empty value regardless of the length, so a
+// non-zero (even above i64::MAX) u64 length can be threaded through codegen
+// without reading memory.
+fn copy_string(p: i64, n: u64) -> String {
+    String::from_raw_parts_copy(p, n)
+}
+
+fn copy_vec(p: i64, n: u64) -> Vec<i64> {
+    Vec::from_raw_parts_copy(p, n)
+}
+
+fn main() -> i32 [io] {
+    let n: u64 = 5;
+    let s: String = copy_string(0, n + 3);
+    if s.len() != 0 { return 1; }
+
+    let v: Vec<i64> = copy_vec(0, n);
+    if v.len() != 0 { return 2; }
+
+    let literal: String = String::from_raw_parts_copy(0, 7);
+    if literal.len() != 0 { return 3; }
+
+    let above_i64_max: String = String::from_raw_parts_copy(0, 10000000000000000000);
+    if above_i64_max.len() != 0 { return 4; }
+
+    let above_i64_max_vec: Vec<i64> = Vec::from_raw_parts_copy(0, 18446744073709551615);
+    if above_i64_max_vec.len() != 0 { return 5; }
+
+    print_str(String::from("ok"));
+    0
+}
