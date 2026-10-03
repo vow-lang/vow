@@ -4,7 +4,7 @@
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-violation "index out of bounds"
 // An unsigned offset still has an upper bound: byte_at on an index that is not
-// proved < len() is a `string bounds` failure, never the `-1` sentinel.
+// proved < len() fails verification as `index out of bounds`, never the `-1` sentinel.
 module StringByteAtUnguardedU64
 
 fn byte_at_any(s: String, i: u64) -> i64 vow {

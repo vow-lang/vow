@@ -2416,7 +2416,7 @@ Because an offset cannot be negative, the runtime has no negative-offset behavio
 - `string_substr(s, start, len)` clamps `start` to `len()` and `len` to the bytes remaining after `start`.
 - `string_matches_literal_at` returns `0` when `pos` plus the literal's byte length exceeds `len()` (including when that sum overflows `u64`).
 
-The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` is a `string bounds` violation, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values.
+The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` fails verification as `index out of bounds`, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values.
 
 `byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64`. `push_byte` takes a byte *value*, not an offset, and is `u8` (see the String method table).
 
@@ -7803,7 +7803,7 @@ Because an offset cannot be negative, the runtime has no negative-offset behavio
 - `string_substr(s, start, len)` clamps `start` to `len()` and `len` to the bytes remaining after `start`.
 - `string_matches_literal_at` returns `0` when `pos` plus the literal's byte length exceeds `len()` (including when that sum overflows `u64`).
 
-The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` is a `string bounds` violation, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values.
+The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` fails verification as `index out of bounds`, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values.
 
 `byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64`. `push_byte` takes a byte *value*, not an offset, and is `u8` (see the String method table).
 

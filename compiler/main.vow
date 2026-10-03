@@ -4558,7 +4558,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("- `string_substr(s, start, len)` clamps `start` to `len()` and `len` to the bytes remaining after `start`.\n"));
     r.push_str(String::from("- `string_matches_literal_at` returns `0` when `pos` plus the literal's byte length exceeds `len()` (including when that sum overflows `u64`).\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` is a `string bounds` violation, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values.\n"));
+    r.push_str(String::from("The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` fails verification as `index out of bounds`, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64`. `push_byte` takes a byte *value*, not an offset, and is `u8` (see the String method table).\n"));
     r.push_str(String::from("\n"));
@@ -9967,7 +9967,7 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("- `string_substr(s, start, len)` clamps `start` to `len()` and `len` to the bytes remaining after `start`.\n"));
     r.push_str(String::from("- `string_matches_literal_at` returns `0` when `pos` plus the literal's byte length exceeds `len()` (including when that sum overflows `u64`).\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` is a `string bounds` violation, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values.\n"));
+    r.push_str(String::from("The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` fails verification as `index out of bounds`, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64`. `push_byte` takes a byte *value*, not an offset, and is `u8` (see the String method table).\n"));
     r.push_str(String::from("\n"));
