@@ -1,0 +1,10 @@
+module TestMutantsMainTier2Default
+
+use mutants_defaults
+
+fn main() -> i32 {
+    let got: String = default_tier2_cmd();
+    let want: String = String::from("VOW_FULL_TEST_SKIP_CARGO=1 scripts/full_test.sh");
+    if got != want { return 1; }
+    0
+}

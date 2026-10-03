@@ -12,7 +12,7 @@ FAIL=0
 SKIP=0
 FAILURES=()
 
-RUST="./target/release/vow"
+RUST="${VOW_FULL_TEST_RUST:-./target/release/vow}"
 SELF=""
 TMPDIR=$(mktemp -d)
 # EXIT alone does not fire on an untrapped SIGTERM/SIGINT/SIGHUP: bash dies
@@ -74,8 +74,16 @@ run_self_bin() {
 }
 
 setup_compilers() {
-    echo -e "${BOLD}Building Rust compiler...${RESET}"
-    cargo build --all --release 2>&1 | tail -1
+    if [ "${VOW_FULL_TEST_SKIP_CARGO:-0}" = "1" ]; then
+        if [ ! -x "$RUST" ]; then
+            echo "VOW_FULL_TEST_SKIP_CARGO=1 but $RUST is not executable; build it first (cargo build --all --release) or unset VOW_FULL_TEST_SKIP_CARGO." >&2
+            exit 1
+        fi
+        echo -e "${BOLD}Skipping Rust compiler rebuild (VOW_FULL_TEST_SKIP_CARGO=1)${RESET}"
+    else
+        echo -e "${BOLD}Building Rust compiler...${RESET}"
+        cargo build --all --release 2>&1 | tail -1
+    fi
     echo -e "${BOLD}Building self-hosted compiler...${RESET}"
     $RUST --no-verify compiler/main.vow -o "$TMPDIR/vowc_self" >/dev/null 2>/dev/null
     SELF="$TMPDIR/vowc_self"
@@ -496,6 +504,10 @@ echo ""
 
 section_begin "Section 0: Setup"
 setup_compilers
+
+if [ "${VOW_FULL_TEST_SETUP_ONLY:-0}" = "1" ]; then
+    exit 0
+fi
 
 if [ "${VOW_FULL_TEST_PROMOTED_ONLY:-0}" = "1" ]; then
     run_promoted_run_tests

@@ -222,4 +222,69 @@ test_success_preserves_fixed_point_gate
 test_mismatch_preserves_fixed_point_failure
 test_hash_failure_reaches_summary
 
+make_setup_only_fixture() {
+    local fixture="$1"
+
+    mkdir -p "$fixture/bin"
+
+    cat > "$fixture/bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+printf 'cargo\n' >> "$VOW_FULL_TEST_TRACE"
+exit 0
+EOF
+    chmod +x "$fixture/bin/cargo"
+
+    cat > "$fixture/fake-rust-bin" <<'EOF'
+#!/usr/bin/env bash
+printf 'rust_bin\n' >> "$VOW_FULL_TEST_TRACE"
+exit 0
+EOF
+    chmod +x "$fixture/fake-rust-bin"
+}
+
+run_setup_only_case() {
+    local name="$1"
+    local skip_cargo="$2"
+    local fixture="$TEST_TMPDIR/$name"
+    local output_file="$fixture/output"
+    local trace_file="$fixture/trace"
+
+    make_setup_only_fixture "$fixture"
+
+    RUN_STATUS=0
+    VOW_FULL_TEST_SETUP_ONLY=1 \
+        VOW_FULL_TEST_SKIP_CARGO="$skip_cargo" \
+        VOW_FULL_TEST_RUST="$fixture/fake-rust-bin" \
+        VOW_FULL_TEST_TRACE="$trace_file" \
+        PATH="$fixture/bin:$PATH" \
+        bash scripts/full_test.sh >"$output_file" 2>&1 || RUN_STATUS=$?
+    RUN_OUTPUT=$(cat "$output_file")
+    RUN_TRACE=""
+    if [ -f "$trace_file" ]; then
+        RUN_TRACE=$(cat "$trace_file")
+    fi
+}
+
+test_setup_only_runs_cargo_by_default() {
+    run_setup_only_case "setup_default" "0"
+
+    [ "$RUN_STATUS" -eq 0 ] || fail_test "setup default: expected status 0, got $RUN_STATUS ($RUN_OUTPUT)"
+    assert_contains "$RUN_TRACE" "cargo" "setup default cargo invocation"
+    assert_contains "$RUN_TRACE" "rust_bin" "setup default self-hosted build invocation"
+}
+
+test_setup_only_skips_cargo_when_flag_set() {
+    run_setup_only_case "setup_skip_cargo" "1"
+
+    [ "$RUN_STATUS" -eq 0 ] || fail_test "setup skip-cargo: expected status 0, got $RUN_STATUS ($RUN_OUTPUT)"
+    if [[ "$RUN_TRACE" == *"cargo"* ]]; then
+        fail_test "setup skip-cargo: cargo shim should not have run, trace: $RUN_TRACE"
+    fi
+    assert_contains "$RUN_OUTPUT" "Skipping Rust compiler rebuild" "setup skip-cargo message"
+    assert_contains "$RUN_TRACE" "rust_bin" "setup skip-cargo self-hosted build still runs"
+}
+
+test_setup_only_runs_cargo_by_default
+test_setup_only_skips_cargo_when_flag_set
+
 echo "full-test bootstrap tests passed"

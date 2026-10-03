@@ -1,0 +1,11 @@
+module MutantsDefaults
+
+// Tier 2 (`vowc mutants`) only ever mutates `*.vow` source, so the Rust
+// bootstrap compiler is invariant across a run: `scripts/full_test.sh`'s
+// `cargo build --all --release` step is always redundant here, and under
+// the documented symlinked-`target/` worktree fast path it actively
+// corrupts the real repo's shared `target/` (issue #1296). Skip it by
+// default.
+fn default_tier2_cmd() -> String {
+    String::from("VOW_FULL_TEST_SKIP_CARGO=1 scripts/full_test.sh")
+}
