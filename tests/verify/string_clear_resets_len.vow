@@ -9,7 +9,7 @@ fn clear_makes_empty() -> u64 vow {
 } {
   let s: String = String::from("hello");
   s.clear();
-  s.len() as u64
+  s.len()
 }
 
 fn main() -> i32 [io] {

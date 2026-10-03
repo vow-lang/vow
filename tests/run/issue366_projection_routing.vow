@@ -50,7 +50,7 @@ fn main() -> i32 [io] {
         print_str("same_arena_delta=");
         print_u64(same_arena_delta);
         print_str(" foreign_len=");
-        print_u64(foreign.len() as u64);
+        print_u64(foreign.len());
     }
 
     0

@@ -23,6 +23,6 @@ fn over(a: String, b: String) -> String vow {
 
 fn main() -> i32 [io] {
   let r: String = over(String::from("a"), String::from("b"));
-  print_u64(r.len() as u64);
+  print_u64(r.len());
   0
 }

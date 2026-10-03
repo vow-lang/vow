@@ -20,6 +20,6 @@ fn fill_vec() -> Vec<i64> vow {
 
 fn main() -> i32 [io] {
   let v: Vec<i64> = fill_vec();
-  print_u64(v.len() as u64);
+  print_u64(v.len());
   0
 }

@@ -4,7 +4,7 @@ use vec_math
 
 fn show(v: Vec<i64>) [io] {
     print_str(String::from("["));
-    let n: u64 = v.len() as u64;
+    let n: u64 = v.len();
     let mut i: u64 = 0;
     while i < n {
         if i > 0 {

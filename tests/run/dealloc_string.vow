@@ -10,7 +10,7 @@ fn build_greeting(name: String) -> String {
 fn unused_strings() -> u64 {
     let a: String = String::from("temporary");
     let b: String = String::from("also temporary");
-    let len: u64 = a.len() as u64 + b.len() as u64;
+    let len: u64 = a.len() + b.len();
     len
 }
 

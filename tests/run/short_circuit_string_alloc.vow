@@ -29,7 +29,7 @@ fn main() -> i32 [io] {
 
     let mut i: u64 = 0;
     let mut sum: i64 = 0;
-    while i < tags.len() as u64 {
+    while i < tags.len() {
         sum = sum + classify(tags[i]);
         i = i + 1;
     }
