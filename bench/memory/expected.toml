@@ -6,6 +6,16 @@ file = "programs/alloc_call_store.vow"
 max_rss_kb = 8528
 expected = "pass"
 
+[alloc_escape_btreemap_get]
+file = "programs/alloc_escape_btreemap_get.vow"
+max_rss_kb = 30820
+expected = "pass"
+
+[alloc_escape_hashmap_get]
+file = "programs/alloc_escape_hashmap_get.vow"
+max_rss_kb = 30900
+expected = "pass"
+
 [alloc_escape_pin]
 file = "programs/alloc_escape_pin.vow"
 max_rss_kb = 9152
@@ -26,6 +36,31 @@ file = "programs/alloc_loop_branch.vow"
 max_rss_kb = 20016
 expected = "pass"
 
+[alloc_loop_btreemap_get]
+file = "programs/alloc_loop_btreemap_get.vow"
+max_rss_kb = 7032
+expected = "pass"
+
+[alloc_loop_btreemap_insert]
+file = "programs/alloc_loop_btreemap_insert.vow"
+max_rss_kb = 7012
+expected = "pass"
+
+[alloc_loop_btreemap_new]
+file = "programs/alloc_loop_btreemap_new.vow"
+max_rss_kb = 6928
+expected = "pass"
+
+[alloc_loop_fresh_builtins]
+file = "programs/alloc_loop_fresh_builtins.vow"
+max_rss_kb = 7248
+expected = "pass"
+
+[alloc_loop_hashmap_get]
+file = "programs/alloc_loop_hashmap_get.vow"
+max_rss_kb = 7012
+expected = "pass"
+
 [alloc_loop_map]
 file = "programs/alloc_loop_map.vow"
 max_rss_kb = 6984
@@ -34,6 +69,11 @@ expected = "pass"
 [alloc_loop_nested]
 file = "programs/alloc_loop_nested.vow"
 max_rss_kb = 12132
+expected = "pass"
+
+[alloc_loop_option_conv]
+file = "programs/alloc_loop_option_conv.vow"
+max_rss_kb = 6980
 expected = "pass"
 
 [alloc_loop_parser]

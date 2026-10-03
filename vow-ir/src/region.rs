@@ -1925,70 +1925,137 @@ fn vec_creation_extern(sym: &str) -> bool {
     matches!(sym, "__vow_vec_new" | "__vow_vec_new_val")
 }
 
-fn string_creation_extern(sym: &str) -> bool {
-    matches!(
-        sym,
-        "__vow_string_new"
-            | "__vow_string_new_in_arena"
-            | "__vow_string_from_cstr"
-            | "__vow_string_from_cstr_in_arena"
-            | "__vow_string_clone"
-            | "__vow_string_clone_in_arena"
-            | "__vow_string_substr"
-            | "__vow_string_substr_in_arena"
-            | "__vow_string_substring"
-            | "__vow_string_substring_in_arena"
-            | "__vow_string_from_i64"
-            | "__vow_string_from_i64_in_arena"
-            | "__vow_string_from_u64"
-            | "__vow_string_from_u64_in_arena"
-            | "__vow_string_split"
-            | "__vow_string_split_in_arena"
-            | "__vow_string_trim"
-            | "__vow_string_trim_in_arena"
-            | "__vow_string_to_upper"
-            | "__vow_string_to_upper_in_arena"
-            | "__vow_string_to_lower"
-            | "__vow_string_to_lower_in_arena"
-            | "__vow_string_replace"
-            | "__vow_string_replace_in_arena"
-            | "__vow_string_join"
-            | "__vow_string_join_in_arena"
-    )
+// GENERATE:OPERATIONS:START
+/// Builtins returning a fresh heap aggregate, paired with their
+/// `<name>_in_arena` variant (target arena first, then the base parameters).
+pub const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[
+    (
+        "__vow_string_parse_i64_opt",
+        "__vow_string_parse_i64_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_u64_opt",
+        "__vow_string_parse_u64_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_i8_opt",
+        "__vow_string_parse_i8_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_u8_opt",
+        "__vow_string_parse_u8_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_i16_opt",
+        "__vow_string_parse_i16_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_u16_opt",
+        "__vow_string_parse_u16_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_i32_opt",
+        "__vow_string_parse_i32_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_u32_opt",
+        "__vow_string_parse_u32_opt_in_arena",
+    ),
+    ("__vow_map_get", "__vow_map_get_in_arena"),
+    ("__vow_btreemap_get", "__vow_btreemap_get_in_arena"),
+    ("__vow_btreemap_insert", "__vow_btreemap_insert_in_arena"),
+    ("__vow_i128_to_u8_try", "__vow_i128_to_u8_try_in_arena"),
+    ("__vow_i16_to_i8_try", "__vow_i16_to_i8_try_in_arena"),
+    ("__vow_i16_to_u8_try", "__vow_i16_to_u8_try_in_arena"),
+    ("__vow_i32_to_i16_try", "__vow_i32_to_i16_try_in_arena"),
+    ("__vow_i32_to_i8_try", "__vow_i32_to_i8_try_in_arena"),
+    ("__vow_i32_to_u16_try", "__vow_i32_to_u16_try_in_arena"),
+    ("__vow_i32_to_u8_try", "__vow_i32_to_u8_try_in_arena"),
+    ("__vow_i64_to_i16_try", "__vow_i64_to_i16_try_in_arena"),
+    ("__vow_i64_to_i32_try", "__vow_i64_to_i32_try_in_arena"),
+    ("__vow_i64_to_i8_try", "__vow_i64_to_i8_try_in_arena"),
+    ("__vow_i64_to_u16_try", "__vow_i64_to_u16_try_in_arena"),
+    ("__vow_i64_to_u32_try", "__vow_i64_to_u32_try_in_arena"),
+    ("__vow_i64_to_u8_try", "__vow_i64_to_u8_try_in_arena"),
+    ("__vow_u128_to_u8_try", "__vow_u128_to_u8_try_in_arena"),
+    ("__vow_u16_to_i8_try", "__vow_u16_to_i8_try_in_arena"),
+    ("__vow_u16_to_u8_try", "__vow_u16_to_u8_try_in_arena"),
+    ("__vow_u32_to_i16_try", "__vow_u32_to_i16_try_in_arena"),
+    ("__vow_u32_to_i32_try", "__vow_u32_to_i32_try_in_arena"),
+    ("__vow_u32_to_i8_try", "__vow_u32_to_i8_try_in_arena"),
+    ("__vow_u32_to_u16_try", "__vow_u32_to_u16_try_in_arena"),
+    ("__vow_u32_to_u8_try", "__vow_u32_to_u8_try_in_arena"),
+    ("__vow_u64_to_i16_try", "__vow_u64_to_i16_try_in_arena"),
+    ("__vow_u64_to_i32_try", "__vow_u64_to_i32_try_in_arena"),
+    ("__vow_u64_to_i8_try", "__vow_u64_to_i8_try_in_arena"),
+    ("__vow_u64_to_u16_try", "__vow_u64_to_u16_try_in_arena"),
+    ("__vow_u64_to_u32_try", "__vow_u64_to_u32_try_in_arena"),
+    ("__vow_u64_to_u8_try", "__vow_u64_to_u8_try_in_arena"),
+    ("__vow_vec_sort", "__vow_vec_sort_in_arena"),
+    ("__vow_hex_encode", "__vow_hex_encode_in_arena"),
+    ("__vow_hex_decode", "__vow_hex_decode_in_arena"),
+    ("__vow_format_f64_bits", "__vow_format_f64_bits_in_arena"),
+    ("__vow_fs_read", "__vow_fs_read_in_arena"),
+    ("__vow_fs_read_line", "__vow_fs_read_line_in_arena"),
+    ("__vow_fs_listdir", "__vow_fs_listdir_in_arena"),
+    ("__vow_stdin_read", "__vow_stdin_read_in_arena"),
+    ("__vow_args", "__vow_args_in_arena"),
+    (
+        "__vow_process_get_stdout",
+        "__vow_process_get_stdout_in_arena",
+    ),
+    (
+        "__vow_process_get_stderr",
+        "__vow_process_get_stderr_in_arena",
+    ),
+    (
+        "__vow_process_stdout_for",
+        "__vow_process_stdout_for_in_arena",
+    ),
+    (
+        "__vow_process_stderr_for",
+        "__vow_process_stderr_for_in_arena",
+    ),
+    ("__vow_map_new", "__vow_map_new_in_arena"),
+    ("__vow_btreemap_new", "__vow_btreemap_new_in_arena"),
+    ("__vow_string_new", "__vow_string_new_in_arena"),
+    ("__vow_string_from_cstr", "__vow_string_from_cstr_in_arena"),
+    ("__vow_string_clone", "__vow_string_clone_in_arena"),
+    ("__vow_string_substr", "__vow_string_substr_in_arena"),
+    ("__vow_string_substring", "__vow_string_substring_in_arena"),
+    ("__vow_string_from_i64", "__vow_string_from_i64_in_arena"),
+    ("__vow_string_from_u64", "__vow_string_from_u64_in_arena"),
+    ("__vow_string_split", "__vow_string_split_in_arena"),
+    ("__vow_string_trim", "__vow_string_trim_in_arena"),
+    ("__vow_string_to_upper", "__vow_string_to_upper_in_arena"),
+    ("__vow_string_to_lower", "__vow_string_to_lower_in_arena"),
+    ("__vow_string_replace", "__vow_string_replace_in_arena"),
+    ("__vow_string_join", "__vow_string_join_in_arena"),
+];
+// GENERATE:OPERATIONS:END
+
+/// The `_in_arena` variant of a fresh-aggregate builtin, if it has one.
+pub fn fresh_arena_variant(sym: &str) -> Option<&'static str> {
+    FRESH_ARENA_VARIANTS
+        .iter()
+        .find(|(base, _)| *base == sym)
+        .map(|&(_, variant)| variant)
 }
 
-fn option_creation_extern(sym: &str) -> bool {
-    matches!(
-        sym,
-        "__vow_string_parse_i64_opt"
-            | "__vow_string_parse_i64_opt_in_arena"
-            | "__vow_string_parse_u64_opt"
-            | "__vow_string_parse_i8_opt"
-            | "__vow_string_parse_u8_opt"
-            | "__vow_string_parse_i16_opt"
-            | "__vow_string_parse_u16_opt"
-            | "__vow_string_parse_i32_opt"
-            | "__vow_string_parse_u32_opt"
-            | "__vow_btreemap_insert"
-            | "__vow_btreemap_get"
-            | "__vow_map_get"
-            | "__vow_map_get_in_arena"
-    )
+/// The base symbol a fresh-aggregate `_in_arena` variant routes from.
+pub fn fresh_arena_base(sym: &str) -> Option<&'static str> {
+    FRESH_ARENA_VARIANTS
+        .iter()
+        .find(|(_, variant)| *variant == sym)
+        .map(|&(base, _)| base)
 }
 
-fn map_creation_extern(sym: &str) -> bool {
-    matches!(
-        sym,
-        "__vow_map_new" | "__vow_map_new_in_arena" | "__vow_btreemap_new"
-    )
+fn fresh_builtin_extern(sym: &str) -> bool {
+    fresh_arena_variant(sym).is_some() || fresh_arena_base(sym).is_some()
 }
 
 fn heap_producing_extern(sym: &str) -> bool {
-    extern_fresh_in_caller(sym)
-        || vec_creation_extern(sym)
-        || string_creation_extern(sym)
-        || option_creation_extern(sym)
-        || map_creation_extern(sym)
+    extern_fresh_in_caller(sym) || vec_creation_extern(sym) || fresh_builtin_extern(sym)
 }
 
 fn for_each_extern_store_edge(sym: &str, args: &[InstId], mut visit: impl FnMut(InstId, InstId)) {
@@ -2000,7 +2067,7 @@ fn for_each_extern_store_edge(sym: &str, args: &[InstId], mut visit: impl FnMut(
             visit(args[0], args[1]);
             visit(args[0], args[2]);
         }
-        "__vow_map_insert_in_arena" if args.len() >= 4 => {
+        "__vow_map_insert_in_arena" | "__vow_btreemap_insert_in_arena" if args.len() >= 4 => {
             visit(args[1], args[2]);
             visit(args[1], args[3]);
         }
@@ -2020,9 +2087,10 @@ fn extern_growth_target(sym: &str, args: &[InstId]) -> Option<InstId> {
         "__vow_string_push_str_in_arena" | "__vow_string_push_byte_in_arena" if args.len() >= 2 => {
             Some(args[1])
         }
-        "__vow_map_insert" if !args.is_empty() => Some(args[0]),
-        "__vow_map_insert_in_arena" if args.len() >= 2 => Some(args[1]),
-        "__vow_btreemap_insert" if !args.is_empty() => Some(args[0]),
+        "__vow_map_insert" | "__vow_btreemap_insert" if !args.is_empty() => Some(args[0]),
+        "__vow_map_insert_in_arena" | "__vow_btreemap_insert_in_arena" if args.len() >= 2 => {
+            Some(args[1])
+        }
         _ => None,
     }
 }
@@ -2036,7 +2104,7 @@ fn extern_mutation_operation(sym: &str) -> Option<&'static str> {
         "__vow_string_push_byte" | "__vow_string_push_byte_in_arena" => Some("String::push_byte"),
         "__vow_string_clear" => Some("String::clear"),
         "__vow_map_insert" | "__vow_map_insert_in_arena" => Some("HashMap::insert"),
-        "__vow_btreemap_insert" => Some("BTreeMap::insert"),
+        "__vow_btreemap_insert" | "__vow_btreemap_insert_in_arena" => Some("BTreeMap::insert"),
         _ => None,
     }
 }
@@ -6886,6 +6954,160 @@ mod tests {
             RegionConstraint::FreshInCaller,
             "returning a Vec-indexed split element should publish FreshInCaller"
         );
+    }
+
+    #[test]
+    fn returned_try_conversion_option_allocates_in_caller_region() {
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+            inst(
+                1,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0],
+                InstData::CallExtern("__vow_i64_to_u8_try".to_string()),
+            ),
+            inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+        ];
+        let f = function(0, "narrow", vec![Ty::I64], Ty::Ptr, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[0].blocks[0].insts[1].region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "a returned `_try` Option cell is heap-producing and must outlive the callee"
+        );
+        assert_eq!(
+            m.functions[0].summary.return_region,
+            RegionConstraint::FreshInCaller
+        );
+    }
+
+    #[test]
+    fn returned_fresh_runtime_aggregates_allocate_in_caller_region() {
+        for (sym, arity) in [
+            ("__vow_vec_sort", 1),
+            ("__vow_hex_encode", 1),
+            ("__vow_hex_decode", 1),
+            ("__vow_fs_read", 1),
+            ("__vow_fs_read_line", 1),
+            ("__vow_fs_listdir", 1),
+            ("__vow_stdin_read", 0),
+            ("__vow_args", 0),
+            ("__vow_process_get_stdout", 0),
+            ("__vow_process_stderr_for", 1),
+        ] {
+            let mut insts = vec![inst(
+                0,
+                Opcode::GetArg,
+                Ty::Ptr,
+                vec![],
+                InstData::ArgIndex(0),
+            )];
+            insts.push(inst(
+                1,
+                Opcode::Call,
+                Ty::Ptr,
+                (0..arity).collect(),
+                InstData::CallExtern(sym.to_string()),
+            ));
+            insts.push(inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None));
+            let f = function(0, "fresh", vec![Ty::Ptr], Ty::Ptr, vec![block(0, insts)]);
+            let mut m = module(vec![f]);
+            infer_regions(&mut m);
+
+            assert_eq!(
+                m.functions[0].blocks[0].insts[1].region,
+                RegionId::Caller(HiddenRegionIdx(0)),
+                "{sym}: a returned fresh aggregate must outlive the callee"
+            );
+            assert_eq!(
+                m.functions[0].summary.return_region,
+                RegionConstraint::FreshInCaller,
+                "{sym}"
+            );
+        }
+    }
+
+    #[test]
+    fn unescaped_fresh_runtime_aggregates_are_block_owned() {
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                1,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0],
+                InstData::CallExtern("__vow_fs_read".to_string()),
+            ),
+            inst(2, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(0, "drop_it", vec![Ty::Ptr], Ty::Unit, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            matches!(m.functions[0].blocks[0].insts[1].region, RegionId::Block(_)),
+            "an unused fs_read result dies with the block, got {:?}",
+            m.functions[0].blocks[0].insts[1].region
+        );
+    }
+
+    #[test]
+    fn btreemap_lookup_options_split_by_escape() {
+        // map = BTreeMap::new(); map.insert(k, v);   (result unused)
+        // kept = map.get(k); return kept;            (escapes to the caller)
+        // dropped = map.get(k);                      (dies with the block)
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+            inst(
+                1,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_btreemap_new".to_string()),
+            ),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1, 0, 0],
+                InstData::CallExtern("__vow_btreemap_insert".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1, 0],
+                InstData::CallExtern("__vow_btreemap_get".to_string()),
+            ),
+            inst(
+                4,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1, 0],
+                InstData::CallExtern("__vow_btreemap_get".to_string()),
+            ),
+            inst(5, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+        ];
+        let f = function(0, "lookup", vec![Ty::I64], Ty::Ptr, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        let insts = &m.functions[0].blocks[0].insts;
+        assert_eq!(
+            insts[3].region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "the returned lookup result belongs to the caller"
+        );
+        for (idx, what) in [(1, "map"), (2, "insert result"), (4, "unused lookup")] {
+            assert!(
+                matches!(insts[idx].region, RegionId::Block(_)),
+                "the non-escaping {what} must be block-owned, got {:?}",
+                insts[idx].region
+            );
+        }
     }
 
     #[test]

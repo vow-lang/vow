@@ -1,0 +1,29 @@
+// BENCH: max-rss-kb 6980
+module AllocLoopOptionConv
+
+fn parse_it(s: String) -> u64 {
+    match s.parse_u64() {
+        Option::Some(v) => v,
+        Option::None => 0,
+    }
+}
+
+fn narrow_it(x: i64) -> i64 {
+    match i64_to_u8_try(x) {
+        Option::Some(v) => v as i64,
+        Option::None => 0,
+    }
+}
+
+fn main() -> i32 [io] {
+    let s: String = String::from("12345");
+    let mut i: i64 = 0;
+    let mut total: u64 = 0;
+    while i < 1000000 {
+        total = total + parse_it(s) + (narrow_it(i % 300) as u64);
+        i = i + 1;
+    }
+    print_u64(total);
+    print_str("\n");
+    0
+}

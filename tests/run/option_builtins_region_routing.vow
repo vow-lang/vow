@@ -1,0 +1,92 @@
+// TEST: stdout "parsed=12345000\nnarrowed=512\nsmall=-128,none\nkept=255,none,none\nwide=65535,none\n"
+// Every Option-returning builtin (the parse_* family and the *_try narrowing
+// conversions) allocates its result cell in the inferred region: freed with the
+// block in a loop, returned to the caller, or retained in the root arena when
+// published through a parameter container. All shapes must read back correctly.
+module OptionBuiltinsRegionRouting
+
+fn parse_sum(s: String, n: i64) -> u64 {
+    let mut i: i64 = 0;
+    let mut total: u64 = 0;
+    while i < n {
+        total = total + match s.parse_u64() {
+            Option::Some(v) => v,
+            Option::None => 0,
+        };
+        i = i + 1;
+    }
+    total
+}
+
+fn narrow_count(n: i64) -> i64 {
+    let mut i: i64 = 0;
+    let mut hits: i64 = 0;
+    while i < n {
+        hits = hits + match i64_to_u8_try(i % 300) {
+            Option::Some(_) => 1,
+            Option::None => 0,
+        };
+        i = i + 1;
+    }
+    hits
+}
+
+fn parse_small(s: String) -> Option<i8> {
+    parse_i8(s)
+}
+
+fn show_small(o: Option<i8>) [io] {
+    match o {
+        Option::Some(v) => { print_i64(v as i64); },
+        Option::None => { print_str(String::from("none")); },
+    }
+}
+
+fn keep(results: Vec<Option<u8>>, x: i64) {
+    results.push(i64_to_u8_try(x));
+}
+
+fn show_u8(o: Option<u8>) [io] {
+    match o {
+        Option::Some(v) => { print_i64(v as i64); },
+        Option::None => { print_str(String::from("none")); },
+    }
+}
+
+fn widen(x: u64) -> Option<u16> {
+    u64_to_u16_try(x)
+}
+
+fn show_u16(o: Option<u16>) [io] {
+    match o {
+        Option::Some(v) => { print_i64(v as i64); },
+        Option::None => { print_str(String::from("none")); },
+    }
+}
+
+fn main() -> i32 [io] {
+    print_str(String::from("parsed="));
+    print_u64(parse_sum(String::from("12345"), 1000));
+    print_str(String::from("\nnarrowed="));
+    print_i64(narrow_count(600));
+    print_str(String::from("\nsmall="));
+    show_small(parse_small(String::from("-128")));
+    print_str(String::from(","));
+    show_small(parse_small(String::from("128")));
+    let results: Vec<Option<u8>> = Vec::new();
+    keep(results, 255);
+    keep(results, 256);
+    keep(results, 0 - 1);
+    print_str(String::from("\nkept="));
+    show_u8(results[0]);
+    print_str(String::from(","));
+    show_u8(results[1]);
+    print_str(String::from(","));
+    show_u8(results[2]);
+    print_str(String::from("\nwide="));
+    show_u16(widen(65535));
+    print_str(String::from(","));
+    show_u16(widen(65536));
+    print_str(String::from("\n"));
+    0
+}

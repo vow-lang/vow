@@ -1,6 +1,6 @@
 // TEST: stdout ""
 // Issue #1265 regression: __vow_btreemap_insert/__vow_btreemap_get both
-// return a fresh Option<i64> (alloc_option_i64), the same allocation shape
+// return a fresh Option<i64>, the same allocation shape
 // as the already-tracked __vow_string_parse_i64_opt. Publishing either
 // result through a parameter container must surface a RegionRootEscape note.
 module RegionBTreeMapInsertGetRootEscapeSpan

@@ -1,0 +1,49 @@
+// BENCH: max-rss-kb 7248
+module AllocLoopFreshBuiltins
+
+fn read_len(path: String) -> u64 [read] {
+    let s: String = fs_read(path);
+    s.len()
+}
+
+fn first_sorted(v: Vec<i64>) -> i64 {
+    let s: Vec<i64> = vec_sort(v);
+    s[0]
+}
+
+fn hex_len(v: Vec<u8>) -> u64 {
+    hex_encode(v).len() + hex_decode(hex_encode(v)).len()
+}
+
+fn main() -> i32 [io, read, write] {
+    // A per-run directory the benchmark owns; refuse to reuse anything that exists.
+    let dir: String = String::from("/tmp/vow_bench_fresh_builtins_");
+    dir.push_str(i64_to_string(time_unix_ms()));
+    if fs_exists(dir) == 1 {
+        return 1;
+    }
+    if fs_mkdir(dir) != 0 {
+        return 1;
+    }
+    let path: String = String::from(dir);
+    path.push_str(String::from("/payload.txt"));
+    fs_write(path, String::from("payload"));
+    let nums: Vec<i64> = Vec::new();
+    nums.push(5);
+    nums.push(1);
+    nums.push(3);
+    let bytes: Vec<u8> = Vec::new();
+    bytes.push(10);
+    bytes.push(255);
+    let mut i: i64 = 0;
+    let mut total: u64 = 0;
+    while i < 50000 {
+        total = total + read_len(path) + (first_sorted(nums) as u64) + hex_len(bytes);
+        i = i + 1;
+    }
+    fs_remove(path);
+    fs_remove_dir(dir);
+    print_u64(total);
+    print_str("\n");
+    0
+}

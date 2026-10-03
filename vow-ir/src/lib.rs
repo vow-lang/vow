@@ -11,7 +11,10 @@ pub use effects::{AbstractHeap, Effects, HeapSet, inst_effects};
 pub use insertion_set::InsertionSet;
 pub use lower::{PatternAggregateMap, StringExprSet, lower_module_with_pattern_aggregates};
 pub use printer::{print_function, print_module};
-pub use region::{infer_regions, insert_region_markers};
+pub use region::{
+    FRESH_ARENA_VARIANTS, fresh_arena_base, fresh_arena_variant, infer_regions,
+    insert_region_markers,
+};
 pub use serialize::{DecodeError, MODULE_MAGIC, MODULE_VERSION, decode_module, encode_module};
 pub use types::{
     AbstractRegionId, BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function,

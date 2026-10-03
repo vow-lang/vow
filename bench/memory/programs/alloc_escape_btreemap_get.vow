@@ -1,0 +1,20 @@
+// BENCH: max-rss-kb 30820
+module AllocEscapeBtreemapGet
+
+fn push_result(results: Vec<Option<i64>>, m: BTreeMap<i64, i64>, k: i64) {
+    results.push(m.get(k));
+}
+
+fn main() -> i32 [io] {
+    let results: Vec<Option<i64>> = Vec::new();
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    m.insert(1, 10);
+    let mut i: i64 = 0;
+    while i < 1000000 {
+        push_result(results, m, i % 4);
+        i = i + 1;
+    }
+    print_u64(results.len());
+    print_str("\n");
+    0
+}

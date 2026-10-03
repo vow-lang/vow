@@ -201,6 +201,10 @@ same marker convention `scripts/generate_help.py` uses for `// GENERATE:SKILL_*`
 - `vow-ir/src/lower/mod.rs` (`catalogue_builtin_to_runtime`)
 - `vow-codegen/src/cranelift_backend.rs` and `vow-clif-shim/src/lib.rs` (`catalogue_extern_sig`)
 - `compiler/lower.vow` (`catalogue_builtin_to_extern`, `catalogue_builtin_ret_ty`)
+- `vow-ir/src/region.rs`, `vow-clif-shim/src/lib.rs` and `compiler/ir.vow` (the `arena_routes` section, a
+  plain list of the base symbols of every fresh-aggregate builtin; the variant is always
+  `<symbol>_in_arena`. Rust gets the `FRESH_ARENA_VARIANTS` table with hand-written lookups over it, Vow
+  gets the `fresh_arena_base_extern` decision tree, and `fresh_arena_variant_extern` strips the suffix)
 
 `docs/spec/grammar.md`'s Builtin Function Signatures table and the generated help-JSON in
 `compiler/main.vow`/`vow/src/skill.rs` are **checked against** the catalogue (not generated from it) —

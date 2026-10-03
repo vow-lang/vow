@@ -16,7 +16,7 @@ use std::sync::Arc;
 use vow_ir::{
     BlockId, FuncId as IrFuncId, Function as IrFunction, HiddenRegionIdx, Inst, InstData, InstId,
     IntegerSignedness, IntegerType, IntegerWidth, Module as IrModule, Opcode, RegionConstraint,
-    RegionId, RegionSummary, Ty as IrTy,
+    RegionId, RegionSummary, Ty as IrTy, fresh_arena_base, fresh_arena_variant,
 };
 
 use crate::return_materialization::{
@@ -800,66 +800,6 @@ fn routed_vec_extern<'a>(
                 _ => (sym, None),
             }
         }
-        "__vow_string_new" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_new_in_arena", Some(region)),
-        },
-        "__vow_string_from_cstr" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_from_cstr_in_arena", Some(region)),
-        },
-        "__vow_string_clone" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_clone_in_arena", Some(region)),
-        },
-        "__vow_string_substr" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_substr_in_arena", Some(region)),
-        },
-        "__vow_string_substring" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_substring_in_arena", Some(region)),
-        },
-        "__vow_string_from_i64" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_from_i64_in_arena", Some(region)),
-        },
-        "__vow_string_from_u64" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_from_u64_in_arena", Some(region)),
-        },
-        "__vow_string_parse_i64_opt" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_parse_i64_opt_in_arena", Some(region)),
-        },
-        "__vow_map_get" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_map_get_in_arena", Some(region)),
-        },
-        "__vow_string_split" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_split_in_arena", Some(region)),
-        },
-        "__vow_string_trim" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_trim_in_arena", Some(region)),
-        },
-        "__vow_string_to_upper" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_to_upper_in_arena", Some(region)),
-        },
-        "__vow_string_to_lower" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_to_lower_in_arena", Some(region)),
-        },
-        "__vow_string_replace" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_replace_in_arena", Some(region)),
-        },
-        "__vow_string_join" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_join_in_arena", Some(region)),
-        },
         "__vow_string_push_str" => {
             let route = first_arg_route(inst, inst_index, current_summary, phi_data);
             match route {
@@ -884,10 +824,6 @@ fn routed_vec_extern<'a>(
                 _ => (sym, None),
             }
         }
-        "__vow_map_new" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_map_new_in_arena", Some(region)),
-        },
         "__vow_map_insert" => {
             let route = first_arg_route(inst, inst_index, current_summary, phi_data);
             match route {
@@ -898,7 +834,12 @@ fn routed_vec_extern<'a>(
             }
         }
         _ => {
-            if extern_uses_target_region(sym) {
+            if let Some(variant) = fresh_arena_variant(sym) {
+                match inst.region {
+                    RegionId::Root => (sym, None),
+                    region => (variant, Some(region)),
+                }
+            } else if extern_uses_target_region(sym) {
                 (sym, Some(inst.region))
             } else {
                 (sym, None)
@@ -2564,6 +2505,11 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
     let call_conv = obj_module.isa().default_call_conv();
     let mut sig = Signature::new(call_conv);
+    if let Some(base) = fresh_arena_base(sym) {
+        let mut sig = make_extern_sig(base, obj_module);
+        sig.params.insert(0, AbiParam::new(types::I64)); // target arena
+        return sig;
+    }
     if let Some((source_ty, return_ty)) = narrow_intrinsic_signature(sym) {
         sig.params.push(AbiParam::new(source_ty));
         sig.returns.push(AbiParam::new(return_ty));
@@ -2682,27 +2628,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // len
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_new_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // ptr
-            sig.params.push(AbiParam::new(types::I64)); // len
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         "__vow_string_from_cstr" => {
             sig.params.push(AbiParam::new(types::I64)); // C-string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_from_cstr_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // C-string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         "__vow_string_clone" => {
-            sig.params.push(AbiParam::new(types::I64)); // source string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // copied *VowVec<u8>
-        }
-        "__vow_string_clone_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // source string ptr
             sig.returns.push(AbiParam::new(types::I64)); // copied *VowVec<u8>
         }
@@ -2777,32 +2707,13 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // value
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_from_i64_in_arena" | "__vow_string_from_u64_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // value
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         "__vow_string_substr" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // start
             sig.params.push(AbiParam::new(types::I64)); // len
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_substr_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.params.push(AbiParam::new(types::I64)); // start
-            sig.params.push(AbiParam::new(types::I64)); // len
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         "__vow_string_substring" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.params.push(AbiParam::new(types::I64)); // start
-            sig.params.push(AbiParam::new(types::I64)); // end (exclusive)
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_string_substring_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // start
             sig.params.push(AbiParam::new(types::I64)); // end (exclusive)
@@ -2819,18 +2730,7 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
         }
-        "__vow_string_parse_i64_opt_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
-        }
         "__vow_string_split" => {
-            sig.params.push(AbiParam::new(types::I64)); // haystack ptr
-            sig.params.push(AbiParam::new(types::I64)); // separator ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<String>
-        }
-        "__vow_string_split_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // haystack ptr
             sig.params.push(AbiParam::new(types::I64)); // separator ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<String>
@@ -2849,26 +2749,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_trim_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         "__vow_string_to_upper" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_to_upper_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         "__vow_string_to_lower" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_string_to_lower_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
@@ -2878,20 +2763,7 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // to ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_replace_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.params.push(AbiParam::new(types::I64)); // from ptr
-            sig.params.push(AbiParam::new(types::I64)); // to ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         "__vow_string_join" => {
-            sig.params.push(AbiParam::new(types::I64)); // vec ptr
-            sig.params.push(AbiParam::new(types::I64)); // separator ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_string_join_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
             sig.params.push(AbiParam::new(types::I64)); // separator ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
@@ -2951,10 +2823,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_map_new" => {
             sig.returns.push(AbiParam::new(types::I64)); // *VowMap
         }
-        "__vow_map_new_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.returns.push(AbiParam::new(types::I64)); // *VowMap
-        }
         "__vow_map_insert" => {
             sig.params.push(AbiParam::new(types::I64)); // map ptr
             sig.params.push(AbiParam::new(types::I64)); // key
@@ -2967,12 +2835,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // value
         }
         "__vow_map_get" => {
-            sig.params.push(AbiParam::new(types::I64)); // map ptr
-            sig.params.push(AbiParam::new(types::I64)); // key
-            sig.returns.push(AbiParam::new(types::I64)); // *VowOption
-        }
-        "__vow_map_get_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // map ptr
             sig.params.push(AbiParam::new(types::I64)); // key
             sig.returns.push(AbiParam::new(types::I64)); // *VowOption
@@ -5538,53 +5400,86 @@ mod tests {
         );
     }
 
-    #[test]
-    fn block_region_fresh_string_helpers_import_arena_variants() {
-        let cases = [
-            ("__vow_string_split", "__vow_string_split_in_arena", 2),
-            ("__vow_string_trim", "__vow_string_trim_in_arena", 1),
-            ("__vow_string_to_upper", "__vow_string_to_upper_in_arena", 1),
-            ("__vow_string_to_lower", "__vow_string_to_lower_in_arena", 1),
-            ("__vow_string_replace", "__vow_string_replace_in_arena", 3),
-            ("__vow_string_join", "__vow_string_join_in_arena", 2),
-            (
-                "__vow_string_parse_i64_opt",
-                "__vow_string_parse_i64_opt_in_arena",
-                1,
-            ),
-            ("__vow_map_get", "__vow_map_get_in_arena", 2),
-        ];
+    fn extern_sig_test_module() -> ObjectModule {
+        let isa = make_isa(BuildMode::Debug).unwrap();
+        ObjectModule::new(
+            ObjectBuilder::new(
+                isa,
+                b"sig".to_vec(),
+                cranelift_module::default_libcall_names(),
+            )
+            .unwrap(),
+        )
+    }
 
+    fn fresh_builtin_call_symbols(region: Option<RegionId>) -> HashSet<String> {
+        let obj_module = extern_sig_test_module();
         let mut insts = vec![
             inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
             inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
             inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
         ];
-        for (idx, (sym, _, arity)) in cases.iter().enumerate() {
+        for (idx, (base, _)) in vow_ir::FRESH_ARENA_VARIANTS.iter().enumerate() {
+            let arity = make_extern_sig(base, &obj_module).params.len() as u32;
+            assert!(arity <= 3, "{base} needs more argument constants");
             let mut call = inst(
                 10 + idx as u32,
                 Opcode::Call,
                 Ty::Ptr,
-                (0..*arity).collect(),
-                InstData::CallExtern((*sym).to_string()),
+                (0..arity).collect(),
+                InstData::CallExtern((*base).to_string()),
             );
-            call.region = RegionId::Block(BlockId(0));
+            if let Some(region) = region {
+                call.region = region;
+            }
             insts.push(call);
         }
-        insts.push(inst(90, Opcode::Return, Ty::Unit, vec![], InstData::None));
+        insts.push(inst(900, Opcode::Return, Ty::Unit, vec![], InstData::None));
 
         let module = make_module("test", vec![simple_fn(0, "f", vec![], Ty::Unit, insts)]);
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
+        compiled_object_symbols(result.unwrap().bytes.as_slice())
+    }
 
-        let bytes = result.unwrap().bytes;
-        let symbols = compiled_object_symbols(bytes.as_slice());
-
-        for (root, routed, _) in cases {
-            assert!(symbols.contains(routed), "{routed} should be imported");
-            assert!(!symbols.contains(root), "{root} should not be imported");
+    #[test]
+    fn block_region_fresh_builtins_import_arena_variants() {
+        let symbols = fresh_builtin_call_symbols(Some(RegionId::Block(BlockId(0))));
+        for (base, variant) in vow_ir::FRESH_ARENA_VARIANTS {
+            assert!(symbols.contains(*variant), "{variant} should be imported");
+            assert!(!symbols.contains(*base), "{base} should not be imported");
         }
+    }
+
+    #[test]
+    fn root_region_fresh_builtins_keep_wrapper_symbols() {
+        let symbols = fresh_builtin_call_symbols(None);
+        for (base, variant) in vow_ir::FRESH_ARENA_VARIANTS {
+            assert!(symbols.contains(*base), "{base} should be imported");
+            assert!(!symbols.contains(*variant), "{variant} unexpected");
+        }
+    }
+
+    #[test]
+    fn fresh_arena_variant_signatures_prepend_the_arena_to_the_base() {
+        let obj_module = extern_sig_test_module();
+        for (base, variant) in vow_ir::FRESH_ARENA_VARIANTS {
+            let base_sig = make_extern_sig(base, &obj_module);
+            let variant_sig = make_extern_sig(variant, &obj_module);
+            assert_eq!(variant_sig.returns, base_sig.returns, "{variant}");
+            assert_eq!(
+                variant_sig.params.len(),
+                base_sig.params.len() + 1,
+                "{variant}"
+            );
+            assert_eq!(variant_sig.params[0].value_type, types::I64, "{variant}");
+            assert_eq!(variant_sig.params[1..], base_sig.params[..], "{variant}");
+            assert!(!base_sig.returns.is_empty(), "{base} must be declared");
+        }
+        let insert = make_extern_sig("__vow_btreemap_insert_in_arena", &obj_module);
+        assert_eq!(insert.params.len(), 4, "arena, map, key, value");
+        assert_eq!(insert.returns.len(), 1);
     }
 
     #[test]

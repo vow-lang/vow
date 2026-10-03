@@ -1384,205 +1384,22 @@ fn region_root_escape_note_count_parity_rust_vs_self_hosted() {
     );
 }
 
-/// Issue #1265: `heap_producing_extern`'s `map_creation_extern` sub-list only
-/// recognized `__vow_map_new`/`__vow_map_new_in_arena` (HashMap), omitting
-/// `__vow_btreemap_new`. An inline `BTreeMap::new()` published through a
-/// parameter container must fire `RegionRootEscape` exactly like the
-/// already-tracked `Vec::new()`/`HashMap::new()` siblings.
-#[test]
-fn rust_btreemap_new_root_escape_note() {
+/// Asserts building `fixture` with `compiler` reports at least `min_notes`
+/// `RegionRootEscape` notes for `what`.
+fn assert_fixture_root_escape_note(
+    compiler: &std::path::Path,
+    label: &str,
+    fixture: &str,
+    what: &str,
+    min_notes: usize,
+) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .to_path_buf();
-    let fixture = root
-        .join("tests")
-        .join("run")
-        .join("region_btreemap_new_root_escape_span.vow");
-    let out = Command::new(env!("CARGO_BIN_EXE_vow"))
-        .args(["build", "--no-verify"])
-        .arg(&fixture)
-        .output()
-        .expect("failed to run vow");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-        panic!("failed to parse vow stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
-    });
-    let diagnostics = parsed["diagnostics"]
-        .as_array()
-        .expect("diagnostics should be an array");
-    let notes: Vec<_> = diagnostics
-        .iter()
-        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
-        .collect();
-    assert!(
-        !notes.is_empty(),
-        "inline BTreeMap::new() published through a parameter container must \
-         emit a RegionRootEscape note; diagnostics: {diagnostics:?}"
-    );
-}
-
-/// Self-hosted parity for `rust_btreemap_new_root_escape_note`. Skips when
-/// `build/vowc` is absent, matching the existing self-hosted test guard.
-#[test]
-fn selfhosted_btreemap_new_root_escape_note() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let fixture = root
-        .join("tests")
-        .join("run")
-        .join("region_btreemap_new_root_escape_span.vow");
-    let vowc = root.join("build").join("vowc");
-    if !vowc.exists() {
-        eprintln!(
-            "skipping {}: build/vowc not present (run scripts/bootstrap.sh)",
-            module_path!()
-        );
-        return;
-    }
-    let out = Command::new(&vowc)
-        .args(["build", "--no-verify"])
-        .arg(&fixture)
-        .output()
-        .expect("failed to run build/vowc");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-        panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
-    });
-    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
-        assert!(
-            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
-            "diagnostics missing and build did not fail with the recognized \
-             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
-        );
-        eprintln!(
-            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
-             (no diagnostics to check)"
-        );
-        return;
-    };
-    let notes: Vec<_> = diagnostics
-        .iter()
-        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
-        .collect();
-    assert!(
-        !notes.is_empty(),
-        "self-hosted: inline BTreeMap::new() published through a parameter \
-         container must emit a RegionRootEscape note; diagnostics: {diagnostics:?}"
-    );
-}
-
-/// Issue #1265: `__vow_btreemap_insert`/`__vow_btreemap_get` return a fresh
-/// `Option<i64>` via `alloc_option_i64` — byte-identical in shape to
-/// `__vow_string_parse_i64_opt`'s allocation — but were absent from every
-/// `heap_producing_extern` sub-list, so `RegionRootEscape` never fired when
-/// one of these results escaped through a parameter container.
-#[test]
-fn rust_btreemap_insert_get_root_escape_note() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let fixture = root
-        .join("tests")
-        .join("run")
-        .join("region_btreemap_insert_get_root_escape_span.vow");
-    let out = Command::new(env!("CARGO_BIN_EXE_vow"))
-        .args(["build", "--no-verify"])
-        .arg(&fixture)
-        .output()
-        .expect("failed to run vow");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-        panic!("failed to parse vow stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
-    });
-    let diagnostics = parsed["diagnostics"]
-        .as_array()
-        .expect("diagnostics should be an array");
-    let notes: Vec<_> = diagnostics
-        .iter()
-        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
-        .collect();
-    assert!(
-        !notes.is_empty(),
-        "BTreeMap insert()/get() results published through a parameter \
-         container must emit a RegionRootEscape note; diagnostics: {diagnostics:?}"
-    );
-}
-
-/// Self-hosted parity for `rust_btreemap_insert_get_root_escape_note`.
-#[test]
-fn selfhosted_btreemap_insert_get_root_escape_note() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let fixture = root
-        .join("tests")
-        .join("run")
-        .join("region_btreemap_insert_get_root_escape_span.vow");
-    let vowc = root.join("build").join("vowc");
-    if !vowc.exists() {
-        eprintln!(
-            "skipping {}: build/vowc not present (run scripts/bootstrap.sh)",
-            module_path!()
-        );
-        return;
-    }
-    let out = Command::new(&vowc)
-        .args(["build", "--no-verify"])
-        .arg(&fixture)
-        .output()
-        .expect("failed to run build/vowc");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-        panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
-    });
-    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
-        assert!(
-            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
-            "diagnostics missing and build did not fail with the recognized \
-             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
-        );
-        eprintln!(
-            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
-             (no diagnostics to check)"
-        );
-        return;
-    };
-    let notes: Vec<_> = diagnostics
-        .iter()
-        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
-        .collect();
-    assert!(
-        !notes.is_empty(),
-        "self-hosted: BTreeMap insert()/get() results published through a \
-         parameter container must emit a RegionRootEscape note; \
-         diagnostics: {diagnostics:?}"
-    );
-}
-
-/// `HashMap::get` returns a fresh `Option<V>` (`__vow_map_get`), so it must be a
-/// heap-producing extern like `BTreeMap::get`: publishing the result through a
-/// parameter container emits a `RegionRootEscape` note.
-fn assert_hashmap_get_root_escape_note(compiler: &std::path::Path, label: &str) {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let fixture = root
-        .join("tests")
-        .join("run")
-        .join("region_hashmap_get_root_escape_span.vow");
     let out = Command::new(compiler)
         .args(["build", "--no-verify"])
-        .arg(&fixture)
+        .arg(root.join("tests").join("run").join(fixture))
         .output()
         .unwrap_or_else(|e| panic!("failed to run {label}: {e}"));
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -1592,29 +1409,25 @@ fn assert_hashmap_get_root_escape_note(compiler: &std::path::Path, label: &str) 
     });
     let Some(diagnostics) = parsed["diagnostics"].as_array() else {
         assert!(
-            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            label == "self-hosted" && self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
             "{label}: diagnostics missing and build did not fail with the recognized \
              missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
         );
         eprintln!("SKIP: {label} build failed due to missing libvow_runtime.a");
         return;
     };
+    let notes = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .count();
     assert!(
-        diagnostics
-            .iter()
-            .any(|d| d["error_code"].as_str() == Some("RegionRootEscape")),
-        "{label}: HashMap::get() result published through a parameter container \
-         must emit a RegionRootEscape note; diagnostics: {diagnostics:?}"
+        notes >= min_notes,
+        "{label}: {what} published through a parameter container must emit \
+         {min_notes} RegionRootEscape note(s), got {notes}; diagnostics: {diagnostics:?}"
     );
 }
 
-#[test]
-fn rust_hashmap_get_root_escape_note() {
-    assert_hashmap_get_root_escape_note(std::path::Path::new(env!("CARGO_BIN_EXE_vow")), "rust");
-}
-
-#[test]
-fn selfhosted_hashmap_get_root_escape_note() {
+fn self_hosted_vowc() -> Option<PathBuf> {
     let vowc = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -1625,99 +1438,75 @@ fn selfhosted_hashmap_get_root_escape_note() {
             "skipping {}: build/vowc not present (run scripts/bootstrap.sh)",
             module_path!()
         );
-        return;
     }
-    assert_hashmap_get_root_escape_note(&vowc, "self-hosted");
+    vowc.exists().then_some(vowc)
 }
 
-/// Issue #1265: `option_creation_extern` only recognized
-/// `__vow_string_parse_i64_opt`/`_in_arena`, omitting `__vow_string_parse_u64_opt`
-/// and the narrow-integer family (`parse_i8/u8/i16/u16/i32/u32_opt`), all of
-/// which build their `Option<N>` via the same `__vow_vec_new(8, 8)` shape as
-/// the already-tracked `parse_i64_opt`. `parse_u64` is the representative
-/// fixture for this allocation-shape family.
+fn assert_root_escape_note_in_both_compilers(fixture: &str, what: &str, min_notes: usize) {
+    assert_fixture_root_escape_note(
+        std::path::Path::new(env!("CARGO_BIN_EXE_vow")),
+        "rust",
+        fixture,
+        what,
+        min_notes,
+    );
+    if let Some(vowc) = self_hosted_vowc() {
+        assert_fixture_root_escape_note(&vowc, "self-hosted", fixture, what, min_notes);
+    }
+}
+
+/// Issue #1265: an inline `BTreeMap::new()` published through a parameter
+/// container must fire `RegionRootEscape` like the `Vec::new()`/`HashMap::new()`
+/// siblings.
 #[test]
-fn rust_parse_u64_opt_root_escape_note() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let fixture = root
-        .join("tests")
-        .join("run")
-        .join("region_parse_opt_root_escape_span.vow");
-    let out = Command::new(env!("CARGO_BIN_EXE_vow"))
-        .args(["build", "--no-verify"])
-        .arg(&fixture)
-        .output()
-        .expect("failed to run vow");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-        panic!("failed to parse vow stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
-    });
-    let diagnostics = parsed["diagnostics"]
-        .as_array()
-        .expect("diagnostics should be an array");
-    let notes: Vec<_> = diagnostics
-        .iter()
-        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
-        .collect();
-    assert!(
-        !notes.is_empty(),
-        "s.parse_u64() result published through a parameter container must \
-         emit a RegionRootEscape note; diagnostics: {diagnostics:?}"
+fn btreemap_new_root_escape_note() {
+    assert_root_escape_note_in_both_compilers(
+        "region_btreemap_new_root_escape_span.vow",
+        "inline BTreeMap::new()",
+        1,
     );
 }
 
-/// Self-hosted parity for `rust_parse_u64_opt_root_escape_note`.
+/// Issue #1265: `BTreeMap::insert`/`get` return a fresh `Option<i64>`, so
+/// publishing either result through a parameter container must fire the note.
 #[test]
-fn selfhosted_parse_u64_opt_root_escape_note() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let fixture = root
-        .join("tests")
-        .join("run")
-        .join("region_parse_opt_root_escape_span.vow");
-    let vowc = root.join("build").join("vowc");
-    if !vowc.exists() {
-        eprintln!(
-            "skipping {}: build/vowc not present (run scripts/bootstrap.sh)",
-            module_path!()
-        );
-        return;
-    }
-    let out = Command::new(&vowc)
-        .args(["build", "--no-verify"])
-        .arg(&fixture)
-        .output()
-        .expect("failed to run build/vowc");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-        panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
-    });
-    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
-        assert!(
-            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
-            "diagnostics missing and build did not fail with the recognized \
-             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
-        );
-        eprintln!(
-            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
-             (no diagnostics to check)"
-        );
-        return;
-    };
-    let notes: Vec<_> = diagnostics
-        .iter()
-        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
-        .collect();
-    assert!(
-        !notes.is_empty(),
-        "self-hosted: s.parse_u64() result published through a parameter \
-         container must emit a RegionRootEscape note; diagnostics: {diagnostics:?}"
+fn btreemap_insert_get_root_escape_note() {
+    assert_root_escape_note_in_both_compilers(
+        "region_btreemap_insert_get_root_escape_span.vow",
+        "BTreeMap insert()/get() results",
+        2,
+    );
+}
+
+/// `HashMap::get` returns a fresh `Option<V>`, so it is heap-producing like
+/// `BTreeMap::get`.
+#[test]
+fn hashmap_get_root_escape_note() {
+    assert_root_escape_note_in_both_compilers(
+        "region_hashmap_get_root_escape_span.vow",
+        "HashMap::get() result",
+        1,
+    );
+}
+
+/// Issue #1265: `parse_u64` is the representative of the narrow-integer
+/// `parse_*_opt` family, which builds the same fresh Option cell as `parse_i64`.
+#[test]
+fn parse_u64_opt_root_escape_note() {
+    assert_root_escape_note_in_both_compilers(
+        "region_parse_opt_root_escape_span.vow",
+        "s.parse_u64() result",
+        1,
+    );
+}
+
+/// `*_try` conversions, `vec_sort` and `fs_read` return fresh aggregates that
+/// region inference must track like `parse_*`.
+#[test]
+fn fresh_builtin_root_escape_note() {
+    assert_root_escape_note_in_both_compilers(
+        "region_fresh_builtin_root_escape_span.vow",
+        "i64_to_u8_try()/vec_sort()/fs_read() results",
+        3,
     );
 }

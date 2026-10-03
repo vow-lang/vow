@@ -1,0 +1,22 @@
+// BENCH: max-rss-kb 7012
+module AllocLoopBtreemapInsert
+
+fn bump(m: BTreeMap<i64, i64>, k: i64) -> i64 {
+    match m.insert(k, k * 2) {
+        Option::Some(v) => v,
+        Option::None => 0,
+    }
+}
+
+fn main() -> i32 [io] {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000000 {
+        total = total + bump(m, i % 4);
+        i = i + 1;
+    }
+    print_i64(total);
+    print_str("\n");
+    0
+}

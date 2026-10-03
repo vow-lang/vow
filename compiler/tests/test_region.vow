@@ -154,6 +154,122 @@ fn check_parse_i64_option_returns_in_caller_region() -> i64 {
     0
 }
 
+// Mirrors `returned_try_conversion_option_allocates_in_caller_region`
+// (vow-ir/src/region.rs). `_try` narrowing conversions build a fresh Option
+// cell, so a returned one is heap-producing and outlives the callee.
+fn check_try_conversion_option_returns_in_caller_region() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    let try_args: Vec<i64> = Vec::new();
+    try_args.push(0);
+    insts.push(mk_inst_call_extern(1, ITY_PTR(), try_args, String::from("__vow_i64_to_u8_try")));
+    insts.push(mk_inst_return(2, 1));
+
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_I64());
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(0, String::from("narrow"), params, ITY_PTR(), blocks));
+
+    let dctx: DiagCtx = diag_ctx_new();
+    let result: IrModule = infer_regions_module(mk_module(funcs), dctx);
+    if result.functions[0].blocks[0].insts[1].rgn != region_pack(REGION_KIND_CALLER(), 0) {
+        return 1;
+    }
+    if result.functions[0].rsum_return_kind != RSUM_KIND_FRESH_IN_CALLER() {
+        return 2;
+    }
+    0
+}
+
+// Mirrors `btreemap_lookup_options_split_by_escape` (vow-ir/src/region.rs):
+// the returned lookup result belongs to the caller; the map, the insert result
+// and an unused lookup result die with the block.
+fn check_btreemap_lookup_options_split_by_escape() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    insts.push(mk_inst_call_extern(1, ITY_PTR(), Vec::new(), String::from("__vow_btreemap_new")));
+    let insert_args: Vec<i64> = Vec::new();
+    insert_args.push(1);
+    insert_args.push(0);
+    insert_args.push(0);
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), insert_args, String::from("__vow_btreemap_insert")));
+    let get_args: Vec<i64> = Vec::new();
+    get_args.push(1);
+    get_args.push(0);
+    insts.push(mk_inst_call_extern(3, ITY_PTR(), get_args, String::from("__vow_btreemap_get")));
+    let get_args2: Vec<i64> = Vec::new();
+    get_args2.push(1);
+    get_args2.push(0);
+    insts.push(mk_inst_call_extern(4, ITY_PTR(), get_args2, String::from("__vow_btreemap_get")));
+    insts.push(mk_inst_return(5, 3));
+
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_I64());
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(0, String::from("lookup"), params, ITY_PTR(), blocks));
+
+    let dctx: DiagCtx = diag_ctx_new();
+    let result: IrModule = infer_regions_module(mk_module(funcs), dctx);
+    let rinsts: Vec<IrInst> = result.functions[0].blocks[0].insts;
+    if rinsts[3].rgn != region_pack(REGION_KIND_CALLER(), 0) {
+        return 1;
+    }
+    if region_kind(rinsts[1].rgn) != REGION_KIND_BLOCK() {
+        return 2;
+    }
+    if region_kind(rinsts[2].rgn) != REGION_KIND_BLOCK() {
+        return 3;
+    }
+    if region_kind(rinsts[4].rgn) != REGION_KIND_BLOCK() {
+        return 4;
+    }
+    0
+}
+
+// Mirrors `returned_fresh_runtime_aggregates_allocate_in_caller_region` and
+// `unescaped_fresh_runtime_aggregates_are_block_owned` (vow-ir/src/region.rs)
+// for one String-, one Vec- and one zero-argument builtin each.
+fn fresh_call_region(sym: String, arity: i64, returned: bool) -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    let args: Vec<i64> = Vec::new();
+    let mut ai: i64 = 0;
+    while ai < arity {
+        args.push(ai);
+        ai = ai + 1;
+    }
+    insts.push(mk_inst_call_extern(1, ITY_PTR(), args, sym));
+    if returned {
+        insts.push(mk_inst_return(2, 1));
+    } else {
+        insts.push(mk_inst_return(2, 0));
+    }
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(0, String::from("fresh"), params, ITY_PTR(), blocks));
+    let dctx: DiagCtx = diag_ctx_new();
+    let result: IrModule = infer_regions_module(mk_module(funcs), dctx);
+    result.functions[0].blocks[0].insts[1].rgn
+}
+
+fn check_fresh_runtime_aggregates_follow_escape() -> i64 {
+    let caller: i64 = region_pack(REGION_KIND_CALLER(), 0);
+    if fresh_call_region(String::from("__vow_fs_read"), 1, true) != caller { return 1; }
+    if fresh_call_region(String::from("__vow_vec_sort"), 1, true) != caller { return 2; }
+    if fresh_call_region(String::from("__vow_args"), 0, true) != caller { return 3; }
+    if fresh_call_region(String::from("__vow_fs_listdir"), 1, true) != caller { return 4; }
+    if region_kind(fresh_call_region(String::from("__vow_fs_read"), 1, false)) != REGION_KIND_BLOCK() { return 5; }
+    if region_kind(fresh_call_region(String::from("__vow_hex_encode"), 1, false)) != REGION_KIND_BLOCK() { return 6; }
+    0
+}
+
 // Mirrors `internal_call_republishes_callee_store_effect_for_parameter_target`
 // (vow-ir/src/region.rs:6469). A wrapper that forwards its parameters to an
 // internal callee (which pushes arg1 into arg0 via `__vow_vec_push_val`)
@@ -218,5 +334,11 @@ fn main() -> i32 {
     if r3 != 0 { return i64_to_i32_wrap(r3); }
     let r4: i64 = check_parse_i64_option_returns_in_caller_region();
     if r4 != 0 { return i64_to_i32_wrap(r4); }
+    let r5: i64 = check_try_conversion_option_returns_in_caller_region();
+    if r5 != 0 { return i64_to_i32_wrap(100 + r5); }
+    let r6: i64 = check_btreemap_lookup_options_split_by_escape();
+    if r6 != 0 { return i64_to_i32_wrap(200 + r6); }
+    let r7: i64 = check_fresh_runtime_aggregates_follow_escape();
+    if r7 != 0 { return i64_to_i32_wrap(300 + r7); }
     0
 }

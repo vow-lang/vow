@@ -1,0 +1,20 @@
+// BENCH: max-rss-kb 30900
+module AllocEscapeHashmapGet
+
+fn push_result(results: Vec<Option<i64>>, m: HashMap<i64, i64>, k: i64) {
+    results.push(m.get(k));
+}
+
+fn main() -> i32 [io] {
+    let results: Vec<Option<i64>> = Vec::new();
+    let m: HashMap<i64, i64> = HashMap::new();
+    m.insert(1, 10);
+    let mut i: i64 = 0;
+    while i < 1000000 {
+        push_result(results, m, i % 4);
+        i = i + 1;
+    }
+    print_u64(results.len());
+    print_str("\n");
+    0
+}
