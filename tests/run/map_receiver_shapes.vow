@@ -1,0 +1,168 @@
+// TEST: stdout "vec elem=ok\nvec vec=ok\nfield vec=ok\nparen=ok\nlet index=ok\nfor each=ok\nstruct field=ok\ncall result=ok\nunwrap chain=ok\nmap of map=ok\ncontains_key=ok\nlen=ok\ninsert via elem=ok\nremove via elem=ok\nbtree elem=ok\nbtree insert via elem=ok\ni64 value=ok\n"
+module MapReceiverShapes
+
+struct Inner {
+    m: HashMap<i64, u8>,
+}
+
+struct Outer {
+    inner: Inner,
+    vs: Vec<HashMap<i64, u8>>,
+}
+
+fn report(label: String, ok: bool) [io] {
+    print_str(label);
+    if ok { print_str(String::from("=ok\n")); } else { print_str(String::from("=FAIL\n")); }
+}
+
+fn mk() -> HashMap<i64, u8> [panic] {
+    let m: HashMap<i64, u8> = HashMap::new();
+    m.insert(1, 200);
+    m
+}
+
+fn mk_inner() -> Inner [panic] {
+    Inner { m: mk() }
+}
+
+fn mk_btree() -> BTreeMap<i64, u8> [panic] {
+    let m: BTreeMap<i64, u8> = BTreeMap::new();
+    m.insert(1, 200);
+    m
+}
+
+fn vec_elem() -> bool [panic] {
+    let v: Vec<HashMap<i64, u8>> = Vec::new();
+    v.push(mk());
+    let got: u8 = v[0].get(1).unwrap();
+    got == 200 && v[0].get(1).unwrap() == 200
+}
+
+fn vec_vec() -> bool [panic] {
+    let w: Vec<HashMap<i64, u8>> = Vec::new();
+    w.push(mk());
+    let v: Vec<Vec<HashMap<i64, u8>>> = Vec::new();
+    v.push(w);
+    v[0][0].get(1).unwrap() == 200
+}
+
+fn field_vec() -> bool [panic] {
+    let vs: Vec<HashMap<i64, u8>> = Vec::new();
+    vs.push(mk());
+    let o: Outer = Outer { inner: mk_inner(), vs: vs };
+    o.vs[0].get(1).unwrap() == 200
+}
+
+fn paren() -> bool [panic] {
+    let v: Vec<HashMap<i64, u8>> = Vec::new();
+    v.push(mk());
+    (v[0]).get(1).unwrap() == 200
+}
+
+fn let_index() -> bool [panic] {
+    let v: Vec<HashMap<i64, u8>> = Vec::new();
+    v.push(mk());
+    let m = v[0];
+    let annotated: HashMap<i64, u8> = v[0];
+    m.get(1).unwrap() == 200 && annotated.get(1).unwrap() == 200
+}
+
+fn for_each() -> bool [panic] {
+    let v: Vec<HashMap<i64, u8>> = Vec::new();
+    v.push(mk());
+    v.push(mk());
+    let mut seen: u64 = 0;
+    for m in v {
+        if m.get(1).unwrap() == 200 && m.contains_key(1) { seen = seen + 1; }
+    }
+    seen == 2
+}
+
+fn struct_field() -> bool [panic] {
+    let o: Outer = Outer { inner: mk_inner(), vs: Vec::new() };
+    o.inner.m.get(1).unwrap() == 200 && mk_inner().m.get(1).unwrap() == 200
+}
+
+fn call_result() -> bool [panic] {
+    mk().get(1).unwrap() == 200
+}
+
+fn unwrap_chain() -> bool [panic] {
+    let o: Option<HashMap<i64, u8>> = Option::Some(mk());
+    o.unwrap().get(1).unwrap() == 200
+}
+
+fn map_of_map() -> bool [panic] {
+    let mm: HashMap<i64, HashMap<i64, u8>> = HashMap::new();
+    mm.insert(5, mk());
+    mm.get(5).unwrap().get(1).unwrap() == 200
+}
+
+fn contains_key() -> bool [panic] {
+    let v: Vec<HashMap<i64, u8>> = Vec::new();
+    v.push(mk());
+    v[0].contains_key(1) && !v[0].contains_key(2)
+}
+
+fn len() -> bool [panic] {
+    let v: Vec<HashMap<i64, u8>> = Vec::new();
+    v.push(mk());
+    v[0].len() == 1
+}
+
+fn insert_via_elem() -> bool [panic] {
+    let v: Vec<HashMap<i64, u8>> = Vec::new();
+    v.push(mk());
+    v[0].insert(2, 77);
+    v[0].len() == 2 && v[0].get(2).unwrap() == 77 && v[0].get(1).unwrap() == 200
+}
+
+fn remove_via_elem() -> bool [panic] {
+    let v: Vec<HashMap<i64, u8>> = Vec::new();
+    v.push(mk());
+    v[0].remove(1);
+    !v[0].contains_key(1) && v[0].len() == 0
+}
+
+fn btree_elem() -> bool [panic] {
+    let v: Vec<BTreeMap<i64, u8>> = Vec::new();
+    v.push(mk_btree());
+    let got: u8 = v[0].get(1).unwrap();
+    got == 200 && v[0].contains(1)
+}
+
+fn btree_insert_via_elem() -> bool [panic] {
+    let v: Vec<BTreeMap<i64, u8>> = Vec::new();
+    v.push(mk_btree());
+    let previous: Option<u8> = v[0].insert(1, 9);
+    previous.unwrap() == 200 && v[0].get(1).unwrap() == 9
+}
+
+fn i64_value() -> bool [panic] {
+    let v: Vec<HashMap<i64, i64>> = Vec::new();
+    let m: HashMap<i64, i64> = HashMap::new();
+    m.insert(3, 4611686018427387904);
+    v.push(m);
+    v[0].get(3).unwrap() == 4611686018427387904
+}
+
+fn main() -> i32 [io, panic] {
+    report(String::from("vec elem"), vec_elem());
+    report(String::from("vec vec"), vec_vec());
+    report(String::from("field vec"), field_vec());
+    report(String::from("paren"), paren());
+    report(String::from("let index"), let_index());
+    report(String::from("for each"), for_each());
+    report(String::from("struct field"), struct_field());
+    report(String::from("call result"), call_result());
+    report(String::from("unwrap chain"), unwrap_chain());
+    report(String::from("map of map"), map_of_map());
+    report(String::from("contains_key"), contains_key());
+    report(String::from("len"), len());
+    report(String::from("insert via elem"), insert_via_elem());
+    report(String::from("remove via elem"), remove_via_elem());
+    report(String::from("btree elem"), btree_elem());
+    report(String::from("btree insert via elem"), btree_insert_via_elem());
+    report(String::from("i64 value"), i64_value());
+    0
+}

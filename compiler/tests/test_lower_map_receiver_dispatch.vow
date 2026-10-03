@@ -1,0 +1,104 @@
+module TestLowerMapReceiverDispatch
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+
+fn lower_fixture(source: String, file: String) -> IrModule {
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(lex(source), arena, diag_ctx_new(), file);
+    let item_files: Vec<String> = Vec::new();
+    item_files.push(file);
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), item_files
+    )
+}
+
+fn probe_function(lowered: IrModule) -> IrFunction {
+    let mut fi: u64 = 0;
+    while fi < lowered.functions.len() {
+        let f: IrFunction = lowered.functions[fi];
+        if f.name == String::from("probe") { return f; }
+        fi = fi + 1;
+    }
+    lowered.functions[0]
+}
+
+fn count_extern_calls(function: IrFunction, symbol: String) -> i64 {
+    let mut n: i64 = 0;
+    let mut block_index: u64 = 0;
+    while block_index < function.blocks.len() {
+        let block: IrBlock = function.blocks[block_index];
+        let mut inst_index: u64 = 0;
+        while inst_index < block.insts.len() {
+            let inst: IrInst = block.insts[inst_index];
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == symbol {
+                n = n + 1;
+            }
+            inst_index = inst_index + 1;
+        }
+        block_index = block_index + 1;
+    }
+    n
+}
+
+fn payload_field_ty(function: IrFunction) -> i64 {
+    let mut block_index: u64 = 0;
+    while block_index < function.blocks.len() {
+        let block: IrBlock = function.blocks[block_index];
+        let mut inst_index: u64 = 0;
+        while inst_index < block.insts.len() {
+            let inst: IrInst = block.insts[inst_index];
+            if inst.op == IOP_FIELD_GET() && inst.dk == IDATA_FIELD() && inst.dv == 1 {
+                return inst.ty;
+            }
+            inst_index = inst_index + 1;
+        }
+        block_index = block_index + 1;
+    }
+    -1
+}
+
+fn routed(params: String, body: String, symbol: String) -> bool {
+    let source: String = String::from("module MapElem\nfn probe(");
+    source.push_str(params);
+    source.push_str(String::from(") -> bool [panic] { "));
+    source.push_str(body);
+    source.push_str(String::from(" }\n"));
+    let function: IrFunction = probe_function(lower_fixture(source, String::from("map_elem.vow")));
+    count_extern_calls(function, symbol) >= 1
+}
+
+fn main() -> i32 {
+    if !routed(String::from("v: Vec<HashMap<i64, u8>>"), String::from("v[0].contains_key(1)"), String::from("__vow_map_contains")) { return 1; }
+    if !routed(String::from("v: Vec<BTreeMap<i64, u8>>"), String::from("v[0].contains(1)"), String::from("__vow_btreemap_contains")) { return 2; }
+    if !routed(String::from("v: Vec<Vec<HashMap<i64, u8>>>"), String::from("v[0][0].contains_key(1)"), String::from("__vow_map_contains")) { return 3; }
+    if !routed(String::from("v: Vec<HashMap<i64, u8>>"), String::from("(v[0]).contains_key(1)"), String::from("__vow_map_contains")) { return 5; }
+    if !routed(String::from("v: Vec<HashMap<i64, u8>>"), String::from("{ let m = v[0]; m.contains_key(1) }"), String::from("__vow_map_contains")) { return 6; }
+
+    let for_each: IrFunction = probe_function(lower_fixture(
+        String::from("module MapForEach\nfn probe(v: Vec<HashMap<i64, u8>>) -> u8 [panic] {\n    let mut r: u8 = 0;\n    for m in v { r = m.get(1).unwrap(); }\n    r\n}\n"),
+        String::from("map_for_each.vow")
+    ));
+    if count_extern_calls(for_each, String::from("__vow_map_get")) != 1 { return 7; }
+    if payload_field_ty(for_each) != ITY_U8() { return 8; }
+
+    let width: IrFunction = probe_function(lower_fixture(
+        String::from("module MapElemWidth\nfn probe(v: Vec<HashMap<i64, u8>>) -> u8 [panic] { v[0].get(1).unwrap() }\n"),
+        String::from("map_elem_width.vow")
+    ));
+    if count_extern_calls(width, String::from("__vow_map_get")) != 1 { return 9; }
+    if payload_field_ty(width) != ITY_U8() { return 10; }
+
+    let wide: IrFunction = probe_function(lower_fixture(
+        String::from("module MapElemWide\nfn probe(v: Vec<HashMap<i64, i64>>) -> i64 [panic] { v[0].get(1).unwrap() }\n"),
+        String::from("map_elem_wide.vow")
+    ));
+    if payload_field_ty(wide) != ITY_I64() { return 11; }
+    0
+}

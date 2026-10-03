@@ -2606,6 +2606,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
             project_vec_index_metadata(ctx, iter_id, elem_id);
+            record_map_foreach_element(ctx, iter_id, elem_id);
 
             // Save scope depth before pushing the for-each binding scope.
             // Loop-carried phis track outer mutation variables whose bindings
@@ -3654,16 +3655,21 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             args,
         } => {
             let recv_id = lower_expr(ctx, receiver);
-            let recv_struct = ctx.inst_struct_type.get(&recv_id).cloned().or_else(|| {
-                if ctx
-                    .string_exprs
-                    .contains(&(receiver.as_ref() as *const Expr as usize))
-                {
-                    Some("String".to_string())
-                } else {
-                    None
-                }
-            });
+            let recv_struct = ctx
+                .inst_struct_type
+                .get(&recv_id)
+                .cloned()
+                .or_else(|| {
+                    if ctx
+                        .string_exprs
+                        .contains(&(receiver.as_ref() as *const Expr as usize))
+                    {
+                        Some("String".to_string())
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| declared_map_tag(ctx, recv_id));
             let recv = recv_struct.as_deref();
             // Twenty builtin methods lower to a single extern call with a fixed result
             // type; `builtin_method_spec` owns those rows. Consulting the table before
@@ -4355,6 +4361,45 @@ fn known_map_argument_ast_types(
             (args.first().cloned(), args.get(1).cloned())
         }
         _ => (None, None),
+    }
+}
+
+/// The map tag (`HashMap` or `BTreeMap`) of a declared AST type.
+fn map_ast_tag(ast_ty: &AstType, type_aliases: &HashMap<String, AstType>) -> Option<String> {
+    match resolve_type_alias(ast_ty, type_aliases) {
+        AstType::Generic { name, .. } if name == "HashMap" || name == "BTreeMap" => {
+            Some(name.clone())
+        }
+        _ => None,
+    }
+}
+
+/// The map receiver tag of an instruction that carries no struct tag but whose declared
+/// type is a map, such as a `Vec<HashMap<..>>` element. Method dispatch keys on the tag,
+/// so without it `get`/`contains_key`/`insert` fall through to the catch-all arm and the
+/// call is silently dropped.
+fn declared_map_tag(ctx: &LowerCtx, inst: InstId) -> Option<String> {
+    map_ast_tag(ctx.inst_declared_ast_types.get(&inst)?, &ctx.type_aliases)
+}
+
+/// Record a `for` binding's declared type when the iterated `Vec`'s element is a map,
+/// so the binding dispatches map methods like an indexed element does.
+fn record_map_foreach_element(ctx: &mut LowerCtx, iter_id: InstId, elem_id: InstId) {
+    let Some(iter_ty) = ctx.inst_declared_ast_types.get(&iter_id) else {
+        return;
+    };
+    let AstType::Generic { name, args, .. } = resolve_type_alias(iter_ty, &ctx.type_aliases) else {
+        return;
+    };
+    if name != "Vec" {
+        return;
+    }
+    if let Some(elem_ty) = args
+        .first()
+        .filter(|ty| map_ast_tag(ty, &ctx.type_aliases).is_some())
+        .cloned()
+    {
+        ctx.inst_declared_ast_types.insert(elem_id, elem_ty);
     }
 }
 
@@ -6536,6 +6581,103 @@ fn unsigned_max() -> u128 {
                 .expect("payload FieldGet");
             assert_eq!(payload.ty, value_ty, "{map}");
         }
+    }
+
+    fn extern_calls_of(func: &Function) -> Vec<String> {
+        insts_of(func)
+            .into_iter()
+            .filter_map(|inst| match &inst.data {
+                InstData::CallExtern(symbol) => Some(symbol.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn map_methods_on_vec_element_receivers_route_to_the_map_runtime() {
+        for (params, body, symbol) in [
+            (
+                "v: Vec<HashMap<i64, u8>>",
+                "v[0].contains_key(1)",
+                "__vow_map_contains",
+            ),
+            (
+                "v: Vec<BTreeMap<i64, u8>>",
+                "v[0].contains(1)",
+                "__vow_btreemap_contains",
+            ),
+            (
+                "v: Vec<Vec<HashMap<i64, u8>>>",
+                "v[0][0].contains_key(1)",
+                "__vow_map_contains",
+            ),
+            ("o: Outer", "o.vs[0].contains_key(1)", "__vow_map_contains"),
+            (
+                "v: Vec<HashMap<i64, u8>>",
+                "(v[0]).contains_key(1)",
+                "__vow_map_contains",
+            ),
+            (
+                "v: Vec<HashMap<i64, u8>>",
+                "{ let m = v[0]; m.contains_key(1) }",
+                "__vow_map_contains",
+            ),
+        ] {
+            let source = format!(
+                "module MapElem\nstruct Outer {{ vs: Vec<HashMap<i64, u8>> }}\nfn probe({params}) -> bool [panic] {{ {body} }}\n"
+            );
+            let module = lower_source_to_module(&source, "map_elem.vow");
+            let func = module
+                .functions
+                .iter()
+                .find(|func| func.name == "probe")
+                .expect("probe function");
+            assert!(
+                extern_calls_of(func).iter().any(|callee| callee == symbol),
+                "{body} must call {symbol}"
+            );
+        }
+    }
+
+    #[test]
+    fn map_methods_on_for_each_bindings_route_to_the_map_runtime() {
+        let module = lower_source_to_module(
+            "module MapForEach\nfn probe(v: Vec<HashMap<i64, u8>>) -> u8 [panic] {\n    let mut r: u8 = 0;\n    for m in v { r = m.get(1).unwrap(); }\n    r\n}\n",
+            "map_for_each.vow",
+        );
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.name == "probe")
+            .expect("probe function");
+        assert!(
+            extern_calls_of(func)
+                .iter()
+                .any(|callee| callee == "__vow_map_get")
+        );
+        let payload = insts_of(func)
+            .into_iter()
+            .find(|inst| inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1))
+            .expect("payload FieldGet");
+        assert_eq!(payload.ty, Ty::U8);
+    }
+
+    #[test]
+    fn map_get_unwrap_on_a_vec_element_types_the_payload_at_the_value_width() {
+        let module = lower_source_to_module(
+            "module MapElemWidth\nfn probe(v: Vec<HashMap<i64, u8>>) -> u8 [panic] { v[0].get(1).unwrap() }\n",
+            "map_elem_width.vow",
+        );
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.name == "probe")
+            .expect("probe function");
+        let payload = insts_of(func)
+            .into_iter()
+            .find(|inst| inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1))
+            .expect("payload FieldGet");
+        assert_eq!(payload.ty, Ty::U8);
     }
 
     #[test]
