@@ -12,7 +12,7 @@ FAIL=0
 SKIP=0
 FAILURES=()
 
-RUST="${VOW_FULL_TEST_RUST_BIN:-./target/release/vow}"
+RUST="${VOW_FULL_TEST_RUST:-./target/release/vow}"
 SELF=""
 TMPDIR=$(mktemp -d)
 # EXIT alone does not fire on an untrapped SIGTERM/SIGINT/SIGHUP: bash dies

@@ -254,7 +254,7 @@ run_setup_only_case() {
     RUN_STATUS=0
     VOW_FULL_TEST_SETUP_ONLY=1 \
         VOW_FULL_TEST_SKIP_CARGO="$skip_cargo" \
-        VOW_FULL_TEST_RUST_BIN="$fixture/fake-rust-bin" \
+        VOW_FULL_TEST_RUST="$fixture/fake-rust-bin" \
         VOW_FULL_TEST_TRACE="$trace_file" \
         PATH="$fixture/bin:$PATH" \
         bash scripts/full_test.sh >"$output_file" 2>&1 || RUN_STATUS=$?
