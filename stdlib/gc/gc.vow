@@ -34,7 +34,7 @@ fn gc_new() -> GcHeap {
 fn gc_alloc(h: GcHeap, val: i64) -> i64 {
     let fl: Vec<i64> = h.free_list;
     if fl.len() > 0 {
-        let idx: u64 = (fl.len() as u64) - 1;
+        let idx: u64 = fl.len() - 1;
         let slot: i64 = fl[idx];
         fl.pop();
         let vals: Vec<i64> = h.values;
@@ -70,7 +70,7 @@ fn gc_remove_root(h: GcHeap, slot: i64) vow {
     requires: slot < h.values.len() as i64
 } {
     let r: Vec<i64> = h.roots;
-    let len: u64 = r.len() as u64;
+    let len: u64 = r.len();
     let mut i: u64 = 0;
     while i < len {
         if r[i] == slot {
@@ -131,7 +131,7 @@ fn gc_collect(h: GcHeap) -> i64 {
     let mrk: Vec<i64> = h.marks;
     let alv: Vec<i64> = h.alive;
     let vals: Vec<i64> = h.values;
-    let total: u64 = vals.len() as u64;
+    let total: u64 = vals.len();
 
     // Clear marks
     let mut i: u64 = 0;
@@ -143,7 +143,7 @@ fn gc_collect(h: GcHeap) -> i64 {
     // Build worklist from roots
     let wl: Vec<i64> = Vec::new();
     let r: Vec<i64> = h.roots;
-    let rlen: u64 = r.len() as u64;
+    let rlen: u64 = r.len();
     i = 0;
     while i < rlen {
         let root: i64 = r[i];
@@ -157,9 +157,9 @@ fn gc_collect(h: GcHeap) -> i64 {
     // Mark phase: iterative worklist
     let rf: Vec<i64> = h.ref_from;
     let rt: Vec<i64> = h.ref_to;
-    let elen: u64 = rf.len() as u64;
+    let elen: u64 = rf.len();
     while wl.len() > 0 {
-        let last_idx: u64 = (wl.len() as u64) - 1;
+        let last_idx: u64 = wl.len() - 1;
         let obj: i64 = wl[last_idx];
         wl.pop();
 
@@ -209,7 +209,7 @@ fn gc_collect(h: GcHeap) -> i64 {
     rf.clear();
     rt.clear();
     i = 0;
-    let new_len: u64 = new_rf.len() as u64;
+    let new_len: u64 = new_rf.len();
     while i < new_len {
         rf.push(new_rf[i]);
         rt.push(new_rt[i]);

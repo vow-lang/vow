@@ -142,7 +142,7 @@ fn bigmag_to_string(b: BigMag) -> String {
         if b.sign < 0 {
             s.push_byte(45);
         }
-        let clen: u64 = chunks.len() as u64;
+        let clen: u64 = chunks.len();
         let top: u64 = clen - 1;
         s.push_str(u64_to_decimal(chunks[top]));
         let mut i: u64 = top;
@@ -163,7 +163,7 @@ fn bigmag_to_u64(b: BigMag) -> Option<u64> {
             Option::None
         } else {
             let d: Vec<u64> = b.limbs;
-            let dlen: u64 = d.len() as u64;
+            let dlen: u64 = d.len();
             if dlen > 2 {
                 Option::None
             } else {
@@ -228,8 +228,8 @@ fn bigmag_cmp(a: BigMag, b: BigMag) -> i64 {
 fn bigmag_cmp_abs(a: BigMag, b: BigMag) -> i64 {
     let ad: Vec<u64> = a.limbs;
     let bd: Vec<u64> = b.limbs;
-    let alen: u64 = ad.len() as u64;
-    let blen: u64 = bd.len() as u64;
+    let alen: u64 = ad.len();
+    let blen: u64 = bd.len();
     if alen > blen {
         1
     } else {
@@ -294,8 +294,8 @@ fn bigmag_add(a: BigMag, b: BigMag) -> BigMag {
 fn bigmag_add_abs(a: BigMag, b: BigMag) -> BigMag {
     let ad: Vec<u64> = a.limbs;
     let bd: Vec<u64> = b.limbs;
-    let alen: u64 = ad.len() as u64;
-    let blen: u64 = bd.len() as u64;
+    let alen: u64 = ad.len();
+    let blen: u64 = bd.len();
     let maxlen: u64 = if alen > blen { alen } else { blen };
     let result: Vec<u64> = Vec::new();
     let mut carry: u64 = 0u64;
@@ -333,8 +333,8 @@ fn bigmag_sub_abs(a: BigMag, b: BigMag) -> BigMag vow {
 } {
     let ad: Vec<u64> = a.limbs;
     let bd: Vec<u64> = b.limbs;
-    let alen: u64 = ad.len() as u64;
-    let blen: u64 = bd.len() as u64;
+    let alen: u64 = ad.len();
+    let blen: u64 = bd.len();
     let result: Vec<u64> = Vec::new();
     let mut borrow: u64 = 0u64;
     let mut i: u64 = 0u64;
@@ -360,8 +360,8 @@ fn bigmag_mul(a: BigMag, b: BigMag) -> BigMag {
     } else {
         let ad: Vec<u64> = a.limbs;
         let bd: Vec<u64> = b.limbs;
-        let alen: u64 = ad.len() as u64;
-        let blen: u64 = bd.len() as u64;
+        let alen: u64 = ad.len();
+        let blen: u64 = bd.len();
         let rlen: u64 = alen + blen;
         let result: Vec<u64> = Vec::new();
         let mut k: u64 = 0u64;
@@ -402,7 +402,7 @@ fn bigmag_mul_single(a: BigMag, v: u64) -> BigMag {
         bigmag_zero()
     } else {
         let ad: Vec<u64> = a.limbs;
-        let alen: u64 = ad.len() as u64;
+        let alen: u64 = ad.len();
         let result: Vec<u64> = Vec::new();
         let mut carry: u64 = 0u64;
         let mut i: u64 = 0u64;
@@ -425,7 +425,7 @@ fn bigmag_add_small(a: BigMag, c: u64) -> BigMag {
         a
     } else {
         let ad: Vec<u64> = a.limbs;
-        let alen: u64 = ad.len() as u64;
+        let alen: u64 = ad.len();
         let result: Vec<u64> = Vec::new();
         let mut carry: u64 = c;
         let mut i: u64 = 0u64;
@@ -497,7 +497,7 @@ fn bigmag_mod(a: BigMag, b: BigMag) -> BigMag vow {
 
 fn bigmag_divmod_abs(a: BigMag, b: BigMag) -> BigMagDivResult {
     let bd: Vec<u64> = b.limbs;
-    let blen: u64 = bd.len() as u64;
+    let blen: u64 = bd.len();
     if blen == 1 {
         bigmag_divmod_single(a, bd[0])
     } else {
@@ -508,7 +508,7 @@ fn bigmag_divmod_abs(a: BigMag, b: BigMag) -> BigMagDivResult {
 // Divide a non-negative magnitude by a single limb d in [1, 2^32).
 fn bigmag_divmod_small(a: BigMag, d: u64) -> SmallDivResult {
     let ad: Vec<u64> = a.limbs;
-    let alen: u64 = ad.len() as u64;
+    let alen: u64 = ad.len();
     let q: Vec<u64> = Vec::new();
     let mut k: u64 = 0u64;
     while k < alen {
@@ -539,8 +539,8 @@ fn bigmag_divmod_single(a: BigMag, d: u64) -> BigMagDivResult {
 fn bigmag_divmod_long(a: BigMag, b: BigMag) -> BigMagDivResult {
     let ad: Vec<u64> = a.limbs;
     let bd: Vec<u64> = b.limbs;
-    let alen: u64 = ad.len() as u64;
-    let blen: u64 = bd.len() as u64;
+    let alen: u64 = ad.len();
+    let blen: u64 = bd.len();
 
     let qlen: u64 = if alen >= blen { alen - blen + 1 } else { 0u64 };
     let q: Vec<u64> = Vec::new();
@@ -627,8 +627,8 @@ fn bigmag_factorial(n: i64) -> BigMag vow {
 fn bigmag_and(a: BigMag, b: BigMag) -> BigMag {
     let ad: Vec<u64> = a.limbs;
     let bd: Vec<u64> = b.limbs;
-    let alen: u64 = ad.len() as u64;
-    let blen: u64 = bd.len() as u64;
+    let alen: u64 = ad.len();
+    let blen: u64 = bd.len();
     let minlen: u64 = if alen < blen { alen } else { blen };
     let result: Vec<u64> = Vec::new();
     let mut i: u64 = 0u64;
@@ -643,8 +643,8 @@ fn bigmag_and(a: BigMag, b: BigMag) -> BigMag {
 fn bigmag_or(a: BigMag, b: BigMag) -> BigMag {
     let ad: Vec<u64> = a.limbs;
     let bd: Vec<u64> = b.limbs;
-    let alen: u64 = ad.len() as u64;
-    let blen: u64 = bd.len() as u64;
+    let alen: u64 = ad.len();
+    let blen: u64 = bd.len();
     let maxlen: u64 = if alen > blen { alen } else { blen };
     let result: Vec<u64> = Vec::new();
     let mut i: u64 = 0u64;
@@ -661,8 +661,8 @@ fn bigmag_or(a: BigMag, b: BigMag) -> BigMag {
 fn bigmag_xor(a: BigMag, b: BigMag) -> BigMag {
     let ad: Vec<u64> = a.limbs;
     let bd: Vec<u64> = b.limbs;
-    let alen: u64 = ad.len() as u64;
-    let blen: u64 = bd.len() as u64;
+    let alen: u64 = ad.len();
+    let blen: u64 = bd.len();
     let maxlen: u64 = if alen > blen { alen } else { blen };
     let result: Vec<u64> = Vec::new();
     let mut i: u64 = 0u64;
@@ -685,7 +685,7 @@ fn bigmag_shl(a: BigMag, n: i64) -> BigMag vow {
         let limb_shift: i64 = n / 32;
         let bit_shift: i64 = n - (n / 32) * 32;
         let ad: Vec<u64> = a.limbs;
-        let alen: u64 = ad.len() as u64;
+        let alen: u64 = ad.len();
         let result: Vec<u64> = Vec::new();
         let mut z: i64 = 0;
         while z < limb_shift {
@@ -774,7 +774,7 @@ fn bigmag_one_limbs() -> Vec<u64> {
 // Remove leading zero limbs, preserving at least one limb.
 fn bigmag_strip_zeros(b: BigMag) -> BigMag {
     let d: Vec<u64> = b.limbs;
-    let mut dlen: u64 = d.len() as u64;
+    let mut dlen: u64 = d.len();
     while dlen > 1 && d[dlen - 1] == 0u64 {
         d.pop();
         dlen = dlen - 1;
@@ -798,7 +798,7 @@ fn bigmag_shift_limbs(b: BigMag, n: i64) -> BigMag {
                 k = k + 1;
             }
             let bd: Vec<u64> = b.limbs;
-            let blen: u64 = bd.len() as u64;
+            let blen: u64 = bd.len();
             let mut j: u64 = 0u64;
             while j < blen {
                 d.push(bd[j]);
@@ -821,7 +821,7 @@ fn u64_to_decimal(v: u64) -> String {
             n = n / 10u64;
         }
         let s: String = String::new();
-        let blen: u64 = buf.len() as u64;
+        let blen: u64 = buf.len();
         let mut i: u64 = blen;
         while i > 0 {
             i = i - 1;
@@ -893,7 +893,7 @@ fn bignum_to_bigmag(x: BigNum) -> BigMag {
 fn bignum_normalize(m: BigMag) -> BigNum {
     let s: BigMag = bigmag_strip_zeros(m);
     let d: Vec<u64> = s.limbs;
-    let n: u64 = d.len() as u64;
+    let n: u64 = d.len();
     if n > 2 {
         BigNum::Big(s)
     } else {
