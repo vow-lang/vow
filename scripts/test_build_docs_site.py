@@ -388,5 +388,70 @@ class MaskedMarkdownStructureTest(unittest.TestCase):
         )
 
 
+class SiteAnchorTest(unittest.TestCase):
+    def test_generic_heading_drops_the_raw_html_tag(self):
+        self.assertEqual(
+            bds._site_heading_anchors(
+                "### Vec<T> Methods\n\n### HashMap<K, V> Methods\n"
+            ),
+            {"vec-methods", "hashmap-methods"},
+        )
+
+    def test_github_slug_of_a_generic_heading_is_not_a_site_anchor(self):
+        self.assertNotIn(
+            bds._slugify_heading("HashMap<K, V> Methods"),
+            bds._site_heading_anchors("### HashMap<K, V> Methods\n"),
+        )
+
+    def test_inline_code_keeps_its_text_and_hyphen_runs_collapse(self):
+        self.assertEqual(
+            bds._site_heading_anchors("## `Option<T>` helpers -- notes\n"),
+            {"optiont-helpers-notes"},
+        )
+
+    def test_duplicate_headings_get_underscore_suffixes(self):
+        self.assertEqual(
+            bds._site_heading_anchors("## Same\n\n## Same\n\n## Same\n"),
+            {"same", "same_1", "same_2"},
+        )
+
+    def test_fenced_hash_comment_is_not_a_heading(self):
+        self.assertEqual(
+            bds._site_heading_anchors("```\n# build it\n```\n\n## Real\n"),
+            {"real"},
+        )
+
+
+class ValidateSiteAnchorsTest(unittest.TestCase):
+    PAGES = {
+        "grammar.md": "### HashMap<K, V> Methods\n\nSee [methods](#hashmap-methods).\n",
+        "errors.md": "See [map](grammar.md#hashmap-methods).\n",
+    }
+
+    def test_valid_in_page_and_sibling_links_pass(self):
+        bds._validate_site_anchors(self.PAGES)
+
+    def test_github_slug_for_a_sibling_link_is_rejected(self):
+        pages = dict(self.PAGES)
+        pages["errors.md"] = "See [map](grammar.md#hashmapk-v-methods).\n"
+        with self.assertRaises(SystemExit) as caught:
+            bds._validate_site_anchors(pages)
+        self.assertIn("hashmapk-v-methods", str(caught.exception))
+        self.assertIn("hashmap-methods", str(caught.exception))
+
+    def test_dead_in_page_link_is_rejected(self):
+        pages = {"grammar.md": "## Real\n\nSee [x](#missing).\n"}
+        with self.assertRaises(SystemExit):
+            bds._validate_site_anchors(pages)
+
+    def test_link_example_in_code_is_ignored(self):
+        pages = {"grammar.md": "## Real\n\nWrite `[x](#missing)` like so.\n"}
+        bds._validate_site_anchors(pages)
+
+    def test_link_to_a_page_outside_the_set_is_ignored(self):
+        pages = {"grammar.md": "## Real\n\nSee [x](other.md#anything).\n"}
+        bds._validate_site_anchors(pages)
+
+
 if __name__ == "__main__":
     unittest.main()
