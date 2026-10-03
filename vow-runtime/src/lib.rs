@@ -7804,7 +7804,7 @@ mod tests {
 
     #[test]
     fn format_f64_bits_round_trips_known_values() {
-        for value in [1.5f64, 0.0, 3.25, 100.25] {
+        for value in [1.5f64, 0.0, 7.123456, 100.25] {
             let ptr = unsafe { __vow_format_f64_bits(value.to_bits()) };
             let v = unsafe { &*(ptr as *const VowVec) };
             let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
