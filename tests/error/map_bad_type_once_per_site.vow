@@ -1,0 +1,35 @@
+// TEST: error-code UnsupportedFeature
+// TEST: error-count 9
+module MapBadTypeOncePerSite
+
+type Names = HashMap<String, i64>;
+
+struct Holder {
+    names: HashMap<String, i64>,
+}
+
+enum Shape {
+    Tuple(HashMap<String, i64>),
+    Fields { names: HashMap<String, i64> },
+}
+
+fn make() -> HashMap<String, i64> [panic] {
+    let m: HashMap<String, i64> = HashMap::new();
+    m
+}
+
+fn count(m: HashMap<String, i64>) -> u64 [panic] {
+    m.insert(String::from("a"), 1);
+    m.len()
+}
+
+fn nested(v: Vec<HashMap<String, i64>>) -> u64 {
+    v.len()
+}
+
+fn main() -> i32 [panic] {
+    let m: HashMap<String, i64> = HashMap::new();
+    m.insert(String::from("a"), 1);
+    m.insert(String::from("b"), 2);
+    0
+}

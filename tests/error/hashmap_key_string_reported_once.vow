@@ -1,0 +1,13 @@
+// TEST: error-code UnsupportedFeature
+// TEST: error-count 1
+// TEST: stderr "HashMap key type `String` is not supported"
+module HashMapKeyStringReportedOnce
+
+fn main() -> i32 [panic] {
+    let m: HashMap<String, i64> = HashMap::new();
+    m.insert(String::from("a"), 1);
+    m.insert(String::from("b"), 2);
+    let present: bool = m.contains_key(String::from("a"));
+    m.remove(String::from("a"));
+    if present && m.len() == 1 { 0 } else { 1 }
+}
