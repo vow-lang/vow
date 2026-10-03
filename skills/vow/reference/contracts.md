@@ -194,10 +194,11 @@ fn insert_and_check() -> HashMap<i64, i64> vow {
 
 ### Value After Insert
 
-`HashMap::get` returns `Option<V>`, so a contract states the bound value through `.unwrap()`. The verifier proves it when the key is bound, and reports a missing key as a failed `unwrap()` on `None`:
+`HashMap::get` returns `Option<V>`, so a contract states the bound value through `.unwrap()`. The verifier proves it when the key is bound; guard it with an earlier `contains_key` clause, because a missing key is reported as a failed `unwrap()` on `None`, which carries no contract blame:
 
 ```vow
 fn insert_and_read() -> HashMap<i64, i64> vow {
+    ensures: result.contains_key(42),
     ensures: result.get(42).unwrap() == 100
 } {
     let m: HashMap<i64, i64> = HashMap::new();
