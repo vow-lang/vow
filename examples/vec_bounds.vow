@@ -8,7 +8,7 @@ fn get_element(i: i64) -> i64 vow {
   v.push(10);
   v.push(20);
   v.push(30);
-  v[i]
+  v[i as u64]
 }
 
 fn main() -> i32 [io] {
