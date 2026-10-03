@@ -3693,8 +3693,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let iter_elem_ast_tid: i64 = lctx_generic_ast_arg_tid(
             ctx, lctx_get_declared_ast_tid(ctx, iter_id), String::from("Vec"), 0
         );
-        if lctx_map_tag_of_ast_tid(ctx, iter_elem_ast_tid) != String::from("") {
-            lctx_tag_declared_ast_tid(ctx, elem_id, iter_elem_ast_tid);
+        // A collection element keeps its declared type, as an indexed element
+        // does, so the binding dispatches map methods and indexes into an inner
+        // `Vec<Map>`. Mirrors Rust `record_collection_foreach_element`.
+        if iter_elem_ast_tid != -1 {
+            if lctx_map_tag_of_ast_tid(ctx, iter_elem_ast_tid) != String::from("")
+                || lctx_generic_ast_arg_tid(ctx, iter_elem_ast_tid, String::from("Vec"), 0) != -1 {
+                lctx_tag_declared_ast_tid(ctx, elem_id, iter_elem_ast_tid);
+            }
         }
 
         let for_scope_depth: u64 = ctx.scope_vars.len();

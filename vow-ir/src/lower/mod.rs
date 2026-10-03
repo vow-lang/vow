@@ -2606,7 +2606,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
             project_vec_index_metadata(ctx, iter_id, elem_id);
-            record_map_foreach_element(ctx, iter_id, elem_id);
+            record_collection_foreach_element(ctx, iter_id, elem_id);
 
             // Save scope depth before pushing the for-each binding scope.
             // Loop-carried phis track outer mutation variables whose bindings
@@ -4382,9 +4382,10 @@ fn declared_map_tag(ctx: &LowerCtx, inst: InstId) -> Option<String> {
     map_ast_tag(ctx.inst_declared_ast_types.get(&inst)?, &ctx.type_aliases)
 }
 
-/// Record a `for` binding's declared type when the iterated `Vec`'s element is a map,
-/// so the binding dispatches map methods like an indexed element does.
-fn record_map_foreach_element(ctx: &mut LowerCtx, iter_id: InstId, elem_id: InstId) {
+/// Record a `for` binding's declared type when the iterated `Vec`'s element is itself a
+/// collection (`Vec`, `HashMap` or `BTreeMap`), as an indexed element already does, so
+/// the binding dispatches map methods and indexes into an inner `Vec<Map>` correctly.
+fn record_collection_foreach_element(ctx: &mut LowerCtx, iter_id: InstId, elem_id: InstId) {
     let Some(iter_ty) = ctx.inst_declared_ast_types.get(&iter_id) else {
         return;
     };
@@ -4396,7 +4397,12 @@ fn record_map_foreach_element(ctx: &mut LowerCtx, iter_id: InstId, elem_id: Inst
     }
     if let Some(elem_ty) = args
         .first()
-        .filter(|ty| map_ast_tag(ty, &ctx.type_aliases).is_some())
+        .filter(|ty| {
+            matches!(
+                resolve_type_alias(ty, &ctx.type_aliases),
+                AstType::Generic { name, .. } if matches!(name.as_str(), "Vec" | "HashMap" | "BTreeMap")
+            )
+        })
         .cloned()
     {
         ctx.inst_declared_ast_types.insert(elem_id, elem_ty);
@@ -6638,6 +6644,29 @@ fn unsigned_max() -> u128 {
         let module = lower_source_to_module(
             "module MapForEach\nfn probe(v: Vec<HashMap<i64, u8>>) -> u8 [panic] {\n    let mut r: u8 = 0;\n    for m in v { r = m.get(1).unwrap(); }\n    r\n}\n",
             "map_for_each.vow",
+        );
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.name == "probe")
+            .expect("probe function");
+        assert!(
+            extern_calls_of(func)
+                .iter()
+                .any(|callee| callee == "__vow_map_get")
+        );
+        let payload = insts_of(func)
+            .into_iter()
+            .find(|inst| inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1))
+            .expect("payload FieldGet");
+        assert_eq!(payload.ty, Ty::U8);
+    }
+
+    #[test]
+    fn map_methods_on_a_nested_for_each_binding_route_to_the_map_runtime() {
+        let module = lower_source_to_module(
+            "module MapNestedForEach\nfn probe(vv: Vec<Vec<HashMap<i64, u8>>>) -> u8 [panic] {\n    let mut r: u8 = 0;\n    for inner in vv { r = inner[0].get(1).unwrap(); }\n    r\n}\n",
+            "map_nested_for_each.vow",
         );
         let func = module
             .functions
