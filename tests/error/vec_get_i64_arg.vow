@@ -7,6 +7,6 @@ fn main() -> i32 {
     let v: Vec<i64> = Vec::new();
     v.push(1);
     let i: i64 = 0;
-    let a: i64 = v.get(i);
+    v.get(i);
     0
 }
