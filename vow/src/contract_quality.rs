@@ -302,10 +302,8 @@ mod tests {
 
     #[test]
     fn casts_are_transparent_to_the_weak_shape() {
-        // A cast does not make a constant bound substantive. #1104's cast bridge
-        // (`v.len() as u64` at every consuming site) produces exactly these, so
-        // without the fold the `WEAK_MAX = 0` ratchet would stop meaning
-        // anything the day the migration starts.
+        // A cast does not make a constant bound substantive, so wrapping a
+        // literal bound in `as T` cannot dodge the `WEAK_MAX = 0` ratchet.
         assert_eq!(
             quality_of("ensures result >= 0 as i64"),
             ContractQuality::Weak
