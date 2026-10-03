@@ -16,7 +16,7 @@ fn vec_max(v: Vec<i64>) -> i64
 - `ensures: result >= v[0]` — the maximum is at least the first element
 - Loop `invariant: best >= v[0]`
 - Loop `invariant: i >= 1`
-- Loop `invariant: i <= v.len() as u64` (the loop counter `i` is a `u64` local, bridged with `v.len() as u64`)
+- Loop `invariant: i <= v.len()` (the loop counter `i` is a `u64` local and `v.len()` is `u64`)
 
 ## Constraints
 

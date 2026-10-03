@@ -6,11 +6,11 @@ fn main() -> i32 [io] {
     let mut total: u64 = 0;
     while outer < 120 {
         let header: String = String::from("outer-allocation-abcdefghijklmnopqrstuvwxyz");
-        total = total + header.len() as u64;
+        total = total + header.len();
         let mut inner: i64 = 0;
         while inner < 500 {
             let payload: String = String::from("inner-allocation-abcdefghijklmnopqrstuvwxyz-0123456789");
-            total = total + payload.len() as u64;
+            total = total + payload.len();
             inner = inner + 1;
         }
         outer = outer + 1;

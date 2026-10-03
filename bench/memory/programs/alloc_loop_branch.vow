@@ -5,11 +5,11 @@ fn branch_len(i: i64) -> u64 {
     let n: u64 = if i < 30000 {
         let s: String = String::from("branch-left-abcdefghijklmnopqrstuvwxyz-0123456789");
         let t: String = String::from("branch-left-extra-ABCDEFGHIJKLMNOPQRSTUVWXYZ");
-        s.len() as u64 + t.len() as u64
+        s.len() + t.len()
     } else {
         let s: String = String::from("branch-right-abcdefghijklmnopqrstuvwxyz-0123456789");
         s.push_str(String::from("-expanded-right-side-payload"));
-        s.len() as u64
+        s.len()
     };
     n
 }

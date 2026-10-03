@@ -7,10 +7,10 @@ fn find_min_idx(v: Vec<i64>) -> i64 vow {
 } {
   let mut min_idx: u64 = 0;
   let mut i: u64 = 1;
-  while i < v.len() as u64 vow {
-    invariant: min_idx < v.len() as u64,
+  while i < v.len() vow {
+    invariant: min_idx < v.len(),
     invariant: i >= 1,
-    invariant: i <= v.len() as u64
+    invariant: i <= v.len()
   } {
     if v[i] < v[min_idx] {
       min_idx = i;

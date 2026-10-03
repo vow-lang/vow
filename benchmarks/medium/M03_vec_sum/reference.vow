@@ -17,8 +17,8 @@ fn make_vec(n: i64) -> Vec<i64> vow {
 fn vec_sum(v: Vec<i64>) -> i64 {
   let mut sum: i64 = 0;
   let mut i: u64 = 0;
-  while i < v.len() as u64 vow {
-    invariant: i <= v.len() as u64
+  while i < v.len() vow {
+    invariant: i <= v.len()
   } {
     sum = sum + v[i];
     i = i + 1;

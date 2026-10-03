@@ -13,7 +13,7 @@ fn main() -> i32 [io] {
     let mut total: u64 = 0;
     while i < 60000 {
         let s: String = make_piece();
-        total = total + s.len() as u64;
+        total = total + s.len();
         i = i + 1;
     }
     print_u64(total);

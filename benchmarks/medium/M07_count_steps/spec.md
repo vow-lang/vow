@@ -14,7 +14,7 @@ fn count_steps(n: i64) -> i64
 
 - `requires: n >= 0` — `n` is non-negative
 - `ensures: result == n` — result equals `n`
-- The loop counter `i` is a `u64` local, so it needs no `invariant: i >= 0`; bridge with `n as u64` and `i as i64`
+- The loop counter `i` is a `u64` local, so it needs no `invariant: i >= 0`; convert with `n as u64` and `i as i64`
 - Loop `invariant: i <= n as u64`
 
 ## Constraints
