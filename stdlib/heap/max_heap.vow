@@ -15,7 +15,7 @@ module MaxHeap
 
 struct MaxHeap {
     data: Vec<i64>,
-    size: i64,
+    size: u64,
 }
 
 pub fn max_heap_new() -> MaxHeap vow {
@@ -26,7 +26,7 @@ pub fn max_heap_new() -> MaxHeap vow {
     MaxHeap { data: v, size: 0 }
 }
 
-pub fn max_heap_len(h: MaxHeap) -> i64 vow {
+pub fn max_heap_len(h: MaxHeap) -> u64 vow {
     ensures: result == h.size
 } {
     h.size
@@ -38,37 +38,33 @@ pub fn max_heap_is_empty(h: MaxHeap) -> bool vow {
     h.size == 0
 }
 
-fn max_parent_idx(i: i64) -> i64 vow {
+fn max_parent_idx(i: u64) -> u64 vow {
     requires: i > 0,
-    ensures: result >= 0,
     ensures: result < i
 } {
     (i - 1) / 2
 }
 
-fn max_swap(data: Vec<i64>, i: i64, j: i64) vow {
-    requires: i >= 0,
-    requires: j >= 0,
-    requires: i < data.len() as i64,
-    requires: j < data.len() as i64
+fn max_swap(data: Vec<i64>, i: u64, j: u64) vow {
+    requires: i < data.len(),
+    requires: j < data.len()
 } {
-    let tmp: i64 = data[i as u64];
-    data[i as u64] = data[j as u64];
-    data[j as u64] = tmp;
+    let tmp: i64 = data[i];
+    data[i] = data[j];
+    data[j] = tmp;
 }
 
-fn max_sift_up(data: Vec<i64>, start: i64) vow {
-    requires: start >= 0,
-    requires: start < data.len() as i64
+fn max_sift_up(data: Vec<i64>, start: u64) vow {
+    requires: start < data.len()
 } {
-    let mut i: u64 = start as u64;
+    let mut i: u64 = start;
     let mut done: bool = false;
     while !done && i > 0 vow {
         invariant: i < data.len()
     } {
-        let p: u64 = max_parent_idx(i as i64) as u64;
+        let p: u64 = max_parent_idx(i);
         if data[i] > data[p] {
-            max_swap(data, i as i64, p as i64);
+            max_swap(data, i, p);
             i = p;
         } else {
             done = true;
@@ -77,10 +73,10 @@ fn max_sift_up(data: Vec<i64>, start: i64) vow {
 }
 
 pub fn max_heap_push(h: MaxHeap, val: i64) -> MaxHeap vow {
-    requires: h.size == h.data.len() as i64,
+    requires: h.size == h.data.len(),
     requires: h.size < 9223372036854775807,
     ensures: result.size == h.size + 1,
-    ensures: result.size == result.data.len() as i64
+    ensures: result.size == result.data.len()
 } {
     let d: Vec<i64> = h.data;
     d.push(val);
@@ -90,22 +86,20 @@ pub fn max_heap_push(h: MaxHeap, val: i64) -> MaxHeap vow {
 
 pub fn max_heap_peek(h: MaxHeap) -> i64 vow {
     requires: h.size > 0,
-    requires: h.size == h.data.len() as i64,
+    requires: h.size == h.data.len(),
     ensures: result == h.data[0]
 } {
     h.data[0]
 }
 
-fn max_left_idx(i: i64) -> i64 vow {
-    requires: i >= 0,
+fn max_left_idx(i: u64) -> u64 vow {
     requires: i <= 4611686018427387902,
     ensures: result > i
 } {
     2 * i + 1
 }
 
-fn max_right_idx(i: i64) -> i64 vow {
-    requires: i >= 0,
+fn max_right_idx(i: u64) -> u64 vow {
     requires: i <= 4611686018427387902,
     ensures: result > i
 } {
@@ -117,25 +111,23 @@ fn max_right_idx(i: i64) -> i64 vow {
 // internal Vec model capacity (128). The loop invariant only carries i < n; the
 // stronger formal chain is not stated because it would require a
 // verifier-driven cap on the heap size itself.
-fn max_sift_down(data: Vec<i64>, n: i64, start: i64) vow {
-    requires: n >= 0,
-    requires: n <= data.len() as i64,
-    requires: start >= 0,
+fn max_sift_down(data: Vec<i64>, n: u64, start: u64) vow {
+    requires: n <= data.len(),
     requires: start < n
 } {
-    let mut i: u64 = start as u64;
+    let mut i: u64 = start;
     let mut done: bool = false;
-    while !done && max_left_idx(i as i64) < n vow {
-        invariant: i < n as u64,
-        invariant: n <= data.len() as i64
+    while !done && max_left_idx(i) < n vow {
+        invariant: i < n,
+        invariant: n <= data.len()
     } {
-        let l: u64 = max_left_idx(i as i64) as u64;
-        let r: u64 = max_right_idx(i as i64) as u64;
+        let l: u64 = max_left_idx(i);
+        let r: u64 = max_right_idx(i);
         let mut largest: u64 = i;
         if data[l] > data[largest] {
             largest = l;
         }
-        if r < n as u64 {
+        if r < n {
             if data[r] > data[largest] {
                 largest = r;
             }
@@ -143,14 +135,14 @@ fn max_sift_down(data: Vec<i64>, n: i64, start: i64) vow {
         if largest == i {
             done = true;
         } else {
-            max_swap(data, i as i64, largest as i64);
+            max_swap(data, i, largest);
             i = largest;
         }
     }
 }
 
 pub fn max_heap_clear(h: MaxHeap) -> MaxHeap vow {
-    requires: h.size == h.data.len() as i64,
+    requires: h.size == h.data.len(),
     ensures: result.size == 0,
     ensures: result.data.len() == 0
 } {
@@ -164,10 +156,10 @@ pub fn max_heap_clear(h: MaxHeap) -> MaxHeap vow {
 // express the universal quantifier. Use from tests/assertions to catch
 // sift bugs that don't surface as wrong pop order.
 pub fn is_max_heap(h: MaxHeap) -> bool vow {
-    requires: h.size == h.data.len() as i64
+    requires: h.size == h.data.len()
 } {
     let d: Vec<i64> = h.data;
-    let n: u64 = h.size as u64;
+    let n: u64 = h.size;
     let mut i: u64 = 1;
     while i < n vow {
         invariant: i >= 1,
@@ -184,13 +176,13 @@ pub fn is_max_heap(h: MaxHeap) -> bool vow {
 
 pub fn max_heap_pop(h: MaxHeap) -> MaxHeap vow {
     requires: h.size > 0,
-    requires: h.size == h.data.len() as i64,
+    requires: h.size == h.data.len(),
     ensures: result.size == h.size - 1,
-    ensures: result.size == result.data.len() as i64
+    ensures: result.size == result.data.len()
 } {
     let d: Vec<i64> = h.data;
-    let n: i64 = h.size;
-    let last: i64 = d[(n - 1) as u64];
+    let n: u64 = h.size;
+    let last: i64 = d[n - 1];
     d[0] = last;
     d.pop();
     if n > 1 {
