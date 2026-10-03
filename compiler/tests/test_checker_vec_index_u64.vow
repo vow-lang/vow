@@ -61,10 +61,10 @@ fn check_index_write() -> i32 [io] {
 }
 
 fn check_get_truncate() -> i32 [io] {
-    if body_errors(String::from(", i: u64"), String::from("v.get(i)")) != 0 { return 31; }
-    if body_errors(String::from(""), String::from("v.get(0)")) != 0 { return 32; }
-    if body_errors(String::from(", i: i64"), String::from("v.get(i)")) != 1 { return 33; }
-    if body_errors(String::from(", i: i64"), String::from("v.get(i as u64)")) != 0 { return 34; }
+    if body_errors(String::from(", i: u64"), String::from("v.get(i); 0")) != 1 { return 31; }
+    if body_errors(String::from(""), String::from("v.get(0); 0")) != 1 { return 32; }
+    if body_errors(String::from(", i: i64"), String::from("v.get(i); 0")) != 1 { return 33; }
+    if body_errors(String::from(", i: i64"), String::from("v.get(i as u64); 0")) != 1 { return 34; }
     if body_errors(String::from(", i: u64"), String::from("v.truncate(i); 0")) != 0 { return 35; }
     if body_errors(String::from(""), String::from("v.truncate(0); 0")) != 0 { return 36; }
     if body_errors(String::from(", i: i64"), String::from("v.truncate(i); 0")) != 1 { return 37; }

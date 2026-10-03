@@ -125,13 +125,11 @@ fn string_offset_method_arguments_reject_non_integers() {
 }
 
 #[test]
-fn vec_get_and_truncate_reject_everything_but_u64() {
+fn vec_truncate_rejects_everything_but_u64() {
     for call in [
-        "let a: Option<i64> = v.get(i);",
         "v.truncate(i);",
-        "let a: Option<i64> = v.get(w);",
         "v.truncate(w);",
-        "let a: Option<i64> = v.get(b);",
+        "v.truncate(b);",
         "v.truncate(String::from(\"n\"));",
         "v.truncate(true);",
     ] {
@@ -152,15 +150,42 @@ fn vec_get_and_truncate_reject_everything_but_u64() {
 }
 
 #[test]
-fn vec_get_and_truncate_accept_u64_and_literals() {
+fn vec_truncate_accepts_u64_and_literals() {
     let diags = typecheck_source(&program(
-        "    let u: u64 = 1;\n    let a: Option<i64> = v.get(u);\n    let b: Option<i64> = v.get(0);\n    v.truncate(u);\n    v.truncate(1 + 2);",
+        "    let u: u64 = 1;\n    v.truncate(u);\n    v.truncate(1 + 2);",
     ));
     assert!(
         diags.is_empty(),
         "u64 and literal arguments must be accepted, got {:?}",
         diags.iter().map(|d| &d.message).collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn vec_has_no_get_method() {
+    for call in [
+        "let a: Option<i64> = v.get(0);",
+        "let a: i64 = v.get(0);",
+        "v.get(i);",
+    ] {
+        let prelude = "    let i: i64 = 0;\n";
+        let diags = typecheck_source(&program(&format!("{prelude}    {call}")));
+        let unknown: Vec<_> = diags
+            .iter()
+            .filter(|d| d.code == ErrorCode::UnknownMethod)
+            .collect();
+        assert_eq!(
+            unknown.len(),
+            1,
+            "`{call}` should yield exactly one UnknownMethod, got {:?}",
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+        assert!(
+            unknown[0].message.contains("`get` on type `Vec`"),
+            "unexpected message for `{call}`: {}",
+            unknown[0].message
+        );
+    }
 }
 
 #[test]

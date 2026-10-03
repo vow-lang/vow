@@ -1,0 +1,11 @@
+// TEST: error-code UnknownMethod
+// TEST: error-count 1
+// TEST: stderr "unknown method"
+module VecGetUnknownMethod
+
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    v.push(1);
+    v.get(0);
+    0
+}
