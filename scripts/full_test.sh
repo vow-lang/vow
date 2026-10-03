@@ -1239,6 +1239,31 @@ else
     fail "cast_in_contract_violation/debug-violation" "$(IFS='; '; echo "${errors[*]}")"
 fi
 
+# u64_literal_violation.vow: a u64 literal above i64::MAX must render as its
+# unsigned decimal in the VowViolation description on both compilers, not as a
+# wrapped negative number.
+$RUST build --mode debug --no-verify tests/debug/u64_literal_violation.vow -o "$TMPDIR/rust_u64lit_violation_debug" >/dev/null 2>/dev/null
+run_self build --mode debug --no-verify tests/debug/u64_literal_violation.vow -o "$TMPDIR/self_u64lit_violation_debug" >/dev/null 2>/dev/null
+
+rust_exit=0 self_exit=0
+"$TMPDIR/rust_u64lit_violation_debug" </dev/null >"$TMPDIR/rust_u64lit_dbg_out" 2>"$TMPDIR/rust_u64lit_dbg_err" || rust_exit=$?
+run_self_bin "$TMPDIR/self_u64lit_violation_debug" </dev/null >"$TMPDIR/self_u64lit_dbg_out" 2>"$TMPDIR/self_u64lit_dbg_err" || self_exit=$?
+rust_err=$(cat "$TMPDIR/rust_u64lit_dbg_err")
+self_err=$(cat "$TMPDIR/self_u64lit_dbg_err")
+
+errors=()
+if [ "$rust_exit" -ne 134 ]; then errors+=("rust exit=$rust_exit, expected 134"); fi
+if [ "$self_exit" -ne 134 ]; then errors+=("self exit=$self_exit, expected 134"); fi
+for pattern in VowViolation '"description":"requires x != 18446744073709551614"' "vow violation: requires x != 18446744073709551614, blame=Caller" '"x":18446744073709551614'; do
+    if ! echo "$rust_err" | grep -qF "$pattern"; then errors+=("rust stderr missing '$pattern'"); fi
+    if ! echo "$self_err" | grep -qF "$pattern"; then errors+=("self stderr missing '$pattern'"); fi
+done
+if [ ${#errors[@]} -eq 0 ]; then
+    pass "u64_literal_violation/debug-violation"
+else
+    fail "u64_literal_violation/debug-violation" "$(IFS='; '; echo "${errors[*]}")"
+fi
+
 # callee_blame, clamp, hello: contracts pass (or none), compare runtime
 for name in callee_blame clamp hello; do
     $RUST build --mode debug --no-verify "examples/${name}.vow" -o "$TMPDIR/rust_${name}_debug" >/dev/null 2>/dev/null
@@ -1551,11 +1576,9 @@ done
 # keep such fixtures out of `quality_fixture` (their parity coverage lives in
 # the separate `where-refinement/offset-parity` block below instead).
 #
-# Scoped to skip `description` on purpose — a pre-existing divergence in the
-# published contracts schema would otherwise mask a real quality regression:
-#   `description`   renders a cast as ` as <type>` in the self-hosted printer
-#                   (compiler/lower.vow) but ` as i64` in the Rust one — #1113.
-# Widen this case to a full compare_json once that's fixed too.
+# `description` text is compared too (per clause, in declaration order): both
+# printers must render casts, literals and operator nesting identically. The
+# dedicated `contract-text/parity` case below pins that against an expected file.
 quality_fixture="tests/fixtures/contracts/quality_shapes.vow"
 rust_quality_json="$TMPDIR/quality_parity_rust.json"
 self_quality_json="$TMPDIR/quality_parity_self.json"
@@ -1586,6 +1609,13 @@ if r_tuples != s_tuples:
     errors.append(f'clause quality/offset differs: rust-only={only_rust} self-only={only_self}')
 if r_quality != s_quality:
     errors.append(f'summary.quality differs: rust={r_quality} self={s_quality}')
+def descriptions(path):
+    with open(path) as f:
+        return [c['description'] for c in json.load(f)['contracts']]
+r_desc = descriptions(sys.argv[1])
+s_desc = descriptions(sys.argv[2])
+if r_desc != s_desc:
+    errors.append(f'description text differs: rust={r_desc} self={s_desc}')
 # Pin the absolute expectation too: parity alone would pass a regression that
 # makes BOTH compilers classify every clause 'substantive'.
 expected = {'weak': 6, 'tautological': 2, 'substantive': 7}
@@ -1608,6 +1638,46 @@ print('; '.join(errors) if errors else 'OK')
         fail "contract-quality/parity" "$parity_result"
     fi
 fi
+echo ""
+
+# contract-text/parity: the contract text rendered into `description` (and
+# from there into VowViolation.description and counterexample `violation`)
+# must be byte-identical across compilers for every integer-literal form,
+# cast and operator nesting. Both compilers are checked against the same
+# expected file, one description per clause in declaration order; the Rust
+# integration test vow-ir/tests/contract_text_forms.rs reads the same file.
+text_fixture="tests/fixtures/contracts/contract_text_forms.vow"
+text_expected="tests/fixtures/contracts/contract_text_forms.expected"
+for text_compiler in rust self; do
+    text_json="$TMPDIR/contract_text_${text_compiler}.json"
+    if [ "$text_compiler" = "rust" ]; then
+        text_ok=0
+        $RUST contracts "$text_fixture" >"$text_json" 2>/dev/null || text_ok=1
+    else
+        text_ok=0
+        run_self contracts "$text_fixture" >"$text_json" 2>/dev/null || text_ok=1
+    fi
+    if [ "$text_ok" -ne 0 ]; then
+        fail "contract-text/parity:$text_compiler" "vow contracts failed on $text_fixture"
+        continue
+    fi
+    text_result=$(python3 -c "
+import json, sys
+
+got = [c['description'] for c in json.load(open(sys.argv[1]))['contracts']]
+want = open(sys.argv[2]).read().splitlines()
+if got == want:
+    print('OK')
+else:
+    diffs = [(i, g, w) for i, (g, w) in enumerate(zip(got, want)) if g != w]
+    print(f'{len(got)} clauses vs {len(want)} expected; first mismatches: {diffs[:3]}')
+" "$text_json" "$text_expected" 2>&1) || text_result="checker error: $text_result"
+    if [ "$text_result" = "OK" ]; then
+        pass "contract-text/parity:$text_compiler"
+    else
+        fail "contract-text/parity:$text_compiler" "$text_result"
+    fi
+done
 echo ""
 
 # where-refinement/offset-parity: a parameter's inline `where` refinement

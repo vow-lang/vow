@@ -1,0 +1,214 @@
+module TestLowerContractText
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use ir_printer
+use lower
+
+// Twin of vow-ir/tests/contract_text_forms.rs: the contract text rendered into
+// `description` must be byte-identical to the Rust printer's for every integer
+// literal form, cast and operator nesting. Expected lines are a subset of
+// tests/fixtures/contracts/contract_text_forms.expected.
+
+fn lower_source(source: String) -> IrModule {
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, diag_ctx_new(), String::from("contract_text.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut item_i: u64 = 0;
+    while item_i < parsed.items.len() {
+        item_files.push(String::from("contract_text.vow"));
+        item_i = item_i + 1;
+    }
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), item_files
+    )
+}
+
+fn expect_descriptions(source: String, expected: Vec<String>, code: i64) -> i64 {
+    let m: IrModule = lower_source(source);
+    let got: Vec<String> = Vec::new();
+    let mut fi: u64 = 0;
+    while fi < m.functions.len() {
+        let f: IrFunction = m.functions[fi];
+        let mut vi: u64 = 0;
+        while vi < f.vows.len() {
+            let v: IrVowEntry = f.vows[vi];
+            got.push(v.description);
+            vi = vi + 1;
+        }
+        fi = fi + 1;
+    }
+    if got.len() != expected.len() { return code; }
+    let mut i: u64 = 0;
+    while i < expected.len() {
+        if got[i] != expected[i] { return code + 1 + (i as i64); }
+        i = i + 1;
+    }
+    0
+}
+
+fn check_unsigned_literals() -> i64 {
+    let source: String = String::from("");
+    source.push_str("module T\n");
+    source.push_str("fn f(x: u64) -> u64 vow {\n");
+    source.push_str("  requires: x != 18446744073709551615\n");
+    source.push_str("  requires: x != 9223372036854775808\n");
+    source.push_str("  requires: x != 9223372036854775807\n");
+    source.push_str("  requires: x != 18446744073709551615u64\n");
+    source.push_str("  requires: x != 0\n");
+    source.push_str("  ensures: result == 18446744073709551614\n");
+    source.push_str("} { x }\n");
+    let expected: Vec<String> = Vec::new();
+    expected.push(String::from("requires x != 18446744073709551615"));
+    expected.push(String::from("requires x != 9223372036854775808"));
+    expected.push(String::from("requires x != 9223372036854775807"));
+    expected.push(String::from("requires x != 18446744073709551615 as u64"));
+    expected.push(String::from("requires x != 0"));
+    expected.push(String::from("ensures result == 18446744073709551614"));
+    expect_descriptions(source, expected, 100)
+}
+
+fn check_wide_literals() -> i64 {
+    let source: String = String::from("");
+    source.push_str("module T\n");
+    source.push_str("fn w(x: u128) -> u128 vow {\n");
+    source.push_str("  requires: x != 340282366920938463463374607431768211455\n");
+    source.push_str("  requires: x != 18446744073709551616\n");
+    source.push_str("  requires: x != 18446744073709551615u128\n");
+    source.push_str("  ensures: result == 170141183460469231731687303715884105728\n");
+    source.push_str("} { x }\n");
+    source.push_str("fn s(x: i128) -> i128 vow {\n");
+    source.push_str("  requires: x != -170141183460469231731687303715884105728\n");
+    source.push_str("  requires: x != -18446744073709551616\n");
+    source.push_str("  requires: x != -170141183460469231731687303715884105727i128\n");
+    source.push_str("} { x }\n");
+    let expected: Vec<String> = Vec::new();
+    expected.push(String::from("requires x != 340282366920938463463374607431768211455"));
+    expected.push(String::from("requires x != 18446744073709551616"));
+    expected.push(String::from("requires x != 18446744073709551615 as u128"));
+    expected.push(String::from("ensures result == 170141183460469231731687303715884105728"));
+    expected.push(String::from("requires x != -170141183460469231731687303715884105728"));
+    expected.push(String::from("requires x != -18446744073709551616"));
+    expected.push(String::from("requires x != -170141183460469231731687303715884105727 as i128"));
+    expect_descriptions(source, expected, 200)
+}
+
+fn check_casts() -> i64 {
+    let source: String = String::from("");
+    source.push_str("module T\n");
+    source.push_str("fn n(x: i64) -> i64 vow {\n");
+    source.push_str("  requires: x != -9223372036854775807 - 1\n");
+    source.push_str("  requires: x != -0\n");
+    source.push_str("  requires: x as i128 != -170141183460469231731687303715884105728\n");
+    source.push_str("  requires: (x + 1) as u128 != 5\n");
+    source.push_str("  requires: x as i128 as u128 != 7\n");
+    source.push_str("  requires: 0 as i64 != x\n");
+    source.push_str("  ensures: result as i128 == x as i128\n");
+    source.push_str("} { x }\n");
+    let expected: Vec<String> = Vec::new();
+    expected.push(String::from("requires x != -9223372036854775807 - 1"));
+    expected.push(String::from("requires x != -0"));
+    expected.push(String::from("requires x as i128 != -170141183460469231731687303715884105728"));
+    expected.push(String::from("requires (x + 1) as u128 != 5"));
+    expected.push(String::from("requires x as i128 as u128 != 7"));
+    expected.push(String::from("requires 0 as i64 != x"));
+    expected.push(String::from("ensures result as i128 == x as i128"));
+    expect_descriptions(source, expected, 300)
+}
+
+fn check_operator_nesting() -> i64 {
+    let source: String = String::from("");
+    source.push_str("module T\n");
+    source.push_str("fn g(a: i64, b: i64, c: i64) -> i64 vow {\n");
+    source.push_str("  requires: (a + b) * c != 3\n");
+    source.push_str("  requires: a + b * c != 3\n");
+    source.push_str("  requires: a - (b - c) != 3\n");
+    source.push_str("  requires: a - b - c != 3\n");
+    source.push_str("  requires: !(a == 0 || b == 1)\n");
+    source.push_str("  requires: !(a == 0) && b != 1\n");
+    source.push_str("  requires: -(a + b) != 3\n");
+    source.push_str("  requires: (a == 0 || b == 1) && c != 2\n");
+    source.push_str("  requires: (a & b) | c != 3\n");
+    source.push_str("  requires: a & (b | c) != 3\n");
+    source.push_str("  requires: a << (1 + 2) != 3\n");
+    source.push_str("  requires: a *! (b +! c) != 3\n");
+    source.push_str("} { a }\n");
+    let expected: Vec<String> = Vec::new();
+    expected.push(String::from("requires (a + b) * c != 3"));
+    expected.push(String::from("requires a + b * c != 3"));
+    expected.push(String::from("requires a - (b - c) != 3"));
+    expected.push(String::from("requires a - b - c != 3"));
+    expected.push(String::from("requires !(a == 0 || b == 1)"));
+    expected.push(String::from("requires !(a == 0) && b != 1"));
+    expected.push(String::from("requires -(a + b) != 3"));
+    expected.push(String::from("requires (a == 0 || b == 1) && c != 2"));
+    expected.push(String::from("requires a & b | c != 3"));
+    expected.push(String::from("requires a & (b | c) != 3"));
+    expected.push(String::from("requires a << 1 + 2 != 3"));
+    expected.push(String::from("requires a *! (b +! c) != 3"));
+    expect_descriptions(source, expected, 400)
+}
+
+fn check_float_literals() -> i64 {
+    let source: String = String::from("");
+    source.push_str("module T\n");
+    source.push_str("fn h(x: f64) -> f64 vow {\n");
+    source.push_str("  requires: x >= 0.0\n");
+    source.push_str("  requires: x <= 1.5\n");
+    source.push_str("  ensures: result <= 2.0\n");
+    source.push_str("} { x }\n");
+    let expected: Vec<String> = Vec::new();
+    expected.push(String::from("requires x >= 0.0"));
+    expected.push(String::from("requires x <= 1.5"));
+    expected.push(String::from("ensures result <= 2.0"));
+    expect_descriptions(source, expected, 500)
+}
+
+fn check_u128_limbs_to_text() -> i64 {
+    if u128_limbs_to_text(0u64, 0u64) != String::from("0") { return 600; }
+    if u128_limbs_to_text(7u64, 0u64) != String::from("7") { return 601; }
+    if u128_limbs_to_text(10u64, 0u64) != String::from("10") { return 602; }
+    if u128_limbs_to_text(18446744073709551615u64, 0u64) != String::from("18446744073709551615") { return 603; }
+    if u128_limbs_to_text(0u64, 1u64) != String::from("18446744073709551616") { return 604; }
+    if u128_limbs_to_text(4294967296u64, 0u64) != String::from("4294967296") { return 605; }
+    if u128_limbs_to_text(18446744073709551615u64, 18446744073709551615u64)
+        != String::from("340282366920938463463374607431768211455") { return 606; }
+    if u128_limbs_to_text(0u64, 9223372036854775808u64)
+        != String::from("170141183460469231731687303715884105728") { return 607; }
+    0
+}
+
+fn check_ir_const_u64_printing() -> i64 {
+    let max_bits: i64 = -1;
+    let inst: IrInst = ir_inst_new(
+        0, IOP_CONST_U64(), ITY_U64(), Vec::new(),
+        IDATA_CONST_U64(), max_bits, 0, String::from("")
+    );
+    if format_data(inst) != String::from("18446744073709551615u64") { return 700; }
+    0
+}
+
+fn main() -> i32 {
+    let r1: i64 = check_u128_limbs_to_text();
+    if r1 != 0 { return i64_to_i32_wrap(r1); }
+    let r2: i64 = check_unsigned_literals();
+    if r2 != 0 { return i64_to_i32_wrap(r2); }
+    let r3: i64 = check_wide_literals();
+    if r3 != 0 { return i64_to_i32_wrap(r3); }
+    let r4: i64 = check_casts();
+    if r4 != 0 { return i64_to_i32_wrap(r4); }
+    let r5: i64 = check_operator_nesting();
+    if r5 != 0 { return i64_to_i32_wrap(r5); }
+    let r6: i64 = check_float_literals();
+    if r6 != 0 { return i64_to_i32_wrap(r6); }
+    let r7: i64 = check_ir_const_u64_printing();
+    if r7 != 0 { return i64_to_i32_wrap(r7); }
+    0
+}

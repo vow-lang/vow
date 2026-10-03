@@ -180,6 +180,48 @@ fn expr_c(a: AstArena, eid: i64) -> i64 { a.expr_data[(eid * 5 + 3) as u64] }
 fn expr_int_lo(a: AstArena, eid: i64) -> u64 { expr_a(a, eid) as u64 }
 fn expr_int_hi(a: AstArena, eid: i64) -> u64 { expr_b(a, eid) as u64 }
 
+// Decimal text of the unsigned 128-bit magnitude `hi:lo`, mirroring Rust's
+// `u128::to_string` for `Lit::Int` in vow-syntax/src/printer.rs. Long division
+// over four 32-bit limbs keeps every intermediate inside u64.
+fn u128_limbs_to_text(lo: u64, hi: u64) -> String {
+    let base: u64 = 4294967296u64;
+    let limbs: Vec<u64> = Vec::new();
+    limbs.push(hi / base);
+    limbs.push(hi % base);
+    limbs.push(lo / base);
+    limbs.push(lo % base);
+    let rev_digits: Vec<i64> = Vec::new();
+    let mut nonzero: bool = limbs[0] != 0u64 || limbs[1] != 0u64 || limbs[2] != 0u64 || limbs[3] != 0u64;
+    while nonzero {
+        let mut rem: u64 = 0u64;
+        let mut i: u64 = 0u64;
+        while i < 4u64 {
+            let cur: u64 = rem * base + limbs[i];
+            limbs[i] = cur / 10u64;
+            rem = cur % 10u64;
+            i = i + 1u64;
+        }
+        rev_digits.push(48 + rem as i64);
+        nonzero = limbs[0] != 0u64 || limbs[1] != 0u64 || limbs[2] != 0u64 || limbs[3] != 0u64;
+    }
+    let out: String = String::from("");
+    let n: u64 = rev_digits.len();
+    if n == 0u64 {
+        out.push_byte(48);
+        return out;
+    }
+    let mut j: u64 = n;
+    while j > 0u64 {
+        j = j - 1u64;
+        out.push_byte(rev_digits[j]);
+    }
+    out
+}
+
+fn expr_int_text(a: AstArena, eid: i64) -> String {
+    u128_limbs_to_text(expr_int_lo(a, eid), expr_int_hi(a, eid))
+}
+
 fn expr_is_const_int(a: AstArena, eid: i64) -> bool {
     if expr_tag(a, eid) == EXPR_LIT_INT() { return true; }
     if expr_tag(a, eid) == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {

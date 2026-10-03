@@ -5301,6 +5301,33 @@ fn print_type_text(a: AstArena, tid: i64) -> String {
         result.push_str(String::from(">"));
         return result;
     }
+    if tag == TY_UNIT() { return String::from("()"); }
+    if tag == TY_NEVER() { return String::from("!"); }
+    if tag == TY_REF() {
+        let result: String = String::from("&");
+        result.push_str(print_type_text(a, type_a(a, tid)));
+        return result;
+    }
+    if tag == TY_SLICE() {
+        let result: String = String::from("[");
+        result.push_str(print_type_text(a, type_a(a, tid)));
+        result.push_str(String::from("]"));
+        return result;
+    }
+    if tag == TY_TUPLE() {
+        let elems_lid: i64 = type_a(a, tid);
+        let n: i64 = list_len(a, elems_lid);
+        if n == 0 { return String::from("()"); }
+        let result: String = String::from("(");
+        let mut i: i64 = 0;
+        while i < n {
+            if i > 0 { result.push_str(String::from(", ")); }
+            result.push_str(print_type_text(a, list_get(a, elems_lid, i)));
+            i = i + 1;
+        }
+        result.push_str(String::from(")"));
+        return result;
+    }
     String::from("<type>")
 }
 
@@ -5326,15 +5353,71 @@ fn print_str_lit_text(raw: String) -> String {
     result
 }
 
+fn print_path_text(a: AstArena, path_lid: i64) -> String {
+    let result: String = String::from("");
+    let n: i64 = list_len(a, path_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 0 { result.push_str(String::from("::")); }
+        result.push_str(arena_str(a, list_get(a, path_lid, i)));
+        i = i + 1;
+    }
+    result
+}
+
+fn parenthesize_text(inner: String) -> String {
+    let result: String = String::from("(");
+    result.push_str(inner);
+    result.push_str(String::from(")"));
+    result
+}
+
+// Mirrors `binop_precedence` in vow-syntax/src/printer.rs.
+fn binop_precedence(op: i64) -> i64 {
+    if op == BINOP_OR() { return 1; }
+    if op == BINOP_AND() { return 2; }
+    if op == BINOP_EQ() || op == BINOP_NE() || op == BINOP_LT() || op == BINOP_LE()
+        || op == BINOP_GT() || op == BINOP_GE() { return 3; }
+    if op == BINOP_BITOR() { return 4; }
+    if op == BINOP_XOR() { return 5; }
+    if op == BINOP_BITAND() { return 6; }
+    if op == BINOP_SHL() || op == BINOP_SHR() { return 7; }
+    if op == BINOP_ADD() || op == BINOP_SUB() || op == BINOP_ADD_CHK() || op == BINOP_SUB_CHK() {
+        return 8;
+    }
+    9
+}
+
+// Mirrors `print_expr_with_parens`: a nested binary operand is parenthesized
+// when it binds no tighter than its parent (strictly looser on the left).
+fn print_binop_operand_text(a: AstArena, eid: i64, parent_prec: i64, is_right: bool) -> String {
+    let text: String = print_expr_text(a, eid);
+    if expr_tag(a, eid) != EXPR_BINOP() { return text; }
+    let child_prec: i64 = binop_precedence(expr_a(a, eid));
+    let needs: bool = if is_right { child_prec <= parent_prec } else { child_prec < parent_prec };
+    if needs { return parenthesize_text(text); }
+    text
+}
+
 fn print_expr_text(a: AstArena, eid: i64) -> String {
     let tag: i64 = expr_tag(a, eid);
     if tag == EXPR_LIT_INT() {
-        let val: i64 = expr_a(a, eid);
-        return i64_to_string(val);
+        return expr_int_text(a, eid);
     }
     if tag == EXPR_LIT_FLOAT() {
         let bits: i64 = expr_a(a, eid);
-        return format_f64_bits(bits as u64);
+        let text: String = format_f64_bits(bits as u64);
+        let mut has_dot: bool = false;
+        let mut k: u64 = 0u64;
+        while k < text.len() {
+            if text.byte_at(k) == 46 { has_dot = true; }
+            k = k + 1u64;
+        }
+        if has_dot { return text; }
+        let with_frac: String = String::from("");
+        with_frac.push_str(text);
+        with_frac.push_str(String::from(".0"));
+        return with_frac;
     }
     if tag == EXPR_LIT_BOOL() {
         let val: i64 = expr_a(a, eid);
@@ -5352,8 +5435,9 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         let op: i64 = expr_a(a, eid);
         let lhs_eid: i64 = expr_b(a, eid);
         let rhs_eid: i64 = expr_c(a, eid);
-        let lhs_s: String = print_expr_text(a, lhs_eid);
-        let rhs_s: String = print_expr_text(a, rhs_eid);
+        let prec: i64 = binop_precedence(op);
+        let lhs_s: String = print_binop_operand_text(a, lhs_eid, prec, false);
+        let rhs_s: String = print_binop_operand_text(a, rhs_eid, prec, true);
         let op_s: String = binop_str(op);
         let result: String = String::from("");
         result.push_str(lhs_s);
@@ -5366,7 +5450,10 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
     if tag == EXPR_UNOP() {
         let op: i64 = expr_a(a, eid);
         let operand_eid: i64 = expr_b(a, eid);
-        let inner_s: String = print_expr_text(a, operand_eid);
+        let mut inner_s: String = print_expr_text(a, operand_eid);
+        if expr_tag(a, operand_eid) == EXPR_BINOP() {
+            inner_s = parenthesize_text(inner_s);
+        }
         if op == UNOP_NOT() {
             let result: String = String::from("!");
             result.push_str(inner_s);
@@ -5393,9 +5480,7 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         if atomic {
             result.push_str(inner_s);
         } else {
-            result.push_str(String::from("("));
-            result.push_str(inner_s);
-            result.push_str(String::from(")"));
+            result.push_str(parenthesize_text(inner_s));
         }
         result.push_str(String::from(" as "));
         result.push_str(print_type_text(a, expr_b(a, eid)));
@@ -5403,6 +5488,54 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
     }
     if tag == EXPR_LIT_STR() {
         return print_str_lit_text(arena_str(a, expr_a(a, eid)));
+    }
+    if tag == EXPR_TUPLE() {
+        let elems_lid: i64 = expr_a(a, eid);
+        let n: i64 = list_len(a, elems_lid);
+        let result: String = String::from("(");
+        let mut i: i64 = 0;
+        while i < n {
+            if i > 0 { result.push_str(String::from(", ")); }
+            result.push_str(print_expr_text(a, list_get(a, elems_lid, i)));
+            i = i + 1;
+        }
+        result.push_str(String::from(")"));
+        return result;
+    }
+    if tag == EXPR_SLIT() {
+        let result: String = print_path_text(a, expr_a(a, eid));
+        let fields_lid: i64 = expr_b(a, eid);
+        let nfields: i64 = list_len(a, fields_lid) / 2;
+        if nfields == 0 {
+            result.push_str(String::from(" {}"));
+            return result;
+        }
+        result.push_str(String::from(" { "));
+        let mut i: i64 = 0;
+        while i < nfields {
+            if i > 0 { result.push_str(String::from(", ")); }
+            result.push_str(arena_str(a, list_get(a, fields_lid, i * 2)));
+            result.push_str(String::from(": "));
+            result.push_str(print_expr_text(a, list_get(a, fields_lid, i * 2 + 1)));
+            i = i + 1;
+        }
+        result.push_str(String::from(" }"));
+        return result;
+    }
+    if tag == EXPR_ECTOR() {
+        let result: String = print_path_text(a, expr_a(a, eid));
+        let args_lid: i64 = expr_b(a, eid);
+        let nargs: i64 = list_len(a, args_lid);
+        if nargs == 0 { return result; }
+        result.push_str(String::from("("));
+        let mut i: i64 = 0;
+        while i < nargs {
+            if i > 0 { result.push_str(String::from(", ")); }
+            result.push_str(print_expr_text(a, list_get(a, args_lid, i)));
+            i = i + 1;
+        }
+        result.push_str(String::from(")"));
+        return result;
     }
     if tag == EXPR_QUESTION() {
         let result: String = String::from("");
