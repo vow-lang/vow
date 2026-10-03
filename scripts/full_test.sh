@@ -1643,28 +1643,33 @@ echo ""
 # contract-text/parity: the contract text rendered into `description` (and
 # from there into VowViolation.description and counterexample `violation`)
 # must be byte-identical across compilers for every integer-literal form,
-# cast and operator nesting. Both compilers are checked against the same
-# expected file, one description per clause in declaration order; the Rust
-# integration test vow-ir/tests/contract_text_forms.rs reads the same file.
-text_fixture="tests/fixtures/contracts/contract_text_forms.vow"
-text_expected="tests/fixtures/contracts/contract_text_forms.expected"
-for text_compiler in rust self; do
-    text_json="$TMPDIR/contract_text_${text_compiler}.json"
-    if [ "$text_compiler" = "rust" ]; then
+# cast, operator nesting, and compound expression (if/else, match, blocks,
+# loops, constructors, type annotations). Both compilers are checked against
+# the same expected file, one escaped description per clause in declaration
+# order (`\` as `\\`, newline as `\n`); the Rust integration test
+# vow-ir/tests/contract_text_forms.rs reads the same files.
+for text_name in contract_text_forms contract_text_blocks; do
+    text_fixture="tests/fixtures/contracts/${text_name}.vow"
+    text_expected="tests/fixtures/contracts/${text_name}.expected"
+    for text_compiler in rust self; do
+        text_json="$TMPDIR/${text_name}_${text_compiler}.json"
         text_ok=0
-        $RUST contracts "$text_fixture" >"$text_json" 2>/dev/null || text_ok=1
-    else
-        text_ok=0
-        run_self contracts "$text_fixture" >"$text_json" 2>/dev/null || text_ok=1
-    fi
-    if [ "$text_ok" -ne 0 ]; then
-        fail "contract-text/parity:$text_compiler" "vow contracts failed on $text_fixture"
-        continue
-    fi
-    text_result=$(python3 -c "
+        if [ "$text_compiler" = "rust" ]; then
+            $RUST contracts "$text_fixture" >"$text_json" 2>/dev/null || text_ok=1
+        else
+            run_self contracts "$text_fixture" >"$text_json" 2>/dev/null || text_ok=1
+        fi
+        if [ "$text_ok" -ne 0 ]; then
+            fail "contract-text/parity:${text_name}:${text_compiler}" "vow contracts failed on $text_fixture"
+            continue
+        fi
+        text_result=$(python3 -c "
 import json, sys
 
-got = [c['description'] for c in json.load(open(sys.argv[1]))['contracts']]
+def escape(text):
+    return text.replace(chr(92), chr(92) * 2).replace(chr(10), chr(92) + 'n')
+
+got = [escape(c['description']) for c in json.load(open(sys.argv[1]))['contracts']]
 want = open(sys.argv[2]).read().splitlines()
 if got == want:
     print('OK')
@@ -1672,11 +1677,12 @@ else:
     diffs = [(i, g, w) for i, (g, w) in enumerate(zip(got, want)) if g != w]
     print(f'{len(got)} clauses vs {len(want)} expected; first mismatches: {diffs[:3]}')
 " "$text_json" "$text_expected" 2>&1) || text_result="checker error: $text_result"
-    if [ "$text_result" = "OK" ]; then
-        pass "contract-text/parity:$text_compiler"
-    else
-        fail "contract-text/parity:$text_compiler" "$text_result"
-    fi
+        if [ "$text_result" = "OK" ]; then
+            pass "contract-text/parity:${text_name}:${text_compiler}"
+        else
+            fail "contract-text/parity:${text_name}:${text_compiler}" "$text_result"
+        fi
+    done
 done
 echo ""
 

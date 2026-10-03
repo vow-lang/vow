@@ -274,7 +274,7 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 - `span.vow`, `token.vow`, `lexer.vow` — lexer (Wave 1)
 - `ast.vow`, `parser.vow` — parser (Wave 2)
 - `types.vow`, `env.vow`, `checker.vow` — type checker (Wave 3)
-- `ir.vow`, `ir_printer.vow`, `lower.vow` — IR lowering and printing (Wave 4)
+- `ir.vow`, `ir_printer.vow`, `contract_text.vow`, `lower.vow` — IR lowering and printing (Wave 4); `contract_text.vow` renders contract predicate text identically to `vow-syntax/src/printer.rs`
 - `clif.vow` — Cranelift backend via FFI shims (`vow-clif-shim` crate)
 - `main.vow` — driver with subcommands (`build`, `verify`), flags, structured `--help`
 

@@ -171,6 +171,82 @@ fn check_float_literals() -> i64 {
     expect_descriptions(source, expected, 500)
 }
 
+fn check_branches_and_matches() -> i64 {
+    let source: String = String::from("");
+    source.push_str("module T\n");
+    source.push_str("enum Shape { Empty, Circle(i64), Rect(i64, i64) }\n");
+    source.push_str("fn b(x: i64, s: Shape) -> i64 vow {\n");
+    source.push_str("  requires: if x > 0 { true } else { false }\n");
+    source.push_str("  requires: if x > 0 { x > 1 } else if x < -5 { false } else { true }\n");
+    source.push_str("  requires: { { x > 0 } }\n");
+    source.push_str("  requires: match s { Shape::Empty => true, Shape::Circle(r) => r > 0, Shape::Rect(w, _) => w > 0 }\n");
+    source.push_str("  requires: match s { Shape::Empty => false, other => x > 1 }\n");
+    source.push_str("  requires: match s { Shape::Circle(r) => { r > 0 }, _ => true }\n");
+    source.push_str("  requires: x != 1 || match s { Shape::Rect(w, h) => w == h, _ => false }\n");
+    source.push_str("  ensures: result == if x > 0 { 1 } else { 2 }\n");
+    source.push_str("} { x }\n");
+    let expected: Vec<String> = Vec::new();
+    expected.push(String::from("requires if x > 0 {\n    true\n} else {\n    false\n}"));
+    expected.push(String::from("requires if x > 0 {\n    x > 1\n} else if x < -5 {\n    false\n} else {\n    true\n}"));
+    expected.push(String::from("requires {\n    {\n    x > 0\n}\n}"));
+    expected.push(String::from("requires match s {\n    Shape::Empty => true,\n    Shape::Circle(r) => r > 0,\n    Shape::Rect(w, _) => w > 0,\n}"));
+    expected.push(String::from("requires match s {\n    Shape::Empty => false,\n    other => x > 1,\n}"));
+    expected.push(String::from("requires match s {\n    Shape::Circle(r) => {\n    r > 0\n},\n    _ => true,\n}"));
+    expected.push(String::from("requires x != 1 || match s {\n    Shape::Rect(w, h) => w == h,\n    _ => false,\n}"));
+    expected.push(String::from("ensures result == if x > 0 {\n    1\n} else {\n    2\n}"));
+    expect_descriptions(source, expected, 800)
+}
+
+fn check_statements_and_loops() -> i64 {
+    let source: String = String::from("");
+    source.push_str("module T\n");
+    source.push_str("fn l(x: i64, v: Vec<i64>) -> i64 vow {\n");
+    source.push_str("  requires: { let y = x; let z: i64 = y + 1; z; y < z }\n");
+    source.push_str("  requires: { let mut y: i64 = x + 1; y = y + 1; y > 0 }\n");
+    source.push_str("  requires: { if x > 0 { return x; } true }\n");
+    source.push_str("  requires: { let mut i: i64 = 0; while i < 3 { i = i + 1; } i == 3 }\n");
+    source.push_str("  requires: { let mut i: i64 = 0; while i < 3 vow { invariant: i >= 0 } { i = i + 1; } i == 3 }\n");
+    source.push_str("  requires: { let mut i: i64 = 0; let r: i64 = loop vow { invariant: i >= 0 } { if i > 3 { break i; } i = i + 1; }; r == 4 }\n");
+    source.push_str("  requires: { let mut t: i64 = 0; for e in v vow { invariant: t >= 0 } { if e > 3 { continue; } t = t + e; } t >= 0 }\n");
+    source.push_str("} { x }\n");
+    let expected: Vec<String> = Vec::new();
+    expected.push(String::from("requires {\n    let y = x;\n    let z: i64 = y + 1;\n    z;\n    y < z\n}"));
+    expected.push(String::from("requires {\n    let mut y: i64 = x + 1;\n    y = y + 1;\n    y > 0\n}"));
+    expected.push(String::from("requires {\n    if x > 0 {\n    return x;\n}\n    true\n}"));
+    expected.push(String::from("requires {\n    let mut i: i64 = 0;\n    while i < 3 {\n    i = i + 1;\n}\n    i == 3\n}"));
+    expected.push(String::from("requires {\n    let mut i: i64 = 0;\n    while i < 3 vow {\n    invariant: i >= 0\n} {\n    i = i + 1;\n}\n    i == 3\n}"));
+    expected.push(String::from("requires {\n    let mut i: i64 = 0;\n    let r: i64 = loop vow {\n    invariant: i >= 0\n} {\n    if i > 3 {\n    break i;\n}\n    i = i + 1;\n};\n    r == 4\n}"));
+    expected.push(String::from("requires {\n    let mut t: i64 = 0;\n    for e in v vow {\n    invariant: t >= 0\n} {\n    if e > 3 {\n    continue;\n}\n    t = t + e;\n}\n    t >= 0\n}"));
+    expect_descriptions(source, expected, 900)
+}
+
+fn check_constructors_and_types() -> i64 {
+    let source: String = String::from("");
+    source.push_str("module T\n");
+    source.push_str("enum Shape { Empty, Circle(i64), Rect(i64, i64) }\n");
+    source.push_str("struct Point { x: i64, y: i64 }\n");
+    source.push_str("fn c(p: Point, r: &i64, sl: [i64], t: (i64, i64), v: Vec<i64>) -> i64 vow {\n");
+    source.push_str("  requires: p.x == 1 && Point { x: 1, y: 2 }.y == 2\n");
+    source.push_str("  requires: { let q: Shape = Shape::Circle(3); true }\n");
+    source.push_str("  requires: { let q: Shape = Shape::Rect(3, 4); true }\n");
+    source.push_str("  requires: { let q: Shape = Shape::Empty; true }\n");
+    source.push_str("  requires: { let q: &i64 = r; true }\n");
+    source.push_str("  requires: { let q: [i64] = sl; true }\n");
+    source.push_str("  requires: { let q: (i64, i64) = t; true }\n");
+    source.push_str("  requires: { let q: Vec<i64> = v; true }\n");
+    source.push_str("} { 0 }\n");
+    let expected: Vec<String> = Vec::new();
+    expected.push(String::from("requires p.x == 1 && Point { x: 1, y: 2 }.y == 2"));
+    expected.push(String::from("requires {\n    let q: Shape = Shape::Circle(3);\n    true\n}"));
+    expected.push(String::from("requires {\n    let q: Shape = Shape::Rect(3, 4);\n    true\n}"));
+    expected.push(String::from("requires {\n    let q: Shape = Shape::Empty;\n    true\n}"));
+    expected.push(String::from("requires {\n    let q: &i64 = r;\n    true\n}"));
+    expected.push(String::from("requires {\n    let q: [i64] = sl;\n    true\n}"));
+    expected.push(String::from("requires {\n    let q: (i64, i64) = t;\n    true\n}"));
+    expected.push(String::from("requires {\n    let q: Vec<i64> = v;\n    true\n}"));
+    expect_descriptions(source, expected, 1000)
+}
+
 fn check_u128_limbs_to_text() -> i64 {
     if u128_limbs_to_text(0u64, 0u64) != String::from("0") { return 600; }
     if u128_limbs_to_text(7u64, 0u64) != String::from("7") { return 601; }
@@ -210,5 +286,11 @@ fn main() -> i32 {
     if r6 != 0 { return i64_to_i32_wrap(r6); }
     let r7: i64 = check_ir_const_u64_printing();
     if r7 != 0 { return i64_to_i32_wrap(r7); }
+    let r8: i64 = check_branches_and_matches();
+    if r8 != 0 { return i64_to_i32_wrap(r8); }
+    let r9: i64 = check_statements_and_loops();
+    if r9 != 0 { return i64_to_i32_wrap(r9); }
+    let r10: i64 = check_constructors_and_types();
+    if r10 != 0 { return i64_to_i32_wrap(r10); }
     0
 }
