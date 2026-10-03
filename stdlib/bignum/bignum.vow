@@ -74,11 +74,11 @@ fn bigmag_from_i64(val: i64) -> BigMag {
 }
 
 fn bigmag_from_string(s: String) -> BigMag {
-    let slen: i64 = s.len() as i64;
+    let slen: u64 = s.len();
     if slen == 0 {
         bigmag_zero()
     } else {
-        let mut start: i64 = 0;
+        let mut start: u64 = 0;
         let mut sign: i64 = 1;
         let first_byte: i64 = s.byte_at(0);
         if first_byte == 45 {
@@ -89,7 +89,7 @@ fn bigmag_from_string(s: String) -> BigMag {
                 start = 1;
             }
         }
-        let mut nz: i64 = start;
+        let mut nz: u64 = start;
         while nz < slen {
             if s.byte_at(nz) != 48 {
                 break;
@@ -100,12 +100,12 @@ fn bigmag_from_string(s: String) -> BigMag {
             bigmag_zero()
         } else {
             let mut result: BigMag = bigmag_zero();
-            let mut pos: i64 = nz;
+            let mut pos: u64 = nz;
             while pos < slen {
-                let end: i64 = if pos + 9 < slen { pos + 9 } else { slen };
+                let end: u64 = if pos + 9 < slen { pos + 9 } else { slen };
                 let mut chunk: u64 = 0u64;
                 let mut mult: u64 = 1u64;
-                let mut k: i64 = pos;
+                let mut k: u64 = pos;
                 while k < end {
                     let digit: i64 = s.byte_at(k) - 48;
                     chunk = chunk * 10u64 + (digit as u64);
@@ -805,11 +805,11 @@ fn u64_to_decimal(v: u64) -> String {
     if v == 0u64 {
         String::from("0")
     } else {
-        let buf: Vec<i64> = Vec::new();
+        let buf: Vec<u8> = Vec::new();
         let mut n: u64 = v;
         while n > 0u64 {
             let digit: u64 = n % 10u64;
-            buf.push(48 + (digit as i64));
+            buf.push(u64_to_u8_wrap(48u64 + digit));
             n = n / 10u64;
         }
         let s: String = String::new();

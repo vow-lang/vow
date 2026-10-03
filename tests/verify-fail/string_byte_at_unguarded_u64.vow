@@ -1,0 +1,18 @@
+// TEST: category bounds
+// TEST: counterexample-fn "byte_at_any"
+// TEST: counterexample-blame none
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-violation "index out of bounds"
+// An unsigned offset still has an upper bound: byte_at on an index that is not
+// proved < len() is a `string bounds` failure, never the `-1` sentinel.
+module StringByteAtUnguardedU64
+
+fn byte_at_any(s: String, i: u64) -> i64 vow {
+    ensures: result >= 0
+} {
+    s.byte_at(i)
+}
+
+fn main() -> i32 {
+    0
+}

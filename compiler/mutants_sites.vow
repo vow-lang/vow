@@ -5,8 +5,8 @@ module Sites
 // (e.g., `+` → `-` AND `+` → `*`); each is its own Site record.
 struct Site {
     file: String,
-    off: i64,
-    len: i64,
+    off: u64,
+    len: u64,
     line: i64,            // 1-based source line of `off`
     col: i64,             // 1-based source column of `off`
     kind: String,         // "op-flip", "const-flip", "body-replace", "contract-weaken"
@@ -18,10 +18,10 @@ struct Site {
 
 // Compute 1-based (line, col) of byte offset `off` in `src`.
 // Returns Vec<i64> with two entries: [line, col].
-fn line_col_at(src: String, off: i64) -> Vec<i64> {
+fn line_col_at(src: String, off: u64) -> Vec<i64> {
     let mut line: i64 = 1;
     let mut col: i64 = 1;
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < off {
         if src.byte_at(i) == 10 {
             line = line + 1;
@@ -54,8 +54,8 @@ fn mutant_name(file: String, line: i64, col: i64, label: String) -> String {
 // Skip-range list for a file: pairs of (start_byte, end_byte_exclusive).
 // Sites whose [off, off+len) intersect any range are dropped.
 struct SkipRange {
-    start: i64,
-    end: i64,
+    start: u64,
+    end: u64,
 }
 
 // Scan a single .vow source for mutation sites of all four kinds:
@@ -65,8 +65,8 @@ struct SkipRange {
 // sites.
 fn scan_all_sites(src: String, file_path: String) -> Vec<Site> {
     let sites: Vec<Site> = Vec::new();
-    let n: i64 = src.len() as i64;
-    let mut i: i64 = 0;
+    let n: u64 = src.len();
+    let mut i: u64 = 0;
     let mut clause_idx: i64 = 0;
     while i < n {
         let b: i64 = src.byte_at(i);
@@ -92,7 +92,7 @@ fn scan_all_sites(src: String, file_path: String) -> Vec<Site> {
         }
         // identifier/keyword runs — capture and check for true/false
         if (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95 {
-            let start: i64 = i;
+            let start: u64 = i;
             while i < n {
                 let c: i64 = src.byte_at(i);
                 if (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95 || (c >= 48 && c <= 57) {
@@ -107,17 +107,17 @@ fn scan_all_sites(src: String, file_path: String) -> Vec<Site> {
             } else if word == String::from("false") {
                 sites.push(make_const_site(src, file_path, start, 5, String::from("false"), String::from("true"), String::from("false → true")));
             } else if word == String::from("requires") || word == String::from("ensures") || word == String::from("invariant") {
-                let after: i64 = parse_contract_clause(src, i, file_path, sites, word, clause_idx);
+                let after: u64 = parse_contract_clause(src, i, file_path, sites, word, clause_idx);
                 if after > i {
                     i = after;
                     clause_idx = clause_idx + 1;
                 }
             } else if word == String::from("fn") {
-                let resume: i64 = try_emit_body_replace(src, i, file_path, sites);
+                let resume: u64 = try_emit_body_replace(src, i, file_path, sites);
                 if resume > i { i = resume; }
             } else if word == String::from("vow") {
                 // Reset clause index when we enter a new vow block.
-                let mut k: i64 = i;
+                let mut k: u64 = i;
                 while k < n {
                     let c: i64 = src.byte_at(k);
                     if c == 32 || c == 9 || c == 10 || c == 13 { k = k + 1; } else { break; }
@@ -130,7 +130,7 @@ fn scan_all_sites(src: String, file_path: String) -> Vec<Site> {
         }
         // integer literal runs — flip 0/1 only
         if b >= 48 && b <= 57 {
-            let start: i64 = i;
+            let start: u64 = i;
             while i < n {
                 let c: i64 = src.byte_at(i);
                 if c >= 48 && c <= 57 {
@@ -225,7 +225,7 @@ fn scan_all_sites(src: String, file_path: String) -> Vec<Site> {
     sites
 }
 
-fn make_op_site(src: String, file: String, off: i64, len: i64, from_text: String, replacement: String, label: String) -> Site {
+fn make_op_site(src: String, file: String, off: u64, len: u64, from_text: String, replacement: String, label: String) -> Site {
     let lc: Vec<i64> = line_col_at(src, off);
     Site {
         file: file,
@@ -242,9 +242,9 @@ fn make_op_site(src: String, file: String, off: i64, len: i64, from_text: String
 }
 
 // Skip whitespace, returning new offset.
-fn skip_ws(src: String, i: i64) -> i64 {
-    let n: i64 = src.len() as i64;
-    let mut k: i64 = i;
+fn skip_ws(src: String, i: u64) -> u64 {
+    let n: u64 = src.len();
+    let mut k: u64 = i;
     while k < n {
         let c: i64 = src.byte_at(k);
         if c == 32 || c == 9 || c == 10 || c == 13 { k = k + 1; } else { break; }
@@ -259,13 +259,13 @@ fn skip_ws(src: String, i: i64) -> i64 {
 
 // Walk a brace-balanced block starting at `{` at position `start`,
 // emitting contract-weaken sites for top-level `requires`/`ensures`/
-// `invariant` clauses. Returns position past the matching `}`, or -1 on
-// imbalance. clause_index restarts at 0 for each call (one vow block).
-fn scan_vow_block_contracts(src: String, start: i64, file_path: String, sites: Vec<Site>) -> i64 {
-    let n: i64 = src.len() as i64;
-    if start >= n || src.byte_at(start) != 123 { return -1; }
+// `invariant` clauses. Returns position past the matching `}`, or `start`
+// (no progress) on imbalance. clause_index restarts at 0 for each call (one vow block).
+fn scan_vow_block_contracts(src: String, start: u64, file_path: String, sites: Vec<Site>) -> u64 {
+    let n: u64 = src.len();
+    if start >= n || src.byte_at(start) != 123 { return start; }
     let mut depth: i64 = 1;
-    let mut k: i64 = start + 1;
+    let mut k: u64 = start + 1;
     let mut clause_idx: i64 = 0;
     while k < n && depth > 0 {
         let b: i64 = src.byte_at(k);
@@ -280,25 +280,25 @@ fn scan_vow_block_contracts(src: String, start: i64, file_path: String, sites: V
         } else if b == 123 { depth = depth + 1; k = k + 1; }
         else if b == 125 { depth = depth - 1; k = k + 1; }
         else if depth == 1 && is_ident_start(b) {
-            let id_start: i64 = k;
+            let id_start: u64 = k;
             while k < n && is_ident_cont(src.byte_at(k)) { k = k + 1; }
             let w: String = string_substr(src, id_start, k - id_start);
             if w == String::from("requires") || w == String::from("ensures") || w == String::from("invariant") {
-                let r: i64 = parse_contract_clause(src, k, file_path, sites, w, clause_idx);
+                let r: u64 = parse_contract_clause(src, k, file_path, sites, w, clause_idx);
                 if r > k { k = r; clause_idx = clause_idx + 1; }
             }
         } else { k = k + 1; }
     }
-    if depth == 0 { k } else { -1 }
+    if depth == 0 { k } else { start }
 }
 
 // Skip a brace-balanced block starting at `{` at position k. Returns
-// position past the matching `}`, or -1 on imbalance.
-fn skip_brace_block(src: String, start: i64) -> i64 {
-    let n: i64 = src.len() as i64;
-    if start >= n || src.byte_at(start) != 123 { return -1; }
+// position past the matching `}`, or `start` (no progress) on imbalance.
+fn skip_brace_block(src: String, start: u64) -> u64 {
+    let n: u64 = src.len();
+    if start >= n || src.byte_at(start) != 123 { return start; }
     let mut depth: i64 = 1;
-    let mut k: i64 = start + 1;
+    let mut k: u64 = start + 1;
     while k < n && depth > 0 {
         let b: i64 = src.byte_at(k);
         if b == 47 && k + 1 < n && src.byte_at(k + 1) == 47 {
@@ -313,7 +313,7 @@ fn skip_brace_block(src: String, start: i64) -> i64 {
         else if b == 125 { depth = depth - 1; k = k + 1; }
         else { k = k + 1; }
     }
-    if depth == 0 { k } else { -1 }
+    if depth == 0 { k } else { start }
 }
 
 fn default_for_ty(ty: String) -> String {
@@ -341,15 +341,15 @@ fn default_for_ty(ty: String) -> String {
 // Try to emit a body-replace site for the function whose `fn` keyword ends
 // at byte i. On success, returns the offset just past the body's open `{`
 // so the scan continues into the body (other site kinds still get found).
-// Returns -1 if the function shape isn't recognized or the return type is
-// unsupported.
-fn try_emit_body_replace(src: String, i_after_kw: i64, file_path: String, sites: Vec<Site>) -> i64 {
-    let n: i64 = src.len() as i64;
-    let mut k: i64 = skip_ws(src, i_after_kw);
-    if k >= n || !is_ident_start(src.byte_at(k)) { return -1; }
+// Returns `i_after_kw` (no progress) if the function shape isn't recognized
+// or the return type is unsupported.
+fn try_emit_body_replace(src: String, i_after_kw: u64, file_path: String, sites: Vec<Site>) -> u64 {
+    let n: u64 = src.len();
+    let mut k: u64 = skip_ws(src, i_after_kw);
+    if k >= n || !is_ident_start(src.byte_at(k)) { return i_after_kw; }
     while k < n && is_ident_cont(src.byte_at(k)) { k = k + 1; }
     k = skip_ws(src, k);
-    if k >= n || src.byte_at(k) != 40 { return -1; }
+    if k >= n || src.byte_at(k) != 40 { return i_after_kw; }
     // skip parameter list
     let mut paren: i64 = 1;
     k = k + 1;
@@ -367,13 +367,13 @@ fn try_emit_body_replace(src: String, i_after_kw: i64, file_path: String, sites:
             if k < n { k = k + 1; }
         } else { k = k + 1; }
     }
-    if paren != 0 { return -1; }
+    if paren != 0 { return i_after_kw; }
     k = skip_ws(src, k);
     let mut ret_ty: String = String::from("()");
     if k + 1 < n && src.byte_at(k) == 45 && src.byte_at(k + 1) == 62 {
         k = k + 2;
         k = skip_ws(src, k);
-        let ty_start: i64 = k;
+        let ty_start: u64 = k;
         while k < n {
             let b: i64 = src.byte_at(k);
             if b == 32 || b == 9 || b == 10 || b == 13 || b == 123 || b == 91 { break; }
@@ -392,42 +392,42 @@ fn try_emit_body_replace(src: String, i_after_kw: i64, file_path: String, sites:
     // default_for_ty, return -1, and the caller's natural scan re-emits the
     // same sites — producing duplicate contract mutants.
     let replacement: String = default_for_ty(ret_ty);
-    if replacement.len() == 0 { return -1; }
+    if replacement.len() == 0 { return i_after_kw; }
     // skip optional `vow { ... }` and effect `[ ... ]` annotations in any order
     let mut guard: i64 = 0;
     while k < n && guard < 6 {
         guard = guard + 1;
         k = skip_ws(src, k);
-        if k >= n { return -1; }
+        if k >= n { return i_after_kw; }
         let b: i64 = src.byte_at(k);
         if b == 91 {
             k = k + 1;
             while k < n && src.byte_at(k) != 93 { k = k + 1; }
             if k < n { k = k + 1; }
         } else if is_ident_start(b) {
-            let id_start: i64 = k;
+            let id_start: u64 = k;
             while k < n && is_ident_cont(src.byte_at(k)) { k = k + 1; }
             let w: String = string_substr(src, id_start, k - id_start);
             if w == String::from("vow") {
                 k = skip_ws(src, k);
-                let after_vow: i64 = scan_vow_block_contracts(src, k, file_path, sites);
-                if after_vow > k { k = after_vow; } else { return -1; }
+                let after_vow: u64 = scan_vow_block_contracts(src, k, file_path, sites);
+                if after_vow > k { k = after_vow; } else { return i_after_kw; }
             } else {
-                return -1;
+                return i_after_kw;
             }
         } else if b == 123 {
             break;
         } else {
-            return -1;
+            return i_after_kw;
         }
     }
-    if k >= n || src.byte_at(k) != 123 { return -1; }
-    let body_inside: i64 = k + 1;
-    let body_end: i64 = skip_brace_block(src, k);
-    if body_end <= body_inside { return -1; }
-    let body_close: i64 = body_end - 1;
-    let body_len: i64 = body_close - body_inside;
-    if body_len <= 0 { return -1; }
+    if k >= n || src.byte_at(k) != 123 { return i_after_kw; }
+    let body_inside: u64 = k + 1;
+    let body_end: u64 = skip_brace_block(src, k);
+    if body_end <= body_inside { return i_after_kw; }
+    let body_close: u64 = body_end - 1;
+    let body_len: u64 = body_close - body_inside;
+    if body_len == 0 { return i_after_kw; }
     // `replacement` is space-padded for splicing (e.g. ` 0 ` to keep the
     // surrounding bytes legible); trim for the human-facing label.
     let label: String = String::from("body → ");
@@ -452,21 +452,21 @@ fn try_emit_body_replace(src: String, i_after_kw: i64, file_path: String, sites:
 // whitespace, then ':', then the clause expression terminated by a top-level
 // `,` or `}`. On success, push a Site weakening the expression to `true` and
 // return the byte offset past the clause expression (where scanning should
-// resume). On failure (no colon, etc.), return -1.
-fn parse_contract_clause(src: String, i: i64, file_path: String, sites: Vec<Site>, kw: String, clause_index: i64) -> i64 {
-    let n: i64 = src.len() as i64;
-    let mut k: i64 = i;
+// resume). On failure (no colon, etc.), return `i` (no progress).
+fn parse_contract_clause(src: String, i: u64, file_path: String, sites: Vec<Site>, kw: String, clause_index: i64) -> u64 {
+    let n: u64 = src.len();
+    let mut k: u64 = i;
     while k < n {
         let c: i64 = src.byte_at(k);
         if c == 32 || c == 9 || c == 10 || c == 13 { k = k + 1; } else { break; }
     }
-    if k >= n || src.byte_at(k) != 58 { return -1; }
+    if k >= n || src.byte_at(k) != 58 { return i; }
     k = k + 1;
     while k < n {
         let c: i64 = src.byte_at(k);
         if c == 32 || c == 9 || c == 10 || c == 13 { k = k + 1; } else { break; }
     }
-    let expr_start: i64 = k;
+    let expr_start: u64 = k;
     let mut paren: i64 = 0;
     let mut bracket: i64 = 0;
     while k < n {
@@ -490,13 +490,13 @@ fn parse_contract_clause(src: String, i: i64, file_path: String, sites: Vec<Site
     }
     // Trim trailing whitespace from the expression span so the replacement
     // doesn't leave gratuitous trailing space.
-    let mut expr_end: i64 = k;
+    let mut expr_end: u64 = k;
     while expr_end > expr_start {
         let c: i64 = src.byte_at(expr_end - 1);
         if c == 32 || c == 9 || c == 10 || c == 13 { expr_end = expr_end - 1; } else { break; }
     }
-    let expr_len: i64 = expr_end - expr_start;
-    if expr_len <= 0 { return -1; }
+    let expr_len: u64 = expr_end - expr_start;
+    if expr_len == 0 { return i; }
     let original: String = string_substr(src, expr_start, expr_len);
     let label: String = str3(kw, String::from(": "), str2(original, String::from(" → true")));
     let lc: Vec<i64> = line_col_at(src, expr_start);
@@ -519,7 +519,7 @@ fn parse_contract_clause(src: String, i: i64, file_path: String, sites: Vec<Site
 // compiler/c_emitter.vow respectively (already in scope via main.vow's
 // transitive `use` chain).
 
-fn make_const_site(src: String, file: String, off: i64, len: i64, from_text: String, replacement: String, label: String) -> Site {
+fn make_const_site(src: String, file: String, off: u64, len: u64, from_text: String, replacement: String, label: String) -> Site {
     let lc: Vec<i64> = line_col_at(src, off);
     Site {
         file: file,
@@ -540,20 +540,20 @@ fn make_const_site(src: String, file: String, off: i64, len: i64, from_text: Str
 //   - GENERATE:<NAME>:START..GENERATE:<NAME>:END line pairs
 //   - extern "C" { ... } blocks (brace-balanced, comment/string aware)
 // Returns flat list of (start, end_exclusive) pairs.
-fn compute_skip_ranges(src: String) -> Vec<i64> {
-    let ranges: Vec<i64> = Vec::new();
+fn compute_skip_ranges(src: String) -> Vec<u64> {
+    let ranges: Vec<u64> = Vec::new();
     add_extern_ranges(src, ranges);
-    let n: i64 = src.len() as i64;
-    let mut i: i64 = 0;
+    let n: u64 = src.len();
+    let mut i: u64 = 0;
     while i < n {
         // line is [line_start, line_end_excl)
-        let line_start: i64 = i;
+        let line_start: u64 = i;
         while i < n && src.byte_at(i) != 10 {
             i = i + 1;
         }
-        let line_end: i64 = i;
-        let line_len: i64 = line_end - line_start;
-        if line_len > 12 {
+        let line_end: u64 = i;
+        let line_len: u64 = line_end - line_start;
+        if line_len >= 18 {
             let line: String = string_substr(src, line_start, line_len);
             if string_starts_with(line, String::from("// GENERATE:")) == 1
                 && string_ends_with(line, String::from(":START")) == 1 {
@@ -562,10 +562,10 @@ fn compute_skip_ranges(src: String) -> Vec<i64> {
                 // same NAME. Without this match, two interleaved blocks
                 // (FOO opens, BAR:END appears first) silently merge into
                 // one skip range and drop sites between them.
-                let name_len: i64 = line_len - 12 - 6;
+                let name_len: u64 = line_len - 12 - 6;
                 let name: String = string_substr(line, 12, name_len);
-                let j: i64 = i + 1;
-                let end_close: i64 = find_generate_end(src, j, name);
+                let j: u64 = i + 1;
+                let end_close: u64 = find_generate_end(src, j, name);
                 if end_close > line_end {
                     ranges.push(line_start);
                     ranges.push(end_close);
@@ -581,9 +581,9 @@ fn compute_skip_ranges(src: String) -> Vec<i64> {
 // Append (start, end) ranges for every `extern "C" { ... }` block in src.
 // The scan is comment- and string-aware so that braces inside string
 // literals or line comments inside the block don't unbalance counting.
-fn add_extern_ranges(src: String, ranges: Vec<i64>) {
-    let n: i64 = src.len() as i64;
-    let mut i: i64 = 0;
+fn add_extern_ranges(src: String, ranges: Vec<u64>) {
+    let n: u64 = src.len();
+    let mut i: u64 = 0;
     while i < n {
         let b: i64 = src.byte_at(i);
         // skip line comment at top level too — `extern` could be after a comment
@@ -602,7 +602,7 @@ fn add_extern_ranges(src: String, ranges: Vec<i64>) {
         }
         // ident run
         if (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95 {
-            let id_start: i64 = i;
+            let id_start: u64 = i;
             while i < n {
                 let c: i64 = src.byte_at(i);
                 if (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95 || (c >= 48 && c <= 57) {
@@ -612,7 +612,7 @@ fn add_extern_ranges(src: String, ranges: Vec<i64>) {
             let word: String = string_substr(src, id_start, i - id_start);
             if word == String::from("extern") {
                 // scan past whitespace + "C" + whitespace + {
-                let mut k: i64 = i;
+                let mut k: u64 = i;
                 while k < n {
                     let wc: i64 = src.byte_at(k);
                     if wc == 32 || wc == 9 || wc == 10 || wc == 13 { k = k + 1; } else { break; }
@@ -626,7 +626,7 @@ fn add_extern_ranges(src: String, ranges: Vec<i64>) {
                     if k < n && src.byte_at(k) == 123 {
                         // brace-balance scan from k+1
                         let mut depth: i64 = 1;
-                        let mut p: i64 = k + 1;
+                        let mut p: u64 = k + 1;
                         while p < n && depth > 0 {
                             let pb: i64 = src.byte_at(p);
                             if pb == 47 && p + 1 < n && src.byte_at(p + 1) == 47 {
@@ -662,21 +662,21 @@ fn add_extern_ranges(src: String, ranges: Vec<i64>) {
 
 // Starting at byte `start`, locate the next `// GENERATE:<name>:END`
 // line whose NAME matches the supplied `name`. Returns the byte offset
-// PAST the trailing newline of that line, or -1 if no matching marker
+// PAST the trailing newline of that line, or 0 if no matching marker
 // is found.
-fn find_generate_end(src: String, start: i64, name: String) -> i64 {
-    let n: i64 = src.len() as i64;
+fn find_generate_end(src: String, start: u64, name: String) -> u64 {
+    let n: u64 = src.len();
     let expected: String = String::from("// GENERATE:");
     expected.push_str(name);
     expected.push_str(String::from(":END"));
-    let mut k: i64 = start;
+    let mut k: u64 = start;
     while k < n {
-        let line_start: i64 = k;
+        let line_start: u64 = k;
         while k < n && src.byte_at(k) != 10 {
             k = k + 1;
         }
-        let line_end: i64 = k;
-        if line_end - line_start == expected.len() as i64 {
+        let line_end: u64 = k;
+        if line_end - line_start == expected.len() {
             let line: String = string_substr(src, line_start, line_end - line_start);
             if line == expected {
                 if k < n {
@@ -688,17 +688,17 @@ fn find_generate_end(src: String, start: i64, name: String) -> i64 {
         }
         if k < n { k = k + 1; }
     }
-    -1
+    0
 }
 
 // True if [off, off+len) intersects any (start, end) pair in ranges.
-fn is_skipped(off: i64, len: i64, ranges: Vec<i64>) -> bool {
+fn is_skipped(off: u64, len: u64, ranges: Vec<u64>) -> bool {
     let n: u64 = ranges.len();
     let mut i: u64 = 0u64;
-    let site_end: i64 = off + len;
+    let site_end: u64 = off + len;
     while i + 1 < n {
-        let r_start: i64 = ranges[i];
-        let r_end: i64 = ranges[i + 1];
+        let r_start: u64 = ranges[i];
+        let r_end: u64 = ranges[i + 1];
         if site_end > r_start && off < r_end {
             return true;
         }
@@ -710,7 +710,7 @@ fn is_skipped(off: i64, len: i64, ranges: Vec<i64>) -> bool {
 // Top-level entry: enumerate all sites for one file with skip-list applied.
 fn enumerate_sites(src: String, file_path: String) -> Vec<Site> {
     let raw: Vec<Site> = scan_all_sites(src, file_path);
-    let ranges: Vec<i64> = compute_skip_ranges(src);
+    let ranges: Vec<u64> = compute_skip_ranges(src);
     if ranges.len() == 0 {
         return raw;
     }

@@ -3,8 +3,8 @@ module StringMatchesLiteralAt
 
 fn count_name_keys(line: String) -> i64 {
     let mut count: i64 = 0;
-    let mut i: i64 = 0;
-    while i < line.len() as i64 {
+    let mut i: u64 = 0;
+    while i < line.len() {
         if string_matches_literal_at(line, i, "\"name\"") == 1 {
             count = count + 1;
         }

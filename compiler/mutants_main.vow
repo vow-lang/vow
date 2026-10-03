@@ -120,8 +120,8 @@ fn absolutize_path(path: String) -> String [io] {
         return path;
     }
     let mut out: String = process_get_stdout();
-    while out.len() > 0 && (out.byte_at(out.len() as i64 - 1) == 10 || out.byte_at(out.len() as i64 - 1) == 13) {
-        out = string_substr(out, 0, out.len() as i64 - 1);
+    while out.len() > 0 && (out.byte_at(out.len() - 1) == 10 || out.byte_at(out.len() - 1) == 13) {
+        out = string_substr(out, 0, out.len() - 1);
     }
     if out.len() == 0 || out.byte_at(0) != 47 {
         return path;
@@ -151,7 +151,7 @@ fn worktree_remove(workdir: String) -> i64 [io] {
 fn join_workdir(workdir: String, repo_relative: String) -> String {
     let r: String = String::from("");
     r.push_str(workdir);
-    if workdir.len() > 0 && workdir.byte_at(workdir.len() as i64 - 1) != 47 {
+    if workdir.len() > 0 && workdir.byte_at(workdir.len() - 1) != 47 {
         r.push_byte(47);
     }
     r.push_str(repo_relative);
@@ -161,7 +161,7 @@ fn join_workdir(workdir: String, repo_relative: String) -> String {
 fn join_path(dir: String, name: String) -> String {
     let r: String = String::from("");
     r.push_str(dir);
-    if dir.len() > 0 && dir.byte_at(dir.len() as i64 - 1) != 47 {
+    if dir.len() > 0 && dir.byte_at(dir.len() - 1) != 47 {
         r.push_byte(47);
     }
     r.push_str(name);
@@ -178,9 +178,9 @@ fn site_to_json(s: Site) -> String {
     r.push_str(String::from(",\"col\":"));
     r.push_str(i64_to_string(s.col));
     r.push_str(String::from(",\"off\":"));
-    r.push_str(i64_to_string(s.off));
+    r.push_str(uint_to_string(s.off));
     r.push_str(String::from(",\"len\":"));
-    r.push_str(i64_to_string(s.len));
+    r.push_str(uint_to_string(s.len));
     r.push_str(String::from(",\"kind\":\""));
     r.push_str(diag_json_escape_str(s.kind));
     r.push_str(String::from("\",\"from\":\""));
@@ -229,12 +229,12 @@ fn enumerate_root(read_dir: String, repo_relative_root: String) -> Vec<Site> [re
 // True iff `s` is a (possibly signed) decimal integer literal.
 // Used to preserve the accepted decimal-literal spelling for integer flags.
 fn is_decimal_int_literal(s: String) -> bool {
-    let n: i64 = s.len() as i64;
+    let n: u64 = s.len();
     if n == 0 { return false; }
-    let mut start: i64 = 0;
+    let mut start: u64 = 0;
     if s.byte_at(0) == 45 || s.byte_at(0) == 43 { start = 1; }
     if start == n { return false; }
-    let mut i: i64 = start;
+    let mut i: u64 = start;
     while i < n {
         let b: i64 = s.byte_at(i);
         if b < 48 || b > 57 { return false; }
@@ -271,14 +271,14 @@ fn shell_quote(s: String) -> String {
     let n: u64 = s.len();
     let mut i: u64 = 0u64;
     while i < n {
-        let b: i64 = s.byte_at(i as i64);
+        let b: i64 = s.byte_at(i);
         if b == 39 {
             r.push_byte(39);
             r.push_byte(92);
             r.push_byte(39);
             r.push_byte(39);
         } else {
-            r.push_byte(b);
+            r.push_byte(i64_to_u8_wrap(b));
         }
         i = i + 1;
     }

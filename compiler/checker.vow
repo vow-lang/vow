@@ -1570,26 +1570,6 @@ fn check_method_argument_exact(
     }
 }
 
-// Integer-shaped builtin-method argument (a String offset or a byte value): any
-// integer width or signedness is accepted. Vec indices and lengths are exact
-// `u64` and go through `check_method_argument_exact` instead.
-fn check_method_argument_integer(
-    e: CheckEnv, a: AstArena, args_lid: i64, arg_tids: Vec<i64>, index: i64
-) {
-    if index < 0 || index >= list_len(a, args_lid) { return; }
-    let arg_eid: i64 = list_get(a, args_lid, index);
-    check_contextual_integer_literal_ranges(e, a, arg_eid, CTY_I64());
-    if index >= arg_tids.len() as i64 { return; }
-    let arg_tid: i64 = arg_tids[index as u64];
-    if is_opaque(arg_tid) { return; }
-    if !ty_is_integer_or_lit_int(e.ts, arg_tid) {
-        let msg: String = String::from("argument has type '");
-        msg.push_str(ty_tag_name(ty_tag(e.ts, arg_tid)));
-        msg.push_str(String::from("' but method expects an integer type"));
-        env_emit_error_code(e, EC_TYPE_MISMATCH(), msg, expr_span(a, arg_eid));
-    }
-}
-
 fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
     let a: AstArena = m.arena;
     env_push_scope(e);
@@ -2600,11 +2580,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 let s_tid: i64 = check_expr(e, m, s_eid);
                 let pos_tid: i64 = check_expr(e, m, pos_eid);
                 let literal_tid: i64 = check_expr(e, m, literal_eid);
-                check_contextual_integer_literal_ranges(e, a, pos_eid, CTY_I64());
+                check_contextual_integer_literal_ranges(e, a, pos_eid, CTY_U64());
                 if !is_coercible(e.ts, s_tid, CTY_STR()) {
                     env_emit_error(e, String::from("argument has wrong type for string_matches_literal_at"), expr_span(a, s_eid));
                 }
-                if !is_coercible(e.ts, pos_tid, CTY_I64()) {
+                if !is_coercible(e.ts, pos_tid, CTY_U64()) {
                     env_emit_error(e, String::from("argument has wrong type for string_matches_literal_at"), expr_span(a, pos_eid));
                 }
                 if !is_coercible(e.ts, literal_tid, CTY_STR()) {
@@ -2683,14 +2663,14 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_STR());
             }
             if mname == String::from("byte_at") {
-                check_method_argument_integer(e, a, args_lid, arg_tids, 0);
+                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64());
             }
             if mname == String::from("push_byte") {
-                check_method_argument_integer(e, a, args_lid, arg_tids, 0);
+                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U8());
             }
             if mname == String::from("substring") {
-                check_method_argument_integer(e, a, args_lid, arg_tids, 0);
-                check_method_argument_integer(e, a, args_lid, arg_tids, 1);
+                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64());
+                check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64());
             }
             if mname == String::from("len") { return CTY_U64(); }
             if mname == String::from("byte_at") { return CTY_I64(); }

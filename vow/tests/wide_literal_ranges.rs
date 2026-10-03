@@ -157,18 +157,18 @@ fn index_rejects_wide_u64_operand_before_lowering() {
 }
 
 #[test]
-fn string_byte_at_rejects_wide_i64_index_before_lowering() {
-    assert_literal_out_of_range("i64_byte_at_wide_literal_out_of_range.vow");
+fn string_byte_at_rejects_wide_u64_index_before_lowering() {
+    assert_literal_out_of_range("u64_byte_at_wide_literal_out_of_range.vow");
 }
 
 #[test]
-fn string_push_byte_rejects_wide_i64_value_before_lowering() {
-    assert_literal_out_of_range("i64_push_byte_wide_literal_out_of_range.vow");
+fn string_push_byte_rejects_wide_u8_value_before_lowering() {
+    assert_literal_out_of_range("u8_push_byte_wide_literal_out_of_range.vow");
 }
 
 #[test]
-fn string_match_rejects_wide_i64_position_before_lowering() {
-    assert_literal_out_of_range("i64_string_match_wide_literal_out_of_range.vow");
+fn string_match_rejects_wide_u64_position_before_lowering() {
+    assert_literal_out_of_range("u64_string_match_wide_literal_out_of_range.vow");
 }
 
 #[test]

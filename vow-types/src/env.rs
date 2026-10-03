@@ -190,7 +190,7 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
         def("fs_rename", vec![Ty::Str, Ty::Str], Ty::I64, &[Effect::IO]),
         def(
             "string_substr",
-            vec![Ty::Str, Ty::I64, Ty::I64],
+            vec![Ty::Str, Ty::U64, Ty::U64],
             Ty::Str,
             &[],
         ),
@@ -199,7 +199,7 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
         def("string_ends_with", vec![Ty::Str, Ty::Str], Ty::I64, &[]),
         def(
             "string_matches_literal_at",
-            vec![Ty::Str, Ty::I64, Ty::Str],
+            vec![Ty::Str, Ty::U64, Ty::Str],
             Ty::I64,
             &[],
         ),
@@ -936,11 +936,11 @@ stdin_read_line() -> Str [Read]
 stdin_ready() -> Bool [Read]
 string_ends_with(Str, Str) -> I64 []
 string_join(Applied(Struct("Vec"), [Str]), Str) -> Str []
-string_matches_literal_at(Str, I64, Str) -> I64 []
+string_matches_literal_at(Str, U64, Str) -> I64 []
 string_replace(Str, Str, Str) -> Str []
 string_split(Str, Str) -> Applied(Struct("Vec"), [Str]) []
 string_starts_with(Str, Str) -> I64 []
-string_substr(Str, I64, I64) -> Str []
+string_substr(Str, U64, U64) -> Str []
 string_to_lower(Str) -> Str []
 string_to_upper(Str) -> Str []
 string_trim(Str) -> Str []

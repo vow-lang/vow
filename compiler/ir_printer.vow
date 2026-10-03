@@ -14,8 +14,7 @@ fn u64_to_str(v: u64) -> String {
     let mut i: u64 = digits.len();
     while i > 0 {
         i = i - 1;
-        let digit: i64 = digits[i] as i64;
-        out.push_byte(48 + digit);
+        out.push_byte(u64_to_u8_wrap(48u64 + digits[i]));
     }
     out
 }
@@ -37,7 +36,7 @@ fn debug_escape_str(s: String) -> String {
     let n: u64 = s.len();
     let mut i: u64 = 0u64;
     while i < n {
-        let b: i64 = s.byte_at(i as i64);
+        let b: i64 = s.byte_at(i);
         if b == 34 {
             out.push_byte(92);
             out.push_byte(34);
@@ -57,7 +56,7 @@ fn debug_escape_str(s: String) -> String {
             out.push_byte(92);
             out.push_byte(48);
         } else {
-            out.push_byte(b);
+            out.push_byte(i64_to_u8_wrap(b));
         }
         i = i + 1;
     }

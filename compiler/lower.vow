@@ -1469,10 +1469,10 @@ fn debug_builtin_to_extern(name: String) -> String {
 }
 
 fn lower_str_ends_with(value: String, suffix: String) -> bool {
-    let value_len: i64 = value.len() as i64;
-    let suffix_len: i64 = suffix.len() as i64;
+    let value_len: u64 = value.len();
+    let suffix_len: u64 = suffix.len();
     if value_len < suffix_len { return false; }
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < suffix_len {
         if value.byte_at(value_len - suffix_len + i) != suffix.byte_at(i) { return false; }
         i = i + 1;
@@ -5318,7 +5318,7 @@ fn print_str_lit_text(raw: String) -> String {
         else if b == 92 { result.push_str(String::from("\\\\")); }
         else if b == 34 { result.push_str(String::from("\\\"")); }
         else if b == 0 { result.push_str(String::from("\\0")); }
-        else { result.push_byte(b); }
+        else { result.push_byte(i64_to_u8_wrap(b)); }
         i = i + 1;
     }
     result.push_str(String::from("\""));

@@ -1,10 +1,9 @@
 // TEST: category bounds
 module StringMatchesLiteralAtVerify
 
-fn matched_literal_implies_bytes(s: String, pos: i64) -> bool vow {
-    requires: pos >= 0
+fn matched_literal_implies_bytes(s: String, pos: u64) -> bool vow {
     requires: s.len() >= 2
-    requires: pos <= s.len() as i64 - 2
+    requires: pos <= s.len() - 2
     requires: string_matches_literal_at(s, pos, "ab") == 1
     ensures: result == true
 } {

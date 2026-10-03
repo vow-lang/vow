@@ -1,8 +1,8 @@
 // TEST: stdout "u64:2lit:1i64cast:1u32cast:3u8cast:2expr:3write:9byte_i64:104byte_u32:108byte_u64:101sub:el"
 // Guard for the exact-u64 Vec index rule (#1122 D1): a u64 value or an
 // unsuffixed literal indexes directly, and every other integer width needs an
-// explicit `as u64`. String offsets (`byte_at`, `substring`) are unchanged and
-// still accept any integer type.
+// explicit `as u64`. String offsets (`byte_at`, `substring`) follow the same
+// exact-u64 rule.
 module index_integer_types
 
 fn main() -> i32 [io] {
@@ -35,9 +35,9 @@ fn main() -> i32 [io] {
     print_i64(v[1]);
 
     print_str("byte_i64:");
-    print_i64(s.byte_at(i));
+    print_i64(s.byte_at(i as u64));
     print_str("byte_u32:");
-    print_i64(s.byte_at(w));
+    print_i64(s.byte_at(w as u64));
     print_str("byte_u64:");
     print_i64(s.byte_at(u));
     print_str("sub:");

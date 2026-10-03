@@ -378,7 +378,7 @@ fn clone_string(src: String) -> String {
     let n: u64 = src.len();
     let mut i: u64 = 0u64;
     while i < n {
-        out.push_byte(src.byte_at(i as i64));
+        out.push_byte(i64_to_u8_wrap(src.byte_at(i)));
         i = i + 1;
     }
     out

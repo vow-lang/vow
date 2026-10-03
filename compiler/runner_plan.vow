@@ -9,7 +9,7 @@ struct TestSelection {
 }
 
 fn strip_vow_ext(path: String) -> String {
-    let n: i64 = path.len() as i64;
+    let n: u64 = path.len();
     if n > 4 {
         let d: i64 = path.byte_at(n - 4);
         let v: i64 = path.byte_at(n - 3);
@@ -70,7 +70,7 @@ fn is_test_file(name: String) -> bool {
     if string_starts_with(name, String::from("test_")) != 0 {
         return true;
     }
-    let n: i64 = name.len() as i64;
+    let n: u64 = name.len();
     if n > 9 {
         let suffix: String = string_substr(name, n - 9, 9);
         if suffix == String::from("_test.vow") {
@@ -82,7 +82,7 @@ fn is_test_file(name: String) -> bool {
 
 fn test_path_join(dir: String, entry: String) -> String {
     let joined: String = String::from("");
-    let n: i64 = dir.len() as i64;
+    let n: u64 = dir.len();
     if n > 0 && dir.byte_at(n - 1) == 47 {
         joined.push_str(string_substr(dir, 0, n - 1));
     } else {

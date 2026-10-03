@@ -1,0 +1,11 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 1
+// TEST: stderr "u8"
+module StringPushByteI64NotU8
+
+fn main() -> i32 {
+    let s: String = String::from("");
+    let b: i64 = 65;
+    s.push_byte(b);
+    0
+}

@@ -1,0 +1,12 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 1
+module StringMatchesLiteralAtI64Pos
+
+fn main() -> i32 {
+    let s: String = String::from("hello");
+    let p: i64 = 1;
+    if string_matches_literal_at(s, p, "el") == 1 {
+        return 1;
+    }
+    0
+}

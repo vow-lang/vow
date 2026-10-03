@@ -4,12 +4,12 @@ use types
 struct IntToken {
     ok: i64,
     value: i64,
-    next: i64,
+    next: u64,
     message: String,
 }
 
-fn skip_inline_ws(src: String, start: i64, end: i64) -> i64 {
-    let mut i: i64 = start;
+fn skip_inline_ws(src: String, start: u64, end: u64) -> u64 {
+    let mut i: u64 = start;
     while i < end {
         if !is_inline_space_byte(src.byte_at(i)) {
             return i;
@@ -19,7 +19,7 @@ fn skip_inline_ws(src: String, start: i64, end: i64) -> i64 {
     i
 }
 
-fn make_ok_token(value: i64, next: i64) -> IntToken {
+fn make_ok_token(value: i64, next: u64) -> IntToken {
     IntToken {
         ok: 1,
         value: value,
@@ -41,14 +41,14 @@ fn line_error(line_no: i64, msg: String) -> String {
     str4(String::from("line "), i64_to_string(line_no), String::from(": "), msg)
 }
 
-fn parse_int_token(src: String, start: i64, end: i64, line_no: i64) -> IntToken {
-    let i0: i64 = skip_inline_ws(src, start, end);
+fn parse_int_token(src: String, start: u64, end: u64, line_no: i64) -> IntToken {
+    let i0: u64 = skip_inline_ws(src, start, end);
     if i0 >= end {
         return make_err_token(line_error(line_no, String::from("expected integer token")));
     }
 
     let mut sign: i64 = 1;
-    let mut i: i64 = i0;
+    let mut i: u64 = i0;
     if src.byte_at(i) == 45 {
         sign = -1;
         i = i + 1;
@@ -107,8 +107,8 @@ fn add_lit_to_clause(clause: Vec<i64>, lit: i64) -> i64 {
     1
 }
 
-fn parse_header(src: String, start: i64, end: i64, line_no: i64) -> IntToken {
-    let mut i: i64 = start + 1;
+fn parse_header(src: String, start: u64, end: u64, line_no: i64) -> IntToken {
+    let mut i: u64 = start + 1;
     i = skip_inline_ws(src, i, end);
     if i + 2 >= end {
         return make_err_token(line_error(line_no, String::from("expected 'p cnf <vars> <clauses>' header")));
@@ -136,16 +136,16 @@ fn parse_dimacs(src: String) -> ParseResult {
     let mut declared_clauses: i64 = -1;
     let mut actual_clause_count: i64 = 0;
 
-    let n: i64 = src.len() as i64;
-    let mut line_start: i64 = 0;
+    let n: u64 = src.len();
+    let mut line_start: u64 = 0;
     let mut line_no: i64 = 1;
     while line_start < n {
-        let mut line_end: i64 = line_start;
+        let mut line_end: u64 = line_start;
         while line_end < n && src.byte_at(line_end) != 10 {
             line_end = line_end + 1;
         }
 
-        let first_non_ws: i64 = skip_inline_ws(src, line_start, line_end);
+        let first_non_ws: u64 = skip_inline_ws(src, line_start, line_end);
         if first_non_ws < line_end {
             let first: i64 = src.byte_at(first_non_ws);
             if first == 99 {
@@ -172,7 +172,7 @@ fn parse_dimacs(src: String) -> ParseResult {
                     if clauses_tok.ok == 0 {
                         return err_parse(clauses_tok.message);
                     }
-                    let after: i64 = skip_inline_ws(src, clauses_tok.next, line_end);
+                    let after: u64 = skip_inline_ws(src, clauses_tok.next, line_end);
                     if after != line_end {
                         return err_parse(line_error(line_no, String::from("unexpected trailing tokens in header")));
                     }
@@ -193,7 +193,7 @@ fn parse_dimacs(src: String) -> ParseResult {
                         return err_parse(line_error(line_no, String::from("extra clause tokens after declared clause count")));
                     }
 
-                    let mut i: i64 = first_non_ws;
+                    let mut i: u64 = first_non_ws;
                     while i < line_end {
                         i = skip_inline_ws(src, i, line_end);
                         if i >= line_end {

@@ -71,7 +71,7 @@ fn reject_encode_u8() -> i64 {
 fn reject_decode_module() -> IrModule {
     let bad: Vec<i64> = Vec::new();
     let name: String = String::new();
-    name.push_byte(bad[0]);
+    name.push_byte(i64_to_u8_wrap(bad[0]));
     ir_module_new(name)
 }
 
@@ -250,7 +250,7 @@ fn reader_read_string(r: ModuleReader) -> String {
     while i < n vow {
         invariant: i <= n
     } {
-        s.push_byte(reader_read_u8(r));
+        s.push_byte(i64_to_u8_wrap(reader_read_u8(r)));
         i = i + 1;
     }
     s
