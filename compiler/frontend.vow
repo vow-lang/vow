@@ -81,7 +81,7 @@ fn resolve_use_path(arena: AstArena, root_dir: String, use_lid: i64) -> String [
     let mut i: i64 = 0;
     while i < n {
         let sid: i64 = list_get(arena, use_lid, i);
-        let component: String = arena.strs[sid];
+        let component: String = arena.strs[sid as u64];
         r.push_byte(47);
         r.push_str(component);
         i = i + 1;

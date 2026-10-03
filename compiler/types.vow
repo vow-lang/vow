@@ -50,9 +50,9 @@ fn ty_store_new() -> TyStore {
     ts
 }
 
-fn ty_tag(ts: TyStore, tid: i64) -> i64 { ts.data[tid * 3] }
-fn ty_a(ts: TyStore, tid: i64) -> i64 { ts.data[tid * 3 + 1] }
-fn ty_b(ts: TyStore, tid: i64) -> i64 { ts.data[tid * 3 + 2] }
+fn ty_tag(ts: TyStore, tid: i64) -> i64 { ts.data[(tid * 3) as u64] }
+fn ty_a(ts: TyStore, tid: i64) -> i64 { ts.data[(tid * 3 + 1) as u64] }
+fn ty_b(ts: TyStore, tid: i64) -> i64 { ts.data[(tid * 3 + 2) as u64] }
 
 fn ty_add(ts: TyStore, tag: i64, a: i64, b: i64) -> i64 {
     let tid: i64 = (ts.data.len() / 3) as i64;
@@ -90,11 +90,11 @@ fn ts_add_args(ts: TyStore, items: Vec<i64>) -> i64 {
 }
 
 fn ts_arg_get(ts: TyStore, lid: i64, i: i64) -> i64 {
-    ts.arg_data[ts.arg_head[lid] + i]
+    ts.arg_data[(ts.arg_head[lid as u64] + i) as u64]
 }
 
 fn ts_arg_len(ts: TyStore, lid: i64) -> i64 {
-    ts.arg_size[lid]
+    ts.arg_size[lid as u64]
 }
 
 fn ts_make_struct(ts: TyStore, name: String) -> i64 {
@@ -168,7 +168,7 @@ fn tids_equal(ts: TyStore, a: i64, b: i64) -> bool {
 }
 
 fn ty_struct_name(ts: TyStore, tid: i64) -> String {
-    ts.strs[ty_a(ts, tid)]
+    ts.strs[ty_a(ts, tid) as u64]
 }
 
 // Best-effort short name for a type tag — used by diagnostics. Mirrors the

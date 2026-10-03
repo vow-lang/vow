@@ -77,8 +77,8 @@ fn is_linear_ty_rec(e: CheckEnv, tid: i64, visited: Vec<i64>) -> i64 {
             return 0;
         }
         visited.push(skey);
-        let nf: i64 = e.sdef_field_count[sidx];
-        let tid_lid: i64 = e.sdef_field_tid_lids[sidx];
+        let nf: i64 = e.sdef_field_count[sidx as u64];
+        let tid_lid: i64 = e.sdef_field_tid_lids[sidx as u64];
         let mut i: i64 = 0;
         while i < nf {
             let ftid: i64 = ts_arg_get(e.ts, tid_lid, i);
@@ -100,8 +100,8 @@ fn is_linear_ty_rec(e: CheckEnv, tid: i64, visited: Vec<i64>) -> i64 {
             return 0;
         }
         visited.push(ekey);
-        let nv: i64 = e.edef_variant_count[eidx];
-        let vpayload_lid: i64 = e.edef_vpayload_lids[eidx];
+        let nv: i64 = e.edef_variant_count[eidx as u64];
+        let vpayload_lid: i64 = e.edef_vpayload_lids[eidx as u64];
         let mut vi: i64 = 0;
         while vi < nv {
             let payload_lid: i64 = ts_arg_get(e.ts, vpayload_lid, vi);
@@ -178,8 +178,8 @@ fn is_linear_owner_ty_rec(e: CheckEnv, tid: i64, visited: Vec<i64>) -> i64 {
             return 0;
         }
         visited.push(key);
-        let nv: i64 = e.edef_variant_count[eidx];
-        let payloads_lid: i64 = e.edef_vpayload_lids[eidx];
+        let nv: i64 = e.edef_variant_count[eidx as u64];
+        let payloads_lid: i64 = e.edef_vpayload_lids[eidx as u64];
         let mut vi: i64 = 0;
         while vi < nv {
             let payload_lid: i64 = ts_arg_get(e.ts, payloads_lid, vi);
@@ -512,8 +512,8 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
             let a: AstArena = m.arena;
             let sidx: i64 = env_lookup_struct(e, arena_str(a, sdef_name_sid(a, id)));
             if sidx != -1 {
-                let nf: i64 = e.sdef_field_count[sidx];
-                let ftid_lid: i64 = e.sdef_field_tid_lids[sidx];
+                let nf: i64 = e.sdef_field_count[sidx as u64];
+                let ftid_lid: i64 = e.sdef_field_tid_lids[sidx as u64];
                 let fields_lid: i64 = sdef_fields_lid(a, id);
                 let struct_name: String = arena_str(a, sdef_name_sid(a, id));
                 let mut fi: i64 = 0;
@@ -537,8 +537,8 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
             let a: AstArena = m.arena;
             let eidx: i64 = env_lookup_enum(e, arena_str(a, edef_name_sid(a, id)));
             if eidx != -1 {
-                let nv: i64 = e.edef_variant_count[eidx];
-                let vpayload_lid: i64 = e.edef_vpayload_lids[eidx];
+                let nv: i64 = e.edef_variant_count[eidx as u64];
+                let vpayload_lid: i64 = e.edef_vpayload_lids[eidx as u64];
                 let mut vi: i64 = 0;
                 while vi < nv {
                     let payload_lid: i64 = ts_arg_get(e.ts, vpayload_lid, vi);
@@ -793,7 +793,7 @@ fn check_clause_purity(e: CheckEnv, m: Module, clause_eid: i64) [io] {
         if cname != String::from("__unwrap__") {
             let fidx: i64 = env_lookup_fn(e, cname);
             if fidx != -1 {
-                let callee_eff: i64 = e.fn_effects[fidx];
+                let callee_eff: i64 = e.fn_effects[fidx as u64];
                 if callee_eff != 0 {
                     let msg: String = String::from("vow predicate must be pure but calls effectful function `");
                     msg.push_str(cname);
@@ -913,7 +913,7 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
 
     let ret_ast_tid: i64 = fn_ret_ast_tid(a, fid);
     let ret_tid: i64 = if fidx != -1 {
-        e.fn_ret_tids[fidx]
+        e.fn_ret_tids[fidx as u64]
     } else {
         resolve_ast_ty(e, m, ret_ast_tid)
     };
@@ -931,8 +931,8 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
         let psid: i64 = list_get(a, params_lid, i * 4);
         let pname: String = arena_str(a, psid);
         let ast_ptid: i64 = list_get(a, params_lid, i * 4 + 1);
-        let ptid: i64 = if fidx != -1 && i < e.fn_param_count[fidx] {
-            ts_arg_get(e.ts, e.fn_param_lids[fidx], i)
+        let ptid: i64 = if fidx != -1 && i < e.fn_param_count[fidx as u64] {
+            ts_arg_get(e.ts, e.fn_param_lids[fidx as u64], i)
         } else {
             resolve_ast_ty(e, m, ast_ptid)
         };
@@ -999,7 +999,7 @@ fn call_returns_never(e: CheckEnv, m: Module, eid: i64) -> bool {
     if fidx == -1 {
         return false;
     }
-    ty_tag(e.ts, e.fn_ret_tids[fidx]) == CTY_NEVER()
+    ty_tag(e.ts, e.fn_ret_tids[fidx as u64]) == CTY_NEVER()
 }
 
 fn stmt_diverges(e: CheckEnv, m: Module, sid: i64) -> bool {
@@ -1541,7 +1541,7 @@ fn check_method_argument_exact(
     check_contextual_integer_literal_ranges(e, a, arg_eid, target_tid);
     if is_opaque(target_tid) { return; }
     if index >= arg_tids.len() as i64 { return; }
-    let arg_tid: i64 = arg_tids[index];
+    let arg_tid: i64 = arg_tids[index as u64];
     if is_opaque(arg_tid) { return; }
     if !is_coercible(e.ts, arg_tid, target_tid) {
         let msg: String = String::from("argument has type '");
@@ -1562,7 +1562,7 @@ fn check_method_argument_integer(
     let arg_eid: i64 = list_get(a, args_lid, index);
     check_contextual_integer_literal_ranges(e, a, arg_eid, CTY_I64());
     if index >= arg_tids.len() as i64 { return; }
-    let arg_tid: i64 = arg_tids[index];
+    let arg_tid: i64 = arg_tids[index as u64];
     if is_opaque(arg_tid) { return; }
     if !ty_is_integer_or_lit_int(e.ts, arg_tid) {
         let msg: String = String::from("argument has type '");
@@ -1699,7 +1699,7 @@ fn enum_name_from_tid(ts: TyStore, tid: i64) -> String {
     let tag: i64 = ty_tag(ts, tid);
     if tag == CTY_ENUM() {
         let name_idx: i64 = ty_a(ts, tid);
-        return ts.strs[name_idx];
+        return ts.strs[name_idx as u64];
     }
     if tag == CTY_APPLIED() || tag == CTY_REF() {
         let base_tid: i64 = ty_a(ts, tid);
@@ -1721,15 +1721,15 @@ fn enum_pattern_matches_tid(ts: TyStore, a: AstArena, pid: i64, tid: i64) -> boo
 }
 
 fn lookup_variant_payload(e: CheckEnv, enum_idx: i64, variant_name: String, field_idx: i64) -> i64 {
-    let vname_lid: i64 = e.edef_vname_lids[enum_idx];
-    let nv: i64 = e.edef_variant_count[enum_idx];
+    let vname_lid: i64 = e.edef_vname_lids[enum_idx as u64];
+    let nv: i64 = e.edef_variant_count[enum_idx as u64];
     let mut i: i64 = 0;
     while i < nv {
         let vsid: i64 = ts_arg_get(e.ts, vname_lid, i);
         let ts: TyStore = e.ts;
-        let vname: String = ts.strs[vsid];
+        let vname: String = ts.strs[vsid as u64];
         if vname == variant_name {
-            let vpayload_lid: i64 = e.edef_vpayload_lids[enum_idx];
+            let vpayload_lid: i64 = e.edef_vpayload_lids[enum_idx as u64];
             let fields_lid: i64 = ts_arg_get(e.ts, vpayload_lid, i);
             let n_fields: i64 = ts_arg_len(e.ts, fields_lid);
             if field_idx < n_fields {
@@ -1743,14 +1743,14 @@ fn lookup_variant_payload(e: CheckEnv, enum_idx: i64, variant_name: String, fiel
 }
 
 fn lookup_variant_payload_count(e: CheckEnv, enum_idx: i64, variant_name: String) -> i64 {
-    let vname_lid: i64 = e.edef_vname_lids[enum_idx];
-    let nv: i64 = e.edef_variant_count[enum_idx];
+    let vname_lid: i64 = e.edef_vname_lids[enum_idx as u64];
+    let nv: i64 = e.edef_variant_count[enum_idx as u64];
     let mut i: i64 = 0;
     while i < nv {
         let vsid: i64 = ts_arg_get(e.ts, vname_lid, i);
         let ts: TyStore = e.ts;
-        if ts.strs[vsid] == variant_name {
-            let vpayload_lid: i64 = e.edef_vpayload_lids[enum_idx];
+        if ts.strs[vsid as u64] == variant_name {
+            let vpayload_lid: i64 = e.edef_vpayload_lids[enum_idx as u64];
             let fields_lid: i64 = ts_arg_get(e.ts, vpayload_lid, i);
             return ts_arg_len(e.ts, fields_lid);
         }
@@ -2071,11 +2071,11 @@ fn record_question_aggregate(e: CheckEnv, eid: i64, payload_tid: i64) {
         e.question_option_elem_tys.push(-1);
         e.question_aggregate_linear.push(0);
     }
-    e.question_aggregate_names[eid] = aggregate_name;
-    e.question_vec_elem_paths[eid] = pattern_vec_elem_path(e.ts, payload_tid);
-    e.question_vec_option_elem_ty_paths[eid] = pattern_vec_option_elem_ty_path(e.ts, payload_tid);
-    e.question_option_elem_tys[eid] = pattern_option_elem_ir_ty(e.ts, payload_tid);
-    e.question_aggregate_linear[eid] = pattern_aggregate_is_linear(e, payload_tid);
+    e.question_aggregate_names[eid as u64] = aggregate_name;
+    e.question_vec_elem_paths[eid as u64] = pattern_vec_elem_path(e.ts, payload_tid);
+    e.question_vec_option_elem_ty_paths[eid as u64] = pattern_vec_option_elem_ty_path(e.ts, payload_tid);
+    e.question_option_elem_tys[eid as u64] = pattern_option_elem_ir_ty(e.ts, payload_tid);
+    e.question_aggregate_linear[eid as u64] = pattern_aggregate_is_linear(e, payload_tid);
 }
 
 fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
@@ -2098,13 +2098,13 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
                 e.pat_variant_payload_tys.push(Vec::new());
                 e.pat_aggregate_linear.push(0);
             }
-            e.pat_aggregate_names[pid] = aggregate_name;
-            e.pat_vec_elem_paths[pid] = pattern_vec_elem_path(e.ts, scrutinee_tid);
-            e.pat_vec_option_elem_ty_paths[pid] = pattern_vec_option_elem_ty_path(e.ts, scrutinee_tid);
-            e.pat_vec_variant_payload_ty_paths[pid] = pattern_vec_variant_payload_ty_path(e.ts, scrutinee_tid);
-            e.pat_option_elem_tys[pid] = pattern_option_elem_ir_ty(e.ts, scrutinee_tid);
-            e.pat_variant_payload_tys[pid] = pattern_variant_payload_ir_tys(e.ts, scrutinee_tid);
-            e.pat_aggregate_linear[pid] = pattern_aggregate_is_linear(e, scrutinee_tid);
+            e.pat_aggregate_names[pid as u64] = aggregate_name;
+            e.pat_vec_elem_paths[pid as u64] = pattern_vec_elem_path(e.ts, scrutinee_tid);
+            e.pat_vec_option_elem_ty_paths[pid as u64] = pattern_vec_option_elem_ty_path(e.ts, scrutinee_tid);
+            e.pat_vec_variant_payload_ty_paths[pid as u64] = pattern_vec_variant_payload_ty_path(e.ts, scrutinee_tid);
+            e.pat_option_elem_tys[pid as u64] = pattern_option_elem_ir_ty(e.ts, scrutinee_tid);
+            e.pat_variant_payload_tys[pid as u64] = pattern_variant_payload_ir_tys(e.ts, scrutinee_tid);
+            e.pat_aggregate_linear[pid as u64] = pattern_aggregate_is_linear(e, scrutinee_tid);
         }
         env_define_var(e, name, scrutinee_tid);
         return;
@@ -2222,14 +2222,14 @@ fn unhandled_variant_owns_linear_payload(e: CheckEnv, scrutinee_tid: i64, handle
     let enum_name: String = enum_name_from_tid(e.ts, scrutinee_tid);
     let enum_idx: i64 = env_lookup_enum(e, enum_name);
     if enum_idx != -1 {
-        let variant_names_lid: i64 = e.edef_vname_lids[enum_idx];
-        let variant_payloads_lid: i64 = e.edef_vpayload_lids[enum_idx];
-        let nvariants: i64 = e.edef_variant_count[enum_idx];
+        let variant_names_lid: i64 = e.edef_vname_lids[enum_idx as u64];
+        let variant_payloads_lid: i64 = e.edef_vpayload_lids[enum_idx as u64];
+        let nvariants: i64 = e.edef_variant_count[enum_idx as u64];
         let mut vi: i64 = 0;
         while vi < nvariants {
             let variant_sid: i64 = ts_arg_get(e.ts, variant_names_lid, vi);
             let ts: TyStore = e.ts;
-            let variant_name: String = ts.strs[variant_sid];
+            let variant_name: String = ts.strs[variant_sid as u64];
             if !handled_variant_contains(handled, variant_name) {
                 let payload_lid: i64 = ts_arg_get(e.ts, variant_payloads_lid, vi);
                 let mut pi: i64 = 0;
@@ -2609,14 +2609,14 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), msg, expr_span(a, eid));
                 return CTY_NEVER();
             }
-            if e.fn_param_count[fidx] != n_args {
+            if e.fn_param_count[fidx as u64] != n_args {
                 env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
             } else {
-                let plid: i64 = e.fn_param_lids[fidx];
+                let plid: i64 = e.fn_param_lids[fidx as u64];
                 let mut ai: i64 = 0;
                 while ai < n_args {
                     let ptid: i64 = ts_arg_get(e.ts, plid, ai);
-                    let atid: i64 = arg_tids[ai];
+                    let atid: i64 = arg_tids[ai as u64];
                     let aeid: i64 = list_get(a, args_lid, ai);
                     check_contextual_integer_literal_ranges(e, a, aeid, ptid);
                     if !is_coercible(e.ts, atid, ptid) {
@@ -2625,7 +2625,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     ai = ai + 1;
                 }
             }
-            return e.fn_ret_tids[fidx];
+            return e.fn_ret_tids[fidx as u64];
         }
         let _callee_tid: i64 = check_expr(e, m, callee_eid);
         env_emit_error(e, String::from("function call callee must be an identifier"), expr_span(a, callee_eid));
@@ -2851,14 +2851,14 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             let sname: String = ty_struct_name(e.ts, recv_tid);
             let sidx: i64 = env_lookup_struct(e, sname);
             if sidx != -1 {
-                let fname_lid: i64 = e.sdef_field_name_lids[sidx];
-                let ftid_lid: i64 = e.sdef_field_tid_lids[sidx];
-                let nf: i64 = e.sdef_field_count[sidx];
+                let fname_lid: i64 = e.sdef_field_name_lids[sidx as u64];
+                let ftid_lid: i64 = e.sdef_field_tid_lids[sidx as u64];
+                let nf: i64 = e.sdef_field_count[sidx as u64];
                 let mut i: i64 = 0;
                 while i < nf {
                     let fsid: i64 = ts_arg_get(e.ts, fname_lid, i);
                     let ts_local: TyStore = e.ts;
-                    let fn_str: String = ts_local.strs[fsid];
+                    let fn_str: String = ts_local.strs[fsid as u64];
                     if fn_str == fname {
                         return ts_arg_get(e.ts, ftid_lid, i);
                     }
@@ -3073,7 +3073,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             let pat_pid: i64 = list_get(a, arms_lid, i * 2);
             let body_eid: i64 = list_get(a, arms_lid, i * 2 + 1);
             env_push_scope(e);
-            if supported_arms[i] && scrutinee_supported {
+            if supported_arms[i as u64] && scrutinee_supported {
                 if pat_tag(a, pat_pid) == PAT_WILD() && unhandled_variant_owns_linear_payload(e, scrutinee_tid, handled_variants) {
                     env_emit_error_code(
                         e,
@@ -3216,15 +3216,15 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             let feid: i64 = list_get(a, fields_lid, i * 2 + 1);
             let ftid: i64 = check_expr(e, m, feid);
             if sidx != -1 {
-                let fname_lid: i64 = e.sdef_field_name_lids[sidx];
-                let ftid_lid: i64 = e.sdef_field_tid_lids[sidx];
-                let nf: i64 = e.sdef_field_count[sidx];
+                let fname_lid: i64 = e.sdef_field_name_lids[sidx as u64];
+                let ftid_lid: i64 = e.sdef_field_tid_lids[sidx as u64];
+                let nf: i64 = e.sdef_field_count[sidx as u64];
                 let mut field_index: i64 = 0;
                 let mut expected_tid: i64 = -1;
                 while field_index < nf {
                     let declared_sid: i64 = ts_arg_get(e.ts, fname_lid, field_index);
                     let ts_local: TyStore = e.ts;
-                    if ts_local.strs[declared_sid] == fname {
+                    if ts_local.strs[declared_sid as u64] == fname {
                         let expected_tid_here: i64 = ts_arg_get(e.ts, ftid_lid, field_index);
                         check_contextual_integer_literal_ranges(e, a, feid, expected_tid_here);
                         expected_tid = expected_tid_here;
@@ -3549,7 +3549,7 @@ fn collect_may_write_sites_in_expr(e: CheckEnv, m: Module, eid: i64, sites: Vec<
             if fidx == -1 {
                 may_write = true;
             } else {
-                may_write = e.may_write_fns[fidx] != 0;
+                may_write = e.may_write_fns[fidx as u64] != 0;
             }
         }
         if may_write {
@@ -3736,7 +3736,7 @@ fn compute_may_write_table(e: CheckEnv, m: Module, fids: Vec<i64>) [io] {
         let fidx: i64 = env_lookup_fn(e, name);
         fidxs.push(fidx);
         if fidx != -1 && fn_is_declaration(a, fid) {
-            e.may_write_fns[fidx] = 1;
+            e.may_write_fns[fidx as u64] = 1;
         }
         i = i + 1;
     }
@@ -3748,12 +3748,12 @@ fn compute_may_write_table(e: CheckEnv, m: Module, fids: Vec<i64>) [io] {
         while i < n {
             let fidx: i64 = fidxs[i];
             let fid: i64 = fids[i];
-            if fidx != -1 && e.may_write_fns[fidx] == 0 && !fn_is_declaration(a, fid) {
+            if fidx != -1 && e.may_write_fns[fidx as u64] == 0 && !fn_is_declaration(a, fid) {
                 let body_bid: i64 = fn_body_bid(a, fid);
                 let sites: Vec<i64> = Vec::new();
                 collect_may_write_sites_in_block(e, m, body_bid, sites);
                 if sites.len() as u64 > 0u64 {
-                    e.may_write_fns[fidx] = 1;
+                    e.may_write_fns[fidx as u64] = 1;
                     changed = true;
                 }
             }
@@ -3963,7 +3963,7 @@ fn check_effects_fn(e: CheckEnv, m: Module, fid: i64) [io] {
         } else {
             let fidx: i64 = env_lookup_fn(e, cname);
             if fidx != -1 {
-                let needed_eff: i64 = e.fn_effects[fidx];
+                let needed_eff: i64 = e.fn_effects[fidx as u64];
                 if needed_eff != 0 && !effect_covered(declared_eff, needed_eff) {
                     env_emit_error(e, String::from("effectful call from pure function"), fn_span(a, fid));
                 }

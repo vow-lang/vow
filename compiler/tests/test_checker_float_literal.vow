@@ -86,13 +86,13 @@ fn check_lowered_constant_and_text() -> i32 [io] {
     let mut rendered: String = String::from("");
     let mut function_index: i64 = 0;
     while function_index < lowered.functions.len() as i64 {
-        let f: IrFunction = lowered.functions[function_index];
+        let f: IrFunction = lowered.functions[function_index as u64];
         let mut block_index: i64 = 0;
         while block_index < f.blocks.len() as i64 {
-            let block: IrBlock = f.blocks[block_index];
+            let block: IrBlock = f.blocks[block_index as u64];
             let mut inst_index: i64 = 0;
             while inst_index < block.insts.len() as i64 {
-                let inst: IrInst = block.insts[inst_index];
+                let inst: IrInst = block.insts[inst_index as u64];
                 if inst.op == IOP_CONST_F64() {
                     if inst.dv as u64 == expected_bits {
                         saw_const = true;
