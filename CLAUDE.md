@@ -357,15 +357,19 @@ Two separate scripts walk `tests/run/*.vow` and other `tests/*` directories, and
 - **`scripts/full_test.sh`** is the CI-gating harness (wired via `.github/workflows/full-test.yml`
   and `promoted-fixtures.yml`). Its `run_promoted_run_tests` (Section 4, over `tests/run/*.vow`)
   parses and checks `TEST: exit`, `TEST: stdout`, `TEST: stdin[-file]`, `TEST: skip`,
-  `TEST: verify-only`, and `TEST: known-divergence`. **It does not check `TEST: stderr`** — stderr
-  is redirected to `/dev/null` at the capture sites.
+  `TEST: verify-only`, `TEST: known-divergence`, and `TEST: stderr` (every line is a substring
+  that must occur in the stderr of both compilers' binaries). Section 5 does the same for
+  `tests/debug/*.vow` (debug-mode build, `TEST: exit` defaulting to 134), and Section 4c checks
+  `TEST: counterexample-violation` on `tests/verify-fail/*.vow` for both compilers. **It does not
+  check `TEST: stderr` on `tests/error/*.vow`** — compile-error stderr is not captured there.
 - **`tests/run_tests.sh`** is a separate, local-developer-only harness (not invoked by any
-  `.github/workflows/*.yml`). Its Phase 1 (`tests/run/`) and Phase 4 (`tests/debug/`) loops *do*
-  parse and check `TEST: stderr` (substring match against captured stderr), in addition to the
-  directives `full_test.sh` also checks.
+  `.github/workflows/*.yml`). Its Phase 1 (`tests/run/`), Phase 4 (`tests/debug/`) and Phase 5
+  (`tests/error/`) loops parse and check `TEST: stderr` (substring match against captured
+  stderr, last directive line only), in addition to the directives `full_test.sh` also checks.
 
-So a `// TEST: stderr "..."` line on a `tests/run/*.vow` fixture is real, checked ground truth —
-just not checked by CI. It is enforced only when a developer runs `tests/run_tests.sh` locally.
+So a `// TEST: stderr "..."` line on a `tests/run/*.vow` or `tests/debug/*.vow` fixture is checked
+by CI; on a `tests/error/*.vow` fixture it is enforced only when a developer runs
+`tests/run_tests.sh` locally.
 Before claiming a directive is "never parsed by any harness," grep `tests/*.sh` as well as
 `scripts/*.sh` — the two harnesses live in different directories and cover different directives.
 

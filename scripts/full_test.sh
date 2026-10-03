@@ -251,6 +251,44 @@ check_empty_output() {
     return 0
 }
 
+# Every `// TEST: stderr "<text>"` line of a fixture must occur as a substring of
+# the captured stderr, with the same decoding tests/run_tests.sh applies (`\"` is
+# a quote and backslash escapes such as `\n` are expanded). All lines are
+# checked, not just the last. Prints one line per missing pattern.
+missing_stderr_directives() {
+    local vow_file="$1" stderr_file="$2" line pattern actual
+    actual=$(cat "$stderr_file")
+    while IFS= read -r line; do
+        pattern="${line#// TEST: stderr \"}"
+        pattern="${pattern%\"}"
+        [ -z "$pattern" ] && continue
+        pattern="${pattern//\\\"/\"}"
+        pattern=$(printf '%b' "$pattern")
+        if [[ "$actual" != *"$pattern"* ]]; then
+            printf '%s\n' "$pattern"
+        fi
+    done < <(grep '^// TEST: stderr "' "$vow_file")
+}
+
+# Check a fixture's stderr directives against both compilers' captured stderr
+# and report one pass/fail. Does nothing when the fixture has no directive.
+check_stderr_directives() {
+    local label="$1" vow_file="$2" rust_err_file="$3" self_err_file="$4"
+    if ! grep -q '^// TEST: stderr "' "$vow_file"; then
+        return
+    fi
+    local errors=() missing
+    missing=$(missing_stderr_directives "$vow_file" "$rust_err_file")
+    if [ -n "$missing" ]; then errors+=("rust stderr missing: ${missing//$'\n'/ | }"); fi
+    missing=$(missing_stderr_directives "$vow_file" "$self_err_file")
+    if [ -n "$missing" ]; then errors+=("self stderr missing: ${missing//$'\n'/ | }"); fi
+    if [ ${#errors[@]} -eq 0 ]; then
+        pass "$label"
+    else
+        fail "$label" "$(IFS='; '; echo "${errors[*]}")"
+    fi
+}
+
 run_promoted_run_tests() {
     section_begin "Section 4: Run Tests"
     for vow_file in tests/run/*.vow; do
@@ -344,6 +382,20 @@ run_promoted_run_tests() {
             else
                 fail "${name}/test-exit" "expected exit $expected_exit got $actual_exit"
             fi
+        fi
+
+        # Validate against // TEST: stderr directives (substring, both compilers)
+        if grep -q '^// TEST: stderr "' "$vow_file"; then
+            rust_err_file="$TMPDIR/test_rust_${name}.stderr"
+            self_err_file="$TMPDIR/test_self_${name}.stderr"
+            if [ -n "$stdin_path" ]; then
+                "$TMPDIR/test_rust_${name}" < "$stdin_path" >/dev/null 2>"$rust_err_file" || true
+                run_self_bin "$TMPDIR/test_self_${name}" < "$stdin_path" >/dev/null 2>"$self_err_file" || true
+            else
+                "$TMPDIR/test_rust_${name}" </dev/null >/dev/null 2>"$rust_err_file" || true
+                run_self_bin "$TMPDIR/test_self_${name}" </dev/null >/dev/null 2>"$self_err_file" || true
+            fi
+            check_stderr_directives "${name}/test-stderr" "$vow_file" "$rust_err_file" "$self_err_file"
         fi
     done
 }
@@ -866,6 +918,30 @@ for vow_file in tests/verify-fail/*.vow; do
     if [ -n "$actual_status" ] && [ "$actual_status" != "VerifyFailed" ]; then
         fail "${name}/verify-expected-fail" "expected VerifyFailed, got $actual_status"
     fi
+
+    # `// TEST: counterexample-violation "<text>"` pins the first counterexample's
+    # `violation` text on both compilers. Parity alone would pass a regression
+    # that makes both printers render the contract text the same wrong way.
+    expected_violation=$(sed -n 's|^// TEST: counterexample-violation "\(.*\)"$|\1|p' "$vow_file" | head -1)
+    if [ -n "$expected_violation" ]; then
+        violation_errors=()
+        for violation_side in rust self; do
+            if [ "$violation_side" = "rust" ]; then violation_json="$rust_json"; else violation_json="$self_json"; fi
+            actual_violation=$(python3 -c "
+import json, sys
+cx = json.loads(sys.stdin.read()).get('counterexamples') or []
+print(cx[0].get('violation', '') if cx else '')
+" <<< "$violation_json" 2>/dev/null) || actual_violation="<unparseable>"
+            if [ "$actual_violation" != "$expected_violation" ]; then
+                violation_errors+=("$violation_side violation='$actual_violation'")
+            fi
+        done
+        if [ ${#violation_errors[@]} -eq 0 ]; then
+            pass "${name}/verify-fail-violation"
+        else
+            fail "${name}/verify-fail-violation" "expected '$expected_violation'; $(IFS='; '; echo "${violation_errors[*]}")"
+        fi
+    fi
 done
 echo ""
 
@@ -1239,30 +1315,31 @@ else
     fail "cast_in_contract_violation/debug-violation" "$(IFS='; '; echo "${errors[*]}")"
 fi
 
-# u64_literal_violation.vow: a u64 literal above i64::MAX must render as its
-# unsigned decimal in the VowViolation description on both compilers, not as a
-# wrapped negative number.
-$RUST build --mode debug --no-verify tests/debug/u64_literal_violation.vow -o "$TMPDIR/rust_u64lit_violation_debug" >/dev/null 2>/dev/null
-run_self build --mode debug --no-verify tests/debug/u64_literal_violation.vow -o "$TMPDIR/self_u64lit_violation_debug" >/dev/null 2>/dev/null
+# Every tests/debug fixture that carries `// TEST: stderr` directives: build in
+# debug mode with both compilers, run, and require the expected exit code
+# (`// TEST: exit N`, default 134 = runtime abort) plus every stderr substring.
+# This is what keeps the VowViolation text (description, rendered values) from
+# regressing in CI; tests/run_tests.sh Phase 4 is a local-only second check.
+for vow_file in tests/debug/*.vow; do
+    name=$(basename "$vow_file" .vow)
+    if ! grep -q '^// TEST: stderr "' "$vow_file"; then continue; fi
+    if grep -q '^// TEST: mode ' "$vow_file"; then continue; fi
+    expected_exit=$(sed -n 's|^// TEST: exit \([0-9]*\)$|\1|p' "$vow_file" | head -1)
+    expected_exit="${expected_exit:-134}"
 
-rust_exit=0 self_exit=0
-"$TMPDIR/rust_u64lit_violation_debug" </dev/null >"$TMPDIR/rust_u64lit_dbg_out" 2>"$TMPDIR/rust_u64lit_dbg_err" || rust_exit=$?
-run_self_bin "$TMPDIR/self_u64lit_violation_debug" </dev/null >"$TMPDIR/self_u64lit_dbg_out" 2>"$TMPDIR/self_u64lit_dbg_err" || self_exit=$?
-rust_err=$(cat "$TMPDIR/rust_u64lit_dbg_err")
-self_err=$(cat "$TMPDIR/self_u64lit_dbg_err")
+    $RUST build --mode debug --no-verify "$vow_file" -o "$TMPDIR/rust_dbgstderr_${name}" >/dev/null 2>/dev/null
+    run_self build --mode debug --no-verify "$vow_file" -o "$TMPDIR/self_dbgstderr_${name}" >/dev/null 2>/dev/null
 
-errors=()
-if [ "$rust_exit" -ne 134 ]; then errors+=("rust exit=$rust_exit, expected 134"); fi
-if [ "$self_exit" -ne 134 ]; then errors+=("self exit=$self_exit, expected 134"); fi
-for pattern in VowViolation '"description":"requires x != 18446744073709551614"' "vow violation: requires x != 18446744073709551614, blame=Caller" '"x":18446744073709551614'; do
-    if ! echo "$rust_err" | grep -qF "$pattern"; then errors+=("rust stderr missing '$pattern'"); fi
-    if ! echo "$self_err" | grep -qF "$pattern"; then errors+=("self stderr missing '$pattern'"); fi
+    rust_exit=0 self_exit=0
+    "$TMPDIR/rust_dbgstderr_${name}" </dev/null >/dev/null 2>"$TMPDIR/rust_dbgstderr_${name}.err" || rust_exit=$?
+    run_self_bin "$TMPDIR/self_dbgstderr_${name}" </dev/null >/dev/null 2>"$TMPDIR/self_dbgstderr_${name}.err" || self_exit=$?
+
+    if [ "$rust_exit" -ne "$expected_exit" ] || [ "$self_exit" -ne "$expected_exit" ]; then
+        fail "${name}/debug-stderr" "expected exit $expected_exit, rust=$rust_exit self=$self_exit"
+        continue
+    fi
+    check_stderr_directives "${name}/debug-stderr" "$vow_file" "$TMPDIR/rust_dbgstderr_${name}.err" "$TMPDIR/self_dbgstderr_${name}.err"
 done
-if [ ${#errors[@]} -eq 0 ]; then
-    pass "u64_literal_violation/debug-violation"
-else
-    fail "u64_literal_violation/debug-violation" "$(IFS='; '; echo "${errors[*]}")"
-fi
 
 # callee_blame, clamp, hello: contracts pass (or none), compare runtime
 for name in callee_blame clamp hello; do

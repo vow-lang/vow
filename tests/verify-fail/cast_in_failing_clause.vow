@@ -1,10 +1,9 @@
 // TEST: category callee-blame
 // TEST: counterexample-fn "widen_and_bound"
 // TEST: counterexample-blame callee
+// TEST: counterexample-violation "ensures result < 100 as u64"
 // The failing ensures clause carries an `as u64` cast, so the counterexample's
-// `violation` text renders a cast on both compilers. This is the Section 4c
-// ratchet for #1113 Half B: with the self-hosted printer emitting the old
-// " as <type>" placeholder, compare_json's violation comparison diverges here.
+// `violation` text must render the real cast target type on both compilers.
 // The postcondition is false for x < 0, which widens to a huge u64.
 module CastInFailingClause
 
