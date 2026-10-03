@@ -3669,7 +3669,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         None
                     }
                 })
-                .or_else(|| declared_map_tag(ctx, recv_id));
+                .or_else(|| declared_map(ctx, recv_id).map(|map| map.tag.to_string()));
             let recv = recv_struct.as_deref();
             // Twenty builtin methods lower to a single extern call with a fixed result
             // type; `builtin_method_spec` owns those rows. Consulting the table before
@@ -3722,7 +3722,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 );
                 if let Some(tag) = result_tag {
                     ctx.inst_struct_type.insert(result, tag.to_string());
-                    if matches!(recv, Some("HashMap" | "BTreeMap")) {
+                    if tag == "Option" {
                         record_map_value_option_ty(ctx, recv_id, result);
                     }
                 }
@@ -4349,37 +4349,37 @@ fn known_assignment_ast_type(ctx: &LowerCtx, lhs: &Expr) -> Option<AstType> {
     .flatten()
 }
 
-fn known_map_argument_ast_types(
-    ctx: &LowerCtx,
-    recv_id: InstId,
-) -> (Option<AstType>, Option<AstType>) {
-    let Some(ast_ty) = ctx.inst_declared_ast_types.get(&recv_id) else {
-        return (None, None);
-    };
-    match resolve_type_alias(ast_ty, &ctx.type_aliases) {
-        AstType::Generic { name, args, .. } if name == "HashMap" || name == "BTreeMap" => {
-            (args.first().cloned(), args.get(1).cloned())
-        }
-        _ => (None, None),
-    }
+/// A map type declared for an instruction, resolved through type aliases: its
+/// tag and its key and value AST types.
+struct DeclaredMap<'a> {
+    tag: &'a str,
+    key: Option<&'a AstType>,
+    value: Option<&'a AstType>,
 }
 
-/// The map tag (`HashMap` or `BTreeMap`) of a declared AST type.
-fn map_ast_tag(ast_ty: &AstType, type_aliases: &HashMap<String, AstType>) -> Option<String> {
-    match resolve_type_alias(ast_ty, type_aliases) {
-        AstType::Generic { name, .. } if name == "HashMap" || name == "BTreeMap" => {
-            Some(name.clone())
+/// The one accessor for map-typed declarations. Method dispatch keys on the map tag, so
+/// an instruction whose only evidence of being a map is its declared type, such as a
+/// `Vec<HashMap<..>>` element, would otherwise fall through to the catch-all arm and the
+/// call would be silently dropped.
+fn declared_map(ctx: &LowerCtx, inst: InstId) -> Option<DeclaredMap<'_>> {
+    let ast_ty = ctx.inst_declared_ast_types.get(&inst)?;
+    match resolve_type_alias(ast_ty, &ctx.type_aliases) {
+        AstType::Generic { name, args, .. } if name == "HashMap" || name == "BTreeMap" => {
+            Some(DeclaredMap {
+                tag: name,
+                key: args.first(),
+                value: args.get(1),
+            })
         }
         _ => None,
     }
 }
 
-/// The map receiver tag of an instruction that carries no struct tag but whose declared
-/// type is a map, such as a `Vec<HashMap<..>>` element. Method dispatch keys on the tag,
-/// so without it `get`/`contains_key`/`insert` fall through to the catch-all arm and the
-/// call is silently dropped.
-fn declared_map_tag(ctx: &LowerCtx, inst: InstId) -> Option<String> {
-    map_ast_tag(ctx.inst_declared_ast_types.get(&inst)?, &ctx.type_aliases)
+fn known_map_argument_ast_types(
+    ctx: &LowerCtx,
+    recv_id: InstId,
+) -> (Option<AstType>, Option<AstType>) {
+    declared_map(ctx, recv_id).map_or((None, None), |map| (map.key.cloned(), map.value.cloned()))
 }
 
 /// Record a `for` binding's declared type when the iterated `Vec`'s element is itself a
@@ -4414,13 +4414,17 @@ fn record_collection_foreach_element(ctx: &mut LowerCtx, iter_id: InstId, elem_i
 /// `V` the payload must be typed at `V`'s width, or an unwrapped value mixes an `i64`
 /// with `V`-typed operands and fails Cranelift verification.
 fn record_map_value_option_ty(ctx: &mut LowerCtx, map_id: InstId, option_id: InstId) {
-    let (_, Some(value_ast_ty)) = known_map_argument_ast_types(ctx, map_id) else {
+    let Some(DeclaredMap {
+        value: Some(value_ast_ty),
+        ..
+    }) = declared_map(ctx, map_id)
+    else {
         return;
     };
-    let value_ty = lower_ty_with_linear(&value_ast_ty, &ctx.linear_owner_names, &ctx.type_aliases);
+    let value_ty = lower_ty_with_linear(value_ast_ty, &ctx.linear_owner_names, &ctx.type_aliases);
     if matches!(
-        value_ty,
-        Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32
+        narrow_int_width(value_ty),
+        Some(IntegerWidth::W8 | IntegerWidth::W16 | IntegerWidth::W32)
     ) {
         ctx.inst_option_elem_ty.insert(option_id, value_ty);
     }
@@ -6561,31 +6565,20 @@ fn unsigned_max() -> u128 {
         func.blocks.iter().flat_map(|block| &block.insts).collect()
     }
 
-    #[test]
-    fn map_get_unwrap_types_the_payload_at_the_narrow_value_width() {
-        for (map, value, value_ty) in [
-            ("HashMap<i64, u8>", "u8", Ty::U8),
-            ("HashMap<i64, i32>", "i32", Ty::I32),
-            ("BTreeMap<i64, i16>", "i16", Ty::I16),
-            ("BTreeMap<i64, u32>", "u32", Ty::U32),
-        ] {
-            let source = format!(
-                "module MapNarrow\nfn probe(m: {map}) -> {value} [panic] {{ m.get(1).unwrap() }}\n"
-            );
-            let module = lower_source_to_module(&source, "map_narrow.vow");
-            let func = module
-                .functions
-                .iter()
-                .find(|func| func.name == "probe")
-                .expect("probe function");
-            let payload = insts_of(func)
-                .into_iter()
-                .find(|inst| {
-                    inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1)
-                })
-                .expect("payload FieldGet");
-            assert_eq!(payload.ty, value_ty, "{map}");
-        }
+    fn lowered_probe(source: &str) -> Function {
+        lower_source_to_module(source, "map_probe.vow")
+            .functions
+            .into_iter()
+            .find(|func| func.name == "probe")
+            .expect("probe function")
+    }
+
+    fn payload_ty(func: &Function) -> Ty {
+        insts_of(func)
+            .into_iter()
+            .find(|inst| inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1))
+            .expect("payload FieldGet")
+            .ty
     }
 
     fn extern_calls_of(func: &Function) -> Vec<String> {
@@ -6598,8 +6591,29 @@ fn unsigned_max() -> u128 {
             .collect()
     }
 
+    // Payload typing only; the runtime behaviour of each receiver shape is pinned
+    // by tests/run/map_receiver_shapes.vow and tests/run/map_narrow_values.vow.
     #[test]
-    fn map_methods_on_vec_element_receivers_route_to_the_map_runtime() {
+    fn map_get_unwrap_types_the_payload_at_the_value_width() {
+        for (map, value, value_ty) in [
+            ("HashMap<i64, u8>", "u8", Ty::U8),
+            ("HashMap<i64, i32>", "i32", Ty::I32),
+            ("BTreeMap<i64, i16>", "i16", Ty::I16),
+            ("BTreeMap<i64, u32>", "u32", Ty::U32),
+            ("HashMap<i64, i64>", "i64", Ty::I64),
+        ] {
+            let func = lowered_probe(&format!(
+                "module MapNarrow\nfn probe(m: {map}) -> {value} [panic] {{ m.get(1).unwrap() }}\n"
+            ));
+            assert_eq!(payload_ty(&func), value_ty, "{map}");
+        }
+    }
+
+    // Twin of compiler/tests/test_lower_map_receiver_dispatch.vow: a map reached
+    // through a collection element, a field, a `let`, or a `for` binding must
+    // dispatch to the map runtime rather than fall through the catch-all arm.
+    #[test]
+    fn map_methods_on_collection_element_receivers_route_to_the_map_runtime() {
         for (params, body, symbol) in [
             (
                 "v: Vec<HashMap<i64, u8>>",
@@ -6627,103 +6641,25 @@ fn unsigned_max() -> u128 {
                 "{ let m = v[0]; m.contains_key(1) }",
                 "__vow_map_contains",
             ),
+            (
+                "v: Vec<HashMap<i64, u8>>",
+                "{ let mut r: bool = false; for m in v { r = m.contains_key(1); } r }",
+                "__vow_map_contains",
+            ),
+            (
+                "vv: Vec<Vec<HashMap<i64, u8>>>",
+                "{ let mut r: bool = false; for inner in vv { r = inner[0].contains_key(1); } r }",
+                "__vow_map_contains",
+            ),
         ] {
-            let source = format!(
+            let func = lowered_probe(&format!(
                 "module MapElem\nstruct Outer {{ vs: Vec<HashMap<i64, u8>> }}\nfn probe({params}) -> bool [panic] {{ {body} }}\n"
-            );
-            let module = lower_source_to_module(&source, "map_elem.vow");
-            let func = module
-                .functions
-                .iter()
-                .find(|func| func.name == "probe")
-                .expect("probe function");
+            ));
             assert!(
-                extern_calls_of(func).iter().any(|callee| callee == symbol),
+                extern_calls_of(&func).iter().any(|callee| callee == symbol),
                 "{body} must call {symbol}"
             );
         }
-    }
-
-    #[test]
-    fn map_methods_on_for_each_bindings_route_to_the_map_runtime() {
-        let module = lower_source_to_module(
-            "module MapForEach\nfn probe(v: Vec<HashMap<i64, u8>>) -> u8 [panic] {\n    let mut r: u8 = 0;\n    for m in v { r = m.get(1).unwrap(); }\n    r\n}\n",
-            "map_for_each.vow",
-        );
-        let func = module
-            .functions
-            .iter()
-            .find(|func| func.name == "probe")
-            .expect("probe function");
-        assert!(
-            extern_calls_of(func)
-                .iter()
-                .any(|callee| callee == "__vow_map_get")
-        );
-        let payload = insts_of(func)
-            .into_iter()
-            .find(|inst| inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1))
-            .expect("payload FieldGet");
-        assert_eq!(payload.ty, Ty::U8);
-    }
-
-    #[test]
-    fn map_methods_on_a_nested_for_each_binding_route_to_the_map_runtime() {
-        let module = lower_source_to_module(
-            "module MapNestedForEach\nfn probe(vv: Vec<Vec<HashMap<i64, u8>>>) -> u8 [panic] {\n    let mut r: u8 = 0;\n    for inner in vv { r = inner[0].get(1).unwrap(); }\n    r\n}\n",
-            "map_nested_for_each.vow",
-        );
-        let func = module
-            .functions
-            .iter()
-            .find(|func| func.name == "probe")
-            .expect("probe function");
-        assert!(
-            extern_calls_of(func)
-                .iter()
-                .any(|callee| callee == "__vow_map_get")
-        );
-        let payload = insts_of(func)
-            .into_iter()
-            .find(|inst| inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1))
-            .expect("payload FieldGet");
-        assert_eq!(payload.ty, Ty::U8);
-    }
-
-    #[test]
-    fn map_get_unwrap_on_a_vec_element_types_the_payload_at_the_value_width() {
-        let module = lower_source_to_module(
-            "module MapElemWidth\nfn probe(v: Vec<HashMap<i64, u8>>) -> u8 [panic] { v[0].get(1).unwrap() }\n",
-            "map_elem_width.vow",
-        );
-        let func = module
-            .functions
-            .iter()
-            .find(|func| func.name == "probe")
-            .expect("probe function");
-        let payload = insts_of(func)
-            .into_iter()
-            .find(|inst| inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1))
-            .expect("payload FieldGet");
-        assert_eq!(payload.ty, Ty::U8);
-    }
-
-    #[test]
-    fn map_get_unwrap_keeps_full_width_for_i64_values() {
-        let module = lower_source_to_module(
-            "module MapWide\nfn probe(m: HashMap<i64, i64>) -> i64 [panic] { m.get(1).unwrap() }\n",
-            "map_wide.vow",
-        );
-        let func = module
-            .functions
-            .iter()
-            .find(|func| func.name == "probe")
-            .expect("probe function");
-        let payload = insts_of(func)
-            .into_iter()
-            .find(|inst| inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1))
-            .expect("payload FieldGet");
-        assert_eq!(payload.ty, Ty::I64);
     }
 
     #[test]
