@@ -343,7 +343,7 @@ fn lit_assign(s: Solver, lit: i64) -> i64 {
 fn enqueue(s: Solver, lit: i64, reason: i64) -> i64 vow {
     requires: lit != 0
 } {
-    let v: i64 = lit_var(lit);
+    let v: u64 = lit_var(lit) as u64;
     let assigns: Vec<i64> = s.assigns;
     let levels: Vec<i64> = s.levels;
     let reasons: Vec<i64> = s.reasons;
@@ -359,14 +359,14 @@ fn enqueue(s: Solver, lit: i64, reason: i64) -> i64 vow {
     }
 
     if lit > 0 {
-        assigns[v as u64] = VAL_TRUE;
-        saved[v as u64] = VAL_TRUE;
+        assigns[v] = VAL_TRUE;
+        saved[v] = VAL_TRUE;
     } else {
-        assigns[v as u64] = VAL_FALSE;
-        saved[v as u64] = VAL_FALSE;
+        assigns[v] = VAL_FALSE;
+        saved[v] = VAL_FALSE;
     }
-    levels[v as u64] = current_level(s);
-    reasons[v as u64] = reason;
+    levels[v] = current_level(s);
+    reasons[v] = reason;
     trail.push(lit);
     1
 }
@@ -414,8 +414,9 @@ fn rescale_var_activity(s: Solver) {
 
 fn bump_var(s: Solver, var: i64) {
     let act: Vec<i64> = s.var_activity;
-    act[var as u64] = act[var as u64] + 1;
-    if act[var as u64] > 1000000000 {
+    let vi: u64 = var as u64;
+    act[vi] = act[vi] + 1;
+    if act[vi] > 1000000000 {
         rescale_var_activity(s);
     }
 }
@@ -696,11 +697,11 @@ fn backtrack(s: Solver, target_level: i64) vow {
             invariant: trail.len() as i64 >= start
         } {
             let lit: i64 = trail[trail.len() - 1];
-            let v: i64 = lit_var(lit);
+            let v: u64 = lit_var(lit) as u64;
             trail.pop();
-            assigns[v as u64] = VAL_UNASSIGNED;
-            levels[v as u64] = 0;
-            reasons[v as u64] = REASON_NONE;
+            assigns[v] = VAL_UNASSIGNED;
+            levels[v] = 0;
+            reasons[v] = REASON_NONE;
         }
         trail_lim.pop();
     }
