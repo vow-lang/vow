@@ -1,0 +1,90 @@
+module TestCheckerIfCondBool
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use checker
+use env
+use ir
+use ir_printer
+use lower
+use module_io
+
+fn checked_error_count(source: String) -> i64 [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("if_cond.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < parsed.items.len() as i64 {
+        item_files.push(String::from("if_cond.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("if_cond.vow"));
+    check_module(check_env, parsed, item_files);
+    dctx.error_count
+}
+
+// The issue's exact repro: an integer-literal condition must be rejected.
+fn check_non_bool_literal_condition_rejected() -> i32 [io] {
+    let source: String = String::from(
+        "module M1\nfn main() -> i32 {\n    if 5 { 0 } else { 1 }\n}"
+    );
+    if checked_error_count(source) == 0 { return 1; }
+    0
+}
+
+// A typed non-literal integer variable condition must also be rejected.
+fn check_non_bool_variable_condition_rejected() -> i32 [io] {
+    let source: String = String::from(
+        "module M2\nfn main() -> i32 {\n    let x: i64 = 5;\n    if x { 0 } else { 1 }\n}"
+    );
+    if checked_error_count(source) == 0 { return 2; }
+    0
+}
+
+// An else-less if with a non-bool condition must be rejected too (the guard
+// must run before the else-less early return).
+fn check_non_bool_condition_else_less_rejected() -> i32 [io] {
+    let source: String = String::from(
+        "module M3\nfn main() -> i32 {\n    if 5 { }\n    0\n}"
+    );
+    if checked_error_count(source) == 0 { return 3; }
+    0
+}
+
+// A bool literal condition must type-check cleanly (non-regression).
+fn check_bool_literal_condition_accepted() -> i32 [io] {
+    let source: String = String::from(
+        "module M4\nfn main() -> i32 {\n    if true { 0 } else { 1 }\n}"
+    );
+    if checked_error_count(source) != 0 { return 4; }
+    0
+}
+
+// A bool variable condition must type-check cleanly (non-regression).
+fn check_bool_variable_condition_accepted() -> i32 [io] {
+    let source: String = String::from(
+        "module M5\nfn main() -> i32 {\n    let flag: bool = true;\n    if flag { 0 } else { 1 }\n}"
+    );
+    if checked_error_count(source) != 0 { return 5; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let r1: i32 = check_non_bool_literal_condition_rejected();
+    if r1 != 0 { return r1; }
+    let r2: i32 = check_non_bool_variable_condition_rejected();
+    if r2 != 0 { return r2; }
+    let r3: i32 = check_non_bool_condition_else_less_rejected();
+    if r3 != 0 { return r3; }
+    let r4: i32 = check_bool_literal_condition_accepted();
+    if r4 != 0 { return r4; }
+    let r5: i32 = check_bool_variable_condition_accepted();
+    if r5 != 0 { return r5; }
+    0
+}

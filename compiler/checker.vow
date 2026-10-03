@@ -2874,7 +2874,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let cond_eid: i64 = expr_a(a, eid);
         let then_bid: i64 = expr_b(a, eid);
         let else_eid: i64 = expr_c(a, eid);
-        let _cond_tid: i64 = check_expr(e, m, cond_eid);
+        let cond_tid: i64 = check_expr(e, m, cond_eid);
+        if cond_tid != CTY_BOOL() && !is_opaque(cond_tid) {
+            let msg: String = String::from("if condition must be `bool`, found `");
+            msg.push_str(ty_value_display_name(e.ts, cond_tid));
+            msg.push_str(String::from("`"));
+            env_emit_error(e, msg, expr_span(a, cond_eid));
+        }
         let then_tid: i64 = check_block(e, m, then_bid);
         if else_eid == -1 {
             return CTY_UNIT();
