@@ -1547,9 +1547,10 @@ fn ts_arg_or_unknown(ts: TyStore, args_lid: i64, index: i64) -> i64 {
 }
 
 // Value-shaped builtin-method argument: the actual type must coerce to
-// `target_tid`, mirroring the Rust checker's `ArgExpect::Exact`. Argument types
-// come from the caller's pre-check loop; re-checking here would double-emit
-// diagnostics and double-consume linear values.
+// `target_tid`, mirroring the Rust checker's per-argument expected `Ty` from
+// `method_argument_expectations`. Argument types come from the caller's
+// pre-check loop; re-checking here would double-emit diagnostics and
+// double-consume linear values.
 fn check_method_argument_exact(
     e: CheckEnv, a: AstArena, args_lid: i64, arg_tids: Vec<i64>, index: i64, target_tid: i64
 ) {

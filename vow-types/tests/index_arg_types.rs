@@ -1,6 +1,6 @@
 //! Enforcement tests for index and builtin-method argument types (#1111).
 //!
-//! The unit tests in `check.rs` cover the `ArgExpect` seam as a pure function;
+//! The unit tests in `check.rs` cover `method_argument_expectations` as a pure function;
 //! these drive real source through parse + check so the wiring at the
 //! `ExprKind::Index` and `ExprKind::MethodCall` sites is covered too. Without
 //! them the enforcement could stop firing while the seam's own tests stayed
