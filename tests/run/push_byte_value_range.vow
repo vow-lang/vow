@@ -1,5 +1,4 @@
 // TEST: stdout "abc,A:97:98:99:44:65"
-// Pins the unchanged behaviour of the split byte_at / push_byte checker arms:
 // push_byte accepts any integer type, does not diagnose a value outside
 // 0..=255, and the runtime appends the low 8 bits (300 appends 44).
 module push_byte_value_range

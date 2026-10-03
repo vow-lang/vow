@@ -949,7 +949,7 @@ m.contains_key(k)
 
 `<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
 
-`push_byte`'s argument is a byte *value*, not an index. It is checked with the same integer rule as an index (any width and signedness) and stays `i64` at the runtime ABI, but it is not a type change: the valid range is `0..=255`, the compiler does not diagnose a value outside that range (only a literal that does not fit `i64` is a `LiteralOutOfRange` error), and the runtime appends the low 8 bits, so `s.push_byte(300)` appends `44`. Keep byte values within `0..=255`.
+`push_byte`'s argument is a byte *value*, not an index. The valid range is `0..=255`. The compiler does not diagnose a value outside that range (only a literal that does not fit `i64` is a `LiteralOutOfRange` error), and the runtime appends the low 8 bits, so `s.push_byte(300)` appends `44`. Keep byte values within `0..=255`.
 
 ### HashMap<K, V> Methods
 
@@ -1000,13 +1000,13 @@ let val: i64 = v[0];
 v[i] = new_val;
 ```
 
-The index expression must have an **integer type**. Any width and either signedness is accepted (`i8` … `i64`, `u8` … `u64`, and unsuffixed integer literals); a non-integer index is a `TypeMismatch` error. The same rule applies to index-shaped builtin-method arguments: `String::byte_at`, both arguments of `String::substring`, and `Vec::get` / `Vec::truncate`. `String::push_byte` takes a byte value, not an index; it is checked with the same integer rule but has its own range (see the String method table).
+The index expression must have an **integer type**. Any width and either signedness is accepted (`i8` … `i64`, `u8` … `u64`, and unsuffixed integer literals); a non-integer index is a `TypeMismatch` error. The same rule applies to index-shaped builtin-method arguments: `String::byte_at`, both arguments of `String::substring`, and `Vec::get` / `Vec::truncate`. `String::push_byte` takes a byte value, not an index; it is checked with the same integer rule but has its own valid range (see the String method table).
 
 The type checker also accepts a 128-bit index, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `Vec` and `String` element helpers are i64-only, so such a program fails codegen instead. Use a 64-bit or narrower index until epic #526 lands 128-bit lowering.
 
 The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).
 
-Lengths are `u64` (see [the Vec method table](#vect-methods)), so an index derived from one needs no conversion:
+Lengths are `u64` (see [the Vec method table](#vec-methods)), so an index derived from one needs no conversion:
 
 ```vow
 let n: u64 = v.len();

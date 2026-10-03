@@ -1529,8 +1529,8 @@ fn check_method_argument_exact(
     }
 }
 
-// Index-shaped builtin-method argument: any integer width or signedness is
-// accepted. Tightening this to a single type is a later migration phase.
+// Integer-shaped builtin-method argument (an index or a byte value): any
+// integer width or signedness is accepted. Tightening this to a single type is a later migration phase.
 fn check_method_argument_integer(
     e: CheckEnv, a: AstArena, args_lid: i64, arg_tids: Vec<i64>, index: i64
 ) {
