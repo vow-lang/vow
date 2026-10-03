@@ -36,6 +36,14 @@ binding. The fix mirrors #1264's pattern exactly: keep the computed type, guard 
 - **No Rust crate change.** `vow-types/src/check.rs:2507-2518` is already correct — this is
   a self-hosted-only parity fix, not a language-semantics change, so the "modify both
   compilers" rule doesn't apply here (there is nothing to change on the Rust side).
+- **Confirmed: no other `EXPR_IF()` site in `compiler/checker.vow` needs the same fix.**
+  `grep -n "EXPR_IF()" compiler/checker.vow` turns up six matches besides line 2805: 870
+  (`checker_expr_is_coercible_int_marker` — literal-marker coercibility, no type-checking),
+  1040 (`expr_diverges` — divergence analysis), 1362 and 1396 (`check_integer_literal_range`
+  / `check_contextual_integer_literal_ranges` — recurse into the *branches*, never touch the
+  condition), and 3418 (`collect_calls_in_expr` — call collection for a later pass). None of
+  these computes or validates the condition's type, so `check_expr_inner`'s `EXPR_IF()` case
+  (line 2805) is the single site that needs the guard.
 
 ## 3. TDD slices
 
@@ -107,23 +115,42 @@ binding. The fix mirrors #1264's pattern exactly: keep the computed type, guard 
 
 No contracts, codegen, or C-model changes — this is a pure type-checker diagnostic addition,
 so there is no new ESBMC proof obligation and no new `tests/run/` or `examples/` fixture is
-required beyond the `tests/error/` parity fixture in slice 3. Run, in this order, after slices
-1–4 land:
+required beyond the `tests/error/` parity fixture in slice 3.
 
-- `build/vowc test compiler/` (or `target/release/vow test compiler/` if `build/vowc` is
-  stale) — exercises the new unit test plus the full existing `compiler/tests/*.vow` suite,
-  catching any other self-hosted-source `if` with an accidentally non-bool condition.
-- `scripts/bootstrap.sh --skip-cargo` — rebuilds `build/vowc` from the patched
-  `compiler/checker.vow` and re-verifies the self-hosted compiler's own contracts; also the
-  cheapest way to confirm the self-hosted compiler's ~13 modules contain no `if` with a
-  non-bool condition that the new check would newly reject (compilation would fail here if
-  so).
-- `scripts/full_test.sh` — full suite including the new Section 7 parity fixture and the
-  bootstrap triple test (Section covering `run_bootstrap_triple`), to confirm the binary
-  fixed point (`compiler_b`/`compiler_c` sha256 match) is unaffected.
-- `cargo test --all` — sanity check that the untouched Rust side still passes (no Rust files
-  are modified by this plan, so this is a no-op regression guard, not expected to catch
-  anything new).
+The real risk is a false positive: self-hosted type inference has fallback-return paths
+(e.g. `EXPR_INDEX` returning `CTY_UNIT()` for an unrecognized receiver) that could in
+principle type some currently-valid bool condition as a non-bool, non-opaque type, which the
+new guard would then wrongly reject. The cheapest way to catch that is compiling the
+self-hosted compiler with itself — if any of the 13 `compiler/*.vow` modules has an `if`
+whose condition isn't genuinely `bool`, `scripts/bootstrap.sh --skip-cargo` fails outright.
+
+Run, in this order, after slices 1–4 land. This run has no asynchronous wakeup (see the run's
+operating contract), so each step must execute to completion in the foreground within the
+turn, not be backgrounded and polled for later:
+
+1. **Fast red/green loop first** (seconds, not minutes) — before the full suites, get
+   immediate signal: build `compiler/main.vow` with
+   `build/vowc build --no-verify compiler/main.vow -o $TMPDIR/vow_main_fixed`, then run both
+   `$TMPDIR/vow_main_fixed` and `./target/release/vow` on the new `tests/error/` fixture with
+   `build --no-verify`, and diff their exit codes and JSON `error_code` fields directly. This
+   confirms the fix works end-to-end without waiting on a 5-minute bootstrap.
+2. `build/vowc test compiler/` (or `target/release/vow test compiler/` if `build/vowc` is
+   stale) — exercises the new unit test plus the full existing `compiler/tests/*.vow` suite,
+   catching any other self-hosted-source `if` with an accidentally non-bool condition.
+3. `VOW_CACHE_DIR=$(mktemp -d) scripts/bootstrap.sh --skip-cargo` — rebuilds `build/vowc`
+   from the patched `compiler/checker.vow` and re-verifies the self-hosted compiler's own
+   contracts. Use a fresh `VOW_CACHE_DIR` so a stale cached object from before the change
+   can't silently serve an unpatched binary (the compile cache keys on source, not compiler
+   version). Budget ~5 minutes wall-clock.
+4. `VOW_CACHE_DIR=$(mktemp -d) scripts/full_test.sh` — full suite including the new Section 7
+   parity fixture and the bootstrap triple test (`run_bootstrap_triple`), to confirm the
+   binary fixed point (`compiler_b`/`compiler_c` sha256 match) is unaffected. Budget ~40
+   minutes wall-clock; run in the foreground or poll its actual exit status at intervals that
+   fit inside the turn — do not background it and wait idle for a notification that will not
+   come.
+5. `cargo test --all` — sanity check that the untouched Rust side still passes (no Rust files
+   are modified by this plan, so this is a no-op regression guard, not expected to catch
+   anything new). Budget a few minutes.
 
 ## 5. Risk areas
 
