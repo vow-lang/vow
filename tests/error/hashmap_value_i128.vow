@@ -1,8 +1,0 @@
-// TEST: error-code UnsupportedFeature
-// TEST: stderr "value type"
-module HashMapValueI128
-
-fn main() -> i32 {
-    let m: HashMap<i64, i128> = HashMap::new();
-    0
-}

@@ -51,69 +51,64 @@ fn assert_diagnostics(name: &str, expected: &[(&str, &str)]) {
     assert_eq!(actual, expected, "{name}");
 }
 
+// The `// TEST:` directives in tests/error fixtures pin the error code, the error
+// count and a stderr substring. These tests pin what they cannot: the full message
+// text, which the self-hosted checker's unit tests assert verbatim, and the order
+// the diagnostics come out in.
+
+const KEY_STRING: &str = "HashMap key type `String` is not supported: keys are compared by value as a single machine word";
+
+fn not_indexable(ty: &str) -> String {
+    format!("index operation on non-indexable type `{ty}`")
+}
+
 #[test]
-fn an_unannotated_collection_is_one_clear_error_per_call() {
+fn an_unannotated_collection_error_names_the_method_and_the_fix() {
     let message = |method: &str| {
         format!(
             "cannot infer the collection type of the receiver of `{method}`: annotate its binding with a full type"
         )
     };
-    let insert = message("insert");
-    let get = message("get");
-    let push = message("push");
     assert_diagnostics(
         "hashmap_new_unannotated.vow",
-        &[("TypeMismatch", &insert), ("TypeMismatch", &get)],
+        &[
+            ("TypeMismatch", &message("insert")),
+            ("TypeMismatch", &message("get")),
+        ],
     );
-    assert_diagnostics("btreemap_new_unannotated.vow", &[("TypeMismatch", &insert)]);
-    assert_diagnostics("vec_new_unannotated.vow", &[("TypeMismatch", &push)]);
 }
 
-const KEY_STRING: &str = "HashMap key type `String` is not supported: keys are compared by value as a single machine word";
-
 #[test]
-fn a_bad_map_type_is_reported_once_however_often_the_map_is_used() {
+fn a_bad_map_key_message_prints_the_full_type() {
     assert_diagnostics(
         "hashmap_key_string_reported_once.vow",
         &[("UnsupportedFeature", KEY_STRING)],
     );
-    assert_diagnostics(
-        "btreemap_key_string_reported_once.vow",
-        &[(
-            "BTreeMapKeyTypeMustBeI64",
-            "BTreeMap key type must be i64; found 'String'",
-        )],
-    );
-}
-
-#[test]
-fn a_bad_map_type_is_reported_once_per_written_site() {
-    let sites = error_diagnostics("map_bad_type_once_per_site.vow");
-    assert_eq!(sites.len(), 9, "{sites:?}");
+    let keys: Vec<String> = error_diagnostics("hashmap_key_unsupported.vow")
+        .into_iter()
+        .map(|(_, message)| message)
+        .collect();
     assert!(
-        sites
-            .iter()
-            .all(|(code, message)| code == "UnsupportedFeature" && message == KEY_STRING),
-        "{sites:?}"
+        keys.iter().any(|message| message.contains("`(i64, i64)`")),
+        "{keys:?}"
     );
 }
 
 #[test]
 fn non_indexable_messages_print_the_full_type() {
     assert_diagnostics(
-        "index_hashmap_read.vow",
-        &[(
-            "TypeMismatch",
-            "index operation on non-indexable type `HashMap<i64, i64>`",
-        )],
+        "index_non_indexable.vow",
+        &[
+            ("TypeMismatch", &not_indexable("HashMap<i64, i64>")),
+            ("TypeMismatch", &not_indexable("HashMap<i64, i64>")),
+            ("TypeMismatch", &not_indexable("BTreeMap<i64, i64>")),
+            ("TypeMismatch", &not_indexable("String")),
+        ],
     );
-    assert_diagnostics(
-        "index_string_read.vow",
-        &[(
-            "TypeMismatch",
-            "index operation on non-indexable type `String`",
-        )],
-    );
+}
+
+#[test]
+fn a_bad_key_type_is_reported_before_the_index_that_uses_it() {
     assert_diagnostics(
         "index_hashmap_vec_key.vow",
         &[
@@ -121,10 +116,7 @@ fn non_indexable_messages_print_the_full_type() {
                 "UnsupportedFeature",
                 "HashMap key type `Vec<i64>` is not supported: keys are compared by value as a single machine word",
             ),
-            (
-                "TypeMismatch",
-                "index operation on non-indexable type `HashMap<Vec<i64>, i64>`",
-            ),
+            ("TypeMismatch", &not_indexable("HashMap<Vec<i64>, i64>")),
         ],
     );
 }

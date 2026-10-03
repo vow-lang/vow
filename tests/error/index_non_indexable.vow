@@ -1,0 +1,28 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 4
+// TEST: stderr "index operation on non-indexable type"
+module IndexNonIndexable
+
+fn hashmap_read() {
+    let m: HashMap<i64, i64> = HashMap::new();
+    let x: i64 = m[1];
+}
+
+fn hashmap_write() {
+    let m: HashMap<i64, i64> = HashMap::new();
+    m[1] = 5;
+}
+
+fn btreemap_read() {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    let x: Option<i64> = m[1];
+}
+
+fn string_read() {
+    let s: String = String::from("abc");
+    let c: i64 = s[0];
+}
+
+fn main() -> i32 {
+    0
+}

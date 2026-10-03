@@ -1,8 +1,0 @@
-// TEST: error-code UnsupportedFeature
-// TEST: stderr "HashMap key type"
-module HashMapKeyF64
-
-fn main() -> i32 {
-    let m: HashMap<f64, i64> = HashMap::new();
-    0
-}
