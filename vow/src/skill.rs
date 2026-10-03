@@ -2288,6 +2288,8 @@ m.contains_key(k)
 
 `Vec` indices and `.truncate(n)` take exactly `u64`; an unsuffixed integer literal coerces, and any other integer type needs an explicit `as u64`. See [Indexing](#indexing).
 
+`Vec` has no `.get(i)` method: element access is `v[i]` only, and `v.get(i)` is an `UnknownMethod` error in both compilers.
+
 ### String Methods
 
 | Method              | Signature                   |
@@ -2359,7 +2361,7 @@ let val: i64 = v[0];
 v[i] = new_val;
 ```
 
-The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method arguments `Vec::get` and `Vec::truncate`, which take exactly `u64`.
+The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method argument of `Vec::truncate`, which takes exactly `u64`.
 
 The `Vec` runtime helpers take a pointer-width unsigned index, so a `u64` index is never reinterpreted as negative: an index at or beyond `v.len()` is out of bounds, including values above `i64::MAX`.
 
@@ -3396,7 +3398,7 @@ capacities are an internal property of the verifier, not of the language:
 
 | Type              | Model Capacity | Supported Operations |
 |-------------------|----------------|----------------------------------------------|
-| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `get`, `set`    |
+| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `truncate`, indexing (`v[i]`) |
 | `String`          | 256            | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |
 | `HashMap<K, V>`   | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
 | `BTreeMap<K, V>`  | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
@@ -4338,8 +4340,8 @@ fn f() -> i32 {
 **Fix:** Change the expression or declared type to match. For an enum pattern,
 qualify the variant with the scrutinee's enum name.
 
-A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::get` / `Vec::truncate`
-arguments must have exactly the type `u64`. An index of any other integer type
+A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::truncate`
+argument must have exactly the type `u64`. An index of any other integer type
 (for example an `i64` counter) or of a non-integer type is a `TypeMismatch`
 in both compilers:
 
@@ -4649,7 +4651,7 @@ fn f() -> () {
 
 **Output:** `unknown method 'psh' on type 'Vec<i64>'`
 
-**Fix:** Check the method name for typos. Use `--help` to see available methods for each type.
+**Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps.
 
 ### UnsupportedFeature
 
@@ -7627,6 +7629,8 @@ m.contains_key(k)
 
 `Vec` indices and `.truncate(n)` take exactly `u64`; an unsuffixed integer literal coerces, and any other integer type needs an explicit `as u64`. See [Indexing](#indexing).
 
+`Vec` has no `.get(i)` method: element access is `v[i]` only, and `v.get(i)` is an `UnknownMethod` error in both compilers.
+
 ### String Methods
 
 | Method              | Signature                   |
@@ -7698,7 +7702,7 @@ let val: i64 = v[0];
 v[i] = new_val;
 ```
 
-The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method arguments `Vec::get` and `Vec::truncate`, which take exactly `u64`.
+The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method argument of `Vec::truncate`, which takes exactly `u64`.
 
 The `Vec` runtime helpers take a pointer-width unsigned index, so a `u64` index is never reinterpreted as negative: an index at or beyond `v.len()` is out of bounds, including values above `i64::MAX`.
 
@@ -8737,7 +8741,7 @@ capacities are an internal property of the verifier, not of the language:
 
 | Type              | Model Capacity | Supported Operations |
 |-------------------|----------------|----------------------------------------------|
-| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `get`, `set`    |
+| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `truncate`, indexing (`v[i]`) |
 | `String`          | 256            | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |
 | `HashMap<K, V>`   | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
 | `BTreeMap<K, V>`  | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
@@ -9681,8 +9685,8 @@ fn f() -> i32 {
 **Fix:** Change the expression or declared type to match. For an enum pattern,
 qualify the variant with the scrutinee's enum name.
 
-A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::get` / `Vec::truncate`
-arguments must have exactly the type `u64`. An index of any other integer type
+A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::truncate`
+argument must have exactly the type `u64`. An index of any other integer type
 (for example an `i64` counter) or of a non-integer type is a `TypeMismatch`
 in both compilers:
 
@@ -9992,7 +9996,7 @@ fn f() -> () {
 
 **Output:** `unknown method 'psh' on type 'Vec<i64>'`
 
-**Fix:** Check the method name for typos. Use `--help` to see available methods for each type.
+**Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps.
 
 ### UnsupportedFeature
 

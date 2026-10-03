@@ -103,8 +103,8 @@ fn f() -> i32 {
 **Fix:** Change the expression or declared type to match. For an enum pattern,
 qualify the variant with the scrutinee's enum name.
 
-A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::get` / `Vec::truncate`
-arguments must have exactly the type `u64`. An index of any other integer type
+A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::truncate`
+argument must have exactly the type `u64`. An index of any other integer type
 (for example an `i64` counter) or of a non-integer type is a `TypeMismatch`
 in both compilers:
 
@@ -414,7 +414,7 @@ fn f() -> () {
 
 **Output:** `unknown method 'psh' on type 'Vec<i64>'`
 
-**Fix:** Check the method name for typos. Use `--help` to see available methods for each type.
+**Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps.
 
 ### UnsupportedFeature
 

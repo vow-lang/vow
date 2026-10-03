@@ -60,11 +60,11 @@ fn check_index_write() -> i32 [io] {
     0
 }
 
-fn check_get_truncate() -> i32 [io] {
-    if body_errors(String::from(", i: u64"), String::from("v.get(i)")) != 0 { return 31; }
-    if body_errors(String::from(""), String::from("v.get(0)")) != 0 { return 32; }
-    if body_errors(String::from(", i: i64"), String::from("v.get(i)")) != 1 { return 33; }
-    if body_errors(String::from(", i: i64"), String::from("v.get(i as u64)")) != 0 { return 34; }
+fn check_get_rejected_and_truncate_u64() -> i32 [io] {
+    if body_errors(String::from(", i: u64"), String::from("v.get(i); 0")) != 1 { return 31; }
+    if body_errors(String::from(""), String::from("v.get(0); 0")) != 1 { return 32; }
+    if body_errors(String::from(", i: i64"), String::from("v.get(i); 0")) != 1 { return 33; }
+    if body_errors(String::from(", i: i64"), String::from("v.get(i as u64); 0")) != 1 { return 34; }
     if body_errors(String::from(", i: u64"), String::from("v.truncate(i); 0")) != 0 { return 35; }
     if body_errors(String::from(""), String::from("v.truncate(0); 0")) != 0 { return 36; }
     if body_errors(String::from(", i: i64"), String::from("v.truncate(i); 0")) != 1 { return 37; }
@@ -92,7 +92,7 @@ fn main() -> i32 [io] {
     if read_result != 0 { return read_result; }
     let write_result: i32 = check_index_write();
     if write_result != 0 { return write_result; }
-    let get_result: i32 = check_get_truncate();
+    let get_result: i32 = check_get_rejected_and_truncate_u64();
     if get_result != 0 { return get_result; }
     check_string_offsets_unchanged()
 }

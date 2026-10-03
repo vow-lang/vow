@@ -4430,6 +4430,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("`Vec` indices and `.truncate(n)` take exactly `u64`; an unsuffixed integer literal coerces, and any other integer type needs an explicit `as u64`. See [Indexing](#indexing).\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("`Vec` has no `.get(i)` method: element access is `v[i]` only, and `v.get(i)` is an `UnknownMethod` error in both compilers.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### String Methods\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Method              | Signature                   |\n"));
@@ -4501,7 +4503,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("v[i] = new_val;\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method arguments `Vec::get` and `Vec::truncate`, which take exactly `u64`.\n"));
+    r.push_str(String::from("The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method argument of `Vec::truncate`, which takes exactly `u64`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("The `Vec` runtime helpers take a pointer-width unsigned index, so a `u64` index is never reinterpreted as negative: an index at or beyond `v.len()` is out of bounds, including values above `i64::MAX`.\n"));
     r.push_str(String::from("\n"));
@@ -5538,7 +5540,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Type              | Model Capacity | Supported Operations |\n"));
     r.push_str(String::from("|-------------------|----------------|----------------------------------------------|\n"));
-    r.push_str(String::from("| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `get`, `set`    |\n"));
+    r.push_str(String::from("| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `truncate`, indexing (`v[i]`) |\n"));
     r.push_str(String::from("| `String`          | 256            | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |\n"));
     r.push_str(String::from("| `HashMap<K, V>`   | 64             | `new`, `insert`, `get`, `contains_key`, `len`|\n"));
     r.push_str(String::from("| `BTreeMap<K, V>`  | 64             | `new`, `insert`, `get`, `contains_key`, `len`|\n"));
@@ -6480,8 +6482,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("**Fix:** Change the expression or declared type to match. For an enum pattern,\n"));
     r.push_str(String::from("qualify the variant with the scrutinee's enum name.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::get` / `Vec::truncate`\n"));
-    r.push_str(String::from("arguments must have exactly the type `u64`. An index of any other integer type\n"));
+    r.push_str(String::from("A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::truncate`\n"));
+    r.push_str(String::from("argument must have exactly the type `u64`. An index of any other integer type\n"));
     r.push_str(String::from("(for example an `i64` counter) or of a non-integer type is a `TypeMismatch`\n"));
     r.push_str(String::from("in both compilers:\n"));
     r.push_str(String::from("\n"));
@@ -6791,7 +6793,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Output:** `unknown method 'psh' on type 'Vec<i64>'`\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Fix:** Check the method name for typos. Use `--help` to see available methods for each type.\n"));
+    r.push_str(String::from("**Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### UnsupportedFeature\n"));
     r.push_str(String::from("\n"));
@@ -9791,6 +9793,8 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("`Vec` indices and `.truncate(n)` take exactly `u64`; an unsuffixed integer literal coerces, and any other integer type needs an explicit `as u64`. See [Indexing](#indexing).\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("`Vec` has no `.get(i)` method: element access is `v[i]` only, and `v.get(i)` is an `UnknownMethod` error in both compilers.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### String Methods\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Method              | Signature                   |\n"));
@@ -9862,7 +9866,7 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("v[i] = new_val;\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method arguments `Vec::get` and `Vec::truncate`, which take exactly `u64`.\n"));
+    r.push_str(String::from("The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method argument of `Vec::truncate`, which takes exactly `u64`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("The `Vec` runtime helpers take a pointer-width unsigned index, so a `u64` index is never reinterpreted as negative: an index at or beyond `v.len()` is out of bounds, including values above `i64::MAX`.\n"));
     r.push_str(String::from("\n"));
@@ -10903,7 +10907,7 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Type              | Model Capacity | Supported Operations |\n"));
     r.push_str(String::from("|-------------------|----------------|----------------------------------------------|\n"));
-    r.push_str(String::from("| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `get`, `set`    |\n"));
+    r.push_str(String::from("| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `truncate`, indexing (`v[i]`) |\n"));
     r.push_str(String::from("| `String`          | 256            | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |\n"));
     r.push_str(String::from("| `HashMap<K, V>`   | 64             | `new`, `insert`, `get`, `contains_key`, `len`|\n"));
     r.push_str(String::from("| `BTreeMap<K, V>`  | 64             | `new`, `insert`, `get`, `contains_key`, `len`|\n"));
@@ -11849,8 +11853,8 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("**Fix:** Change the expression or declared type to match. For an enum pattern,\n"));
     r.push_str(String::from("qualify the variant with the scrutinee's enum name.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::get` / `Vec::truncate`\n"));
-    r.push_str(String::from("arguments must have exactly the type `u64`. An index of any other integer type\n"));
+    r.push_str(String::from("A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::truncate`\n"));
+    r.push_str(String::from("argument must have exactly the type `u64`. An index of any other integer type\n"));
     r.push_str(String::from("(for example an `i64` counter) or of a non-integer type is a `TypeMismatch`\n"));
     r.push_str(String::from("in both compilers:\n"));
     r.push_str(String::from("\n"));
@@ -12160,7 +12164,7 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Output:** `unknown method 'psh' on type 'Vec<i64>'`\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Fix:** Check the method name for typos. Use `--help` to see available methods for each type.\n"));
+    r.push_str(String::from("**Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### UnsupportedFeature\n"));
     r.push_str(String::from("\n"));

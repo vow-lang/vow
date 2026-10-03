@@ -2700,15 +2700,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 let base_name: String = ty_struct_name(e.ts, base_tid);
                 if base_name == String::from("Vec") {
                     let hargs_lid: i64 = ty_b(e.ts, recv_tid);
-                    let inner_tid: i64 = if ts_arg_len(e.ts, hargs_lid) > 0 {
-                        ts_arg_get(e.ts, hargs_lid, 0)
-                    } else {
-                        CTY_UNIT()
-                    };
                     if mname == String::from("push") {
                         check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0));
                     }
-                    if mname == String::from("get") || mname == String::from("truncate") {
+                    if mname == String::from("truncate") {
                         check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64());
                     }
                     if mname == String::from("len") { return CTY_U64(); }
@@ -2716,7 +2711,6 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if mname == String::from("pop") { return CTY_UNIT(); }
                     if mname == String::from("clear") { return CTY_UNIT(); }
                     if mname == String::from("truncate") { return CTY_UNIT(); }
-                    if mname == String::from("get") { return inner_tid; }
                     let verr_msg: String = String::from("unknown method '");
                     verr_msg.push_str(mname);
                     verr_msg.push_str(String::from("' on type 'Vec'"));

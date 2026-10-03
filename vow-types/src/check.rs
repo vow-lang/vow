@@ -300,7 +300,7 @@ fn default_literal_integer_types(ty: &Ty) -> Ty {
 
 /// What a builtin method demands of one argument position.
 ///
-/// `Vec` index and length positions (`get`, `truncate`) are `Exact(Ty::U64)`.
+/// The `Vec` length position (`truncate`) is `Exact(Ty::U64)`.
 /// `String` offsets (`byte_at`, `substring`) and the `push_byte` value stay
 /// `AnyInteger` because string offsets remain `i64` at the runtime ABI.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -350,7 +350,7 @@ fn method_argument_expectations(receiver: &Ty, method: &str) -> Vec<ArgExpect> {
                     .map(ArgExpect::Exact)
                     .into_iter()
                     .collect(),
-                "get" | "truncate" => vec![ArgExpect::Exact(Ty::U64)],
+                "truncate" => vec![ArgExpect::Exact(Ty::U64)],
                 _ => vec![],
             },
             Ty::Struct(name) if name == "HashMap" || name == "BTreeMap" => match method {
@@ -394,7 +394,6 @@ fn method_result_type(receiver: &Ty, method: &str) -> Option<Ty> {
             Ty::Struct(name) if name == "Vec" => match method {
                 "len" => Some(Ty::U64),
                 "push" | "pop" | "clear" | "truncate" => Some(Ty::Unit),
-                "get" => Some(option_of(args.first().cloned().unwrap_or(Ty::I64))),
                 _ => None,
             },
             Ty::Struct(name) if name == "HashMap" => match method {
@@ -440,9 +439,7 @@ fn builtin_method_names(receiver: &Ty) -> &'static [&'static str] {
             "clear",
         ],
         Ty::Applied(base, _) => match base.as_ref() {
-            Ty::Struct(name) if name == "Vec" => {
-                &["len", "push", "pop", "get", "clear", "truncate"]
-            }
+            Ty::Struct(name) if name == "Vec" => &["len", "push", "pop", "clear", "truncate"],
             Ty::Struct(name) if name == "HashMap" => {
                 &["len", "insert", "get", "contains_key", "remove"]
             }
@@ -7488,25 +7485,23 @@ mod tests {
     }
 
     #[test]
-    fn vec_get_and_truncate_arguments_require_exactly_u64() {
-        for method in ["get", "truncate"] {
-            let expects = method_argument_expectations(&vec_of(Ty::I64), method);
-            assert_eq!(expects, vec![ArgExpect::Exact(Ty::U64)], "{method}");
-            for ty in [Ty::U64, Ty::LitInt, Ty::Never] {
-                assert!(expects[0].accepts(&ty), "{method} must accept `{ty}`");
-            }
-            for ty in [
-                Ty::I64,
-                Ty::I32,
-                Ty::I8,
-                Ty::U32,
-                Ty::U8,
-                Ty::Str,
-                Ty::Bool,
-                Ty::Unit,
-            ] {
-                assert!(!expects[0].accepts(&ty), "{method} must reject `{ty}`");
-            }
+    fn vec_truncate_argument_requires_exactly_u64() {
+        let expects = method_argument_expectations(&vec_of(Ty::I64), "truncate");
+        assert_eq!(expects, vec![ArgExpect::Exact(Ty::U64)]);
+        for ty in [Ty::U64, Ty::LitInt, Ty::Never] {
+            assert!(expects[0].accepts(&ty), "truncate must accept `{ty}`");
+        }
+        for ty in [
+            Ty::I64,
+            Ty::I32,
+            Ty::I8,
+            Ty::U32,
+            Ty::U8,
+            Ty::Str,
+            Ty::Bool,
+            Ty::Unit,
+        ] {
+            assert!(!expects[0].accepts(&ty), "truncate must reject `{ty}`");
         }
     }
 
@@ -7914,18 +7909,16 @@ mod tests {
         );
         assert_eq!(method_result_type(&Ty::Str, "nope"), None);
 
-        // Vec<i64>: element type flows into `get`'s Option payload.
+        // Vec has no `get`: element access is `v[i]`.
         let vec_i64 = vec_of(Ty::I64);
         assert_eq!(method_result_type(&vec_i64, "len"), Some(Ty::U64));
         assert_eq!(method_result_type(&vec_i64, "push"), Some(Ty::Unit));
         assert_eq!(method_result_type(&vec_i64, "pop"), Some(Ty::Unit));
         assert_eq!(method_result_type(&vec_i64, "clear"), Some(Ty::Unit));
         assert_eq!(method_result_type(&vec_i64, "truncate"), Some(Ty::Unit));
-        assert_eq!(method_result_type(&vec_i64, "get"), Some(opt_of(Ty::I64)));
-        assert_eq!(
-            method_result_type(&vec_of(Ty::Bool), "get"),
-            Some(opt_of(Ty::Bool))
-        );
+        assert_eq!(method_result_type(&vec_i64, "get"), None);
+        assert_eq!(method_result_type(&vec_of(Ty::Bool), "get"), None);
+        assert!(method_argument_expectations(&vec_i64, "get").is_empty());
         assert_eq!(method_result_type(&vec_i64, "nope"), None);
 
         // HashMap: `get` returns the value type directly (pre-existing shape).
@@ -7968,7 +7961,7 @@ mod tests {
         assert!(builtin_method_names(&Ty::Str).contains(&"parse_u64"));
         assert_eq!(
             builtin_method_names(&vec_of(Ty::I64)),
-            &["len", "push", "pop", "get", "clear", "truncate"]
+            &["len", "push", "pop", "clear", "truncate"]
         );
         assert_eq!(
             builtin_method_names(&map_of("HashMap", Ty::I64, Ty::Bool)),
