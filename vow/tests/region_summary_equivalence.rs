@@ -1721,3 +1721,146 @@ fn selfhosted_parse_u64_opt_root_escape_note() {
          container must emit a RegionRootEscape note; diagnostics: {diagnostics:?}"
     );
 }
+/// Build `fixture` under `tests/run/` with `compiler` and assert the build
+/// reports at least one `RegionRootEscape` note, i.e. that `what` is a
+/// heap-producing extern for region inference. Self-hosted builds without
+/// `libvow_runtime.a` skip, like the sibling tests above.
+fn assert_fixture_root_escape_note(
+    compiler: &std::path::Path,
+    label: &str,
+    fixture: &str,
+    what: &str,
+) {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let out = Command::new(compiler)
+        .args(["build", "--no-verify"])
+        .arg(root.join("tests").join("run").join(fixture))
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run {label}: {e}"));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse {label} stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "{label}: diagnostics missing and build did not fail with the recognized \
+             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
+        );
+        eprintln!("SKIP: {label} build failed due to missing libvow_runtime.a");
+        return;
+    };
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d["error_code"].as_str() == Some("RegionRootEscape")),
+        "{label}: {what} published through a parameter container must emit a \
+         RegionRootEscape note; diagnostics: {diagnostics:?}"
+    );
+}
+
+fn self_hosted_vowc() -> Option<PathBuf> {
+    let vowc = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("build")
+        .join("vowc");
+    if !vowc.exists() {
+        eprintln!(
+            "skipping {}: build/vowc not present (run scripts/bootstrap.sh)",
+            module_path!()
+        );
+    }
+    vowc.exists().then_some(vowc)
+}
+
+#[test]
+fn rust_btreemap_insert_get_root_escape_note() {
+    assert_fixture_root_escape_note(
+        std::path::Path::new(env!("CARGO_BIN_EXE_vow")),
+        "rust",
+        "region_btreemap_insert_get_root_escape_span.vow",
+        "BTreeMap insert()/get() results",
+    );
+}
+
+#[test]
+fn selfhosted_btreemap_insert_get_root_escape_note() {
+    if let Some(vowc) = self_hosted_vowc() {
+        assert_fixture_root_escape_note(
+            &vowc,
+            "self-hosted",
+            "region_btreemap_insert_get_root_escape_span.vow",
+            "BTreeMap insert()/get() results",
+        );
+    }
+}
+
+/// The `*_try` narrowing conversions return a fresh Option cell that is now
+/// allocated in the inferred region, so region inference must track them like
+/// `parse_*`: an escaping cell would otherwise be freed with its block.
+#[test]
+fn rust_try_conversion_root_escape_note() {
+    assert_fixture_root_escape_note(
+        std::path::Path::new(env!("CARGO_BIN_EXE_vow")),
+        "rust",
+        "region_try_conv_root_escape_span.vow",
+        "i64_to_u8_try() result",
+    );
+}
+
+#[test]
+fn selfhosted_try_conversion_root_escape_note() {
+    if let Some(vowc) = self_hosted_vowc() {
+        assert_fixture_root_escape_note(
+            &vowc,
+            "self-hosted",
+            "region_try_conv_root_escape_span.vow",
+            "i64_to_u8_try() result",
+        );
+    }
+}
+
+/// `vow_ir::OPTION_ARENA_VARIANTS` is the Rust source of truth for which
+/// builtins return a fresh Option cell. The self-hosted twin
+/// (`option_arena_base_extern` in `compiler/ir.vow`) and the runtime exports
+/// must name exactly the same symbols, or one compiler would route a builtin
+/// the other keeps in the root arena.
+#[test]
+fn option_arena_variants_agree_across_compilers_and_runtime() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let ir_vow = std::fs::read_to_string(root.join("compiler").join("ir.vow")).unwrap();
+    let start = ir_vow
+        .find("fn option_arena_base_extern(sym: String) -> bool {")
+        .expect("option_arena_base_extern in compiler/ir.vow");
+    let body = &ir_vow[start..start + ir_vow[start..].find("\n}\n").unwrap()];
+    let runtime =
+        std::fs::read_to_string(root.join("vow-runtime").join("src").join("lib.rs")).unwrap();
+
+    for (base, variant) in vow_ir::OPTION_ARENA_VARIANTS {
+        assert_eq!(vow_ir::option_arena_variant(base), Some(*variant));
+        assert_eq!(vow_ir::option_arena_base(variant), Some(*base));
+        assert!(
+            body.contains(&format!("sym == String::from(\"{base}\")")),
+            "compiler/ir.vow option_arena_base_extern is missing {base}"
+        );
+        for symbol in [base, variant] {
+            assert!(
+                runtime.contains(symbol),
+                "vow-runtime does not export {symbol}"
+            );
+        }
+    }
+    assert_eq!(
+        body.matches("sym == String::from(").count(),
+        vow_ir::OPTION_ARENA_VARIANTS.len(),
+        "compiler/ir.vow lists symbols that vow_ir::OPTION_ARENA_VARIANTS lacks"
+    );
+}

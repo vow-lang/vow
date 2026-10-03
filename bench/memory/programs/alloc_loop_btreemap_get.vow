@@ -1,0 +1,24 @@
+// BENCH: max-rss-kb 7032
+module AllocLoopBtreemapGet
+
+fn probe(m: BTreeMap<i64, i64>, k: i64) -> i64 {
+    match m.get(k) {
+        Option::Some(v) => v,
+        Option::None => 0,
+    }
+}
+
+fn main() -> i32 [io] {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    m.insert(1, 10);
+    m.insert(2, 20);
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000000 {
+        total = total + probe(m, i % 4);
+        i = i + 1;
+    }
+    print_i64(total);
+    print_str("\n");
+    0
+}

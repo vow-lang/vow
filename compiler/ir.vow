@@ -384,3 +384,70 @@ fn ir_module_new(name: String) -> IrModule {
         warnings: Vec::new(),
     }
 }
+
+// Every builtin that returns a fresh Option cell. Each has an `<name>_in_arena`
+// variant that takes the target arena first and otherwise keeps the base
+// parameters; vow-ir's OPTION_ARENA_VARIANTS is the Rust twin of this list.
+fn option_arena_base_extern(sym: String) -> bool {
+    sym == String::from("__vow_string_parse_i64_opt")
+        || sym == String::from("__vow_string_parse_u64_opt")
+        || sym == String::from("__vow_string_parse_i8_opt")
+        || sym == String::from("__vow_string_parse_u8_opt")
+        || sym == String::from("__vow_string_parse_i16_opt")
+        || sym == String::from("__vow_string_parse_u16_opt")
+        || sym == String::from("__vow_string_parse_i32_opt")
+        || sym == String::from("__vow_string_parse_u32_opt")
+        || sym == String::from("__vow_map_get")
+        || sym == String::from("__vow_btreemap_get")
+        || sym == String::from("__vow_i128_to_u8_try")
+        || sym == String::from("__vow_i16_to_i8_try")
+        || sym == String::from("__vow_i16_to_u8_try")
+        || sym == String::from("__vow_i32_to_i16_try")
+        || sym == String::from("__vow_i32_to_i8_try")
+        || sym == String::from("__vow_i32_to_u16_try")
+        || sym == String::from("__vow_i32_to_u8_try")
+        || sym == String::from("__vow_i64_to_i16_try")
+        || sym == String::from("__vow_i64_to_i32_try")
+        || sym == String::from("__vow_i64_to_i8_try")
+        || sym == String::from("__vow_i64_to_u16_try")
+        || sym == String::from("__vow_i64_to_u32_try")
+        || sym == String::from("__vow_i64_to_u8_try")
+        || sym == String::from("__vow_u128_to_u8_try")
+        || sym == String::from("__vow_u16_to_i8_try")
+        || sym == String::from("__vow_u16_to_u8_try")
+        || sym == String::from("__vow_u32_to_i16_try")
+        || sym == String::from("__vow_u32_to_i32_try")
+        || sym == String::from("__vow_u32_to_i8_try")
+        || sym == String::from("__vow_u32_to_u16_try")
+        || sym == String::from("__vow_u32_to_u8_try")
+        || sym == String::from("__vow_u64_to_i16_try")
+        || sym == String::from("__vow_u64_to_i32_try")
+        || sym == String::from("__vow_u64_to_i8_try")
+        || sym == String::from("__vow_u64_to_u16_try")
+        || sym == String::from("__vow_u64_to_u32_try")
+        || sym == String::from("__vow_u64_to_u8_try")
+}
+
+fn option_arena_variant_base(sym: String) -> String {
+    let suffix: String = String::from("_in_arena");
+    let n: u64 = sym.len();
+    let k: u64 = suffix.len();
+    if n <= k {
+        return String::from("");
+    }
+    if !(sym.substring(n - k, n) == suffix) {
+        return String::from("");
+    }
+    let base: String = sym.substring(0, n - k);
+    if option_arena_base_extern(base) {
+        return base;
+    }
+    String::from("")
+}
+
+fn option_arena_variant_name(base: String) -> String {
+    let variant: String = String::from("");
+    variant.push_str(base);
+    variant.push_str(String::from("_in_arena"));
+    variant
+}

@@ -1,0 +1,106 @@
+// TEST: stdout "sum=20540\nlookup=49\nprev=20\nkept=13\nbuilt=2000\nnested=28\n"
+// BTreeMap::new/insert/get allocate in the region the analysis assigns them:
+// a map built in a callee escapes to the caller, a callee grows the caller's
+// map (growth belongs to the map's arena while each returned Option belongs to
+// the call), and Options published through a parameter container land in the
+// root arena. Every shape must read back the right values.
+module BTreeMapRegionRouting
+
+fn fill(m: BTreeMap<i64, i64>, n: i64) {
+    let mut i: i64 = 0;
+    while i < n {
+        m.insert(i, i * i);
+        i = i + 1;
+    }
+}
+
+fn build(n: i64) -> BTreeMap<i64, i64> {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    fill(m, n);
+    m
+}
+
+fn lookup(m: BTreeMap<i64, i64>, k: i64) -> Option<i64> {
+    m.get(k)
+}
+
+fn sum_lookups(m: BTreeMap<i64, i64>, n: i64) -> i64 {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < n {
+        total = total + match m.get(i) {
+            Option::Some(v) => v,
+            Option::None => 0,
+        };
+        i = i + 1;
+    }
+    total
+}
+
+fn prev_sum(m: BTreeMap<i64, i64>, n: i64) -> i64 {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < n {
+        total = total + match m.insert(i % 4, i) {
+            Option::Some(p) => p,
+            Option::None => 0,
+        };
+        i = i + 1;
+    }
+    total
+}
+
+fn keep(results: Vec<Option<i64>>, m: BTreeMap<i64, i64>) {
+    results.push(m.get(3));
+    results.push(m.insert(3, 99));
+    results.push(m.get(1000));
+}
+
+fn decode(o: Option<i64>) -> i64 {
+    match o {
+        Option::Some(v) => v,
+        Option::None => 0 - 1,
+    }
+}
+
+fn scratch_build(rounds: i64) -> i64 {
+    let mut r: i64 = 0;
+    let mut total: i64 = 0;
+    while r < rounds {
+        let tmp: BTreeMap<i64, i64> = build(50);
+        total = total + decode(tmp.get(49));
+        r = r + 1;
+    }
+    total
+}
+
+struct Holder {
+    map: BTreeMap<i64, i64>,
+    tag: i64,
+}
+
+fn nested() -> i64 {
+    let h: Holder = Holder { map: build(10), tag: 3 };
+    let m: BTreeMap<i64, i64> = h.map;
+    decode(m.get(h.tag)) + decode(m.get(h.tag + 1)) + decode(m.get(10)) + 4
+}
+
+fn main() -> i32 [io] {
+    let m: BTreeMap<i64, i64> = build(40);
+    print_str(String::from("sum="));
+    print_i64(sum_lookups(m, 50));
+    print_str(String::from("\nlookup="));
+    print_i64(decode(lookup(m, 7)));
+    print_str(String::from("\nprev="));
+    print_i64(prev_sum(m, 8));
+    let results: Vec<Option<i64>> = Vec::new();
+    keep(results, m);
+    print_str(String::from("\nkept="));
+    print_i64(decode(results[0]) + decode(results[1]) + decode(results[2]));
+    print_str(String::from("\nbuilt="));
+    print_i64(scratch_build(20) - 2401 * 20 + 2000);
+    print_str(String::from("\nnested="));
+    print_i64(nested());
+    print_str(String::from("\n"));
+    0
+}

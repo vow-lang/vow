@@ -16,7 +16,7 @@ use std::sync::Arc;
 use vow_ir::{
     BlockId, FuncId as IrFuncId, Function as IrFunction, HiddenRegionIdx, Inst, InstData, InstId,
     IntegerSignedness, IntegerType, IntegerWidth, Module as IrModule, Opcode, RegionConstraint,
-    RegionId, RegionSummary, Ty as IrTy,
+    RegionId, RegionSummary, Ty as IrTy, option_arena_base, option_arena_variant,
 };
 
 use crate::return_materialization::{
@@ -766,6 +766,10 @@ fn first_arg_route(
         .unwrap_or(ReceiverRoute::Direct(RegionId::Root))
 }
 
+/// `BTreeMap::insert` routed to a region: takes the map-growth arena and the
+/// result-option arena, in that order, ahead of the ordinary arguments.
+const BTREEMAP_INSERT_IN_ARENA: &str = "__vow_btreemap_insert_in_arena";
+
 fn routed_vec_extern<'a>(
     sym: &'a str,
     inst: &Inst,
@@ -828,14 +832,6 @@ fn routed_vec_extern<'a>(
             RegionId::Root => (sym, None),
             region => ("__vow_string_from_u64_in_arena", Some(region)),
         },
-        "__vow_string_parse_i64_opt" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_parse_i64_opt_in_arena", Some(region)),
-        },
-        "__vow_map_get" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_map_get_in_arena", Some(region)),
-        },
         "__vow_string_split" => match inst.region {
             RegionId::Root => (sym, None),
             region => ("__vow_string_split_in_arena", Some(region)),
@@ -897,8 +893,33 @@ fn routed_vec_extern<'a>(
                 _ => (sym, None),
             }
         }
+        "__vow_btreemap_new" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_btreemap_new_in_arena", Some(region)),
+        },
+        "__vow_btreemap_insert" => {
+            // Two owners: the returned option lives in `inst.region` (the call
+            // site appends that arena after the one returned here), while
+            // growth of the map's buffers belongs to the receiver's region.
+            let growth = match first_arg_route(inst, inst_index, current_summary, phi_data) {
+                ReceiverRoute::Direct(region @ (RegionId::Block(_) | RegionId::Caller(_))) => {
+                    region
+                }
+                _ => RegionId::Root,
+            };
+            if growth == RegionId::Root && inst.region == RegionId::Root {
+                (sym, None)
+            } else {
+                (BTREEMAP_INSERT_IN_ARENA, Some(growth))
+            }
+        }
         _ => {
-            if extern_uses_target_region(sym) {
+            if let Some(variant) = option_arena_variant(sym) {
+                match inst.region {
+                    RegionId::Root => (sym, None),
+                    region => (variant, Some(region)),
+                }
+            } else if extern_uses_target_region(sym) {
                 (sym, Some(inst.region))
             } else {
                 (sym, None)
@@ -1620,6 +1641,16 @@ fn lower_inst(
                     ctx.root_arena_gv,
                 )?;
                 call_args.push(arena);
+                if matches!(&inst.data, InstData::CallExtern(sym) if sym == "__vow_btreemap_insert")
+                {
+                    call_args.push(region_to_arena_value(
+                        builder,
+                        inst.region,
+                        ctx.hidden_region_values,
+                        ctx.block_arena_slots,
+                        ctx.root_arena_gv,
+                    )?);
+                }
             }
             let hidden_arg_offset = call_args.len();
             for (i, id) in inst.args.iter().enumerate() {
@@ -2564,6 +2595,11 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
     let call_conv = obj_module.isa().default_call_conv();
     let mut sig = Signature::new(call_conv);
+    if let Some(base) = option_arena_base(sym) {
+        let mut sig = make_extern_sig(base, obj_module);
+        sig.params.insert(0, AbiParam::new(types::I64)); // target arena
+        return sig;
+    }
     if let Some((source_ty, return_ty)) = narrow_intrinsic_signature(sym) {
         sig.params.push(AbiParam::new(source_ty));
         sig.returns.push(AbiParam::new(return_ty));
@@ -2819,11 +2855,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
         }
-        "__vow_string_parse_i64_opt_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
-        }
         "__vow_string_split" => {
             sig.params.push(AbiParam::new(types::I64)); // haystack ptr
             sig.params.push(AbiParam::new(types::I64)); // separator ptr
@@ -2971,12 +3002,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // key
             sig.returns.push(AbiParam::new(types::I64)); // *VowOption
         }
-        "__vow_map_get_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // map ptr
-            sig.params.push(AbiParam::new(types::I64)); // key
-            sig.returns.push(AbiParam::new(types::I64)); // *VowOption
-        }
         "__vow_map_contains" => {
             sig.params.push(AbiParam::new(types::I64)); // map ptr
             sig.params.push(AbiParam::new(types::I64)); // key
@@ -2998,6 +3023,18 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         // BTreeMap runtime — sorted parallel-Vec backing
         "__vow_btreemap_new" => {
             sig.returns.push(AbiParam::new(types::I64)); // *VowBTreeMap
+        }
+        "__vow_btreemap_new_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.returns.push(AbiParam::new(types::I64)); // *VowBTreeMap
+        }
+        "__vow_btreemap_insert_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // map-growth arena
+            sig.params.push(AbiParam::new(types::I64)); // result-option arena
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+            sig.params.push(AbiParam::new(types::I64)); // value
+            sig.returns.push(AbiParam::new(types::I64)); // *VowOption (prev)
         }
         "__vow_btreemap_len" => {
             sig.params.push(AbiParam::new(types::I64)); // map ptr
@@ -5553,6 +5590,16 @@ mod tests {
                 1,
             ),
             ("__vow_map_get", "__vow_map_get_in_arena", 2),
+            ("__vow_btreemap_get", "__vow_btreemap_get_in_arena", 2),
+            ("__vow_btreemap_new", "__vow_btreemap_new_in_arena", 0),
+            ("__vow_btreemap_insert", "__vow_btreemap_insert_in_arena", 3),
+            (
+                "__vow_string_parse_u64_opt",
+                "__vow_string_parse_u64_opt_in_arena",
+                1,
+            ),
+            ("__vow_i64_to_u8_try", "__vow_i64_to_u8_try_in_arena", 1),
+            ("__vow_u64_to_u32_try", "__vow_u64_to_u32_try_in_arena", 1),
         ];
 
         let mut insts = vec![
@@ -5585,6 +5632,77 @@ mod tests {
             assert!(symbols.contains(routed), "{routed} should be imported");
             assert!(!symbols.contains(root), "{root} should not be imported");
         }
+    }
+
+    #[test]
+    fn root_region_option_builtins_keep_wrapper_symbols() {
+        let cases = [
+            ("__vow_btreemap_get", 2),
+            ("__vow_btreemap_new", 0),
+            ("__vow_btreemap_insert", 3),
+            ("__vow_string_parse_u64_opt", 1),
+            ("__vow_i64_to_u8_try", 1),
+        ];
+        let mut insts = vec![
+            inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+        ];
+        for (idx, (sym, arity)) in cases.iter().enumerate() {
+            insts.push(inst(
+                10 + idx as u32,
+                Opcode::Call,
+                Ty::Ptr,
+                (0..*arity).collect(),
+                InstData::CallExtern((*sym).to_string()),
+            ));
+        }
+        insts.push(inst(90, Opcode::Return, Ty::Unit, vec![], InstData::None));
+
+        let module = make_module("test", vec![simple_fn(0, "f", vec![], Ty::Unit, insts)]);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let symbols = compiled_object_symbols(result.unwrap().bytes.as_slice());
+        for (root, _) in cases {
+            assert!(symbols.contains(root), "{root} should be imported");
+            let variant = format!("{root}_in_arena");
+            assert!(!symbols.contains(variant.as_str()), "{variant} unexpected");
+        }
+    }
+
+    #[test]
+    fn option_arena_variant_signatures_prepend_the_arena_to_the_base() {
+        let isa = make_isa(BuildMode::Debug).unwrap();
+        let obj_module = ObjectModule::new(
+            ObjectBuilder::new(
+                isa,
+                b"sig".to_vec(),
+                cranelift_module::default_libcall_names(),
+            )
+            .unwrap(),
+        );
+        for (base, variant) in vow_ir::OPTION_ARENA_VARIANTS {
+            let base_sig = make_extern_sig(base, &obj_module);
+            let variant_sig = make_extern_sig(variant, &obj_module);
+            assert_eq!(variant_sig.returns, base_sig.returns, "{variant}");
+            assert_eq!(
+                variant_sig.params.len(),
+                base_sig.params.len() + 1,
+                "{variant}"
+            );
+            assert_eq!(variant_sig.params[0].value_type, types::I64, "{variant}");
+            assert_eq!(variant_sig.params[1..], base_sig.params[..], "{variant}");
+            assert!(!base_sig.returns.is_empty(), "{base} must be declared");
+        }
+        let insert = make_extern_sig("__vow_btreemap_insert_in_arena", &obj_module);
+        assert_eq!(
+            insert.params.len(),
+            5,
+            "growth arena, option arena, map, key, value"
+        );
+        assert_eq!(insert.returns.len(), 1);
     }
 
     #[test]

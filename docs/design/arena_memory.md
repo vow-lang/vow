@@ -491,6 +491,73 @@ Heap-typed keys or values are not yet supported; the surface grammar
 permits them syntactically (`HashMap<K, V>`), but only `i64` × `i64`
 is wired through the runtime.
 
+### 3.3.1. BTreeMap and `Option`-returning builtins
+
+`BTreeMap<i64, V>` follows the HashMap contract: its header and both parallel
+backing buffers (keys and values) live in one arena, and growth on `insert`
+uses the shared arena grow path in the **map's own** arena.
+
+```c
+void* __vow_btreemap_new(void);
+void* __vow_btreemap_new_in_arena(struct VowArena* arena);
+void* __vow_btreemap_insert(void* map, int64_t key, int64_t val);
+void* __vow_btreemap_insert_in_arena(struct VowArena* grow_arena,
+                                     struct VowArena* option_arena,
+                                     void* map, int64_t key, int64_t val);
+void* __vow_btreemap_get(const void* map, int64_t key);
+void* __vow_btreemap_get_in_arena(struct VowArena* arena, const void* map,
+                                  int64_t key);
+```
+
+`BTreeMap::insert` is the one builtin with **two independent owners**: growth
+of the map's buffers belongs to the receiver's region, while the returned
+`Option` (the replaced value, or `None`) belongs to the region of the call's
+result. They are deliberately not unified: tying the `Option` to the map would
+leak one cell per `insert` into a long-lived map. Codegen passes the
+growth arena first and the result arena second. The growth arena is the
+receiver's arena when the receiver route is a proven block or caller region,
+otherwise the root arena; the root wrapper passes the root arena twice. A
+`BTreeMap::new` is routed to its allocation region together with this
+receiver-routed growth in the same change, so a block-arena map never grows
+through the root arena.
+
+An `Option` cell produced by a builtin is the same bare 16-byte
+`[tag: i64, payload: i64]` object (8-byte aligned) that the lowerers allocate
+for a source-level `Option::Some`/`Option::None`. It is **not** a `VowVec`
+descriptor: it has no owner prefix, no capacity word and, under `--mode
+sanitize`, no shadow-table entry (the previous descriptor-based cell added one
+entry per call that was never removed). A single runtime helper,
+`alloc_option_in_arena`, allocates it and traps on a null arena.
+
+Every builtin that returns a fresh `Option` is a pair: the root wrapper
+(`__vow_string_parse_i64_opt`, `__vow_map_get`, `__vow_btreemap_get`,
+`__vow_i64_to_u8_try`, ...) and `<name>_in_arena`, which takes the target arena
+as its first argument and otherwise keeps the base parameters. The set is the
+table `vow_ir::OPTION_ARENA_VARIANTS` (twin: `option_arena_base_extern` in
+`compiler/ir.vow`, plus a copy in `vow-clif-shim`; a test keeps all copies and
+the runtime exports in sync): the `parse_*_opt` family, `HashMap::get`,
+`BTreeMap::get` and every `<src>_to_<tgt>_try` narrowing conversion. Region
+inference treats each of them (and `BTreeMap::new`/`insert`) as a
+heap-producing extern, so the result is assigned to a block, caller or root
+region like any other fresh allocation, and codegen routes accordingly:
+
+| Result region | Symbol | Lifetime of the cell |
+|---|---|---|
+| `Block(_)` (non-escaping, e.g. a lookup inside a loop) | `<name>_in_arena` with the block arena | freed when the block region closes |
+| `Caller(_)` (returned to the caller) | `<name>_in_arena` with the hidden caller arena | owned by the caller's region |
+| `Root` (published through a parameter container, stored in a struct that escapes, or a `main` result) | root wrapper | program lifetime, with a `RegionRootEscape` note on the allocation site |
+
+The root case is the defined owner for escaping lookups: the cell is retained
+in the root arena for the life of the process because the value genuinely
+outlives every region, and the compiler says so with the note. It is 16 bytes
+(it was a 32-byte descriptor), and it no longer takes the process-wide root
+arena lock unless it really is root-owned. A loop of 10^6 non-escaping
+`BTreeMap::get`, `BTreeMap::insert`, `HashMap::get`, `parse_u64` or `_try`
+calls therefore no longer grows resident memory (`bench/memory`
+`alloc_loop_btreemap_get`, `alloc_loop_btreemap_insert`,
+`alloc_loop_btreemap_new`, `alloc_loop_hashmap_get` and
+`alloc_loop_option_conv`).
+
 ### 3.4. Determinism
 
 The arena **allocation strategy**, the **chunk-size policy**, and

@@ -1182,16 +1182,13 @@ unsafe fn ensure_root_arena_locked() {
     }
 }
 
-unsafe fn root_arena_alloc(bytes: usize, align: usize) -> *mut u8 {
+/// Run `f` against the process-wide root arena with `ROOT_ARENA_LOCK` held
+/// for the whole call, so a root wrapper that allocates several objects takes
+/// the lock once rather than once per allocation.
+unsafe fn with_root_arena<R>(f: impl FnOnce(*mut VowArena) -> R) -> R {
     let _guard = ROOT_ARENA_LOCK.lock().unwrap();
     unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_arena_alloc(&raw mut __vow_root_arena, bytes, align) }
-}
-
-unsafe fn root_arena_alloc_zeroed(bytes: usize, align: usize) -> *mut u8 {
-    let ptr = unsafe { root_arena_alloc(bytes, align) };
-    unsafe { std::ptr::write_bytes(ptr, 0, bytes) };
-    ptr
+    f(&raw mut __vow_root_arena)
 }
 
 /// Grow a backing buffer that lives in `arena`. Implements the spec §7.2
@@ -1240,17 +1237,6 @@ unsafe fn arena_grow_backing(
     }
     unsafe { std::ptr::write_bytes(new_ptr.add(old_size), 0, new_size - old_size) };
     new_ptr
-}
-
-unsafe fn root_arena_grow_backing(
-    ptr: *mut u8,
-    old_size: usize,
-    new_size: usize,
-    align: usize,
-) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { arena_grow_backing(&raw mut __vow_root_arena, ptr, old_size, new_size, align) }
 }
 
 #[unsafe(no_mangle)]
@@ -2464,148 +2450,131 @@ pub unsafe extern "C" fn __vow_string_join(vec_ptr: *const u8, sep: *const u8) -
     unsafe { __vow_string_join_in_arena(&raw mut __vow_root_arena, vec_ptr, sep) }
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_parse_i64_opt_in_arena(
+/// A fresh `Option<N>` cell owned by `arena`: two `i64` words `[tag, payload]`,
+/// tag 1 with the payload for `Some`, tag 0 with a zero payload for `None`.
+/// This is the bare 16-byte shape the compilers allocate for a source-level
+/// `Option`, not a `VowVec` descriptor: it carries no owner prefix and no
+/// sanitize shadow entry, and it is released only with `arena`.
+unsafe fn alloc_option_in_arena(
     arena: *mut VowArena,
-    s: *const u8,
+    operation: &'static str,
+    value: Option<i64>,
 ) -> *mut u8 {
     if arena.is_null() {
-        null_arena_trap("parse_i64");
+        null_arena_trap(operation);
     }
-    let ptr = unsafe { __vow_vec_new_in_arena(arena, 8, 8) } as *mut i64;
+    let cell = unsafe { __vow_arena_alloc(arena, 16, 8) } as *mut i64;
+    let (tag, payload) = match value {
+        Some(payload) => (1, payload),
+        None => (0, 0),
+    };
+    unsafe {
+        *cell = tag;
+        *cell.add(1) = payload;
+    }
+    cell as *mut u8
+}
+
+unsafe fn parse_string_arg<T: std::str::FromStr>(s: *const u8) -> Option<T> {
     if s.is_null() {
-        unsafe { *ptr = 0 };
-        return ptr as *mut u8;
+        return None;
     }
     sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
-    match std::str::from_utf8(bytes) {
-        Ok(text) => match text.trim().parse::<i64>() {
-            Ok(val) => {
-                unsafe { *ptr = 1 };
-                unsafe { *ptr.add(1) = val };
-            }
-            Err(_) => {
-                unsafe { *ptr = 0 };
-            }
-        },
-        Err(_) => {
-            unsafe { *ptr = 0 };
-        }
-    }
-    ptr as *mut u8
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_parse_i64_opt(s: *const u8) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_parse_i64_opt_in_arena(&raw mut __vow_root_arena, s) }
-}
-
-unsafe fn alloc_option_u8(value: Option<u8>) -> *mut u8 {
-    let ptr = __vow_vec_new(8, 8) as *mut i64;
-    match value {
-        Some(value) => unsafe {
-            *ptr = 1;
-            *ptr.add(1) = i64::from(value);
-        },
-        None => unsafe {
-            *ptr = 0;
-            *ptr.add(1) = 0;
-        },
-    }
-    ptr as *mut u8
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_parse_u8_opt(s: *const u8) -> *mut u8 {
-    if s.is_null() {
-        return unsafe { alloc_option_u8(None) };
-    }
-    sanitize_on_read(s as usize, 0);
-    let v = unsafe { &*(s as *const VowVec) };
-    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
-    let value = std::str::from_utf8(bytes)
+    std::str::from_utf8(bytes)
         .ok()
-        .and_then(|text| text.trim().parse::<u8>().ok());
-    unsafe { alloc_option_u8(value) }
+        .and_then(|text| text.trim().parse::<T>().ok())
 }
 
-macro_rules! define_narrow_parser {
-    ($alloc_name:ident, $parse_name:ident, $ty:ty) => {
-        unsafe fn $alloc_name(value: Option<$ty>) -> *mut u8 {
-            let ptr = __vow_vec_new(8, 8) as *mut i64;
-            match value {
-                Some(value) => unsafe {
-                    *ptr = 1;
-                    *ptr.add(1) = i64::from(value);
-                },
-                None => unsafe {
-                    *ptr = 0;
-                    *ptr.add(1) = 0;
-                },
+// Every `Option`-returning builtin comes as a pair: `<name>_in_arena`, which
+// allocates the result cell in the region the compiler inferred for it, and the
+// root-arena `<name>`, used when that region is the root (the result escapes
+// the function).
+macro_rules! define_option_parser {
+    ($parse_name:ident, $parse_arena_name:ident, $ty:ty) => {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $parse_arena_name(arena: *mut VowArena, s: *const u8) -> *mut u8 {
+            let value = unsafe { parse_string_arg::<$ty>(s) };
+            unsafe {
+                alloc_option_in_arena(
+                    arena,
+                    stringify!($parse_arena_name),
+                    value.map(|v| v as i64),
+                )
             }
-            ptr as *mut u8
         }
 
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $parse_name(s: *const u8) -> *mut u8 {
-            if s.is_null() {
-                return unsafe { $alloc_name(None) };
-            }
-            sanitize_on_read(s as usize, 0);
-            let v = unsafe { &*(s as *const VowVec) };
-            let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
-            let value = std::str::from_utf8(bytes)
-                .ok()
-                .and_then(|text| text.trim().parse::<$ty>().ok());
-            unsafe { $alloc_name(value) }
+            unsafe { with_root_arena(|arena| $parse_arena_name(arena, s)) }
         }
     };
 }
 
-define_narrow_parser!(alloc_option_i8, __vow_string_parse_i8_opt, i8);
-define_narrow_parser!(alloc_option_i16, __vow_string_parse_i16_opt, i16);
-define_narrow_parser!(alloc_option_u16, __vow_string_parse_u16_opt, u16);
-define_narrow_parser!(alloc_option_u32, __vow_string_parse_u32_opt, u32);
+define_option_parser!(
+    __vow_string_parse_i64_opt,
+    __vow_string_parse_i64_opt_in_arena,
+    i64
+);
+define_option_parser!(
+    __vow_string_parse_u64_opt,
+    __vow_string_parse_u64_opt_in_arena,
+    u64
+);
+define_option_parser!(
+    __vow_string_parse_i8_opt,
+    __vow_string_parse_i8_opt_in_arena,
+    i8
+);
+define_option_parser!(
+    __vow_string_parse_u8_opt,
+    __vow_string_parse_u8_opt_in_arena,
+    u8
+);
+define_option_parser!(
+    __vow_string_parse_i16_opt,
+    __vow_string_parse_i16_opt_in_arena,
+    i16
+);
+define_option_parser!(
+    __vow_string_parse_u16_opt,
+    __vow_string_parse_u16_opt_in_arena,
+    u16
+);
+define_option_parser!(
+    __vow_string_parse_i32_opt,
+    __vow_string_parse_i32_opt_in_arena,
+    i32
+);
+define_option_parser!(
+    __vow_string_parse_u32_opt,
+    __vow_string_parse_u32_opt_in_arena,
+    u32
+);
 
-unsafe fn alloc_option_i32(value: Option<i32>) -> *mut u8 {
-    let ptr = __vow_vec_new(8, 8) as *mut i64;
-    match value {
-        Some(value) => unsafe {
-            *ptr = 1;
-            *ptr.add(1) = i64::from(value);
-        },
-        None => unsafe {
-            *ptr = 0;
-            *ptr.add(1) = 0;
-        },
-    }
-    ptr as *mut u8
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_parse_i32_opt(s: *const u8) -> *mut u8 {
-    if s.is_null() {
-        return unsafe { alloc_option_i32(None) };
-    }
-    sanitize_on_read(s as usize, 0);
-    let v = unsafe { &*(s as *const VowVec) };
-    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
-    let value = std::str::from_utf8(bytes)
-        .ok()
-        .and_then(|text| text.trim().parse::<i32>().ok());
-    unsafe { alloc_option_i32(value) }
-}
-
-macro_rules! define_signed_to_u8 {
-    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $ty:ty) => {
+macro_rules! define_try_conversion {
+    ($try_name:ident, $try_arena_name:ident, $source:ty, $target:ty) => {
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $try_name(value: $ty) -> *mut u8 {
-            unsafe { alloc_option_u8(u8::try_from(value).ok()) }
+        pub unsafe extern "C" fn $try_arena_name(arena: *mut VowArena, value: $source) -> *mut u8 {
+            unsafe {
+                alloc_option_in_arena(
+                    arena,
+                    stringify!($try_arena_name),
+                    <$target>::try_from(value).ok().map(|v| v as i64),
+                )
+            }
         }
+
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $try_name(value: $source) -> *mut u8 {
+            unsafe { with_root_arena(|arena| $try_arena_name(arena, value)) }
+        }
+    };
+}
+macro_rules! define_signed_to_u8 {
+    ($try_name:ident, $try_arena_name:ident, $wrap_name:ident, $sat_name:ident, $ty:ty) => {
+        define_try_conversion!($try_name, $try_arena_name, $ty, u8);
 
         #[unsafe(no_mangle)]
         pub extern "C" fn $wrap_name(value: $ty) -> u8 {
@@ -2620,11 +2589,8 @@ macro_rules! define_signed_to_u8 {
 }
 
 macro_rules! define_unsigned_to_u8 {
-    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $ty:ty) => {
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $try_name(value: $ty) -> *mut u8 {
-            unsafe { alloc_option_u8(u8::try_from(value).ok()) }
-        }
+    ($try_name:ident, $try_arena_name:ident, $wrap_name:ident, $sat_name:ident, $ty:ty) => {
+        define_try_conversion!($try_name, $try_arena_name, $ty, u8);
 
         #[unsafe(no_mangle)]
         pub extern "C" fn $wrap_name(value: $ty) -> u8 {
@@ -2640,59 +2606,64 @@ macro_rules! define_unsigned_to_u8 {
 
 define_signed_to_u8!(
     __vow_i16_to_u8_try,
+    __vow_i16_to_u8_try_in_arena,
     __vow_i16_to_u8_wrap,
     __vow_i16_to_u8_sat,
     i16
 );
 define_signed_to_u8!(
     __vow_i32_to_u8_try,
+    __vow_i32_to_u8_try_in_arena,
     __vow_i32_to_u8_wrap,
     __vow_i32_to_u8_sat,
     i32
 );
 define_signed_to_u8!(
     __vow_i64_to_u8_try,
+    __vow_i64_to_u8_try_in_arena,
     __vow_i64_to_u8_wrap,
     __vow_i64_to_u8_sat,
     i64
 );
 define_signed_to_u8!(
     __vow_i128_to_u8_try,
+    __vow_i128_to_u8_try_in_arena,
     __vow_i128_to_u8_wrap,
     __vow_i128_to_u8_sat,
     i128
 );
 define_unsigned_to_u8!(
     __vow_u16_to_u8_try,
+    __vow_u16_to_u8_try_in_arena,
     __vow_u16_to_u8_wrap,
     __vow_u16_to_u8_sat,
     u16
 );
 define_unsigned_to_u8!(
     __vow_u32_to_u8_try,
+    __vow_u32_to_u8_try_in_arena,
     __vow_u32_to_u8_wrap,
     __vow_u32_to_u8_sat,
     u32
 );
 define_unsigned_to_u8!(
     __vow_u64_to_u8_try,
+    __vow_u64_to_u8_try_in_arena,
     __vow_u64_to_u8_wrap,
     __vow_u64_to_u8_sat,
     u64
 );
 define_unsigned_to_u8!(
     __vow_u128_to_u8_try,
+    __vow_u128_to_u8_try_in_arena,
     __vow_u128_to_u8_wrap,
     __vow_u128_to_u8_sat,
     u128
 );
 
 macro_rules! define_signed_to_i32 {
-    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $ty:ty) => {
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $try_name(value: $ty) -> *mut u8 {
-            unsafe { alloc_option_i32(i32::try_from(value).ok()) }
-        }
+    ($try_name:ident, $try_arena_name:ident, $wrap_name:ident, $sat_name:ident, $ty:ty) => {
+        define_try_conversion!($try_name, $try_arena_name, $ty, i32);
 
         #[unsafe(no_mangle)]
         pub extern "C" fn $wrap_name(value: $ty) -> i32 {
@@ -2707,11 +2678,8 @@ macro_rules! define_signed_to_i32 {
 }
 
 macro_rules! define_unsigned_to_i32 {
-    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $ty:ty) => {
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $try_name(value: $ty) -> *mut u8 {
-            unsafe { alloc_option_i32(i32::try_from(value).ok()) }
-        }
+    ($try_name:ident, $try_arena_name:ident, $wrap_name:ident, $sat_name:ident, $ty:ty) => {
+        define_try_conversion!($try_name, $try_arena_name, $ty, i32);
 
         #[unsafe(no_mangle)]
         pub extern "C" fn $wrap_name(value: $ty) -> i32 {
@@ -2727,29 +2695,29 @@ macro_rules! define_unsigned_to_i32 {
 
 define_signed_to_i32!(
     __vow_i64_to_i32_try,
+    __vow_i64_to_i32_try_in_arena,
     __vow_i64_to_i32_wrap,
     __vow_i64_to_i32_sat,
     i64
 );
 define_unsigned_to_i32!(
     __vow_u32_to_i32_try,
+    __vow_u32_to_i32_try_in_arena,
     __vow_u32_to_i32_wrap,
     __vow_u32_to_i32_sat,
     u32
 );
 define_unsigned_to_i32!(
     __vow_u64_to_i32_try,
+    __vow_u64_to_i32_try_in_arena,
     __vow_u64_to_i32_wrap,
     __vow_u64_to_i32_sat,
     u64
 );
 
 macro_rules! define_narrowing_intrinsic {
-    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $alloc:ident, $sat:expr) => {
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $try_name(value: $source) -> *mut u8 {
-            unsafe { $alloc(<$target>::try_from(value).ok()) }
-        }
+    ($try_name:ident, $try_arena_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $sat:expr) => {
+        define_try_conversion!($try_name, $try_arena_name, $source, $target);
 
         #[unsafe(no_mangle)]
         pub extern "C" fn $wrap_name(value: $source) -> $target {
@@ -2764,14 +2732,14 @@ macro_rules! define_narrowing_intrinsic {
 }
 
 macro_rules! define_signed_to_signed {
-    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $alloc:ident) => {
+    ($try_name:ident, $try_arena_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty) => {
         define_narrowing_intrinsic!(
             $try_name,
+            $try_arena_name,
             $wrap_name,
             $sat_name,
             $source,
             $target,
-            $alloc,
             |value: $source| value.clamp(<$target>::MIN as $source, <$target>::MAX as $source)
                 as $target
         );
@@ -2779,42 +2747,42 @@ macro_rules! define_signed_to_signed {
 }
 
 macro_rules! define_unsigned_to_signed {
-    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $alloc:ident) => {
+    ($try_name:ident, $try_arena_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty) => {
         define_narrowing_intrinsic!(
             $try_name,
+            $try_arena_name,
             $wrap_name,
             $sat_name,
             $source,
             $target,
-            $alloc,
             |value: $source| value.min(<$target>::MAX as $source) as $target
         );
     };
 }
 
 macro_rules! define_signed_to_unsigned {
-    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $alloc:ident) => {
+    ($try_name:ident, $try_arena_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty) => {
         define_narrowing_intrinsic!(
             $try_name,
+            $try_arena_name,
             $wrap_name,
             $sat_name,
             $source,
             $target,
-            $alloc,
             |value: $source| value.clamp(0, <$target>::MAX as $source) as $target
         );
     };
 }
 
 macro_rules! define_unsigned_to_unsigned {
-    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $alloc:ident) => {
+    ($try_name:ident, $try_arena_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty) => {
         define_narrowing_intrinsic!(
             $try_name,
+            $try_arena_name,
             $wrap_name,
             $sat_name,
             $source,
             $target,
-            $alloc,
             |value: $source| value.min(<$target>::MAX as $source) as $target
         );
     };
@@ -2822,134 +2790,134 @@ macro_rules! define_unsigned_to_unsigned {
 
 define_signed_to_signed!(
     __vow_i16_to_i8_try,
+    __vow_i16_to_i8_try_in_arena,
     __vow_i16_to_i8_wrap,
     __vow_i16_to_i8_sat,
     i16,
-    i8,
-    alloc_option_i8
+    i8
 );
 define_unsigned_to_signed!(
     __vow_u16_to_i8_try,
+    __vow_u16_to_i8_try_in_arena,
     __vow_u16_to_i8_wrap,
     __vow_u16_to_i8_sat,
     u16,
-    i8,
-    alloc_option_i8
+    i8
 );
 define_signed_to_signed!(
     __vow_i32_to_i8_try,
+    __vow_i32_to_i8_try_in_arena,
     __vow_i32_to_i8_wrap,
     __vow_i32_to_i8_sat,
     i32,
-    i8,
-    alloc_option_i8
+    i8
 );
 define_unsigned_to_signed!(
     __vow_u32_to_i8_try,
+    __vow_u32_to_i8_try_in_arena,
     __vow_u32_to_i8_wrap,
     __vow_u32_to_i8_sat,
     u32,
-    i8,
-    alloc_option_i8
+    i8
 );
 define_signed_to_signed!(
     __vow_i64_to_i8_try,
+    __vow_i64_to_i8_try_in_arena,
     __vow_i64_to_i8_wrap,
     __vow_i64_to_i8_sat,
     i64,
-    i8,
-    alloc_option_i8
+    i8
 );
 define_unsigned_to_signed!(
     __vow_u64_to_i8_try,
+    __vow_u64_to_i8_try_in_arena,
     __vow_u64_to_i8_wrap,
     __vow_u64_to_i8_sat,
     u64,
-    i8,
-    alloc_option_i8
+    i8
 );
 
 define_signed_to_signed!(
     __vow_i32_to_i16_try,
+    __vow_i32_to_i16_try_in_arena,
     __vow_i32_to_i16_wrap,
     __vow_i32_to_i16_sat,
     i32,
-    i16,
-    alloc_option_i16
+    i16
 );
 define_unsigned_to_signed!(
     __vow_u32_to_i16_try,
+    __vow_u32_to_i16_try_in_arena,
     __vow_u32_to_i16_wrap,
     __vow_u32_to_i16_sat,
     u32,
-    i16,
-    alloc_option_i16
+    i16
 );
 define_signed_to_signed!(
     __vow_i64_to_i16_try,
+    __vow_i64_to_i16_try_in_arena,
     __vow_i64_to_i16_wrap,
     __vow_i64_to_i16_sat,
     i64,
-    i16,
-    alloc_option_i16
+    i16
 );
 define_unsigned_to_signed!(
     __vow_u64_to_i16_try,
+    __vow_u64_to_i16_try_in_arena,
     __vow_u64_to_i16_wrap,
     __vow_u64_to_i16_sat,
     u64,
-    i16,
-    alloc_option_i16
+    i16
 );
 
 define_signed_to_unsigned!(
     __vow_i32_to_u16_try,
+    __vow_i32_to_u16_try_in_arena,
     __vow_i32_to_u16_wrap,
     __vow_i32_to_u16_sat,
     i32,
-    u16,
-    alloc_option_u16
+    u16
 );
 define_unsigned_to_unsigned!(
     __vow_u32_to_u16_try,
+    __vow_u32_to_u16_try_in_arena,
     __vow_u32_to_u16_wrap,
     __vow_u32_to_u16_sat,
     u32,
-    u16,
-    alloc_option_u16
+    u16
 );
 define_signed_to_unsigned!(
     __vow_i64_to_u16_try,
+    __vow_i64_to_u16_try_in_arena,
     __vow_i64_to_u16_wrap,
     __vow_i64_to_u16_sat,
     i64,
-    u16,
-    alloc_option_u16
+    u16
 );
 define_unsigned_to_unsigned!(
     __vow_u64_to_u16_try,
+    __vow_u64_to_u16_try_in_arena,
     __vow_u64_to_u16_wrap,
     __vow_u64_to_u16_sat,
     u64,
-    u16,
-    alloc_option_u16
+    u16
 );
 
 define_signed_to_unsigned!(
     __vow_i64_to_u32_try,
+    __vow_i64_to_u32_try_in_arena,
     __vow_i64_to_u32_wrap,
     __vow_i64_to_u32_sat,
     i64,
-    u32,
-    alloc_option_u32
+    u32
 );
 define_unsigned_to_unsigned!(
     __vow_u64_to_u32_try,
+    __vow_u64_to_u32_try_in_arena,
     __vow_u64_to_u32_wrap,
     __vow_u64_to_u32_sat,
     u64,
-    u32,
-    alloc_option_u32
+    u32
 );
 
 #[unsafe(no_mangle)]
@@ -3023,33 +2991,6 @@ pub extern "C" fn __vow_i128_mul_overflow(a: i128, b: i128) -> i8 {
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_u128_mul_overflow(a: u128, b: u128) -> i8 {
     a.checked_mul(b).is_none() as i8
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_parse_u64_opt(s: *const u8) -> *mut u8 {
-    let ptr = __vow_vec_new(8, 8) as *mut i64;
-    if s.is_null() {
-        unsafe { *ptr = 0 };
-        return ptr as *mut u8;
-    }
-    sanitize_on_read(s as usize, 0);
-    let v = unsafe { &*(s as *const VowVec) };
-    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
-    match std::str::from_utf8(bytes) {
-        Ok(text) => match text.trim().parse::<u64>() {
-            Ok(val) => {
-                unsafe { *ptr = 1 };
-                unsafe { *ptr.add(1) = val as i64 };
-            }
-            Err(_) => {
-                unsafe { *ptr = 0 };
-            }
-        },
-        Err(_) => {
-            unsafe { *ptr = 0 };
-        }
-    }
-    ptr as *mut u8
 }
 
 // ---------------------------------------------------------------------------
@@ -4222,31 +4163,17 @@ pub unsafe extern "C" fn __vow_map_get_in_arena(
     map: *const u8,
     key: i64,
 ) -> *mut u8 {
-    if arena.is_null() {
-        null_arena_trap("HashMap::get");
-    }
-    let ptr = unsafe { __vow_vec_new_in_arena(arena, 8, 8) } as *mut i64;
     let m = unsafe { &*(map as *const VowMap) };
     let entries = unsafe { std::slice::from_raw_parts(m.ptr as *const i64, m.len * 2) };
-    let (mut tag, mut payload) = (0, 0);
-    for i in 0..m.len {
-        if entries[i * 2] == key {
-            (tag, payload) = (1, entries[i * 2 + 1]);
-            break;
-        }
-    }
-    unsafe {
-        *ptr = tag;
-        *ptr.add(1) = payload;
-    }
-    ptr as *mut u8
+    let value = (0..m.len)
+        .find(|&i| entries[i * 2] == key)
+        .map(|i| entries[i * 2 + 1]);
+    unsafe { alloc_option_in_arena(arena, "HashMap::get", value) }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_map_get(map: *const u8, key: i64) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_map_get_in_arena(&raw mut __vow_root_arena, map, key) }
+    unsafe { with_root_arena(|arena| __vow_map_get_in_arena(arena, map, key)) }
 }
 
 #[unsafe(no_mangle)]
@@ -4300,7 +4227,9 @@ pub unsafe extern "C" fn __vow_map_len(map: *const u8) -> usize {
 // ---------------------------------------------------------------------------
 // BTreeMap runtime — sorted parallel-Vec backing (i64 keys, i64 values).
 // Iteration is ascending-by-key; binary search for lookup, sorted-insert for
-// writes. Lives in the root arena (no explicit free), matching HashMap.
+// writes. Like HashMap, the header and both backing buffers live in the arena
+// the compiler inferred for the map; the root-arena entry points are used when
+// that region is the root.
 // ---------------------------------------------------------------------------
 
 // `entries_len` is the shared logical length of both parallel arrays; both
@@ -4320,13 +4249,18 @@ const BTREEMAP_INITIAL_CAP: usize = 8;
 const BTREEMAP_ENTRY_BYTES: usize = 8;
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __vow_btreemap_new() -> *mut u8 {
-    let header_ptr = unsafe { root_arena_alloc_zeroed(std::mem::size_of::<VowBTreeMap>(), 8) }
+pub unsafe extern "C" fn __vow_btreemap_new_in_arena(arena: *mut VowArena) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("BTreeMap::new");
+    }
+    let header_ptr = unsafe { __vow_arena_alloc(arena, std::mem::size_of::<VowBTreeMap>(), 8) }
         as *mut VowBTreeMap;
     let buf_size = BTREEMAP_INITIAL_CAP * BTREEMAP_ENTRY_BYTES;
-    let keys_buf = unsafe { root_arena_alloc_zeroed(buf_size, 8) };
-    let vals_buf = unsafe { root_arena_alloc_zeroed(buf_size, 8) };
+    let keys_buf = unsafe { __vow_arena_alloc(arena, buf_size, 8) };
+    let vals_buf = unsafe { __vow_arena_alloc(arena, buf_size, 8) };
     unsafe {
+        std::ptr::write_bytes(keys_buf, 0, buf_size);
+        std::ptr::write_bytes(vals_buf, 0, buf_size);
         (*header_ptr).keys_ptr = keys_buf;
         (*header_ptr).entries_len = 0;
         (*header_ptr).keys_cap = BTREEMAP_INITIAL_CAP;
@@ -4334,6 +4268,11 @@ pub extern "C" fn __vow_btreemap_new() -> *mut u8 {
         (*header_ptr).vals_cap = BTREEMAP_INITIAL_CAP;
     }
     header_ptr as *mut u8
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_btreemap_new() -> *mut u8 {
+    unsafe { with_root_arena(|arena| __vow_btreemap_new_in_arena(arena)) }
 }
 
 #[unsafe(no_mangle)]
@@ -4361,36 +4300,40 @@ fn btreemap_search(keys: &[i64], key: i64) -> Result<usize, usize> {
     Err(lo)
 }
 
-// Allocate an Option<i64> using the same layout as `__vow_string_parse_i64_opt`:
-// a `*mut i64` pointing at [tag, payload] (tag=1 Some, tag=0 None).
-unsafe fn alloc_option_i64(tag: i64, payload: i64) -> *mut u8 {
-    let ptr = __vow_vec_new(8, 8) as *mut i64;
-    unsafe {
-        *ptr = tag;
-        *ptr.add(1) = payload;
-    }
-    ptr as *mut u8
-}
-
+/// `BTreeMap::insert`: returns a fresh `Option<V>` holding the replaced value
+/// (tag 0 when the key was new). The two allocations have independent owners:
+/// growth of the map's buffers belongs to the map's own arena (`grow_arena`),
+/// while the returned `Option` belongs to the region of the call's result
+/// (`option_arena`). Tying the `Option` to the map's lifetime would leak one
+/// cell per insert into a long-lived map.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_btreemap_insert(map: *mut u8, key: i64, val: i64) -> *mut u8 {
+pub unsafe extern "C" fn __vow_btreemap_insert_in_arena(
+    grow_arena: *mut VowArena,
+    option_arena: *mut VowArena,
+    map: *mut u8,
+    key: i64,
+    val: i64,
+) -> *mut u8 {
+    if grow_arena.is_null() || option_arena.is_null() {
+        null_arena_trap("BTreeMap::insert");
+    }
     let m = unsafe { &mut *(map as *mut VowBTreeMap) };
     let keys = unsafe { std::slice::from_raw_parts(m.keys_ptr as *const i64, m.entries_len) };
-    match btreemap_search(keys, key) {
+    let replaced = match btreemap_search(keys, key) {
         Ok(idx) => {
             let vals =
                 unsafe { std::slice::from_raw_parts_mut(m.vals_ptr as *mut i64, m.entries_len) };
-            let prev = vals[idx];
-            vals[idx] = val;
-            unsafe { alloc_option_i64(1, prev) }
+            Some(std::mem::replace(&mut vals[idx], val))
         }
         Err(idx) => {
             if m.entries_len == m.keys_cap {
                 let old_size = m.keys_cap * BTREEMAP_ENTRY_BYTES;
                 let new_cap = m.keys_cap * 2;
                 let new_size = new_cap * BTREEMAP_ENTRY_BYTES;
-                m.keys_ptr = unsafe { root_arena_grow_backing(m.keys_ptr, old_size, new_size, 8) };
-                m.vals_ptr = unsafe { root_arena_grow_backing(m.vals_ptr, old_size, new_size, 8) };
+                m.keys_ptr =
+                    unsafe { arena_grow_backing(grow_arena, m.keys_ptr, old_size, new_size, 8) };
+                m.vals_ptr =
+                    unsafe { arena_grow_backing(grow_arena, m.vals_ptr, old_size, new_size, 8) };
                 m.keys_cap = new_cap;
                 m.vals_cap = new_cap;
             }
@@ -4410,23 +4353,35 @@ pub unsafe extern "C" fn __vow_btreemap_insert(map: *mut u8, key: i64, val: i64)
             keys[idx] = key;
             vals[idx] = val;
             m.entries_len += 1;
-            unsafe { alloc_option_i64(0, 0) }
+            None
         }
-    }
+    };
+    unsafe { alloc_option_in_arena(option_arena, "BTreeMap::insert", replaced) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_btreemap_insert(map: *mut u8, key: i64, val: i64) -> *mut u8 {
+    unsafe { with_root_arena(|arena| __vow_btreemap_insert_in_arena(arena, arena, map, key, val)) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_btreemap_get_in_arena(
+    arena: *mut VowArena,
+    map: *const u8,
+    key: i64,
+) -> *mut u8 {
+    let m = unsafe { &*(map as *const VowBTreeMap) };
+    let keys = unsafe { std::slice::from_raw_parts(m.keys_ptr as *const i64, m.entries_len) };
+    let value = btreemap_search(keys, key).ok().map(|idx| {
+        let vals = unsafe { std::slice::from_raw_parts(m.vals_ptr as *const i64, m.entries_len) };
+        vals[idx]
+    });
+    unsafe { alloc_option_in_arena(arena, "BTreeMap::get", value) }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_btreemap_get(map: *const u8, key: i64) -> *mut u8 {
-    let m = unsafe { &*(map as *const VowBTreeMap) };
-    let keys = unsafe { std::slice::from_raw_parts(m.keys_ptr as *const i64, m.entries_len) };
-    match btreemap_search(keys, key) {
-        Ok(idx) => {
-            let vals =
-                unsafe { std::slice::from_raw_parts(m.vals_ptr as *const i64, m.entries_len) };
-            unsafe { alloc_option_i64(1, vals[idx]) }
-        }
-        Err(_) => unsafe { alloc_option_i64(0, 0) },
-    }
+    unsafe { with_root_arena(|arena| __vow_btreemap_get_in_arena(arena, map, key)) }
 }
 
 #[unsafe(no_mangle)]
@@ -5307,6 +5262,186 @@ mod tests {
 
         unsafe { __vow_arena_close(&mut arena) };
         assert!(arena.first_chunk.is_null());
+    }
+
+    fn option_pair(cell: *mut u8) -> (i64, i64) {
+        let cell = cell as *const i64;
+        unsafe { (*cell, *cell.add(1)) }
+    }
+
+    #[test]
+    fn option_cell_is_a_bare_two_word_arena_allocation() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+
+        let some = unsafe { alloc_option_in_arena(&mut a, "test", Some(-9)) };
+        let none = unsafe { alloc_option_in_arena(&mut a, "test", None) };
+        assert_eq!(option_pair(some), (1, -9));
+        assert_eq!(option_pair(none), (0, 0));
+        assert_eq!(none as usize - some as usize, 16, "16 bytes per cell");
+
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn option_cells_leave_no_sanitize_shadow_entry() {
+        __vow_sanitize_init();
+        let mut a = empty_arena_header();
+        let ap: *mut VowArena = &mut a;
+        unsafe { __vow_arena_open(ap) };
+        let m = unsafe { __vow_btreemap_new_in_arena(ap) };
+        let hm = unsafe { __vow_map_new_in_arena(ap) };
+        let cells = [
+            unsafe { __vow_btreemap_insert_in_arena(ap, ap, m, 1, 2) },
+            unsafe { __vow_btreemap_get_in_arena(ap, m, 1) },
+            unsafe { __vow_map_get_in_arena(ap, hm, 1) },
+            unsafe { __vow_i64_to_u8_try_in_arena(ap, 3) },
+        ];
+        let mut table = SHADOW_TABLE.lock().unwrap();
+        let shadows = shadow_table_get_or_init(&mut table);
+        for cell in cells {
+            assert!(
+                !shadows.contains_key(&(cell as usize)),
+                "an Option cell is not a Vec and must not be shadow-tracked"
+            );
+        }
+        drop(table);
+        unsafe { __vow_arena_close(ap) };
+    }
+
+    #[test]
+    fn option_builtins_allocate_only_in_the_requested_arena() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let input = unsafe { __vow_string_new_in_arena(&mut a, c"200".as_ptr(), 3) };
+
+        let before = a.cursor;
+        let parsed = unsafe { __vow_string_parse_u64_opt_in_arena(&mut a, input) };
+        assert_eq!(option_pair(parsed), (1, 200));
+        let narrowed = unsafe { __vow_i64_to_u8_try_in_arena(&mut a, 300) };
+        assert_eq!(option_pair(narrowed), (0, 0));
+        let widened = unsafe { __vow_u64_to_i8_try_in_arena(&mut a, 100) };
+        assert_eq!(option_pair(widened), (1, 100));
+        let small = unsafe { __vow_string_parse_i8_opt_in_arena(&mut a, input) };
+        assert_eq!(option_pair(small), (0, 0), "200 does not fit i8");
+        assert_eq!(a.cursor - before, 4 * 16);
+
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn option_root_wrappers_agree_with_the_arena_variants() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let input = unsafe { __vow_string_new_in_arena(&mut a, c"77".as_ptr(), 2) };
+
+        let parsed = unsafe { __vow_string_parse_u32_opt(input) };
+        assert_eq!(option_pair(parsed), (1, 77));
+        let missing = unsafe { __vow_string_parse_u32_opt(std::ptr::null()) };
+        assert_eq!(option_pair(missing), (0, 0));
+        let narrowed = unsafe { __vow_u64_to_u32_try(1 << 40) };
+        assert_eq!(option_pair(narrowed), (0, 0));
+        let wide = unsafe { __vow_i128_to_u8_try(255) };
+        assert_eq!(option_pair(wide), (1, 255));
+
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn btreemap_lookups_do_not_touch_the_map_arena() {
+        let mut map_arena = empty_arena_header();
+        let mut call_arena = empty_arena_header();
+        unsafe { __vow_arena_open(&mut map_arena) };
+        unsafe { __vow_arena_open(&mut call_arena) };
+
+        let m = unsafe { __vow_btreemap_new_in_arena(&mut map_arena) };
+        let none =
+            unsafe { __vow_btreemap_insert_in_arena(&mut map_arena, &mut call_arena, m, 5, 50) };
+        assert_eq!(option_pair(none), (0, 0));
+        let replaced =
+            unsafe { __vow_btreemap_insert_in_arena(&mut map_arena, &mut call_arena, m, 5, 51) };
+        assert_eq!(option_pair(replaced), (1, 50));
+
+        let map_cursor = map_arena.cursor;
+        let call_cursor = call_arena.cursor;
+        for _ in 0..100 {
+            let hit = unsafe { __vow_btreemap_get_in_arena(&mut call_arena, m, 5) };
+            assert_eq!(option_pair(hit), (1, 51));
+        }
+        let miss = unsafe { __vow_btreemap_get_in_arena(&mut call_arena, m, 6) };
+        assert_eq!(option_pair(miss), (0, 0));
+        assert_eq!(
+            map_arena.cursor, map_cursor,
+            "lookups never allocate in the map's arena"
+        );
+        assert_eq!(call_arena.cursor - call_cursor, 101 * 16);
+
+        unsafe { __vow_arena_close(&mut call_arena) };
+        let hit = unsafe { __vow_btreemap_get_in_arena(&mut map_arena, m, 5) };
+        assert_eq!(option_pair(hit), (1, 51), "map outlives the call arena");
+        unsafe { __vow_arena_close(&mut map_arena) };
+    }
+
+    #[test]
+    fn btreemap_growth_belongs_to_the_map_arena_and_options_to_the_call_arena() {
+        let mut map_arena = empty_arena_header();
+        let mut call_arena = empty_arena_header();
+        unsafe { __vow_arena_open(&mut map_arena) };
+        unsafe { __vow_arena_open(&mut call_arena) };
+
+        let m = unsafe { __vow_btreemap_new_in_arena(&mut map_arena) };
+        let call_cursor = call_arena.cursor;
+        let n = (BTREEMAP_INITIAL_CAP * 4) as i64;
+        for i in (0..n).rev() {
+            let prev = unsafe {
+                __vow_btreemap_insert_in_arena(&mut map_arena, &mut call_arena, m, i, i * 10)
+            };
+            assert_eq!(option_pair(prev), (0, 0));
+        }
+        assert_eq!(call_arena.cursor - call_cursor, n as usize * 16);
+        assert_eq!(unsafe { __vow_btreemap_len(m) }, n as usize);
+        let header = unsafe { &*(m as *const VowBTreeMap) };
+        assert!(
+            header.keys_cap > BTREEMAP_INITIAL_CAP,
+            "buffers must have grown"
+        );
+
+        unsafe { __vow_arena_close(&mut call_arena) };
+        for i in 0..n {
+            let hit = unsafe { __vow_btreemap_get_in_arena(&mut map_arena, m, i) };
+            assert_eq!(option_pair(hit), (1, i * 10));
+        }
+        unsafe { __vow_arena_close(&mut map_arena) };
+    }
+
+    #[test]
+    fn btreemap_root_wrappers_use_one_root_arena_for_map_and_option() {
+        let m = __vow_btreemap_new();
+        for i in 0..40 {
+            let prev = unsafe { __vow_btreemap_insert(m, i, i + 1) };
+            assert_eq!(option_pair(prev), (0, 0));
+        }
+        let hit = unsafe { __vow_btreemap_get(m, 17) };
+        assert_eq!(option_pair(hit), (1, 18));
+        let replaced = unsafe { __vow_btreemap_insert(m, 17, 0) };
+        assert_eq!(option_pair(replaced), (1, 18));
+    }
+
+    #[test]
+    fn hashmap_lookups_allocate_one_cell_in_the_requested_arena() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let m = unsafe { __vow_map_new_in_arena(&mut a) };
+        unsafe { __vow_map_insert_in_arena(&mut a, m, 1, 10) };
+
+        let before = a.cursor;
+        let hit = unsafe { __vow_map_get_in_arena(&mut a, m, 1) };
+        let miss = unsafe { __vow_map_get_in_arena(&mut a, m, 2) };
+        assert_eq!(option_pair(hit), (1, 10));
+        assert_eq!(option_pair(miss), (0, 0));
+        assert_eq!(a.cursor - before, 2 * 16);
+
+        unsafe { __vow_arena_close(&mut a) };
     }
 
     #[test]
@@ -6683,6 +6818,58 @@ mod tests {
             eprintln!("rodata_trap_worker: null arena map new did NOT trap");
             std::process::exit(42);
         }
+        if op == "HashMap::get_in_arena_null" {
+            let mut m = VowMap {
+                ptr: 8 as *mut u8,
+                len: 0,
+                cap: 0,
+            };
+            let _ = unsafe {
+                __vow_map_get_in_arena(std::ptr::null_mut(), &mut m as *mut _ as *mut u8, 1)
+            };
+            eprintln!("rodata_trap_worker: null arena map get did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "BTreeMap::new_in_arena_null" {
+            let _ = unsafe { __vow_btreemap_new_in_arena(std::ptr::null_mut()) };
+            eprintln!("rodata_trap_worker: null arena btreemap new did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "BTreeMap::get_in_arena_null" || op == "BTreeMap::insert_in_arena_null" {
+            let mut a = empty_arena_header();
+            unsafe { __vow_arena_open(&mut a) };
+            let m = unsafe { __vow_btreemap_new_in_arena(&mut a) };
+            if op == "BTreeMap::get_in_arena_null" {
+                let _ = unsafe { __vow_btreemap_get_in_arena(std::ptr::null_mut(), m, 1) };
+            } else {
+                let _ = unsafe {
+                    __vow_btreemap_insert_in_arena(&mut a, std::ptr::null_mut(), m, 1, 1)
+                };
+            }
+            eprintln!("rodata_trap_worker: null arena btreemap op did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "BTreeMap::insert_grow_in_arena_null" {
+            let mut a = empty_arena_header();
+            unsafe { __vow_arena_open(&mut a) };
+            let m = unsafe { __vow_btreemap_new_in_arena(&mut a) };
+            let _ =
+                unsafe { __vow_btreemap_insert_in_arena(std::ptr::null_mut(), &mut a, m, 1, 1) };
+            eprintln!("rodata_trap_worker: null grow arena btreemap insert did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "Option::parse_in_arena_null" {
+            let _ = unsafe {
+                __vow_string_parse_u64_opt_in_arena(std::ptr::null_mut(), std::ptr::null())
+            };
+            eprintln!("rodata_trap_worker: null arena parse did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "Option::try_in_arena_null" {
+            let _ = unsafe { __vow_i64_to_u8_try_in_arena(std::ptr::null_mut(), 7) };
+            eprintln!("rodata_trap_worker: null arena narrowing did NOT trap");
+            std::process::exit(42);
+        }
         if op == "HashMap::insert_in_arena_null" {
             let mut m = VowMap {
                 ptr: 8 as *mut u8,
@@ -7000,6 +7187,25 @@ mod tests {
     #[test]
     fn explicit_arena_map_insert_null_arena_traps() {
         assert_runtime_invariant_null_arena("HashMap::insert_in_arena_null", "HashMap::insert");
+    }
+
+    #[test]
+    fn option_returning_builtins_trap_on_null_arena() {
+        let cases = [
+            ("HashMap::get_in_arena_null", "HashMap::get"),
+            ("BTreeMap::new_in_arena_null", "BTreeMap::new"),
+            ("BTreeMap::get_in_arena_null", "BTreeMap::get"),
+            ("BTreeMap::insert_in_arena_null", "BTreeMap::insert"),
+            ("BTreeMap::insert_grow_in_arena_null", "BTreeMap::insert"),
+            (
+                "Option::parse_in_arena_null",
+                "__vow_string_parse_u64_opt_in_arena",
+            ),
+            ("Option::try_in_arena_null", "__vow_i64_to_u8_try_in_arena"),
+        ];
+        for (op, expected) in cases {
+            assert_runtime_invariant_null_arena(op, expected);
+        }
     }
 
     #[test]
