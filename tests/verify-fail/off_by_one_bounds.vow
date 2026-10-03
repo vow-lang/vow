@@ -20,7 +20,7 @@ fn last_element(n: i64) -> i64 vow {
     v.push(i + 1);
     i = i + 1;
   }
-  v[n]
+  v[n as u64]
 }
 
 fn main() -> i32 [io] {

@@ -38,7 +38,7 @@ fn stack_peek_safe(v: Vec<i64>, size: i64) -> i64 vow {
   requires: size > 0,
   requires: size <= v.len() as i64
 } {
-  v[size - 1]
+  v[(size - 1) as u64]
 }
 
 fn main() -> i32 [io] {

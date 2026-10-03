@@ -36,7 +36,7 @@ fn ring_write(rb: RingBuf, val: i64) -> RingBuf vow {
   ensures: result.data.len() == rb.data.len()
 } {
   let d: Vec<i64> = rb.data;
-  d[rb.write_pos] = val;
+  d[rb.write_pos as u64] = val;
   let next_pos: i64 = (rb.write_pos + 1) % rb.capacity;
   RingBuf { data: d, write_pos: next_pos, count: rb.count + 1, capacity: rb.capacity }
 }

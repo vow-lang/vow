@@ -14,7 +14,7 @@ pub struct Entry {
     kind: Kind,
 }
 
-fn read_from_param(v: Vec<Entry>, idx: i64) -> i64 {
+fn read_from_param(v: Vec<Entry>, idx: u64) -> i64 {
     v[idx].y
 }
 

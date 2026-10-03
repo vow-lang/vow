@@ -128,7 +128,7 @@ fn lit_value(assigns: Vec<i64>, lit: i64) -> i64 vow {
     requires: lit_var(lit) >= 0,
     requires: lit_var(lit) < assigns.len() as i64
 } {
-    let v: i64 = assigns[lit_var(lit)];
+    let v: i64 = assigns[lit_var(lit) as u64];
     if lit < 0 {
         -v
     } else {

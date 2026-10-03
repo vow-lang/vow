@@ -29,5 +29,5 @@ fn past_end(n: i64) -> i64 vow {
 } {
   let v: Vec<i64> = Vec::new();
   v.push(7);
-  v[n]
+  v[n as u64]
 }
