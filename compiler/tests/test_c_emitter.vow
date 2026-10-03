@@ -945,10 +945,7 @@ fn check_str_starts_with() -> i64 {
     0
 }
 
-// Shared scaffold for the two check_wide_field_set_is_non_modelable cases below:
-// one arg (id 0, always ITY_PTR) plus a second value instruction stored through
-// IOP_FIELD_SET(). Mirrors the `shift_function` helper's parameterize-the-one-
-// differing-operand pattern used elsewhere in this file.
+// Mirrors the `shift_function` parameterize-the-differing-operand pattern.
 fn field_set_test_function(id: i64, name: String, params: Vec<i64>, value_inst: IrInst) -> IrFunction {
     let insts: Vec<IrInst> = Vec::new();
     insts.push(mk_inst_arg(0, ITY_PTR(), 0));
@@ -989,9 +986,7 @@ fn check_wide_field_set_is_non_modelable() -> i64 {
     0
 }
 
-// Shared scaffold for the two check_string_matches_literal_at_oob_index_falls_back
-// cases below: the only thing that differs between the OOB and in-range cases is
-// which string-pool index the IOP_CONST_STR() literal points at.
+// Parameterizes only the string-pool index the IOP_CONST_STR() literal points at.
 fn matches_literal_test_function(id: i64, name: String, literal_idx: i64) -> IrFunction {
     let insts: Vec<IrInst> = Vec::new();
     insts.push(mk_inst_const_i64(0, 0));
@@ -1023,14 +1018,14 @@ fn check_string_matches_literal_at_oob_index_falls_back() -> i64 {
     if !c.contains(String::from("/* opcode Call not modelled */")) { return 420; }
 
     // Companion: an in-range index on the same shape must NOT fall back.
-    let f2: IrFunction = matches_literal_test_function(421, String::from("matches_literal_in_range"), 0);
-    let funcs2: Vec<IrFunction> = Vec::new();
-    funcs2.push(f2);
-    let m2: IrModule = mk_module(funcs2);
-    m2.strings.push(String::from("ab"));
-    let c2: String = String::from("");
-    emit_c_function(c2, f2, const_fn_indices, modelable_fi_set, m2, 16, 16, 16, 16, false, false, 0);
-    if c2.contains(String::from("/* opcode Call not modelled */")) { return 421; }
+    let in_range_f: IrFunction = matches_literal_test_function(421, String::from("matches_literal_in_range"), 0);
+    let in_range_funcs: Vec<IrFunction> = Vec::new();
+    in_range_funcs.push(in_range_f);
+    let in_range_m: IrModule = mk_module(in_range_funcs);
+    in_range_m.strings.push(String::from("ab"));
+    let c_in_range: String = String::from("");
+    emit_c_function(c_in_range, in_range_f, const_fn_indices, modelable_fi_set, in_range_m, 16, 16, 16, 16, false, false, 0);
+    if c_in_range.contains(String::from("/* opcode Call not modelled */")) { return 421; }
     0
 }
 
