@@ -374,11 +374,7 @@ fn outcome_record_json(id: i64, s: Site, status: i64, tier: i64, oracle_ms: i64)
     r.push_str(String::from("\",\"status\":\""));
     r.push_str(diag_json_escape_str(status_str(status)));
     r.push_str(String::from("\",\"tier\":"));
-    if tier == TIER_15() {
-        r.push_str(String::from("1.5"));
-    } else {
-        r.push_str(i64_to_string(tier));
-    }
+    r.push_str(tier_json_str(tier));
     r.push_str(String::from(",\"oracle_ms\":"));
     r.push_str(i64_to_string(oracle_ms));
     r.push_str(String::from("}"));
