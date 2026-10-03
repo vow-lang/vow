@@ -49,9 +49,8 @@ pub fn is_prime(n: i64) -> bool vow {
     }
 }
 
-pub fn power_mod(base: i64, exp: i64, modulus: i64) -> i64 vow {
+pub fn power_mod(base: i64, exp: u64, modulus: i64) -> i64 vow {
     requires: base >= 0,
-    requires: exp >= 0,
     requires: modulus > 1,
     requires: modulus <= 3037000499,
     ensures: result >= 0,
@@ -60,8 +59,8 @@ pub fn power_mod(base: i64, exp: i64, modulus: i64) -> i64 vow {
     let mut result: i64 = 1;
     let b: i64 = base % modulus;
     let mut i: u64 = 0;
-    while i < exp as u64 vow {
-        invariant: i <= exp as u64,
+    while i < exp vow {
+        invariant: i <= exp,
         invariant: result >= 0,
         invariant: result < modulus
     } {
