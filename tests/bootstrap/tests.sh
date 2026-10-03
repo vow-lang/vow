@@ -121,7 +121,22 @@ test_single_flags_do_not_warn() {
     done
 }
 
+test_no_cache_flag_is_forwarded_to_all_stages() {
+    local paths
+    local invocations
+    paths=$(run_bootstrap no_cache --no-cache)
+    invocations=$(sed -n '3p' <<<"$paths")
+
+    local invocation_count
+    invocation_count=$(wc -l <"$invocations" | tr -d ' ')
+    [ "$invocation_count" -eq 3 ] || fail "no_cache: expected three compiler invocations"
+    while IFS= read -r invocation; do
+        assert_contains "$invocation" "--no-cache" "no_cache compiler invocation"
+    done <"$invocations"
+}
+
 test_combined_flags_warn_and_preserve_no_verify_precedence
 test_single_flags_do_not_warn
+test_no_cache_flag_is_forwarded_to_all_stages
 
 echo "bootstrap tests passed"
