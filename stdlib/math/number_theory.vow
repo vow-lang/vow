@@ -59,10 +59,9 @@ pub fn power_mod(base: i64, exp: i64, modulus: i64) -> i64 vow {
 } {
     let mut result: i64 = 1;
     let b: i64 = base % modulus;
-    let mut i: i64 = 0;
-    while i < exp vow {
-        invariant: i >= 0,
-        invariant: i <= exp,
+    let mut i: u64 = 0;
+    while i < exp as u64 vow {
+        invariant: i <= exp as u64,
         invariant: result >= 0,
         invariant: result < modulus
     } {
@@ -152,15 +151,14 @@ pub fn largest_divisor(n: i64) -> i64 vow {
     1
 }
 
-pub fn count_divisors(n: i64) -> i64 vow {
+pub fn count_divisors(n: i64) -> u64 vow {
     requires: n > 0,
     ensures: result >= 1
 } {
-    let mut count: i64 = 0;
+    let mut count: u64 = 0;
     let mut i: i64 = 1;
     while i * i <= n vow {
-        invariant: i >= 1,
-        invariant: count >= 0
+        invariant: i >= 1
     } {
         if n % i == 0 {
             if i * i == n {

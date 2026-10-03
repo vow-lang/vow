@@ -77,17 +77,15 @@ pub fn vec_dot(a: Vec<i64>, b: Vec<i64>) -> i64 vow {
     total
 }
 
-pub fn vec_count(v: Vec<i64>, target: i64) -> i64 vow {
-    ensures: result >= 0,
-    ensures: result <= v.len() as i64
+pub fn vec_count(v: Vec<i64>, target: i64) -> u64 vow {
+    ensures: result <= v.len()
 } {
-    let mut count: i64 = 0;
+    let mut count: u64 = 0;
     let mut i: u64 = 0;
     let n: u64 = v.len();
     while i < n vow {
         invariant: i <= n,
-        invariant: count >= 0,
-        invariant: count <= i as i64
+        invariant: count <= i
     } {
         if v[i] == target {
             count = count + 1;
