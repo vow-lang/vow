@@ -1619,7 +1619,7 @@ fn emit_inst(
                             let len = bytes.len();
                             out.push_str(&format!("  v{id} = 0;\n"));
                             out.push_str(&format!(
-                                "  if (v{pos} >= 0 && v{pos} <= (int64_t)v{s}.len && {len}LL <= (int64_t)v{s}.len - v{pos}) {{\n"
+                                "  if ((uint64_t)v{pos} <= (uint64_t)v{s}.len && {len}ULL <= (uint64_t)v{s}.len - (uint64_t)v{pos}) {{\n"
                             ));
                             if bytes.is_empty() {
                                 out.push_str(&format!("    v{id} = 1;\n"));
@@ -1649,12 +1649,10 @@ fn emit_inst(
                         let len = inst.args[len_arg].0;
                         let string_max = limits.string_max;
                         out.push_str(&format!(
-                            "  int64_t __substr_start_{id} = v{start};\n\
-                             \x20 if (__substr_start_{id} < 0) {{ __substr_start_{id} = 0; }}\n\
-                             \x20 if (__substr_start_{id} > (int64_t)v{s}.len) {{ __substr_start_{id} = (int64_t)v{s}.len; }}\n\
-                             \x20 int64_t __substr_len_{id} = v{len};\n\
-                             \x20 if (__substr_len_{id} < 0) {{ __substr_len_{id} = 0; }}\n\
-                             \x20 int64_t __substr_max_len_{id} = (int64_t)v{s}.len - __substr_start_{id};\n\
+                            "  uint64_t __substr_start_{id} = (uint64_t)v{start};\n\
+                             \x20 if (__substr_start_{id} > (uint64_t)v{s}.len) {{ __substr_start_{id} = (uint64_t)v{s}.len; }}\n\
+                             \x20 uint64_t __substr_len_{id} = (uint64_t)v{len};\n\
+                             \x20 uint64_t __substr_max_len_{id} = (uint64_t)v{s}.len - __substr_start_{id};\n\
                              \x20 if (__substr_len_{id} > __substr_max_len_{id}) {{ __substr_len_{id} = __substr_max_len_{id}; }}\n\
                              \x20 v{id}.len = __substr_len_{id};\n\
                              \x20 for (uint64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
@@ -1674,12 +1672,11 @@ fn emit_inst(
                         let end = inst.args[end_arg].0;
                         let string_max = limits.string_max;
                         out.push_str(&format!(
-                            "  int64_t __substring_start_{id} = v{start};\n\
-                             \x20 if (__substring_start_{id} < 0) {{ __substring_start_{id} = 0; }}\n\
-                             \x20 if (__substring_start_{id} > (int64_t)v{s}.len) {{ __substring_start_{id} = (int64_t)v{s}.len; }}\n\
-                             \x20 int64_t __substring_end_{id} = v{end};\n\
+                            "  uint64_t __substring_start_{id} = (uint64_t)v{start};\n\
+                             \x20 if (__substring_start_{id} > (uint64_t)v{s}.len) {{ __substring_start_{id} = (uint64_t)v{s}.len; }}\n\
+                             \x20 uint64_t __substring_end_{id} = (uint64_t)v{end};\n\
                              \x20 if (__substring_end_{id} < __substring_start_{id}) {{ __substring_end_{id} = __substring_start_{id}; }}\n\
-                             \x20 if (__substring_end_{id} > (int64_t)v{s}.len) {{ __substring_end_{id} = (int64_t)v{s}.len; }}\n\
+                             \x20 if (__substring_end_{id} > (uint64_t)v{s}.len) {{ __substring_end_{id} = (uint64_t)v{s}.len; }}\n\
                              \x20 v{id}.len = __substring_end_{id} - __substring_start_{id};\n\
                              \x20 for (uint64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
                              \x20   v{id}.data[__i] = v{s}.data[__substring_start_{id} + __i];\n\
@@ -4026,7 +4023,7 @@ mod tests {
             "literal helper should be modeled deterministically: {c}"
         );
         assert!(
-            c.contains("3LL <= (int64_t)v0.len - v1"),
+            c.contains("3ULL <= (uint64_t)v0.len - (uint64_t)v1"),
             "byte length guard: {c}"
         );
         assert!(
@@ -5970,7 +5967,7 @@ mod tests {
                 id: BlockId(0),
                 insts: vec![
                     inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
-                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(-1)),
+                    inst(1, Opcode::ConstU64, Ty::U64, vec![], InstData::ConstU64(1)),
                     inst(
                         2,
                         Opcode::ConstI64,
@@ -6007,6 +6004,15 @@ mod tests {
             c.contains("v3.data[__i] = v0.data[__substr_start_3 + __i];"),
             "substr copy should index with the clamped start: {c}"
         );
+        assert!(
+            c.contains("uint64_t __substr_start_3 = (uint64_t)v1;")
+                && c.contains("uint64_t __substr_len_3 = (uint64_t)v2;"),
+            "substr operands are u64 offsets: {c}"
+        );
+        assert!(
+            !c.contains("< 0"),
+            "u64 offsets have no negative clamp: {c}"
+        );
     }
 
     #[test]
@@ -6024,7 +6030,7 @@ mod tests {
                 id: BlockId(0),
                 insts: vec![
                     inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
-                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(-5)),
+                    inst(1, Opcode::ConstU64, Ty::U64, vec![], InstData::ConstU64(5)),
                     inst(
                         2,
                         Opcode::ConstI64,
@@ -6060,6 +6066,15 @@ mod tests {
         assert!(
             c.contains("v3.data[__i] = v0.data[__substring_start_3 + __i];"),
             "substring copy should index with the clamped start: {c}"
+        );
+        assert!(
+            c.contains("uint64_t __substring_start_3 = (uint64_t)v1;")
+                && c.contains("uint64_t __substring_end_3 = (uint64_t)v2;"),
+            "substring operands are u64 offsets: {c}"
+        );
+        assert!(
+            !c.contains("< 0"),
+            "u64 offsets have no negative clamp: {c}"
         );
     }
 
