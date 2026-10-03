@@ -143,7 +143,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
         let mut bi: u64 = 0;
         while bi < scc_n {
             let fidx: i64 = scc[bi];
-            let nparams: u64 = m.functions[fidx].params.len();
+            let nparams: u64 = m.functions[fidx as u64].params.len();
             bound = bound + (nparams + 3) * 2;
             bi = bi + 1;
         }
@@ -159,8 +159,8 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
                 let fidx: i64 = scc[ii];
                 let did_change: bool = analyze_function(
                     m, fidx,
-                    id_to_inst_per_fn[fidx], id_to_block_per_fn[fidx], phi_arms_per_fn[fidx],
-                    block_parent_per_fn[fidx], block_depth_per_fn[fidx],
+                    id_to_inst_per_fn[fidx as u64], id_to_block_per_fn[fidx as u64], phi_arms_per_fn[fidx as u64],
+                    block_parent_per_fn[fidx as u64], block_depth_per_fn[fidx as u64],
                     int_kinds, int_auxs, int_aliases_list,
                     int_return_rodata,
                     int_se_targets, int_se_src_kinds, int_se_src_aux, int_se_src_aliases,
@@ -192,11 +192,11 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
         let mut ri2: u64 = 0;
         while ri2 < scc_n {
             let fidx: i64 = scc[ri2];
-            if int_kinds[fidx] == RSUM_INTERNAL_UNINIT() {
-                let resolved_kind: i64 = resolve_uninit_return_kind(m, fidx, id_to_inst_per_fn[fidx], phi_arms_per_fn[fidx]);
-                let resolved_aux: i64 = resolve_uninit_return_aux(m, fidx, resolved_kind, id_to_inst_per_fn[fidx], phi_arms_per_fn[fidx]);
-                int_kinds[fidx] = resolved_kind;
-                int_auxs[fidx] = resolved_aux;
+            if int_kinds[fidx as u64] == RSUM_INTERNAL_UNINIT() {
+                let resolved_kind: i64 = resolve_uninit_return_kind(m, fidx, id_to_inst_per_fn[fidx as u64], phi_arms_per_fn[fidx as u64]);
+                let resolved_aux: i64 = resolve_uninit_return_aux(m, fidx, resolved_kind, id_to_inst_per_fn[fidx as u64], phi_arms_per_fn[fidx as u64]);
+                int_kinds[fidx as u64] = resolved_kind;
+                int_auxs[fidx as u64] = resolved_aux;
                 // AliasOfAny resolution is rare via this path; leave aliases empty.
             }
             ri2 = ri2 + 1;
@@ -361,7 +361,7 @@ fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, dctx: D
             let mut pi: u64 = 0;
             while pi < ps.len() {
                 let pred_idx: i64 = ps[pi];
-                linear_union_into(incoming, block_out[pred_idx]);
+                linear_union_into(incoming, block_out[pred_idx as u64]);
                 pi = pi + 1;
             }
             sort_i64_vec_inplace(incoming);
@@ -401,7 +401,7 @@ fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, dctx: D
             let cps: Vec<i64> = preds[cbi];
             let mut cpi: u64 = 0;
             while cpi < cps.len() {
-                linear_union_into(incoming, consumed_out[cps[cpi]]);
+                linear_union_into(incoming, consumed_out[cps[cpi] as u64]);
                 cpi = cpi + 1;
             }
             sort_i64_vec_inplace(incoming);
@@ -492,7 +492,7 @@ fn linear_apply_inst(inst: IrInst, live: Vec<i64>, id_to_inst: Vec<IrInst>) {
         // Upsilons have ty=Unit (they produce no value); look at the arg's type.
         let arg_id: i64 = inst.args[0];
         if arg_id >= 0 && arg_id < id_to_inst.len() as i64 {
-            let arg_inst: IrInst = id_to_inst[arg_id];
+            let arg_inst: IrInst = id_to_inst[arg_id as u64];
             if arg_inst.id >= 0 && arg_inst.ty == ITY_LPTR() {
                 linear_remove_origins(live, arg_id, id_to_inst);
             }
@@ -508,7 +508,7 @@ fn linear_inst_starts_origin(inst: IrInst, id_to_inst: Vec<IrInst>) -> bool {
     if inst.op == IOP_FIELD_GET() && inst.args.len() > 0 {
         let base_id: i64 = inst.args[0];
         if base_id >= 0 && base_id < id_to_inst.len() as i64 {
-            owned_field_transfer = id_to_inst[base_id].ty == ITY_LPTR();
+            owned_field_transfer = id_to_inst[base_id as u64].ty == ITY_LPTR();
         }
     }
     inst.ty == ITY_LPTR() && (inst.op == IOP_GET_ARG() || inst.op == IOP_REGION_ALLOC() || inst.op == IOP_CALL() || inst.op == IOP_PHI() || owned_field_transfer)
@@ -576,7 +576,7 @@ fn linear_origins(id: i64, id_to_inst: Vec<IrInst>) -> Vec<i64> {
         }
         seen.push(cur);
         if cur >= 0 && cur < id_to_inst.len() as i64 {
-            let inst: IrInst = id_to_inst[cur];
+            let inst: IrInst = id_to_inst[cur as u64];
             if inst.id >= 0 {
                 if inst.op == IOP_UPSILON() && inst.args.len() > 0 {
                     stack.push(inst.args[0]);
@@ -585,7 +585,7 @@ fn linear_origins(id: i64, id_to_inst: Vec<IrInst>) -> Vec<i64> {
                     if inst.op == IOP_FIELD_GET() && inst.args.len() > 0 {
                         let base_id: i64 = inst.args[0];
                         if base_id >= 0 && base_id < id_to_inst.len() as i64 {
-                            owned_origin = id_to_inst[base_id].ty == ITY_LPTR();
+                            owned_origin = id_to_inst[base_id as u64].ty == ITY_LPTR();
                         }
                     }
                     if owned_origin {
@@ -608,12 +608,12 @@ fn linear_predecessors(f: IrFunction) -> Vec<Vec<i64>> {
     }
     let mut bi: i64 = 0;
     while bi < n {
-        let succs: Vec<i64> = linear_successors(f.blocks[bi]);
+        let succs: Vec<i64> = linear_successors(f.blocks[bi as u64]);
         let mut si: u64 = 0;
         while si < succs.len() {
             let s: i64 = succs[si];
             if s >= 0 && s < n {
-                preds[s].push(bi);
+                preds[s as u64].push(bi);
             }
             si = si + 1;
         }
@@ -652,7 +652,7 @@ fn linear_emit_live_errors(f: IrFunction, live: Vec<i64>, id_to_inst: Vec<IrInst
             let name: String = linear_local_name(f, id);
             let inst: IrInst = {
                 if id >= 0 && id < id_to_inst.len() as i64 {
-                    id_to_inst[id]
+                    id_to_inst[id as u64]
                 } else {
                     ir_inst_new(-1, 0, 0, Vec::new(), 0, 0, 0, String::from(""))
                 }
@@ -820,13 +820,13 @@ fn canonicalize_store_effects(
     let mut k: u64 = 0;
     while k < n {
         let idx: i64 = perm[k];
-        out.push(targets[idx]);
-        let kind: i64 = kinds[idx];
+        out.push(targets[idx as u64]);
+        let kind: i64 = kinds[idx as u64];
         out.push(kind);
         if kind == RSUM_KIND_ALIAS_OF() {
-            out.push(aux[idx]);
+            out.push(aux[idx as u64]);
         } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
-            let als: Vec<i64> = aliases[idx];
+            let als: Vec<i64> = aliases[idx as u64];
             out.push(als.len() as i64);
             let mut ai: u64 = 0;
             while ai < als.len() {
@@ -843,17 +843,19 @@ fn store_effect_less(
     targets: Vec<i64>, kinds: Vec<i64>, auxs: Vec<i64>, aliases: Vec<Vec<i64>>,
     a: i64, b: i64
 ) -> bool {
-    if targets[a] != targets[b] {
-        return targets[a] < targets[b];
+    let au: u64 = a as u64;
+    let bu: u64 = b as u64;
+    if targets[au] != targets[bu] {
+        return targets[au] < targets[bu];
     }
-    if kinds[a] != kinds[b] {
-        return kinds[a] < kinds[b];
+    if kinds[au] != kinds[bu] {
+        return kinds[au] < kinds[bu];
     }
-    if kinds[a] == RSUM_KIND_ALIAS_OF() && auxs[a] != auxs[b] {
-        return auxs[a] < auxs[b];
+    if kinds[au] == RSUM_KIND_ALIAS_OF() && auxs[au] != auxs[bu] {
+        return auxs[au] < auxs[bu];
     }
-    if kinds[a] == RSUM_KIND_ALIAS_OF_ANY() {
-        return i64_vec_lex_less(aliases[a], aliases[b]);
+    if kinds[au] == RSUM_KIND_ALIAS_OF_ANY() {
+        return i64_vec_lex_less(aliases[au], aliases[bu]);
     }
     false
 }
@@ -1015,12 +1017,12 @@ fn underlying_caller_via_aliases_inner(
                     // both compilers must keep this in sync.
                     let callee_idx: i64 = inst.dv;
                     if callee_idx >= 0 && callee_idx < m_functions.len() as i64 {
-                        let callee: IrFunction = m_functions[callee_idx];
+                        let callee: IrFunction = m_functions[callee_idx as u64];
                         let rkind: i64 = callee.rsum_return_kind;
                         if rkind == RSUM_KIND_ALIAS_OF() {
                             let j_idx: i64 = callee.rsum_return_aux;
                             if j_idx >= 0 && j_idx < inst.args.len() as i64 {
-                                current = inst.args[j_idx];
+                                current = inst.args[j_idx as u64];
                             } else {
                                 keep_going = false;
                             }
@@ -1033,7 +1035,7 @@ fn underlying_caller_via_aliases_inner(
                                 if j_idx >= 0 && j_idx < inst.args.len() as i64 {
                                     let arm_rgn: i64 = underlying_caller_via_aliases_inner(
                                         id_to_inst, region_keys, region_vals, m_functions,
-                                        inst.args[j_idx], local_seen);
+                                        inst.args[j_idx as u64], local_seen);
                                     if arm_rgn >= 0 && region_kind(arm_rgn) == REGION_KIND_CALLER() {
                                         any_caller = arm_rgn;
                                     }
@@ -1112,7 +1114,7 @@ fn check_region_store_conflicts_module(
                 if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
                     let growth_target_pos: i64 = extern_growth_target_pos(inst.ds);
                     if growth_target_pos >= 0 && growth_target_pos < inst.args.len() as i64 {
-                        let target_arg: i64 = inst.args[growth_target_pos];
+                        let target_arg: i64 = inst.args[growth_target_pos as u64];
                         let visiting: Vec<i64> = Vec::new();
                         if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m.functions, return_rodata, target_arg, visiting) {
                             emit_region_literal_mutation(
@@ -1130,7 +1132,7 @@ fn check_region_store_conflicts_module(
                     let callee_idx: i64 = inst.dv;
                     if callee_idx >= 0 && callee_idx < m.functions.len() as i64 {
                         check_store_effects_at_call(
-                            m.functions[callee_idx].rsum_store_effects,
+                            m.functions[callee_idx as u64].rsum_store_effects,
                             inst,
                             id_to_inst,
                             id_to_block,
@@ -1179,10 +1181,10 @@ fn check_store_effects_at_call(
         {
             checked_targets.push(target);
             let visiting: Vec<i64> = Vec::new();
-            if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, call_inst.args[target], visiting) {
+            if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, call_inst.args[target as u64], visiting) {
                 emit_region_literal_mutation(
                     source_file,
-                    call_inst.args[target],
+                    call_inst.args[target as u64],
                     call_inst,
                     id_to_inst,
                     String::from("mutating callee parameter"),
@@ -1199,8 +1201,8 @@ fn check_store_effects_at_call(
             {
                 check_store_conflict(
                     source_file,
-                    call_inst.args[target],
-                    call_inst.args[source_param],
+                    call_inst.args[target as u64],
+                    call_inst.args[source_param as u64],
                     call_inst,
                     id_to_inst,
                     region_keys,
@@ -1577,10 +1579,10 @@ fn value_may_be_rodata(
     if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
         let callee_idx: i64 = inst.dv;
         if callee_idx >= 0 && callee_idx < m_functions.len() as i64 {
-            if callee_idx < return_rodata.len() as i64 && return_rodata[callee_idx] {
+            if callee_idx < return_rodata.len() as i64 && return_rodata[callee_idx as u64] {
                 return true;
             }
-            let callee: IrFunction = m_functions[callee_idx];
+            let callee: IrFunction = m_functions[callee_idx as u64];
             visiting.push(id);
             let result: bool = return_region_may_be_rodata(
                 callee.rsum_return_kind,
@@ -1602,7 +1604,7 @@ fn value_may_be_rodata(
     }
     if inst.op == IOP_PHI() && id >= 0 && id < phi_arms.len() as i64 {
         visiting.push(id);
-        let arms: Vec<i64> = phi_arms[id];
+        let arms: Vec<i64> = phi_arms[id as u64];
         let mut ai: u64 = 0;
         while ai < arms.len() {
             if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, arms[ai], visiting) {
@@ -1808,7 +1810,7 @@ fn return_region_may_be_rodata(
 ) -> bool {
     if kind == RSUM_KIND_ALIAS_OF() {
         if aux >= 0 && aux < args.len() as i64 {
-            return value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, args[aux], visiting);
+            return value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, args[aux as u64], visiting);
         }
         return false;
     }
@@ -1817,7 +1819,7 @@ fn return_region_may_be_rodata(
         while ai < aliases.len() {
             let arg_idx: i64 = aliases[ai];
             if arg_idx >= 0 && arg_idx < args.len() as i64
-                && value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, args[arg_idx], visiting)
+                && value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, args[arg_idx as u64], visiting)
             {
                 return true;
             }
@@ -1862,14 +1864,14 @@ fn value_may_be_rodata_internal(
     if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
         let callee_idx: i64 = inst.dv;
         if callee_idx >= 0 && callee_idx < int_kinds.len() as i64 {
-            if callee_idx < return_rodata.len() as i64 && return_rodata[callee_idx] {
+            if callee_idx < return_rodata.len() as i64 && return_rodata[callee_idx as u64] {
                 return true;
             }
             visiting.push(id);
             let result: bool = return_region_may_be_rodata_internal(
-                int_kinds[callee_idx],
-                int_auxs[callee_idx],
-                int_aliases_list[callee_idx],
+                int_kinds[callee_idx as u64],
+                int_auxs[callee_idx as u64],
+                int_aliases_list[callee_idx as u64],
                 inst.args,
                 id_to_inst,
                 id_to_block,
@@ -1888,7 +1890,7 @@ fn value_may_be_rodata_internal(
     }
     if inst.op == IOP_PHI() && id >= 0 && id < phi_arms.len() as i64 {
         visiting.push(id);
-        let arms: Vec<i64> = phi_arms[id];
+        let arms: Vec<i64> = phi_arms[id as u64];
         let mut ai: u64 = 0;
         while ai < arms.len() {
             if value_may_be_rodata_internal(
@@ -2036,7 +2038,7 @@ fn return_region_may_be_rodata_internal(
                 int_auxs,
                 int_aliases_list,
                 return_rodata,
-                args[aux],
+                args[aux as u64],
                 visiting
             );
         }
@@ -2057,7 +2059,7 @@ fn return_region_may_be_rodata_internal(
                     int_auxs,
                     int_aliases_list,
                     return_rodata,
-                    args[arg_idx],
+                    args[arg_idx as u64],
                     visiting
                 )
             {
@@ -2114,6 +2116,7 @@ fn analyze_function(
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
     note_region_keys: Vec<Vec<i64>>, note_region_vals: Vec<Vec<i64>>,
 ) -> bool {
+    let fidx_u: u64 = fidx as u64;
     // Reset this function's note-region snapshot before populating it again
     // so only the convergence iteration's captures contribute. Without this,
     // an earlier iteration's Caller(_) entry could persist past a final-
@@ -2122,20 +2125,20 @@ fn analyze_function(
     // fresh `note_region_map` would not. Mirrors the Rust pass's
     // `let mut note_region_map = BTreeMap::new()` at the top of
     // `analyze_function` (vow-ir/src/region.rs:1427).
-    note_region_keys[fidx].clear();
-    note_region_vals[fidx].clear();
-    let f: IrFunction = m.functions[fidx];
+    note_region_keys[fidx_u].clear();
+    note_region_vals[fidx_u].clear();
+    let f: IrFunction = m.functions[fidx_u];
     let bks: Vec<IrBlock> = f.blocks;
     let n_bks: u64 = bks.len();
 
-    let prev_kind: i64 = int_kinds[fidx];
-    let prev_aux: i64 = int_auxs[fidx];
-    let prev_aliases: Vec<i64> = int_aliases_list[fidx];
-    let prev_return_rodata: bool = int_return_rodata[fidx];
-    let prev_se_targets: Vec<i64> = clone_i64_vec(int_se_targets[fidx]);
-    let prev_se_src_kinds: Vec<i64> = clone_i64_vec(int_se_src_kinds[fidx]);
-    let prev_se_src_aux: Vec<i64> = clone_i64_vec(int_se_src_aux[fidx]);
-    let prev_se_src_aliases: Vec<Vec<i64>> = clone_i64_vec_vec(int_se_src_aliases[fidx]);
+    let prev_kind: i64 = int_kinds[fidx_u];
+    let prev_aux: i64 = int_auxs[fidx_u];
+    let prev_aliases: Vec<i64> = int_aliases_list[fidx_u];
+    let prev_return_rodata: bool = int_return_rodata[fidx_u];
+    let prev_se_targets: Vec<i64> = clone_i64_vec(int_se_targets[fidx_u]);
+    let prev_se_src_kinds: Vec<i64> = clone_i64_vec(int_se_src_kinds[fidx_u]);
+    let prev_se_src_aux: Vec<i64> = clone_i64_vec(int_se_src_aux[fidx_u]);
+    let prev_se_src_aliases: Vec<Vec<i64>> = clone_i64_vec_vec(int_se_src_aliases[fidx_u]);
 
     // 1. Compute return-region contribution by deep-walking the Return arg
     //    through Pizlo Phi/Upsilon arms and Call summaries.
@@ -2194,10 +2197,10 @@ fn analyze_function(
                         source_id,
                         target_param,
                         int_kinds,
-                        int_se_targets[fidx],
-                        int_se_src_kinds[fidx],
-                        int_se_src_aux[fidx],
-                        int_se_src_aliases[fidx],
+                        int_se_targets[fidx_u],
+                        int_se_src_kinds[fidx_u],
+                        int_se_src_aux[fidx_u],
+                        int_se_src_aliases[fidx_u],
                     );
                 }
             }
@@ -2210,8 +2213,8 @@ fn analyze_function(
                     if target_pos >= 0 && target_pos < inst.args.len() as i64
                         && source_pos >= 0 && source_pos < inst.args.len() as i64
                     {
-                        let target_id2: i64 = inst.args[target_pos];
-                        let source_id2: i64 = inst.args[source_pos];
+                        let target_id2: i64 = inst.args[target_pos as u64];
+                        let source_id2: i64 = inst.args[source_pos as u64];
                         let target_param2: i64 = trace_param(id_to_inst, target_id2);
                         if target_param2 >= 0 {
                             add_store_effect_source_constraints(
@@ -2219,10 +2222,10 @@ fn analyze_function(
                                 source_id2,
                                 target_param2,
                                 int_kinds,
-                                int_se_targets[fidx],
-                                int_se_src_kinds[fidx],
-                                int_se_src_aux[fidx],
-                                int_se_src_aliases[fidx],
+                                int_se_targets[fidx_u],
+                                int_se_src_kinds[fidx_u],
+                                int_se_src_aux[fidx_u],
+                                int_se_src_aliases[fidx_u],
                             );
                         }
                     }
@@ -2230,13 +2233,13 @@ fn analyze_function(
                 }
                 let growth_target_pos: i64 = extern_growth_target_pos(inst.ds);
                 if growth_target_pos >= 0 && growth_target_pos < inst.args.len() as i64 {
-                    let growth_target_param: i64 = trace_param(id_to_inst, inst.args[growth_target_pos]);
+                    let growth_target_param: i64 = trace_param(id_to_inst, inst.args[growth_target_pos as u64]);
                     if growth_target_param >= 0 {
                         add_store_effect(
-                            int_se_targets[fidx],
-                            int_se_src_kinds[fidx],
-                            int_se_src_aux[fidx],
-                            int_se_src_aliases[fidx],
+                            int_se_targets[fidx_u],
+                            int_se_src_kinds[fidx_u],
+                            int_se_src_aux[fidx_u],
+                            int_se_src_aliases[fidx_u],
                             growth_target_param,
                             RSUM_KIND_CONSTANT_GLOBAL(),
                             0,
@@ -2254,10 +2257,10 @@ fn analyze_function(
                     int_se_src_kinds,
                     int_se_src_aux,
                     int_se_src_aliases,
-                    int_se_targets[fidx],
-                    int_se_src_kinds[fidx],
-                    int_se_src_aux[fidx],
-                    int_se_src_aliases[fidx],
+                    int_se_targets[fidx_u],
+                    int_se_src_kinds[fidx_u],
+                    int_se_src_aux[fidx_u],
+                    int_se_src_aliases[fidx_u],
                 );
             }
             ii = ii + 1;
@@ -2296,7 +2299,7 @@ fn analyze_function(
                 // Issue #366: record multi-slot widen-to-Root allocs so the
                 // note pass surfaces the leak (mirrors vow-ir/src/region.rs).
                 if widened_flag.len() > 0 {
-                    put_inst_region(note_region_keys[fidx], note_region_vals[fidx], rinst.id, rgn);
+                    put_inst_region(note_region_keys[fidx_u], note_region_vals[fidx_u], rinst.id, rgn);
                 }
                 // Issue #320: record the Caller(_) region so the note pass can
                 // surface internal-call heap producers routed through a hidden
@@ -2315,10 +2318,10 @@ fn analyze_function(
                         // dropped: with hidden-arena threading for store targets,
                         // a Caller(_) internal-call result is placed in the
                         // caller's arena instead of leaking to root (issue #871).
-                        put_inst_region(note_region_keys[fidx], note_region_vals[fidx], rinst.id, rgn);
+                        put_inst_region(note_region_keys[fidx_u], note_region_vals[fidx_u], rinst.id, rgn);
                     }
                 }
-                put_inst_region(region_keys[fidx], region_vals[fidx], rinst.id, rgn);
+                put_inst_region(region_keys[fidx_u], region_vals[fidx_u], rinst.id, rgn);
             }
             rii = rii + 1;
         }
@@ -2329,10 +2332,10 @@ fn analyze_function(
     let new_aux: i64 = acc_aux;
     let new_aliases: Vec<i64> = acc_aliases;
 
-    int_kinds[fidx] = new_kind;
-    int_auxs[fidx] = new_aux;
-    int_aliases_list[fidx] = new_aliases;
-    int_return_rodata[fidx] = acc_return_rodata;
+    int_kinds[fidx_u] = new_kind;
+    int_auxs[fidx_u] = new_aux;
+    int_aliases_list[fidx_u] = new_aliases;
+    int_return_rodata[fidx_u] = acc_return_rodata;
 
     // Return whether the summary changed.
     if new_kind != prev_kind { return true; }
@@ -2346,10 +2349,10 @@ fn analyze_function(
             k = k + 1;
         }
     }
-    if !linear_vec_eq(prev_se_targets, int_se_targets[fidx]) { return true; }
-    if !linear_vec_eq(prev_se_src_kinds, int_se_src_kinds[fidx]) { return true; }
-    if !linear_vec_eq(prev_se_src_aux, int_se_src_aux[fidx]) { return true; }
-    if !i64_vec_vec_eq(prev_se_src_aliases, int_se_src_aliases[fidx]) { return true; }
+    if !linear_vec_eq(prev_se_targets, int_se_targets[fidx_u]) { return true; }
+    if !linear_vec_eq(prev_se_src_kinds, int_se_src_kinds[fidx_u]) { return true; }
+    if !linear_vec_eq(prev_se_src_aux, int_se_src_aux[fidx_u]) { return true; }
+    if !i64_vec_vec_eq(prev_se_src_aliases, int_se_src_aliases[fidx_u]) { return true; }
     false
 }
 
@@ -2362,7 +2365,7 @@ fn is_heap_producing_for_region(inst: IrInst, int_kinds: Vec<i64>) -> bool {
     }
     if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET()
         && inst.dv >= 0 && inst.dv < int_kinds.len() as i64
-        && int_kinds[inst.dv] == RSUM_KIND_FRESH_IN_CALLER()
+        && int_kinds[inst.dv as u64] == RSUM_KIND_FRESH_IN_CALLER()
     {
         return true;
     }
@@ -2403,7 +2406,7 @@ fn add_store_effect_source_constraints(
     if callee_idx < 0 || callee_idx >= int_kinds.len() as i64 {
         return;
     }
-    if int_kinds[callee_idx] != RSUM_KIND_FRESH_IN_CALLER() {
+    if int_kinds[callee_idx as u64] != RSUM_KIND_FRESH_IN_CALLER() {
         return;
     }
     let mut ai: u64 = 0;
@@ -2463,15 +2466,15 @@ fn publish_transitive_store_effects(
     if callee_idx < 0 || callee_idx >= all_targets.len() as i64 {
         return;
     }
-    let callee_targets: Vec<i64> = all_targets[callee_idx];
-    let callee_kinds: Vec<i64> = all_kinds[callee_idx];
-    let callee_auxs: Vec<i64> = all_auxs[callee_idx];
-    let callee_aliases: Vec<Vec<i64>> = all_aliases[callee_idx];
+    let callee_targets: Vec<i64> = all_targets[callee_idx as u64];
+    let callee_kinds: Vec<i64> = all_kinds[callee_idx as u64];
+    let callee_auxs: Vec<i64> = all_auxs[callee_idx as u64];
+    let callee_aliases: Vec<Vec<i64>> = all_aliases[callee_idx as u64];
     let mut i: u64 = 0;
     while i < callee_targets.len() && i < callee_kinds.len() && i < callee_auxs.len() {
         let target_pos: i64 = callee_targets[i];
         if target_pos >= 0 && target_pos < call_inst.args.len() as i64 {
-            let current_target_param: i64 = trace_param(id_to_inst, call_inst.args[target_pos]);
+            let current_target_param: i64 = trace_param(id_to_inst, call_inst.args[target_pos as u64]);
             if current_target_param >= 0 {
                 let kind: i64 = callee_kinds[i];
                 if kind == RSUM_KIND_ALIAS_OF() {
@@ -2479,7 +2482,7 @@ fn publish_transitive_store_effects(
                     if source_pos >= 0 && source_pos < call_inst.args.len() as i64 {
                         add_store_effect_source_constraints(
                             id_to_inst,
-                            call_inst.args[source_pos],
+                            call_inst.args[source_pos as u64],
                             current_target_param,
                             int_kinds,
                             targets,
@@ -2496,7 +2499,7 @@ fn publish_transitive_store_effects(
                         if source_pos2 >= 0 && source_pos2 < call_inst.args.len() as i64 {
                             add_store_effect_source_constraints(
                                 id_to_inst,
-                                call_inst.args[source_pos2],
+                                call_inst.args[source_pos2 as u64],
                                 current_target_param,
                                 int_kinds,
                                 targets,
@@ -2528,7 +2531,7 @@ fn publish_transitive_store_effects(
 
 fn lookup_inst_block(id_to_block: Vec<i64>, id: i64) -> i64 {
     if id >= 0 && id < id_to_block.len() as i64 {
-        return id_to_block[id];
+        return id_to_block[id as u64];
     }
     -1
 }
@@ -2592,22 +2595,22 @@ fn value_lub_region(
         );
     }
     let own_return_kind: i64 = if fi >= 0 && fi < int_kinds.len() as i64 {
-        int_kinds[fi]
+        int_kinds[fi as u64]
     } else {
         RSUM_INTERNAL_UNINIT()
     };
     let own_return_aux: i64 = if fi >= 0 && fi < int_auxs.len() as i64 {
-        int_auxs[fi]
+        int_auxs[fi as u64]
     } else {
         0
     };
     let own_return_aliases: Vec<i64> = if fi >= 0 && fi < int_aliases_list.len() as i64 {
-        int_aliases_list[fi]
+        int_aliases_list[fi as u64]
     } else {
         Vec::new()
     };
     let own_se_targets: Vec<i64> = if fi >= 0 && fi < int_se_targets.len() as i64 {
-        int_se_targets[fi]
+        int_se_targets[fi as u64]
     } else {
         Vec::new()
     };
@@ -2721,7 +2724,7 @@ fn direct_markers_collect_regions(
             let inst: IrInst = blk.insts[ii];
             let mut ai: i64 = 0;
             while ai < inst.args.len() as i64 {
-                if inst.args[ai] == id {
+                if inst.args[ai as u64] == id {
                     // Every argument use contributes the use-block marker.
                     linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), blk.id));
                     if inst.op == IOP_RETURN() && !return_is_scalar {
@@ -2781,7 +2784,7 @@ fn direct_markers_collect_regions(
                             seen
                         );
                         if callee_idx >= 0 && callee_idx < int_kinds.len() as i64
-                            && int_kinds[callee_idx] == RSUM_KIND_FRESH_IN_CALLER()
+                            && int_kinds[callee_idx as u64] == RSUM_KIND_FRESH_IN_CALLER()
                         {
                             // Fresh aggregate results may embed heap descriptors
                             // passed as constructor arguments. Let later widening
@@ -2803,7 +2806,7 @@ fn direct_markers_collect_regions(
                         if target_pos2 >= 0 && target_pos2 < inst.args.len() as i64 {
                             add_store_target_markers_vow(
                                 id_to_inst, id_to_block, phi_arms,
-                                inst.args[target_pos2], int_kinds,
+                                inst.args[target_pos2 as u64], int_kinds,
                                 markers, work, seen, Vec::new(), false
                             );
                         }
@@ -2883,7 +2886,7 @@ fn direct_markers_collect_concrete_blocks(
             let inst: IrInst = blk.insts[ii];
             let mut ai: i64 = 0;
             while ai < inst.args.len() as i64 {
-                if inst.args[ai] == id {
+                if inst.args[ai as u64] == id {
                     // Every argument use contributes the use-block marker.
                     linear_insert_i64(markers, blk.id);
                     if inst.op == IOP_RETURN() && !return_is_scalar {
@@ -2938,7 +2941,7 @@ fn direct_markers_collect_concrete_blocks(
                             return false;
                         }
                         if callee_idx >= 0 && callee_idx < int_kinds.len() as i64
-                            && int_kinds[callee_idx] == RSUM_KIND_FRESH_IN_CALLER()
+                            && int_kinds[callee_idx as u64] == RSUM_KIND_FRESH_IN_CALLER()
                         {
                             push_region_work(work, seen, inst.id);
                         }
@@ -2958,14 +2961,14 @@ fn direct_markers_collect_concrete_blocks(
                             let target_block2: i64 = target_marker_concrete_block(
                                 id_to_inst,
                                 id_to_block,
-                                inst.args[target_pos2],
+                                inst.args[target_pos2 as u64],
                                 int_kinds
                             );
                             if target_block2 < 0 {
                                 return false;
                             }
                             linear_insert_i64(markers, target_block2);
-                            push_region_work(work, seen, inst.args[target_pos2]);
+                            push_region_work(work, seen, inst.args[target_pos2 as u64]);
                         }
                         if (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
                             && ai == 0
@@ -3056,7 +3059,7 @@ fn add_store_target_markers_vow(
     }
     trace_seen.push(target_id);
     if target_id >= 0 && target_id < phi_arms.len() as i64 {
-        let arms: Vec<i64> = phi_arms[target_id];
+        let arms: Vec<i64> = phi_arms[target_id as u64];
         if arms.len() > 0 {
             let mut ai: u64 = 0;
             while ai < arms.len() {
@@ -3103,9 +3106,9 @@ fn call_store_effects_collect_regions(
     if callee_idx < 0 || callee_idx >= int_se_targets.len() as i64 {
         return;
     }
-    let targets: Vec<i64> = int_se_targets[callee_idx];
-    let kinds: Vec<i64> = int_se_src_kinds[callee_idx];
-    let auxs: Vec<i64> = int_se_src_aux[callee_idx];
+    let targets: Vec<i64> = int_se_targets[callee_idx as u64];
+    let kinds: Vec<i64> = int_se_src_kinds[callee_idx as u64];
+    let auxs: Vec<i64> = int_se_src_aux[callee_idx as u64];
     let mut i: u64 = 0;
     while i < targets.len() && i < kinds.len() && i < auxs.len() {
         if kinds[i] == RSUM_KIND_ALIAS_OF() && auxs[i] == source_arg_pos {
@@ -3113,7 +3116,7 @@ fn call_store_effects_collect_regions(
             if target_param >= 0 && target_param < call_inst.args.len() as i64 {
                 add_store_target_markers_vow(
                     id_to_inst, id_to_block, phi_arms,
-                    call_inst.args[target_param], int_kinds,
+                    call_inst.args[target_param as u64], int_kinds,
                     markers, work, seen, Vec::new(), false
                 );
             }
@@ -3135,9 +3138,9 @@ fn call_store_effects_collect_concrete_blocks(
     if callee_idx < 0 || callee_idx >= int_se_targets.len() as i64 {
         return true;
     }
-    let targets: Vec<i64> = int_se_targets[callee_idx];
-    let kinds: Vec<i64> = int_se_src_kinds[callee_idx];
-    let auxs: Vec<i64> = int_se_src_aux[callee_idx];
+    let targets: Vec<i64> = int_se_targets[callee_idx as u64];
+    let kinds: Vec<i64> = int_se_src_kinds[callee_idx as u64];
+    let auxs: Vec<i64> = int_se_src_aux[callee_idx as u64];
     let mut i: u64 = 0;
     while i < targets.len() && i < kinds.len() && i < auxs.len() {
         if kinds[i] == RSUM_KIND_ALIAS_OF() && auxs[i] == source_arg_pos {
@@ -3146,14 +3149,14 @@ fn call_store_effects_collect_concrete_blocks(
                 let target_block: i64 = target_marker_concrete_block(
                     id_to_inst,
                     id_to_block,
-                    call_inst.args[target_param],
+                    call_inst.args[target_param as u64],
                     int_kinds
                 );
                 if target_block < 0 {
                     return false;
                 }
                 linear_insert_i64(markers, target_block);
-                push_region_work(work, seen, call_inst.args[target_param]);
+                push_region_work(work, seen, call_inst.args[target_param as u64]);
             }
         } else if kinds[i] == RSUM_KIND_ALIAS_OF_ANY() {
             return false;
@@ -3170,11 +3173,11 @@ fn callee_return_aliases_arg(
     if callee_idx < 0 || callee_idx >= int_kinds.len() as i64 {
         return false;
     }
-    if int_kinds[callee_idx] == RSUM_KIND_ALIAS_OF() {
-        return int_auxs[callee_idx] == arg_pos;
+    if int_kinds[callee_idx as u64] == RSUM_KIND_ALIAS_OF() {
+        return int_auxs[callee_idx as u64] == arg_pos;
     }
-    if int_kinds[callee_idx] == RSUM_KIND_ALIAS_OF_ANY() {
-        let aliases: Vec<i64> = int_aliases_list[callee_idx];
+    if int_kinds[callee_idx as u64] == RSUM_KIND_ALIAS_OF_ANY() {
+        let aliases: Vec<i64> = int_aliases_list[callee_idx as u64];
         return region_vec_contains_i64(aliases, arg_pos);
     }
     false
@@ -3379,7 +3382,7 @@ fn block_tree_visit_root(
     ids.push(root);
     kinds.push(0);
     if root >= 0 && root < parent.len() as i64 {
-        parent[root] = -1;
+        parent[root as u64] = -1;
     }
 
     while ids.len() > 0 {
@@ -3403,7 +3406,7 @@ fn block_tree_visit_root(
         visited.push(id);
         linear_insert_i64(on_stack, id);
         if id >= 0 && id < component.len() as i64 {
-            component[id] = comp;
+            component[id as u64] = comp;
         }
 
         ids.push(id);
@@ -3421,14 +3424,14 @@ fn block_tree_visit_root(
             if region_vec_contains_i64(on_stack, succ) {
                 continue;
             }
-            if succ >= 0 && succ < component.len() as i64 && component[succ] >= 0 && component[succ] != comp {
+            if succ >= 0 && succ < component.len() as i64 && component[succ as u64] >= 0 && component[succ as u64] != comp {
                 continue;
             }
             if id >= 0 && id < forward.len() as i64 {
-                linear_insert_i64(forward[id], succ);
+                linear_insert_i64(forward[id as u64], succ);
             }
-            if succ >= 0 && succ < parent.len() as i64 && parent[succ] == -2 {
-                parent[succ] = id;
+            if succ >= 0 && succ < parent.len() as i64 && parent[succ as u64] == -2 {
+                parent[succ as u64] = id;
             }
             if !region_vec_contains_i64(visited, succ) {
                 ids.push(succ);
@@ -3445,7 +3448,7 @@ fn block_tree_dominance_parent(
     while ri < roots.len() {
         let root: i64 = roots[ri];
         if root >= 0 && root < parent.len() as i64 {
-            parent[root] = -1;
+            parent[root as u64] = -1;
         }
         ri = ri + 1;
     }
@@ -3459,24 +3462,24 @@ fn block_tree_dominance_parent(
         iter = iter + 1;
         let mut pred: i64 = 0;
         while pred < forward.len() as i64 {
-            let succs: Vec<i64> = forward[pred];
+            let succs: Vec<i64> = forward[pred as u64];
             let mut si: u64 = 0;
             while si < succs.len() {
                 let succ: i64 = succs[si];
                 if succ >= 0 && succ < parent.len() as i64
                     && pred >= 0 && pred < component.len() as i64
                     && succ < component.len() as i64
-                    && component[pred] == component[succ]
-                    && parent[succ] != -1
+                    && component[pred as u64] == component[succ as u64]
+                    && parent[succ as u64] != -1
                 {
-                    let old_parent: i64 = parent[succ];
+                    let old_parent: i64 = parent[succ as u64];
                     let next_parent: i64 = if old_parent == -2 {
                         pred
                     } else {
                         block_tree_parent_lca(parent, old_parent, pred)
                     };
                     if next_parent != old_parent {
-                        parent[succ] = next_parent;
+                        parent[succ as u64] = next_parent;
                         changed = true;
                     }
                 }
@@ -3523,7 +3526,7 @@ fn block_parent_depth(parent: Vec<i64>, id: i64) -> i64 {
             return -1;
         }
         seen.push(cur);
-        let p: i64 = parent[cur];
+        let p: i64 = parent[cur as u64];
         if p == -1 {
             return depth;
         }
@@ -3568,8 +3571,8 @@ fn build_block_depth(parent: Vec<i64>) -> Vec<i64> {
     }
     let mut j: i64 = 0;
     while j < parent.len() as i64 {
-        if parent[j] != -2 {
-            depth[j] = block_depth_for(parent, j);
+        if parent[j as u64] != -2 {
+            depth[j as u64] = block_depth_for(parent, j);
         }
         j = j + 1;
     }
@@ -3585,7 +3588,7 @@ fn block_depth_for(parent: Vec<i64>, id: i64) -> i64 {
             return -1;
         }
         seen.push(cur);
-        let p: i64 = parent[cur];
+        let p: i64 = parent[cur as u64];
         if p == -1 {
             return depth;
         }
@@ -3703,14 +3706,14 @@ fn sort_block_regions_by_depth(regions: Vec<i64>, depth: Vec<i64>) {
 
 fn block_parent_at(parent: Vec<i64>, id: i64) -> i64 {
     if id >= 0 && id < parent.len() as i64 {
-        return parent[id];
+        return parent[id as u64];
     }
     -2
 }
 
 fn block_depth_at(depth: Vec<i64>, id: i64) -> i64 {
     if id >= 0 && id < depth.len() as i64 {
-        return depth[id];
+        return depth[id as u64];
     }
     -1
 }
@@ -3870,7 +3873,7 @@ fn forward_graph_without_back_edges(f: IrFunction, edges: BackEdges) -> Vec<Vec<
             while si < succs.len() {
                 let succ: i64 = succs[si];
                 if succ >= 0 && succ < graph.len() as i64 && !back_edges_contains(edges, blk.id, succ) {
-                    linear_insert_i64(graph[blk.id], succ);
+                    linear_insert_i64(graph[blk.id as u64], succ);
                 }
                 si = si + 1;
             }
@@ -3889,12 +3892,12 @@ fn reverse_graph(graph: Vec<Vec<i64>>) -> Vec<Vec<i64>> {
     }
     let mut pred: i64 = 0;
     while pred < graph.len() as i64 {
-        let succs: Vec<i64> = graph[pred];
+        let succs: Vec<i64> = graph[pred as u64];
         let mut si: u64 = 0;
         while si < succs.len() {
             let succ: i64 = succs[si];
             if succ >= 0 && succ < rev.len() as i64 {
-                linear_insert_i64(rev[succ], pred);
+                linear_insert_i64(rev[succ as u64], pred);
             }
             si = si + 1;
         }
@@ -3920,7 +3923,7 @@ fn reachable_from_blocks(starts: Vec<i64>, graph: Vec<Vec<i64>>) -> Vec<i64> {
         }
         reachable.push(block);
         if block >= 0 && block < graph.len() as i64 {
-            let succs: Vec<i64> = graph[block];
+            let succs: Vec<i64> = graph[block as u64];
             let mut gi: u64 = succs.len();
             while gi > 0 {
                 gi = gi - 1;
@@ -3947,7 +3950,7 @@ fn refresh_regions_for_edge(
             let header_succs: Vec<i64> = Vec::new();
             header_succs.push(header);
             if header >= 0 && header < forward.len() as i64 {
-                let src: Vec<i64> = forward[header];
+                let src: Vec<i64> = forward[header as u64];
                 let mut si: u64 = 0;
                 while si < src.len() {
                     header_succs.push(src[si]);
@@ -4043,7 +4046,7 @@ fn build_phi_home_blocks(f: IrFunction) -> Vec<i64> {
         while ii2 < blk2.insts.len() {
             let inst: IrInst = blk2.insts[ii2];
             if inst.op == IOP_PHI() && inst.id >= 0 && inst.id < homes.len() as i64 {
-                homes[inst.id] = blk2.id;
+                homes[inst.id as u64] = blk2.id;
             }
             ii2 = ii2 + 1;
         }
@@ -4060,7 +4063,7 @@ fn upsilon_targets_block(inst: IrInst, target: i64, phi_home: Vec<i64>) -> bool 
     if phi_id < 0 || phi_id >= phi_home.len() as i64 {
         return false;
     }
-    phi_home[phi_id] == target
+    phi_home[phi_id as u64] == target
 }
 
 fn collect_edge_upsilons_for_target(
@@ -4182,7 +4185,7 @@ fn build_id_to_inst(f: IrFunction) -> Vec<IrInst> {
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
             if inst.id >= 0 {
-                tbl[inst.id] = inst;
+                tbl[inst.id as u64] = inst;
             }
             ii = ii + 1;
         }
@@ -4206,7 +4209,7 @@ fn build_id_to_block(f: IrFunction, n_ids: i64) -> Vec<i64> {
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
             if inst.id >= 0 && inst.id < n_ids {
-                tbl[inst.id] = blk.id;
+                tbl[inst.id as u64] = blk.id;
             }
             ii = ii + 1;
         }
@@ -4232,7 +4235,7 @@ fn build_phi_arms(f: IrFunction, n_ids: i64) -> Vec<Vec<i64>> {
             if inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET() && inst.args.len() > 0 {
                 let phi_id: i64 = inst.dv;
                 if phi_id >= 0 && phi_id < n_ids {
-                    arms[phi_id].push(inst.args[0]);
+                    arms[phi_id as u64].push(inst.args[0]);
                 }
             }
             ii = ii + 1;
@@ -4401,7 +4404,7 @@ fn deep_ret_uninit() -> DeepRet {
 
 fn lookup_inst_or_default(id_to_inst: Vec<IrInst>, id: i64) -> IrInst {
     if id >= 0 && id < id_to_inst.len() as i64 {
-        return id_to_inst[id];
+        return id_to_inst[id as u64];
     }
     ir_inst_new(-1, 0, 0, Vec::new(), 0, 0, 0, String::from(""))
 }
@@ -4498,7 +4501,7 @@ fn deep_origin_inner(
     if id < 0 || id >= id_to_inst.len() as i64 {
         return deep_ret_const_global();
     }
-    let inst: IrInst = id_to_inst[id];
+    let inst: IrInst = id_to_inst[id as u64];
     if inst.id < 0 {
         return deep_ret_const_global();
     }
@@ -4527,16 +4530,16 @@ fn deep_origin_inner(
         if inst.dk == IDATA_CALL_TARGET() {
             let callee_idx: i64 = inst.dv;
             if callee_idx >= 0 && callee_idx < int_kinds.len() as i64 {
-                let ck: i64 = int_kinds[callee_idx];
+                let ck: i64 = int_kinds[callee_idx as u64];
                 if ck == RSUM_KIND_ALIAS_OF() {
-                    let p_idx: i64 = int_auxs[callee_idx];
+                    let p_idx: i64 = int_auxs[callee_idx as u64];
                     if p_idx >= 0 && p_idx < inst.args.len() as i64 {
                         // `visiting` is the shared cycle-detection stack.
                         // Vow Vec has reference semantics, so every sibling
                         // recursion sees the same vec — pop before returning
                         // so stale ids don't leak into subsequent arms.
                         visiting.push(id);
-                        let r: DeepRet = deep_origin_inner(id_to_inst, phi_arms, inst.args[p_idx], int_kinds, int_auxs, int_aliases_list, visiting);
+                        let r: DeepRet = deep_origin_inner(id_to_inst, phi_arms, inst.args[p_idx as u64], int_kinds, int_auxs, int_aliases_list, visiting);
                         visiting.pop();
                         return r;
                     }
@@ -4548,7 +4551,7 @@ fn deep_origin_inner(
                     // because the lowerer doesn't track struct tag through
                     // reassignment yet (would emit FieldGet ICE warnings).
                     visiting.push(id);
-                    let als: Vec<i64> = int_aliases_list[callee_idx];
+                    let als: Vec<i64> = int_aliases_list[callee_idx as u64];
                     let mut acc_kind: i64 = RSUM_INTERNAL_UNINIT();
                     let mut acc_aux: i64 = 0;
                     let mut acc_aliases: Vec<i64> = Vec::new();
@@ -4556,7 +4559,7 @@ fn deep_origin_inner(
                     while ai < als.len() {
                         let p_idx: i64 = als[ai];
                         if p_idx >= 0 && p_idx < inst.args.len() as i64 {
-                            let arm: DeepRet = deep_origin_inner(id_to_inst, phi_arms, inst.args[p_idx], int_kinds, int_auxs, int_aliases_list, visiting);
+                            let arm: DeepRet = deep_origin_inner(id_to_inst, phi_arms, inst.args[p_idx as u64], int_kinds, int_auxs, int_aliases_list, visiting);
                             let arm_kind: i64 = arm.kind;
                             let arm_aux: i64 = arm.aux;
                             let arm_aliases: Vec<i64> = arm.aliases;
@@ -4582,7 +4585,7 @@ fn deep_origin_inner(
     if inst.op == IOP_PHI() {
         // Pizlo SSA: join all upsilon arms targeting this phi.
         visiting.push(id);
-        let arms: Vec<i64> = phi_arms[id];
+        let arms: Vec<i64> = phi_arms[id as u64];
         let mut acc_kind: i64 = RSUM_INTERNAL_UNINIT();
         let mut acc_aux: i64 = 0;
         let mut acc_aliases: Vec<i64> = Vec::new();
@@ -4710,7 +4713,7 @@ fn canonical_aliases_vec(xs: Vec<i64>) -> Vec<i64> {
 // ---- §4.3 step 5 termination resolution ----
 
 fn resolve_uninit_return_kind(m: IrModule, fidx: i64, id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>) -> i64 {
-    let f: IrFunction = m.functions[fidx];
+    let f: IrFunction = m.functions[fidx as u64];
     if is_scalar_ity(f.return_ty) {
         return RSUM_KIND_CONSTANT_GLOBAL();
     }
@@ -4759,7 +4762,7 @@ fn resolve_uninit_return_aux(m: IrModule, fidx: i64, kind: i64, id_to_inst: Vec<
     if kind != RSUM_KIND_ALIAS_OF() {
         return 0;
     }
-    let f: IrFunction = m.functions[fidx];
+    let f: IrFunction = m.functions[fidx as u64];
     let bks: Vec<IrBlock> = f.blocks;
     let int_kinds_empty: Vec<i64> = Vec::new();
     let int_auxs_empty: Vec<i64> = Vec::new();
@@ -4937,23 +4940,23 @@ fn tarjan_sccs(cg: Vec<Vec<i64>>, n: u64) -> Vec<Vec<i64>> {
                 let v: i64 = work_node[last];
                 let p: i64 = work_pos[last];
                 if p == -1 {
-                    indices[v] = idx_counter;
-                    lowlinks[v] = idx_counter;
+                    indices[v as u64] = idx_counter;
+                    lowlinks[v as u64] = idx_counter;
                     idx_counter = idx_counter + 1;
                     stack.push(v);
-                    on_stack[v] = 1;
+                    on_stack[v as u64] = 1;
                     work_pos[last] = 0;
                 } else {
-                    let succs: Vec<i64> = cg[v];
+                    let succs: Vec<i64> = cg[v as u64];
                     if p < succs.len() as i64 {
-                        let w: i64 = succs[p];
+                        let w: i64 = succs[p as u64];
                         work_pos[last] = p + 1;
-                        if indices[w] == -1 {
+                        if indices[w as u64] == -1 {
                             work_node.push(w);
                             work_pos.push(-1);
-                        } else if on_stack[w] == 1 {
-                            if lowlinks[v] > indices[w] {
-                                lowlinks[v] = indices[w];
+                        } else if on_stack[w as u64] == 1 {
+                            if lowlinks[v as u64] > indices[w as u64] {
+                                lowlinks[v as u64] = indices[w as u64];
                             }
                         }
                     } else {
@@ -4961,18 +4964,18 @@ fn tarjan_sccs(cg: Vec<Vec<i64>>, n: u64) -> Vec<Vec<i64>> {
                         let mut ci: u64 = 0;
                         while ci < succs.len() {
                             let w2: i64 = succs[ci];
-                            if on_stack[w2] == 1 && lowlinks[v] > lowlinks[w2] {
-                                lowlinks[v] = lowlinks[w2];
+                            if on_stack[w2 as u64] == 1 && lowlinks[v as u64] > lowlinks[w2 as u64] {
+                                lowlinks[v as u64] = lowlinks[w2 as u64];
                             }
                             ci = ci + 1;
                         }
-                        if lowlinks[v] == indices[v] {
+                        if lowlinks[v as u64] == indices[v as u64] {
                             let component: Vec<i64> = Vec::new();
                             let mut popping: bool = true;
                             while popping {
                                 let w3: i64 = stack[stack.len() - 1];
                                 stack.pop();
-                                on_stack[w3] = 0;
+                                on_stack[w3 as u64] = 0;
                                 component.push(w3);
                                 if w3 == v {
                                     popping = false;
