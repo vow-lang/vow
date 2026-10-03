@@ -1057,17 +1057,30 @@ VOW
 arith_status() {
     python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$1" 2>/dev/null || echo ""
 }
-# Count ArithOverflowReachable warnings naming a given function.
-arith_warns() {
+# Query the diagnostics of a verify/build JSON document. MODE is one of:
+#   arith-warns FN  count of ArithOverflowReachable warnings naming FN
+#   bound-note FN   the `(...)` bound list of FN's ModelCapacityAssumed note
+#   bound-notes     every ModelCapacityAssumed message, in output order
+diag_query() {
+    local mode="$1" json="$2" fn="${3:-}" err=ERR
+    [ "$mode" = arith-warns ] && err=-1
     python3 -c "
 import json, sys
-d = json.loads(sys.argv[1])
-fn = sys.argv[2]
-n = sum(1 for g in d.get('diagnostics', [])
-        if g.get('error_code') == 'ArithOverflowReachable'
-        and ('\`' + fn + '\`') in g.get('message', ''))
-print(n)
-" "$1" "$2" 2>/dev/null || echo "-1"
+mode, d, fn = sys.argv[1], json.loads(sys.argv[2]), sys.argv[3]
+diags = d.get('diagnostics', [])
+named = lambda g: ('\`' + fn + '\`') in g.get('message', '')
+if mode == 'arith-warns':
+    print(sum(1 for g in diags
+              if g.get('error_code') == 'ArithOverflowReachable' and named(g)))
+else:
+    for g in diags:
+        if g.get('error_code') != 'ModelCapacityAssumed':
+            continue
+        if mode == 'bound-notes':
+            print(g['message'])
+        elif g.get('severity') == 'note' and named(g):
+            print(g['message'].rsplit('(', 1)[1].rstrip(')'))
+" "$mode" "$json" "$fn" 2>/dev/null || echo "$err"
 }
 
 for compiler in rust self; do
@@ -1090,7 +1103,7 @@ for compiler in rust self; do
         j=$(run_self verify "$arith_dir/checked.vow" 2>/dev/null) || true
     fi
     [ "$(arith_status "$j")" = "Verified" ] || errors+=("checked '-!' should verify, got $(arith_status "$j")")
-    [ "$(arith_warns "$j" last_index)" = "1" ] || errors+=("checked '-!' should warn once, got $(arith_warns "$j" last_index)")
+    [ "$(diag_query arith-warns "$j" last_index)" = "1" ] || errors+=("checked '-!' should warn once, got $(diag_query arith-warns "$j" last_index)")
 
     # 3. The warning is precise, not blanket: in the committed fixture only the
     #    two functions whose abort is genuinely reachable are named, and a
@@ -1102,10 +1115,10 @@ for compiler in rust self; do
     fi
     [ "$(arith_status "$j")" = "Verified" ] || errors+=("fixture should verify, got $(arith_status "$j")")
     for fn in twice scale doomed; do
-        [ "$(arith_warns "$j" "$fn")" = "1" ] || errors+=("$fn should warn, got $(arith_warns "$j" "$fn")")
+        [ "$(diag_query arith-warns "$j" "$fn")" = "1" ] || errors+=("$fn should warn, got $(diag_query arith-warns "$j" "$fn")")
     done
     for fn in last_index halve rem_pos; do
-        [ "$(arith_warns "$j" "$fn")" = "0" ] || errors+=("$fn abort is ruled out by requires; must not warn")
+        [ "$(diag_query arith-warns "$j" "$fn")" = "0" ] || errors+=("$fn abort is ruled out by requires; must not warn")
     done
 
     # 4. A site inside a co-emitted callee is attributed to the callee, not to
@@ -1117,8 +1130,8 @@ for compiler in rust self; do
         j=$(run_self verify tests/verify/checked_arith_callee_attribution.vow 2>/dev/null) || true
     fi
     [ "$(arith_status "$j")" = "Verified" ] || errors+=("attribution fixture status $(arith_status "$j")")
-    [ "$(arith_warns "$j" helper)" = "1" ] || errors+=("site must be attributed to helper exactly once, got $(arith_warns "$j" helper)")
-    [ "$(arith_warns "$j" caller)" = "0" ] || errors+=("caller has no checked arithmetic and must not be named")
+    [ "$(diag_query arith-warns "$j" helper)" = "1" ] || errors+=("site must be attributed to helper exactly once, got $(diag_query arith-warns "$j" helper)")
+    [ "$(diag_query arith-warns "$j" caller)" = "0" ] || errors+=("caller has no checked arithmetic and must not be named")
 
     if [ ${#errors[@]} -eq 0 ]; then
         pass "checked_arith_abort_model/$compiler"
@@ -1138,31 +1151,6 @@ echo ""
 # in-range length) must carry none.
 section_begin "Model-capacity bound note"
 
-# Print the ModelCapacityAssumed message naming a function, or nothing.
-bound_note() {
-    python3 -c "
-import json, sys
-d = json.loads(sys.argv[1])
-fn = sys.argv[2]
-for g in d.get('diagnostics', []):
-    if (g.get('error_code') == 'ModelCapacityAssumed'
-            and g.get('severity') == 'note'
-            and ('\`' + fn + '\`') in g.get('message', '')):
-        print(g['message'].rsplit('(', 1)[1].rstrip(')'))
-" "$1" "$2" 2>/dev/null || echo "ERR"
-}
-
-# Every ModelCapacityAssumed message, in output order, one per line.
-bound_notes_in_order() {
-    python3 -c "
-import json, sys
-d = json.loads(sys.argv[1])
-for g in d.get('diagnostics', []):
-    if g.get('error_code') == 'ModelCapacityAssumed':
-        print(g['message'])
-" "$1" 2>/dev/null || echo "ERR"
-}
-
 # The notes are asserted on both pipelines: `verify` (frontend + verification
 # only) and `build` (the default user path, which verifies and then compiles the
 # fixture's trivial `main`). Both compilers must agree on the full ordered list.
@@ -1178,14 +1166,16 @@ for cmd in verify build; do
             j=$(run_self "$cmd" --no-cache "$fixture" ${extra[@]+"${extra[@]}"} 2>/dev/null) || true
         fi
         errors=()
-        [ "$(arith_status "$j")" = "Verified" ] || errors+=("fixture should verify, got $(arith_status "$j")")
-        [ "$(bound_note "$j" first_byte)" = "Vec<T>: 128" ] || errors+=("first_byte note: '$(bound_note "$j" first_byte)'")
-        [ "$(bound_note "$j" string_len)" = "String: 256" ] || errors+=("string_len note: '$(bound_note "$j" string_len)'")
-        [ "$(bound_note "$j" map_size)" = "HashMap<K, V>: 64" ] || errors+=("map_size note: '$(bound_note "$j" map_size)'")
-        [ "$(bound_note "$j" vec_and_string)" = "Vec<T>: 128, String: 256" ] || errors+=("vec_and_string note: '$(bound_note "$j" vec_and_string)'")
-        [ -z "$(bound_note "$j" scalar_only)" ] || errors+=("scalar_only must not carry a capacity note")
-        [ -z "$(bound_note "$j" constant_in_range)" ] || errors+=("constant_in_range restricts nothing and must not carry a capacity note")
-        notes_by_compiler+=("$(bound_notes_in_order "$j")")
+        if [ "$cmd" = build ] && [ "$(arith_status "$j")" != "Verified" ]; then
+            errors+=("build should verify, got $(arith_status "$j")")
+        fi
+        [ "$(diag_query bound-note "$j" first_byte)" = "Vec<T>: 128" ] || errors+=("first_byte note: '$(diag_query bound-note "$j" first_byte)'")
+        [ "$(diag_query bound-note "$j" string_len)" = "String: 256" ] || errors+=("string_len note: '$(diag_query bound-note "$j" string_len)'")
+        [ "$(diag_query bound-note "$j" map_size)" = "HashMap<K, V>: 64" ] || errors+=("map_size note: '$(diag_query bound-note "$j" map_size)'")
+        [ "$(diag_query bound-note "$j" vec_and_string)" = "Vec<T>: 128, String: 256" ] || errors+=("vec_and_string note: '$(diag_query bound-note "$j" vec_and_string)'")
+        [ -z "$(diag_query bound-note "$j" scalar_only)" ] || errors+=("scalar_only must not carry a capacity note")
+        [ -z "$(diag_query bound-note "$j" constant_in_range)" ] || errors+=("constant_in_range restricts nothing and must not carry a capacity note")
+        notes_by_compiler+=("$(diag_query bound-notes "$j")")
 
         if [ ${#errors[@]} -eq 0 ]; then
             pass "model_capacity_bound_note/$cmd/$compiler"
@@ -1225,7 +1215,7 @@ for compiler in rust self; do
     fi
     errors=()
     [ "$(arith_status "$j")" = "Verified" ] || errors+=("compiler/parser.vow should verify, got $(arith_status "$j")")
-    [ "$(arith_warns "$j" span_pack)" = "1" ] || errors+=("span_pack should warn once (start's magnitude bound was dropped, so the abort is reachable), got $(arith_warns "$j" span_pack)")
+    [ "$(diag_query arith-warns "$j" span_pack)" = "1" ] || errors+=("span_pack should warn once (start's magnitude bound was dropped, so the abort is reachable), got $(diag_query arith-warns "$j" span_pack)")
 
     if [ ${#errors[@]} -eq 0 ]; then
         pass "span_pack_verifier_bound/$compiler"
