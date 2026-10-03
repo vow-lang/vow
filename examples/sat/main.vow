@@ -15,7 +15,7 @@ fn print_error(msg: String) [io] {
 }
 
 fn print_stats(result: SolveResult, elapsed_ms: i64) [io] {
-    eprintln_str(str2(String::from("vars="), i64_to_string(result.num_vars)));
+    eprintln_str(str2(String::from("vars="), uint_to_string(result.num_vars)));
     eprintln_str(str2(String::from("clauses="), i64_to_string(result.original_clauses)));
     eprintln_str(str2(String::from("learnts="), i64_to_string(result.learnt_clauses)));
     eprintln_str(str2(String::from("decisions="), i64_to_string(result.decisions)));

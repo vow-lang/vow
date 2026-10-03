@@ -72,11 +72,11 @@ fn parse_int_token(src: String, start: i64, end: i64, line_no: i64) -> IntToken 
 }
 
 fn append_formula_clause(formula: Formula, clause: Vec<i64>) {
-    let starts: Vec<i64> = formula.clause_start;
-    let lens: Vec<i64> = formula.clause_len;
+    let starts: Vec<u64> = formula.clause_start;
+    let lens: Vec<u64> = formula.clause_len;
     let lits: Vec<i64> = formula.lits;
-    starts.push(lits.len() as i64);
-    lens.push(clause.len() as i64);
+    starts.push(lits.len());
+    lens.push(clause.len());
 
     let mut i: u64 = 0;
     let n: u64 = clause.len();
@@ -182,7 +182,7 @@ fn parse_dimacs(src: String) -> ParseResult {
 
                     declared_vars = vars_tok.value;
                     declared_clauses = clauses_tok.value;
-                    formula.num_vars = declared_vars;
+                    formula.num_vars = declared_vars as u64;
                     formula.input_clause_count = declared_clauses;
                     header_seen = 1;
                 } else {

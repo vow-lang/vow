@@ -12,11 +12,11 @@ const VAL_UNASSIGNED: i64 = 0;
 const VAL_TRUE: i64 = 1;
 
 struct Formula {
-    num_vars: i64,
+    num_vars: u64,
     input_clause_count: i64,
     lits: Vec<i64>,
-    clause_start: Vec<i64>,
-    clause_len: Vec<i64>,
+    clause_start: Vec<u64>,
+    clause_len: Vec<u64>,
 }
 
 struct ParseResult {
@@ -27,7 +27,7 @@ struct ParseResult {
 
 struct SolveResult {
     status: i64,
-    num_vars: i64,
+    num_vars: u64,
     assignment: Vec<i64>,
     original_clauses: i64,
     learnt_clauses: i64,
@@ -97,38 +97,36 @@ fn is_digit_byte(b: i64) -> bool {
     b >= 48 && b <= 57
 }
 
-fn lit_var(lit: i64) -> i64 vow {
+fn lit_var(lit: i64) -> u64 vow {
     requires: lit != 0,
     requires: lit >= -9223372036854775807,
     ensures: result > 0
 } {
     if lit < 0 {
-        -lit
+        (-lit) as u64
     } else {
-        lit
+        lit as u64
     }
 }
 
-fn lit_bucket(lit: i64) -> i64 vow {
+fn lit_bucket(lit: i64) -> u64 vow {
     requires: lit != 0,
     requires: lit > -4611686018427387905,
-    requires: lit < 4611686018427387905,
-    ensures: result >= 0
+    requires: lit < 4611686018427387905
 } {
     if lit > 0 {
-        (lit - 1) * 2
+        (lit_var(lit) - 1) * 2
     } else {
-        ((-lit) - 1) * 2 + 1
+        (lit_var(lit) - 1) * 2 + 1
     }
 }
 
 fn lit_value(assigns: Vec<i64>, lit: i64) -> i64 vow {
     requires: lit != 0,
     requires: lit >= -9223372036854775807,
-    requires: lit_var(lit) >= 0,
-    requires: lit_var(lit) < assigns.len() as i64
+    requires: lit_var(lit) < assigns.len()
 } {
-    let v: i64 = assigns[lit_var(lit) as u64];
+    let v: i64 = assigns[lit_var(lit)];
     if lit < 0 {
         -v
     } else {
@@ -136,15 +134,13 @@ fn lit_value(assigns: Vec<i64>, lit: i64) -> i64 vow {
     }
 }
 
-fn make_zero_vec(n: i64) -> Vec<i64> vow {
-    requires: n >= 0,
-    ensures: result.len() as i64 == n
+fn make_zero_vec(n: u64) -> Vec<i64> vow {
+    ensures: result.len() == n
 } {
     let out: Vec<i64> = Vec::new();
-    let count: u64 = n as u64;
     let mut i: u64 = 0;
-    while i < count vow {
-        invariant: i <= count,
+    while i < n vow {
+        invariant: i <= n,
         invariant: out.len() == i
     } {
         out.push(0);
@@ -153,15 +149,13 @@ fn make_zero_vec(n: i64) -> Vec<i64> vow {
     out
 }
 
-fn make_i64_vec(n: i64, val: i64) -> Vec<i64> vow {
-    requires: n >= 0,
-    ensures: result.len() as i64 == n
+fn make_i64_vec(n: u64, val: i64) -> Vec<i64> vow {
+    ensures: result.len() == n
 } {
     let out: Vec<i64> = Vec::new();
-    let count: u64 = n as u64;
     let mut i: u64 = 0;
-    while i < count vow {
-        invariant: i <= count,
+    while i < n vow {
+        invariant: i <= n,
         invariant: out.len() == i
     } {
         out.push(val);
@@ -170,15 +164,28 @@ fn make_i64_vec(n: i64, val: i64) -> Vec<i64> vow {
     out
 }
 
-fn make_empty_buckets(n: i64) -> Vec<Vec<i64>> vow {
-    requires: n >= 0,
-    ensures: result.len() as i64 == n
+fn make_u64_vec(n: u64, val: u64) -> Vec<u64> vow {
+    ensures: result.len() == n
 } {
-    let out: Vec<Vec<i64>> = Vec::new();
-    let count: u64 = n as u64;
+    let out: Vec<u64> = Vec::new();
     let mut i: u64 = 0;
-    while i < count vow {
-        invariant: i <= count,
+    while i < n vow {
+        invariant: i <= n,
+        invariant: out.len() == i
+    } {
+        out.push(val);
+        i = i + 1;
+    }
+    out
+}
+
+fn make_empty_buckets(n: u64) -> Vec<Vec<u64>> vow {
+    ensures: result.len() == n
+} {
+    let out: Vec<Vec<u64>> = Vec::new();
+    let mut i: u64 = 0;
+    while i < n vow {
+        invariant: i <= n,
         invariant: out.len() == i
     } {
         out.push(Vec::new());

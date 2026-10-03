@@ -8,29 +8,29 @@ const LUBY_BASE: i64 = 32;
 
 struct AnalyzeResult {
     learnt: Vec<i64>,
-    backtrack_level: i64,
+    backtrack_level: u64,
 }
 
 struct Solver {
-    num_vars: i64,
+    num_vars: u64,
     clause_lits: Vec<i64>,
     clause_start: Vec<i64>,
-    clause_len: Vec<i64>,
-    clause_watch_a: Vec<i64>,
-    clause_watch_b: Vec<i64>,
+    clause_len: Vec<u64>,
+    clause_watch_a: Vec<u64>,
+    clause_watch_b: Vec<u64>,
     clause_deleted: Vec<i64>,
     clause_learnt: Vec<i64>,
     clause_score: Vec<i64>,
-    watches: Vec<Vec<i64>>,
+    watches: Vec<Vec<u64>>,
     assigns: Vec<i64>,
-    levels: Vec<i64>,
+    levels: Vec<u64>,
     reasons: Vec<i64>,
     saved_phase: Vec<i64>,
     var_activity: Vec<i64>,
     seen: Vec<i64>,
     trail: Vec<i64>,
-    trail_lim: Vec<i64>,
-    qhead: i64,
+    trail_lim: Vec<u64>,
+    qhead: u64,
     original_clauses: i64,
     active_learnts: i64,
     deleted_learnts: i64,
@@ -43,14 +43,12 @@ struct Solver {
     next_restart_conflicts: i64,
 }
 
-fn pow2(n: i64) -> i64 vow {
-    requires: n >= 0,
+fn pow2(n: u64) -> i64 vow {
     ensures: result >= 1
 } {
     let mut out: i64 = 1;
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < n vow {
-        invariant: i >= 0,
         invariant: i <= n,
         invariant: out >= 1
     } {
@@ -64,7 +62,7 @@ fn luby(i: i64) -> i64 vow {
     requires: i >= 1,
     ensures: result >= 1
 } {
-    let mut k: i64 = 1;
+    let mut k: u64 = 1;
     while pow2(k) - 1 < i vow {
         invariant: k >= 1
     } {
@@ -78,113 +76,100 @@ fn luby(i: i64) -> i64 vow {
     luby(i - pow2(k - 1) + 1)
 }
 
-fn clause_count(s: Solver) -> i64 {
+fn clause_count(s: Solver) -> u64 {
     let starts: Vec<i64> = s.clause_start;
-    starts.len() as i64
+    starts.len()
 }
 
-fn current_level(s: Solver) -> i64 {
-    let levels: Vec<i64> = s.trail_lim;
-    levels.len() as i64
+fn current_level(s: Solver) -> u64 {
+    let levels: Vec<u64> = s.trail_lim;
+    levels.len()
 }
 
-fn clause_start_of(s: Solver, cid: i64) -> i64 vow {
-    requires: cid >= 0,
+fn clause_start_of(s: Solver, cid: u64) -> i64 vow {
     requires: cid < clause_count(s)
 } {
     let starts: Vec<i64> = s.clause_start;
-    starts[cid as u64]
+    starts[cid]
 }
 
-fn clause_len_of(s: Solver, cid: i64) -> i64 vow {
-    requires: cid >= 0,
+fn clause_len_of(s: Solver, cid: u64) -> u64 vow {
     requires: cid < clause_count(s)
 } {
-    let lens: Vec<i64> = s.clause_len;
-    lens[cid as u64]
+    let lens: Vec<u64> = s.clause_len;
+    lens[cid]
 }
 
-fn clause_lit_at(s: Solver, cid: i64, pos: i64) -> i64 vow {
-    requires: cid >= 0,
+fn clause_lit_at(s: Solver, cid: u64, pos: u64) -> i64 vow {
     requires: cid < clause_count(s),
-    requires: pos >= 0,
     requires: pos < clause_len_of(s, cid)
 } {
     let start: i64 = clause_start_of(s, cid);
     let lits: Vec<i64> = s.clause_lits;
-    lits[(start + pos) as u64]
+    lits[(start as u64) + pos]
 }
 
-fn clause_watch_a_of(s: Solver, cid: i64) -> i64 vow {
-    requires: cid >= 0,
+fn clause_watch_a_of(s: Solver, cid: u64) -> u64 vow {
     requires: cid < clause_count(s)
 } {
-    let xs: Vec<i64> = s.clause_watch_a;
-    xs[cid as u64]
+    let xs: Vec<u64> = s.clause_watch_a;
+    xs[cid]
 }
 
-fn clause_watch_b_of(s: Solver, cid: i64) -> i64 vow {
-    requires: cid >= 0,
+fn clause_watch_b_of(s: Solver, cid: u64) -> u64 vow {
     requires: cid < clause_count(s)
 } {
-    let xs: Vec<i64> = s.clause_watch_b;
-    xs[cid as u64]
+    let xs: Vec<u64> = s.clause_watch_b;
+    xs[cid]
 }
 
-fn set_clause_watch_a(s: Solver, cid: i64, pos: i64) vow {
-    requires: cid >= 0,
+fn set_clause_watch_a(s: Solver, cid: u64, pos: u64) vow {
     requires: cid < clause_count(s)
 } {
-    let xs: Vec<i64> = s.clause_watch_a;
-    xs[cid as u64] = pos;
+    let xs: Vec<u64> = s.clause_watch_a;
+    xs[cid] = pos;
 }
 
-fn set_clause_watch_b(s: Solver, cid: i64, pos: i64) vow {
-    requires: cid >= 0,
+fn set_clause_watch_b(s: Solver, cid: u64, pos: u64) vow {
     requires: cid < clause_count(s)
 } {
-    let xs: Vec<i64> = s.clause_watch_b;
-    xs[cid as u64] = pos;
+    let xs: Vec<u64> = s.clause_watch_b;
+    xs[cid] = pos;
 }
 
-fn clause_deleted_of(s: Solver, cid: i64) -> i64 vow {
-    requires: cid >= 0,
+fn clause_deleted_of(s: Solver, cid: u64) -> i64 vow {
     requires: cid < clause_count(s)
 } {
     let xs: Vec<i64> = s.clause_deleted;
-    xs[cid as u64]
+    xs[cid]
 }
 
-fn clause_learnt_of(s: Solver, cid: i64) -> i64 vow {
-    requires: cid >= 0,
+fn clause_learnt_of(s: Solver, cid: u64) -> i64 vow {
     requires: cid < clause_count(s)
 } {
     let xs: Vec<i64> = s.clause_learnt;
-    xs[cid as u64]
+    xs[cid]
 }
 
-fn clause_score_of(s: Solver, cid: i64) -> i64 vow {
-    requires: cid >= 0,
+fn clause_score_of(s: Solver, cid: u64) -> i64 vow {
     requires: cid < clause_count(s)
 } {
     let xs: Vec<i64> = s.clause_score;
-    xs[cid as u64]
+    xs[cid]
 }
 
-fn set_clause_deleted(s: Solver, cid: i64, val: i64) vow {
-    requires: cid >= 0,
+fn set_clause_deleted(s: Solver, cid: u64, val: i64) vow {
     requires: cid < clause_count(s)
 } {
     let xs: Vec<i64> = s.clause_deleted;
-    xs[cid as u64] = val;
+    xs[cid] = val;
 }
 
-fn set_clause_score(s: Solver, cid: i64, val: i64) vow {
-    requires: cid >= 0,
+fn set_clause_score(s: Solver, cid: u64, val: i64) vow {
     requires: cid < clause_count(s)
 } {
     let xs: Vec<i64> = s.clause_score;
-    xs[cid as u64] = val;
+    xs[cid] = val;
 }
 
 fn make_solver(formula: Formula) -> Solver {
@@ -200,7 +185,7 @@ fn make_solver(formula: Formula) -> Solver {
         clause_score: Vec::new(),
         watches: make_empty_buckets(formula.num_vars * 2),
         assigns: make_i64_vec(formula.num_vars + 1, VAL_UNASSIGNED),
-        levels: make_i64_vec(formula.num_vars + 1, 0),
+        levels: make_u64_vec(formula.num_vars + 1, 0),
         reasons: make_i64_vec(formula.num_vars + 1, REASON_NONE),
         saved_phase: make_i64_vec(formula.num_vars + 1, VAL_TRUE),
         var_activity: make_i64_vec(formula.num_vars + 1, 0),
@@ -222,33 +207,31 @@ fn make_solver(formula: Formula) -> Solver {
 }
 
 fn rebuild_watches(s: Solver) {
-    let ws: Vec<Vec<i64>> = s.watches;
+    let ws: Vec<Vec<u64>> = s.watches;
     ws.clear();
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < s.num_vars * 2 vow {
-        invariant: i >= 0,
         invariant: i <= s.num_vars * 2,
-        invariant: ws.len() as i64 == i
+        invariant: ws.len() == i
     } {
         ws.push(Vec::new());
         i = i + 1;
     }
 
-    let total: i64 = clause_count(s);
+    let total: u64 = clause_count(s);
     i = 0;
     while i < total vow {
-        invariant: i >= 0,
         invariant: i <= total
     } {
         if clause_deleted_of(s, i) == CLAUSE_LIVE && clause_len_of(s, i) > 0 {
-            let a_pos: i64 = clause_watch_a_of(s, i);
-            let b_pos: i64 = clause_watch_b_of(s, i);
+            let a_pos: u64 = clause_watch_a_of(s, i);
+            let b_pos: u64 = clause_watch_b_of(s, i);
             let a_lit: i64 = clause_lit_at(s, i, a_pos);
-            let bucket_a: Vec<i64> = ws[lit_bucket(a_lit) as u64];
+            let bucket_a: Vec<u64> = ws[lit_bucket(a_lit)];
             bucket_a.push(i);
             if b_pos != a_pos {
                 let b_lit: i64 = clause_lit_at(s, i, b_pos);
-                let bucket_b: Vec<i64> = ws[lit_bucket(b_lit) as u64];
+                let bucket_b: Vec<u64> = ws[lit_bucket(b_lit)];
                 bucket_b.push(i);
             }
         }
@@ -256,8 +239,8 @@ fn rebuild_watches(s: Solver) {
     }
 }
 
-fn add_clause(s: Solver, clause: Vec<i64>, learnt: i64, score: i64) -> i64 {
-    let cid: i64 = clause_count(s);
+fn add_clause(s: Solver, clause: Vec<i64>, learnt: i64, score: i64) -> u64 {
+    let cid: u64 = clause_count(s);
     let start: i64 = s.clause_lits.len() as i64;
     let lits: Vec<i64> = s.clause_lits;
     let mut i: u64 = 0;
@@ -270,15 +253,15 @@ fn add_clause(s: Solver, clause: Vec<i64>, learnt: i64, score: i64) -> i64 {
     }
 
     let starts: Vec<i64> = s.clause_start;
-    let lens: Vec<i64> = s.clause_len;
-    let wa: Vec<i64> = s.clause_watch_a;
-    let wb: Vec<i64> = s.clause_watch_b;
+    let lens: Vec<u64> = s.clause_len;
+    let wa: Vec<u64> = s.clause_watch_a;
+    let wb: Vec<u64> = s.clause_watch_b;
     let del: Vec<i64> = s.clause_deleted;
     let lrn: Vec<i64> = s.clause_learnt;
     let scr: Vec<i64> = s.clause_score;
 
     starts.push(start);
-    lens.push(n as i64);
+    lens.push(n);
     if n == 0 {
         wa.push(0);
         wb.push(0);
@@ -301,11 +284,11 @@ fn add_clause(s: Solver, clause: Vec<i64>, learnt: i64, score: i64) -> i64 {
     }
 
     if n > 0 {
-        let ws: Vec<Vec<i64>> = s.watches;
-        let bucket_a: Vec<i64> = ws[lit_bucket(clause[0]) as u64];
+        let ws: Vec<Vec<u64>> = s.watches;
+        let bucket_a: Vec<u64> = ws[lit_bucket(clause[0])];
         bucket_a.push(cid);
         if n > 1 {
-            let bucket_b: Vec<i64> = ws[lit_bucket(clause[1]) as u64];
+            let bucket_b: Vec<u64> = ws[lit_bucket(clause[1])];
             bucket_b.push(cid);
         }
     }
@@ -313,23 +296,21 @@ fn add_clause(s: Solver, clause: Vec<i64>, learnt: i64, score: i64) -> i64 {
     cid
 }
 
-fn clause_from_formula(formula: Formula, cid: i64) -> Vec<i64> vow {
-    requires: cid >= 0,
-    requires: cid < formula.clause_start.len() as i64
+fn clause_from_formula(formula: Formula, cid: u64) -> Vec<i64> vow {
+    requires: cid < formula.clause_start.len()
 } {
     let out: Vec<i64> = Vec::new();
-    let starts: Vec<i64> = formula.clause_start;
-    let lens: Vec<i64> = formula.clause_len;
+    let starts: Vec<u64> = formula.clause_start;
+    let lens: Vec<u64> = formula.clause_len;
     let lits: Vec<i64> = formula.lits;
-    let start: i64 = starts[cid as u64];
-    let len: i64 = lens[cid as u64];
-    let mut i: i64 = 0;
+    let start: u64 = starts[cid];
+    let len: u64 = lens[cid];
+    let mut i: u64 = 0;
     while i < len vow {
-        invariant: i >= 0,
         invariant: i <= len,
-        invariant: out.len() as i64 == i
+        invariant: out.len() == i
     } {
-        out.push(lits[(start + i) as u64]);
+        out.push(lits[start + i]);
         i = i + 1;
     }
     out
@@ -343,9 +324,9 @@ fn lit_assign(s: Solver, lit: i64) -> i64 {
 fn enqueue(s: Solver, lit: i64, reason: i64) -> i64 vow {
     requires: lit != 0
 } {
-    let v: u64 = lit_var(lit) as u64;
+    let v: u64 = lit_var(lit);
     let assigns: Vec<i64> = s.assigns;
-    let levels: Vec<i64> = s.levels;
+    let levels: Vec<u64> = s.levels;
     let reasons: Vec<i64> = s.reasons;
     let saved: Vec<i64> = s.saved_phase;
     let trail: Vec<i64> = s.trail;
@@ -378,15 +359,15 @@ fn clause_distinct_levels(s: Solver, clause: Vec<i64>) -> i64 {
     while i < n vow {
         invariant: i <= n
     } {
-        let v: i64 = lit_var(clause[i]);
-        let level_i: i64 = s.levels[v as u64];
+        let v: u64 = lit_var(clause[i]);
+        let level_i: u64 = s.levels[v];
         let mut seen_before: i64 = 0;
         let mut j: u64 = 0;
         while j < i vow {
             invariant: j <= i
         } {
-            let prev_v: i64 = lit_var(clause[j]);
-            if s.levels[prev_v as u64] == level_i {
+            let prev_v: u64 = lit_var(clause[j]);
+            if s.levels[prev_v] == level_i {
                 seen_before = 1;
                 break;
             }
@@ -412,28 +393,26 @@ fn rescale_var_activity(s: Solver) {
     }
 }
 
-fn bump_var(s: Solver, var: i64) {
+fn bump_var(s: Solver, var: u64) {
     let act: Vec<i64> = s.var_activity;
-    let vi: u64 = var as u64;
-    act[vi] = act[vi] + 1;
-    if act[vi] > 1000000000 {
+    act[var] = act[var] + 1;
+    if act[var] > 1000000000 {
         rescale_var_activity(s);
     }
 }
 
 fn propagate(s: Solver) -> i64 {
     let trail: Vec<i64> = s.trail;
-    let ws: Vec<Vec<i64>> = s.watches;
-    while s.qhead < trail.len() as i64 vow {
-        invariant: s.qhead >= 0,
-        invariant: s.qhead <= trail.len() as i64
+    let ws: Vec<Vec<u64>> = s.watches;
+    while s.qhead < trail.len() vow {
+        invariant: s.qhead <= trail.len()
     } {
-        let lit: i64 = trail[s.qhead as u64];
+        let lit: i64 = trail[s.qhead];
         s.qhead = s.qhead + 1;
         s.propagations = s.propagations + 1;
 
         let false_lit: i64 = -lit;
-        let bucket: Vec<i64> = ws[lit_bucket(false_lit) as u64];
+        let bucket: Vec<u64> = ws[lit_bucket(false_lit)];
         let mut read_idx: u64 = 0;
         let mut write_idx: u64 = 0;
         let original_len: u64 = bucket.len();
@@ -441,25 +420,25 @@ fn propagate(s: Solver) -> i64 {
             invariant: read_idx <= original_len,
             invariant: write_idx <= read_idx
         } {
-            let cid: i64 = bucket[read_idx];
+            let cid: u64 = bucket[read_idx];
             read_idx = read_idx + 1;
 
             if clause_deleted_of(s, cid) == CLAUSE_DELETED {
                 0;
             } else {
-                let clen: i64 = clause_len_of(s, cid);
+                let clen: u64 = clause_len_of(s, cid);
                 if clen == 0 {
-                    return cid;
+                    return cid as i64;
                 }
 
-                let watch_a: i64 = clause_watch_a_of(s, cid);
-                let watch_b: i64 = clause_watch_b_of(s, cid);
+                let watch_a: u64 = clause_watch_a_of(s, cid);
+                let watch_b: u64 = clause_watch_b_of(s, cid);
                 let a_lit: i64 = clause_lit_at(s, cid, watch_a);
                 let b_lit: i64 = clause_lit_at(s, cid, watch_b);
 
                 if a_lit == false_lit || b_lit == false_lit {
-                    let mut false_pos: i64 = watch_a;
-                    let mut other_pos: i64 = watch_b;
+                    let mut false_pos: u64 = watch_a;
+                    let mut other_pos: u64 = watch_b;
                     if a_lit != false_lit {
                         false_pos = watch_b;
                         other_pos = watch_a;
@@ -471,9 +450,8 @@ fn propagate(s: Solver) -> i64 {
                         write_idx = write_idx + 1;
                     } else {
                         let mut moved: i64 = 0;
-                        let mut scan_pos: i64 = 0;
+                        let mut scan_pos: u64 = 0;
                         while scan_pos < clen vow {
-                            invariant: scan_pos >= 0,
                             invariant: scan_pos <= clen
                         } {
                             if scan_pos != false_pos && scan_pos != other_pos {
@@ -484,7 +462,7 @@ fn propagate(s: Solver) -> i64 {
                                     } else {
                                         set_clause_watch_b(s, cid, scan_pos);
                                     }
-                                    let new_bucket: Vec<i64> = ws[lit_bucket(cand) as u64];
+                                    let new_bucket: Vec<u64> = ws[lit_bucket(cand)];
                                     new_bucket.push(cid);
                                     moved = 1;
                                     break;
@@ -505,13 +483,13 @@ fn propagate(s: Solver) -> i64 {
                                     read_idx = read_idx + 1;
                                 }
                                 bucket.truncate(write_idx);
-                                return cid;
+                                return cid as i64;
                             }
-                            if enqueue(s, other_lit, cid) == 0 {
+                            if enqueue(s, other_lit, cid as i64) == 0 {
                                 bucket[write_idx] = cid;
                                 write_idx = write_idx + 1;
                                 bucket.truncate(write_idx);
-                                return cid;
+                                return cid as i64;
                             }
                             bucket[write_idx] = cid;
                             write_idx = write_idx + 1;
@@ -528,24 +506,24 @@ fn propagate(s: Solver) -> i64 {
 fn lit_removable(s: Solver, lit: i64) -> bool vow {
     requires: lit != 0
 } {
-    let v: i64 = lit_var(lit);
+    let v: u64 = lit_var(lit);
     let reasons: Vec<i64> = s.reasons;
-    let reason: i64 = reasons[v as u64];
+    let reason: i64 = reasons[v];
     if reason < 0 {
         return false;
     }
 
-    let clen: i64 = clause_len_of(s, reason);
-    let mut i: i64 = 0;
+    let rid: u64 = reason as u64;
+    let clen: u64 = clause_len_of(s, rid);
+    let mut i: u64 = 0;
     while i < clen vow {
-        invariant: i >= 0,
         invariant: i <= clen
     } {
-        let q: i64 = clause_lit_at(s, reason, i);
-        let u: i64 = lit_var(q);
-        if u != v && s.levels[u as u64] > 0 {
+        let q: i64 = clause_lit_at(s, rid, i);
+        let u: u64 = lit_var(q);
+        if u != v && s.levels[u] > 0 {
             let seen: Vec<i64> = s.seen;
-            if seen[u as u64] == 0 {
+            if seen[u] == 0 {
                 return false;
             }
         }
@@ -554,15 +532,18 @@ fn lit_removable(s: Solver, lit: i64) -> bool vow {
     true
 }
 
-fn backtrack_level_for(s: Solver, clause: Vec<i64>) -> i64 {
-    let mut level: i64 = 0;
+fn backtrack_level_for(s: Solver, clause: Vec<i64>) -> u64 {
+    let mut level: u64 = 0;
     let mut i: u64 = 1;
     while i < clause.len() vow {
         invariant: i >= 1,
         invariant: i <= clause.len()
     } {
-        let v: i64 = lit_var(clause[i]);
-        level = max_i64(level, s.levels[v as u64]);
+        let v: u64 = lit_var(clause[i]);
+        let lv: u64 = s.levels[v];
+        if lv > level {
+            level = lv;
+        }
         i = i + 1;
     }
     level
@@ -596,7 +577,7 @@ fn dedupe_clause(clause: Vec<i64>) -> Vec<i64> {
 
 fn analyze(s: Solver, conflict_cid: i64) -> AnalyzeResult {
     let learnt: Vec<i64> = Vec::new();
-    let touched: Vec<i64> = Vec::new();
+    let touched: Vec<u64> = Vec::new();
     learnt.push(0);
 
     let trail: Vec<i64> = s.trail;
@@ -606,22 +587,22 @@ fn analyze(s: Solver, conflict_cid: i64) -> AnalyzeResult {
     let mut unread: u64 = trail_len;
     let mut cid: i64 = conflict_cid;
     let mut pivot: i64 = 0;
-    let decision_level: i64 = current_level(s);
+    let decision_level: u64 = current_level(s);
 
     loop {
-        let clen: i64 = clause_len_of(s, cid);
-        let mut i: i64 = 0;
+        let clause_id: u64 = cid as u64;
+        let clen: u64 = clause_len_of(s, clause_id);
+        let mut i: u64 = 0;
         while i < clen vow {
-            invariant: i >= 0,
             invariant: i <= clen
         } {
-            let q: i64 = clause_lit_at(s, cid, i);
-            let v: i64 = lit_var(q);
-            if q != pivot && seen[v as u64] == 0 {
-                seen[v as u64] = 1;
+            let q: i64 = clause_lit_at(s, clause_id, i);
+            let v: u64 = lit_var(q);
+            if q != pivot && seen[v] == 0 {
+                seen[v] = 1;
                 touched.push(v);
                 bump_var(s, v);
-                if s.levels[v as u64] == decision_level {
+                if s.levels[v] == decision_level {
                     path_count = path_count + 1;
                 } else {
                     learnt.push(q);
@@ -630,15 +611,15 @@ fn analyze(s: Solver, conflict_cid: i64) -> AnalyzeResult {
             i = i + 1;
         }
 
-        let mut pivot_var: i64 = 0;
+        let mut pivot_var: u64 = 0;
         let mut found_pivot: i64 = 0;
         while unread > 0 && found_pivot == 0 vow {
             invariant: unread <= trail_len
         } {
             unread = unread - 1;
             let cand: i64 = trail[unread];
-            let cand_var: i64 = lit_var(cand);
-            if seen[cand_var as u64] == 1 {
+            let cand_var: u64 = lit_var(cand);
+            if seen[cand_var] == 1 {
                 pivot = cand;
                 pivot_var = cand_var;
                 found_pivot = 1;
@@ -650,7 +631,7 @@ fn analyze(s: Solver, conflict_cid: i64) -> AnalyzeResult {
             break;
         }
 
-        seen[pivot_var as u64] = 0;
+        seen[pivot_var] = 0;
         path_count = path_count - 1;
         if path_count == 0 {
             learnt[0] = -pivot;
@@ -658,7 +639,7 @@ fn analyze(s: Solver, conflict_cid: i64) -> AnalyzeResult {
         }
 
         let reasons: Vec<i64> = s.reasons;
-        cid = reasons[pivot_var as u64];
+        cid = reasons[pivot_var];
         if cid < 0 {
             learnt[0] = -pivot;
             break;
@@ -669,7 +650,7 @@ fn analyze(s: Solver, conflict_cid: i64) -> AnalyzeResult {
     while j < touched.len() vow {
         invariant: j <= touched.len()
     } {
-        seen[touched[j] as u64] = 0;
+        seen[touched[j]] = 0;
         j = j + 1;
     }
 
@@ -681,23 +662,21 @@ fn analyze(s: Solver, conflict_cid: i64) -> AnalyzeResult {
     }
 }
 
-fn backtrack(s: Solver, target_level: i64) vow {
-    requires: target_level >= 0
-} {
+fn backtrack(s: Solver, target_level: u64) {
     let trail: Vec<i64> = s.trail;
-    let trail_lim: Vec<i64> = s.trail_lim;
+    let trail_lim: Vec<u64> = s.trail_lim;
     let assigns: Vec<i64> = s.assigns;
-    let levels: Vec<i64> = s.levels;
+    let levels: Vec<u64> = s.levels;
     let reasons: Vec<i64> = s.reasons;
-    while trail_lim.len() as i64 > target_level vow {
-        invariant: trail_lim.len() as i64 >= target_level
+    while trail_lim.len() > target_level vow {
+        invariant: trail_lim.len() >= target_level
     } {
-        let start: i64 = trail_lim[trail_lim.len() - 1];
-        while trail.len() as i64 > start vow {
-            invariant: trail.len() as i64 >= start
+        let start: u64 = trail_lim[trail_lim.len() - 1];
+        while trail.len() > start vow {
+            invariant: trail.len() >= start
         } {
             let lit: i64 = trail[trail.len() - 1];
-            let v: u64 = lit_var(lit) as u64;
+            let v: u64 = lit_var(lit);
             trail.pop();
             assigns[v] = VAL_UNASSIGNED;
             levels[v] = 0;
@@ -705,17 +684,17 @@ fn backtrack(s: Solver, target_level: i64) vow {
         }
         trail_lim.pop();
     }
-    s.qhead = trail.len() as i64;
+    s.qhead = trail.len();
 }
 
-fn clause_locked(s: Solver, cid: i64) -> bool {
+fn clause_locked(s: Solver, cid: u64) -> bool {
     let reasons: Vec<i64> = s.reasons;
     let mut v: u64 = 1;
     while v < reasons.len() vow {
         invariant: v >= 1,
         invariant: v <= reasons.len()
     } {
-        if reasons[v] == cid {
+        if reasons[v] == cid as i64 {
             return true;
         }
         v = v + 1;
@@ -723,7 +702,7 @@ fn clause_locked(s: Solver, cid: i64) -> bool {
     false
 }
 
-fn worse_clause(s: Solver, a: i64, b: i64) -> bool {
+fn worse_clause(s: Solver, a: u64, b: u64) -> bool {
     let sa: i64 = clause_score_of(s, a);
     let sb: i64 = clause_score_of(s, b);
     if sa != sb {
@@ -738,10 +717,9 @@ fn reduce_database(s: Solver) {
     }
 
     let candidates: Vec<i64> = Vec::new();
-    let total: i64 = clause_count(s);
-    let mut cid: i64 = 0;
+    let total: u64 = clause_count(s);
+    let mut cid: u64 = 0;
     while cid < total vow {
-        invariant: cid >= 0,
         invariant: cid <= total
     } {
         if clause_deleted_of(s, cid) == CLAUSE_LIVE
@@ -749,7 +727,7 @@ fn reduce_database(s: Solver) {
             && clause_len_of(s, cid) > 2
             && !clause_locked(s, cid)
         {
-            candidates.push(cid);
+            candidates.push(cid as i64);
         }
         cid = cid + 1;
     }
@@ -766,8 +744,8 @@ fn reduce_database(s: Solver) {
             invariant: i <= candidates.len()
         } {
             let cand: i64 = candidates[i];
-            if cand >= 0 && clause_deleted_of(s, cand) == CLAUSE_LIVE {
-                if worst < 0 || worse_clause(s, cand, worst) {
+            if cand >= 0 && clause_deleted_of(s, cand as u64) == CLAUSE_LIVE {
+                if worst < 0 || worse_clause(s, cand as u64, worst as u64) {
                     worst = cand;
                     worst_idx = i as i64;
                 }
@@ -778,7 +756,7 @@ fn reduce_database(s: Solver) {
         if worst < 0 {
             removed = target_delete;
         } else {
-            set_clause_deleted(s, worst, CLAUSE_DELETED);
+            set_clause_deleted(s, worst as u64, CLAUSE_DELETED);
             candidates[worst_idx as u64] = -1;
             s.active_learnts = s.active_learnts - 1;
             s.deleted_learnts = s.deleted_learnts + 1;
@@ -796,31 +774,29 @@ fn compact_database(s: Solver) {
     }
 
     let new_lits: Vec<i64> = Vec::new();
-    let total: i64 = clause_count(s);
-    let mut cid: i64 = 0;
+    let total: u64 = clause_count(s);
+    let mut cid: u64 = 0;
     while cid < total vow {
-        invariant: cid >= 0,
         invariant: cid <= total
     } {
         if clause_deleted_of(s, cid) == CLAUSE_LIVE {
             let old_start: i64 = clause_start_of(s, cid);
-            let len: i64 = clause_len_of(s, cid);
+            let len: u64 = clause_len_of(s, cid);
             let starts: Vec<i64> = s.clause_start;
-            starts[cid as u64] = new_lits.len() as i64;
-            let mut i: i64 = 0;
+            starts[cid] = new_lits.len() as i64;
+            let mut i: u64 = 0;
             while i < len vow {
-                invariant: i >= 0,
                 invariant: i <= len
             } {
                 let lits: Vec<i64> = s.clause_lits;
-                new_lits.push(lits[(old_start + i) as u64]);
+                new_lits.push(lits[(old_start as u64) + i]);
                 i = i + 1;
             }
         } else {
             let starts: Vec<i64> = s.clause_start;
-            let lens: Vec<i64> = s.clause_len;
-            starts[cid as u64] = -1;
-            lens[cid as u64] = 0;
+            let lens: Vec<u64> = s.clause_len;
+            starts[cid] = -1;
+            lens[cid] = 0;
         }
         cid = cid + 1;
     }
@@ -845,15 +821,15 @@ fn choose_branch_var(s: Solver) -> i64 {
     let act: Vec<i64> = s.var_activity;
     let mut best_var: i64 = -1;
     let mut best_score: i64 = -1;
-    let mut v: i64 = 1;
+    let mut v: u64 = 1;
     while v <= s.num_vars vow {
         invariant: v >= 1,
         invariant: v <= s.num_vars + 1
     } {
-        if assigns[v as u64] == VAL_UNASSIGNED {
-            if best_var < 0 || act[v as u64] > best_score {
-                best_var = v;
-                best_score = act[v as u64];
+        if assigns[v] == VAL_UNASSIGNED {
+            if best_var < 0 || act[v] > best_score {
+                best_var = v as i64;
+                best_score = act[v];
             }
         }
         v = v + 1;
@@ -862,19 +838,18 @@ fn choose_branch_var(s: Solver) -> i64 {
 }
 
 fn root_initialize(s: Solver) -> i64 {
-    let total: i64 = clause_count(s);
-    let mut cid: i64 = 0;
+    let total: u64 = clause_count(s);
+    let mut cid: u64 = 0;
     while cid < total vow {
-        invariant: cid >= 0,
         invariant: cid <= total
     } {
-        let len: i64 = clause_len_of(s, cid);
+        let len: u64 = clause_len_of(s, cid);
         if len == 0 {
-            return cid;
+            return cid as i64;
         }
         if len == 1 {
-            if enqueue(s, clause_lit_at(s, cid, 0), cid) == 0 {
-                return cid;
+            if enqueue(s, clause_lit_at(s, cid, 0), cid as i64) == 0 {
+                return cid as i64;
             }
         }
         cid = cid + 1;
@@ -886,18 +861,16 @@ fn root_pure_simplify(s: Solver) -> i64 {
     while true {
         let pos: Vec<i64> = make_i64_vec(s.num_vars + 1, 0);
         let neg: Vec<i64> = make_i64_vec(s.num_vars + 1, 0);
-        let total: i64 = clause_count(s);
-        let mut cid: i64 = 0;
+        let total: u64 = clause_count(s);
+        let mut cid: u64 = 0;
         while cid < total vow {
-            invariant: cid >= 0,
             invariant: cid <= total
         } {
             if clause_deleted_of(s, cid) == CLAUSE_LIVE {
-                let len: i64 = clause_len_of(s, cid);
+                let len: u64 = clause_len_of(s, cid);
                 let mut sat: i64 = 0;
-                let mut i: i64 = 0;
+                let mut i: u64 = 0;
                 while i < len vow {
-                    invariant: i >= 0,
                     invariant: i <= len
                 } {
                     let lit: i64 = clause_lit_at(s, cid, i);
@@ -907,11 +880,11 @@ fn root_pure_simplify(s: Solver) -> i64 {
                         break;
                     } else {
                         if val == VAL_UNASSIGNED {
-                            let v: i64 = lit_var(lit);
+                            let v: u64 = lit_var(lit);
                             if lit > 0 {
-                                pos[v as u64] = pos[v as u64] + 1;
+                                pos[v] = pos[v] + 1;
                             } else {
-                                neg[v as u64] = neg[v as u64] + 1;
+                                neg[v] = neg[v] + 1;
                             }
                         }
                     }
@@ -926,20 +899,20 @@ fn root_pure_simplify(s: Solver) -> i64 {
 
         let assigns: Vec<i64> = s.assigns;
         let mut changed: i64 = 0;
-        let mut v: i64 = 1;
+        let mut v: u64 = 1;
         while v <= s.num_vars vow {
             invariant: v >= 1,
             invariant: v <= s.num_vars + 1
         } {
-            if assigns[v as u64] == VAL_UNASSIGNED {
-                if pos[v as u64] > 0 && neg[v as u64] == 0 {
-                    if enqueue(s, v, REASON_NONE) == 0 {
+            if assigns[v] == VAL_UNASSIGNED {
+                if pos[v] > 0 && neg[v] == 0 {
+                    if enqueue(s, v as i64, REASON_NONE) == 0 {
                         return find_unsatisfied_clause_for_assignment(s, complete_assignment(s));
                     }
                     changed = 1;
                 } else {
-                    if neg[v as u64] > 0 && pos[v as u64] == 0 {
-                        if enqueue(s, -v, REASON_NONE) == 0 {
+                    if neg[v] > 0 && pos[v] == 0 {
+                        if enqueue(s, -(v as i64), REASON_NONE) == 0 {
                             return find_unsatisfied_clause_for_assignment(s, complete_assignment(s));
                         }
                         changed = 1;
@@ -981,15 +954,15 @@ fn complete_assignment(s: Solver) -> Vec<i64> {
     out.push(0);
     let assigns: Vec<i64> = s.assigns;
     let saved: Vec<i64> = s.saved_phase;
-    let mut v: i64 = 1;
+    let mut v: u64 = 1;
     while v <= s.num_vars vow {
         invariant: v >= 1,
         invariant: v <= s.num_vars + 1,
-        invariant: out.len() as i64 == v
+        invariant: out.len() == v
     } {
-        let mut val: i64 = assigns[v as u64];
+        let mut val: i64 = assigns[v];
         if val == VAL_UNASSIGNED {
-            val = saved[v as u64];
+            val = saved[v];
             if val == VAL_UNASSIGNED {
                 val = VAL_TRUE;
             }
@@ -1002,25 +975,24 @@ fn complete_assignment(s: Solver) -> Vec<i64> {
 
 fn formula_satisfied(formula: Formula, assignment: Vec<i64>) -> bool {
     let total: u64 = formula.clause_start.len();
-    let starts: Vec<i64> = formula.clause_start;
-    let lens: Vec<i64> = formula.clause_len;
+    let starts: Vec<u64> = formula.clause_start;
+    let lens: Vec<u64> = formula.clause_len;
     let lits: Vec<i64> = formula.lits;
     let mut cid: u64 = 0;
     while cid < total vow {
         invariant: cid <= total
     } {
-        let len: i64 = lens[cid];
+        let len: u64 = lens[cid];
         if len == 0 {
             return false;
         }
-        let start: i64 = starts[cid];
+        let start: u64 = starts[cid];
         let mut sat: i64 = 0;
-        let mut i: i64 = 0;
+        let mut i: u64 = 0;
         while i < len vow {
-            invariant: i >= 0,
             invariant: i <= len
         } {
-            let lit: i64 = lits[(start + i) as u64];
+            let lit: i64 = lits[start + i];
             let val: i64 = lit_value(assignment, lit);
             if val == VAL_TRUE {
                 sat = 1;
@@ -1037,22 +1009,20 @@ fn formula_satisfied(formula: Formula, assignment: Vec<i64>) -> bool {
 }
 
 fn find_unsatisfied_clause_for_assignment(s: Solver, assignment: Vec<i64>) -> i64 {
-    let total: i64 = clause_count(s);
-    let mut cid: i64 = 0;
+    let total: u64 = clause_count(s);
+    let mut cid: u64 = 0;
     while cid < total vow {
-        invariant: cid >= 0,
         invariant: cid <= total
     } {
         if clause_deleted_of(s, cid) == CLAUSE_LIVE {
-            let len: i64 = clause_len_of(s, cid);
+            let len: u64 = clause_len_of(s, cid);
             if len == 0 {
-                return cid;
+                return cid as i64;
             }
 
             let mut sat: i64 = 0;
-            let mut i: i64 = 0;
+            let mut i: u64 = 0;
             while i < len vow {
-                invariant: i >= 0,
                 invariant: i <= len
             } {
                 if lit_value(assignment, clause_lit_at(s, cid, i)) == VAL_TRUE {
@@ -1062,7 +1032,7 @@ fn find_unsatisfied_clause_for_assignment(s: Solver, assignment: Vec<i64>) -> i6
                 i = i + 1;
             }
             if sat == 0 {
-                return cid;
+                return cid as i64;
             }
         }
         cid = cid + 1;
@@ -1091,7 +1061,7 @@ fn solve_formula(formula: Formula) -> SolveResult {
     while cid < total vow {
         invariant: cid <= total
     } {
-        let clause: Vec<i64> = clause_from_formula(formula, cid as i64);
+        let clause: Vec<i64> = clause_from_formula(formula, cid);
         add_clause(s, clause, 0, 0);
         cid = cid + 1;
     }
@@ -1123,8 +1093,8 @@ fn solve_formula(formula: Formula) -> SolveResult {
             let analysis: AnalyzeResult = analyze(s, final_conflict);
             backtrack(s, analysis.backtrack_level);
             let score: i64 = clause_distinct_levels(s, analysis.learnt);
-            let learnt_cid: i64 = add_clause(s, analysis.learnt, 1, score);
-            if enqueue(s, clause_lit_at(s, learnt_cid, 0), learnt_cid) == 0 {
+            let learnt_cid: u64 = add_clause(s, analysis.learnt, 1, score);
+            if enqueue(s, clause_lit_at(s, learnt_cid, 0), learnt_cid as i64) == 0 {
                 return finish_result(s, STATUS_UNSAT, Vec::new());
             }
             if should_restart(s) {
@@ -1134,8 +1104,8 @@ fn solve_formula(formula: Formula) -> SolveResult {
                 }
             }
         } else {
-            let trail_lim: Vec<i64> = s.trail_lim;
-            trail_lim.push(s.trail.len() as i64);
+            let trail_lim: Vec<u64> = s.trail_lim;
+            trail_lim.push(s.trail.len());
             s.decisions = s.decisions + 1;
 
             let saved: Vec<i64> = s.saved_phase;
@@ -1159,8 +1129,8 @@ fn solve_formula(formula: Formula) -> SolveResult {
                 let analysis: AnalyzeResult = analyze(s, conflict);
                 backtrack(s, analysis.backtrack_level);
                 let score: i64 = clause_distinct_levels(s, analysis.learnt);
-                let learnt_cid: i64 = add_clause(s, analysis.learnt, 1, score);
-                if enqueue(s, clause_lit_at(s, learnt_cid, 0), learnt_cid) == 0 {
+                let learnt_cid: u64 = add_clause(s, analysis.learnt, 1, score);
+                if enqueue(s, clause_lit_at(s, learnt_cid, 0), learnt_cid as i64) == 0 {
                     return finish_result(s, STATUS_UNSAT, Vec::new());
                 }
 
@@ -1183,23 +1153,22 @@ fn print_assignment(assignment: Vec<i64>) [io] {
         return;
     }
 
-    let mut i: i64 = 1;
-    let mut line_count: i64 = 0;
-    while i < assignment.len() as i64 vow {
+    let mut i: u64 = 1;
+    let mut line_count: u64 = 0;
+    while i < assignment.len() vow {
         invariant: i >= 1,
-        invariant: i <= assignment.len() as i64,
-        invariant: line_count >= 0
+        invariant: i <= assignment.len()
     } {
         if line_count == 0 {
             print_str(String::from("v "));
         }
 
-        let lit: i64 = if assignment[i as u64] == VAL_FALSE { -i } else { i };
+        let lit: i64 = if assignment[i] == VAL_FALSE { -(i as i64) } else { i as i64 };
         print_i64(lit);
         print_str(String::from(" "));
 
         line_count = line_count + 1;
-        if line_count == 20 && i + 1 < assignment.len() as i64 {
+        if line_count == 20 && i + 1 < assignment.len() {
             print_str(String::from("\n"));
             line_count = 0;
         }
