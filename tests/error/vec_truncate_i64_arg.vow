@@ -1,9 +1,12 @@
 // TEST: error-code TypeMismatch
+// TEST: error-count 1
 // TEST: stderr "u64"
-module IndexTypeBool
+module VecTruncateI64Arg
 
 fn main() -> i32 {
     let v: Vec<i64> = Vec::new();
-    let a: i64 = v[true];
+    v.push(1);
+    let n: i64 = 0;
+    v.truncate(n);
     0
 }
