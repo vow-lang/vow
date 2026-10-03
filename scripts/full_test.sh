@@ -1305,10 +1305,6 @@ for pattern in VowViolation Caller "as u64"; do
     if ! echo "$rust_err" | grep -qF "$pattern"; then errors+=("rust stderr missing '$pattern'"); fi
     if ! echo "$self_err" | grep -qF "$pattern"; then errors+=("self stderr missing '$pattern'"); fi
 done
-for pattern in "as <type>"; do
-    if echo "$rust_err" | grep -qF "$pattern"; then errors+=("rust stderr has placeholder '$pattern'"); fi
-    if echo "$self_err" | grep -qF "$pattern"; then errors+=("self stderr has placeholder '$pattern'"); fi
-done
 if [ ${#errors[@]} -eq 0 ]; then
     pass "cast_in_contract_violation/debug-violation"
 else

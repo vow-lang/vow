@@ -14588,7 +14588,6 @@ fn cq_has_alpha(s: String) -> bool {
 }
 
 fn cq_is_cast_target(name: String) -> bool {
-    name == String::from("<type>") ||
     name == String::from("i8") || name == String::from("i16") ||
     name == String::from("i32") || name == String::from("i64") ||
     name == String::from("i128") ||
@@ -14598,14 +14597,12 @@ fn cq_is_cast_target(name: String) -> bool {
     name == String::from("f32") || name == String::from("f64")
 }
 
-// The text with every ` as <type>` cast removed, trimmed. Mirrors
-// `without_casts` in vow/src/contract_quality.rs.
+// The text with every cast to a primitive numeric type (` as i64`) removed,
+// trimmed. Mirrors `without_casts` in vow/src/contract_quality.rs.
 //
 // A cast is transparent to shape classification: `0 as u64` bounds a value
 // exactly as `0` does, and `result as i64` names the same value as `result`.
 // Only a primitive numeric type name is stripped, so `x as Foo` is left alone.
-// The self-hosted printer emits the placeholder `as <type>` rather than the
-// type name (compiler/lower.vow), so that form is accepted too.
 fn cq_without_casts(s: String) -> String {
     let out: String = String::from("");
     let mut rest: String = clone_string(s);
@@ -14619,7 +14616,7 @@ fn cq_without_casts(s: String) -> String {
         while end < an {
             let b: i64 = after.byte_at(end);
             let is_word: bool = (b >= 48 && b <= 57) || (b >= 65 && b <= 90) ||
-                                (b >= 97 && b <= 122) || b == 60 || b == 62;
+                                (b >= 97 && b <= 122);
             if !is_word {
                 break;
             }
@@ -14676,7 +14673,7 @@ fn cq_side_has_ordering(s: String) -> bool {
 }
 
 // Both sides arrive already cast-stripped by cq_is_weak_result_bound, so
-// `result >= 0 as <type>` reads exactly as `result >= 0` does here.
+// `result >= 0 as i64` reads exactly as `result >= 0` does here.
 fn cq_weak_sides(lhs: String, rhs: String) -> bool {
     let l: String = str_trim(lhs);
     let r: String = str_trim(rhs);
@@ -14689,12 +14686,6 @@ fn cq_weak_sides(lhs: String, rhs: String) -> bool {
 
 // True for a single ordering comparison between `result` and an integer literal.
 fn cq_is_weak_result_bound(raw_pred: String) -> bool {
-    // Casts come out before any operator scanning, not after the split. This
-    // printer renders a cast as ` as <type>` (compiler/lower.vow), and those
-    // angle brackets would otherwise be picked up as the `<` / `>` comparison
-    // operator — splitting `result > 0 as <type>` at the wrong place and
-    // classifying it `substantive` where the Rust printer's ` as i64` reads
-    // `weak`. Stripping first makes the two compilers agree by construction.
     let pred: String = cq_without_casts(raw_pred);
     if str_find_str(pred, String::from("&&")) >= 0 {
         return false;
