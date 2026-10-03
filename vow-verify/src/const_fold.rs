@@ -20,8 +20,14 @@ fn normalize_const_bits(bits: u64, int_ty: IntegerType) -> u64 {
     }
 }
 
+/// The integer type a value of IR type `ty` folds as. A pointer folds as a
+/// 64-bit unsigned address, so a null pointer constant is recognised whether the
+/// IR types it as an integer or as a pointer.
 fn narrow_int_type(ty: Ty) -> Option<IntegerType> {
-    ir_ty_to_integer_type(ty).filter(|t| t.width != IntegerWidth::W128)
+    match ty {
+        Ty::Ptr | Ty::LinearPtr => Some(IntegerType::U64),
+        _ => ir_ty_to_integer_type(ty).filter(|t| t.width != IntegerWidth::W128),
+    }
 }
 
 fn const_leaf_bits(inst: &Inst) -> Option<u64> {

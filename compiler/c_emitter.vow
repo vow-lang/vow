@@ -652,15 +652,41 @@ fn bound_tail(kind: String, cap: i64) -> String {
     str5(cs, String::from("); /* vow:model-bound "), kind, String::from(" "), str3(cs, String::from(" */"), String::from("\n")))
 }
 
-// Model for from_raw_parts_copy(ptr, len). The runtime returns an empty value
-// for a null ptr whatever len is, so the model does too: the capacity
-// restriction only applies to a non-null source. A length that is provably
-// constant and outside the model capacity cannot be assumed (the assumption
-// would be unsatisfiable and prove everything after it), so a non-null source
-// fails closed with the capacity label. A u64 length drops the vacuous >= 0
-// lower bound.
-fn emit_raw_parts_len(out: String, const_len_by_id: Vec<i64>, id: i64, ptr_arg: i64, len_arg: i64, len_ty: i64, max: i64, kind: String) {
+// The collection kind ("Vec" or "String") a raw-parts style constructor builds
+// and the model capacity its length is checked against.
+struct CapacityModel {
+    kind: String,
+    max: i64,
+}
+
+// The instruction ids and length type of one constructor call.
+struct RawParts {
+    id: i64,
+    ptr: i64,
+    len: i64,
+    len_ty: i64,
+}
+
+// Model for a constructor copying len elements from ptr (from_raw_parts_copy,
+// String::new). The runtime returns an empty value for a null ptr whatever len
+// is, so the model does too: a provably null source is empty, and otherwise the
+// capacity restriction only applies to a non-null source. A length that is
+// provably constant and outside the model capacity cannot be assumed (the
+// assumption would be unsatisfiable and prove everything after it), so a
+// non-null source fails closed with the capacity label. A u64 length drops the
+// vacuous >= 0 lower bound.
+fn emit_raw_parts_len(out: String, const_len_by_id: Vec<i64>, model: CapacityModel, parts: RawParts) {
+    let id: i64 = parts.id;
+    let ptr_arg: i64 = parts.ptr;
+    let len_arg: i64 = parts.len;
+    let len_ty: i64 = parts.len_ty;
+    let kind: String = model.kind;
+    let max: i64 = model.max;
     let ids: String = i64_to_string(id);
+    if raw_parts_null_source(const_len_by_id, ptr_arg) {
+        out.push_str(str3(String::from("  v"), ids, String::from(".len = 0;\n")));
+        return;
+    }
     let ps: String = i64_to_string(ptr_arg);
     if raw_parts_const_len_exceeds_model(const_len_by_id, len_arg, max) {
         let label: String = { if kind == String::from("Vec") { String::from("vec capacity") } else { String::from("string capacity") } };
@@ -671,7 +697,7 @@ fn emit_raw_parts_len(out: String, const_len_by_id: Vec<i64>, id: i64, ptr_arg: 
     let ls: String = i64_to_string(len_arg);
     let lower: String = { if ity_is_unsigned(len_ty) { String::new() } else { str3(String::from("v"), ls, String::from(" >= 0 && ")) } };
     let marker: String = {
-        if len_is_const(const_len_by_id, len_arg) || raw_parts_null_source(const_len_by_id, ptr_arg) { String::new() }
+        if len_is_const(const_len_by_id, len_arg) { String::new() }
         else { str5(String::from(" /* vow:model-bound "), kind, String::from(" "), i64_to_string(max), String::from(" */")) }
     };
     out.push_str(str5(String::from("  __ESBMC_assume(v"), ps,
@@ -1857,7 +1883,9 @@ fn emit_vec_op(out: String, inst: IrInst, inst_ty_by_id: Vec<i64>, const_len_by_
     }
     if ds == String::from("__vow_vec_from_raw_parts_copy_val") {
         let len_arg: i64 = iargs[1];
-        emit_raw_parts_len(out, const_len_by_id, id, iargs[0], len_arg, inst_ty_of(inst_ty_by_id, len_arg), vec_max, String::from("Vec"));
+        emit_raw_parts_len(out, const_len_by_id,
+            CapacityModel { kind: String::from("Vec"), max: vec_max },
+            RawParts { id: id, ptr: iargs[0], len: len_arg, len_ty: inst_ty_of(inst_ty_by_id, len_arg) });
         return;
     }
     if ds == String::from("__vow_vec_pin_to_root_val") {
@@ -2032,17 +2060,11 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
     let iargs: Vec<i64> = inst.args;
 
     if ds == String::from("__vow_string_new") || ds == String::from("__vow_string_new_in_arena") {
+        let ptr_arg: i64 = if ds == String::from("__vow_string_new_in_arena") { iargs[1] } else { iargs[0] };
         let len_arg: i64 = if ds == String::from("__vow_string_new_in_arena") { iargs[2] } else { iargs[1] };
-        let ids: String = i64_to_string(id);
-        let ls: String = i64_to_string(len_arg);
-        let string_new_marker: String = {
-            if len_is_const(const_len_by_id, len_arg) { String::new() }
-            else { str5(String::from(" /* vow:model-bound String "), i64_to_string(string_max), String::from(" */"), String::new(), String::new()) }
-        };
-        out.push_str(str5(String::from("  __ESBMC_assume(v"), ls,
-            String::from(" >= 0 && v"), ls,
-            str3(String::from(" < "), i64_to_string(string_max), str3(String::from(");"), string_new_marker, String::from("\n")))));
-        out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), ls, String::from(";\n")));
+        emit_raw_parts_len(out, const_len_by_id,
+            CapacityModel { kind: String::from("String"), max: string_max },
+            RawParts { id: id, ptr: ptr_arg, len: len_arg, len_ty: inst_ty_of(inst_ty_by_id, len_arg) });
         return;
     }
     if ds == String::from("__vow_string_from_cstr")
@@ -2073,7 +2095,9 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
     }
     if ds == String::from("__vow_string_from_raw_parts_copy") {
         let len_arg: i64 = iargs[1];
-        emit_raw_parts_len(out, const_len_by_id, id, iargs[0], len_arg, inst_ty_of(inst_ty_by_id, len_arg), string_max, String::from("String"));
+        emit_raw_parts_len(out, const_len_by_id,
+            CapacityModel { kind: String::from("String"), max: string_max },
+            RawParts { id: id, ptr: iargs[0], len: len_arg, len_ty: inst_ty_of(inst_ty_by_id, len_arg) });
         return;
     }
     if ds == String::from("__vow_string_clone") || ds == String::from("__vow_string_clone_in_arena") || ds == String::from("__vow_string_pin_to_root") {

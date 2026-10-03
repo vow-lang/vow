@@ -934,28 +934,152 @@ fn check_raw_parts_folded_len(extern_name: String, label: String, base_code: i64
     0
 }
 
-// A literal null source is empty whatever the length, so the capacity assumption
-// restricts nothing and carries no bound marker. Mirrors
-// raw_parts_copy_literal_null_source_carries_no_bound in
-// vow-verify/src/c_emitter.rs.
-fn check_raw_parts_literal_null_carries_no_bound(extern_name: String, base_code: i64) -> i64 {
+// `extern_name(ptr, len)` over the instructions `ptr` (id 1) and `len` (id 2),
+// with a leading arena argument (id 0) when `in_arena`. The call is value 3.
+fn emit_ctor_c(extern_name: String, in_arena: bool, ptr: IrInst, len: IrInst) -> String {
+    let ptr_ty: i64 = ptr.ty;
+    let len_ty: i64 = len.ty;
     let insts: Vec<IrInst> = Vec::new();
-    insts.push(ir_inst_new(0, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from("")));
-    insts.push(mk_inst_arg(1, ITY_U64(), 0));
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(ptr);
+    insts.push(len);
     let call_args: Vec<i64> = Vec::new();
-    call_args.push(0);
+    if in_arena { call_args.push(0); }
     call_args.push(1);
-    insts.push(mk_inst_call_extern(2, ITY_PTR(), call_args, extern_name));
-    insts.push(mk_inst_return(3, 2));
+    call_args.push(2);
+    insts.push(mk_inst_call_extern(3, ITY_PTR(), call_args, extern_name));
+    insts.push(mk_inst_return(4, 3));
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, insts));
     let params: Vec<i64> = Vec::new();
-    params.push(ITY_U64());
+    params.push(ITY_PTR());
+    params.push(ptr_ty);
+    params.push(len_ty);
     let funcs: Vec<IrFunction> = Vec::new();
-    funcs.push(mk_function(0, String::from("raw_parts"), params, ITY_PTR(), blocks));
-    let c: String = emit_c_module(mk_module(funcs), 16, 16, 16, 16);
-    if !c.contains(String::from("__ESBMC_assume(v0 == 0 || (v1 <")) { return base_code; }
-    if c.contains(String::from("vow:model-bound")) { return base_code + 1; }
+    funcs.push(mk_function(0, String::from("ctor"), params, ITY_PTR(), blocks));
+    emit_c_module(mk_module(funcs), 16, 16, 16, 16)
+}
+
+// A null pointer constant (id 1) in each form the IR can give it: typed as an
+// integer or as a pointer.
+fn null_ptr_inst(form: i64) -> IrInst {
+    if form == 0 {
+        return ir_inst_new(1, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from(""));
+    }
+    if form == 1 {
+        return ir_inst_new(1, IOP_CONST_I64(), ITY_PTR(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from(""));
+    }
+    if form == 2 {
+        return ir_inst_new(1, IOP_CONST_U64(), ITY_PTR(), Vec::new(), IDATA_CONST_U64(), 0, 0, String::from(""));
+    }
+    ir_inst_new(1, IOP_CONST_I64(), ITY_LPTR(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from(""))
+}
+
+fn len_inst_form(form: i64) -> IrInst {
+    if form == 0 { return mk_inst_arg(2, ITY_U64(), 2); }
+    if form == 1 {
+        return ir_inst_new(2, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 3, 0, String::from(""));
+    }
+    ir_inst_new(2, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 21, 0, String::from(""))
+}
+
+// A provably null source is empty whatever the length, so no capacity
+// assumption is emitted at all and the proof is not reported as bounded. A null
+// literal is recognised whether the IR types it as an integer or as a pointer.
+// Mirrors raw_parts_copy_literal_null_source_is_empty_without_a_bound in
+// vow-verify/src/c_emitter.rs.
+fn check_raw_parts_literal_null_is_empty(extern_name: String, base_code: i64) -> i64 {
+    let mut form: i64 = 0;
+    while form < 4 {
+        let mut lf: i64 = 0;
+        while lf < 3 {
+            let c: String = emit_ctor_c(extern_name, false, null_ptr_inst(form), len_inst_form(lf));
+            let code: i64 = base_code + form * 3 + lf;
+            if !c.contains(String::from("  v3.len = 0;\n")) { return code; }
+            if c.contains(String::from("__ESBMC_assume(v1 == 0")) { return code; }
+            if c.contains(String::from("__ESBMC_assert(v1 == 0")) { return code; }
+            if c.contains(String::from("vow:model-bound")) { return code; }
+            lf = lf + 1;
+        }
+        form = form + 1;
+    }
+    0
+}
+
+// A phi of null constants is a null source too, whatever type it carries.
+// Mirrors raw_parts_copy_phi_of_null_constants_is_empty in
+// vow-verify/src/c_emitter.rs.
+fn check_raw_parts_phi_of_null_is_empty(extern_name: String, base_code: i64) -> i64 {
+    let mut which: i64 = 0;
+    while which < 2 {
+        let phi_ty: i64 = { if which == 0 { ITY_U64() } else { ITY_PTR() } };
+        let insts: Vec<IrInst> = Vec::new();
+        insts.push(mk_inst_arg(0, ITY_U64(), 0));
+        insts.push(fold_const_u64(1, 0));
+        insts.push(fold_const_u64(2, 0));
+        insts.push(ir_inst_new(3, IOP_PHI(), phi_ty, Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+        let a1: Vec<i64> = Vec::new();
+        a1.push(1);
+        insts.push(ir_inst_new(4, IOP_UPSILON(), ITY_UNIT(), a1, IDATA_PHI_TARGET(), 3, 0, String::from("")));
+        let a2: Vec<i64> = Vec::new();
+        a2.push(2);
+        insts.push(ir_inst_new(5, IOP_UPSILON(), ITY_UNIT(), a2, IDATA_PHI_TARGET(), 3, 0, String::from("")));
+        let call_args: Vec<i64> = Vec::new();
+        call_args.push(3);
+        call_args.push(0);
+        insts.push(mk_inst_call_extern(100, ITY_PTR(), call_args, extern_name));
+        insts.push(mk_inst_return(101, 100));
+        let blocks: Vec<IrBlock> = Vec::new();
+        blocks.push(mk_block(0, insts));
+        let params: Vec<i64> = Vec::new();
+        params.push(ITY_U64());
+        let funcs: Vec<IrFunction> = Vec::new();
+        funcs.push(mk_function(0, String::from("raw_parts"), params, ITY_PTR(), blocks));
+        let c: String = emit_c_module(mk_module(funcs), 16, 16, 16, 16);
+        if !c.contains(String::from("  v100.len = 0;\n")) { return base_code + which; }
+        if c.contains(String::from("vow:model-bound")) { return base_code + which; }
+        if c.contains(String::from("__ESBMC_assume(v3 == 0")) { return base_code + which; }
+        which = which + 1;
+    }
+    0
+}
+
+fn string_new_beyond_len_inst(form: i64) -> IrInst {
+    if form == 0 {
+        return ir_inst_new(2, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 16, 0, String::from(""));
+    }
+    if form == 1 {
+        return ir_inst_new(2, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0 - 1, 0, String::from(""));
+    }
+    ir_inst_new(2, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 0 - 1, 0, String::from(""))
+}
+
+// String::new(ptr, len) shares the raw-parts model: a constant length outside
+// the model capacity fails closed for a non-null source, a null source is
+// empty, and a non-constant length is a tagged capacity assumption. Mirrors
+// string_new_follows_the_raw_parts_model in vow-verify/src/c_emitter.rs.
+fn check_string_new_model(extern_name: String, in_arena: bool, base_code: i64) -> i64 {
+    let fail_closed: String = String::from("  __ESBMC_assert(v1 == 0, \"string capacity\");\n  v3.len = 0;\n");
+    let mut form: i64 = 0;
+    while form < 3 {
+        let c: String = emit_ctor_c(extern_name, in_arena, mk_inst_arg(1, ITY_I64(), 1), string_new_beyond_len_inst(form));
+        if !c.contains(fail_closed) { return base_code + form; }
+        if c.contains(String::from("__ESBMC_assume(v1 == 0")) { return base_code + form; }
+        if c.contains(String::from("vow:model-bound")) { return base_code + form; }
+        form = form + 1;
+    }
+    let zero_len: IrInst = ir_inst_new(2, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from(""));
+    let in_range: String = emit_ctor_c(extern_name, in_arena, mk_inst_arg(1, ITY_I64(), 1), zero_len);
+    if !in_range.contains(String::from("__ESBMC_assume(v1 == 0 || (v2 >= 0 && v2 < 16));\n")) { return base_code + 3; }
+    if in_range.contains(String::from("vow:model-bound")) { return base_code + 4; }
+
+    let variable: String = emit_ctor_c(extern_name, in_arena, mk_inst_arg(1, ITY_I64(), 1), mk_inst_arg(2, ITY_U64(), 2));
+    if !variable.contains(String::from("__ESBMC_assume(v1 == 0 || (v2 < 16)); /* vow:model-bound String 16 */\n  v3.len = v1 == 0 ? 0 : v2;")) { return base_code + 5; }
+
+    let empty_len: IrInst = ir_inst_new(2, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from(""));
+    let empty: String = emit_ctor_c(extern_name, in_arena, null_ptr_inst(0), empty_len);
+    if !empty.contains(String::from("  v3.len = 0;\n")) { return base_code + 6; }
+    if empty.contains(String::from("__ESBMC_assume(v")) { return base_code + 7; }
     0
 }
 
@@ -1262,9 +1386,17 @@ fn main() -> i32 {
     if r33 != 0 { return i64_to_i32_wrap(r33); }
     let r34: i64 = check_raw_parts_null_pointer_is_empty(String::from("__vow_string_from_raw_parts_copy"), 342);
     if r34 != 0 { return i64_to_i32_wrap(r34); }
-    let r35: i64 = check_raw_parts_literal_null_carries_no_bound(String::from("__vow_vec_from_raw_parts_copy_val"), 344);
+    let r35: i64 = check_raw_parts_literal_null_is_empty(String::from("__vow_vec_from_raw_parts_copy_val"), 400);
     if r35 != 0 { return i64_to_i32_wrap(r35); }
-    let r36: i64 = check_raw_parts_literal_null_carries_no_bound(String::from("__vow_string_from_raw_parts_copy"), 346);
+    let r36: i64 = check_raw_parts_literal_null_is_empty(String::from("__vow_string_from_raw_parts_copy"), 420);
     if r36 != 0 { return i64_to_i32_wrap(r36); }
+    let r37: i64 = check_raw_parts_phi_of_null_is_empty(String::from("__vow_vec_from_raw_parts_copy_val"), 440);
+    if r37 != 0 { return i64_to_i32_wrap(r37); }
+    let r38: i64 = check_raw_parts_phi_of_null_is_empty(String::from("__vow_string_from_raw_parts_copy"), 442);
+    if r38 != 0 { return i64_to_i32_wrap(r38); }
+    let r39: i64 = check_string_new_model(String::from("__vow_string_new"), false, 450);
+    if r39 != 0 { return i64_to_i32_wrap(r39); }
+    let r40: i64 = check_string_new_model(String::from("__vow_string_new_in_arena"), true, 460);
+    if r40 != 0 { return i64_to_i32_wrap(r40); }
     0
 }
