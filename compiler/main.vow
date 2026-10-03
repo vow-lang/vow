@@ -1099,6 +1099,7 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
     let in_flight_h: Vec<i64> = Vec::new();
     let in_flight_fi: Vec<i64> = Vec::new();
     let in_flight_tmp: Vec<String> = Vec::new();
+    let model_bounds: Vec<String> = model_bounds_table(fns.len() as i64);
     let mut fi: i64 = 0;
     while fi < fns.len() as i64 {
         let f: IrFunction = fns[fi as u64];
@@ -1125,6 +1126,7 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
                 } else {
                     eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
                     let started: EsbmcStart = verify_start(esbmc_bin, f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                    model_bounds[fi as u64] = started.bounds;
                     in_flight_h.push(started.handle);
                     in_flight_fi.push(fi);
                     in_flight_tmp.push(started.tmp_path);
@@ -1148,18 +1150,7 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
     }
     if all_proven == 0 { return 1; }
     if any_skipped == 1 { return 2; }
-    // Capacity notes describe a completed proof run: they follow every other
-    // finding, in function order, and exist only when every function was proved.
-    // Mirrors `to_output_with_warnings` in the Rust driver.
-    let mut ni: i64 = 0;
-    while ni < fns.len() as i64 {
-        let nf: IrFunction = fns[ni as u64];
-        let nvows: Vec<IrVowEntry> = nf.vows;
-        if nvows.len() > 0 {
-            report_capacity_bounds(nf, ir_mod, vec_max, string_max, hashmap_max, btreemap_max, dctx);
-        }
-        ni = ni + 1;
-    }
+    report_capacity_notes(fns, model_bounds, dctx);
     0
 }
 
@@ -1363,19 +1354,30 @@ fn report_arith_overflow(f: IrFunction, ir_mod: IrModule, path: String, site: Pa
     diag_ctx_emit(dctx, d);
 }
 
+// One zeroed-out model-bounds slot per function: `bounds[fi]` is "" until
+// `verify_start` reports the bounds of the model it sent to ESBMC.
+fn model_bounds_table(n: i64) -> Vec<String> {
+    let table: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n {
+        table.push(String::from(""));
+        i = i + 1;
+    }
+    table
+}
+
 // Report that a proof was obtained from a model restricting collection lengths
 // to the model capacity (the structured "this proof is bounded" Note). A Note,
 // not a failure: the contracts are proved, only for executions within the bound.
-// Read off the emitted model's `vow:model-bound` markers, so it describes exactly
-// what was checked. Mirrors `CapacityBoundNote` in the Rust driver, which
-// `compare_json` holds byte-identical.
-fn report_capacity_bounds(f: IrFunction, ir_mod: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, dctx: DiagCtx) [io] {
-    let c_src: String = emit_c_for_verify(f, ir_mod, vec_max, string_max, hashmap_max, btreemap_max, false, false);
-    let bounds: String = model_bounds_text(c_src);
+// `bounds` is read off the model that was proved (its `vow:model-bound`
+// markers), so it describes exactly what was checked. Mirrors
+// `CapacityBoundNote` in the Rust driver, which `compare_json` holds
+// byte-identical.
+fn report_capacity_bound(function: String, bounds: String, dctx: DiagCtx) [io] {
     if bounds.len() == 0 { return; }
     let msg: String = str5(
         String::from("proof of `"),
-        f.name,
+        function,
         String::from("` is bounded: collection lengths were checked only up to the verifier model capacity ("),
         bounds,
         String::from(")"),
@@ -1384,6 +1386,19 @@ fn report_capacity_bounds(f: IrFunction, ir_mod: IrModule, vec_max: i64, string_
     diag_add_hint(d, String::from("the bound belongs to the bounded model checker, not to the program or its contracts; executions with longer collections were not checked"));
     diag_add_hint(d, String::from("do not add a length bound to a contract to silence this note; an unbounded verifier removes it without any source change"));
     diag_ctx_emit(dctx, d);
+}
+
+// Capacity notes describe a completed proof run: they follow every other
+// finding, in function order, and exist only when every function was proved and
+// none was skipped. Shared by `vowc verify` and `vowc build`, mirroring
+// `to_output_with_warnings` in the Rust driver.
+fn report_capacity_notes(fns: Vec<IrFunction>, model_bounds: Vec<String>, dctx: DiagCtx) [io] {
+    let mut ni: i64 = 0;
+    while ni < fns.len() as i64 && ni < model_bounds.len() as i64 {
+        let nf: IrFunction = fns[ni as u64];
+        report_capacity_bound(nf.name, model_bounds[ni as u64], dctx);
+        ni = ni + 1;
+    }
 }
 
 fn verify_collect_and_report(
@@ -1636,6 +1651,8 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
 //     full. Remaining entries are drained by `build_drain_verify_phase` after codegen.
 //   - `ces`, `soft_meta`: counterexample + soft-fail accumulators threaded
 //     through to `verify_collect_and_report`.
+//   - `model_bounds`: per-function model-bound text, filled at launch and read
+//     by `report_capacity_notes` once the whole run is proved.
 // Returns `[all_proven, any_skipped]`.
 fn build_verify_phase(
     esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String,
@@ -1643,7 +1660,7 @@ fn build_verify_phase(
     in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>,
     max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
     vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64,
-    verify_origin: i64, t: TraceCtx
+    verify_origin: i64, t: TraceCtx, model_bounds: Vec<String>
 ) -> Vec<i64> [io] {
     let mut all_proven: i64 = 1;
     let mut any_skipped: i64 = 0;
@@ -1673,6 +1690,7 @@ fn build_verify_phase(
                 } else {
                     eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
                     let started: EsbmcStart = verify_start(esbmc_bin, f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                    model_bounds[fi as u64] = started.bounds;
                     in_flight_h.push(started.handle);
                     in_flight_fi.push(fi);
                     in_flight_tmp.push(started.tmp_path);
@@ -1852,8 +1870,9 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     let in_flight_tmp: Vec<String> = Vec::new();
     let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
     let verify_origin: i64 = trace_now(tctx);
+    let model_bounds: Vec<String> = model_bounds_table(fns.len() as i64);
     if do_verify {
-        let phase_result: Vec<i64> = build_verify_phase(esbmc_bin, fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, in_flight_h, in_flight_fi, in_flight_tmp, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, verify_origin, tctx);
+        let phase_result: Vec<i64> = build_verify_phase(esbmc_bin, fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, in_flight_h, in_flight_fi, in_flight_tmp, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, verify_origin, tctx, model_bounds);
         if phase_result[0] == 0 { all_proven = 0; }
         if phase_result[1] == 1 { any_skipped = 1; }
     }
@@ -1869,6 +1888,9 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     }
     all_proven = build_drain_verify_phase(esbmc_bin, in_flight_h, in_flight_fi, in_flight_tmp, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven, verify_origin, tctx, dctx);
     trace_span(tctx, String::from("verification"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, trace_now(tctx) - verify_origin, String::from(""));
+    if all_proven == 1 && any_skipped == 0 {
+        report_capacity_notes(fns, model_bounds, dctx);
+    }
     let status_str: String = {
         if all_proven == 0 { String::from("VerifyFailed") }
         else if any_skipped == 1 { String::from("Skipped") }

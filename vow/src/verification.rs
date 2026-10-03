@@ -16,9 +16,8 @@ use std::thread;
 
 use vow_verify::{
     ArithOverflowSite, ConstantValue, Encoding, Solver, SolverConfig, VerificationResult,
-    VerifyLimits, VerifyRequest, contracts_only_source, detect_constant_functions,
-    emit_verify_c_source, find_esbmc, model_capacity_bounds, non_modelable_reason,
-    run_with_fallback, verify,
+    VerifyLimits, contracts_only_source, detect_constant_functions, emit_verify_c_source,
+    find_esbmc, model_capacity_bounds, non_modelable_reason, run_with_fallback,
 };
 
 use crate::cache::VerifyCache;
@@ -117,36 +116,31 @@ fn verify_one_function(
         *config
     };
 
-    let result = if let Some(vc) = verify_cache {
-        let c_src = emit_verify_c_source(func, ir_module, const_fns, limits);
+    // The model is emitted once: it is what ESBMC proves, what the failure cache
+    // is keyed on, and what the capacity-bound note is read from.
+    let c_src = emit_verify_c_source(func, ir_module, const_fns, limits);
 
-        // Lookup under the pre-fallback `func_config`; only FAILED entries come
-        // back (a forged PROVEN file is discarded inside the cache, so it can
-        // never bypass ESBMC).
-        if let Some(ce) = vc.lookup_failure(&c_src, limits.max_k_step, &func_config) {
-            VerificationResult::Failed(ce)
-        } else {
-            let esbmc = match find_esbmc() {
-                Some(p) => p,
-                None => return PerFuncResult::Halt(VerifyOutcome::ToolNotFound),
-            };
-            let (res, resolved_config) =
-                run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, &func_config);
-            // Store under the config that actually produced the result. Only a
-            // Counterexample can be handed to `store_failure`, so a PROVEN
-            // result is structurally uncacheable and can never bypass ESBMC on a
-            // later run.
-            if let VerificationResult::Failed(ce) = &res {
-                vc.store_failure(&c_src, limits.max_k_step, &resolved_config, ce);
-            }
-            res
-        }
+    // Lookup under the pre-fallback `func_config`; only FAILED entries come
+    // back (a forged PROVEN file is discarded inside the cache, so it can never
+    // bypass ESBMC).
+    let cached =
+        verify_cache.and_then(|vc| vc.lookup_failure(&c_src, limits.max_k_step, &func_config));
+    let result = if let Some(ce) = cached {
+        VerificationResult::Failed(ce)
     } else {
-        verify(&VerifyRequest {
-            const_fns: Some(const_fns),
-            config: Some(&func_config),
-            ..VerifyRequest::new(func, ir_module, limits)
-        })
+        let esbmc = match find_esbmc() {
+            Some(p) => p,
+            None => return PerFuncResult::Halt(VerifyOutcome::ToolNotFound),
+        };
+        let (res, resolved_config) =
+            run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, &func_config);
+        // Store under the config that actually produced the result. Only a
+        // Counterexample can be handed to `store_failure`, so a PROVEN result is
+        // structurally uncacheable and can never bypass ESBMC on a later run.
+        if let (Some(vc), VerificationResult::Failed(ce)) = (verify_cache, &res) {
+            vc.store_failure(&c_src, limits.max_k_step, &resolved_config, ce);
+        }
+        res
     };
 
     // #585: an `arith:` counterexample reports a checked operator whose
@@ -159,14 +153,8 @@ fn verify_one_function(
         VerificationResult::Failed(ce) if ce.arith_overflow.is_some() => {
             let site = ce.arith_overflow.expect("matched Some above");
             let warning = arith_overflow_warning(ir_module, func, file, site);
-            let contract_result = verify_contracts_only(
-                func,
-                ir_module,
-                const_fns,
-                verify_cache,
-                limits,
-                &func_config,
-            );
+            let contract_result =
+                verify_contracts_only(func, &c_src, verify_cache, limits, &func_config);
             (contract_result, Some(warning))
         }
         other => (Some(other), None),
@@ -179,7 +167,7 @@ fn verify_one_function(
     let (result, arith_warning) = result;
     if let Some(warning) = arith_warning {
         let mut findings = vec![VerifyWarning::ArithOverflow(warning)];
-        findings.extend(capacity_bound_note(func, ir_module, const_fns, limits));
+        findings.extend(capacity_bound_note(func, &c_src));
         return PerFuncResult::Warn(findings);
     }
 
@@ -199,7 +187,7 @@ fn verify_one_function(
             })
         }
         VerificationDisposition::Complete(PerFuncResult::Ok) => {
-            match capacity_bound_note(func, ir_module, const_fns, limits) {
+            match capacity_bound_note(func, &c_src) {
                 Some(note) => PerFuncResult::Warn(vec![note]),
                 None => PerFuncResult::Ok,
             }
@@ -209,16 +197,11 @@ fn verify_one_function(
 }
 
 /// The `ModelCapacityAssumed` note for a function that has just been proved, or
-/// `None` when its model restricts no collection length. Read off the emitted
-/// model itself, so the note describes exactly the bound that was checked.
-fn capacity_bound_note(
-    func: &vow_ir::Function,
-    ir_module: &vow_ir::Module,
-    const_fns: &std::collections::HashMap<vow_ir::FuncId, ConstantValue>,
-    limits: &VerifyLimits,
-) -> Option<VerifyWarning> {
-    let c_src = emit_verify_c_source(func, ir_module, const_fns, limits);
-    CapacityBoundNote::new(&func.name, &model_capacity_bounds(&c_src))
+/// `None` when its model restricts no collection length. Read off the model
+/// that was proved (`c_src`), so the note describes exactly the bound that was
+/// checked.
+fn capacity_bound_note(func: &vow_ir::Function, c_src: &str) -> Option<VerifyWarning> {
+    CapacityBoundNote::new(&func.name, &model_capacity_bounds(c_src))
         .map(VerifyWarning::CapacityBound)
 }
 
@@ -297,13 +280,12 @@ fn arith_overflow_warning(
 /// returns? Returns `None` when ESBMC cannot be located.
 fn verify_contracts_only(
     func: &vow_ir::Function,
-    ir_module: &vow_ir::Module,
-    const_fns: &std::collections::HashMap<vow_ir::FuncId, ConstantValue>,
+    full_c_src: &str,
     verify_cache: Option<&VerifyCache>,
     limits: &VerifyLimits,
     func_config: &SolverConfig,
 ) -> Option<VerificationResult> {
-    let c_src = contracts_only_source(&emit_verify_c_source(func, ir_module, const_fns, limits));
+    let c_src = contracts_only_source(full_c_src);
 
     // The suppressed source hashes to its own cache key, so replaying it can
     // never be confused with the full obligation set.

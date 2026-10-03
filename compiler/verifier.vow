@@ -53,6 +53,9 @@ struct EsbmcRun {
 struct EsbmcStart {
     handle: i64,
     tmp_path: String,
+    // The model-bound text (`Vec<T>: 128, String: 256`) of the model that was
+    // sent to ESBMC; "" when it restricts no collection length.
+    bounds: String,
 }
 
 // Per-clause verdicts from an ESBMC `--multi-property` run: `status` is the
@@ -1588,7 +1591,7 @@ fn verify_start(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: Strin
                 vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> EsbmcStart [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
-        return EsbmcStart { handle: -1, tmp_path: String::from("") };
+        return EsbmcStart { handle: -1, tmp_path: String::from(""), bounds: String::from("") };
     }
     let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, false);
     // No cache lookup or write — see the note above resolve_auto_bv_solver.
@@ -1600,8 +1603,9 @@ fn verify_start(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: Strin
     let tmp_path: String = verify_tmp_path();
     let fn_name: String = f.name;
     let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
+    let bounds: String = model_bounds_text(c_source);
     let handle: i64 = start_esbmc(esbmc_bin, c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout);
-    EsbmcStart { handle: handle, tmp_path: tmp_path }
+    EsbmcStart { handle: handle, tmp_path: tmp_path, bounds: bounds }
 }
 
 // STILL_RUNNING sentinel returned by process_poll_wait — must match
