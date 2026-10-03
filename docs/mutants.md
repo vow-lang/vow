@@ -1,6 +1,6 @@
 # Mutation testing (`vowc mutants`)
 
-A `cargo-mutants`-style mutation-testing tool integrated as a `vowc` subcommand. The default target is the self-hosted compiler at `compiler/*.vow`, with `scripts/full_test.sh` as the catch-it-or-miss-it oracle.
+A `cargo-mutants`-style mutation-testing tool integrated as a `vowc` subcommand. The default target is the self-hosted compiler at `compiler/*.vow`, with `scripts/full_test.sh` (run with `VOW_FULL_TEST_SKIP_CARGO=1`, see Caveats) as the catch-it-or-miss-it oracle.
 
 Mutation testing is **local-only** — it is not wired into CI. A full sweep across `compiler/*.vow` is multi-hour wall-clock, and a nightly across 8 shards would burn through the GitHub Actions budget for findings only the developer ever consumes. Run it on the cadence the project warrants — before tagging a release, after a substantial compiler change, or whenever you want to audit test coverage.
 
