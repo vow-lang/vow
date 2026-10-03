@@ -61,8 +61,8 @@ fn write_u8(out: Vec<i64>, v: i64) vow {
 **Strength:** a precondition is strong when it is the *true* domain of the
 function — no wider (which would admit miscompilation) and no narrower (a
 verifier-driven bound like `requires: n <= 8`, forbidden by `contracts.md`).
-A bounds-check precondition such as `requires: i >= 0, requires: i < v.len()` is
-the standard guard for every indexing operation.
+A bounds-check precondition such as `requires: i < v.len()` (with `i: u64`, so no
+lower-bound clause is needed) is the standard guard for every indexing operation.
 
 ### 2. Output-range postcondition (the weak default — use sparingly)
 

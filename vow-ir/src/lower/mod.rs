@@ -321,7 +321,7 @@ fn builtin_method_spec(
 ) -> Option<(&'static str, Ty, MethodArg, Option<&'static str>)> {
     use MethodArg::{Absent, Consumed, ConsumedOrZero, Unconsumed};
     Some(match (recv, method) {
-        (Some("String"), "len") => ("__vow_string_len", Ty::I64, Absent, None),
+        (Some("String"), "len") => ("__vow_string_len", Ty::U64, Absent, None),
         (Some("String"), "push_str") => ("__vow_string_push_str", Ty::Unit, Consumed, None),
         (Some("String"), "eq") => ("__vow_string_eq", Ty::Bool, Consumed, None),
         (Some("String"), "contains") => ("__vow_string_contains", Ty::Bool, Unconsumed, None),
@@ -340,14 +340,14 @@ fn builtin_method_spec(
             Absent,
             Some("Option"),
         ),
-        (Some("HashMap"), "len") => ("__vow_map_len", Ty::I64, Absent, None),
+        (Some("HashMap"), "len") => ("__vow_map_len", Ty::U64, Absent, None),
         (Some("HashMap"), "get") => ("__vow_map_get", Ty::I64, Consumed, None),
         (Some("HashMap"), "contains_key") => ("__vow_map_contains", Ty::Bool, Consumed, None),
         (Some("HashMap"), "remove") => ("__vow_map_remove", Ty::Unit, Consumed, None),
-        (Some("BTreeMap"), "len") => ("__vow_btreemap_len", Ty::I64, Absent, None),
+        (Some("BTreeMap"), "len") => ("__vow_btreemap_len", Ty::U64, Absent, None),
         (Some("BTreeMap"), "get") => ("__vow_btreemap_get", Ty::Ptr, Consumed, Some("Option")),
         (Some("BTreeMap"), "contains") => ("__vow_btreemap_contains", Ty::Bool, Consumed, None),
-        (_, "len") => ("__vow_vec_len", Ty::I64, Absent, None),
+        (_, "len") => ("__vow_vec_len", Ty::U64, Absent, None),
         (_, "pop") => ("__vow_vec_pop", Ty::Unit, Absent, None),
         (_, "clear") => ("__vow_vec_clear", Ty::Unit, Absent, None),
         (_, "truncate") => ("__vow_vec_truncate", Ty::Unit, ConsumedOrZero, None),
@@ -2450,16 +2450,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             let len_id = ctx.emit(
                 Opcode::Call,
-                Ty::I64,
+                Ty::U64,
                 vec![iter_id],
                 InstData::CallExtern("__vow_vec_len".to_string()),
                 span,
             );
             let idx_init = ctx.emit(
-                Opcode::ConstI64,
-                Ty::I64,
+                Opcode::ConstU64,
+                Ty::U64,
                 vec![],
-                InstData::ConstI64(0),
+                InstData::ConstU64(0),
                 span,
             );
 
@@ -2477,7 +2477,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // Pre-header: Upsilon for index
             let idx_up = ctx.emit(
                 Opcode::Upsilon,
-                Ty::I64,
+                Ty::U64,
                 vec![idx_init],
                 InstData::PhiTarget(InstId(u32::MAX)),
                 span,
@@ -2506,7 +2506,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Header: Phi for index
             ctx.switch_to_block(header_block);
-            let idx_phi = ctx.emit(Opcode::Phi, Ty::I64, vec![], InstData::None, span);
+            let idx_phi = ctx.emit(Opcode::Phi, Ty::U64, vec![], InstData::None, span);
             backpatch_upsilon(ctx, pre_header_block, idx_up, idx_phi);
 
             // Header: Phi for user mutated vars
@@ -2536,7 +2536,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 Opcode::Lt,
                 Ty::Bool,
                 vec![idx_phi, len_id],
-                InstData::Integer(IntegerType::I64),
+                InstData::Integer(IntegerType::U64),
                 span,
             );
 
@@ -2614,22 +2614,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // Increment index and emit back-edge
             if !ctx.is_terminated() {
                 let one = ctx.emit(
-                    Opcode::ConstI64,
-                    Ty::I64,
+                    Opcode::ConstU64,
+                    Ty::U64,
                     vec![],
-                    InstData::ConstI64(1),
+                    InstData::ConstU64(1),
                     span,
                 );
                 let idx_next = ctx.emit(
                     Opcode::WrappingAdd,
-                    Ty::I64,
+                    Ty::U64,
                     vec![idx_phi, one],
-                    InstData::Integer(IntegerType::I64),
+                    InstData::Integer(IntegerType::U64),
                     span,
                 );
                 ctx.emit(
                     Opcode::Upsilon,
-                    Ty::I64,
+                    Ty::U64,
                     vec![idx_next],
                     InstData::PhiTarget(idx_phi),
                     span,
@@ -2873,22 +2873,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // For for-each: increment index and emit Upsilon for index Phi.
             if let Some(ip) = idx_phi {
                 let one = ctx.emit(
-                    Opcode::ConstI64,
-                    Ty::I64,
+                    Opcode::ConstU64,
+                    Ty::U64,
                     vec![],
-                    InstData::ConstI64(1),
+                    InstData::ConstU64(1),
                     span,
                 );
                 let idx_next = ctx.emit(
                     Opcode::WrappingAdd,
-                    Ty::I64,
+                    Ty::U64,
                     vec![ip, one],
-                    InstData::Integer(IntegerType::I64),
+                    InstData::Integer(IntegerType::U64),
                     span,
                 );
                 ctx.emit(
                     Opcode::Upsilon,
-                    Ty::I64,
+                    Ty::U64,
                     vec![idx_next],
                     InstData::PhiTarget(ip),
                     span,
@@ -5484,7 +5484,7 @@ mod tests {
         );
         assert_eq!(
             builtin_method_spec(Some("BTreeMap"), "len"),
-            Some(("__vow_btreemap_len", Ty::I64, Absent, None))
+            Some(("__vow_btreemap_len", Ty::U64, Absent, None))
         );
         assert_eq!(
             builtin_method_spec(None, "pop"),
@@ -5521,7 +5521,7 @@ mod tests {
             (
                 Some("String"),
                 "len",
-                ("__vow_string_len", Ty::I64, Absent, None),
+                ("__vow_string_len", Ty::U64, Absent, None),
             ),
             (
                 Some("String"),
@@ -5576,7 +5576,7 @@ mod tests {
             (
                 Some("HashMap"),
                 "len",
-                ("__vow_map_len", Ty::I64, Absent, None),
+                ("__vow_map_len", Ty::U64, Absent, None),
             ),
             (
                 Some("HashMap"),
@@ -5596,7 +5596,7 @@ mod tests {
             (
                 Some("BTreeMap"),
                 "len",
-                ("__vow_btreemap_len", Ty::I64, Absent, None),
+                ("__vow_btreemap_len", Ty::U64, Absent, None),
             ),
             (
                 Some("BTreeMap"),
@@ -5608,7 +5608,7 @@ mod tests {
                 "contains",
                 ("__vow_btreemap_contains", Ty::Bool, Consumed, None),
             ),
-            (None, "len", ("__vow_vec_len", Ty::I64, Absent, None)),
+            (None, "len", ("__vow_vec_len", Ty::U64, Absent, None)),
             (None, "pop", ("__vow_vec_pop", Ty::Unit, Absent, None)),
             (None, "clear", ("__vow_vec_clear", Ty::Unit, Absent, None)),
             (
@@ -6746,6 +6746,73 @@ fn area(s: Shape) -> i64 {
         }
     }
 
+    /// The for-each desugar hand-rolls its index chain, so none of it picks up
+    /// signedness from the checker: a stray `I64` payload on the `Lt` would be a
+    /// signed compare on a `u64` length with no diagnostic and no wrong answer
+    /// below `i64::MAX`. Pin every link, including the `continue` path's second
+    /// increment.
+    #[test]
+    fn for_each_desugar_index_chain_is_unsigned() {
+        let module = lower_source_to_module(
+            r#"
+module ForEachUnsignedIndex
+
+fn sum(v: Vec<i64>) -> i64 {
+    let mut s: i64 = 0;
+    for x in v {
+        if x == 7 { continue; }
+        s = s + x;
+    }
+    s
+}
+"#,
+            "for_each_unsigned_index.vow",
+        );
+
+        let func = &module.functions[0];
+        let insts = insts_of(func);
+        let count = |pred: &dyn Fn(&Inst) -> bool| insts.iter().filter(|i| pred(i)).count();
+        let unsigned = InstData::Integer(IntegerType::U64);
+
+        assert_eq!(
+            count(&|i| i.opcode == Opcode::Call
+                && i.data == InstData::CallExtern("__vow_vec_len".to_string())
+                && i.ty == Ty::U64),
+            1,
+            "len call must be U64:\n{func:#?}"
+        );
+        assert_eq!(
+            count(&|i| i.opcode == Opcode::Lt && i.data == unsigned),
+            1,
+            "idx < len must compare as U64:\n{func:#?}"
+        );
+        assert_eq!(
+            count(&|i| i.opcode == Opcode::Lt && i.data != unsigned),
+            0,
+            "no signed Lt may remain:\n{func:#?}"
+        );
+        assert_eq!(
+            count(&|i| i.opcode == Opcode::WrappingAdd && i.ty == Ty::U64 && i.data == unsigned),
+            2,
+            "loop-end and continue increments must both be U64:\n{func:#?}"
+        );
+        assert_eq!(
+            count(&|i| i.opcode == Opcode::Phi && i.ty == Ty::U64),
+            1,
+            "index phi must be U64:\n{func:#?}"
+        );
+        assert_eq!(
+            count(&|i| i.opcode == Opcode::ConstU64),
+            3,
+            "index init and both increment constants must be ConstU64:\n{func:#?}"
+        );
+        assert_eq!(
+            count(&|i| i.opcode == Opcode::WrappingAdd && i.ty == Ty::I64),
+            1,
+            "only the user's `s + x` stays I64:\n{func:#?}"
+        );
+    }
+
     /// The applier half of the `builtin_method_spec` seam: the table says *what*
     /// to emit, and this pins that the emission actually happens — every
     /// `MethodArg` branch, the operand order, and the result tag. The pure table
@@ -6758,7 +6825,7 @@ fn area(s: Shape) -> i64 {
 module TabledMethodLowering
 
 fn exercise(hay: String, needle: String, m: BTreeMap<i64, i64>) -> i64 {
-    let n: i64 = hay.len();
+    let n: i64 = hay.len() as i64;
     let found: bool = hay.contains(needle);
     let hit: Option<i64> = m.get(n);
     let mut v: Vec<i64> = Vec::new();
@@ -6783,7 +6850,7 @@ fn exercise(hay: String, needle: String, m: BTreeMap<i64, i64>) -> i64 {
 
         // MethodArg::Absent — receiver only, and the declared result type.
         let len = call("__vow_string_len");
-        assert_eq!(len.ty, Ty::I64);
+        assert_eq!(len.ty, Ty::U64);
         assert_eq!(len.args.len(), 1, "len takes the receiver alone");
 
         // MethodArg::Unconsumed — String::contains, the one borrowing row.

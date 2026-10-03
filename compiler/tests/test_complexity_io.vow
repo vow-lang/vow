@@ -60,7 +60,7 @@ fn check_nonempty_file_succeeds() -> i64 [io, read, write] {
     if fs_remove(path) != 0 { return 12; }
     if !r.ok { return 5; }
     if string_starts_with(r.src, String::from("module CalleeFreeVars")) == 0 { return 6; }
-    if diag_compute_line(r.src, r.src.len()) != 13 { return 8; }
+    if diag_compute_line(r.src, r.src.len() as i64) != 13 { return 8; }
     0
 }
 

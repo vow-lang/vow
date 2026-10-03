@@ -1,0 +1,8 @@
+// TEST: error-code TypeMismatch
+module LenBTreeMapAssignedToI64
+
+fn main() -> i32 {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    let n: i64 = m.len();
+    0
+}

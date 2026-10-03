@@ -32,7 +32,7 @@ fn expect_spec(
 }
 
 fn check_all_rows() -> i64 {
-    let mut r: i64 = expect_spec(String::from("String"), String::from("len"), String::from("__vow_string_len"), ITY_I64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 1);
+    let mut r: i64 = expect_spec(String::from("String"), String::from("len"), String::from("__vow_string_len"), ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 1);
     if r == 0 { r = expect_spec(String::from("String"), String::from("push_str"), String::from("__vow_string_push_str"), ITY_UNIT(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), false, 7); }
     if r == 0 { r = expect_spec(String::from("String"), String::from("eq"), String::from("__vow_string_eq"), ITY_BOOL(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), false, 13); }
     if r == 0 { r = expect_spec(String::from("String"), String::from("contains"), String::from("__vow_string_contains"), ITY_BOOL(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), false, 19); }
@@ -41,14 +41,14 @@ fn check_all_rows() -> i64 {
     if r == 0 { r = expect_spec(String::from("String"), String::from("clear"), String::from("__vow_string_clear"), ITY_UNIT(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 37); }
     if r == 0 { r = expect_spec(String::from("String"), String::from("parse_i64"), String::from("__vow_string_parse_i64_opt"), ITY_PTR(), METHOD_ARG_NONE(), METHOD_TAG_OPTION(), true, 43); }
     if r == 0 { r = expect_spec(String::from("String"), String::from("parse_u64"), String::from("__vow_string_parse_u64_opt"), ITY_PTR(), METHOD_ARG_NONE(), METHOD_TAG_OPTION(), true, 49); }
-    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("len"), String::from("__vow_map_len"), ITY_I64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 55); }
+    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("len"), String::from("__vow_map_len"), ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 55); }
     if r == 0 { r = expect_spec(String::from("HashMap"), String::from("get"), String::from("__vow_map_get"), ITY_I64(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), false, 61); }
     if r == 0 { r = expect_spec(String::from("HashMap"), String::from("contains_key"), String::from("__vow_map_contains"), ITY_BOOL(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), false, 67); }
     if r == 0 { r = expect_spec(String::from("HashMap"), String::from("remove"), String::from("__vow_map_remove"), ITY_UNIT(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), false, 73); }
-    if r == 0 { r = expect_spec(String::from("BTreeMap"), String::from("len"), String::from("__vow_btreemap_len"), ITY_I64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 79); }
+    if r == 0 { r = expect_spec(String::from("BTreeMap"), String::from("len"), String::from("__vow_btreemap_len"), ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 79); }
     if r == 0 { r = expect_spec(String::from("BTreeMap"), String::from("get"), String::from("__vow_btreemap_get"), ITY_PTR(), METHOD_ARG_CONSUMED_UNIT(), METHOD_TAG_OPTION(), true, 85); }
     if r == 0 { r = expect_spec(String::from("BTreeMap"), String::from("contains"), String::from("__vow_btreemap_contains"), ITY_BOOL(), METHOD_ARG_CONSUMED_UNIT(), METHOD_TAG_NONE(), false, 91); }
-    if r == 0 { r = expect_spec(String::from("Widget"), String::from("len"), String::from("__vow_vec_len"), ITY_I64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 97); }
+    if r == 0 { r = expect_spec(String::from("Widget"), String::from("len"), String::from("__vow_vec_len"), ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 97); }
     if r == 0 { r = expect_spec(String::from(""), String::from("pop"), String::from("__vow_vec_pop"), ITY_UNIT(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 103); }
     if r == 0 { r = expect_spec(String::from("HashMap"), String::from("clear"), String::from("__vow_vec_clear"), ITY_UNIT(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 109); }
     if r == 0 { r = expect_spec(String::from("String"), String::from("truncate"), String::from("__vow_vec_truncate"), ITY_UNIT(), METHOD_ARG_EXPR_ZERO(), METHOD_TAG_NONE(), false, 115); }
@@ -74,10 +74,10 @@ fn check_precedence_and_declines() -> i64 {
 
 fn inst_opcode_by_id(function: IrFunction, id: i64) -> i64 {
     let mut block_index: i64 = 0;
-    while block_index < function.blocks.len() {
+    while block_index < function.blocks.len() as i64 {
         let block: IrBlock = function.blocks[block_index];
         let mut inst_index: i64 = 0;
-        while inst_index < block.insts.len() {
+        while inst_index < block.insts.len() as i64 {
             let inst: IrInst = block.insts[inst_index];
             if inst.id == id { return inst.op; }
             inst_index = inst_index + 1;
@@ -113,14 +113,14 @@ fn check_emitted_calls() -> i64 {
     seen.push(false);
     seen.push(false);
     let mut block_index: i64 = 0;
-    while block_index < function.blocks.len() {
+    while block_index < function.blocks.len() as i64 {
         let block: IrBlock = function.blocks[block_index];
         let mut inst_index: i64 = 0;
-        while inst_index < block.insts.len() {
+        while inst_index < block.insts.len() as i64 {
             let inst: IrInst = block.insts[inst_index];
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
                 if inst.ds == String::from("__vow_string_len") {
-                    if inst.ty != ITY_I64() || inst.args.len() != 1 { return 151; }
+                    if inst.ty != ITY_U64() || inst.args.len() != 1 { return 151; }
                     seen[0] = true;
                 } else if inst.ds == String::from("__vow_string_contains") {
                     if inst.ty != ITY_BOOL() || inst.args.len() != 2 { return 152; }
@@ -141,7 +141,7 @@ fn check_emitted_calls() -> i64 {
         block_index = block_index + 1;
     }
     let mut i: i64 = 0;
-    while i < seen.len() {
+    while i < seen.len() as i64 {
         if !seen[i] { return 156 + i; }
         i = i + 1;
     }
@@ -158,10 +158,10 @@ fn check_missing_argument_fallbacks() -> i64 {
     let mut unit_fallbacks: i64 = 0;
     let mut zero_fallbacks: i64 = 0;
     let mut block_index: i64 = 0;
-    while block_index < function.blocks.len() {
+    while block_index < function.blocks.len() as i64 {
         let block: IrBlock = function.blocks[block_index];
         let mut inst_index: i64 = 0;
-        while inst_index < block.insts.len() {
+        while inst_index < block.insts.len() as i64 {
             let inst: IrInst = block.insts[inst_index];
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.args.len() == 2 {
                 if inst.ds == String::from("__vow_string_eq") || inst.ds == String::from("__vow_string_contains") || inst.ds == String::from("__vow_btreemap_get") || inst.ds == String::from("__vow_btreemap_contains") {

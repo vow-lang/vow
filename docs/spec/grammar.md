@@ -141,11 +141,14 @@ pub fn api_function(x: i64) -> i64 {
 
 Vow targets 64-bit only and has no `isize`/`usize`. Excluding pointer-width
 types preserves binary fixed-point reproducibility across compilation hosts;
-see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). `Vec::len()` and
-indices currently use `i64`, but their signedness is independent of this
-determinism rationale. [ADR 0003](../adr/0003-unsigned-size-types.md) specifies
-that lengths, indices, and capacities will move to fixed-width `u64` as part of
-epic #1104.
+see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). The signedness of a
+length is independent of this determinism rationale, so
+[ADR 0003](../adr/0003-unsigned-size-types.md) makes lengths fixed-width `u64`:
+`.len()` on `Vec`, `String`, `HashMap`, and `BTreeMap` returns `u64`. An index
+expression accepts any integer type (see [Indexing](#indexing)), so `v[i]` with
+`i: u64` needs no cast. `String` offsets (`byte_at`, `substr`,
+`substring`, `matches_literal_at`) stay `i64` as a documented v1 scope
+decision; see [String offsets](#string-offsets).
 
 **128-bit implementation status:** `i128`/`u128` types and full-range literal
 representation are available to the frontend and IR. Native code generation,
@@ -607,7 +610,7 @@ while i > 0 {
 let mut i: u64 = 0u64;
 while i < n vow {
     invariant: i <= n,
-    invariant: v.len() as u64 == i
+    invariant: v.len() == i
 } {
     v.push(i);
     i = i + 1;
@@ -616,9 +619,9 @@ while i < n vow {
 
 State the bound the loop actually maintains. `invariant: i >= 0` looks like a
 lower bound but is always true once `i` is unsigned, and the type checker
-rejects it as `TautologicalComparison`. `.len()` is `i64`, so a length clause
-compared against an unsigned counter needs the same `as u64` bridge as the
-descending-loop idiom below.
+rejects it as `TautologicalComparison`. `.len()` is `u64`, so a length clause
+compares directly against a `u64` counter; a counter of any other type needs
+an explicit `as` cast.
 
 ### Descending Loops
 
@@ -626,7 +629,7 @@ A descending index loop guards on `> 0` and decrements as the first statement
 of the body:
 
 ```vow
-let n: u64 = v.len() as u64;
+let n: u64 = v.len();
 let mut i: u64 = n;
 let mut acc: u64 = 0u64;
 while i > 0 vow { invariant: i <= n } {
@@ -639,11 +642,10 @@ while i > 0 vow { invariant: i <= n } {
 before the first use. The guard is therefore also the bounds check: every
 `v[i]` in the body runs with `i < n`.
 
-Two constraints on the shape above are easy to miss. `.len()` is `i64`, so the
-`as u64` bridge is required — without it the `let` is a `TypeMismatch`. And the
-body must stay pure: a `print_*` call inside a contracted function gives that
-function an effect, and the verifier model is restricted to pure functions, so
-the contract is reported as `VerificationSkipped` rather than checked.
+One constraint on the shape above is easy to miss: the body must stay pure.
+A `print_*` call inside a contracted function gives that function an effect,
+and the verifier model is restricted to pure functions, so the contract is
+reported as `VerificationSkipped` rather than checked.
 
 This idiom does not by itself make a length-bounded loop provable. ESBMC's
 unwind bound sits below the modelled collection capacity, so this form and the
@@ -655,15 +657,15 @@ an unsigned index, whereas the signed form's companion clause `i >= -1` is not
 #### Never `while i >= 0`
 
 ```vow
-let mut i: u64 = v.len() as u64 - 1;   // wraps on an empty collection
-while i >= 0 { ... }                   // never exits; rejected by the checker
+let mut i: u64 = v.len() - 1;   // wraps on an empty collection
+while i >= 0 { ... }            // never exits; rejected by the checker
 ```
 
 Both lines are broken independently. `i >= 0` is universally true on an
 unsigned type, so the loop has no exit; the type checker rejects the
 comparison outright as `TautologicalComparison`, in a loop condition just as
 in a contract clause. The initializer is the half no diagnostic catches: on an
-empty collection `v.len() as u64 - 1` wraps to `18446744073709551615` and the
+empty collection `v.len() - 1` wraps to `18446744073709551615` and the
 first index read runs far out of bounds.
 
 #### `-` inside the guard, `-!` outside it
@@ -919,7 +921,7 @@ m.contains_key(k)
 | `Vec::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> Vec<T>` for flat scalar `T` |
 | `.push(val)`   | `(T) -> ()`                      |
 | `.pop()`       | `() -> ()`                       |
-| `.len()`       | `() -> i64`                      |
+| `.len()`       | `() -> u64`                      |
 | `.clear()`     | `() -> ()` — frees buffer, resets to empty |
 | `.truncate(n)` | `(<int>) -> ()` — shrinks to n elements, frees excess memory |
 | `v[i]`         | Index read — copies slot value; aliases heap types (panics if out of bounds) |
@@ -934,7 +936,7 @@ m.contains_key(k)
 | `String::from(s)`   | `(String) -> String` — mutable copy |
 | `String::new()`     | `() -> String`              |
 | `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |
-| `.len()`            | `() -> i64`                 |
+| `.len()`            | `() -> u64`                 |
 | `.byte_at(i)`       | `(<int>) -> i64`            |
 | `.push_byte(b)`     | `(<int>) -> ()`             |
 | `.push_str(s)`      | `(String) -> ()`            |
@@ -956,7 +958,7 @@ m.contains_key(k)
 | `.get(k)`           | `(K) -> V`                  |
 | `.contains_key(k)`  | `(K) -> bool`               |
 | `.remove(k)`        | `(K) -> ()`                 |
-| `.len()`            | `() -> i64`                 |
+| `.len()`            | `() -> u64`                 |
 
 ### BTreeMap<K, V> Methods
 
@@ -975,7 +977,7 @@ prefer `BTreeMap` over `HashMap` for any map whose iteration affects compiler ou
 | `.insert(k, v)`     | `(K, V) -> Option<V>` (returns the previous value bound to `k`, if any) |
 | `.get(k)`           | `(K) -> Option<V>` (returns the value bound to `k`, or `None`)          |
 | `.contains(k)`      | `(K) -> bool`               |
-| `.len()`            | `() -> i64`                 |
+| `.len()`            | `() -> u64`                 |
 
 ### Option<T> Methods
 
@@ -1001,6 +1003,29 @@ The index expression must have an **integer type**. Any width and either signedn
 The type checker also accepts a 128-bit index, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `Vec` and `String` element helpers are i64-only, so such a program fails codegen instead. Use a 64-bit or narrower index until epic #526 lands 128-bit lowering.
 
 The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).
+
+Lengths are `u64` (see [the Vec method table](#vect-methods)), so an index derived from one needs no conversion:
+
+```vow
+let n: u64 = v.len();
+let mut i: u64 = 0;
+while i < n vow { invariant: i <= n } {
+    let x: i64 = v[i];
+    i = i + 1;
+}
+```
+
+Arithmetic and comparison do not mix signedness: `i64 + u64` and `u64 < i64` are `TypeMismatch`. Convert at the binding with `as`; same-width `as` casts between `i64` and `u64` are legal.
+
+### String offsets
+
+`String` offsets stay `i64` in v1. This is a documented scope decision, not an oversight: `String::len()` is `u64`, but the runtime helpers that take an offset or span (`byte_at`, `substr`, `substring`, `matches_literal_at`) still take `i64` and keep live negative-offset behaviour — `byte_at` returns `-1` for an out-of-range offset, `substr` and `substring` clamp their arguments, and `matches_literal_at` rejects a negative position. Migrating them to `u64` means deleting those guards, which changes runtime semantics for out-of-range callers.
+
+What this means at a call site:
+
+- The `string_substr` and `string_matches_literal_at` builtins require `i64` offset arguments exactly (see the builtin signature table).
+- The `byte_at` and `substring` methods accept any integer type per the rule above, but the runtime sees an `i64`; a `u64` offset above `i64::MAX` is reinterpreted as negative, exactly as described for unsigned indices above. A length-derived `u64` offset is always in range, so `s.byte_at(i)` with `i < s.len()` is safe.
+- `byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64` regardless.
 
 Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.
 

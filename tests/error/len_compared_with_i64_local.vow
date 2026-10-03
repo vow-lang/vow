@@ -1,0 +1,11 @@
+// TEST: error-code TypeMismatch
+module LenComparedWithI64Local
+
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    let i: i64 = 0;
+    if i < v.len() {
+        return 1;
+    }
+    0
+}

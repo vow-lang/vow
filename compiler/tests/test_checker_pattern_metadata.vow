@@ -17,7 +17,7 @@ fn checked_env(source: String) -> CheckEnv [io] {
     );
     let item_files: Vec<String> = Vec::new();
     let mut i: i64 = 0;
-    while i < parsed.items.len() {
+    while i < parsed.items.len() as i64 {
         item_files.push(String::from("pat_meta.vow"));
         i = i + 1;
     }
@@ -34,7 +34,7 @@ fn env_error_count(check_env: CheckEnv) -> i64 {
 fn count_named(names: Vec<String>, wanted: String) -> i64 {
     let mut count: i64 = 0;
     let mut i: i64 = 0;
-    while i < names.len() {
+    while i < names.len() as i64 {
         if names[i] == wanted {
             count = count + 1;
         }
@@ -78,7 +78,7 @@ fn check_unwritten_slots_keep_placeholders() -> i32 [io] {
     if linear_flags.len() != names.len() { return 5; }
     let mut placeholders: i64 = 0;
     let mut i: i64 = 0;
-    while i < names.len() {
+    while i < names.len() as i64 {
         if names[i].len() == 0 {
             placeholders = placeholders + 1;
             if option_tys[i] != -1 { return 6; }
@@ -109,7 +109,7 @@ fn check_unwrap_aggregate_is_recorded() -> i32 [io] {
     if linear_flags.len() != names.len() { return 12; }
     let mut placeholders: i64 = 0;
     let mut i: i64 = 0;
-    while i < names.len() {
+    while i < names.len() as i64 {
         if names[i].len() == 0 {
             placeholders = placeholders + 1;
             if option_tys[i] != -1 { return 13; }

@@ -1,0 +1,47 @@
+// TEST: stdout "iterations=4\nsum=100\nskipped_sum=80\nbroke_at=2\nempty=0\n"
+module ForEachLenU64
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    v.push(40);
+
+    let mut count: u64 = 0;
+    let mut sum: i64 = 0;
+    for x in v {
+        count = count + 1;
+        sum = sum + x;
+    }
+    print_str(String::from("iterations="));
+    print_u64(count);
+    print_str(String::from("\nsum="));
+    print_i64(sum);
+
+    let mut skipped: i64 = 0;
+    for x in v {
+        if x == 20 { continue; }
+        skipped = skipped + x;
+    }
+    print_str(String::from("\nskipped_sum="));
+    print_i64(skipped);
+
+    let mut seen: u64 = 0;
+    for x in v {
+        if x == 30 { break; }
+        seen = seen + 1;
+    }
+    print_str(String::from("\nbroke_at="));
+    print_u64(seen);
+
+    let e: Vec<i64> = Vec::new();
+    let mut none: u64 = 0;
+    for x in e {
+        none = none + 1;
+    }
+    print_str(String::from("\nempty="));
+    print_u64(none);
+    print_str(String::from("\n"));
+    0
+}

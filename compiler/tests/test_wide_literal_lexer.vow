@@ -20,7 +20,7 @@ fn checked_error_count(source: String) -> i64 [io] {
     );
     let item_files: Vec<String> = Vec::new();
     let mut i: i64 = 0;
-    while i < parsed.items.len() {
+    while i < parsed.items.len() as i64 {
         item_files.push(String::from("wide_range.vow"));
         i = i + 1;
     }
@@ -37,7 +37,7 @@ fn checked_first_error_message(source: String) -> String [io] {
     );
     let item_files: Vec<String> = Vec::new();
     let mut i: i64 = 0;
-    while i < parsed.items.len() {
+    while i < parsed.items.len() as i64 {
         item_files.push(String::from("wide_range.vow"));
         i = i + 1;
     }
@@ -275,7 +275,7 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
     );
     let item_files: Vec<String> = Vec::new();
     let mut item_index: i64 = 0;
-    while item_index < parsed.items.len() {
+    while item_index < parsed.items.len() as i64 {
         item_files.push(String::from("wide_aggregate.vow"));
         item_index = item_index + 1;
     }
@@ -311,13 +311,13 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
     let mut saw_btreemap_insert_limb: bool = false;
     let mut saw_nested_index_assignment_limb: bool = false;
     let mut function_index: i64 = 0;
-    while function_index < lowered.functions.len() {
+    while function_index < lowered.functions.len() as i64 {
         let f: IrFunction = lowered.functions[function_index];
         let mut block_index: i64 = 0;
-        while block_index < f.blocks.len() {
+        while block_index < f.blocks.len() as i64 {
             let block: IrBlock = f.blocks[block_index];
             let mut inst_index: i64 = 0;
-            while inst_index < block.insts.len() {
+            while inst_index < block.insts.len() as i64 {
                 let inst: IrInst = block.insts[inst_index];
                 if inst.dk == IDATA_CONST_U128() && inst.dv2 == 1 {
                     if inst.dv == 0 { saw_struct_limb = true; }
@@ -420,7 +420,7 @@ fn check_wide_suffix_parser_path() -> i32 {
     write_inst_data(encoded, wide_inst);
     if encoded.len() != 17 || encoded[0] != 21 { return 19; }
     let mut i: i64 = 1;
-    while i < encoded.len() {
+    while i < encoded.len() as i64 {
         if encoded[i] != 255 { return 20; }
         i = i + 1;
     }
