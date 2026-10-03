@@ -2328,7 +2328,7 @@ m.contains_key(k)
 
 `String` offsets are exactly `u64` and `push_byte`'s argument is exactly `u8`; see [String offsets](#string-offsets).
 
-`push_byte`'s argument is a byte *value*, not an index. It is typed `u8`, so the byte range `0..=255` is a fact of the type: an unsuffixed literal outside that range is a `LiteralOutOfRange` error, and any other integer type (`i64`, `u64`, ...) is a `TypeMismatch`. A wider value is narrowed explicitly with a narrowing intrinsic (`i64_to_u8_wrap`, `u64_to_u8_wrap`, `i64_to_u8_sat`, `i64_to_u8_try`, ...) — `as u8` from a wider type is `NarrowingCastNotAllowed`. There is no silent truncation: `s.push_byte(300)` is rejected, and the explicit `s.push_byte(i64_to_u8_wrap(300))` appends `44`. `byte_at` returns an `i64` in `-1..=255`, so copying a byte reads `r.push_byte(i64_to_u8_wrap(s.byte_at(i)))`.
+`push_byte`'s argument is a byte *value*, not an index. It is typed `u8`, so the byte range `0..=255` is a fact of the type: an unsuffixed literal outside that range is a `LiteralOutOfRange` error, and any other integer type (`i64`, `u64`, ...) is a `TypeMismatch`. A wider value is narrowed explicitly with a narrowing intrinsic (`i64_to_u8_wrap`, `u64_to_u8_wrap`, `i64_to_u8_sat`, `i64_to_u8_try`, ...) — `as u8` from a wider type is `NarrowingCastNotAllowed`. There is no silent truncation: `s.push_byte(300)` is rejected, and the explicit `s.push_byte(i64_to_u8_wrap(300))` appends `44`. `byte_at` returns an `i64` in `-1..=255`, where `-1` means the index is past the end: copy a whole range with `substring` or `push_str`, and when transforming byte by byte make `i < s.len()` a precondition, because wrapping the `-1` sentinel would append `0xFF`.
 
 ### HashMap<K, V> Methods
 
@@ -7715,7 +7715,7 @@ m.contains_key(k)
 
 `String` offsets are exactly `u64` and `push_byte`'s argument is exactly `u8`; see [String offsets](#string-offsets).
 
-`push_byte`'s argument is a byte *value*, not an index. It is typed `u8`, so the byte range `0..=255` is a fact of the type: an unsuffixed literal outside that range is a `LiteralOutOfRange` error, and any other integer type (`i64`, `u64`, ...) is a `TypeMismatch`. A wider value is narrowed explicitly with a narrowing intrinsic (`i64_to_u8_wrap`, `u64_to_u8_wrap`, `i64_to_u8_sat`, `i64_to_u8_try`, ...) — `as u8` from a wider type is `NarrowingCastNotAllowed`. There is no silent truncation: `s.push_byte(300)` is rejected, and the explicit `s.push_byte(i64_to_u8_wrap(300))` appends `44`. `byte_at` returns an `i64` in `-1..=255`, so copying a byte reads `r.push_byte(i64_to_u8_wrap(s.byte_at(i)))`.
+`push_byte`'s argument is a byte *value*, not an index. It is typed `u8`, so the byte range `0..=255` is a fact of the type: an unsuffixed literal outside that range is a `LiteralOutOfRange` error, and any other integer type (`i64`, `u64`, ...) is a `TypeMismatch`. A wider value is narrowed explicitly with a narrowing intrinsic (`i64_to_u8_wrap`, `u64_to_u8_wrap`, `i64_to_u8_sat`, `i64_to_u8_try`, ...) — `as u8` from a wider type is `NarrowingCastNotAllowed`. There is no silent truncation: `s.push_byte(300)` is rejected, and the explicit `s.push_byte(i64_to_u8_wrap(300))` appends `44`. `byte_at` returns an `i64` in `-1..=255`, where `-1` means the index is past the end: copy a whole range with `substring` or `push_str`, and when transforming byte by byte make `i < s.len()` a precondition, because wrapping the `-1` sentinel would append `0xFF`.
 
 ### HashMap<K, V> Methods
 
