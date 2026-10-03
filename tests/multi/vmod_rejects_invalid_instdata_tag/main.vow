@@ -1,13 +1,20 @@
-// TEST: exit 134
+// TEST: exit 1
+// TEST: stdout "{"error":"ModuleDecodeError","kind":"InvalidKind","label":"InstData","value":99,"offset":0}\n"
+// An unknown InstData tag is InvalidKind labelled InstData.
 module Main
 
 use ir
 use module_io
 
-fn main() -> i32 [panic] {
+fn main() -> i32 [io] {
     let bytes: Vec<i64> = Vec::new();
     bytes.push(99);
     let r: ModuleReader = reader_new(bytes);
     let _data: WireInstData = read_inst_data(r);
+    if r.err_kind != DEC_OK() {
+        print_str(decode_error_json(r.err_kind, r.err_label, r.err_value, r.err_offset));
+        print_str(String::from("\n"));
+        return 1;
+    }
     0
 }

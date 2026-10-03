@@ -7,6 +7,9 @@ module ModuleIo
 // - explicit opcode / type / effect / blame / InstData discriminants
 // - region metadata on `IrInst`
 // - `RegionSummary` on `IrFunction`
+// Decoding never traps on malformed input: the first violation is recorded on
+// the reader (kind, byte offset, label, value), later reads return 0, and
+// `module_decode` returns it in `ModuleDecode` alongside an empty module.
 
 use ir
 
@@ -23,9 +26,33 @@ fn EFFECT_READ() -> i64 { 4 }
 fn EFFECT_UNSAFE() -> i64 { 8 }
 fn EFFECT_WRITE() -> i64 { 16 }
 
+fn DEC_OK() -> i64 { 0 }
+fn DEC_BAD_MAGIC() -> i64 { 1 }
+fn DEC_VERSION_MISMATCH() -> i64 { 2 }
+fn DEC_TRUNCATED() -> i64 { 3 }
+fn DEC_INVALID_KIND() -> i64 { 4 }
+fn DEC_TRAILING_BYTES() -> i64 { 5 }
+fn DEC_LEB_OVERLONG() -> i64 { 6 }
+fn DEC_LEB_OVERFLOW() -> i64 { 7 }
+fn DEC_LEB_NON_CANONICAL() -> i64 { 8 }
+fn DEC_NEGATIVE_COUNT() -> i64 { 9 }
+fn DEC_COUNT_EXCEEDS_REMAINING() -> i64 { 10 }
+
 struct ModuleReader {
     buf: Vec<i64>,
     pos: u64,
+    err_kind: i64,
+    err_offset: u64,
+    err_label: String,
+    err_value: i64,
+}
+
+struct ModuleDecode {
+    m: IrModule,
+    err_kind: i64,
+    err_offset: u64,
+    err_label: String,
+    err_value: i64,
 }
 
 struct WireRegionConstraint {
@@ -55,12 +82,35 @@ struct SortedLocalNames {
 }
 
 fn reader_new(buf: Vec<i64>) -> ModuleReader {
-    ModuleReader { buf: buf, pos: 0 }
+    ModuleReader {
+        buf: buf,
+        pos: 0,
+        err_kind: DEC_OK(),
+        err_offset: 0,
+        err_label: String::new(),
+        err_value: 0,
+    }
 }
 
-fn reject_decode_i64() -> i64 {
-    let bad: Vec<i64> = Vec::new();
-    bad[0]
+fn reader_fail(r: ModuleReader, kind: i64, offset: u64, label: String, value: i64) {
+    if r.err_kind != DEC_OK() {
+        return;
+    }
+    r.err_kind = kind;
+    r.err_offset = offset;
+    r.err_label = label;
+    r.err_value = value;
+}
+
+fn reader_need(r: ModuleReader, n: u64) -> bool {
+    if r.err_kind != DEC_OK() {
+        return false;
+    }
+    if n > r.buf.len() - r.pos {
+        reader_fail(r, DEC_TRUNCATED(), r.pos, String::new(), 0);
+        return false;
+    }
+    true
 }
 
 fn reject_encode_u8() -> i64 {
@@ -68,11 +118,39 @@ fn reject_encode_u8() -> i64 {
     bad[0]
 }
 
-fn reject_decode_module() -> IrModule {
-    let bad: Vec<i64> = Vec::new();
-    let name: String = String::new();
-    name.push_byte(i64_to_u8_wrap(bad[0]));
-    ir_module_new(name)
+fn decode_error_name(kind: i64) -> String {
+    if kind == DEC_BAD_MAGIC() { return String::from("BadMagic"); }
+    if kind == DEC_VERSION_MISMATCH() { return String::from("VersionMismatch"); }
+    if kind == DEC_TRUNCATED() { return String::from("Truncated"); }
+    if kind == DEC_INVALID_KIND() { return String::from("InvalidKind"); }
+    if kind == DEC_TRAILING_BYTES() { return String::from("TrailingBytes"); }
+    if kind == DEC_LEB_OVERLONG() { return String::from("LebOverlong"); }
+    if kind == DEC_LEB_OVERFLOW() { return String::from("LebOverflow"); }
+    if kind == DEC_LEB_NON_CANONICAL() { return String::from("LebNonCanonical"); }
+    if kind == DEC_NEGATIVE_COUNT() { return String::from("NegativeCount"); }
+    if kind == DEC_COUNT_EXCEEDS_REMAINING() { return String::from("CountExceedsRemaining"); }
+    String::from("None")
+}
+
+fn module_decode_failed(res: ModuleDecode) -> bool {
+    res.err_kind != DEC_OK()
+}
+
+fn decode_error_json(kind: i64, label: String, value: i64, offset: u64) -> String {
+    let out: String = String::from("{\"error\":\"ModuleDecodeError\",\"kind\":\"");
+    out.push_str(decode_error_name(kind));
+    out.push_str(String::from("\",\"label\":\""));
+    out.push_str(label);
+    out.push_str(String::from("\",\"value\":"));
+    out.push_str(i64_to_string(value));
+    out.push_str(String::from(",\"offset\":"));
+    out.push_str(i64_to_string(offset as i64));
+    out.push_str(String::from("}"));
+    out
+}
+
+fn module_decode_error_json(res: ModuleDecode) -> String {
+    decode_error_json(res.err_kind, res.err_label, res.err_value, res.err_offset)
 }
 
 fn write_u8(out: Vec<i64>, v: i64) vow {
@@ -133,26 +211,29 @@ fn write_i64_bits(out: Vec<i64>, v: i64) {
     }
 }
 
-fn reader_read_u8(r: ModuleReader) -> i64 vow {
-    requires: r.pos < r.buf.len()
-} {
+fn reader_read_u8(r: ModuleReader) -> i64 {
+    if !reader_need(r, 1) {
+        return 0;
+    }
     let b: i64 = r.buf[r.pos];
     r.pos = r.pos + 1;
     b
 }
 
-fn reader_read_u16_le(r: ModuleReader) -> i64 vow {
-    requires: r.pos + 1 < r.buf.len()
-} {
+fn reader_read_u16_le(r: ModuleReader) -> i64 {
+    if !reader_need(r, 2) {
+        return 0;
+    }
     let b0: i64 = r.buf[r.pos];
     let b1: i64 = r.buf[r.pos + 1];
     r.pos = r.pos + 2;
     b0 + b1 * 256
 }
 
-fn reader_read_u32_le(r: ModuleReader) -> i64 vow {
-    requires: r.pos + 3 < r.buf.len()
-} {
+fn reader_read_u32_le(r: ModuleReader) -> i64 {
+    if !reader_need(r, 4) {
+        return 0;
+    }
     let b0: i64 = r.buf[r.pos];
     let b1: i64 = r.buf[r.pos + 1];
     let b2: i64 = r.buf[r.pos + 2];
@@ -168,6 +249,9 @@ fn read_i32_bits(r: ModuleReader) -> i64 {
 }
 
 fn read_i64_bits(r: ModuleReader) -> i64 {
+    if !reader_need(r, 8) {
+        return 0;
+    }
     let b0: i64 = reader_read_u8(r);
     let b1: i64 = reader_read_u8(r);
     let b2: i64 = reader_read_u8(r);
@@ -200,9 +284,8 @@ fn write_leb(out: Vec<i64>, v: u64) {
     }
 }
 
-fn reader_read_leb(r: ModuleReader) -> i64 vow {
-    requires: r.pos < r.buf.len()
-} {
+fn reader_read_leb(r: ModuleReader) -> i64 {
+    let start: u64 = r.pos;
     let mut value: i64 = 0;
     let mut shift: i64 = 0;
     let mut done: i64 = 0;
@@ -210,36 +293,46 @@ fn reader_read_leb(r: ModuleReader) -> i64 vow {
         invariant: shift >= 0
     } {
         let b: i64 = reader_read_u8(r);
+        if r.err_kind != DEC_OK() {
+            return 0;
+        }
         let chunk: i64 = b - (b / 128) * 128;
         if shift == 63 && chunk > 1 {
-            return reject_decode_i64();
+            reader_fail(r, DEC_LEB_OVERFLOW(), start, String::new(), 0);
+            return 0;
         }
         value = value + chunk * (1 << shift);
         if (b / 128) == 0 {
             if shift > 0 && chunk == 0 {
-                return reject_decode_i64();
+                reader_fail(r, DEC_LEB_NON_CANONICAL(), start, String::new(), 0);
+                return 0;
             }
             done = 1;
         } else {
             shift = shift + 7;
             if shift > 63 {
-                return reject_decode_i64();
+                reader_fail(r, DEC_LEB_OVERLONG(), start, String::new(), 0);
+                return 0;
             }
         }
     }
     value
 }
 
-fn reader_read_count(r: ModuleReader) -> u64 vow {
-    requires: r.pos < r.buf.len()
-} {
+fn reader_read_count(r: ModuleReader) -> u64 {
+    let start: u64 = r.pos;
     let n: i64 = reader_read_leb(r);
+    if r.err_kind != DEC_OK() {
+        return 0;
+    }
     if n < 0 {
-        return reject_decode_i64() as u64;
+        reader_fail(r, DEC_NEGATIVE_COUNT(), start, String::new(), 0);
+        return 0;
     }
     let remaining: u64 = r.buf.len() - r.pos;
     if n as u64 > remaining {
-        return reject_decode_i64() as u64;
+        reader_fail(r, DEC_COUNT_EXCEEDS_REMAINING(), start, String::new(), n);
+        return 0;
     }
     n as u64
 }
@@ -260,7 +353,7 @@ fn reader_read_string(r: ModuleReader) -> String {
     let n: u64 = reader_read_count(r);
     let s: String = String::new();
     let mut i: u64 = 0;
-    while i < n vow {
+    while i < n && r.err_kind == DEC_OK() vow {
         invariant: i <= n
     } {
         s.push_byte(i64_to_u8_wrap(reader_read_u8(r)));
@@ -296,7 +389,7 @@ fn reader_read_effects(r: ModuleReader) -> i64 {
     let n: u64 = reader_read_count(r);
     let mut effects: i64 = 0;
     let mut i: u64 = 0;
-    while i < n vow {
+    while i < n && r.err_kind == DEC_OK() vow {
         invariant: i <= n
     } {
         let d: i64 = reader_read_u8(r);
@@ -349,15 +442,21 @@ fn region_encode(out: Vec<i64>, rgn: i64) vow {
     write_u32_le(out, payload);
 }
 
-fn region_decode(r: ModuleReader) -> i64 [panic] {
+fn region_decode(r: ModuleReader) -> i64 {
+    let kind_at: u64 = r.pos;
     let kind: i64 = reader_read_u8(r);
     let payload: i64 = reader_read_u32_le(r);
+    if r.err_kind != DEC_OK() {
+        return 0;
+    }
     if kind > REGION_KIND_RODATA() {
-        return reject_decode_i64();
+        reader_fail(r, DEC_INVALID_KIND(), kind_at, String::from("RegionId"), kind);
+        return 0;
     }
     if kind == REGION_KIND_ROOT() || kind == REGION_KIND_RODATA() {
         if payload != 0 {
-            return reject_decode_i64();
+            reader_fail(r, DEC_INVALID_KIND(), kind_at + 1, String::from("RegionId.payload"), payload);
+            return 0;
         }
     }
     region_pack(kind, payload)
@@ -388,8 +487,12 @@ fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64
     }
 }
 
-fn region_constraint_decode(r: ModuleReader) -> WireRegionConstraint [panic] {
+fn region_constraint_decode(r: ModuleReader) -> WireRegionConstraint {
+    let kind_at: u64 = r.pos;
     let kind: i64 = reader_read_u8(r);
+    if r.err_kind != DEC_OK() {
+        return WireRegionConstraint { kind: 0, aux: 0, aliases: Vec::new() };
+    }
     if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() {
         return WireRegionConstraint { kind: kind, aux: 0, aliases: Vec::new() };
     }
@@ -401,12 +504,13 @@ fn region_constraint_decode(r: ModuleReader) -> WireRegionConstraint [panic] {
         };
     }
     if kind != RSUM_KIND_ALIAS_OF_ANY() {
-        return WireRegionConstraint { kind: reject_decode_i64(), aux: 0, aliases: Vec::new() };
+        reader_fail(r, DEC_INVALID_KIND(), kind_at, String::from("RegionConstraint"), kind);
+        return WireRegionConstraint { kind: 0, aux: 0, aliases: Vec::new() };
     }
     let n: u64 = reader_read_count(r);
     let aliases: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
-    while i < n vow {
+    while i < n && r.err_kind == DEC_OK() vow {
         invariant: i <= n
     } {
         aliases.push(reader_read_u32_le(r));
@@ -481,11 +585,11 @@ fn write_region_summary(out: Vec<i64>, f: IrFunction) {
     }
 }
 
-fn read_region_summary(r: ModuleReader) -> WireRegionSummary [panic] {
+fn read_region_summary(r: ModuleReader) -> WireRegionSummary {
     let param_n: u64 = reader_read_count(r);
     let param_regions: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
-    while i < param_n vow {
+    while i < param_n && r.err_kind == DEC_OK() vow {
         invariant: i <= param_n
     } {
         param_regions.push(reader_read_u32_le(r));
@@ -497,7 +601,7 @@ fn read_region_summary(r: ModuleReader) -> WireRegionSummary [panic] {
     let effects_n: u64 = reader_read_count(r);
     let flat: Vec<i64> = Vec::new();
     i = 0;
-    while i < effects_n vow {
+    while i < effects_n && r.err_kind == DEC_OK() vow {
         invariant: i <= effects_n
     } {
         let target: i64 = reader_read_u32_le(r);
@@ -542,9 +646,22 @@ fn write_integer_ty(out: Vec<i64>, ty: i64) {
     write_u8(out, reject_encode_u8());
 }
 
-fn read_integer_ty(r: ModuleReader) -> i64 [panic] {
+fn read_integer_ty(r: ModuleReader) -> i64 {
+    let width_at: u64 = r.pos;
     let width: i64 = reader_read_u8(r);
+    if r.err_kind == DEC_OK() && (width < 0 || width > 4) {
+        reader_fail(r, DEC_INVALID_KIND(), width_at, String::from("IntegerWidth"), width);
+        return 0;
+    }
+    let sign_at: u64 = r.pos;
     let signedness: i64 = reader_read_u8(r);
+    if r.err_kind == DEC_OK() && (signedness < 0 || signedness > 1) {
+        reader_fail(r, DEC_INVALID_KIND(), sign_at, String::from("IntegerSignedness"), signedness);
+        return 0;
+    }
+    if r.err_kind != DEC_OK() {
+        return 0;
+    }
     if width == 0 && signedness == 0 { return ITY_I8(); }
     if width == 0 && signedness == 1 { return ITY_U8(); }
     if width == 1 && signedness == 0 { return ITY_I16(); }
@@ -554,8 +671,7 @@ fn read_integer_ty(r: ModuleReader) -> i64 [panic] {
     if width == 3 && signedness == 0 { return ITY_I64(); }
     if width == 3 && signedness == 1 { return ITY_U64(); }
     if width == 4 && signedness == 0 { return ITY_I128(); }
-    if width == 4 && signedness == 1 { return ITY_U128(); }
-    reject_decode_i64()
+    ITY_U128()
 }
 
 fn write_inst_data(out: Vec<i64>, inst: IrInst) {
@@ -621,7 +737,8 @@ fn write_inst_data(out: Vec<i64>, inst: IrInst) {
     write_u8(out, reject_encode_u8());
 }
 
-fn read_inst_data(r: ModuleReader) -> WireInstData [panic] {
+fn read_inst_data(r: ModuleReader) -> WireInstData {
+    let tag_at: u64 = r.pos;
     let tag: i64 = reader_read_u8(r);
     let data: WireInstData = WireInstData { dk: IDATA_NONE(), dv: 0, dv2: 0, ds: String::from("") };
     if tag == 0 {
@@ -677,19 +794,7 @@ fn read_inst_data(r: ModuleReader) -> WireInstData [panic] {
         data.dv = reader_read_u32_le(r);
     } else if tag == 17 {
         data.dk = IDATA_INTEGER();
-        let width: i64 = reader_read_u8(r);
-        let signedness: i64 = reader_read_u8(r);
-        if width == 0 && signedness == 0 { data.dv = ITY_I8(); }
-        else if width == 0 && signedness == 1 { data.dv = ITY_U8(); }
-        else if width == 1 && signedness == 0 { data.dv = ITY_I16(); }
-        else if width == 1 && signedness == 1 { data.dv = ITY_U16(); }
-        else if width == 2 && signedness == 0 { data.dv = ITY_I32(); }
-        else if width == 2 && signedness == 1 { data.dv = ITY_U32(); }
-        else if width == 3 && signedness == 0 { data.dv = ITY_I64(); }
-        else if width == 3 && signedness == 1 { data.dv = ITY_U64(); }
-        else if width == 4 && signedness == 0 { data.dv = ITY_I128(); }
-        else if width == 4 && signedness == 1 { data.dv = ITY_U128(); }
-        else { data.dk = reject_decode_i64(); }
+        data.dv = read_integer_ty(r);
     } else if tag == 18 {
         data.dk = IDATA_CONST_U8();
         data.dv = reader_read_u8(r);
@@ -703,7 +808,10 @@ fn read_inst_data(r: ModuleReader) -> WireInstData [panic] {
         data.dv = read_i64_bits(r);
         data.dv2 = read_i64_bits(r);
     } else {
-        return WireInstData { dk: reject_decode_i64(), dv: 0, dv2: 0, ds: String::from("") };
+        if r.err_kind == DEC_OK() {
+            reader_fail(r, DEC_INVALID_KIND(), tag_at, String::from("InstData"), tag);
+        }
+        return WireInstData { dk: IDATA_NONE(), dv: 0, dv2: 0, ds: String::from("") };
     }
     data
 }
@@ -726,14 +834,14 @@ fn write_inst(out: Vec<i64>, inst: IrInst) {
     region_encode(out, inst.rgn);
 }
 
-fn read_inst(r: ModuleReader) -> IrInst [panic] {
+fn read_inst(r: ModuleReader) -> IrInst {
     let id: i64 = reader_read_u32_le(r);
     let op: i64 = disc_opcode(reader_read_u16_le(r));
     let ty: i64 = disc_ty(reader_read_u8(r));
     let argc: u64 = reader_read_count(r);
     let args: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
-    while i < argc vow {
+    while i < argc && r.err_kind == DEC_OK() vow {
         invariant: i <= argc
     } {
         args.push(reader_read_u32_le(r));
@@ -759,11 +867,11 @@ fn write_block(out: Vec<i64>, block: IrBlock) {
     }
 }
 
-fn read_block(r: ModuleReader) -> IrBlock [panic] {
+fn read_block(r: ModuleReader) -> IrBlock {
     let block: IrBlock = ir_block_new(reader_read_u32_le(r));
     let n: u64 = reader_read_count(r);
     let mut i: u64 = 0;
-    while i < n vow {
+    while i < n && r.err_kind == DEC_OK() vow {
         invariant: i <= n
     } {
         block.insts.push(read_inst(r));
@@ -801,7 +909,7 @@ fn read_vow_entry(r: ModuleReader) -> IrVowEntry {
     };
     let n: u64 = reader_read_count(r);
     let mut i: u64 = 0;
-    while i < n vow {
+    while i < n && r.err_kind == DEC_OK() vow {
         invariant: i <= n
     } {
         entry.binding_names.push(reader_read_string(r));
@@ -899,7 +1007,7 @@ fn read_struct_layout(r: ModuleReader) -> IrStructLayout {
     };
     let n: u64 = reader_read_count(r);
     let mut i: u64 = 0;
-    while i < n vow {
+    while i < n && r.err_kind == DEC_OK() vow {
         invariant: i <= n
     } {
         layout.fields.push(read_field(r));
@@ -930,7 +1038,7 @@ fn read_variant(r: ModuleReader) -> IrVariantLayout {
     };
     let n: u64 = reader_read_count(r);
     let mut i: u64 = 0;
-    while i < n vow {
+    while i < n && r.err_kind == DEC_OK() vow {
         invariant: i <= n
     } {
         variant.payload.push(read_field(r));
@@ -958,7 +1066,7 @@ fn read_enum_layout(r: ModuleReader) -> IrEnumLayout {
     };
     let n: u64 = reader_read_count(r);
     let mut i: u64 = 0;
-    while i < n vow {
+    while i < n && r.err_kind == DEC_OK() vow {
         invariant: i <= n
     } {
         layout.variants.push(read_variant(r));
@@ -1025,14 +1133,14 @@ fn write_function(out: Vec<i64>, f: IrFunction) {
     write_string(out, f.source_file);
 }
 
-fn read_function(r: ModuleReader) -> IrFunction [panic] {
+fn read_function(r: ModuleReader) -> IrFunction {
     let id: i64 = reader_read_u32_le(r);
     let name: String = reader_read_string(r);
 
     let param_n: u64 = reader_read_count(r);
     let params: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
-    while i < param_n vow {
+    while i < param_n && r.err_kind == DEC_OK() vow {
         invariant: i <= param_n
     } {
         params.push(disc_ty(reader_read_u8(r)));
@@ -1042,7 +1150,7 @@ fn read_function(r: ModuleReader) -> IrFunction [panic] {
     let param_name_n: u64 = reader_read_count(r);
     let param_names: Vec<String> = Vec::new();
     i = 0;
-    while i < param_name_n vow {
+    while i < param_name_n && r.err_kind == DEC_OK() vow {
         invariant: i <= param_name_n
     } {
         param_names.push(reader_read_string(r));
@@ -1061,7 +1169,7 @@ fn read_function(r: ModuleReader) -> IrFunction [panic] {
 
     let vow_n: u64 = reader_read_count(r);
     i = 0;
-    while i < vow_n vow {
+    while i < vow_n && r.err_kind == DEC_OK() vow {
         invariant: i <= vow_n
     } {
         f.vows.push(read_vow_entry(r));
@@ -1070,7 +1178,7 @@ fn read_function(r: ModuleReader) -> IrFunction [panic] {
 
     let block_n: u64 = reader_read_count(r);
     i = 0;
-    while i < block_n vow {
+    while i < block_n && r.err_kind == DEC_OK() vow {
         invariant: i <= block_n
     } {
         f.blocks.push(read_block(r));
@@ -1079,7 +1187,7 @@ fn read_function(r: ModuleReader) -> IrFunction [panic] {
 
     let local_n: u64 = reader_read_count(r);
     i = 0;
-    while i < local_n vow {
+    while i < local_n && r.err_kind == DEC_OK() vow {
         invariant: i <= local_n
     } {
         f.local_names_ids.push(reader_read_u32_le(r));
@@ -1145,24 +1253,44 @@ fn module_encode(m: IrModule) -> Vec<i64> {
     out
 }
 
-fn module_decode(buf: Vec<i64>) -> IrModule [panic] {
+fn decode_result(r: ModuleReader, m: IrModule) -> ModuleDecode {
+    if r.err_kind != DEC_OK() {
+        return ModuleDecode {
+            m: ir_module_new(String::new()),
+            err_kind: r.err_kind,
+            err_offset: r.err_offset,
+            err_label: r.err_label,
+            err_value: r.err_value,
+        };
+    }
+    ModuleDecode { m: m, err_kind: DEC_OK(), err_offset: 0, err_label: String::new(), err_value: 0 }
+}
+
+fn module_decode(buf: Vec<i64>) -> ModuleDecode {
     let r: ModuleReader = reader_new(buf);
-    let m0: i64 = reader_read_u8(r);
-    let m1: i64 = reader_read_u8(r);
-    let m2: i64 = reader_read_u8(r);
-    let m3: i64 = reader_read_u8(r);
+    if reader_need(r, 4) {
+        let m0: i64 = reader_read_u8(r);
+        let m1: i64 = reader_read_u8(r);
+        let m2: i64 = reader_read_u8(r);
+        let m3: i64 = reader_read_u8(r);
+        if m0 != MODULE_MAGIC_0() || m1 != MODULE_MAGIC_1() || m2 != MODULE_MAGIC_2() || m3 != MODULE_MAGIC_3() {
+            reader_fail(r, DEC_BAD_MAGIC(), 0, String::new(), 0);
+        }
+    }
+    let version_at: u64 = r.pos;
     let version: i64 = reader_read_u32_le(r);
-    if m0 != MODULE_MAGIC_0() { return reject_decode_module(); }
-    if m1 != MODULE_MAGIC_1() { return reject_decode_module(); }
-    if m2 != MODULE_MAGIC_2() { return reject_decode_module(); }
-    if m3 != MODULE_MAGIC_3() { return reject_decode_module(); }
-    if version != MODULE_VERSION() { return reject_decode_module(); }
+    if r.err_kind == DEC_OK() && version != MODULE_VERSION() {
+        reader_fail(r, DEC_VERSION_MISMATCH(), version_at, String::new(), version);
+    }
+    if r.err_kind != DEC_OK() {
+        return decode_result(r, ir_module_new(String::new()));
+    }
 
     let m: IrModule = ir_module_new(reader_read_string(r));
 
     let strings_n: u64 = reader_read_count(r);
     let mut i: u64 = 0;
-    while i < strings_n vow {
+    while i < strings_n && r.err_kind == DEC_OK() vow {
         invariant: i <= strings_n
     } {
         m.strings.push(reader_read_string(r));
@@ -1171,7 +1299,7 @@ fn module_decode(buf: Vec<i64>) -> IrModule [panic] {
 
     let struct_n: u64 = reader_read_count(r);
     i = 0;
-    while i < struct_n vow {
+    while i < struct_n && r.err_kind == DEC_OK() vow {
         invariant: i <= struct_n
     } {
         m.struct_layouts.push(read_struct_layout(r));
@@ -1180,7 +1308,7 @@ fn module_decode(buf: Vec<i64>) -> IrModule [panic] {
 
     let enum_n: u64 = reader_read_count(r);
     i = 0;
-    while i < enum_n vow {
+    while i < enum_n && r.err_kind == DEC_OK() vow {
         invariant: i <= enum_n
     } {
         m.enum_layouts.push(read_enum_layout(r));
@@ -1189,16 +1317,17 @@ fn module_decode(buf: Vec<i64>) -> IrModule [panic] {
 
     let fn_n: u64 = reader_read_count(r);
     i = 0;
-    while i < fn_n vow {
+    while i < fn_n && r.err_kind == DEC_OK() vow {
         invariant: i <= fn_n
     } {
         m.functions.push(read_function(r));
         i = i + 1;
     }
 
-    if r.pos != r.buf.len() {
-        return reject_decode_module();
+    if r.err_kind == DEC_OK() && r.pos != r.buf.len() {
+        let extra: u64 = r.buf.len() - r.pos;
+        reader_fail(r, DEC_TRAILING_BYTES(), r.pos, String::new(), extra as i64);
     }
 
-    m
+    decode_result(r, m)
 }

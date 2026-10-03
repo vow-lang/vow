@@ -1,7 +1,7 @@
 // TEST: exit 1
-// TEST: stdout "{"error":"ModuleDecodeError","kind":"LebOverflow","label":"","value":0,"offset":9}\n"
-// A 10-byte LEB whose last byte carries bits past 2^63 used to wrap silently to a
-// smaller count; the decoder reports LebOverflow, as the Rust decoder does.
+// TEST: stdout "{"error":"ModuleDecodeError","kind":"CountExceedsRemaining","label":"","value":5,"offset":9}\n"
+// A count larger than the bytes left in the buffer is CountExceedsRemaining; it can
+// never be satisfied, so no section is allocated for it.
 module Main
 
 use ir
@@ -22,13 +22,7 @@ fn main() -> i32 [io] {
     let bytes: Vec<i64> = Vec::new();
     push_header(bytes);
     bytes.push(0);
-    let mut i: u64 = 0;
-    while i < 9 {
-        bytes.push(128);
-        i = i + 1;
-    }
-    bytes.push(2);
-    bytes.push(0);
+    bytes.push(5);
     bytes.push(0);
     bytes.push(0);
     let res: ModuleDecode = module_decode(bytes);

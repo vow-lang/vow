@@ -1,5 +1,6 @@
-// TEST: exit 134
-// A LEB count with more continuation bytes than a u64 can hold is corrupt.
+// TEST: exit 1
+// TEST: stdout "{"error":"ModuleDecodeError","kind":"LebOverlong","label":"","value":0,"offset":9}\n"
+// A LEB count with a continuation bit past its tenth byte is LebOverlong.
 module Main
 
 use ir
@@ -16,16 +17,7 @@ fn push_header(bytes: Vec<i64>) {
     bytes.push(0);
 }
 
-fn push_u64_max_leb(bytes: Vec<i64>) {
-    let mut i: u64 = 0;
-    while i < 9 {
-        bytes.push(255);
-        i = i + 1;
-    }
-    bytes.push(1);
-}
-
-fn main() -> i32 [panic] {
+fn main() -> i32 [io] {
     let bytes: Vec<i64> = Vec::new();
     push_header(bytes);
     bytes.push(0);
@@ -38,6 +30,11 @@ fn main() -> i32 [panic] {
     bytes.push(0);
     bytes.push(0);
     bytes.push(0);
-    let _m: IrModule = module_decode(bytes);
+    let res: ModuleDecode = module_decode(bytes);
+    if module_decode_failed(res) {
+        print_str(module_decode_error_json(res));
+        print_str(String::from("\n"));
+        return 1;
+    }
     0
 }

@@ -1,6 +1,6 @@
 // TEST: exit 1
-// TEST: stdout "{"error":"ModuleDecodeError","kind":"InvalidKind","label":"RegionId.payload","value":1,"offset":1}\n"
-// A Root region with a nonzero payload is InvalidKind labelled RegionId.payload.
+// TEST: stdout "{"error":"ModuleDecodeError","kind":"InvalidKind","label":"RegionId","value":4,"offset":0}\n"
+// A region kind past Rodata is InvalidKind labelled RegionId.
 module Main
 
 use ir
@@ -8,8 +8,8 @@ use module_io
 
 fn main() -> i32 [io] {
     let bytes: Vec<i64> = Vec::new();
-    bytes.push(REGION_KIND_ROOT());
-    bytes.push(1);
+    bytes.push(4);
+    bytes.push(0);
     bytes.push(0);
     bytes.push(0);
     bytes.push(0);

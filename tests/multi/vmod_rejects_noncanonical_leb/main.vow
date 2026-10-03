@@ -1,13 +1,13 @@
-// TEST: exit 134
-// A count encoded as [0x80, 0x00] is a non-minimal spelling of 0; two byte
-// streams must never decode to the same module, so the decoder rejects it.
+// TEST: exit 1
+// TEST: stdout "{"error":"ModuleDecodeError","kind":"LebNonCanonical","label":"","value":0,"offset":9}\n"
+// A count encoded as [0x80, 0x00] is a non-minimal spelling of 0; two byte streams
+// must never decode to the same module, so the decoder reports LebNonCanonical.
 module Main
 
 use ir
 use module_io
 
-fn main() -> i32 [panic] {
-    let bytes: Vec<i64> = Vec::new();
+fn push_header(bytes: Vec<i64>) {
     bytes.push(MODULE_MAGIC_0());
     bytes.push(MODULE_MAGIC_1());
     bytes.push(MODULE_MAGIC_2());
@@ -16,12 +16,22 @@ fn main() -> i32 [panic] {
     bytes.push(0);
     bytes.push(0);
     bytes.push(0);
+}
+
+fn main() -> i32 [io] {
+    let bytes: Vec<i64> = Vec::new();
+    push_header(bytes);
     bytes.push(0);
     bytes.push(128);
     bytes.push(0);
     bytes.push(0);
     bytes.push(0);
     bytes.push(0);
-    let _m: IrModule = module_decode(bytes);
+    let res: ModuleDecode = module_decode(bytes);
+    if module_decode_failed(res) {
+        print_str(module_decode_error_json(res));
+        print_str(String::from("\n"));
+        return 1;
+    }
     0
 }

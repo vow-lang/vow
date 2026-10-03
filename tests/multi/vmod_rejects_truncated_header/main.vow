@@ -1,6 +1,6 @@
 // TEST: exit 1
-// TEST: stdout "{"error":"ModuleDecodeError","kind":"TrailingBytes","label":"","value":1,"offset":13}\n"
-// A byte after the last function is TrailingBytes, not silent success.
+// TEST: stdout "{"error":"ModuleDecodeError","kind":"Truncated","label":"","value":0,"offset":4}\n"
+// A buffer that ends inside the version word is Truncated at the start of that read.
 module Main
 
 use ir
@@ -13,12 +13,7 @@ fn main() -> i32 [io] {
     bytes.push(MODULE_MAGIC_2());
     bytes.push(MODULE_MAGIC_3());
     bytes.push(MODULE_VERSION());
-    let mut i: u64 = 0;
-    while i < 8 {
-        bytes.push(0);
-        i = i + 1;
-    }
-    bytes.push(99);
+    bytes.push(0);
     let res: ModuleDecode = module_decode(bytes);
     if module_decode_failed(res) {
         print_str(module_decode_error_json(res));
