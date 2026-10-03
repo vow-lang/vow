@@ -25,7 +25,7 @@ fn primitive_tid(ts: TyStore, name: String) -> i64 {
 }
 
 fn linear_visited_has(v: Vec<i64>, key: i64) -> i64 {
-    let n: u64 = v.len() as u64;
+    let n: u64 = v.len();
     let mut i: u64 = 0u64;
     while i < n {
         if v[i] == key {
@@ -460,8 +460,8 @@ fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
 }
 
 fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
-    let n: u64 = m.items.len() as u64;
-    if item_files.len() as u64 != n {
+    let n: u64 = m.items.len();
+    if item_files.len() != n {
         eprintln_str("item_files must be parallel to module.items");
         process_exit(1);
     }
@@ -773,7 +773,7 @@ fn check_clause_purity(e: CheckEnv, m: Module, clause_eid: i64) [io] {
     let a: AstArena = m.arena;
     let calls: Vec<String> = Vec::new();
     collect_calls_in_expr(e, m, clause_eid, calls);
-    let n: u64 = calls.len() as u64;
+    let n: u64 = calls.len();
     let mut i: u64 = 0u64;
     while i < n {
         let cname: String = calls[i];
@@ -896,7 +896,7 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     e.cur_ret_tid = ret_tid;
     e.cur_effects = fn_eff(a, fid);
 
-    let mut_base: u64 = e.var_names.len() as u64;
+    let mut_base: u64 = e.var_names.len();
     env_push_scope(e);
 
     let params_lid: i64 = fn_params_lid(a, fid);
@@ -941,7 +941,7 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
 
     env_pop_scope(e);
 
-    let var_total: u64 = e.var_names.len() as u64;
+    let var_total: u64 = e.var_names.len();
     let mut vi: u64 = mut_base;
     while vi < var_total {
         if e.var_muts[vi] == 1 && e.var_mutated[vi] == 0 {
@@ -1248,7 +1248,7 @@ fn wide_literal_decimal(a: AstArena, lit_eid: i64) -> String {
     if negative && (lo != 0u64 || hi != 0u64) {
         result.push_str(String::from("-"));
     }
-    let mut digit_index: u64 = digits.len() as u64;
+    let mut digit_index: u64 = digits.len();
     while digit_index > 0 {
         digit_index = digit_index - 1;
         result.push_str(i64_to_string(digits[digit_index]));
@@ -1318,7 +1318,7 @@ fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_ta
         if expr_tag(a, lit_eid) == EXPR_LOOP() {
             let values: Vec<i64> = loop_break_value_eids(a, expr_a(a, lit_eid));
             let mut i: u64 = 0u64;
-            while i < values.len() as u64 {
+            while i < values.len() {
                 check_integer_literal_range(e, a, values[i], target_tag);
                 i = i + 1;
             }
@@ -1419,7 +1419,7 @@ fn check_contextual_integer_literal_ranges(e: CheckEnv, a: AstArena, eid: i64, t
     if expr_kind == EXPR_LOOP() {
         let values: Vec<i64> = loop_break_value_eids(a, expr_a(a, eid));
         let mut i: u64 = 0u64;
-        while i < values.len() as u64 {
+        while i < values.len() {
             check_contextual_integer_literal_ranges(e, a, values[i], target_tid);
             i = i + 1;
         }
@@ -1874,7 +1874,7 @@ fn pattern_vec_elem_path(ts: TyStore, tid: i64) -> Vec<String> {
     if elem_name == String::from("Vec") {
         let nested: Vec<String> = pattern_vec_elem_path(ts, elem_tid);
         let mut i: u64 = 0u64;
-        while i < nested.len() as u64 {
+        while i < nested.len() {
             result.push(nested[i]);
             i = i + 1;
         }
@@ -1994,7 +1994,7 @@ fn pattern_vec_option_elem_ty_path(ts: TyStore, tid: i64) -> Vec<i64> {
     if elem_name == String::from("Vec") {
         let nested: Vec<i64> = pattern_vec_option_elem_ty_path(ts, elem_tid);
         let mut i: u64 = 0u64;
-        while i < nested.len() as u64 {
+        while i < nested.len() {
             result.push(nested[i]);
             i = i + 1;
         }
@@ -2024,7 +2024,7 @@ fn pattern_vec_variant_payload_ty_path(ts: TyStore, tid: i64) -> Vec<Vec<i64>> {
     if elem_name == String::from("Vec") {
         let nested: Vec<Vec<i64>> = pattern_vec_variant_payload_ty_path(ts, elem_tid);
         let mut i: u64 = 0u64;
-        while i < nested.len() as u64 {
+        while i < nested.len() {
             result.push(nested[i]);
             i = i + 1;
         }
@@ -2185,7 +2185,7 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
 
 fn handled_variant_contains(handled: Vec<String>, name: String) -> bool {
     let mut i: u64 = 0u64;
-    while i < handled.len() as u64 {
+    while i < handled.len() {
         if handled[i] == name {
             return true;
         }
@@ -2319,7 +2319,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     if tag == EXPR_IDENT() {
         let name_sid: i64 = expr_a(a, eid);
         let name: String = arena_str(a, name_sid);
-        let ncnst: u64 = e.const_names.len() as u64;
+        let ncnst: u64 = e.const_names.len();
         let mut ci: u64 = 0u64;
         while ci < ncnst {
             let cn: String = e.const_names[ci];
@@ -2924,11 +2924,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if lvow_lid != -1 {
             check_vow_clause(e, m, lvow_lid, CLAUSE_INVARIANT(), String::from("loop"));
         }
-        let break_start: u64 = e.break_tids.len() as u64;
+        let break_start: u64 = e.break_tids.len();
         e.loop_kind_stack.push(1);
         e.break_counts.push(0);
         let _body_tid: i64 = check_block(e, m, body_bid);
-        let bc_idx: u64 = e.break_counts.len() as u64 - 1u64;
+        let bc_idx: u64 = e.break_counts.len() - 1u64;
         let bc: u64 = e.break_counts[bc_idx] as u64;
         let mut loop_tid: i64 = CTY_NEVER();
         let mut bi: u64 = 0u64;
@@ -3108,18 +3108,18 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let mut val_tid: i64 = CTY_UNIT();
         if val_eid != -1 {
             val_tid = check_expr(e, m, val_eid);
-            let nk: u64 = e.loop_kind_stack.len() as u64;
+            let nk: u64 = e.loop_kind_stack.len();
             if nk > 0 {
                 if e.loop_kind_stack[nk - 1] == 0 {
                     env_emit_error(e, String::from("`break` with a value is only allowed inside `loop`, not `while`"), expr_span(a, eid));
                 }
             }
         }
-        let nk2: u64 = e.loop_kind_stack.len() as u64;
+        let nk2: u64 = e.loop_kind_stack.len();
         if nk2 > 0 {
             if e.loop_kind_stack[nk2 - 1] == 1 {
                 e.break_tids.push(val_tid);
-                let cnt_idx: u64 = e.break_counts.len() as u64 - 1u64;
+                let cnt_idx: u64 = e.break_counts.len() - 1u64;
                 e.break_counts[cnt_idx] = e.break_counts[cnt_idx] + 1;
             }
         }
@@ -3638,7 +3638,7 @@ fn check_effects_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     let body_bid: i64 = fn_body_bid(a, fid);
     let calls: Vec<String> = Vec::new();
     collect_calls_in_block(e, m, body_bid, calls);
-    let n: u64 = calls.len() as u64;
+    let n: u64 = calls.len();
     let mut i: u64 = 0u64;
     let eff_panic: i64 = 2;
     while i < n {

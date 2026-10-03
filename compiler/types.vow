@@ -63,7 +63,7 @@ fn ty_add(ts: TyStore, tag: i64, a: i64, b: i64) -> i64 {
 }
 
 fn ts_intern_name(ts: TyStore, name: String) -> i64 {
-    let n: u64 = ts.strs.len() as u64;
+    let n: u64 = ts.strs.len();
     let mut i: u64 = 0u64;
     while i < n {
         if ts.strs[i] == name {
@@ -78,7 +78,7 @@ fn ts_intern_name(ts: TyStore, name: String) -> i64 {
 fn ts_add_args(ts: TyStore, items: Vec<i64>) -> i64 {
     let lid: i64 = ts.arg_head.len() as i64;
     let head: i64 = ts.arg_data.len() as i64;
-    let n: u64 = items.len() as u64;
+    let n: u64 = items.len();
     let mut i: u64 = 0u64;
     while i < n {
         ts.arg_data.push(items[i]);
