@@ -12,6 +12,7 @@ mkdir -p build
 SKIP_CARGO=false
 STAGE3_NO_VERIFY=false
 NO_VERIFY=false
+NO_CACHE=false
 VMEM_LIMIT_KB="${VOW_BOOTSTRAP_VMEM_KB:-0}"
 if ! [[ "$VMEM_LIMIT_KB" =~ ^[0-9]+$ ]]; then
     echo "Error: VOW_BOOTSTRAP_VMEM_KB must be a non-negative integer (got: '$VMEM_LIMIT_KB')" >&2
@@ -19,7 +20,7 @@ if ! [[ "$VMEM_LIMIT_KB" =~ ^[0-9]+$ ]]; then
 fi
 
 usage() {
-    echo "Usage: $0 [--skip-cargo] [--no-verify] [--stage3-no-verify] [--help|-h]"
+    echo "Usage: $0 [--skip-cargo] [--no-verify] [--stage3-no-verify] [--no-cache] [--help|-h]"
     echo ""
     echo "Bootstrap the self-hosted Vow compiler and verify the fixed point."
     echo ""
@@ -39,6 +40,18 @@ usage() {
     echo "  --stage3-no-verify   Skip ESBMC verification on Stage 3 only (Stages 1-2"
     echo "                       still verify). Verification does not change codegen,"
     echo "                       so the SHA-256 fixed-point check remains meaningful."
+    echo "  --no-cache           Disable the on-disk verify cache. Forwarded to all"
+    echo "                       three stages for CLI symmetry, but only Stage 1"
+    echo "                       (the Rust compiler) has one -- the self-hosted"
+    echo "                       compiler (Stages 2-3) always re-runs ESBMC. The"
+    echo "                       verify cache's hits/misses never change codegen"
+    echo "                       output, so under verification this is cheap"
+    echo "                       defense in depth for a 'green locally' claim, not"
+    echo "                       a fix for a known cache defect. Under --no-verify,"
+    echo "                       --no-cache also disables Stage 1's separate"
+    echo "                       compile-object cache, which unlike the verify"
+    echo "                       cache CAN serve stale objects after a compiler"
+    echo "                       rebuild at the same source rev."
     echo "  -h, --help           Show this help"
     echo ""
     echo "Environment:"
@@ -122,6 +135,7 @@ for arg in "$@"; do
         --skip-cargo)        SKIP_CARGO=true ;;
         --no-verify)         NO_VERIFY=true ;;
         --stage3-no-verify)  STAGE3_NO_VERIFY=true ;;
+        --no-cache)          NO_CACHE=true ;;
         -h|--help)           usage ;;
         *)                   echo "Unknown flag: $arg"; usage ;;
     esac
@@ -138,6 +152,11 @@ if [ "$NO_VERIFY" = true ]; then
     stage3_build_flags="--no-verify"
 elif [ "$STAGE3_NO_VERIFY" = true ]; then
     stage3_build_flags="--no-verify"
+fi
+
+if [ "$NO_CACHE" = true ]; then
+    stage12_build_flags="$stage12_build_flags --no-cache"
+    stage3_build_flags="$stage3_build_flags --no-cache"
 fi
 
 # Stage 1 runs the Rust compiler (well-behaved release binary) — no vmem cap.

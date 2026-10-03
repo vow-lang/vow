@@ -761,6 +761,16 @@ if VOWC_BIN="$SELF" bash tests/esbmc-path-cache/tests.sh >"$TMPDIR/esbmc-path-ca
 else
     fail "verifier/esbmc-path-cache" "$(tail -10 "$TMPDIR/esbmc-path-cache.log")"
 fi
+
+if command -v esbmc >/dev/null 2>&1; then
+    if VOWC_BIN="$RUST" bash tests/verify-cache-stale-pass/tests.sh >"$TMPDIR/verify-cache-stale-pass.log" 2>&1; then
+        pass "verifier/verify-cache-stale-pass"
+    else
+        fail "verifier/verify-cache-stale-pass" "$(tail -10 "$TMPDIR/verify-cache-stale-pass.log")"
+    fi
+else
+    skip "verifier/verify-cache-stale-pass" "esbmc not on PATH"
+fi
 echo ""
 
 # ─── Section 3: Runtime Execution ──────────────────────────────────
