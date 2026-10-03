@@ -99,17 +99,19 @@ Exit code is non-zero on any bucket except known-gaps. A machine-readable
 
 ## Category coverage
 
-All seven categories are represented (43 programs):
+<!-- GENERATE:CORPUS_COUNTS:START -->
+All 7 categories are represented (99 programs):
 
 | Category | Count |
 | --- | --- |
-| overflow | 8 |
-| callee-blame | 13 |
-| bounds | 5 |
-| model-drift | 6 |
+| callee-blame | 30 |
+| bounds | 23 |
+| overflow | 15 |
+| model-drift | 14 |
+| caller-blame | 8 |
+| unverifiable | 5 |
 | invariant | 4 |
-| caller-blame | 5 |
-| unverifiable | 2 |
+<!-- GENERATE:CORPUS_COUNTS:END -->
 
 ## Known soundness gaps
 
@@ -140,6 +142,10 @@ python3 scripts/verify_eval.py --discover
 
 # A single program:
 python3 scripts/verify_eval.py --filter off_by_one_bounds
+
+# Keep the category counts above in sync with the corpus:
+python3 scripts/verify_eval.py --write-docs   # regenerate
+python3 scripts/verify_eval.py --check-docs   # CI gate (no verifier needed)
 ```
 
 It also runs as **Section 4e** of `scripts/full_test.sh`, as a dedicated Rust

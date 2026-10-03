@@ -565,6 +565,57 @@ class CompareErrorSpanParityTest(unittest.TestCase):
         )
 
 
+class CompareErrorHintParityTest(unittest.TestCase):
+    HINT = "use `v[i]` to read an element; `Vec` has no `get`"
+
+    @staticmethod
+    def failed(*hints):
+        diagnostic = {"error_code": "UnknownMethod", "span": {"offset": 5, "length": 8}}
+        if hints:
+            diagnostic["hints"] = list(hints)
+        return document("CompileFailed", diagnostics=[diagnostic])
+
+    def compare(self, rust, self_hosted, fixture_name):
+        return parity.compare_error(rust, self_hosted, 1, 1, fixture_name)
+
+    def test_curated_fixture_requires_identical_hints(self):
+        name = "vec_get_unknown_method.vow"
+
+        self.assertEqual(
+            [], self.compare(self.failed(self.HINT), self.failed(self.HINT), name)
+        )
+        errors = self.compare(self.failed(self.HINT), self.failed(), name)
+        self.assertEqual(1, len(errors))
+        self.assertTrue(errors[0].startswith("hints: "))
+
+    def test_curated_fixture_rejects_a_different_hint_text(self):
+        errors = self.compare(
+            self.failed(self.HINT),
+            self.failed("did you mean `len`?"),
+            "vec_get_unknown_method.vow",
+        )
+
+        self.assertEqual(1, len(errors))
+        self.assertTrue(errors[0].startswith("hints: "))
+
+    def test_hints_are_not_compared_outside_the_curated_fixtures(self):
+        self.assertEqual(
+            [], self.compare(self.failed(self.HINT), self.failed(), "other.vow")
+        )
+
+    def test_hints_are_not_compared_without_a_fixture(self):
+        self.assertEqual(
+            [],
+            parity.compare_error(self.failed(self.HINT), self.failed(), 1, 1, None),
+        )
+
+    def test_vec_get_fixture_is_on_the_curated_list(self):
+        fixture = REPO_ROOT / "tests" / "error" / "vec_get_unknown_method.vow"
+
+        self.assertTrue(fixture.is_file())
+        self.assertIn(fixture.name, parity.STRICT_HINT_FIXTURES)
+
+
 class CompareTestTest(unittest.TestCase):
     @staticmethod
     def entry(name, **fields):

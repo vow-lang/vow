@@ -1,6 +1,7 @@
 // TEST: error-code UnknownMethod
 // TEST: error-count 1
-// TEST: stderr "unknown method"
+// TEST: stderr "use `v[i]` to read an element"
+// TEST: build-json x.get('hints') == ['use `v[i]` to read an element; `Vec` has no `get`']
 module VecGetUnknownMethod
 
 fn main() -> i32 {

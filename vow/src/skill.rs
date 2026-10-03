@@ -4396,7 +4396,7 @@ fn f(v: Vec<i64>, i: i64) -> i64 {
 }
 ```
 
-**Output:** `index has type 'i64' but must be 'u64'`
+**Output:** ``index has type `i64` but must be `u64` ``
 
 **Fix:** Keep index counters `u64` (`.len()` is already `u64`), or convert at
 the index site with `as u64` (`v[i as u64]`). Unsuffixed integer literals
@@ -4695,9 +4695,9 @@ fn f() -> () {
 }
 ```
 
-**Output:** `unknown method 'psh' on type 'Vec<i64>'`
+**Output:** ``unknown method `psh` on type `Vec` ``
 
-**Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps.
+**Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps. A `Vec` receiver calling `get` carries the structured hint ``use `v[i]` to read an element; `Vec` has no `get` `` in the diagnostic's `hints` array, identically in both compilers.
 
 ### UnsupportedFeature
 
@@ -9787,7 +9787,7 @@ fn f(v: Vec<i64>, i: i64) -> i64 {
 }
 ```
 
-**Output:** `index has type 'i64' but must be 'u64'`
+**Output:** ``index has type `i64` but must be `u64` ``
 
 **Fix:** Keep index counters `u64` (`.len()` is already `u64`), or convert at
 the index site with `as u64` (`v[i as u64]`). Unsuffixed integer literals
@@ -10086,9 +10086,9 @@ fn f() -> () {
 }
 ```
 
-**Output:** `unknown method 'psh' on type 'Vec<i64>'`
+**Output:** ``unknown method `psh` on type `Vec` ``
 
-**Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps.
+**Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps. A `Vec` receiver calling `get` carries the structured hint ``use `v[i]` to read an element; `Vec` has no `get` `` in the diagnostic's `hints` array, identically in both compilers.
 
 ### UnsupportedFeature
 

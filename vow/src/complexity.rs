@@ -1732,6 +1732,199 @@ fn contract_predicate_cost(ct: &Contract) -> i64 {
     ct.predicate_nodes + ct.free_vars + if ct.has_vec_quant { 1 } else { 0 }
 }
 
+struct Verif {
+    loops_total: i64,
+    loops_without_invariant: i64,
+    max_loop_nesting: i64,
+    contract_predicate_cost: i64,
+}
+
+fn loop_no_inv(vow: &Option<VowBlock>) -> bool {
+    // A loop counts as lacking an invariant unless its vow block carries an
+    // actual `invariant:` clause — a loop vow block with only requires/ensures
+    // still forces the verifier to unwind blind.
+    match vow {
+        None => true,
+        Some(vb) => !vb
+            .clauses
+            .iter()
+            .any(|c| matches!(c, VowClause::Invariant { .. })),
+    }
+}
+
+fn loops_block(b: &Block, nesting: i64, total: &mut i64, without: &mut i64, maxnest: &mut i64) {
+    for s in &b.stmts {
+        match s {
+            Stmt::Let { init, .. } => loops_expr(init, nesting, total, without, maxnest),
+            Stmt::Expr { expr, .. } => loops_expr(expr, nesting, total, without, maxnest),
+        }
+    }
+    if let Some(t) = &b.trailing_expr {
+        loops_expr(t, nesting, total, without, maxnest);
+    }
+}
+
+fn loops_expr(e: &Expr, nesting: i64, total: &mut i64, without: &mut i64, maxnest: &mut i64) {
+    match &e.kind {
+        ExprKind::While {
+            condition,
+            vow,
+            body,
+        } => {
+            *total += 1;
+            if nesting + 1 > *maxnest {
+                *maxnest = nesting + 1;
+            }
+            if loop_no_inv(vow) {
+                *without += 1;
+            }
+            loops_expr(condition, nesting, total, without, maxnest);
+            loops_block(body, nesting + 1, total, without, maxnest);
+        }
+        ExprKind::ForEach {
+            iterable,
+            vow,
+            body,
+            ..
+        } => {
+            *total += 1;
+            if nesting + 1 > *maxnest {
+                *maxnest = nesting + 1;
+            }
+            if loop_no_inv(vow) {
+                *without += 1;
+            }
+            loops_expr(iterable, nesting, total, without, maxnest);
+            loops_block(body, nesting + 1, total, without, maxnest);
+        }
+        ExprKind::Loop { vow, body } => {
+            *total += 1;
+            if nesting + 1 > *maxnest {
+                *maxnest = nesting + 1;
+            }
+            if loop_no_inv(vow) {
+                *without += 1;
+            }
+            loops_block(body, nesting + 1, total, without, maxnest);
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            loops_expr(condition, nesting, total, without, maxnest);
+            loops_block(then_branch, nesting, total, without, maxnest);
+            if let Some(e2) = else_branch {
+                loops_expr(e2, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            loops_expr(scrutinee, nesting, total, without, maxnest);
+            for arm in arms {
+                loops_expr(&arm.body, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::Block(b) => loops_block(b, nesting, total, without, maxnest),
+        ExprKind::BinaryOp { lhs, rhs, .. } => {
+            loops_expr(lhs, nesting, total, without, maxnest);
+            loops_expr(rhs, nesting, total, without, maxnest);
+        }
+        ExprKind::Assign { lhs, rhs } => {
+            loops_expr(lhs, nesting, total, without, maxnest);
+            loops_expr(rhs, nesting, total, without, maxnest);
+        }
+        ExprKind::Index { base, index } => {
+            loops_expr(base, nesting, total, without, maxnest);
+            loops_expr(index, nesting, total, without, maxnest);
+        }
+        ExprKind::UnaryOp { operand, .. } => loops_expr(operand, nesting, total, without, maxnest),
+        ExprKind::FieldAccess { base, .. } => loops_expr(base, nesting, total, without, maxnest),
+        ExprKind::Question { expr } => loops_expr(expr, nesting, total, without, maxnest),
+        ExprKind::Cast { expr, .. } => loops_expr(expr, nesting, total, without, maxnest),
+        // Borrow has no node in the self-hosted AST: walk through it transparently.
+        ExprKind::Borrow { expr } => loops_expr(expr, nesting, total, without, maxnest),
+        ExprKind::Return { value } => {
+            if let Some(v) = value {
+                loops_expr(v, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::Break { value } => {
+            if let Some(v) = value {
+                loops_expr(v, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::Call { callee, args } => {
+            loops_expr(callee, nesting, total, without, maxnest);
+            for a in args {
+                loops_expr(a, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::MethodCall { receiver, args, .. } => {
+            loops_expr(receiver, nesting, total, without, maxnest);
+            for a in args {
+                loops_expr(a, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::StructLiteral { fields, .. } => {
+            for (_, v) in fields {
+                loops_expr(v, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::EnumConstruct { fields, .. } => {
+            for v in fields {
+                loops_expr(v, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::Tuple(elems) => {
+            for v in elems {
+                loops_expr(v, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Continue | ExprKind::Result => {}
+    }
+}
+
+fn analyze_verif(f: &FnDef, predicate_cost: i64) -> Verif {
+    let mut total = 0i64;
+    let mut without = 0i64;
+    let mut maxnest = 0i64;
+    loops_block(&f.body, 0, &mut total, &mut without, &mut maxnest);
+    Verif {
+        loops_total: total,
+        loops_without_invariant: without,
+        max_loop_nesting: maxnest,
+        contract_predicate_cost: predicate_cost,
+    }
+}
+
+fn read_complexity_source(source: &Path) -> Result<String, String> {
+    std::fs::read_to_string(source)
+        .map_err(|e| format!("cannot read {}: {e}", source.to_string_lossy()))
+}
+
+// Experimental Vow-surface score bump (§3.2a Step 3), fixed-point, capped 150.
+fn cx_vow_bump(effect_breadth: i64, linear_consumes: i64, contract_predicate_cost: i64) -> i64 {
+    let excess_eff = (effect_breadth - 2).max(0);
+    let over_budget = (contract_predicate_cost - 20).max(0);
+    let v = 50 * excess_eff + 30 * linear_consumes + 20 * over_budget;
+    v.min(150)
+}
+
+// 1-based line number of a byte offset. Must match the self-hosted
+// `diag_compute_line` exactly (count `\n` bytes before `offset`).
+fn line_at(src: &str, offset: usize) -> i64 {
+    let bytes = src.as_bytes();
+    let mut line: i64 = 1;
+    let mut i: usize = 0;
+    while i < offset && i < bytes.len() {
+        if bytes[i] == 10 {
+            line += 1;
+        }
+        i += 1;
+    }
+    line
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1924,7 +2117,7 @@ mod tests {
             "error should surface the OS detail after the path: {err}"
         );
         assert!(
-            err[prefix.len()..].trim().len() > 0,
+            !err[prefix.len()..].trim().is_empty(),
             "error should include non-empty OS detail: {err}"
         );
     }
@@ -2119,197 +2312,4 @@ mod tests {
         assert_eq!(totals.fan_out_max, 0);
         assert_eq!(totals.hk_max, 0);
     }
-}
-
-struct Verif {
-    loops_total: i64,
-    loops_without_invariant: i64,
-    max_loop_nesting: i64,
-    contract_predicate_cost: i64,
-}
-
-fn loop_no_inv(vow: &Option<VowBlock>) -> bool {
-    // A loop counts as lacking an invariant unless its vow block carries an
-    // actual `invariant:` clause — a loop vow block with only requires/ensures
-    // still forces the verifier to unwind blind.
-    match vow {
-        None => true,
-        Some(vb) => !vb
-            .clauses
-            .iter()
-            .any(|c| matches!(c, VowClause::Invariant { .. })),
-    }
-}
-
-fn loops_block(b: &Block, nesting: i64, total: &mut i64, without: &mut i64, maxnest: &mut i64) {
-    for s in &b.stmts {
-        match s {
-            Stmt::Let { init, .. } => loops_expr(init, nesting, total, without, maxnest),
-            Stmt::Expr { expr, .. } => loops_expr(expr, nesting, total, without, maxnest),
-        }
-    }
-    if let Some(t) = &b.trailing_expr {
-        loops_expr(t, nesting, total, without, maxnest);
-    }
-}
-
-fn loops_expr(e: &Expr, nesting: i64, total: &mut i64, without: &mut i64, maxnest: &mut i64) {
-    match &e.kind {
-        ExprKind::While {
-            condition,
-            vow,
-            body,
-        } => {
-            *total += 1;
-            if nesting + 1 > *maxnest {
-                *maxnest = nesting + 1;
-            }
-            if loop_no_inv(vow) {
-                *without += 1;
-            }
-            loops_expr(condition, nesting, total, without, maxnest);
-            loops_block(body, nesting + 1, total, without, maxnest);
-        }
-        ExprKind::ForEach {
-            iterable,
-            vow,
-            body,
-            ..
-        } => {
-            *total += 1;
-            if nesting + 1 > *maxnest {
-                *maxnest = nesting + 1;
-            }
-            if loop_no_inv(vow) {
-                *without += 1;
-            }
-            loops_expr(iterable, nesting, total, without, maxnest);
-            loops_block(body, nesting + 1, total, without, maxnest);
-        }
-        ExprKind::Loop { vow, body } => {
-            *total += 1;
-            if nesting + 1 > *maxnest {
-                *maxnest = nesting + 1;
-            }
-            if loop_no_inv(vow) {
-                *without += 1;
-            }
-            loops_block(body, nesting + 1, total, without, maxnest);
-        }
-        ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            loops_expr(condition, nesting, total, without, maxnest);
-            loops_block(then_branch, nesting, total, without, maxnest);
-            if let Some(e2) = else_branch {
-                loops_expr(e2, nesting, total, without, maxnest);
-            }
-        }
-        ExprKind::Match { scrutinee, arms } => {
-            loops_expr(scrutinee, nesting, total, without, maxnest);
-            for arm in arms {
-                loops_expr(&arm.body, nesting, total, without, maxnest);
-            }
-        }
-        ExprKind::Block(b) => loops_block(b, nesting, total, without, maxnest),
-        ExprKind::BinaryOp { lhs, rhs, .. } => {
-            loops_expr(lhs, nesting, total, without, maxnest);
-            loops_expr(rhs, nesting, total, without, maxnest);
-        }
-        ExprKind::Assign { lhs, rhs } => {
-            loops_expr(lhs, nesting, total, without, maxnest);
-            loops_expr(rhs, nesting, total, without, maxnest);
-        }
-        ExprKind::Index { base, index } => {
-            loops_expr(base, nesting, total, without, maxnest);
-            loops_expr(index, nesting, total, without, maxnest);
-        }
-        ExprKind::UnaryOp { operand, .. } => loops_expr(operand, nesting, total, without, maxnest),
-        ExprKind::FieldAccess { base, .. } => loops_expr(base, nesting, total, without, maxnest),
-        ExprKind::Question { expr } => loops_expr(expr, nesting, total, without, maxnest),
-        ExprKind::Cast { expr, .. } => loops_expr(expr, nesting, total, without, maxnest),
-        // Borrow has no node in the self-hosted AST: walk through it transparently.
-        ExprKind::Borrow { expr } => loops_expr(expr, nesting, total, without, maxnest),
-        ExprKind::Return { value } => {
-            if let Some(v) = value {
-                loops_expr(v, nesting, total, without, maxnest);
-            }
-        }
-        ExprKind::Break { value } => {
-            if let Some(v) = value {
-                loops_expr(v, nesting, total, without, maxnest);
-            }
-        }
-        ExprKind::Call { callee, args } => {
-            loops_expr(callee, nesting, total, without, maxnest);
-            for a in args {
-                loops_expr(a, nesting, total, without, maxnest);
-            }
-        }
-        ExprKind::MethodCall { receiver, args, .. } => {
-            loops_expr(receiver, nesting, total, without, maxnest);
-            for a in args {
-                loops_expr(a, nesting, total, without, maxnest);
-            }
-        }
-        ExprKind::StructLiteral { fields, .. } => {
-            for (_, v) in fields {
-                loops_expr(v, nesting, total, without, maxnest);
-            }
-        }
-        ExprKind::EnumConstruct { fields, .. } => {
-            for v in fields {
-                loops_expr(v, nesting, total, without, maxnest);
-            }
-        }
-        ExprKind::Tuple(elems) => {
-            for v in elems {
-                loops_expr(v, nesting, total, without, maxnest);
-            }
-        }
-        ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Continue | ExprKind::Result => {}
-    }
-}
-
-fn analyze_verif(f: &FnDef, predicate_cost: i64) -> Verif {
-    let mut total = 0i64;
-    let mut without = 0i64;
-    let mut maxnest = 0i64;
-    loops_block(&f.body, 0, &mut total, &mut without, &mut maxnest);
-    Verif {
-        loops_total: total,
-        loops_without_invariant: without,
-        max_loop_nesting: maxnest,
-        contract_predicate_cost: predicate_cost,
-    }
-}
-
-fn read_complexity_source(source: &Path) -> Result<String, String> {
-    std::fs::read_to_string(source)
-        .map_err(|e| format!("cannot read {}: {e}", source.to_string_lossy()))
-}
-
-// Experimental Vow-surface score bump (§3.2a Step 3), fixed-point, capped 150.
-fn cx_vow_bump(effect_breadth: i64, linear_consumes: i64, contract_predicate_cost: i64) -> i64 {
-    let excess_eff = (effect_breadth - 2).max(0);
-    let over_budget = (contract_predicate_cost - 20).max(0);
-    let v = 50 * excess_eff + 30 * linear_consumes + 20 * over_budget;
-    v.min(150)
-}
-
-// 1-based line number of a byte offset. Must match the self-hosted
-// `diag_compute_line` exactly (count `\n` bytes before `offset`).
-fn line_at(src: &str, offset: usize) -> i64 {
-    let bytes = src.as_bytes();
-    let mut line: i64 = 1;
-    let mut i: usize = 0;
-    while i < offset && i < bytes.len() {
-        if bytes[i] == 10 {
-            line += 1;
-        }
-        i += 1;
-    }
-    line
 }

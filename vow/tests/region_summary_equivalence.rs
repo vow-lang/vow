@@ -452,8 +452,8 @@ fn selfhosted_internal_call_fresh_return_emits_region_root_escape_note() {
     let vowc = root.join("build").join("vowc");
     if !vowc.exists() {
         eprintln!(
-            "skipping {}: build/vowc not present (run scripts/bootstrap.sh first)",
-            "selfhosted_internal_call_fresh_return_emits_region_root_escape_note"
+            "skipping selfhosted_internal_call_fresh_return_emits_region_root_escape_note: \
+             build/vowc not present (run scripts/bootstrap.sh first)"
         );
         return;
     }

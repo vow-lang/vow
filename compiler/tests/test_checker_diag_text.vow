@@ -1,0 +1,91 @@
+module TestCheckerDiagText
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use checker
+use env
+
+fn checked_diags(source: String) -> DiagCtx [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("diag_text.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < parsed.items.len() {
+        item_files.push(String::from("diag_text.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("diag_text.vow"));
+    check_module(check_env, parsed, item_files);
+    dctx
+}
+
+fn probe_source(params: String, body: String) -> String {
+    let src: String = String::from("module DiagText\nfn probe(v: Vec<i64>");
+    src.push_str(params);
+    src.push_str(String::from(") -> i64 { "));
+    src.push_str(body);
+    src.push_str(String::from(" }"));
+    src
+}
+
+fn first_message(dctx: DiagCtx) -> String {
+    let diags: Vec<Diagnostic> = dctx.diags;
+    let d: Diagnostic = diags[0];
+    d.message
+}
+
+fn first_hints(dctx: DiagCtx) -> Vec<String> {
+    let diags: Vec<Diagnostic> = dctx.diags;
+    let d: Diagnostic = diags[0];
+    d.hints
+}
+
+fn check_index_message_uses_backticks() -> i32 [io] {
+    let wide: DiagCtx = checked_diags(probe_source(String::from(", i: i64"), String::from("v[i]")));
+    if first_message(wide) != String::from("in fn probe: index has type `i64` but must be `u64`") { return 1; }
+    let narrow: DiagCtx = checked_diags(probe_source(String::from(", i: u32"), String::from("v[i]")));
+    if first_message(narrow) != String::from("in fn probe: index has type `u32` but must be `u64`") { return 2; }
+    0
+}
+
+fn check_vec_get_carries_the_index_hint() -> i32 [io] {
+    let dctx: DiagCtx = checked_diags(probe_source(String::from(", i: u64"), String::from("v.get(i); 0")));
+    if dctx.error_count != 1 { return 11; }
+    let hints: Vec<String> = first_hints(dctx);
+    if first_message(dctx) != String::from("in fn probe: unknown method `get` on type `Vec`") { return 14; }
+    if hints.len() != 1 { return 12; }
+    if hints[0] != String::from("use `v[i]` to read an element; `Vec` has no `get`") { return 13; }
+    0
+}
+
+fn check_truncate_message_names_the_method() -> i32 [io] {
+    let dctx: DiagCtx = checked_diags(probe_source(String::from(", i: i64"), String::from("v.truncate(i); 0")));
+    if first_message(dctx) != String::from("in fn probe: argument has type `i64` but `truncate` expects `u64`") { return 21; }
+    0
+}
+
+fn check_const_messages_use_backticks() -> i32 [io] {
+    let int_for_bool: DiagCtx = checked_diags(String::from("module ConstText\nconst BAD: bool = 42;"));
+    if !first_message(int_for_bool).contains(String::from("const `BAD` has type `bool`, expected integer type")) { return 31; }
+    let bool_for_int: DiagCtx = checked_diags(String::from("module ConstText\nconst BAD: i64 = true;"));
+    if !first_message(bool_for_int).contains(String::from("const `BAD` has type `i64`, expected bool")) { return 32; }
+    let neg_for_bool: DiagCtx = checked_diags(String::from("module ConstText\nconst BAD: bool = -1;"));
+    if !first_message(neg_for_bool).contains(String::from("const `BAD` has type `bool`, expected integer type")) { return 33; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let index_result: i32 = check_index_message_uses_backticks();
+    if index_result != 0 { return index_result; }
+    let get_result: i32 = check_vec_get_carries_the_index_hint();
+    if get_result != 0 { return get_result; }
+    let truncate_result: i32 = check_truncate_message_names_the_method();
+    if truncate_result != 0 { return truncate_result; }
+    check_const_messages_use_backticks()
+}

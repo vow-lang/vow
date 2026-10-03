@@ -120,5 +120,35 @@ class ParseDirectivesKnownGapTest(unittest.TestCase):
                 verify_eval.REPO_ROOT = old_repo_root
 
 
+class CorpusCountsDocsTest(unittest.TestCase):
+    def test_docs_counts_match_the_corpus(self):
+        self.assertEqual(0, verify_eval.sync_docs(check=True))
+
+    def test_render_lists_every_category_by_descending_count(self):
+        block = verify_eval.render_corpus_counts(3, {"bounds": 2, "overflow": 1})
+
+        rows = [line for line in block.splitlines() if line.startswith("| ")][2:]
+        self.assertEqual(len(verify_eval.CATEGORIES), len(rows))
+        self.assertEqual("| bounds | 2 |", rows[0])
+        self.assertEqual("| overflow | 1 |", rows[1])
+        self.assertIn("(3 programs)", block)
+
+    def test_splice_replaces_only_the_marked_block(self):
+        block = verify_eval.render_corpus_counts(1, {"bounds": 1})
+        text = (
+            f"before\n{verify_eval.DOCS_START}\nstale\n{verify_eval.DOCS_END}\nafter\n"
+        )
+
+        updated = verify_eval.splice_corpus_counts(text, block)
+
+        self.assertTrue(updated.startswith("before\n"))
+        self.assertTrue(updated.endswith("\nafter\n"))
+        self.assertNotIn("stale", updated)
+
+    def test_splice_without_markers_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "markers"):
+            verify_eval.splice_corpus_counts("no markers here", "x")
+
+
 if __name__ == "__main__":
     unittest.main()

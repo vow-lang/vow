@@ -242,7 +242,23 @@ fn vec_has_no_get_method() {
             "unexpected message for `{call}`: {}",
             unknown[0].message
         );
+        assert_eq!(
+            unknown[0].hints,
+            vec!["use `v[i]` to read an element; `Vec` has no `get`".to_string()],
+            "`{call}` should hint at indexing"
+        );
     }
+}
+
+#[test]
+fn misspelled_vec_method_keeps_the_did_you_mean_hint() {
+    let diags = typecheck_source(&program("    v.psh(1);"));
+    let unknown: Vec<_> = diags
+        .iter()
+        .filter(|d| d.code == ErrorCode::UnknownMethod)
+        .collect();
+    assert_eq!(unknown.len(), 1);
+    assert_eq!(unknown[0].hints, vec!["did you mean `push`?".to_string()]);
 }
 
 #[test]

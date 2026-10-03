@@ -638,6 +638,16 @@ fn register_alias(e: CheckEnv, m: Module, aid: i64) [io] {
     }
 }
 
+fn emit_const_type_mismatch(e: CheckEnv, name: String, tid: i64, expected: String, span: i64) {
+    let msg: String = String::from("const `");
+    msg.push_str(name);
+    msg.push_str(String::from("` has type `"));
+    msg.push_str(ty_value_display_name(e.ts, tid));
+    msg.push_str(String::from("`, expected "));
+    msg.push_str(expected);
+    env_emit_error(e, msg, span);
+}
+
 fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
     let a: AstArena = m.arena;
     let name_sid: i64 = cdef_name_sid(a, cid);
@@ -651,11 +661,11 @@ fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
     }
     if val_tag == EXPR_LIT_INT() {
         if !ty_is_integer(e.ts, resolved_tid) {
-            env_emit_error(e, String::from("const has integer value but non-integer type"), cdef_span(a, cid));
+            emit_const_type_mismatch(e, name, resolved_tid, String::from("integer type"), cdef_span(a, cid));
         }
     } else if val_tag == EXPR_LIT_BOOL() {
         if resolved_tid != CTY_BOOL() {
-            env_emit_error(e, String::from("const has bool value but non-bool type"), cdef_span(a, cid));
+            emit_const_type_mismatch(e, name, resolved_tid, String::from("bool"), cdef_span(a, cid));
         }
     } else if val_tag == EXPR_UNOP() {
         let op: i64 = expr_a(a, val_eid);
@@ -663,7 +673,7 @@ fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
             env_emit_error(e, String::from("const value must be a literal"), expr_span(a, val_eid));
         } else {
             if !ty_is_integer(e.ts, resolved_tid) {
-                env_emit_error(e, String::from("const has negated value but non-integer type"), cdef_span(a, cid));
+                emit_const_type_mismatch(e, name, resolved_tid, String::from("integer type"), cdef_span(a, cid));
             }
             let inner_eid: i64 = expr_b(a, val_eid);
             let inner_tag: i64 = expr_tag(a, inner_eid);
@@ -1552,7 +1562,7 @@ fn ts_arg_or_unknown(ts: TyStore, args_lid: i64, index: i64) -> i64 {
 // pre-check loop; re-checking here would double-emit diagnostics and
 // double-consume linear values.
 fn check_method_argument_exact(
-    e: CheckEnv, a: AstArena, args_lid: i64, arg_tids: Vec<i64>, index: i64, target_tid: i64
+    e: CheckEnv, a: AstArena, args_lid: i64, arg_tids: Vec<i64>, index: i64, target_tid: i64, mname: String
 ) {
     if index < 0 || index >= list_len(a, args_lid) { return; }
     let arg_eid: i64 = list_get(a, args_lid, index);
@@ -1562,11 +1572,13 @@ fn check_method_argument_exact(
     let arg_tid: i64 = arg_tids[index as u64];
     if is_opaque(arg_tid) { return; }
     if !is_coercible(e.ts, arg_tid, target_tid) {
-        let msg: String = String::from("argument has type '");
-        msg.push_str(ty_tag_name(ty_tag(e.ts, arg_tid)));
-        msg.push_str(String::from("' but method expects '"));
-        msg.push_str(ty_tag_name(ty_tag(e.ts, target_tid)));
-        msg.push_str(String::from("'"));
+        let msg: String = String::from("argument has type `");
+        msg.push_str(ty_value_display_name(e.ts, arg_tid));
+        msg.push_str(String::from("` but `"));
+        msg.push_str(mname);
+        msg.push_str(String::from("` expects `"));
+        msg.push_str(ty_value_display_name(e.ts, target_tid));
+        msg.push_str(String::from("`"));
         env_emit_error_code(e, EC_TYPE_MISMATCH(), msg, expr_span(a, arg_eid));
     }
 }
@@ -2661,7 +2673,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if recv_tag == CTY_STR() {
             if mname == String::from("push_str") || mname == String::from("eq") ||
                mname == String::from("contains") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_STR());
+                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_STR(), mname);
             }
             if mname == String::from("byte_at") {
                 check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64());
@@ -2693,9 +2705,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 opt_args.push(CTY_U64());
                 return ts_make_applied(e.ts, opt_base, opt_args);
             }
-            let err_msg: String = String::from("unknown method '");
+            let err_msg: String = String::from("unknown method `");
             err_msg.push_str(mname);
-            err_msg.push_str(String::from("' on type 'String'"));
+            err_msg.push_str(String::from("` on type `String`"));
             env_emit_error_code(e, EC_UNKNOWN_METHOD(), err_msg, expr_span(a, eid));
             return CTY_UNIT();
         }
@@ -2707,20 +2719,24 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 if base_name == String::from("Vec") {
                     let hargs_lid: i64 = ty_b(e.ts, recv_tid);
                     if mname == String::from("push") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0));
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
                     }
                     if mname == String::from("truncate") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64());
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64(), mname);
                     }
                     if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("push") { return CTY_UNIT(); }
                     if mname == String::from("pop") { return CTY_UNIT(); }
                     if mname == String::from("clear") { return CTY_UNIT(); }
                     if mname == String::from("truncate") { return CTY_UNIT(); }
-                    let verr_msg: String = String::from("unknown method '");
+                    let verr_msg: String = String::from("unknown method `");
                     verr_msg.push_str(mname);
-                    verr_msg.push_str(String::from("' on type 'Vec'"));
-                    env_emit_error_code(e, EC_UNKNOWN_METHOD(), verr_msg, expr_span(a, eid));
+                    verr_msg.push_str(String::from("` on type `Vec`"));
+                    if mname == String::from("get") {
+                        env_emit_error_code_hint(e, EC_UNKNOWN_METHOD(), verr_msg, expr_span(a, eid), String::from("use `v[i]` to read an element; `Vec` has no `get`"));
+                    } else {
+                        env_emit_error_code(e, EC_UNKNOWN_METHOD(), verr_msg, expr_span(a, eid));
+                    }
                     return CTY_UNIT();
                 }
                 if base_name == String::from("Option") || base_name == String::from("Result") {
@@ -2744,11 +2760,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         record_question_aggregate(e, eid, inner_tid);
                         return inner_tid;
                     }
-                    let oerr_msg: String = String::from("unknown method '");
+                    let oerr_msg: String = String::from("unknown method `");
                     oerr_msg.push_str(mname);
-                    oerr_msg.push_str(String::from("' on type '"));
+                    oerr_msg.push_str(String::from("` on type `"));
                     oerr_msg.push_str(base_name);
-                    oerr_msg.push_str(String::from("'"));
+                    oerr_msg.push_str(String::from("`"));
                     env_emit_error_code(e, EC_UNKNOWN_METHOD(), oerr_msg, expr_span(a, eid));
                     return CTY_UNIT();
                 }
@@ -2765,13 +2781,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         CTY_I64()
                     };
                     if mname == String::from("insert") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0));
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, hargs_lid, 1));
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, hargs_lid, 1), mname);
                     }
                     if mname == String::from("get") ||
                        mname == String::from("contains_key") ||
                        mname == String::from("remove") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0));
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
                     }
                     if mname == String::from("insert") { return CTY_UNIT(); }
                     if mname == String::from("get") {
@@ -2783,9 +2799,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if mname == String::from("contains_key") { return CTY_BOOL(); }
                     if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("remove") { return CTY_UNIT(); }
-                    let herr_msg: String = String::from("unknown method '");
+                    let herr_msg: String = String::from("unknown method `");
                     herr_msg.push_str(mname);
-                    herr_msg.push_str(String::from("' on type 'HashMap'"));
+                    herr_msg.push_str(String::from("` on type `HashMap`"));
                     env_emit_error_code(e, EC_UNKNOWN_METHOD(), herr_msg, expr_span(a, eid));
                     return CTY_UNIT();
                 }
@@ -2809,11 +2825,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         env_emit_error_code(e, EC_BTREEMAP_KEY_TYPE_MUST_BE_I64(), kerr_msg, expr_span(a, eid));
                     }
                     if mname == String::from("insert") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0));
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, bargs_lid, 1));
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, bargs_lid, 1), mname);
                     }
                     if mname == String::from("get") || mname == String::from("contains") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0));
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
                     }
                     if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("contains") { return CTY_BOOL(); }
@@ -2829,17 +2845,17 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         opt_args.push(bval_tid);
                         return ts_make_applied(e.ts, opt_base, opt_args);
                     }
-                    let bterr_msg: String = String::from("unknown method '");
+                    let bterr_msg: String = String::from("unknown method `");
                     bterr_msg.push_str(mname);
-                    bterr_msg.push_str(String::from("' on type 'BTreeMap'"));
+                    bterr_msg.push_str(String::from("` on type `BTreeMap`"));
                     env_emit_error_code(e, EC_UNKNOWN_METHOD(), bterr_msg, expr_span(a, eid));
                     return CTY_UNIT();
                 }
             }
         }
-        let uerr_msg: String = String::from("unknown method '");
+        let uerr_msg: String = String::from("unknown method `");
         uerr_msg.push_str(mname);
-        uerr_msg.push_str(String::from("' on this type"));
+        uerr_msg.push_str(String::from("` on this type"));
         env_emit_error_code(e, EC_UNKNOWN_METHOD(), uerr_msg, expr_span(a, eid));
         return CTY_UNIT();
     }
@@ -2882,9 +2898,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let idx_tid: i64 = check_expr(e, m, idx_eid);
         check_contextual_integer_literal_ranges(e, a, idx_eid, CTY_U64());
         if !is_opaque(idx_tid) && !is_coercible(e.ts, idx_tid, CTY_U64()) {
-            let imsg: String = String::from("index has type '");
+            let imsg: String = String::from("index has type `");
             imsg.push_str(ty_tag_name(ty_tag(e.ts, idx_tid)));
-            imsg.push_str(String::from("' but must be 'u64'"));
+            imsg.push_str(String::from("` but must be `u64`"));
             env_emit_error_code(e, EC_TYPE_MISMATCH(), imsg, expr_span(a, idx_eid));
         }
         if is_opaque(recv_tid) {
@@ -3338,8 +3354,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if n_args != 2 {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
                     }
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64());
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64());
+                    check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64(), second_name);
+                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64(), second_name);
                     return CTY_NEVER();
                 }
             }
@@ -3352,8 +3368,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if n_args != 2 {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
                     }
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64());
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64());
+                    check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64(), second_name);
+                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64(), second_name);
                     return CTY_STR();
                 }
                 if second_name == String::from("from") {

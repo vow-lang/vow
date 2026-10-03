@@ -1088,6 +1088,33 @@ mod tests {
     }
 
     #[test]
+    fn negative_as_i64_counts_rejected() {
+        // `u64::MAX` and `2^63` both decode negative when read as `i64`, which
+        // is how the self-hosted reader sees them; each must be a decode error
+        // in the module name length and in a section count.
+        let leb_u64_max = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01];
+        let leb_2_pow_63 = [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01];
+        for leb in [leb_u64_max, leb_2_pow_63] {
+            let mut name_len = encode_module(&empty_module())[..8].to_vec();
+            name_len.extend_from_slice(&leb);
+            name_len.extend_from_slice(&[0, 0, 0, 0]);
+            assert!(matches!(
+                decode_module(&name_len),
+                Err(DecodeError::Truncated)
+            ));
+
+            let mut strings_n = encode_module(&empty_module())[..8].to_vec();
+            strings_n.extend_from_slice(&[0]);
+            strings_n.extend_from_slice(&leb);
+            strings_n.extend_from_slice(&[0, 0, 0]);
+            assert!(matches!(
+                decode_module(&strings_n),
+                Err(DecodeError::Truncated)
+            ));
+        }
+    }
+
+    #[test]
     fn crafted_huge_leb_count_rejected() {
         // Header + name "" + LEB(0 strings) + LEB(0 structs) + LEB(0 enums)
         // + LEB(HUGE) would normally trip Vec::with_capacity. The

@@ -1,4 +1,6 @@
 // TEST: exit 134
+// A 10-byte LEB whose last byte carries bits past 2^63 used to wrap silently
+// to a smaller count; the decoder must reject it, as the Rust decoder does.
 module Main
 
 use ir
@@ -15,11 +17,15 @@ fn main() -> i32 [panic] {
     bytes.push(0);
     bytes.push(0);
     bytes.push(0);
+    let mut i: u64 = 0;
+    while i < 9 {
+        bytes.push(128);
+        i = i + 1;
+    }
+    bytes.push(2);
     bytes.push(0);
     bytes.push(0);
     bytes.push(0);
-    bytes.push(0);
-    bytes.push(99);
     let _m: IrModule = module_decode(bytes);
     0
 }

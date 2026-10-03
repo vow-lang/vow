@@ -28,6 +28,7 @@ KNOWN_CEX_COUNT_DIVERGENCE = re.compile(
 VALUES_LABEL = "values"
 ERROR_CODES_LABEL = "error codes"
 SPAN_LABEL = "span"
+HINTS_LABEL = "hints"
 COUNTEREXAMPLE_COUNT_LABEL = "counterexamples count"
 ESBMC_INTERNAL_VALUE_PREFIX = "$esbmc$"
 
@@ -57,6 +58,11 @@ STRICT_SPAN_FIXTURES = frozenset(
         "let_tuple_arity_mismatch.vow",
     }
 )
+# Fixtures whose diagnostic `hints` must match the Rust compiler's exactly. The
+# Rust checker attaches many suggestion hints the self-hosted checker does not
+# (did-you-mean lists, available methods), so corpus-wide equality would pin
+# unrelated gaps; a hint is a parity contract only where both checkers emit it.
+STRICT_HINT_FIXTURES = frozenset({"vec_get_unknown_method.vow"})
 # Fixtures on which the self-hosted compiler still reports offset 0, length 0
 # for a diagnostic the Rust compiler locates. #1353 fixed the last of these;
 # kept as an empty set (not deleted) so a future drop has this same
@@ -354,6 +360,25 @@ def _dropped_spans(rust_diagnostics, self_diagnostics):
     return unmatched[:spanless]
 
 
+def _hints_by_code(diagnostics):
+    """Each diagnostic's (error code, hints), ordered for multiset comparison."""
+    return sorted(
+        (diagnostic.get("error_code", ""), tuple(diagnostic.get("hints", [])))
+        for diagnostic in diagnostics
+    )
+
+
+def _hint_errors(rust_diagnostics, self_diagnostics, fixture_name):
+    """Hint parity on the curated fixtures; other fixtures are not compared."""
+    if fixture_name not in STRICT_HINT_FIXTURES:
+        return []
+    return _mismatch(
+        HINTS_LABEL,
+        _hints_by_code(rust_diagnostics),
+        _hints_by_code(self_diagnostics),
+    )
+
+
 def _span_errors(rust_diagnostics, self_diagnostics, fixture_name):
     """Span parity: strict on the curated fixtures, drop-detection elsewhere."""
     if fixture_name in STRICT_SPAN_FIXTURES:
@@ -394,6 +419,11 @@ def compare_error(rust, self_hosted, rust_exit, self_exit, fixture_name=None):
     )
     if fixture_name is not None:
         errors += _span_errors(
+            rust.get("diagnostics", []),
+            self_hosted.get("diagnostics", []),
+            fixture_name,
+        )
+        errors += _hint_errors(
             rust.get("diagnostics", []),
             self_hosted.get("diagnostics", []),
             fixture_name,

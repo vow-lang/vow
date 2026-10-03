@@ -1,4 +1,6 @@
-// TEST: exit 134
+// TEST: exit 0
+// Control for the vmod_rejects_* fixtures: the minimal well-formed module
+// (header, empty name, four empty sections) decodes cleanly.
 module Main
 
 use ir
@@ -19,7 +21,9 @@ fn main() -> i32 [panic] {
     bytes.push(0);
     bytes.push(0);
     bytes.push(0);
-    bytes.push(99);
-    let _m: IrModule = module_decode(bytes);
+    let m: IrModule = module_decode(bytes);
+    if m.functions.len() != 0 {
+        return 1;
+    }
     0
 }

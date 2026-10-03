@@ -1,5 +1,5 @@
 // TEST: error-code TypeMismatch
-// TEST: stderr "expects"
+// TEST: stderr "but `truncate` expects `u64`"
 module VecTruncateArgNotInteger
 
 fn main() -> i32 {

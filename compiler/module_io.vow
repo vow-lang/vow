@@ -211,11 +211,20 @@ fn reader_read_leb(r: ModuleReader) -> i64 vow {
     } {
         let b: i64 = reader_read_u8(r);
         let chunk: i64 = b - (b / 128) * 128;
+        if shift == 63 && chunk > 1 {
+            return reject_decode_i64();
+        }
         value = value + chunk * (1 << shift);
         if (b / 128) == 0 {
+            if shift > 0 && chunk == 0 {
+                return reject_decode_i64();
+            }
             done = 1;
         } else {
             shift = shift + 7;
+            if shift > 63 {
+                return reject_decode_i64();
+            }
         }
     }
     value
@@ -226,7 +235,11 @@ fn reader_read_count(r: ModuleReader) -> u64 vow {
 } {
     let n: i64 = reader_read_leb(r);
     if n < 0 {
-        return 0;
+        return reject_decode_i64() as u64;
+    }
+    let remaining: u64 = r.buf.len() - r.pos;
+    if n as u64 > remaining {
+        return reject_decode_i64() as u64;
     }
     n as u64
 }
