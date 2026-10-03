@@ -24,18 +24,38 @@ nothing about a Vow-source mutation run ever requires it.
 
 **Hand-edited:**
 
-- `scripts/full_test.sh` — `setup_compilers()` (currently lines 76-82) gains a `VOW_FULL_TEST_SKIP_CARGO`
-  env-var gate around the `cargo build --all --release` call, mirroring `scripts/bootstrap.sh`'s
-  existing `--skip-cargo` flag semantics but as an env var, consistent with this script's existing
-  `VOW_FULL_TEST_BOOTSTRAP_ONLY` / `VOW_FULL_TEST_PROMOTED_ONLY` toggles (no `getopts`/arg-parsing
-  loop exists in this script today — env vars are the established convention here, a CLI flag would
-  be the odd one out). The top-level `RUST="./target/release/vow"` (line 15) becomes
-  `RUST="${VOW_FULL_TEST_RUST:-./target/release/vow}"` so tests can redirect it to a fixture binary
-  (this env var already exists for a different, non-overlapping purpose in the
-  `VOW_FULL_TEST_BOOTSTRAP_ONLY` path — see TDD slice 1 for why reusing it is safe). A new
-  `VOW_FULL_TEST_SETUP_ONLY=1` early-exit guard is added (structurally parallel to the existing
-  `VOW_FULL_TEST_BOOTSTRAP_ONLY` guard just above it) that runs only `setup_compilers()` and exits,
-  giving tests a fast, isolated hook instead of running the full ~40-minute suite.
+- `scripts/full_test.sh` — confirmed via `grep -n 'cargo\|bootstrap\.sh' scripts/full_test.sh` that
+  the Section 0 setup step is the *only* place in this script, or in any of the sub-harnesses it
+  shells out to (`tests/bootstrap/tests.sh`, `tests/esbmc-path-cache/tests.sh`,
+  `tests/full_test_bootstrap/tests.sh`, `tests/install_toolchain/tests.sh`,
+  `tests/measure_bootstrap_rss/tests.sh`, `tests/mutants/tests.sh`), that invokes `cargo` at all —
+  `tests/bootstrap/tests.sh` already calls `scripts/bootstrap.sh --skip-cargo`, and
+  `tests/mutants/tests.sh`'s one "cargo" hit is the unrelated string `"cargo-mutants format"` in a
+  test label. So gating this one call site closes the issue completely; there is no second rebuild
+  trigger hiding elsewhere on the Tier-2 path. The setup step (currently lines 76-82) gains a
+  `VOW_FULL_TEST_SKIP_CARGO` env-var gate around the `cargo build --all --release` call, mirroring
+  `scripts/bootstrap.sh`'s existing `--skip-cargo` flag semantics but as an env var, consistent with
+  this script's existing `VOW_FULL_TEST_BOOTSTRAP_ONLY` / `VOW_FULL_TEST_PROMOTED_ONLY` toggles (no
+  `getopts`/arg-parsing loop exists in this script today — env vars are the established convention
+  here). When `VOW_FULL_TEST_SKIP_CARGO=1` and `$RUST` is not executable, fail loudly
+  (`echo ... >&2; exit 1`) instead of letting the step fall through to a confusing downstream error —
+  without this, a missing `./target/release/vow` under the skip flag dies with exit 127 and gets
+  silently misclassified as a Tier-2 "caught" verdict for the wrong reason. The top-level
+  `RUST="./target/release/vow"` (line 15) becomes `RUST="${VOW_FULL_TEST_RUST_BIN:-./target/release/vow}"`
+  so tests can redirect it to a fixture binary — a **new, distinct** env var name, deliberately not
+  reusing the existing `VOW_FULL_TEST_RUST` (which already has an unrelated meaning as a required
+  argument inside the `VOW_FULL_TEST_BOOTSTRAP_ONLY` path); conflating the two would let a leftover
+  exported `VOW_FULL_TEST_RUST` from one test session silently redirect an unrelated real run. A new
+  `VOW_FULL_TEST_SETUP_ONLY=1` early-exit check is added **immediately after the existing
+  `setup_compilers` call** (currently line 498), before the `VOW_FULL_TEST_PROMOTED_ONLY` gate — not
+  as a new parallel block mirroring `VOW_FULL_TEST_BOOTSTRAP_ONLY` further up the file, because that
+  guard runs *before* Section 0 and would need its own call to the setup step, which would push the
+  literal-substring count in `scripts/test_bootstrap_workflow.py::test_compiler_setup_is_a_reusable_step`
+  (`self.assertEqual(2, self.script.count("setup_compilers"))`) from 2 to 3 and fail that test. Placing
+  the new check right after the existing call adds no new occurrence of that identifier and leaves
+  `test_promoted_only_route_stops_before_the_complete_suite`'s forward-searching index assertions
+  intact (it only asserts relative ordering, which is preserved). For the same reason, no new comment
+  near this check should mention the setup-step function's name literally.
 - `compiler/mutants_main.vow` — extract the inlined Tier-2 default (currently
   `let tier2_cmd: String = if tier2_in.len() == 0 { String::from("scripts/full_test.sh") } else { tier2_in };`
   at line 479-480) into a named function `default_tier2_cmd() -> String` returning
@@ -71,28 +91,36 @@ deliberate, pre-existing, documented exception to having a Rust counterpart at a
 ## 3. TDD slices
 
 1. **`scripts/full_test.sh`: `VOW_FULL_TEST_SKIP_CARGO` gate.**
-   - Test: new `tests/full_test_setup/tests.sh`, following the fixture-and-trace-file pattern already
-     used by `tests/full_test_bootstrap/tests.sh`. Fixture provides a fake `cargo` shim placed first
-     on `PATH` that appends a marker line to a trace file and exits 0 without doing real work, and a
-     fake `VOW_FULL_TEST_RUST` binary (a trivial script that accepts any args and exits 0) standing in
-     for `./target/release/vow`. Two cases, both run with `VOW_FULL_TEST_SETUP_ONLY=1`:
+   - Test: extend the existing `tests/full_test_bootstrap/tests.sh` (not a new file) with a second
+     fixture helper and two new test functions, reusing its already-registered scratch tree
+     (`$TEST_TMPDIR`, already listed in `scripts/test_scratch_cleanup.py`'s `SCRATCH_SCRIPTS`) and its
+     trap/signal preamble, so no new top-level-scratch-script registration or signal-trap lint
+     exposure is introduced. (A brand-new sibling script would need its own `SCRATCH_SCRIPTS` entry,
+     its own EXIT/INT/TERM/HUP traps to satisfy `scripts/test_scratch_cleanup.py`'s lint, and its own
+     invocation wired into `scripts/full_test.sh`'s Section 9 — all of which this file already has.)
+     The new fixture adds a fake `cargo` shim placed first on `PATH` that appends a marker line to a
+     trace file and exits 0 without doing real work, and a fake Rust-compiler stand-in script
+     (pointed to via `VOW_FULL_TEST_RUST_BIN`) that accepts any args and exits 0. Two new test
+     functions, both invoking `bash scripts/full_test.sh` with `VOW_FULL_TEST_SETUP_ONLY=1` set
+     (and wrapped in `timeout` as a backstop — see below):
      - Default (`VOW_FULL_TEST_SKIP_CARGO` unset): trace file contains the fake-cargo marker.
-     - `VOW_FULL_TEST_SKIP_CARGO=1`: trace file does **not** contain the fake-cargo marker, and
-       script output contains an explicit "skipped" message (so a silently-vanished cargo build
-       can't pass by accident), while the self-hosted-build step (fake `$RUST` invocation) still runs
-       — proving only the cargo stage is gated, not the whole setup step.
-     This is RED against current `scripts/full_test.sh` (no such env var exists; the `VOW_FULL_TEST_SKIP_CARGO=1`
-     case would currently still invoke the fake cargo and fail the "does not contain" assertion, and
-     `VOW_FULL_TEST_SETUP_ONLY=1` isn't recognized at all, so the harness would run the full suite
-     instead of exiting after setup — also an observable failure).
-   - Production code: add the `VOW_FULL_TEST_SKIP_CARGO` conditional inside `setup_compilers()`, the
-     `VOW_FULL_TEST_RUST`-overridable `RUST=` assignment, and the `VOW_FULL_TEST_SETUP_ONLY` early-exit
-     guard, as described in section 2.
+     - `VOW_FULL_TEST_SKIP_CARGO=1`: trace file does **not** contain the fake-cargo marker, script
+       output contains an explicit "skipped" message (so a silently-vanished cargo build can't pass
+       by accident), and the self-hosted-build step (fake `VOW_FULL_TEST_RUST_BIN` invocation) still
+       runs — proving only the cargo stage is gated, not the whole setup step.
+     This is RED against current `scripts/full_test.sh`: neither `VOW_FULL_TEST_SKIP_CARGO` nor
+     `VOW_FULL_TEST_SETUP_ONLY` exist yet, so the harness would ignore both and run the full ~40-minute
+     suite instead of exiting right after setup. Run the RED step itself under `timeout` (e.g.
+     `timeout 60 bash ...`) so a mistaken "not recognized" case can't actually block the implementer's
+     terminal for 40 minutes before showing red.
+   - Production code: add the `VOW_FULL_TEST_SKIP_CARGO` conditional (plus the loud failure when
+     `$RUST` is missing under that flag) inside the Section 0 setup step, the
+     `VOW_FULL_TEST_RUST_BIN`-overridable `RUST=` assignment, and the `VOW_FULL_TEST_SETUP_ONLY`
+     early-exit check placed immediately after the existing setup call, as described in section 2.
    - Also re-run `scripts/test_bootstrap_workflow.py::FullTestPromotedGateTest::test_compiler_setup_is_a_reusable_step`
-     (asserts the literal substring `"setup_compilers"` appears exactly twice in the script — one
-     `fn` definition, one call site) to confirm the edit doesn't add a second call site or a second
-     textual mention; it shouldn't, since the new logic lives inside the existing function body, but
-     this is cheap insurance given the test asserts on raw text.
+     and `test_promoted_only_route_stops_before_the_complete_suite` to confirm the placement choice in
+     section 2 keeps both green (they should, per the reasoning given there, but both assert on raw
+     text/ordering so this is cheap insurance before moving on).
 
 2. **`compiler/mutants_main.vow`: `default_tier2_cmd()`.**
    - Test: new `compiler/tests/test_mutants_main_tier2_default.vow` (module `use mutants_main;`,
@@ -111,11 +139,14 @@ deliberate, pre-existing, documented exception to having a Rust counterpart at a
      either take the full ~40-minute suite's wall-clock per test run, or require faking out
      `scripts/full_test.sh` inside the ephemeral `git worktree`, which isn't possible without first
      committing the fake (the worktree is checked out from a git ref, not from the working tree's
-     uncommitted state). The unit test on `default_tier2_cmd()` plus slice 1's direct test of
-     `setup_compilers()`'s env-var handling together cover the fix compositionally: (a) the tool's
-     default literal contains the env-var prefix, and (b) the script honors that env var by skipping
-     `cargo build --all --release`. Proving both halves independently is sufficient; see "Risk areas"
-     for the residual gap this leaves.
+     uncommitted state). The unit test on `default_tier2_cmd()` plus slice 1's direct test of the
+     setup step's env-var handling together cover the fix compositionally: (a) the tool's default
+     literal contains the env-var prefix, (b) the script honors that env var by skipping
+     `cargo build --all --release`, and (c) that call site is the only one on the whole Tier-2 path
+     (confirmed in section 2). Confirm `vow test compiler/` (run by `.github/workflows/bootstrap.yml`
+     lines 89 and 91, for both the Rust-built and self-hosted compiler) actually discovers
+     `compiler/tests/*.vow` recursively before relying on it — confirmed already, so the new test
+     genuinely gates CI rather than sitting dead.
 
 3. **Docs.** No tests (prose-only): update `docs/mutants.md`, `docs/spec/cli.md`, and `CLAUDE.md` as
    described in section 2, then regenerate `compiler/main.vow` / `vow/src/skill.rs` /
