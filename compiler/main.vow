@@ -6680,7 +6680,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Only `Vec<T>` has an index operator. Indexing any other type (`HashMap`,\n"));
     r.push_str(String::from("`BTreeMap`, `String`, `Option`, ...) is a `TypeMismatch` whose message begins\n"));
-    r.push_str(String::from("`index operation on non-indexable type` and names the receiver type; read a map entry\n"));
+    r.push_str(String::from("`index operation on non-indexable type` and prints the full receiver type (for example `HashMap<i64, i64>` or `String`, identically in both compilers); read a map entry\n"));
     r.push_str(String::from("with `m.get(k)` and a string byte with `s.byte_at(i)`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`Vec::new()`, `HashMap::new()`, and `BTreeMap::new()` take their element, key,\n"));
@@ -12250,7 +12250,7 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Only `Vec<T>` has an index operator. Indexing any other type (`HashMap`,\n"));
     r.push_str(String::from("`BTreeMap`, `String`, `Option`, ...) is a `TypeMismatch` whose message begins\n"));
-    r.push_str(String::from("`index operation on non-indexable type` and names the receiver type; read a map entry\n"));
+    r.push_str(String::from("`index operation on non-indexable type` and prints the full receiver type (for example `HashMap<i64, i64>` or `String`, identically in both compilers); read a map entry\n"));
     r.push_str(String::from("with `m.get(k)` and a string byte with `s.byte_at(i)`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`Vec::new()`, `HashMap::new()`, and `BTreeMap::new()` take their element, key,\n"));

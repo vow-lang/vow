@@ -4484,7 +4484,7 @@ and `push_byte` takes exactly `u8`; see
 
 Only `Vec<T>` has an index operator. Indexing any other type (`HashMap`,
 `BTreeMap`, `String`, `Option`, ...) is a `TypeMismatch` whose message begins
-`index operation on non-indexable type` and names the receiver type; read a map entry
+`index operation on non-indexable type` and prints the full receiver type (for example `HashMap<i64, i64>` or `String`, identically in both compilers); read a map entry
 with `m.get(k)` and a string byte with `s.byte_at(i)`.
 
 `Vec::new()`, `HashMap::new()`, and `BTreeMap::new()` take their element, key,
@@ -10028,7 +10028,7 @@ and `push_byte` takes exactly `u8`; see
 
 Only `Vec<T>` has an index operator. Indexing any other type (`HashMap`,
 `BTreeMap`, `String`, `Option`, ...) is a `TypeMismatch` whose message begins
-`index operation on non-indexable type` and names the receiver type; read a map entry
+`index operation on non-indexable type` and prints the full receiver type (for example `HashMap<i64, i64>` or `String`, identically in both compilers); read a map entry
 with `m.get(k)` and a string byte with `s.byte_at(i)`.
 
 `Vec::new()`, `HashMap::new()`, and `BTreeMap::new()` take their element, key,

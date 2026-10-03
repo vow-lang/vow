@@ -361,9 +361,21 @@ fn map_value_supported(value: &Ty) -> bool {
     !matches!(value, Ty::I128 | Ty::U128 | Ty::F32 | Ty::F64)
 }
 
-fn map_ty_name(ty: &Ty) -> String {
+/// The user-facing spelling of a type for diagnostics: `Ty`'s `Display` prints
+/// `Ty::Str` as `str`, but the language spells it `String`. The self-hosted
+/// `ty_full_display_name` produces the same text.
+fn user_ty_name(ty: &Ty) -> String {
     match ty {
         Ty::Str => "String".to_string(),
+        Ty::Applied(base, args) => {
+            let args: Vec<String> = args.iter().map(user_ty_name).collect();
+            format!("{}<{}>", user_ty_name(base), args.join(", "))
+        }
+        Ty::Reference(inner) => format!("&{}", user_ty_name(inner)),
+        Ty::Tuple(elems) => {
+            let elems: Vec<String> = elems.iter().map(user_ty_name).collect();
+            format!("({})", elems.join(", "))
+        }
         other => other.to_string(),
     }
 }
@@ -2652,7 +2664,10 @@ impl<'e> Checker<'e> {
                     _ => {
                         self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
-                            format!("index operation on non-indexable type `{base_ty}`"),
+                            format!(
+                                "index operation on non-indexable type `{}`",
+                                user_ty_name(&base_ty)
+                            ),
                             expr.span,
                             vec![
                                 "indexing is supported on Vec<T> only; read a map entry with `get`, which returns an `Option`"
@@ -3589,7 +3604,7 @@ impl<'e> Checker<'e> {
             && let Some(key_ty) = args.first()
             && !hashmap_key_supported(key_ty)
         {
-            let key_name = map_ty_name(key_ty);
+            let key_name = user_ty_name(key_ty);
             self.emit_error_with_hints(
                 ErrorCode::UnsupportedFeature,
                 format!(
@@ -3604,7 +3619,7 @@ impl<'e> Checker<'e> {
         if let Some(val_ty) = args.get(1)
             && !map_value_supported(val_ty)
         {
-            let val_name = map_ty_name(val_ty);
+            let val_name = user_ty_name(val_ty);
             self.emit_error_with_hints(
                 ErrorCode::UnsupportedFeature,
                 format!(
@@ -3620,7 +3635,7 @@ impl<'e> Checker<'e> {
             && let Some(val_ty) = args.get(1)
             && self.is_linear_ty(val_ty)
         {
-            let val_name = map_ty_name(val_ty);
+            let val_name = user_ty_name(val_ty);
             self.emit_error(
                 ErrorCode::UnsupportedFeature,
                 format!(
@@ -3646,7 +3661,10 @@ impl<'e> Checker<'e> {
             {
                 self.emit_error(
                     ErrorCode::BTreeMapKeyTypeMustBeI64,
-                    format!("BTreeMap key type must be i64; found '{key_ty}'"),
+                    format!(
+                        "BTreeMap key type must be i64; found '{}'",
+                        user_ty_name(key_ty)
+                    ),
                     span,
                 );
             }
@@ -3655,7 +3673,10 @@ impl<'e> Checker<'e> {
             {
                 self.emit_error(
                     ErrorCode::BTreeMapValueMustBeNonLinear,
-                    format!("BTreeMap value type must be non-linear; found '{val_ty}'"),
+                    format!(
+                        "BTreeMap value type must be non-linear; found '{}'",
+                        user_ty_name(val_ty)
+                    ),
                     span,
                 );
             }
