@@ -144,11 +144,12 @@ types preserves binary fixed-point reproducibility across compilation hosts;
 see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). The signedness of a
 length is independent of this determinism rationale, so
 [ADR 0003](../adr/0003-unsigned-size-types.md) makes lengths fixed-width `u64`:
-`.len()` on `Vec`, `String`, `HashMap`, and `BTreeMap` returns `u64`. An index
-expression accepts any integer type (see [Indexing](#indexing)), so `v[i]` with
-`i: u64` needs no cast. `String` offsets (`byte_at`, `substr`,
-`substring`, `matches_literal_at`) stay `i64` as a documented v1 scope
-decision; see [String offsets](#string-offsets).
+`.len()` on `Vec`, `String`, `HashMap`, and `BTreeMap` returns `u64`. A `Vec`
+index expression has exactly the type `u64` (see [Indexing](#indexing)), so
+`v[i]` with `i: u64` needs no cast, and `v[i]` with `i: i64` is a
+`TypeMismatch`. `String` offsets (`byte_at`, `substr`, `substring`,
+`matches_literal_at`) stay `i64` as a documented v1 scope decision; see
+[String offsets](#string-offsets).
 
 **128-bit implementation status:** `i128`/`u128` types and full-range literal
 representation are available to the frontend and IR. Native code generation,
@@ -724,7 +725,7 @@ for x in vec vow {
 ```vow
 let idx: i64 = loop {
     if data[i] == target {
-        break i;
+        break i as i64;
     }
     i = i + 1;
     if i >= n { break -1; }
@@ -923,11 +924,11 @@ m.contains_key(k)
 | `.pop()`       | `() -> ()`                       |
 | `.len()`       | `() -> u64`                      |
 | `.clear()`     | `() -> ()` — frees buffer, resets to empty |
-| `.truncate(n)` | `(<int>) -> ()` — shrinks to n elements, frees excess memory |
-| `v[i]`         | Index read — copies slot value; aliases heap types (panics if out of bounds) |
-| `v[i] = val`   | Index write — copies value into slot |
+| `.truncate(n)` | `(u64) -> ()` — shrinks to n elements, frees excess memory |
+| `v[i]`         | Index read, `i: u64` — copies slot value; aliases heap types (panics if out of bounds) |
+| `v[i] = val`   | Index write, `i: u64` — copies value into slot |
 
-`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
+`Vec` indices and `.truncate(n)` take exactly `u64`; an unsuffixed integer literal coerces, and any other integer type needs an explicit `as u64`. See [Indexing](#indexing).
 
 ### String Methods
 
@@ -947,7 +948,7 @@ m.contains_key(k)
 | `.parse_i64()`      | `() -> Option<i64>`         |
 | `.parse_u64()`      | `() -> Option<u64>`         |
 
-`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
+`<int>` marks a `String` offset or byte-value parameter, which is deliberately *not* `u64`: any integer width and either signedness is accepted, per [String offsets](#string-offsets). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
 
 `push_byte`'s argument is a byte *value*, not an index. The valid range is `0..=255`. The compiler does not diagnose a value outside that range (only a literal that does not fit `i64` is a `LiteralOutOfRange` error), and the runtime appends the low 8 bits, so `s.push_byte(300)` appends `44`. Keep byte values within `0..=255`.
 
@@ -1000,11 +1001,9 @@ let val: i64 = v[0];
 v[i] = new_val;
 ```
 
-The index expression must have an **integer type**. Any width and either signedness is accepted (`i8` … `i64`, `u8` … `u64`, and unsuffixed integer literals); a non-integer index is a `TypeMismatch` error. The same rule applies to index-shaped builtin-method arguments: `String::byte_at`, both arguments of `String::substring`, and `Vec::get` / `Vec::truncate`. `String::push_byte` takes a byte value, not an index; it is checked with the same integer rule but has its own valid range (see the String method table).
+The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method arguments `Vec::get` and `Vec::truncate`, which take exactly `u64`.
 
-The type checker also accepts a 128-bit index, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `Vec` and `String` element helpers are i64-only, so such a program fails codegen instead. Use a 64-bit or narrower index until epic #526 lands 128-bit lowering.
-
-The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).
+The `Vec` runtime helpers take a pointer-width unsigned index, so a `u64` index is never reinterpreted as negative: an index at or beyond `v.len()` is out of bounds, including values above `i64::MAX`.
 
 Lengths are `u64` (see [the Vec method table](#vec-methods)), so an index derived from one needs no conversion:
 
@@ -1017,16 +1016,18 @@ while i < n vow { invariant: i <= n } {
 }
 ```
 
-Arithmetic and comparison do not mix signedness: `i64 + u64` and `u64 < i64` are `TypeMismatch`. Convert at the binding with `as`; same-width `as` casts between `i64` and `u64` are legal.
+Arithmetic and comparison do not mix signedness: `i64 + u64` and `u64 < i64` are `TypeMismatch`. Convert at the binding with `as`; same-width `as` casts between `i64` and `u64` are legal. A signed value that is already known to be a valid position is converted at the index site (`v[k as u64]`); a negative `k` becomes a huge `u64` and fails the bounds check.
 
 ### String offsets
 
-`String` offsets stay `i64` in v1. This is a documented scope decision, not an oversight: `String::len()` is `u64`, but the runtime helpers that take an offset or span (`byte_at`, `substr`, `substring`, `matches_literal_at`) still take `i64` and keep live negative-offset behaviour — `byte_at` returns `-1` for an out-of-range offset, `substr` and `substring` clamp their arguments, and `matches_literal_at` rejects a negative position. Migrating them to `u64` means deleting those guards, which changes runtime semantics for out-of-range callers.
+`String` offsets stay `i64` in v1, unlike `Vec` indices. This is a documented scope decision, not an oversight: `String::len()` is `u64`, but the runtime helpers that take an offset or span (`byte_at`, `substr`, `substring`, `matches_literal_at`) still take `i64` and keep live negative-offset behaviour — `byte_at` returns `-1` for an out-of-range offset, `substr` and `substring` clamp their arguments, and `matches_literal_at` rejects a negative position. Migrating them to `u64` means deleting those guards, which changes runtime semantics for out-of-range callers.
 
 What this means at a call site:
 
 - The `string_substr` and `string_matches_literal_at` builtins require `i64` offset arguments exactly (see the builtin signature table).
-- The `byte_at` and `substring` methods accept any integer type per the rule above, but the runtime sees an `i64`; a `u64` offset above `i64::MAX` is reinterpreted as negative, exactly as described for unsigned indices above. A length-derived `u64` offset is always in range, so `s.byte_at(i)` with `i < s.len()` is safe.
+- The `byte_at` and `substring` methods accept any integer type, not only `u64`; the argument is checked as an integer (a non-integer is a `TypeMismatch`) and unsuffixed literals are range-checked against `i64`. The runtime sees an `i64`, so a `u64` offset above `i64::MAX` is reinterpreted as negative and clamped rather than treated as a large offset — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. A length-derived `u64` offset is always in range, so `s.byte_at(i)` with `i < s.len()` is safe.
+- The checker accepts a 128-bit `String` offset, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `String` helpers are i64-only, so such a program fails codegen. Use a 64-bit or narrower offset until epic #526 lands 128-bit lowering. (A 128-bit `Vec` index is not a codegen question: it is a `TypeMismatch`.) The `u64`-above-`i64::MAX` hazard is tracked in issue #1131.
+- `push_byte` takes a byte *value*, not an offset, and stays `i64`-checked with its own `0..=255` range (see the String method table).
 - `byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64` regardless.
 
 Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.
