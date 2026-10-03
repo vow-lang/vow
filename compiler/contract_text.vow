@@ -9,9 +9,11 @@ use diag
 // byte-identical to what `vow_syntax::printer::print_expr` renders for the same
 // predicate, so every function here mirrors its counterpart in
 // vow-syntax/src/printer.rs, quirks included (a nested block restarts at indent
-// level 0). Every node a contract can reach is covered; forms the checker rejects
-// inside a contract (tuple expressions and patterns, see `contract_depth`) and
-// forms the parser cannot build (borrow, refinement types) have no arm here.
+// level 0). Every node a contract can reach is covered; forms the parser cannot
+// build (borrow, refinement types) and forms the checker rejects inside a
+// contract have no arm here. The checker rejects tuple expressions directly
+// (`contract_depth`); a tuple pattern is rejected indirectly, because it needs a
+// syntactic tuple-literal initializer.
 
 // Render an AST type node as source text, mirroring `print_type` in
 // vow-syntax/src/printer.rs. The parser has no refinement type (`{ x: T | p }`
@@ -24,17 +26,10 @@ fn print_type_text(a: AstArena, tid: i64) -> String {
     }
     if tag == TY_GENERIC() {
         let name: String = arena_str(a, type_a(a, tid));
-        let args_lid: i64 = type_b(a, tid);
-        let n: i64 = list_len(a, args_lid);
         let result: String = String::from("");
         result.push_str(name);
         result.push_str(String::from("<"));
-        let mut i: i64 = 0;
-        while i < n {
-            if i > 0 { result.push_str(String::from(", ")); }
-            result.push_str(print_type_text(a, list_get(a, args_lid, i)));
-            i = i + 1;
-        }
+        result.push_str(print_type_list_text(a, type_b(a, tid)));
         result.push_str(String::from(">"));
         return result;
     }
@@ -52,19 +47,48 @@ fn print_type_text(a: AstArena, tid: i64) -> String {
         return result;
     }
     if tag == TY_TUPLE() {
-        let elems_lid: i64 = type_a(a, tid);
-        let n: i64 = list_len(a, elems_lid);
         let result: String = String::from("(");
-        let mut i: i64 = 0;
-        while i < n {
-            if i > 0 { result.push_str(String::from(", ")); }
-            result.push_str(print_type_text(a, list_get(a, elems_lid, i)));
-            i = i + 1;
-        }
+        result.push_str(print_type_list_text(a, type_a(a, tid)));
         result.push_str(String::from(")"));
         return result;
     }
     String::from("")
+}
+
+fn print_type_list_text(a: AstArena, lid: i64) -> String {
+    let result: String = String::from("");
+    let n: i64 = list_len(a, lid);
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 0 { result.push_str(String::from(", ")); }
+        result.push_str(print_type_text(a, list_get(a, lid, i)));
+        i = i + 1;
+    }
+    result
+}
+
+fn print_expr_list_text(a: AstArena, lid: i64) -> String {
+    let result: String = String::from("");
+    let n: i64 = list_len(a, lid);
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 0 { result.push_str(String::from(", ")); }
+        result.push_str(print_expr_text(a, list_get(a, lid, i)));
+        i = i + 1;
+    }
+    result
+}
+
+fn print_pat_list_text(a: AstArena, lid: i64) -> String {
+    let result: String = String::from("");
+    let n: i64 = list_len(a, lid);
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 0 { result.push_str(String::from(", ")); }
+        result.push_str(print_pat_text(a, list_get(a, lid, i)));
+        i = i + 1;
+    }
+    result
 }
 
 // Escape a string literal for contract text, mirroring `print_lit`'s
@@ -203,8 +227,10 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         let inner_eid: i64 = expr_a(a, eid);
         let inner_s: String = print_expr_text(a, inner_eid);
         let result: String = String::from("");
-        // Mirror printer.rs: a non-atomic operand is parenthesized so the cast
-        // binds where the source said it did.
+        // A non-atomic operand is parenthesized so the cast binds where the
+        // source said it did. EXPR_RESULT is listed because the self-hosted
+        // parser makes `result` a distinct node, where the Rust parser sees
+        // Ident("result").
         let inner_tag: i64 = expr_tag(a, inner_eid);
         let atomic: bool = inner_tag == EXPR_LIT_INT() || inner_tag == EXPR_LIT_FLOAT()
             || inner_tag == EXPR_LIT_BOOL()
@@ -248,15 +274,9 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
     if tag == EXPR_ECTOR() {
         let result: String = print_path_text(a, expr_a(a, eid));
         let args_lid: i64 = expr_b(a, eid);
-        let nargs: i64 = list_len(a, args_lid);
-        if nargs == 0 { return result; }
+        if list_len(a, args_lid) == 0 { return result; }
         result.push_str(String::from("("));
-        let mut i: i64 = 0;
-        while i < nargs {
-            if i > 0 { result.push_str(String::from(", ")); }
-            result.push_str(print_expr_text(a, list_get(a, args_lid, i)));
-            i = i + 1;
-        }
+        result.push_str(print_expr_list_text(a, args_lid));
         result.push_str(String::from(")"));
         return result;
     }
@@ -286,37 +306,21 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
     }
     if tag == EXPR_METHOD() {
         let recv_s: String = print_expr_text(a, expr_a(a, eid));
-        let args_lid: i64 = expr_c(a, eid);
         let result: String = String::from("");
         result.push_str(recv_s);
         result.push_str(String::from("."));
         result.push_str(arena_str(a, expr_b(a, eid)));
         result.push_str(String::from("("));
-        let nargs: i64 = list_len(a, args_lid);
-        let mut i: i64 = 0;
-        while i < nargs {
-            if i > 0 { result.push_str(String::from(", ")); }
-            result.push_str(print_expr_text(a, list_get(a, args_lid, i)));
-            i = i + 1;
-        }
+        result.push_str(print_expr_list_text(a, expr_c(a, eid)));
         result.push_str(String::from(")"));
         return result;
     }
     if tag == EXPR_CALL() {
-        let callee_eid: i64 = expr_a(a, eid);
-        let args_lid: i64 = expr_b(a, eid);
-        let callee_s: String = print_expr_text(a, callee_eid);
+        let callee_s: String = print_expr_text(a, expr_a(a, eid));
         let result: String = String::from("");
         result.push_str(callee_s);
         result.push_str(String::from("("));
-        let nargs: i64 = list_len(a, args_lid);
-        let mut i: i64 = 0;
-        while i < nargs {
-            if i > 0 { result.push_str(String::from(", ")); }
-            let arg_eid: i64 = list_get(a, args_lid, i);
-            result.push_str(print_expr_text(a, arg_eid));
-            i = i + 1;
-        }
+        result.push_str(print_expr_list_text(a, expr_b(a, eid)));
         result.push_str(String::from(")"));
         return result;
     }
@@ -329,7 +333,7 @@ fn print_control_expr_text(a: AstArena, eid: i64, tag: i64) -> String {
         let result: String = String::from("if ");
         result.push_str(print_expr_text(a, expr_a(a, eid)));
         result.push_str(String::from(" "));
-        result.push_str(print_block_text(a, expr_b(a, eid), 0));
+        result.push_str(print_block_text(a, expr_b(a, eid)));
         let else_eid: i64 = expr_c(a, eid);
         if else_eid != -1 {
             result.push_str(String::from(" else "));
@@ -338,7 +342,7 @@ fn print_control_expr_text(a: AstArena, eid: i64, tag: i64) -> String {
         return result;
     }
     if tag == EXPR_BLOCK() {
-        return print_block_text(a, expr_a(a, eid), 0);
+        return print_block_text(a, expr_a(a, eid));
     }
     if tag == EXPR_MATCH() {
         let result: String = String::from("match ");
@@ -348,7 +352,7 @@ fn print_control_expr_text(a: AstArena, eid: i64, tag: i64) -> String {
         let narms: i64 = list_len(a, arms_lid) / 2;
         let mut i: i64 = 0;
         while i < narms {
-            result.push_str(indent_text(1));
+            result.push_str(String::from("    "));
             result.push_str(print_pat_text(a, list_get(a, arms_lid, i * 2)));
             result.push_str(String::from(" => "));
             result.push_str(print_expr_text(a, list_get(a, arms_lid, i * 2 + 1)));
@@ -362,13 +366,13 @@ fn print_control_expr_text(a: AstArena, eid: i64, tag: i64) -> String {
         let result: String = String::from("while ");
         result.push_str(print_expr_text(a, expr_a(a, eid)));
         result.push_str(print_loop_vow_text(a, expr_c(a, eid)));
-        result.push_str(print_block_text(a, expr_b(a, eid), 0));
+        result.push_str(print_block_text(a, expr_b(a, eid)));
         return result;
     }
     if tag == EXPR_LOOP() {
         let result: String = String::from("loop");
         result.push_str(print_loop_vow_text(a, expr_b(a, eid)));
-        result.push_str(print_block_text(a, expr_a(a, eid), 0));
+        result.push_str(print_block_text(a, expr_a(a, eid)));
         return result;
     }
     if tag == EXPR_FOR() {
@@ -378,7 +382,7 @@ fn print_control_expr_text(a: AstArena, eid: i64, tag: i64) -> String {
         result.push_str(String::from(" in "));
         result.push_str(print_expr_text(a, expr_a(a, eid)));
         result.push_str(print_loop_vow_text(a, list_get(a, info_lid, 1)));
-        result.push_str(print_block_text(a, expr_b(a, eid), 0));
+        result.push_str(print_block_text(a, expr_b(a, eid)));
         return result;
     }
     if tag == EXPR_BREAK() || tag == EXPR_RETURN() {
@@ -430,22 +434,10 @@ fn binop_str(op: i64) -> String {
     String::from("?")
 }
 
-
-// Four spaces per level, like `indent` in vow-syntax/src/printer.rs.
-fn indent_text(level: i64) -> String {
-    let result: String = String::from("");
-    let mut i: i64 = 0;
-    while i < level {
-        result.push_str(String::from("    "));
-        i = i + 1;
-    }
-    result
-}
-
 // Mirrors `print_pat`. Only the pattern forms the checker accepts reach a
 // contract: `_`, identifiers and qualified enum variants. A tuple pattern needs a
-// tuple initializer, which a contract rejects; literal and struct patterns are
-// rejected with UnsupportedPattern before lowering, and the parser has no
+// tuple-literal initializer, which a contract rejects; literal and struct patterns
+// are rejected with UnsupportedPattern before lowering, and the parser has no
 // or-pattern.
 fn print_pat_text(a: AstArena, pid: i64) -> String {
     let tag: i64 = pat_tag(a, pid);
@@ -459,15 +451,9 @@ fn print_pat_text(a: AstArena, pid: i64) -> String {
     if tag == PAT_ENUM() {
         let result: String = print_path_text(a, pat_a(a, pid));
         let inner_lid: i64 = pat_b(a, pid);
-        let n: i64 = list_len(a, inner_lid);
-        if n == 0 { return result; }
+        if list_len(a, inner_lid) == 0 { return result; }
         result.push_str(String::from("("));
-        let mut i: i64 = 0;
-        while i < n {
-            if i > 0 { result.push_str(String::from(", ")); }
-            result.push_str(print_pat_text(a, list_get(a, inner_lid, i)));
-            i = i + 1;
-        }
+        result.push_str(print_pat_list_text(a, inner_lid));
         result.push_str(String::from(")"));
         return result;
     }
@@ -484,7 +470,7 @@ fn print_loop_vow_text(a: AstArena, vow_lid: i64) -> String {
     while i < n {
         let cid: i64 = list_get(a, vow_lid, i);
         let kind: i64 = vow_clause_kind(a, cid);
-        result.push_str(indent_text(1));
+        result.push_str(String::from("    "));
         if kind == CLAUSE_REQUIRES() { result.push_str(String::from("requires")); }
         else if kind == CLAUSE_ENSURES() { result.push_str(String::from("ensures")); }
         else { result.push_str(String::from("invariant")); }
@@ -518,22 +504,22 @@ fn print_stmt_text(a: AstArena, sid: i64) -> String {
     result
 }
 
-// Mirrors `print_block`: nested blocks restart at indent level 0, exactly as the
-// Rust printer renders them, so the two outputs match byte for byte. The parser
+// Mirrors `print_block`: statements are indented four spaces and nested blocks
+// restart at column 0, exactly as the Rust printer renders them, so the two
+// outputs match byte for byte. The parser
 // stores a block's trailing expression as its last statement (no semicolon), so
 // `blk_trail` is never set and prints identically to Rust's `trailing_expr`.
-fn print_block_text(a: AstArena, bid: i64, level: i64) -> String {
+fn print_block_text(a: AstArena, bid: i64) -> String {
     let result: String = String::from("{\n");
     let stmts_lid: i64 = blk_stmts(a, bid);
     let n: i64 = list_len(a, stmts_lid);
     let mut i: i64 = 0;
     while i < n {
-        result.push_str(indent_text(level + 1));
+        result.push_str(String::from("    "));
         result.push_str(print_stmt_text(a, list_get(a, stmts_lid, i)));
         result.push_str(String::from("\n"));
         i = i + 1;
     }
-    result.push_str(indent_text(level));
     result.push_str(String::from("}"));
     result
 }
