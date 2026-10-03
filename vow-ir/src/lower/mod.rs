@@ -6496,6 +6496,7 @@ const D: i128 = -18446744073709551625;
 const E: i64 = -1;
 const F: u128 = 55340232221128654855;
 const G: i16 = -2;
+const H: bool = true;
 
 fn a() -> u64 { A }
 fn b() -> i8 { B }
@@ -6504,6 +6505,7 @@ fn d() -> i128 { D }
 fn e() -> i64 { E }
 fn f() -> u128 { F }
 fn g() -> i16 { G }
+fn h() -> bool { H }
 "#,
             "const_widths.vow",
         );
@@ -6520,6 +6522,7 @@ fn g() -> i16 { G }
             ("e", Ty::I64, InstData::ConstI64(-1)),
             ("f", Ty::U128, InstData::ConstU128((3_u128 << 64) | 7)),
             ("g", Ty::I16, InstData::ConstI32(-2)),
+            ("h", Ty::Bool, InstData::ConstBool(true)),
         ];
         for (name, ty, data) in expected {
             let func = module
