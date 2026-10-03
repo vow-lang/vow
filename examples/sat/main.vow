@@ -39,7 +39,7 @@ fn main() -> i32 [read, io] {
     let mut show_stats: i64 = 0;
 
     let mut i: u64 = 1;
-    while i < argv.len() as u64 {
+    while i < argv.len() {
         let arg: String = argv[i];
         if arg.eq(String::from("--help")) {
             print_str(usage());

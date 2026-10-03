@@ -28,7 +28,7 @@ fn max_of(a: i64, b: i64) -> i64 vow {
 fn bounded_sum(v: Vec<i64>) -> i64 {
   let mut i: u64 = 0;
   let mut total: i64 = 0;
-  let n: u64 = v.len() as u64;
+  let n: u64 = v.len();
   while i < n vow {
     invariant: i <= n
   } {

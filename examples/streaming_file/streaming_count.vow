@@ -22,7 +22,7 @@ fn main() -> i32 [read, io] {
     let mut line: String = fs_read_line(h);
     while line.len() > 0 {
         lines = lines + 1;
-        bytes = bytes + line.len() as u64;
+        bytes = bytes + line.len();
         line = fs_read_line(h);
     }
 

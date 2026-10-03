@@ -7709,7 +7709,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("fn main() -> i32 [io] {\n"));
     r.push_str(String::from("    let v: Vec<i64> = fill_vec(5);\n"));
-    r.push_str(String::from("    print_u64(v.len() as u64);\n"));
+    r.push_str(String::from("    print_u64(v.len());\n"));
     r.push_str(String::from("    0\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
@@ -7747,7 +7747,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("    vow { requires: data.len() > 0 }\n"));
     r.push_str(String::from("{\n"));
     r.push_str(String::from("    let mut i: u64 = 0;\n"));
-    r.push_str(String::from("    let n: u64 = data.len() as u64;\n"));
+    r.push_str(String::from("    let n: u64 = data.len();\n"));
     r.push_str(String::from("    let result: i64 = loop {\n"));
     r.push_str(String::from("        if i >= n {\n"));
     r.push_str(String::from("            break -1;\n"));
@@ -7807,7 +7807,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("module CmdLoop\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("fn trim_newline(s: String) -> String {\n"));
-    r.push_str(String::from("    let n: u64 = s.len() as u64;\n"));
+    r.push_str(String::from("    let n: u64 = s.len();\n"));
     r.push_str(String::from("    if n == 0 { return s; }\n"));
     r.push_str(String::from("    let last: i64 = s.byte_at(n - 1);\n"));
     r.push_str(String::from("    if last == 10 {\n"));
@@ -7824,7 +7824,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("fn skip_spaces(s: String, start: u64) -> u64 {\n"));
     r.push_str(String::from("    let mut i: u64 = start;\n"));
-    r.push_str(String::from("    let n: u64 = s.len() as u64;\n"));
+    r.push_str(String::from("    let n: u64 = s.len();\n"));
     r.push_str(String::from("    while i < n {\n"));
     r.push_str(String::from("        if s.byte_at(i) != 32 { return i; }\n"));
     r.push_str(String::from("        i = i + 1;\n"));
@@ -13016,7 +13016,7 @@ fn skill_support_content_examples_examples_md_d533c48e() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("fn main() -> i32 [io] {\n"));
     r.push_str(String::from("    let v: Vec<i64> = fill_vec(5);\n"));
-    r.push_str(String::from("    print_u64(v.len() as u64);\n"));
+    r.push_str(String::from("    print_u64(v.len());\n"));
     r.push_str(String::from("    0\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
@@ -13054,7 +13054,7 @@ fn skill_support_content_examples_examples_md_d533c48e() -> String {
     r.push_str(String::from("    vow { requires: data.len() > 0 }\n"));
     r.push_str(String::from("{\n"));
     r.push_str(String::from("    let mut i: u64 = 0;\n"));
-    r.push_str(String::from("    let n: u64 = data.len() as u64;\n"));
+    r.push_str(String::from("    let n: u64 = data.len();\n"));
     r.push_str(String::from("    let result: i64 = loop {\n"));
     r.push_str(String::from("        if i >= n {\n"));
     r.push_str(String::from("            break -1;\n"));
@@ -13114,7 +13114,7 @@ fn skill_support_content_examples_examples_md_d533c48e() -> String {
     r.push_str(String::from("module CmdLoop\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("fn trim_newline(s: String) -> String {\n"));
-    r.push_str(String::from("    let n: u64 = s.len() as u64;\n"));
+    r.push_str(String::from("    let n: u64 = s.len();\n"));
     r.push_str(String::from("    if n == 0 { return s; }\n"));
     r.push_str(String::from("    let last: i64 = s.byte_at(n - 1);\n"));
     r.push_str(String::from("    if last == 10 {\n"));
@@ -13131,7 +13131,7 @@ fn skill_support_content_examples_examples_md_d533c48e() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("fn skip_spaces(s: String, start: u64) -> u64 {\n"));
     r.push_str(String::from("    let mut i: u64 = start;\n"));
-    r.push_str(String::from("    let n: u64 = s.len() as u64;\n"));
+    r.push_str(String::from("    let n: u64 = s.len();\n"));
     r.push_str(String::from("    while i < n {\n"));
     r.push_str(String::from("        if s.byte_at(i) != 32 { return i; }\n"));
     r.push_str(String::from("        i = i + 1;\n"));

@@ -5567,7 +5567,7 @@ fn fill_vec(n: i64) -> Vec<i64> vow {
 
 fn main() -> i32 [io] {
     let v: Vec<i64> = fill_vec(5);
-    print_u64(v.len() as u64);
+    print_u64(v.len());
     0
 }
 ```
@@ -5605,7 +5605,7 @@ fn linear_search(data: Vec<i64>, target: i64) -> i64
     vow { requires: data.len() > 0 }
 {
     let mut i: u64 = 0;
-    let n: u64 = data.len() as u64;
+    let n: u64 = data.len();
     let result: i64 = loop {
         if i >= n {
             break -1;
@@ -5665,7 +5665,7 @@ Write a line-oriented command interpreter that reads from stdin, dispatches comm
 module CmdLoop
 
 fn trim_newline(s: String) -> String {
-    let n: u64 = s.len() as u64;
+    let n: u64 = s.len();
     if n == 0 { return s; }
     let last: i64 = s.byte_at(n - 1);
     if last == 10 {
@@ -5682,7 +5682,7 @@ fn trim_newline(s: String) -> String {
 
 fn skip_spaces(s: String, start: u64) -> u64 {
     let mut i: u64 = start;
-    let n: u64 = s.len() as u64;
+    let n: u64 = s.len();
     while i < n {
         if s.byte_at(i) != 32 { return i; }
         i = i + 1;
@@ -10846,7 +10846,7 @@ fn fill_vec(n: i64) -> Vec<i64> vow {
 
 fn main() -> i32 [io] {
     let v: Vec<i64> = fill_vec(5);
-    print_u64(v.len() as u64);
+    print_u64(v.len());
     0
 }
 ```
@@ -10884,7 +10884,7 @@ fn linear_search(data: Vec<i64>, target: i64) -> i64
     vow { requires: data.len() > 0 }
 {
     let mut i: u64 = 0;
-    let n: u64 = data.len() as u64;
+    let n: u64 = data.len();
     let result: i64 = loop {
         if i >= n {
             break -1;
@@ -10944,7 +10944,7 @@ Write a line-oriented command interpreter that reads from stdin, dispatches comm
 module CmdLoop
 
 fn trim_newline(s: String) -> String {
-    let n: u64 = s.len() as u64;
+    let n: u64 = s.len();
     if n == 0 { return s; }
     let last: i64 = s.byte_at(n - 1);
     if last == 10 {
@@ -10961,7 +10961,7 @@ fn trim_newline(s: String) -> String {
 
 fn skip_spaces(s: String, start: u64) -> u64 {
     let mut i: u64 = start;
-    let n: u64 = s.len() as u64;
+    let n: u64 = s.len();
     while i < n {
         if s.byte_at(i) != 32 { return i; }
         i = i + 1;
