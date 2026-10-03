@@ -1,5 +1,5 @@
 // TEST: error-code TypeMismatch
-// TEST: stderr "u64"
+// TEST: stderr "must be"
 module IndexWriteTypeString
 
 fn main() -> i32 {

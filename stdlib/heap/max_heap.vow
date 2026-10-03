@@ -74,7 +74,7 @@ fn max_sift_up(data: Vec<i64>, start: u64) vow {
 
 pub fn max_heap_push(h: MaxHeap, val: i64) -> MaxHeap vow {
     requires: h.size == h.data.len(),
-    requires: h.size < 9223372036854775807,
+    requires: h.size < 18446744073709551615,
     ensures: result.size == h.size + 1,
     ensures: result.size == result.data.len()
 } {
@@ -93,20 +93,20 @@ pub fn max_heap_peek(h: MaxHeap) -> i64 vow {
 }
 
 fn max_left_idx(i: u64) -> u64 vow {
-    requires: i <= 4611686018427387902,
+    requires: i <= 9223372036854775807,
     ensures: result > i
 } {
     2 * i + 1
 }
 
 fn max_right_idx(i: u64) -> u64 vow {
-    requires: i <= 4611686018427387902,
+    requires: i <= 9223372036854775806,
     ensures: result > i
 } {
     2 * i + 2
 }
 
-// The max_left_idx/max_right_idx overflow guard (i <= 2^62 - 2) is
+// The max_left_idx/max_right_idx overflow guards (i <= 2^63 - 1 and i <= 2^63 - 2) are
 // discharged in practice by n <= data.len(), which ESBMC bounds via the
 // internal Vec model capacity (128). The loop invariant only carries i < n; the
 // stronger formal chain is not stated because it would require a

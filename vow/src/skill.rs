@@ -5273,7 +5273,7 @@ lets ESBMC reason about in-bounds `data[i]` access without a universal quantifie
 ```vow
 pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {
     requires: h.size == h.data.len(),
-    requires: h.size < 9223372036854775807,
+    requires: h.size < 18446744073709551615,
     ensures: result.size == h.size + 1,
     ensures: result.size == result.data.len()
 }
@@ -10615,7 +10615,7 @@ lets ESBMC reason about in-bounds `data[i]` access without a universal quantifie
 ```vow
 pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {
     requires: h.size == h.data.len(),
-    requires: h.size < 9223372036854775807,
+    requires: h.size < 18446744073709551615,
     ensures: result.size == h.size + 1,
     ensures: result.size == result.data.len()
 }

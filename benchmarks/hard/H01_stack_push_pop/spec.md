@@ -17,7 +17,7 @@ fn stack_peek_safe(v: Vec<i64>, size: u64) -> i64
 
 ## Contracts
 
-- `stack_size_bounded`: no contract; `size` is a `u64`, so non-negativity is carried by the type
+- `stack_size_bounded`: `ensures: result == size` (`size` is a `u64`, so non-negativity is carried by the type)
 - `stack_is_empty`: `ensures: result >= 0, ensures: result <= 1` (the `0`/`1` flag is an `i64`)
 - `stack_peek_safe`: `requires: size > 0, requires: size <= v.len()`
 

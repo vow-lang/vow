@@ -7415,7 +7415,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {\n"));
     r.push_str(String::from("    requires: h.size == h.data.len(),\n"));
-    r.push_str(String::from("    requires: h.size < 9223372036854775807,\n"));
+    r.push_str(String::from("    requires: h.size < 18446744073709551615,\n"));
     r.push_str(String::from("    ensures: result.size == h.size + 1,\n"));
     r.push_str(String::from("    ensures: result.size == result.data.len()\n"));
     r.push_str(String::from("}\n"));
@@ -12784,7 +12784,7 @@ fn skill_support_content_reference_stdlib_md_347c6c47() -> String {
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {\n"));
     r.push_str(String::from("    requires: h.size == h.data.len(),\n"));
-    r.push_str(String::from("    requires: h.size < 9223372036854775807,\n"));
+    r.push_str(String::from("    requires: h.size < 18446744073709551615,\n"));
     r.push_str(String::from("    ensures: result.size == h.size + 1,\n"));
     r.push_str(String::from("    ensures: result.size == result.data.len()\n"));
     r.push_str(String::from("}\n"));

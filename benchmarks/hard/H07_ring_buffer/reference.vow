@@ -38,7 +38,9 @@ fn ring_write(rb: RingBuf, val: i64) -> RingBuf vow {
   RingBuf { data: d, write_pos: next_pos, count: rb.count + 1, capacity: rb.capacity }
 }
 
-fn ring_count(rb: RingBuf) -> u64 {
+fn ring_count(rb: RingBuf) -> u64 vow {
+  ensures: result == rb.count
+} {
   rb.count
 }
 

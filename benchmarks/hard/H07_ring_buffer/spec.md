@@ -17,7 +17,7 @@ fn ring_count(rb: RingBuf) -> u64
 
 - `ring_new`: `requires: capacity > 0`, `ensures: result.count == 0, ensures: result.capacity == capacity, ensures: result.data.len() == capacity`
 - `ring_write`: requires available capacity, a valid write position, and `rb.data.len() == rb.capacity` (count and position are `u64`, so non-negativity is carried by the type); ensures count increments and capacity/data length are preserved
-- `ring_count`: no contract; the `u64` return type already makes the count non-negative
+- `ring_count`: `ensures: result == rb.count` (the `u64` return type already makes the count non-negative)
 
 ## Constraints
 
