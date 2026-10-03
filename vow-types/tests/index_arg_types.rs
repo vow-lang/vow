@@ -104,6 +104,7 @@ fn an_index_write_is_rejected_through_the_same_site() {
 fn index_shaped_method_arguments_reject_non_integers() {
     for (call, expected_count) in [
         ("let c: i64 = s.byte_at(String::from(\"x\"));", 1),
+        ("s.push_byte(String::from(\"x\"));", 1),
         ("let d: String = s.substring(String::from(\"a\"), true);", 2),
         ("v.truncate(String::from(\"n\"));", 1),
     ] {
@@ -175,6 +176,9 @@ fn the_index_rule_stays_weak_across_widths_and_signedness() {
         \x20   let d: i64 = v[0];\n\
         \x20   let e: i64 = s.byte_at(u);\n\
         \x20   let f: i64 = s.byte_at(0);\n\
+        \x20   s.push_byte(u);\n\
+        \x20   s.push_byte(w);\n\
+        \x20   s.push_byte(300);\n\
         \x20   let g: String = s.substring(u, 3);\n\
         \x20   v[u] = 9;\n\
         \x20   0\n}\n";

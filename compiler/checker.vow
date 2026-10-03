@@ -2632,7 +2632,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                mname == String::from("contains") {
                 check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_STR());
             }
-            if mname == String::from("byte_at") || mname == String::from("push_byte") {
+            if mname == String::from("byte_at") {
+                check_method_argument_integer(e, a, args_lid, arg_tids, 0);
+            }
+            if mname == String::from("push_byte") {
                 check_method_argument_integer(e, a, args_lid, arg_tids, 0);
             }
             if mname == String::from("substring") {

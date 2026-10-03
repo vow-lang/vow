@@ -338,7 +338,8 @@ fn method_argument_expectations(receiver: &Ty, method: &str) -> Vec<ArgExpect> {
     match receiver {
         Ty::Str => match method {
             "push_str" | "eq" | "contains" => vec![ArgExpect::Exact(Ty::Str)],
-            "byte_at" | "push_byte" => vec![ArgExpect::AnyInteger],
+            "byte_at" => vec![ArgExpect::AnyInteger],
+            "push_byte" => vec![ArgExpect::AnyInteger],
             "substring" => vec![ArgExpect::AnyInteger, ArgExpect::AnyInteger],
             _ => vec![],
         },

@@ -1,0 +1,5 @@
+module I64PushByteWideLiteralOutOfRange
+
+fn append(s: String) {
+    s.push_byte(340282366920938463463374607431768211455);
+}
