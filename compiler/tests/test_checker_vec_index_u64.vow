@@ -1,0 +1,98 @@
+module TestCheckerVecIndexU64
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use checker
+use env
+
+fn checked_error_count(source: String) -> i64 [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("vec_index.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < parsed.items.len() {
+        item_files.push(String::from("vec_index.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("vec_index.vow"));
+    check_module(check_env, parsed, item_files);
+    dctx.error_count
+}
+
+fn body_errors(params: String, body: String) -> i64 [io] {
+    let src: String = String::from("module VecIndex\nfn probe(v: Vec<i64>");
+    src.push_str(params);
+    src.push_str(String::from(") -> i64 { "));
+    src.push_str(body);
+    src.push_str(String::from(" }"));
+    checked_error_count(src)
+}
+
+fn check_index_read() -> i32 [io] {
+    if body_errors(String::from(", i: u64"), String::from("v[i]")) != 0 { return 1; }
+    if body_errors(String::from(""), String::from("v[0]")) != 0 { return 2; }
+    if body_errors(String::from(", i: u64"), String::from("v[i + 1]")) != 0 { return 3; }
+    if body_errors(String::from(", i: i64"), String::from("v[i as u64]")) != 0 { return 4; }
+    if body_errors(String::from(", i: u32"), String::from("v[i as u64]")) != 0 { return 5; }
+    if body_errors(String::from(", i: i64"), String::from("v[i]")) != 1 { return 6; }
+    if body_errors(String::from(", i: u32"), String::from("v[i]")) != 1 { return 7; }
+    if body_errors(String::from(", i: u8"), String::from("v[i]")) != 1 { return 8; }
+    if body_errors(String::from(", i: i64"), String::from("v[i + 1]")) != 1 { return 9; }
+    if body_errors(String::from(""), String::from("v[true]")) != 1 { return 10; }
+    if body_errors(String::from(""), String::from("v[-1]")) != 1 { return 11; }
+    if body_errors(String::from(""), String::from("v[18446744073709551615]")) != 0 { return 12; }
+    if body_errors(String::from(""), String::from("v[18446744073709551616]")) != 1 { return 13; }
+    0
+}
+
+fn check_index_write() -> i32 [io] {
+    if body_errors(String::from(", i: u64"), String::from("v[i] = 1; 0")) != 0 { return 21; }
+    if body_errors(String::from(""), String::from("v[0] = 1; 0")) != 0 { return 22; }
+    if body_errors(String::from(", i: i64"), String::from("v[i] = 1; 0")) != 1 { return 23; }
+    if body_errors(String::from(", i: u32"), String::from("v[i] = 1; 0")) != 1 { return 24; }
+    if body_errors(String::from(", i: i64"), String::from("v[i as u64] = 1; 0")) != 0 { return 25; }
+    0
+}
+
+fn check_get_truncate() -> i32 [io] {
+    if body_errors(String::from(", i: u64"), String::from("v.get(i)")) != 0 { return 31; }
+    if body_errors(String::from(""), String::from("v.get(0)")) != 0 { return 32; }
+    if body_errors(String::from(", i: i64"), String::from("v.get(i)")) != 1 { return 33; }
+    if body_errors(String::from(", i: i64"), String::from("v.get(i as u64)")) != 0 { return 34; }
+    if body_errors(String::from(", i: u64"), String::from("v.truncate(i); 0")) != 0 { return 35; }
+    if body_errors(String::from(""), String::from("v.truncate(0); 0")) != 0 { return 36; }
+    if body_errors(String::from(", i: i64"), String::from("v.truncate(i); 0")) != 1 { return 37; }
+    if body_errors(String::from(", i: u32"), String::from("v.truncate(i); 0")) != 1 { return 38; }
+    if body_errors(String::from(""), String::from("v.truncate(-1); 0")) != 1 { return 39; }
+    if body_errors(String::from(""), String::from("v.truncate(18446744073709551616); 0")) != 1 { return 40; }
+    if body_errors(String::from(""), String::from("v.truncate(String::from(\"n\")); 0")) != 1 { return 41; }
+    0
+}
+
+fn check_string_offsets_unchanged() -> i32 [io] {
+    let byte_at: String = String::from(
+        "module VecIndex\nfn probe(s: String, i: i64) -> i64 { s.byte_at(i) }"
+    );
+    if checked_error_count(byte_at) != 0 { return 51; }
+    let substring: String = String::from(
+        "module VecIndex\nfn probe(s: String, i: i64) -> String { s.substring(i, 2) }"
+    );
+    if checked_error_count(substring) != 0 { return 52; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let read_result: i32 = check_index_read();
+    if read_result != 0 { return read_result; }
+    let write_result: i32 = check_index_write();
+    if write_result != 0 { return write_result; }
+    let get_result: i32 = check_get_truncate();
+    if get_result != 0 { return get_result; }
+    check_string_offsets_unchanged()
+}

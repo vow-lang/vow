@@ -1553,8 +1553,9 @@ fn check_method_argument_exact(
     }
 }
 
-// Integer-shaped builtin-method argument (an index or a byte value): any
-// integer width or signedness is accepted. Tightening this to a single type is a later migration phase.
+// Integer-shaped builtin-method argument (a String offset or a byte value): any
+// integer width or signedness is accepted. Vec indices and lengths are exact
+// `u64` and go through `check_method_argument_exact` instead.
 fn check_method_argument_integer(
     e: CheckEnv, a: AstArena, args_lid: i64, arg_tids: Vec<i64>, index: i64
 ) {
@@ -2708,7 +2709,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0));
                     }
                     if mname == String::from("get") || mname == String::from("truncate") {
-                        check_method_argument_integer(e, a, args_lid, arg_tids, 0);
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64());
                     }
                     if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("push") { return CTY_UNIT(); }
@@ -2874,11 +2875,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let idx_eid: i64 = expr_b(a, eid);
         let recv_tid: i64 = check_expr(e, m, recv_eid);
         let idx_tid: i64 = check_expr(e, m, idx_eid);
-        check_contextual_integer_literal_ranges(e, a, idx_eid, CTY_I64());
-        if !is_opaque(idx_tid) && !ty_is_integer_or_lit_int(e.ts, idx_tid) {
+        check_contextual_integer_literal_ranges(e, a, idx_eid, CTY_U64());
+        if !is_opaque(idx_tid) && !is_coercible(e.ts, idx_tid, CTY_U64()) {
             let imsg: String = String::from("index has type '");
             imsg.push_str(ty_tag_name(ty_tag(e.ts, idx_tid)));
-            imsg.push_str(String::from("' but must be an integer type"));
+            imsg.push_str(String::from("' but must be u64"));
             env_emit_error_code(e, EC_TYPE_MISMATCH(), imsg, expr_span(a, idx_eid));
         }
         if is_opaque(recv_tid) {

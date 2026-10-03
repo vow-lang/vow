@@ -1,9 +1,12 @@
 // TEST: error-code TypeMismatch
+// TEST: error-count 1
 // TEST: stderr "u64"
-module IndexTypeBool
+module IndexU32VarNotU64
 
 fn main() -> i32 {
     let v: Vec<i64> = Vec::new();
-    let a: i64 = v[true];
+    v.push(1);
+    let i: u32 = 0;
+    let a: i64 = v[i];
     0
 }
