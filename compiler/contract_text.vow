@@ -9,12 +9,14 @@ use diag
 // byte-identical to what `vow_syntax::printer::print_expr` renders for the same
 // predicate, so every function here mirrors its counterpart in
 // vow-syntax/src/printer.rs, quirks included (a nested block restarts at indent
-// level 0). Every AST node tag the parser can build is covered.
+// level 0). Every node a contract can reach is covered; forms the checker rejects
+// inside a contract (tuple expressions and patterns, see `contract_depth`) and
+// forms the parser cannot build (borrow, refinement types) have no arm here.
 
 // Render an AST type node as source text, mirroring `print_type` in
-// vow-syntax/src/printer.rs. The parser has no refinement type (`{ x: T || p }`
-// is a parse error here and a type error in the Rust checker), so every type
-// node a contract can reach is covered.
+// vow-syntax/src/printer.rs. The parser has no refinement type (`{ x: T | p }`
+// is a parse error in both compilers) and builds a tuple type only with two or
+// more elements, so every type node a contract can reach is covered.
 fn print_type_text(a: AstArena, tid: i64) -> String {
     let tag: i64 = type_tag(a, tid);
     if tag == TY_NAMED() {
@@ -52,7 +54,6 @@ fn print_type_text(a: AstArena, tid: i64) -> String {
     if tag == TY_TUPLE() {
         let elems_lid: i64 = type_a(a, tid);
         let n: i64 = list_len(a, elems_lid);
-        if n == 0 { return String::from("()"); }
         let result: String = String::from("(");
         let mut i: i64 = 0;
         while i < n {
@@ -223,19 +224,6 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
     }
     if tag == EXPR_LIT_STR() {
         return print_str_lit_text(arena_str(a, expr_a(a, eid)));
-    }
-    if tag == EXPR_TUPLE() {
-        let elems_lid: i64 = expr_a(a, eid);
-        let n: i64 = list_len(a, elems_lid);
-        let result: String = String::from("(");
-        let mut i: i64 = 0;
-        while i < n {
-            if i > 0 { result.push_str(String::from(", ")); }
-            result.push_str(print_expr_text(a, list_get(a, elems_lid, i)));
-            i = i + 1;
-        }
-        result.push_str(String::from(")"));
-        return result;
     }
     if tag == EXPR_SLIT() {
         let result: String = print_path_text(a, expr_a(a, eid));
@@ -455,9 +443,10 @@ fn indent_text(level: i64) -> String {
 }
 
 // Mirrors `print_pat`. Only the pattern forms the checker accepts reach a
-// contract: `_`, identifiers, qualified enum variants, and the tuple pattern of
-// a destructuring `let`. Literal and struct patterns are rejected with
-// UnsupportedPattern before lowering, and the parser has no or-pattern.
+// contract: `_`, identifiers and qualified enum variants. A tuple pattern needs a
+// tuple initializer, which a contract rejects; literal and struct patterns are
+// rejected with UnsupportedPattern before lowering, and the parser has no
+// or-pattern.
 fn print_pat_text(a: AstArena, pid: i64) -> String {
     let tag: i64 = pat_tag(a, pid);
     if tag == PAT_WILD() { return String::from("_"); }
@@ -482,17 +471,7 @@ fn print_pat_text(a: AstArena, pid: i64) -> String {
         result.push_str(String::from(")"));
         return result;
     }
-    let result: String = String::from("(");
-    let elems_lid: i64 = pat_a(a, pid);
-    let n: i64 = list_len(a, elems_lid);
-    let mut i: i64 = 0;
-    while i < n {
-        if i > 0 { result.push_str(String::from(", ")); }
-        result.push_str(print_pat_text(a, list_get(a, elems_lid, i)));
-        i = i + 1;
-    }
-    result.push_str(String::from(")"));
-    result
+    String::from("")
 }
 
 // The ` vow { ... } ` clause list a loop carries, or a single space when it has
