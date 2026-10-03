@@ -7,17 +7,17 @@ Implement a circular buffer with modular arithmetic for write position tracking.
 ## Signatures
 
 ```vow
-struct RingBuf { data: Vec<i64>, write_pos: i64, count: i64, capacity: i64 }
-fn ring_new(capacity: i64) -> RingBuf
+struct RingBuf { data: Vec<i64>, write_pos: u64, count: u64, capacity: u64 }
+fn ring_new(capacity: u64) -> RingBuf
 fn ring_write(rb: RingBuf, val: i64) -> RingBuf
-fn ring_count(rb: RingBuf) -> i64
+fn ring_count(rb: RingBuf) -> u64
 ```
 
 ## Contracts
 
-- `ring_new`: `requires: capacity > 0`, `ensures: result.count == 0, ensures: result.capacity == capacity, ensures: result.data.len() as i64 == capacity`
-- `ring_write`: requires a non-negative count, available capacity, a valid write position, and `rb.data.len() as i64 == rb.capacity`; ensures count increments and capacity/data length are preserved
-- `ring_count`: `requires: rb.count >= 0`, `ensures: result >= 0`
+- `ring_new`: `requires: capacity > 0`, `ensures: result.count == 0, ensures: result.capacity == capacity, ensures: result.data.len() == capacity`
+- `ring_write`: requires available capacity, a valid write position, and `rb.data.len() == rb.capacity` (count and position are `u64`, so non-negativity is carried by the type); ensures count increments and capacity/data length are preserved
+- `ring_count`: `ensures: result == rb.count` (the `u64` return type already makes the count non-negative)
 
 ## Constraints
 

@@ -23,7 +23,7 @@ Public API (selected):
 - Compare: `bignum_cmp`, `bignum_cmp_abs`, `bignum_eq`, `bignum_lt`, `bignum_gt`, `bignum_le`, `bignum_ge`
 - Arithmetic: `bignum_negate`, `bignum_abs`, `bignum_add`, `bignum_sub`, `bignum_monus`, `bignum_mul`, `bignum_div`, `bignum_mod`, `bignum_divmod`
 - Bitwise (on magnitude): `bignum_and`, `bignum_or`, `bignum_xor`, `bignum_shl`, `bignum_shr`
-- Higher-level: `bignum_pow(base, exp: i64)`, `bignum_gcd`, `bignum_factorial(n: i64)`
+- Higher-level: `bignum_pow(base, exp: u64)`, `bignum_gcd`, `bignum_factorial(n: u64)`
 
 Full details: [docs/spec/stdlib.md#bignum](../../docs/spec/stdlib.md#bignum).
 
@@ -45,10 +45,10 @@ build/vowc build --no-verify stdlib/bignum/main.vow -o /tmp/bignum_demo && /tmp/
 - `bignum_monus` is truncated (Nat) subtraction — `max(a − b, 0)`, saturating at 0.
 - Bitwise `and`/`or`/`xor` operate on the **magnitude** (Nat semantics) and return a
   non-negative result; the sign is ignored.
-- `bignum_shl` / `bignum_shr` shift the magnitude (`requires: n >= 0`) and preserve the
+- `bignum_shl` / `bignum_shr` shift the magnitude (`n` is a `u64` bit count) and preserve the
   sign — i.e. multiply / floor-divide by 2ⁿ. For non-negative operands this is a
   logical bit shift.
-- `bignum_pow` / `bignum_factorial` take a native `i64` exponent/argument, not a BigNum.
+- `bignum_pow` / `bignum_factorial` take a native `u64` exponent/argument, not a BigNum.
 - `bignum_gcd` works on absolute values; the result is non-negative.
 - Multiplication is O(n·m) schoolbook (no Karatsuba).
 - The limb algorithms are internal `bigmag_*` functions over the `BigMag` magnitude
@@ -60,6 +60,7 @@ build/vowc build --no-verify stdlib/bignum/main.vow -o /tmp/bignum_demo && /tmp/
 
 `vow verify stdlib/bignum/main.vow` reports `Skipped`: limb arithmetic allocates
 `Vec`s per call (`RegionAlloc`), which the verifier cannot model. The present
-contracts (`requires` on division-by-zero, `exp >= 0`, `n >= 0`, shift `n >= 0`, etc.)
+contracts (`requires` on division-by-zero, `bigmag_cmp_abs(a, b) >= 0`, etc.; the
+`exp`, `n` and shift-count parameters are `u64`)
 are enforced at runtime in `--mode debug`. See
 [docs/spec/stdlib.md#verification-status](../../docs/spec/stdlib.md#verification-status).

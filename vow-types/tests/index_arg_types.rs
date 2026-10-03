@@ -59,7 +59,7 @@ fn program(body: &str) -> String {
 }
 
 #[test]
-fn a_non_integer_index_is_rejected() {
+fn a_non_u64_non_integer_index_is_rejected() {
     for (label, index_expr) in [
         ("string", "String::from(\"x\")"),
         ("bool", "true"),
@@ -79,7 +79,7 @@ fn a_non_integer_index_is_rejected() {
             diags.iter().map(|d| &d.message).collect::<Vec<_>>()
         );
         assert!(
-            diags[0].message.contains("must be an integer type"),
+            diags[0].message.contains("must be `u64`"),
             "unexpected message for {label} index: {}",
             diags[0].message
         );
@@ -97,16 +97,15 @@ fn an_index_write_is_rejected_through_the_same_site() {
         "an index write with a non-integer index must be rejected once, got {:?}",
         diags.iter().map(|d| &d.message).collect::<Vec<_>>()
     );
-    assert!(diags[0].message.contains("must be an integer type"));
+    assert!(diags[0].message.contains("must be `u64`"));
 }
 
 #[test]
-fn index_shaped_method_arguments_reject_non_integers() {
+fn string_offset_method_arguments_reject_non_integers() {
     for (call, expected_count) in [
         ("let c: i64 = s.byte_at(String::from(\"x\"));", 1),
         ("s.push_byte(String::from(\"x\"));", 1),
         ("let d: String = s.substring(String::from(\"a\"), true);", 2),
-        ("v.truncate(String::from(\"n\"));", 1),
     ] {
         let diags = type_mismatches(&program(&format!("    {call}")));
         assert_eq!(
@@ -123,6 +122,45 @@ fn index_shaped_method_arguments_reject_non_integers() {
             );
         }
     }
+}
+
+#[test]
+fn vec_get_and_truncate_reject_everything_but_u64() {
+    for call in [
+        "let a: Option<i64> = v.get(i);",
+        "v.truncate(i);",
+        "let a: Option<i64> = v.get(w);",
+        "v.truncate(w);",
+        "let a: Option<i64> = v.get(b);",
+        "v.truncate(String::from(\"n\"));",
+        "v.truncate(true);",
+    ] {
+        let prelude = "    let i: i64 = 0;\n    let w: u32 = 1;\n    let b: u8 = 2;\n";
+        let diags = type_mismatches(&program(&format!("{prelude}    {call}")));
+        assert_eq!(
+            diags.len(),
+            1,
+            "`{call}` should yield exactly one TypeMismatch, got {:?}",
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+        assert!(
+            diags[0].message.contains("expects `u64`"),
+            "unexpected message for `{call}`: {}",
+            diags[0].message
+        );
+    }
+}
+
+#[test]
+fn vec_get_and_truncate_accept_u64_and_literals() {
+    let diags = typecheck_source(&program(
+        "    let u: u64 = 1;\n    let a: Option<i64> = v.get(u);\n    let b: Option<i64> = v.get(0);\n    v.truncate(u);\n    v.truncate(1 + 2);",
+    ));
+    assert!(
+        diags.is_empty(),
+        "u64 and literal arguments must be accepted, got {:?}",
+        diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -160,31 +198,90 @@ fn map_key_and_value_arguments_are_checked() {
 }
 
 #[test]
-fn the_index_rule_stays_weak_across_widths_and_signedness() {
-    // The #1104 migration needs `i64` and `u64` indices to coexist, so no
-    // width or signedness is enforced. A regression that tightened this would
-    // break the migration silently, so it is pinned here.
+fn the_index_rule_is_exactly_u64() {
     let src = "module Test\n\nfn main() -> i32 {\n\
         \x20   let v: Vec<i64> = Vec::new();\n\
         \x20   let s: String = String::from(\"hello\");\n\
-        \x20   let i: i64 = 0;\n\
         \x20   let u: u64 = 1;\n\
-        \x20   let w: u32 = 2;\n\
-        \x20   let a: i64 = v[i];\n\
-        \x20   let b: i64 = v[u];\n\
-        \x20   let c: i64 = v[w];\n\
-        \x20   let d: i64 = v[0];\n\
-        \x20   let e: i64 = s.byte_at(u);\n\
-        \x20   let f: i64 = s.byte_at(0);\n\
-        \x20   s.push_byte(u);\n\
-        \x20   s.push_byte(w);\n\
-        \x20   let g: String = s.substring(u, 3);\n\
+        \x20   let a: i64 = v[u];\n\
+        \x20   let b: i64 = v[0];\n\
+        \x20   let c: i64 = v[1 + 2];\n\
+        \x20   let d: i64 = v[u + 1];\n\
+        \x20   let e: i64 = v[(u as i64) as u64];\n\
         \x20   v[u] = 9;\n\
+        \x20   v[0] = 9;\n\
         \x20   0\n}\n";
     let diags = typecheck_source(src);
     assert!(
         diags.is_empty(),
-        "every integer width and signedness must be accepted as an index, got {:?}",
+        "u64 values and unsuffixed literals must be accepted as an index, got {:?}",
+        diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_non_u64_integer_index_is_a_type_mismatch() {
+    for ty in ["i64", "i32", "i16", "i8", "u32", "u16", "u8"] {
+        let prelude = format!("    let i: {ty} = 1;\n");
+        for use_site in ["let a: i64 = v[i];", "v[i] = 3;"] {
+            let diags = type_mismatches(&program(&format!("{prelude}    {use_site}")));
+            assert_eq!(
+                diags.len(),
+                1,
+                "`{use_site}` with i: {ty} must produce exactly one TypeMismatch, got {:?}",
+                diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+            );
+            let message = &diags[0].message;
+            assert!(
+                message.contains(&format!("index has type `{ty}` but must be `u64`")),
+                "unexpected message for {ty}: {message}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_str_typed_index_is_a_type_mismatch_naming_u64() {
+    let diags = type_mismatches(&program("    let a: i64 = v[s];"));
+    assert_eq!(diags.len(), 1);
+    assert!(
+        diags[0]
+            .message
+            .contains("index has type `str` but must be `u64`")
+    );
+}
+
+#[test]
+fn an_index_literal_that_does_not_fit_u64_is_out_of_range() {
+    let diags = typecheck_source(&program("    let a: i64 = v[18446744073709551616];"));
+    let out_of_range: Vec<_> = diags
+        .iter()
+        .filter(|d| d.code == ErrorCode::LiteralOutOfRange)
+        .collect();
+    assert_eq!(out_of_range.len(), 1, "got {diags:?}");
+    assert!(out_of_range[0].message.contains("does not fit in u64"));
+}
+
+#[test]
+fn string_offset_arguments_stay_any_integer() {
+    let src = "module Test\n\nfn main() -> i32 {\n\
+        \x20   let s: String = String::from(\"hello\");\n\
+        \x20   let i: i64 = 0;\n\
+        \x20   let u: u64 = 1;\n\
+        \x20   let w: u32 = 2;\n\
+        \x20   let e: i64 = s.byte_at(u);\n\
+        \x20   let e2: i64 = s.byte_at(i);\n\
+        \x20   let f: i64 = s.byte_at(0);\n\
+        \x20   s.push_byte(u);\n\
+        \x20   s.push_byte(w);\n\
+        \x20   s.push_byte(i);\n\
+        \x20   let g: String = s.substring(u, 3);\n\
+        \x20   let h: String = s.substring(i, w);\n\
+        \x20   0\n}\n";
+    let diags = typecheck_source(src);
+    assert!(
+        diags.is_empty(),
+        "String offsets and byte values stay any-integer, got {:?}",
         diags.iter().map(|d| &d.message).collect::<Vec<_>>()
     );
 }

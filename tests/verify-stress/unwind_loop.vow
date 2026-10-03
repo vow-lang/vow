@@ -10,7 +10,7 @@
 // instead of tests/verify/ or tests/verify-fail/.
 //
 // `ensures: result == n` is the TRUE, TIGHT postcondition (`count_up` returns
-// exactly `n` for every `n >= 0`, with no overflow), so the contract obeys the
+// exactly `n` for every `n`, with no overflow), so the contract obeys the
 // contract-authoring rule in CLAUDE.md — it is not a known-false/weak vow. It
 // is nonetheless hard to verify: ESBMC needs a loop invariant (`i <= n`) to
 // discharge it, and without one it exhausts its unwind budget. The large trip
@@ -18,15 +18,14 @@
 // bound.
 module UnwindLoop
 
-fn count_up(n: i64) -> i64 vow {
-  requires: n >= 0,
+fn count_up(n: u64) -> u64 vow {
   ensures: result == n
 } {
-  let mut i: i64 = 0;
+  let mut i: u64 = 0;
   while i < n {
     i = i + 1;
   }
   i
 }
 
-fn main() -> i32 [io] { print_i64(count_up(100000)); 0 }
+fn main() -> i32 [io] { print_u64(count_up(100000)); 0 }

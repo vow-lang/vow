@@ -5,13 +5,12 @@
 // unwind limits are not contract bounds).
 module StrongInvariant
 
-fn fill_and_sum() -> i64 vow {
-  ensures: result >= 0
+fn fill_and_sum() -> u64 vow {
+  ensures: result == 36
 } {
-  let mut sum: i64 = 0;
-  let mut i: i64 = 0;
+  let mut sum: u64 = 0;
+  let mut i: u64 = 0;
   while i < 8 vow {
-    invariant: i >= 0,
     invariant: i <= 8,
     invariant: sum == i * (i + 1) / 2
   } {
@@ -22,6 +21,6 @@ fn fill_and_sum() -> i64 vow {
 }
 
 fn main() -> i32 [io] {
-  print_i64(fill_and_sum());
+  print_u64(fill_and_sum());
   0
 }

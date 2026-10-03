@@ -1,7 +1,6 @@
 module FibonacciBounded
 
-fn fib(n: i64) -> i64 vow {
-  requires: n >= 0,
+fn fib(n: u64) -> i64 vow {
   requires: n <= 92,
   ensures: result >= 0
 } {

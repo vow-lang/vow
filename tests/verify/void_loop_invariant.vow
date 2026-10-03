@@ -11,9 +11,8 @@
 module VoidLoopInvariant
 
 fn count_up() {
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < 8 vow {
-        invariant: i >= 0,
         invariant: i <= 8
     } {
         i = i + 1;

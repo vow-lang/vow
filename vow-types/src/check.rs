@@ -300,10 +300,9 @@ fn default_literal_integer_types(ty: &Ty) -> Ty {
 
 /// What a builtin method demands of one argument position.
 ///
-/// Index-shaped positions accept any integer type: during the unsigned-size
-/// migration `i64` and `u64` indices legitimately coexist, so width and
-/// signedness are deliberately unconstrained. `Exact` is the seam that a later
-/// phase tightens to `Ty::U64`.
+/// `Vec` index and length positions (`get`, `truncate`) are `Exact(Ty::U64)`.
+/// `String` offsets (`byte_at`, `substring`) and the `push_byte` value stay
+/// `AnyInteger` because string offsets remain `i64` at the runtime ABI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ArgExpect {
     Exact(Ty),
@@ -351,7 +350,7 @@ fn method_argument_expectations(receiver: &Ty, method: &str) -> Vec<ArgExpect> {
                     .map(ArgExpect::Exact)
                     .into_iter()
                     .collect(),
-                "get" | "truncate" => vec![ArgExpect::AnyInteger],
+                "get" | "truncate" => vec![ArgExpect::Exact(Ty::U64)],
                 _ => vec![],
             },
             Ty::Struct(name) if name == "HashMap" || name == "BTreeMap" => match method {
@@ -2597,13 +2596,18 @@ impl<'e> Checker<'e> {
             ExprKind::Index { base, index } => {
                 let base_ty = self.check_expr(base);
                 let index_ty = self.check_expr(index);
-                self.check_contextual_integer_literal_ranges(index, &Ty::I64);
-                if index_ty != Ty::Never && !is_integer_or_lit_int(&index_ty) {
+                self.check_contextual_integer_literal_ranges(index, &Ty::U64);
+                if !can_assignment_coerce(&index_ty, &Ty::U64) {
+                    let hint = if index_ty.is_integer() {
+                        "convert with `as u64`; `.len()` already returns `u64`".to_string()
+                    } else {
+                        "an index is a `u64` value or an unsuffixed integer literal".to_string()
+                    };
                     self.emit_error_with_hints(
                         ErrorCode::TypeMismatch,
-                        format!("index has type `{index_ty}` but must be an integer type"),
+                        format!("index has type `{index_ty}` but must be `u64`"),
                         index.span,
-                        vec!["any integer width or signedness is accepted as an index".to_string()],
+                        vec![hint],
                     );
                 }
                 match &base_ty {
@@ -7456,13 +7460,11 @@ mod tests {
     }
 
     #[test]
-    fn index_shaped_method_arguments_accept_any_integer_width_or_signedness() {
+    fn string_offset_and_byte_arguments_accept_any_integer_width_or_signedness() {
         for (receiver, method) in [
             (Ty::Str, "byte_at"),
             (Ty::Str, "push_byte"),
             (Ty::Str, "substring"),
-            (vec_of(Ty::I64), "get"),
-            (vec_of(Ty::I64), "truncate"),
         ] {
             let expects = method_argument_expectations(&receiver, method);
             assert!(!expects.is_empty(), "{method} must constrain its index");
@@ -7481,6 +7483,29 @@ mod tests {
                     !expects[0].accepts(&ty),
                     "{method} must reject `{ty}` as an index"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn vec_get_and_truncate_arguments_require_exactly_u64() {
+        for method in ["get", "truncate"] {
+            let expects = method_argument_expectations(&vec_of(Ty::I64), method);
+            assert_eq!(expects, vec![ArgExpect::Exact(Ty::U64)], "{method}");
+            for ty in [Ty::U64, Ty::LitInt, Ty::Never] {
+                assert!(expects[0].accepts(&ty), "{method} must accept `{ty}`");
+            }
+            for ty in [
+                Ty::I64,
+                Ty::I32,
+                Ty::I8,
+                Ty::U32,
+                Ty::U8,
+                Ty::Str,
+                Ty::Bool,
+                Ty::Unit,
+            ] {
+                assert!(!expects[0].accepts(&ty), "{method} must reject `{ty}`");
             }
         }
     }
@@ -7512,6 +7537,7 @@ mod tests {
         // `Never` on either side means an earlier diagnostic already fired;
         // a second one here would be noise.
         assert!(ArgExpect::AnyInteger.accepts(&Ty::Never));
+        assert!(ArgExpect::Exact(Ty::U64).accepts(&Ty::Never));
         assert!(ArgExpect::Exact(Ty::Str).accepts(&Ty::Never));
         assert!(ArgExpect::Exact(Ty::Never).accepts(&Ty::Str));
     }

@@ -7,14 +7,13 @@ Implement a simple tokenizer that counts delimited segments in a Vec of integers
 ## Signatures
 
 ```vow
-fn count_tokens(v: Vec<i64>) -> i64
+fn count_tokens(v: Vec<i64>) -> u64
 ```
 
 ## Contracts
 
-- `ensures: result >= 0` — token count is non-negative
-- `ensures: result <= v.len() as i64` — at most as many tokens as elements
-- `count` and `i` are `u64` locals, so they need no `>= 0` invariants; convert with `count as i64`
+- `ensures: result <= v.len()` — at most as many tokens as elements; the `u64` return type already makes the count non-negative
+- `count` and `i` are `u64` locals, so they need no `>= 0` invariants
 - Loop `invariant: count <= i`
 - Loop `invariant: i <= v.len()`
 

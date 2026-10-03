@@ -45,7 +45,7 @@ fn main() -> i32 [io] {
     print_str(String::from(" "));
     print_i64(largest_divisor(12));
     print_str(String::from(" "));
-    print_i64(count_divisors(12));
+    print_u64(count_divisors(12));
     print_str(String::from(" "));
     print_i64(power_mod(2, 10, 1000));
     print_str(String::from("\n"));
@@ -65,7 +65,7 @@ fn main() -> i32 [io] {
     print_str(String::from(" "));
     print_i64(vec_mean(v));
     print_str(String::from(" "));
-    print_i64(vec_count(v, 3));
+    print_u64(vec_count(v, 3));
     print_str(String::from("\n"));
 
     let a: Vec<i64> = Vec::new();

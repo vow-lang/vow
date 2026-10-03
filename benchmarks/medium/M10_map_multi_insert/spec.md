@@ -7,15 +7,15 @@ Implement a function `map_fill` that inserts `n` distinct key-value pairs into a
 ## Signature
 
 ```vow
-fn map_fill(n: i64) -> HashMap<i64, i64>
+fn map_fill(n: u64) -> HashMap<i64, i64>
 ```
 
 ## Contracts
 
-- `requires: n >= 0` — count is non-negative
-- `ensures: result.len() as i64 == n` — map has exactly `n` entries
-- The loop counter `i` is a `u64` local, so it needs no `invariant: i >= 0`; convert with `n as u64` and `i as i64`
-- Loop `invariant: i <= n as u64`
+- `n` is a `u64` count, so the type already says it is non-negative; no `requires: n >= 0` is needed
+- `ensures: result.len() == n` — map has exactly `n` entries
+- The loop counter `i` is a `u64` local, so it needs no `invariant: i >= 0`; convert with `i as i64` for the key
+- Loop `invariant: i <= n`
 
 ## Constraints
 

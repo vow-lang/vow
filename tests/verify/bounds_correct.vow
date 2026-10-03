@@ -8,12 +8,11 @@ fn last_element() -> i64 vow {
   ensures: result == 8
 } {
   let v: Vec<i64> = Vec::new();
-  let mut i: i64 = 0;
+  let mut i: u64 = 0;
   while i < 8 vow {
-    invariant: i >= 0,
     invariant: i <= 8
   } {
-    v.push(i + 1);
+    v.push((i + 1) as i64);
     i = i + 1;
   }
   v[7]

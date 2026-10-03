@@ -2,7 +2,7 @@ module StackPushPop
 
 struct Stack {
   data: Vec<i64>,
-  size: i64,
+  size: u64,
 }
 
 fn stack_new() -> Stack {
@@ -16,14 +16,13 @@ fn stack_push(s: Stack, val: i64) -> Stack {
   Stack { data: d, size: s.size + 1 }
 }
 
-fn stack_size_bounded(size: i64) -> i64 vow {
-  requires: size >= 0,
-  ensures: result >= 0
+fn stack_size_bounded(size: u64) -> u64 vow {
+  ensures: result == size
 } {
   size
 }
 
-fn stack_is_empty(size: i64) -> i64 vow {
+fn stack_is_empty(size: u64) -> i64 vow {
   ensures: result >= 0,
   ensures: result <= 1
 } {
@@ -34,18 +33,18 @@ fn stack_is_empty(size: i64) -> i64 vow {
   }
 }
 
-fn stack_peek_safe(v: Vec<i64>, size: i64) -> i64 vow {
+fn stack_peek_safe(v: Vec<i64>, size: u64) -> i64 vow {
   requires: size > 0,
-  requires: size <= v.len() as i64
+  requires: size <= v.len()
 } {
-  v[(size - 1) as u64]
+  v[size - 1]
 }
 
 fn main() -> i32 [io] {
   let s0: Stack = stack_new();
   let s1: Stack = stack_push(s0, 10);
   let s2: Stack = stack_push(s1, 20);
-  print_i64(stack_size_bounded(2));
+  print_u64(stack_size_bounded(2));
   print_i64(stack_is_empty(0));
   0
 }

@@ -1,8 +1,7 @@
 module Tokenizer
 
-fn count_tokens(v: Vec<i64>) -> i64 vow {
-  ensures: result >= 0,
-  ensures: result <= v.len() as i64
+fn count_tokens(v: Vec<i64>) -> u64 vow {
+  ensures: result <= v.len()
 } {
   let mut count: u64 = 0;
   let mut in_token: i64 = 0;
@@ -25,7 +24,7 @@ fn count_tokens(v: Vec<i64>) -> i64 vow {
     }
     i = i + 1;
   }
-  count as i64
+  count
 }
 
 fn main() -> i32 [io] {
@@ -37,6 +36,6 @@ fn main() -> i32 [io] {
   v.push(0);
   v.push(4);
   v.push(5);
-  print_i64(count_tokens(v));
+  print_u64(count_tokens(v));
   0
 }

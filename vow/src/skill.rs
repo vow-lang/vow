@@ -1502,11 +1502,12 @@ types preserves binary fixed-point reproducibility across compilation hosts;
 see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). The signedness of a
 length is independent of this determinism rationale, so
 [ADR 0003](../adr/0003-unsigned-size-types.md) makes lengths fixed-width `u64`:
-`.len()` on `Vec`, `String`, `HashMap`, and `BTreeMap` returns `u64`. An index
-expression accepts any integer type (see [Indexing](#indexing)), so `v[i]` with
-`i: u64` needs no cast. `String` offsets (`byte_at`, `substr`,
-`substring`, `matches_literal_at`) stay `i64` as a documented v1 scope
-decision; see [String offsets](#string-offsets).
+`.len()` on `Vec`, `String`, `HashMap`, and `BTreeMap` returns `u64`. A `Vec`
+index expression has exactly the type `u64` (see [Indexing](#indexing)), so
+`v[i]` with `i: u64` needs no cast, and `v[i]` with `i: i64` is a
+`TypeMismatch`. `String` offsets (`byte_at`, `substr`, `substring`,
+`matches_literal_at`) stay `i64` as a documented v1 scope decision; see
+[String offsets](#string-offsets).
 
 **128-bit implementation status:** `i128`/`u128` types and full-range literal
 representation are available to the frontend and IR. Native code generation,
@@ -2082,7 +2083,7 @@ for x in vec vow {
 ```vow
 let idx: i64 = loop {
     if data[i] == target {
-        break i;
+        break i as i64;
     }
     i = i + 1;
     if i >= n { break -1; }
@@ -2281,11 +2282,11 @@ m.contains_key(k)
 | `.pop()`       | `() -> ()`                       |
 | `.len()`       | `() -> u64`                      |
 | `.clear()`     | `() -> ()` — frees buffer, resets to empty |
-| `.truncate(n)` | `(<int>) -> ()` — shrinks to n elements, frees excess memory |
-| `v[i]`         | Index read — copies slot value; aliases heap types (panics if out of bounds) |
-| `v[i] = val`   | Index write — copies value into slot |
+| `.truncate(n)` | `(u64) -> ()` — shrinks to n elements, frees excess memory |
+| `v[i]`         | Index read, `i: u64` — copies slot value; aliases heap types (panics if out of bounds) |
+| `v[i] = val`   | Index write, `i: u64` — copies value into slot |
 
-`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
+`Vec` indices and `.truncate(n)` take exactly `u64`; an unsuffixed integer literal coerces, and any other integer type needs an explicit `as u64`. See [Indexing](#indexing).
 
 ### String Methods
 
@@ -2305,7 +2306,7 @@ m.contains_key(k)
 | `.parse_i64()`      | `() -> Option<i64>`         |
 | `.parse_u64()`      | `() -> Option<u64>`         |
 
-`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
+`<int>` marks a `String` offset or byte-value parameter, which is deliberately *not* `u64`: any integer width and either signedness is accepted, per [String offsets](#string-offsets). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
 
 `push_byte`'s argument is a byte *value*, not an index. The valid range is `0..=255`. The compiler does not diagnose a value outside that range (only a literal that does not fit `i64` is a `LiteralOutOfRange` error), and the runtime appends the low 8 bits, so `s.push_byte(300)` appends `44`. Keep byte values within `0..=255`.
 
@@ -2358,11 +2359,9 @@ let val: i64 = v[0];
 v[i] = new_val;
 ```
 
-The index expression must have an **integer type**. Any width and either signedness is accepted (`i8` … `i64`, `u8` … `u64`, and unsuffixed integer literals); a non-integer index is a `TypeMismatch` error. The same rule applies to index-shaped builtin-method arguments: `String::byte_at`, both arguments of `String::substring`, and `Vec::get` / `Vec::truncate`. `String::push_byte` takes a byte value, not an index; it is checked with the same integer rule but has its own valid range (see the String method table).
+The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method arguments `Vec::get` and `Vec::truncate`, which take exactly `u64`.
 
-The type checker also accepts a 128-bit index, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `Vec` and `String` element helpers are i64-only, so such a program fails codegen instead. Use a 64-bit or narrower index until epic #526 lands 128-bit lowering.
-
-The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).
+The `Vec` runtime helpers take a pointer-width unsigned index, so a `u64` index is never reinterpreted as negative: an index at or beyond `v.len()` is out of bounds, including values above `i64::MAX`.
 
 Lengths are `u64` (see [the Vec method table](#vec-methods)), so an index derived from one needs no conversion:
 
@@ -2375,16 +2374,18 @@ while i < n vow { invariant: i <= n } {
 }
 ```
 
-Arithmetic and comparison do not mix signedness: `i64 + u64` and `u64 < i64` are `TypeMismatch`. Convert at the binding with `as`; same-width `as` casts between `i64` and `u64` are legal.
+Arithmetic and comparison do not mix signedness: `i64 + u64` and `u64 < i64` are `TypeMismatch`. Convert at the binding with `as`; same-width `as` casts between `i64` and `u64` are legal. A signed value that is already known to be a valid position is converted at the index site (`v[k as u64]`); a negative `k` becomes a huge `u64` and fails the bounds check.
 
 ### String offsets
 
-`String` offsets stay `i64` in v1. This is a documented scope decision, not an oversight: `String::len()` is `u64`, but the runtime helpers that take an offset or span (`byte_at`, `substr`, `substring`, `matches_literal_at`) still take `i64` and keep live negative-offset behaviour — `byte_at` returns `-1` for an out-of-range offset, `substr` and `substring` clamp their arguments, and `matches_literal_at` rejects a negative position. Migrating them to `u64` means deleting those guards, which changes runtime semantics for out-of-range callers.
+`String` offsets stay `i64` in v1, unlike `Vec` indices. This is a documented scope decision, not an oversight: `String::len()` is `u64`, but the runtime helpers that take an offset or span (`byte_at`, `substr`, `substring`, `matches_literal_at`) still take `i64` and keep live negative-offset behaviour — `byte_at` returns `-1` for an out-of-range offset, `substr` and `substring` clamp their arguments, and `matches_literal_at` rejects a negative position. Migrating them to `u64` means deleting those guards, which changes runtime semantics for out-of-range callers.
 
 What this means at a call site:
 
 - The `string_substr` and `string_matches_literal_at` builtins require `i64` offset arguments exactly (see the builtin signature table).
-- The `byte_at` and `substring` methods accept any integer type per the rule above, but the runtime sees an `i64`; a `u64` offset above `i64::MAX` is reinterpreted as negative, exactly as described for unsigned indices above. A length-derived `u64` offset is always in range, so `s.byte_at(i)` with `i < s.len()` is safe.
+- The `byte_at` and `substring` methods accept any integer type, not only `u64`; the argument is checked as an integer (a non-integer is a `TypeMismatch`) and unsuffixed literals are range-checked against `i64`. The runtime sees an `i64`, so a `u64` offset above `i64::MAX` is reinterpreted as negative and clamped rather than treated as a large offset — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. A length-derived `u64` offset is always in range, so `s.byte_at(i)` with `i < s.len()` is safe.
+- The checker accepts a 128-bit `String` offset, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `String` helpers are i64-only, so such a program fails codegen. Use a 64-bit or narrower offset until epic #526 lands 128-bit lowering. (A 128-bit `Vec` index is not a codegen question: it is a `TypeMismatch`.) The `u64`-above-`i64::MAX` hazard is tracked in issue #1131.
+- `push_byte` takes a byte *value*, not an offset, and stays `i64`-checked with its own `0..=255` range (see the String method table).
 - `byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64` regardless.
 
 Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.
@@ -4337,6 +4338,25 @@ fn f() -> i32 {
 **Fix:** Change the expression or declared type to match. For an enum pattern,
 qualify the variant with the scrutinee's enum name.
 
+A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::get` / `Vec::truncate`
+arguments must have exactly the type `u64`. An index of any other integer type
+(for example an `i64` counter) or of a non-integer type is a `TypeMismatch`
+in both compilers:
+
+```vow
+fn f(v: Vec<i64>, i: i64) -> i64 {
+    v[i]
+}
+```
+
+**Output:** `index has type 'i64' but must be 'u64'`
+
+**Fix:** Keep index counters `u64` (`.len()` is already `u64`), or convert at
+the index site with `as u64` (`v[i as u64]`). Unsuffixed integer literals
+coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`) are
+not `u64` in v1 and are unaffected; see
+[String offsets](grammar.md#string-offsets).
+
 ### LiteralOutOfRange
 
 **Phase:** Type Checker
@@ -5192,7 +5212,7 @@ general signed wrappers.
 | `safe_mul` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, b == 0 \|\| a <= I64_MAX / b`; `ensures result == a * b` | |
 | `safe_div` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result <= a` | `b > 0`, not just `b != 0`. |
 | `safe_mod` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result < b` | |
-| `pow` | `(base, exp: i64) -> i64` | `requires base >= 0, exp >= 0`; `ensures result >= 0` | O(exp) — no fast exponentiation; no overflow guard on the running product. |
+| `pow` | `(base: i64, exp: u64) -> i64` | `requires base >= 0`; `ensures result >= 0` | O(exp) — no fast exponentiation; no overflow guard on the running product. |
 | `midpoint` | `(a, b: i64) -> i64` | `requires a >= 0, a <= b`; `ensures a <= result <= b` | Overflow-safe `a + (b-a)/2`. |
 | `diff` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0`; `ensures result >= 0` | `|a - b|`. |
 | `divides` | `(d, n: i64) -> bool` | `requires d != 0` | |
@@ -5217,12 +5237,12 @@ pub fn safe_mul(a: i64, b: i64) -> i64 vow {
 | `gcd` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a > 0 \|\| b > 0`; `ensures result > 0` | Euclid; loop invariants `x >= 0, y >= 0`. |
 | `lcm` | `(a, b: i64) -> i64` | `requires a > 0, b > 0`; `ensures result > 0` | No overflow guard on `(a/g)*b`. |
 | `is_prime` | `(n: i64) -> bool` | `requires n >= 0` | Trial division to `i*i <= n`. |
-| `power_mod` | `(base, exp, modulus: i64) -> i64` | `requires base >= 0, exp >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |
+| `power_mod` | `(base: i64, exp: u64, modulus: i64) -> i64` | `requires base >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |
 | `factorial` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 1` | No upper bound on `n` — product overflows past 20!. |
 | `fibonacci` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0` | Iterative; overflows past F(92). |
 | `isqrt` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0, result*result <= n` | Floor integer sqrt; postcondition is the real spec. |
 | `largest_divisor` | `(n: i64) -> i64` | `requires n > 1`; `ensures 1 <= result < n` | Largest proper divisor. |
-| `count_divisors` | `(n: i64) -> i64` | `requires n > 0`; `ensures result >= 1` | |
+| `count_divisors` | `(n: i64) -> u64` | `requires n > 0`; `ensures result >= 1` | |
 
 ### math.vec_math
 
@@ -5235,7 +5255,7 @@ overflow — use on bounded data, or add `requires` bounds at the call site.
 | `vec_min` / `vec_max` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | |
 | `vec_mean` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | Integer mean. |
 | `vec_dot` | `(a, b: Vec<i64>) -> i64` | `requires a.len() == b.len()` | |
-| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures result >= 0, result <= v.len() as i64` | Invariant `count <= i`. |
+| `vec_count` | `(v: Vec<i64>, target: i64) -> u64` | `ensures result <= v.len()` | Invariant `count <= i`. |
 | `vec_all_in_range` | `(v: Vec<i64>, lo, hi: i64) -> bool` | `requires lo <= hi` | |
 | `vec_is_sorted` | `(v: Vec<i64>) -> bool` | — | Ascending. |
 | `vec_prefix_sum` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |
@@ -5249,22 +5269,22 @@ overflow — use on bounded data, or add `requires` bounds at the call site.
 a max-heap over `i64`), with the comparator flipped. Both are value types: every
 mutator takes a heap by value and returns a new one.
 
-The defining contract pattern is the **size-shadow invariant** `size == data.len() as i64`
-(`size` is `i64`, `.len()` is `u64`), threaded through every mutator. This is what
+The defining contract pattern is the **size-shadow invariant** `size == data.len()`
+(`size` and `.len()` are both `u64`), threaded through every mutator. This is what
 lets ESBMC reason about in-bounds `data[i]` access without a universal quantifier:
 ```vow
 pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {
-    requires: h.size == h.data.len() as i64,
-    requires: h.size < 9223372036854775807,
+    requires: h.size == h.data.len(),
+    requires: h.size < 18446744073709551615,
     ensures: result.size == h.size + 1,
-    ensures: result.size == result.data.len() as i64
+    ensures: result.size == result.data.len()
 }
 ```
 
 | Function (min; `max_*` mirrors) | Signature | Key contracts |
 |---------------------------------|-----------|---------------|
 | `min_heap_new` | `() -> MinHeap` | `ensures result.size == 0, result.data.len() == 0` |
-| `min_heap_len` | `(h) -> i64` | `ensures result == h.size` |
+| `min_heap_len` | `(h) -> u64` | `ensures result == h.size` |
 | `min_heap_is_empty` | `(h) -> bool` | `ensures result == (h.size == 0)` |
 | `min_heap_push` | `(h, val: i64) -> MinHeap` | size-shadow in/out; `ensures result.size == h.size + 1` |
 | `min_heap_peek` | `(h) -> i64` | `requires h.size > 0, size-shadow`; `ensures result == h.data[0]` |
@@ -5353,12 +5373,12 @@ memory on small-op-heavy loops vs. the always-allocating representation.
 - Compare: `bignum_cmp`, `bignum_cmp_abs`, `bignum_eq`, `bignum_lt`, `bignum_gt`, `bignum_le`, `bignum_ge`
 - Arithmetic: `bignum_negate`, `bignum_abs`, `bignum_add`, `bignum_sub`, `bignum_monus`, `bignum_mul`, `bignum_div`, `bignum_mod`, `bignum_divmod`
 - Bitwise (on magnitude): `bignum_and`, `bignum_or`, `bignum_xor`, `bignum_shl`, `bignum_shr`
-- Higher-level: `bignum_pow(base, exp: i64)`, `bignum_gcd`, `bignum_factorial(n: i64)`
+- Higher-level: `bignum_pow(base, exp: u64)`, `bignum_gcd`, `bignum_factorial(n: u64)`
 
 **Contracts present:** `bignum_div`/`bignum_mod`/`bignum_divmod` require
-`!bignum_is_zero(b)`; `bignum_pow` requires `exp >= 0`; `bignum_shl`/`bignum_shr`
-require `n >= 0`; `bignum_factorial` requires `n >= 0` (internal `bigmag_sub_abs`
-requires `bigmag_cmp_abs(a, b) >= 0`).
+`!bignum_is_zero(b)`; the `bignum_pow` exponent, the `bignum_shl`/`bignum_shr` shift
+count and the `bignum_factorial` argument are `u64`, so non-negativity is carried by
+the type (internal `bigmag_sub_abs` requires `bigmag_cmp_abs(a, b) >= 0`).
 
 **Semantics to know:**
 - **Canonicalization invariant:** a value fits `i64` ⟺ it is `Small`. Every
@@ -5377,7 +5397,7 @@ requires `bigmag_cmp_abs(a, b) >= 0`).
 - Bitwise `and`/`or`/`xor` act on the **magnitude** (Nat semantics) and return a
   non-negative result; `shl`/`shr` shift the magnitude and preserve the sign
   (= multiply / floor-divide by 2ⁿ; a logical bit shift for non-negative operands).
-- `bignum_pow`/`bignum_factorial` take a native `i64` exponent/argument, not a BigNum.
+- `bignum_pow`/`bignum_factorial` take a native `u64` exponent/argument, not a BigNum.
 - `bignum_gcd` operates on absolute values; the result is non-negative.
 - Multiplication is O(n·m) schoolbook (no Karatsuba).
 - The limb algorithms live in internal `bigmag_*` functions over the `BigMag`
@@ -5597,14 +5617,13 @@ Fill a vector with `n` elements and prove its length equals `n`.
 ```vow
 module VecFill
 
-fn fill_vec(n: i64) -> Vec<i64> vow {
-    requires: n >= 0,
-    ensures: result.len() as i64 == n
+fn fill_vec(n: u64) -> Vec<i64> vow {
+    ensures: result.len() == n
 } {
     let v: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
-    while i < n as u64 vow {
-        invariant: i <= n as u64
+    while i < n vow {
+        invariant: i <= n
     } {
         v.push(i as i64);
         i = i + 1;
@@ -5630,8 +5649,8 @@ $ vow verify examples/vec_fill.vow
 ```
 
 **Key points:**
-- `invariant: i <= n as u64` is inductive: true on entry, preserved by the loop body. The lower bound `i >= 0` is carried by the `u64` type, so it needs no clause (and `TautologicalComparison` rejects one)
-- The Vec model tracks `len`, so ESBMC can reason about `result.len() as i64 == n`
+- `invariant: i <= n` is inductive: true on entry, preserved by the loop body. The lower bounds `i >= 0` and `n >= 0` are carried by the `u64` type, so they need no clause (and `TautologicalComparison` rejects one)
+- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
 - The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
 - `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 
@@ -6822,11 +6841,12 @@ types preserves binary fixed-point reproducibility across compilation hosts;
 see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). The signedness of a
 length is independent of this determinism rationale, so
 [ADR 0003](../adr/0003-unsigned-size-types.md) makes lengths fixed-width `u64`:
-`.len()` on `Vec`, `String`, `HashMap`, and `BTreeMap` returns `u64`. An index
-expression accepts any integer type (see [Indexing](#indexing)), so `v[i]` with
-`i: u64` needs no cast. `String` offsets (`byte_at`, `substr`,
-`substring`, `matches_literal_at`) stay `i64` as a documented v1 scope
-decision; see [String offsets](#string-offsets).
+`.len()` on `Vec`, `String`, `HashMap`, and `BTreeMap` returns `u64`. A `Vec`
+index expression has exactly the type `u64` (see [Indexing](#indexing)), so
+`v[i]` with `i: u64` needs no cast, and `v[i]` with `i: i64` is a
+`TypeMismatch`. `String` offsets (`byte_at`, `substr`, `substring`,
+`matches_literal_at`) stay `i64` as a documented v1 scope decision; see
+[String offsets](#string-offsets).
 
 **128-bit implementation status:** `i128`/`u128` types and full-range literal
 representation are available to the frontend and IR. Native code generation,
@@ -7402,7 +7422,7 @@ for x in vec vow {
 ```vow
 let idx: i64 = loop {
     if data[i] == target {
-        break i;
+        break i as i64;
     }
     i = i + 1;
     if i >= n { break -1; }
@@ -7601,11 +7621,11 @@ m.contains_key(k)
 | `.pop()`       | `() -> ()`                       |
 | `.len()`       | `() -> u64`                      |
 | `.clear()`     | `() -> ()` — frees buffer, resets to empty |
-| `.truncate(n)` | `(<int>) -> ()` — shrinks to n elements, frees excess memory |
-| `v[i]`         | Index read — copies slot value; aliases heap types (panics if out of bounds) |
-| `v[i] = val`   | Index write — copies value into slot |
+| `.truncate(n)` | `(u64) -> ()` — shrinks to n elements, frees excess memory |
+| `v[i]`         | Index read, `i: u64` — copies slot value; aliases heap types (panics if out of bounds) |
+| `v[i] = val`   | Index write, `i: u64` — copies value into slot |
 
-`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
+`Vec` indices and `.truncate(n)` take exactly `u64`; an unsuffixed integer literal coerces, and any other integer type needs an explicit `as u64`. See [Indexing](#indexing).
 
 ### String Methods
 
@@ -7625,7 +7645,7 @@ m.contains_key(k)
 | `.parse_i64()`      | `() -> Option<i64>`         |
 | `.parse_u64()`      | `() -> Option<u64>`         |
 
-`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
+`<int>` marks a `String` offset or byte-value parameter, which is deliberately *not* `u64`: any integer width and either signedness is accepted, per [String offsets](#string-offsets). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
 
 `push_byte`'s argument is a byte *value*, not an index. The valid range is `0..=255`. The compiler does not diagnose a value outside that range (only a literal that does not fit `i64` is a `LiteralOutOfRange` error), and the runtime appends the low 8 bits, so `s.push_byte(300)` appends `44`. Keep byte values within `0..=255`.
 
@@ -7678,11 +7698,9 @@ let val: i64 = v[0];
 v[i] = new_val;
 ```
 
-The index expression must have an **integer type**. Any width and either signedness is accepted (`i8` … `i64`, `u8` … `u64`, and unsuffixed integer literals); a non-integer index is a `TypeMismatch` error. The same rule applies to index-shaped builtin-method arguments: `String::byte_at`, both arguments of `String::substring`, and `Vec::get` / `Vec::truncate`. `String::push_byte` takes a byte value, not an index; it is checked with the same integer rule but has its own valid range (see the String method table).
+The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method arguments `Vec::get` and `Vec::truncate`, which take exactly `u64`.
 
-The type checker also accepts a 128-bit index, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `Vec` and `String` element helpers are i64-only, so such a program fails codegen instead. Use a 64-bit or narrower index until epic #526 lands 128-bit lowering.
-
-The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).
+The `Vec` runtime helpers take a pointer-width unsigned index, so a `u64` index is never reinterpreted as negative: an index at or beyond `v.len()` is out of bounds, including values above `i64::MAX`.
 
 Lengths are `u64` (see [the Vec method table](#vec-methods)), so an index derived from one needs no conversion:
 
@@ -7695,16 +7713,18 @@ while i < n vow { invariant: i <= n } {
 }
 ```
 
-Arithmetic and comparison do not mix signedness: `i64 + u64` and `u64 < i64` are `TypeMismatch`. Convert at the binding with `as`; same-width `as` casts between `i64` and `u64` are legal.
+Arithmetic and comparison do not mix signedness: `i64 + u64` and `u64 < i64` are `TypeMismatch`. Convert at the binding with `as`; same-width `as` casts between `i64` and `u64` are legal. A signed value that is already known to be a valid position is converted at the index site (`v[k as u64]`); a negative `k` becomes a huge `u64` and fails the bounds check.
 
 ### String offsets
 
-`String` offsets stay `i64` in v1. This is a documented scope decision, not an oversight: `String::len()` is `u64`, but the runtime helpers that take an offset or span (`byte_at`, `substr`, `substring`, `matches_literal_at`) still take `i64` and keep live negative-offset behaviour — `byte_at` returns `-1` for an out-of-range offset, `substr` and `substring` clamp their arguments, and `matches_literal_at` rejects a negative position. Migrating them to `u64` means deleting those guards, which changes runtime semantics for out-of-range callers.
+`String` offsets stay `i64` in v1, unlike `Vec` indices. This is a documented scope decision, not an oversight: `String::len()` is `u64`, but the runtime helpers that take an offset or span (`byte_at`, `substr`, `substring`, `matches_literal_at`) still take `i64` and keep live negative-offset behaviour — `byte_at` returns `-1` for an out-of-range offset, `substr` and `substring` clamp their arguments, and `matches_literal_at` rejects a negative position. Migrating them to `u64` means deleting those guards, which changes runtime semantics for out-of-range callers.
 
 What this means at a call site:
 
 - The `string_substr` and `string_matches_literal_at` builtins require `i64` offset arguments exactly (see the builtin signature table).
-- The `byte_at` and `substring` methods accept any integer type per the rule above, but the runtime sees an `i64`; a `u64` offset above `i64::MAX` is reinterpreted as negative, exactly as described for unsigned indices above. A length-derived `u64` offset is always in range, so `s.byte_at(i)` with `i < s.len()` is safe.
+- The `byte_at` and `substring` methods accept any integer type, not only `u64`; the argument is checked as an integer (a non-integer is a `TypeMismatch`) and unsuffixed literals are range-checked against `i64`. The runtime sees an `i64`, so a `u64` offset above `i64::MAX` is reinterpreted as negative and clamped rather than treated as a large offset — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. A length-derived `u64` offset is always in range, so `s.byte_at(i)` with `i < s.len()` is safe.
+- The checker accepts a 128-bit `String` offset, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `String` helpers are i64-only, so such a program fails codegen. Use a 64-bit or narrower offset until epic #526 lands 128-bit lowering. (A 128-bit `Vec` index is not a codegen question: it is a `TypeMismatch`.) The `u64`-above-`i64::MAX` hazard is tracked in issue #1131.
+- `push_byte` takes a byte *value*, not an offset, and stays `i64`-checked with its own `0..=255` range (see the String method table).
 - `byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64` regardless.
 
 Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.
@@ -9661,6 +9681,25 @@ fn f() -> i32 {
 **Fix:** Change the expression or declared type to match. For an enum pattern,
 qualify the variant with the scrutinee's enum name.
 
+A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::get` / `Vec::truncate`
+arguments must have exactly the type `u64`. An index of any other integer type
+(for example an `i64` counter) or of a non-integer type is a `TypeMismatch`
+in both compilers:
+
+```vow
+fn f(v: Vec<i64>, i: i64) -> i64 {
+    v[i]
+}
+```
+
+**Output:** `index has type 'i64' but must be 'u64'`
+
+**Fix:** Keep index counters `u64` (`.len()` is already `u64`), or convert at
+the index site with `as u64` (`v[i as u64]`). Unsuffixed integer literals
+coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`) are
+not `u64` in v1 and are unaffected; see
+[String offsets](grammar.md#string-offsets).
+
 ### LiteralOutOfRange
 
 **Phase:** Type Checker
@@ -10517,7 +10556,7 @@ general signed wrappers.
 | `safe_mul` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, b == 0 \|\| a <= I64_MAX / b`; `ensures result == a * b` | |
 | `safe_div` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result <= a` | `b > 0`, not just `b != 0`. |
 | `safe_mod` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result < b` | |
-| `pow` | `(base, exp: i64) -> i64` | `requires base >= 0, exp >= 0`; `ensures result >= 0` | O(exp) — no fast exponentiation; no overflow guard on the running product. |
+| `pow` | `(base: i64, exp: u64) -> i64` | `requires base >= 0`; `ensures result >= 0` | O(exp) — no fast exponentiation; no overflow guard on the running product. |
 | `midpoint` | `(a, b: i64) -> i64` | `requires a >= 0, a <= b`; `ensures a <= result <= b` | Overflow-safe `a + (b-a)/2`. |
 | `diff` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0`; `ensures result >= 0` | `|a - b|`. |
 | `divides` | `(d, n: i64) -> bool` | `requires d != 0` | |
@@ -10542,12 +10581,12 @@ pub fn safe_mul(a: i64, b: i64) -> i64 vow {
 | `gcd` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a > 0 \|\| b > 0`; `ensures result > 0` | Euclid; loop invariants `x >= 0, y >= 0`. |
 | `lcm` | `(a, b: i64) -> i64` | `requires a > 0, b > 0`; `ensures result > 0` | No overflow guard on `(a/g)*b`. |
 | `is_prime` | `(n: i64) -> bool` | `requires n >= 0` | Trial division to `i*i <= n`. |
-| `power_mod` | `(base, exp, modulus: i64) -> i64` | `requires base >= 0, exp >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |
+| `power_mod` | `(base: i64, exp: u64, modulus: i64) -> i64` | `requires base >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |
 | `factorial` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 1` | No upper bound on `n` — product overflows past 20!. |
 | `fibonacci` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0` | Iterative; overflows past F(92). |
 | `isqrt` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0, result*result <= n` | Floor integer sqrt; postcondition is the real spec. |
 | `largest_divisor` | `(n: i64) -> i64` | `requires n > 1`; `ensures 1 <= result < n` | Largest proper divisor. |
-| `count_divisors` | `(n: i64) -> i64` | `requires n > 0`; `ensures result >= 1` | |
+| `count_divisors` | `(n: i64) -> u64` | `requires n > 0`; `ensures result >= 1` | |
 
 ### math.vec_math
 
@@ -10560,7 +10599,7 @@ overflow — use on bounded data, or add `requires` bounds at the call site.
 | `vec_min` / `vec_max` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | |
 | `vec_mean` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | Integer mean. |
 | `vec_dot` | `(a, b: Vec<i64>) -> i64` | `requires a.len() == b.len()` | |
-| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures result >= 0, result <= v.len() as i64` | Invariant `count <= i`. |
+| `vec_count` | `(v: Vec<i64>, target: i64) -> u64` | `ensures result <= v.len()` | Invariant `count <= i`. |
 | `vec_all_in_range` | `(v: Vec<i64>, lo, hi: i64) -> bool` | `requires lo <= hi` | |
 | `vec_is_sorted` | `(v: Vec<i64>) -> bool` | — | Ascending. |
 | `vec_prefix_sum` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |
@@ -10574,22 +10613,22 @@ overflow — use on bounded data, or add `requires` bounds at the call site.
 a max-heap over `i64`), with the comparator flipped. Both are value types: every
 mutator takes a heap by value and returns a new one.
 
-The defining contract pattern is the **size-shadow invariant** `size == data.len() as i64`
-(`size` is `i64`, `.len()` is `u64`), threaded through every mutator. This is what
+The defining contract pattern is the **size-shadow invariant** `size == data.len()`
+(`size` and `.len()` are both `u64`), threaded through every mutator. This is what
 lets ESBMC reason about in-bounds `data[i]` access without a universal quantifier:
 ```vow
 pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {
-    requires: h.size == h.data.len() as i64,
-    requires: h.size < 9223372036854775807,
+    requires: h.size == h.data.len(),
+    requires: h.size < 18446744073709551615,
     ensures: result.size == h.size + 1,
-    ensures: result.size == result.data.len() as i64
+    ensures: result.size == result.data.len()
 }
 ```
 
 | Function (min; `max_*` mirrors) | Signature | Key contracts |
 |---------------------------------|-----------|---------------|
 | `min_heap_new` | `() -> MinHeap` | `ensures result.size == 0, result.data.len() == 0` |
-| `min_heap_len` | `(h) -> i64` | `ensures result == h.size` |
+| `min_heap_len` | `(h) -> u64` | `ensures result == h.size` |
 | `min_heap_is_empty` | `(h) -> bool` | `ensures result == (h.size == 0)` |
 | `min_heap_push` | `(h, val: i64) -> MinHeap` | size-shadow in/out; `ensures result.size == h.size + 1` |
 | `min_heap_peek` | `(h) -> i64` | `requires h.size > 0, size-shadow`; `ensures result == h.data[0]` |
@@ -10678,12 +10717,12 @@ memory on small-op-heavy loops vs. the always-allocating representation.
 - Compare: `bignum_cmp`, `bignum_cmp_abs`, `bignum_eq`, `bignum_lt`, `bignum_gt`, `bignum_le`, `bignum_ge`
 - Arithmetic: `bignum_negate`, `bignum_abs`, `bignum_add`, `bignum_sub`, `bignum_monus`, `bignum_mul`, `bignum_div`, `bignum_mod`, `bignum_divmod`
 - Bitwise (on magnitude): `bignum_and`, `bignum_or`, `bignum_xor`, `bignum_shl`, `bignum_shr`
-- Higher-level: `bignum_pow(base, exp: i64)`, `bignum_gcd`, `bignum_factorial(n: i64)`
+- Higher-level: `bignum_pow(base, exp: u64)`, `bignum_gcd`, `bignum_factorial(n: u64)`
 
 **Contracts present:** `bignum_div`/`bignum_mod`/`bignum_divmod` require
-`!bignum_is_zero(b)`; `bignum_pow` requires `exp >= 0`; `bignum_shl`/`bignum_shr`
-require `n >= 0`; `bignum_factorial` requires `n >= 0` (internal `bigmag_sub_abs`
-requires `bigmag_cmp_abs(a, b) >= 0`).
+`!bignum_is_zero(b)`; the `bignum_pow` exponent, the `bignum_shl`/`bignum_shr` shift
+count and the `bignum_factorial` argument are `u64`, so non-negativity is carried by
+the type (internal `bigmag_sub_abs` requires `bigmag_cmp_abs(a, b) >= 0`).
 
 **Semantics to know:**
 - **Canonicalization invariant:** a value fits `i64` ⟺ it is `Small`. Every
@@ -10702,7 +10741,7 @@ requires `bigmag_cmp_abs(a, b) >= 0`).
 - Bitwise `and`/`or`/`xor` act on the **magnitude** (Nat semantics) and return a
   non-negative result; `shl`/`shr` shift the magnitude and preserve the sign
   (= multiply / floor-divide by 2ⁿ; a logical bit shift for non-negative operands).
-- `bignum_pow`/`bignum_factorial` take a native `i64` exponent/argument, not a BigNum.
+- `bignum_pow`/`bignum_factorial` take a native `u64` exponent/argument, not a BigNum.
 - `bignum_gcd` operates on absolute values; the result is non-negative.
 - Multiplication is O(n·m) schoolbook (no Karatsuba).
 - The limb algorithms live in internal `bigmag_*` functions over the `BigMag`
@@ -10923,14 +10962,13 @@ Fill a vector with `n` elements and prove its length equals `n`.
 ```vow
 module VecFill
 
-fn fill_vec(n: i64) -> Vec<i64> vow {
-    requires: n >= 0,
-    ensures: result.len() as i64 == n
+fn fill_vec(n: u64) -> Vec<i64> vow {
+    ensures: result.len() == n
 } {
     let v: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
-    while i < n as u64 vow {
-        invariant: i <= n as u64
+    while i < n vow {
+        invariant: i <= n
     } {
         v.push(i as i64);
         i = i + 1;
@@ -10956,8 +10994,8 @@ $ vow verify examples/vec_fill.vow
 ```
 
 **Key points:**
-- `invariant: i <= n as u64` is inductive: true on entry, preserved by the loop body. The lower bound `i >= 0` is carried by the `u64` type, so it needs no clause (and `TautologicalComparison` rejects one)
-- The Vec model tracks `len`, so ESBMC can reason about `result.len() as i64 == n`
+- `invariant: i <= n` is inductive: true on entry, preserved by the loop body. The lower bounds `i >= 0` and `n >= 0` are carried by the `u64` type, so they need no clause (and `TautologicalComparison` rejects one)
+- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
 - The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
 - `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 
@@ -12075,7 +12113,7 @@ mod tests {
     }
 
     fn generated_skill_support_count(source: &str) -> usize {
-        let body = generated_vow_function_lines(source, "fn skill_support_count() -> i64 {");
+        let body = generated_vow_function_lines(source, "fn skill_support_count() -> u64 {");
         let mut literal_lines = body
             .iter()
             .map(|line| line.trim())
@@ -12123,14 +12161,14 @@ mod tests {
         let compiler_main = repo_root.join("compiler/main.vow");
         let source = std::fs::read_to_string(&compiler_main).expect("compiler/main.vow must exist");
 
-        assert!(source.contains("fn skill_support_count() -> i64"));
-        assert!(source.contains("fn skill_support_path(index: i64) -> String vow {"));
-        assert!(source.contains("fn skill_support_content_index_guard(index: i64) vow {"));
-        assert!(source.contains("fn skill_support_content(index: i64) -> String {"));
+        assert!(source.contains("fn skill_support_count() -> u64"));
+        assert!(source.contains("fn skill_support_path(index: u64) -> String vow {"));
+        assert!(source.contains("fn skill_support_content_index_guard(index: u64) vow {"));
+        assert!(source.contains("fn skill_support_content(index: u64) -> String {"));
         assert!(source.contains("    skill_support_content_index_guard(index);"));
         assert_eq!(
             source
-                .matches("requires: index >= 0 && index < skill_support_count()")
+                .matches("requires: index < skill_support_count()")
                 .count(),
             2,
             "indexed support lookup contracts should guard path lookup and content access"
@@ -12138,11 +12176,11 @@ mod tests {
         let support_count = generated_skill_support_count(&source);
         let path_branch_count = generated_skill_support_branch_count(
             &source,
-            "fn skill_support_path(index: i64) -> String vow {",
+            "fn skill_support_path(index: u64) -> String vow {",
         );
         let content_branch_count = generated_skill_support_branch_count(
             &source,
-            "fn skill_support_content(index: i64) -> String {",
+            "fn skill_support_content(index: u64) -> String {",
         );
         assert_eq!(
             path_branch_count, support_count,

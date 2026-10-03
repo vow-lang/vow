@@ -1,15 +1,13 @@
 module PowerOfTwo
 
-fn pow2(n: i64) -> i64 vow {
-  requires: n >= 0,
+fn pow2(n: u64) -> i64 vow {
   requires: n <= 62,
   ensures: result >= 1
 } {
   let mut r: i64 = 1;
-  let mut i: i64 = 0;
+  let mut i: u64 = 0;
   while i < n vow {
     invariant: r >= 1,
-    invariant: i >= 0,
     invariant: i <= n
   } {
     r = r * 2;

@@ -7,12 +7,12 @@ Implement a function `pow2` that computes 2^n using a loop.
 ## Signature
 
 ```vow
-fn pow2(n: i64) -> i64
+fn pow2(n: u64) -> i64
 ```
 
 ## Contracts
 
-- `requires: n >= 0` — exponent is non-negative
+- `n` is a `u64` exponent, so the type already says it is non-negative; no `requires: n >= 0` is needed
 - `requires: n <= 62` — exact largest exponent whose result fits in `i64`
 - `ensures: result >= 1` — 2^n is always at least 1
 

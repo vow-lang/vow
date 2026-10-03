@@ -7,12 +7,12 @@ Implement a function `fib` that computes the n-th Fibonacci number using a loop.
 ## Signature
 
 ```vow
-fn fib(n: i64) -> i64
+fn fib(n: u64) -> i64
 ```
 
 ## Contracts
 
-- `requires: n >= 0` — index is non-negative
+- `n` is a `u64` index, so the type already says it is non-negative; no `requires: n >= 0` is needed
 - `requires: n <= 92` — exact largest Fibonacci index whose result fits in `i64`
 - `ensures: result >= 0` — Fibonacci numbers are non-negative
 

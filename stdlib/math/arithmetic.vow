@@ -99,15 +99,13 @@ pub fn safe_mod(a: i64, b: i64) -> i64 vow {
     a % b
 }
 
-pub fn pow(base: i64, exp: i64) -> i64 vow {
-    requires: exp >= 0,
+pub fn pow(base: i64, exp: u64) -> i64 vow {
     requires: base >= 0,
     ensures: result >= 0
 } {
     let mut result: i64 = 1;
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < exp vow {
-        invariant: i >= 0,
         invariant: i <= exp,
         invariant: result >= 0
     } {

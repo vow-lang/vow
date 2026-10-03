@@ -30,7 +30,7 @@ fn main() -> i32 [io] {
     let cleared: bool = min_heap_is_empty(h8);
     if cleared { print_i64(1); } else { print_i64(0); }    // 1
     print_str(String::from(" "));
-    print_i64(min_heap_len(h8));                            // 0
+    print_u64(min_heap_len(h8));                            // 0
     print_str(String::from(" "));
 
     // Mixed push/pop: exercises sift_up and sift_down interleaving.

@@ -7,14 +7,14 @@ Implement a function that counts Collatz steps for inputs from 1 through 27.
 ## Signature
 
 ```vow
-fn collatz_steps(n: i64) -> i64
+fn collatz_steps(n: i64) -> u64
 ```
 
 ## Contracts
 
 - `requires: n >= 1` — starting value is positive
 - `requires: n <= 27` — intentional bounded benchmark domain
-- `ensures: result >= 0` — step count is non-negative
+- the step count is a `u64`, so non-negativity is carried by the type (no `ensures: result >= 0`)
 
 ## Constraints
 

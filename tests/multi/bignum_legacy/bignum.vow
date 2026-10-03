@@ -495,15 +495,13 @@ fn bignum_divmod_long(a: BigNum, b: BigNum) -> DivResult {
     }
 }
 
-fn bignum_pow(base_val: BigNum, exp: i64) -> BigNum vow {
-    requires: exp >= 0
-} {
+fn bignum_pow(base_val: BigNum, exp: u64) -> BigNum {
     if exp == 0 {
         bignum_from_i64(1)
     } else {
         let mut result: BigNum = bignum_from_i64(1);
         let mut b: BigNum = base_val;
-        let mut e: i64 = exp;
+        let mut e: u64 = exp;
         while e > 0 {
             if e - (e / 2) * 2 == 1 {
                 result = bignum_mul(result, b);
@@ -526,13 +524,11 @@ fn bignum_gcd(a: BigNum, b: BigNum) -> BigNum {
     x
 }
 
-fn bignum_factorial(n: i64) -> BigNum vow {
-    requires: n >= 0
-} {
+fn bignum_factorial(n: u64) -> BigNum {
     let mut result: BigNum = bignum_from_i64(1);
-    let mut i: i64 = 2;
+    let mut i: u64 = 2;
     while i <= n {
-        result = bignum_mul(result, bignum_from_i64(i));
+        result = bignum_mul(result, bignum_from_i64(i as i64));
         i = i + 1;
     }
     result

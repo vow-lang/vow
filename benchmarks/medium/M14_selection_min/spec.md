@@ -7,15 +7,14 @@ Implement a function `find_min_idx` that finds the index of the minimum element 
 ## Signature
 
 ```vow
-fn find_min_idx(v: Vec<i64>) -> i64
+fn find_min_idx(v: Vec<i64>) -> u64
 ```
 
 ## Contracts
 
 - `requires: v.len() > 0` — Vec must be non-empty
-- `ensures: result >= 0` — valid index
-- `ensures: result < v.len() as i64` — within bounds
-- `min_idx` and `i` are `u64` locals, so `min_idx` needs no `>= 0` invariant; convert with `min_idx as i64`
+- `ensures: result < v.len()` — within bounds; the `u64` return type already makes it a non-negative index
+- `min_idx` and `i` are `u64` locals, so `min_idx` needs no `>= 0` invariant
 - Loop `invariant: min_idx < v.len()`
 - Loop `invariant: i >= 1`
 - Loop `invariant: i <= v.len()`

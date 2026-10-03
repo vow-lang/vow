@@ -7,18 +7,18 @@ Implement a bounded queue with enqueue, size tracking, and full-check.
 ## Signatures
 
 ```vow
-struct Queue { data: Vec<i64>, size: i64, capacity: i64 }
-fn queue_new(capacity: i64) -> Queue
+struct Queue { data: Vec<i64>, size: u64, capacity: u64 }
+fn queue_new(capacity: u64) -> Queue
 fn queue_enqueue(q: Queue, val: i64) -> Queue
-fn queue_size(q: Queue) -> i64
+fn queue_size(q: Queue) -> u64
 fn queue_is_full(q: Queue) -> i64
 ```
 
 ## Contracts
 
 - `queue_new`: runtime constructor for any positive capacity
-- `queue_enqueue`: `requires: q.size >= 0, requires: q.size < q.capacity`
-- `queue_size`: `requires: q.size >= 0`, `ensures: result >= 0`
+- `queue_enqueue`: `requires: q.size < q.capacity` (`size` is a `u64`, so it needs no `size >= 0`)
+- `queue_size`: no contract; the `u64` return type already makes the size non-negative
 - `queue_is_full`: `ensures: result >= 0, ensures: result <= 1`
 
 ## Constraints

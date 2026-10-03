@@ -3644,11 +3644,12 @@ fn skill_bundle() -> String {
     r.push_str(String::from("see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). The signedness of a\n"));
     r.push_str(String::from("length is independent of this determinism rationale, so\n"));
     r.push_str(String::from("[ADR 0003](../adr/0003-unsigned-size-types.md) makes lengths fixed-width `u64`:\n"));
-    r.push_str(String::from("`.len()` on `Vec`, `String`, `HashMap`, and `BTreeMap` returns `u64`. An index\n"));
-    r.push_str(String::from("expression accepts any integer type (see [Indexing](#indexing)), so `v[i]` with\n"));
-    r.push_str(String::from("`i: u64` needs no cast. `String` offsets (`byte_at`, `substr`,\n"));
-    r.push_str(String::from("`substring`, `matches_literal_at`) stay `i64` as a documented v1 scope\n"));
-    r.push_str(String::from("decision; see [String offsets](#string-offsets).\n"));
+    r.push_str(String::from("`.len()` on `Vec`, `String`, `HashMap`, and `BTreeMap` returns `u64`. A `Vec`\n"));
+    r.push_str(String::from("index expression has exactly the type `u64` (see [Indexing](#indexing)), so\n"));
+    r.push_str(String::from("`v[i]` with `i: u64` needs no cast, and `v[i]` with `i: i64` is a\n"));
+    r.push_str(String::from("`TypeMismatch`. `String` offsets (`byte_at`, `substr`, `substring`,\n"));
+    r.push_str(String::from("`matches_literal_at`) stay `i64` as a documented v1 scope decision; see\n"));
+    r.push_str(String::from("[String offsets](#string-offsets).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**128-bit implementation status:** `i128`/`u128` types and full-range literal\n"));
     r.push_str(String::from("representation are available to the frontend and IR. Native code generation,\n"));
@@ -4224,7 +4225,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("let idx: i64 = loop {\n"));
     r.push_str(String::from("    if data[i] == target {\n"));
-    r.push_str(String::from("        break i;\n"));
+    r.push_str(String::from("        break i as i64;\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("    i = i + 1;\n"));
     r.push_str(String::from("    if i >= n { break -1; }\n"));
@@ -4423,11 +4424,11 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `.pop()`       | `() -> ()`                       |\n"));
     r.push_str(String::from("| `.len()`       | `() -> u64`                      |\n"));
     r.push_str(String::from("| `.clear()`     | `() -> ()` -- frees buffer, resets to empty |\n"));
-    r.push_str(String::from("| `.truncate(n)` | `(<int>) -> ()` -- shrinks to n elements, frees excess memory |\n"));
-    r.push_str(String::from("| `v[i]`         | Index read -- copies slot value; aliases heap types (panics if out of bounds) |\n"));
-    r.push_str(String::from("| `v[i] = val`   | Index write -- copies value into slot |\n"));
+    r.push_str(String::from("| `.truncate(n)` | `(u64) -> ()` -- shrinks to n elements, frees excess memory |\n"));
+    r.push_str(String::from("| `v[i]`         | Index read, `i: u64` -- copies slot value; aliases heap types (panics if out of bounds) |\n"));
+    r.push_str(String::from("| `v[i] = val`   | Index write, `i: u64` -- copies value into slot |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.\n"));
+    r.push_str(String::from("`Vec` indices and `.truncate(n)` take exactly `u64`; an unsuffixed integer literal coerces, and any other integer type needs an explicit `as u64`. See [Indexing](#indexing).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### String Methods\n"));
     r.push_str(String::from("\n"));
@@ -4447,7 +4448,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `.parse_i64()`      | `() -> Option<i64>`         |\n"));
     r.push_str(String::from("| `.parse_u64()`      | `() -> Option<u64>`         |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.\n"));
+    r.push_str(String::from("`<int>` marks a `String` offset or byte-value parameter, which is deliberately *not* `u64`: any integer width and either signedness is accepted, per [String offsets](#string-offsets). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`push_byte`'s argument is a byte *value*, not an index. The valid range is `0..=255`. The compiler does not diagnose a value outside that range (only a literal that does not fit `i64` is a `LiteralOutOfRange` error), and the runtime appends the low 8 bits, so `s.push_byte(300)` appends `44`. Keep byte values within `0..=255`.\n"));
     r.push_str(String::from("\n"));
@@ -4500,11 +4501,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("v[i] = new_val;\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The index expression must have an **integer type**. Any width and either signedness is accepted (`i8` … `i64`, `u8` … `u64`, and unsuffixed integer literals); a non-integer index is a `TypeMismatch` error. The same rule applies to index-shaped builtin-method arguments: `String::byte_at`, both arguments of `String::substring`, and `Vec::get` / `Vec::truncate`. `String::push_byte` takes a byte value, not an index; it is checked with the same integer rule but has its own valid range (see the String method table).\n"));
+    r.push_str(String::from("The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method arguments `Vec::get` and `Vec::truncate`, which take exactly `u64`.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The type checker also accepts a 128-bit index, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `Vec` and `String` element helpers are i64-only, so such a program fails codegen instead. Use a 64-bit or narrower index until epic #526 lands 128-bit lowering.\n"));
-    r.push_str(String::from("\n"));
-    r.push_str(String::from("The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index -- `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).\n"));
+    r.push_str(String::from("The `Vec` runtime helpers take a pointer-width unsigned index, so a `u64` index is never reinterpreted as negative: an index at or beyond `v.len()` is out of bounds, including values above `i64::MAX`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Lengths are `u64` (see [the Vec method table](#vec-methods)), so an index derived from one needs no conversion:\n"));
     r.push_str(String::from("\n"));
@@ -4517,16 +4516,18 @@ fn skill_bundle() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Arithmetic and comparison do not mix signedness: `i64 + u64` and `u64 < i64` are `TypeMismatch`. Convert at the binding with `as`; same-width `as` casts between `i64` and `u64` are legal.\n"));
+    r.push_str(String::from("Arithmetic and comparison do not mix signedness: `i64 + u64` and `u64 < i64` are `TypeMismatch`. Convert at the binding with `as`; same-width `as` casts between `i64` and `u64` are legal. A signed value that is already known to be a valid position is converted at the index site (`v[k as u64]`); a negative `k` becomes a huge `u64` and fails the bounds check.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### String offsets\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`String` offsets stay `i64` in v1. This is a documented scope decision, not an oversight: `String::len()` is `u64`, but the runtime helpers that take an offset or span (`byte_at`, `substr`, `substring`, `matches_literal_at`) still take `i64` and keep live negative-offset behaviour -- `byte_at` returns `-1` for an out-of-range offset, `substr` and `substring` clamp their arguments, and `matches_literal_at` rejects a negative position. Migrating them to `u64` means deleting those guards, which changes runtime semantics for out-of-range callers.\n"));
+    r.push_str(String::from("`String` offsets stay `i64` in v1, unlike `Vec` indices. This is a documented scope decision, not an oversight: `String::len()` is `u64`, but the runtime helpers that take an offset or span (`byte_at`, `substr`, `substring`, `matches_literal_at`) still take `i64` and keep live negative-offset behaviour -- `byte_at` returns `-1` for an out-of-range offset, `substr` and `substring` clamp their arguments, and `matches_literal_at` rejects a negative position. Migrating them to `u64` means deleting those guards, which changes runtime semantics for out-of-range callers.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("What this means at a call site:\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("- The `string_substr` and `string_matches_literal_at` builtins require `i64` offset arguments exactly (see the builtin signature table).\n"));
-    r.push_str(String::from("- The `byte_at` and `substring` methods accept any integer type per the rule above, but the runtime sees an `i64`; a `u64` offset above `i64::MAX` is reinterpreted as negative, exactly as described for unsigned indices above. A length-derived `u64` offset is always in range, so `s.byte_at(i)` with `i < s.len()` is safe.\n"));
+    r.push_str(String::from("- The `byte_at` and `substring` methods accept any integer type, not only `u64`; the argument is checked as an integer (a non-integer is a `TypeMismatch`) and unsuffixed literals are range-checked against `i64`. The runtime sees an `i64`, so a `u64` offset above `i64::MAX` is reinterpreted as negative and clamped rather than treated as a large offset -- `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. A length-derived `u64` offset is always in range, so `s.byte_at(i)` with `i < s.len()` is safe.\n"));
+    r.push_str(String::from("- The checker accepts a 128-bit `String` offset, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `String` helpers are i64-only, so such a program fails codegen. Use a 64-bit or narrower offset until epic #526 lands 128-bit lowering. (A 128-bit `Vec` index is not a codegen question: it is a `TypeMismatch`.) The `u64`-above-`i64::MAX` hazard is tracked in issue #1131.\n"));
+    r.push_str(String::from("- `push_byte` takes a byte *value*, not an offset, and stays `i64`-checked with its own `0..=255` range (see the String method table).\n"));
     r.push_str(String::from("- `byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64` regardless.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.\n"));
@@ -6479,6 +6480,25 @@ fn skill_bundle() -> String {
     r.push_str(String::from("**Fix:** Change the expression or declared type to match. For an enum pattern,\n"));
     r.push_str(String::from("qualify the variant with the scrutinee's enum name.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::get` / `Vec::truncate`\n"));
+    r.push_str(String::from("arguments must have exactly the type `u64`. An index of any other integer type\n"));
+    r.push_str(String::from("(for example an `i64` counter) or of a non-integer type is a `TypeMismatch`\n"));
+    r.push_str(String::from("in both compilers:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn f(v: Vec<i64>, i: i64) -> i64 {\n"));
+    r.push_str(String::from("    v[i]\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** `index has type 'i64' but must be 'u64'`\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Keep index counters `u64` (`.len()` is already `u64`), or convert at\n"));
+    r.push_str(String::from("the index site with `as u64` (`v[i as u64]`). Unsuffixed integer literals\n"));
+    r.push_str(String::from("coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`) are\n"));
+    r.push_str(String::from("not `u64` in v1 and are unaffected; see\n"));
+    r.push_str(String::from("[String offsets](grammar.md#string-offsets).\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### LiteralOutOfRange\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Type Checker\n"));
@@ -7334,7 +7354,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `safe_mul` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, b == 0 \\|\\| a <= I64_MAX / b`; `ensures result == a * b` | |\n"));
     r.push_str(String::from("| `safe_div` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result <= a` | `b > 0`, not just `b != 0`. |\n"));
     r.push_str(String::from("| `safe_mod` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result < b` | |\n"));
-    r.push_str(String::from("| `pow` | `(base, exp: i64) -> i64` | `requires base >= 0, exp >= 0`; `ensures result >= 0` | O(exp) -- no fast exponentiation; no overflow guard on the running product. |\n"));
+    r.push_str(String::from("| `pow` | `(base: i64, exp: u64) -> i64` | `requires base >= 0`; `ensures result >= 0` | O(exp) -- no fast exponentiation; no overflow guard on the running product. |\n"));
     r.push_str(String::from("| `midpoint` | `(a, b: i64) -> i64` | `requires a >= 0, a <= b`; `ensures a <= result <= b` | Overflow-safe `a + (b-a)/2`. |\n"));
     r.push_str(String::from("| `diff` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0`; `ensures result >= 0` | `|a - b|`. |\n"));
     r.push_str(String::from("| `divides` | `(d, n: i64) -> bool` | `requires d != 0` | |\n"));
@@ -7359,12 +7379,12 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `gcd` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a > 0 \\|\\| b > 0`; `ensures result > 0` | Euclid; loop invariants `x >= 0, y >= 0`. |\n"));
     r.push_str(String::from("| `lcm` | `(a, b: i64) -> i64` | `requires a > 0, b > 0`; `ensures result > 0` | No overflow guard on `(a/g)*b`. |\n"));
     r.push_str(String::from("| `is_prime` | `(n: i64) -> bool` | `requires n >= 0` | Trial division to `i*i <= n`. |\n"));
-    r.push_str(String::from("| `power_mod` | `(base, exp, modulus: i64) -> i64` | `requires base >= 0, exp >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |\n"));
+    r.push_str(String::from("| `power_mod` | `(base: i64, exp: u64, modulus: i64) -> i64` | `requires base >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |\n"));
     r.push_str(String::from("| `factorial` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 1` | No upper bound on `n` -- product overflows past 20!. |\n"));
     r.push_str(String::from("| `fibonacci` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0` | Iterative; overflows past F(92). |\n"));
     r.push_str(String::from("| `isqrt` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0, result*result <= n` | Floor integer sqrt; postcondition is the real spec. |\n"));
     r.push_str(String::from("| `largest_divisor` | `(n: i64) -> i64` | `requires n > 1`; `ensures 1 <= result < n` | Largest proper divisor. |\n"));
-    r.push_str(String::from("| `count_divisors` | `(n: i64) -> i64` | `requires n > 0`; `ensures result >= 1` | |\n"));
+    r.push_str(String::from("| `count_divisors` | `(n: i64) -> u64` | `requires n > 0`; `ensures result >= 1` | |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### math.vec_math\n"));
     r.push_str(String::from("\n"));
@@ -7377,7 +7397,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `vec_min` / `vec_max` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | |\n"));
     r.push_str(String::from("| `vec_mean` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | Integer mean. |\n"));
     r.push_str(String::from("| `vec_dot` | `(a, b: Vec<i64>) -> i64` | `requires a.len() == b.len()` | |\n"));
-    r.push_str(String::from("| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures result >= 0, result <= v.len() as i64` | Invariant `count <= i`. |\n"));
+    r.push_str(String::from("| `vec_count` | `(v: Vec<i64>, target: i64) -> u64` | `ensures result <= v.len()` | Invariant `count <= i`. |\n"));
     r.push_str(String::from("| `vec_all_in_range` | `(v: Vec<i64>, lo, hi: i64) -> bool` | `requires lo <= hi` | |\n"));
     r.push_str(String::from("| `vec_is_sorted` | `(v: Vec<i64>) -> bool` | -- | Ascending. |\n"));
     r.push_str(String::from("| `vec_prefix_sum` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |\n"));
@@ -7391,22 +7411,22 @@ fn skill_bundle() -> String {
     r.push_str(String::from("a max-heap over `i64`), with the comparator flipped. Both are value types: every\n"));
     r.push_str(String::from("mutator takes a heap by value and returns a new one.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The defining contract pattern is the **size-shadow invariant** `size == data.len() as i64`\n"));
-    r.push_str(String::from("(`size` is `i64`, `.len()` is `u64`), threaded through every mutator. This is what\n"));
+    r.push_str(String::from("The defining contract pattern is the **size-shadow invariant** `size == data.len()`\n"));
+    r.push_str(String::from("(`size` and `.len()` are both `u64`), threaded through every mutator. This is what\n"));
     r.push_str(String::from("lets ESBMC reason about in-bounds `data[i]` access without a universal quantifier:\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {\n"));
-    r.push_str(String::from("    requires: h.size == h.data.len() as i64,\n"));
-    r.push_str(String::from("    requires: h.size < 9223372036854775807,\n"));
+    r.push_str(String::from("    requires: h.size == h.data.len(),\n"));
+    r.push_str(String::from("    requires: h.size < 18446744073709551615,\n"));
     r.push_str(String::from("    ensures: result.size == h.size + 1,\n"));
-    r.push_str(String::from("    ensures: result.size == result.data.len() as i64\n"));
+    r.push_str(String::from("    ensures: result.size == result.data.len()\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Function (min; `max_*` mirrors) | Signature | Key contracts |\n"));
     r.push_str(String::from("|---------------------------------|-----------|---------------|\n"));
     r.push_str(String::from("| `min_heap_new` | `() -> MinHeap` | `ensures result.size == 0, result.data.len() == 0` |\n"));
-    r.push_str(String::from("| `min_heap_len` | `(h) -> i64` | `ensures result == h.size` |\n"));
+    r.push_str(String::from("| `min_heap_len` | `(h) -> u64` | `ensures result == h.size` |\n"));
     r.push_str(String::from("| `min_heap_is_empty` | `(h) -> bool` | `ensures result == (h.size == 0)` |\n"));
     r.push_str(String::from("| `min_heap_push` | `(h, val: i64) -> MinHeap` | size-shadow in/out; `ensures result.size == h.size + 1` |\n"));
     r.push_str(String::from("| `min_heap_peek` | `(h) -> i64` | `requires h.size > 0, size-shadow`; `ensures result == h.data[0]` |\n"));
@@ -7495,12 +7515,12 @@ fn skill_bundle() -> String {
     r.push_str(String::from("- Compare: `bignum_cmp`, `bignum_cmp_abs`, `bignum_eq`, `bignum_lt`, `bignum_gt`, `bignum_le`, `bignum_ge`\n"));
     r.push_str(String::from("- Arithmetic: `bignum_negate`, `bignum_abs`, `bignum_add`, `bignum_sub`, `bignum_monus`, `bignum_mul`, `bignum_div`, `bignum_mod`, `bignum_divmod`\n"));
     r.push_str(String::from("- Bitwise (on magnitude): `bignum_and`, `bignum_or`, `bignum_xor`, `bignum_shl`, `bignum_shr`\n"));
-    r.push_str(String::from("- Higher-level: `bignum_pow(base, exp: i64)`, `bignum_gcd`, `bignum_factorial(n: i64)`\n"));
+    r.push_str(String::from("- Higher-level: `bignum_pow(base, exp: u64)`, `bignum_gcd`, `bignum_factorial(n: u64)`\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Contracts present:** `bignum_div`/`bignum_mod`/`bignum_divmod` require\n"));
-    r.push_str(String::from("`!bignum_is_zero(b)`; `bignum_pow` requires `exp >= 0`; `bignum_shl`/`bignum_shr`\n"));
-    r.push_str(String::from("require `n >= 0`; `bignum_factorial` requires `n >= 0` (internal `bigmag_sub_abs`\n"));
-    r.push_str(String::from("requires `bigmag_cmp_abs(a, b) >= 0`).\n"));
+    r.push_str(String::from("`!bignum_is_zero(b)`; the `bignum_pow` exponent, the `bignum_shl`/`bignum_shr` shift\n"));
+    r.push_str(String::from("count and the `bignum_factorial` argument are `u64`, so non-negativity is carried by\n"));
+    r.push_str(String::from("the type (internal `bigmag_sub_abs` requires `bigmag_cmp_abs(a, b) >= 0`).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Semantics to know:**\n"));
     r.push_str(String::from("- **Canonicalization invariant:** a value fits `i64` ⟺ it is `Small`. Every\n"));
@@ -7519,7 +7539,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("- Bitwise `and`/`or`/`xor` act on the **magnitude** (Nat semantics) and return a\n"));
     r.push_str(String::from("  non-negative result; `shl`/`shr` shift the magnitude and preserve the sign\n"));
     r.push_str(String::from("  (= multiply / floor-divide by 2ⁿ; a logical bit shift for non-negative operands).\n"));
-    r.push_str(String::from("- `bignum_pow`/`bignum_factorial` take a native `i64` exponent/argument, not a BigNum.\n"));
+    r.push_str(String::from("- `bignum_pow`/`bignum_factorial` take a native `u64` exponent/argument, not a BigNum.\n"));
     r.push_str(String::from("- `bignum_gcd` operates on absolute values; the result is non-negative.\n"));
     r.push_str(String::from("- Multiplication is O(n·m) schoolbook (no Karatsuba).\n"));
     r.push_str(String::from("- The limb algorithms live in internal `bigmag_*` functions over the `BigMag`\n"));
@@ -7739,14 +7759,13 @@ fn skill_bundle() -> String {
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("module VecFill\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("fn fill_vec(n: i64) -> Vec<i64> vow {\n"));
-    r.push_str(String::from("    requires: n >= 0,\n"));
-    r.push_str(String::from("    ensures: result.len() as i64 == n\n"));
+    r.push_str(String::from("fn fill_vec(n: u64) -> Vec<i64> vow {\n"));
+    r.push_str(String::from("    ensures: result.len() == n\n"));
     r.push_str(String::from("} {\n"));
     r.push_str(String::from("    let v: Vec<i64> = Vec::new();\n"));
     r.push_str(String::from("    let mut i: u64 = 0;\n"));
-    r.push_str(String::from("    while i < n as u64 vow {\n"));
-    r.push_str(String::from("        invariant: i <= n as u64\n"));
+    r.push_str(String::from("    while i < n vow {\n"));
+    r.push_str(String::from("        invariant: i <= n\n"));
     r.push_str(String::from("    } {\n"));
     r.push_str(String::from("        v.push(i as i64);\n"));
     r.push_str(String::from("        i = i + 1;\n"));
@@ -7772,8 +7791,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Key points:**\n"));
-    r.push_str(String::from("- `invariant: i <= n as u64` is inductive: true on entry, preserved by the loop body. The lower bound `i >= 0` is carried by the `u64` type, so it needs no clause (and `TautologicalComparison` rejects one)\n"));
-    r.push_str(String::from("- The Vec model tracks `len`, so ESBMC can reason about `result.len() as i64 == n`\n"));
+    r.push_str(String::from("- `invariant: i <= n` is inductive: true on entry, preserved by the loop body. The lower bounds `i >= 0` and `n >= 0` are carried by the `u64` type, so they need no clause (and `TautologicalComparison` rejects one)\n"));
+    r.push_str(String::from("- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`\n"));
     r.push_str(String::from("- The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.\n"));
     r.push_str(String::from("- `VerifyFailed` with `verify_status: \"unknown\"` records the current verifier's limit; it does not make the contract false.\n"));
     r.push_str(String::from("\n"));
@@ -8814,12 +8833,12 @@ fn skill_bundle() -> String {
     r
 }
 
-fn skill_support_count() -> i64 {
+fn skill_support_count() -> u64 {
     15
 }
 
-fn skill_support_path(index: i64) -> String vow {
-    requires: index >= 0 && index < skill_support_count()
+fn skill_support_path(index: u64) -> String vow {
+    requires: index < skill_support_count()
 } {
     if index == 0 { return String::from("reference/grammar.md"); }
     if index == 1 { return String::from("reference/cli.md"); }
@@ -8986,11 +9005,12 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). The signedness of a\n"));
     r.push_str(String::from("length is independent of this determinism rationale, so\n"));
     r.push_str(String::from("[ADR 0003](../adr/0003-unsigned-size-types.md) makes lengths fixed-width `u64`:\n"));
-    r.push_str(String::from("`.len()` on `Vec`, `String`, `HashMap`, and `BTreeMap` returns `u64`. An index\n"));
-    r.push_str(String::from("expression accepts any integer type (see [Indexing](#indexing)), so `v[i]` with\n"));
-    r.push_str(String::from("`i: u64` needs no cast. `String` offsets (`byte_at`, `substr`,\n"));
-    r.push_str(String::from("`substring`, `matches_literal_at`) stay `i64` as a documented v1 scope\n"));
-    r.push_str(String::from("decision; see [String offsets](#string-offsets).\n"));
+    r.push_str(String::from("`.len()` on `Vec`, `String`, `HashMap`, and `BTreeMap` returns `u64`. A `Vec`\n"));
+    r.push_str(String::from("index expression has exactly the type `u64` (see [Indexing](#indexing)), so\n"));
+    r.push_str(String::from("`v[i]` with `i: u64` needs no cast, and `v[i]` with `i: i64` is a\n"));
+    r.push_str(String::from("`TypeMismatch`. `String` offsets (`byte_at`, `substr`, `substring`,\n"));
+    r.push_str(String::from("`matches_literal_at`) stay `i64` as a documented v1 scope decision; see\n"));
+    r.push_str(String::from("[String offsets](#string-offsets).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**128-bit implementation status:** `i128`/`u128` types and full-range literal\n"));
     r.push_str(String::from("representation are available to the frontend and IR. Native code generation,\n"));
@@ -9566,7 +9586,7 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("let idx: i64 = loop {\n"));
     r.push_str(String::from("    if data[i] == target {\n"));
-    r.push_str(String::from("        break i;\n"));
+    r.push_str(String::from("        break i as i64;\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("    i = i + 1;\n"));
     r.push_str(String::from("    if i >= n { break -1; }\n"));
@@ -9765,11 +9785,11 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("| `.pop()`       | `() -> ()`                       |\n"));
     r.push_str(String::from("| `.len()`       | `() -> u64`                      |\n"));
     r.push_str(String::from("| `.clear()`     | `() -> ()` -- frees buffer, resets to empty |\n"));
-    r.push_str(String::from("| `.truncate(n)` | `(<int>) -> ()` -- shrinks to n elements, frees excess memory |\n"));
-    r.push_str(String::from("| `v[i]`         | Index read -- copies slot value; aliases heap types (panics if out of bounds) |\n"));
-    r.push_str(String::from("| `v[i] = val`   | Index write -- copies value into slot |\n"));
+    r.push_str(String::from("| `.truncate(n)` | `(u64) -> ()` -- shrinks to n elements, frees excess memory |\n"));
+    r.push_str(String::from("| `v[i]`         | Index read, `i: u64` -- copies slot value; aliases heap types (panics if out of bounds) |\n"));
+    r.push_str(String::from("| `v[i] = val`   | Index write, `i: u64` -- copies value into slot |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.\n"));
+    r.push_str(String::from("`Vec` indices and `.truncate(n)` take exactly `u64`; an unsuffixed integer literal coerces, and any other integer type needs an explicit `as u64`. See [Indexing](#indexing).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### String Methods\n"));
     r.push_str(String::from("\n"));
@@ -9789,7 +9809,7 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("| `.parse_i64()`      | `() -> Option<i64>`         |\n"));
     r.push_str(String::from("| `.parse_u64()`      | `() -> Option<u64>`         |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.\n"));
+    r.push_str(String::from("`<int>` marks a `String` offset or byte-value parameter, which is deliberately *not* `u64`: any integer width and either signedness is accepted, per [String offsets](#string-offsets). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`push_byte`'s argument is a byte *value*, not an index. The valid range is `0..=255`. The compiler does not diagnose a value outside that range (only a literal that does not fit `i64` is a `LiteralOutOfRange` error), and the runtime appends the low 8 bits, so `s.push_byte(300)` appends `44`. Keep byte values within `0..=255`.\n"));
     r.push_str(String::from("\n"));
@@ -9842,11 +9862,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("v[i] = new_val;\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The index expression must have an **integer type**. Any width and either signedness is accepted (`i8` … `i64`, `u8` … `u64`, and unsuffixed integer literals); a non-integer index is a `TypeMismatch` error. The same rule applies to index-shaped builtin-method arguments: `String::byte_at`, both arguments of `String::substring`, and `Vec::get` / `Vec::truncate`. `String::push_byte` takes a byte value, not an index; it is checked with the same integer rule but has its own valid range (see the String method table).\n"));
+    r.push_str(String::from("The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method arguments `Vec::get` and `Vec::truncate`, which take exactly `u64`.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The type checker also accepts a 128-bit index, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `Vec` and `String` element helpers are i64-only, so such a program fails codegen instead. Use a 64-bit or narrower index until epic #526 lands 128-bit lowering.\n"));
-    r.push_str(String::from("\n"));
-    r.push_str(String::from("The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index -- `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).\n"));
+    r.push_str(String::from("The `Vec` runtime helpers take a pointer-width unsigned index, so a `u64` index is never reinterpreted as negative: an index at or beyond `v.len()` is out of bounds, including values above `i64::MAX`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Lengths are `u64` (see [the Vec method table](#vec-methods)), so an index derived from one needs no conversion:\n"));
     r.push_str(String::from("\n"));
@@ -9859,16 +9877,18 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Arithmetic and comparison do not mix signedness: `i64 + u64` and `u64 < i64` are `TypeMismatch`. Convert at the binding with `as`; same-width `as` casts between `i64` and `u64` are legal.\n"));
+    r.push_str(String::from("Arithmetic and comparison do not mix signedness: `i64 + u64` and `u64 < i64` are `TypeMismatch`. Convert at the binding with `as`; same-width `as` casts between `i64` and `u64` are legal. A signed value that is already known to be a valid position is converted at the index site (`v[k as u64]`); a negative `k` becomes a huge `u64` and fails the bounds check.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### String offsets\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`String` offsets stay `i64` in v1. This is a documented scope decision, not an oversight: `String::len()` is `u64`, but the runtime helpers that take an offset or span (`byte_at`, `substr`, `substring`, `matches_literal_at`) still take `i64` and keep live negative-offset behaviour -- `byte_at` returns `-1` for an out-of-range offset, `substr` and `substring` clamp their arguments, and `matches_literal_at` rejects a negative position. Migrating them to `u64` means deleting those guards, which changes runtime semantics for out-of-range callers.\n"));
+    r.push_str(String::from("`String` offsets stay `i64` in v1, unlike `Vec` indices. This is a documented scope decision, not an oversight: `String::len()` is `u64`, but the runtime helpers that take an offset or span (`byte_at`, `substr`, `substring`, `matches_literal_at`) still take `i64` and keep live negative-offset behaviour -- `byte_at` returns `-1` for an out-of-range offset, `substr` and `substring` clamp their arguments, and `matches_literal_at` rejects a negative position. Migrating them to `u64` means deleting those guards, which changes runtime semantics for out-of-range callers.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("What this means at a call site:\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("- The `string_substr` and `string_matches_literal_at` builtins require `i64` offset arguments exactly (see the builtin signature table).\n"));
-    r.push_str(String::from("- The `byte_at` and `substring` methods accept any integer type per the rule above, but the runtime sees an `i64`; a `u64` offset above `i64::MAX` is reinterpreted as negative, exactly as described for unsigned indices above. A length-derived `u64` offset is always in range, so `s.byte_at(i)` with `i < s.len()` is safe.\n"));
+    r.push_str(String::from("- The `byte_at` and `substring` methods accept any integer type, not only `u64`; the argument is checked as an integer (a non-integer is a `TypeMismatch`) and unsuffixed literals are range-checked against `i64`. The runtime sees an `i64`, so a `u64` offset above `i64::MAX` is reinterpreted as negative and clamped rather than treated as a large offset -- `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. A length-derived `u64` offset is always in range, so `s.byte_at(i)` with `i < s.len()` is safe.\n"));
+    r.push_str(String::from("- The checker accepts a 128-bit `String` offset, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `String` helpers are i64-only, so such a program fails codegen. Use a 64-bit or narrower offset until epic #526 lands 128-bit lowering. (A 128-bit `Vec` index is not a codegen question: it is a `TypeMismatch`.) The `u64`-above-`i64::MAX` hazard is tracked in issue #1131.\n"));
+    r.push_str(String::from("- `push_byte` takes a byte *value*, not an offset, and stays `i64`-checked with its own `0..=255` range (see the String method table).\n"));
     r.push_str(String::from("- `byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64` regardless.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.\n"));
@@ -11829,6 +11849,25 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("**Fix:** Change the expression or declared type to match. For an enum pattern,\n"));
     r.push_str(String::from("qualify the variant with the scrutinee's enum name.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::get` / `Vec::truncate`\n"));
+    r.push_str(String::from("arguments must have exactly the type `u64`. An index of any other integer type\n"));
+    r.push_str(String::from("(for example an `i64` counter) or of a non-integer type is a `TypeMismatch`\n"));
+    r.push_str(String::from("in both compilers:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn f(v: Vec<i64>, i: i64) -> i64 {\n"));
+    r.push_str(String::from("    v[i]\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** `index has type 'i64' but must be 'u64'`\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Keep index counters `u64` (`.len()` is already `u64`), or convert at\n"));
+    r.push_str(String::from("the index site with `as u64` (`v[i as u64]`). Unsuffixed integer literals\n"));
+    r.push_str(String::from("coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`) are\n"));
+    r.push_str(String::from("not `u64` in v1 and are unaffected; see\n"));
+    r.push_str(String::from("[String offsets](grammar.md#string-offsets).\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### LiteralOutOfRange\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Type Checker\n"));
@@ -12686,7 +12725,7 @@ fn skill_support_content_reference_stdlib_md_347c6c47() -> String {
     r.push_str(String::from("| `safe_mul` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, b == 0 \\|\\| a <= I64_MAX / b`; `ensures result == a * b` | |\n"));
     r.push_str(String::from("| `safe_div` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result <= a` | `b > 0`, not just `b != 0`. |\n"));
     r.push_str(String::from("| `safe_mod` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result < b` | |\n"));
-    r.push_str(String::from("| `pow` | `(base, exp: i64) -> i64` | `requires base >= 0, exp >= 0`; `ensures result >= 0` | O(exp) -- no fast exponentiation; no overflow guard on the running product. |\n"));
+    r.push_str(String::from("| `pow` | `(base: i64, exp: u64) -> i64` | `requires base >= 0`; `ensures result >= 0` | O(exp) -- no fast exponentiation; no overflow guard on the running product. |\n"));
     r.push_str(String::from("| `midpoint` | `(a, b: i64) -> i64` | `requires a >= 0, a <= b`; `ensures a <= result <= b` | Overflow-safe `a + (b-a)/2`. |\n"));
     r.push_str(String::from("| `diff` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0`; `ensures result >= 0` | `|a - b|`. |\n"));
     r.push_str(String::from("| `divides` | `(d, n: i64) -> bool` | `requires d != 0` | |\n"));
@@ -12711,12 +12750,12 @@ fn skill_support_content_reference_stdlib_md_347c6c47() -> String {
     r.push_str(String::from("| `gcd` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a > 0 \\|\\| b > 0`; `ensures result > 0` | Euclid; loop invariants `x >= 0, y >= 0`. |\n"));
     r.push_str(String::from("| `lcm` | `(a, b: i64) -> i64` | `requires a > 0, b > 0`; `ensures result > 0` | No overflow guard on `(a/g)*b`. |\n"));
     r.push_str(String::from("| `is_prime` | `(n: i64) -> bool` | `requires n >= 0` | Trial division to `i*i <= n`. |\n"));
-    r.push_str(String::from("| `power_mod` | `(base, exp, modulus: i64) -> i64` | `requires base >= 0, exp >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |\n"));
+    r.push_str(String::from("| `power_mod` | `(base: i64, exp: u64, modulus: i64) -> i64` | `requires base >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |\n"));
     r.push_str(String::from("| `factorial` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 1` | No upper bound on `n` -- product overflows past 20!. |\n"));
     r.push_str(String::from("| `fibonacci` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0` | Iterative; overflows past F(92). |\n"));
     r.push_str(String::from("| `isqrt` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0, result*result <= n` | Floor integer sqrt; postcondition is the real spec. |\n"));
     r.push_str(String::from("| `largest_divisor` | `(n: i64) -> i64` | `requires n > 1`; `ensures 1 <= result < n` | Largest proper divisor. |\n"));
-    r.push_str(String::from("| `count_divisors` | `(n: i64) -> i64` | `requires n > 0`; `ensures result >= 1` | |\n"));
+    r.push_str(String::from("| `count_divisors` | `(n: i64) -> u64` | `requires n > 0`; `ensures result >= 1` | |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### math.vec_math\n"));
     r.push_str(String::from("\n"));
@@ -12729,7 +12768,7 @@ fn skill_support_content_reference_stdlib_md_347c6c47() -> String {
     r.push_str(String::from("| `vec_min` / `vec_max` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | |\n"));
     r.push_str(String::from("| `vec_mean` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | Integer mean. |\n"));
     r.push_str(String::from("| `vec_dot` | `(a, b: Vec<i64>) -> i64` | `requires a.len() == b.len()` | |\n"));
-    r.push_str(String::from("| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures result >= 0, result <= v.len() as i64` | Invariant `count <= i`. |\n"));
+    r.push_str(String::from("| `vec_count` | `(v: Vec<i64>, target: i64) -> u64` | `ensures result <= v.len()` | Invariant `count <= i`. |\n"));
     r.push_str(String::from("| `vec_all_in_range` | `(v: Vec<i64>, lo, hi: i64) -> bool` | `requires lo <= hi` | |\n"));
     r.push_str(String::from("| `vec_is_sorted` | `(v: Vec<i64>) -> bool` | -- | Ascending. |\n"));
     r.push_str(String::from("| `vec_prefix_sum` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |\n"));
@@ -12743,22 +12782,22 @@ fn skill_support_content_reference_stdlib_md_347c6c47() -> String {
     r.push_str(String::from("a max-heap over `i64`), with the comparator flipped. Both are value types: every\n"));
     r.push_str(String::from("mutator takes a heap by value and returns a new one.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The defining contract pattern is the **size-shadow invariant** `size == data.len() as i64`\n"));
-    r.push_str(String::from("(`size` is `i64`, `.len()` is `u64`), threaded through every mutator. This is what\n"));
+    r.push_str(String::from("The defining contract pattern is the **size-shadow invariant** `size == data.len()`\n"));
+    r.push_str(String::from("(`size` and `.len()` are both `u64`), threaded through every mutator. This is what\n"));
     r.push_str(String::from("lets ESBMC reason about in-bounds `data[i]` access without a universal quantifier:\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {\n"));
-    r.push_str(String::from("    requires: h.size == h.data.len() as i64,\n"));
-    r.push_str(String::from("    requires: h.size < 9223372036854775807,\n"));
+    r.push_str(String::from("    requires: h.size == h.data.len(),\n"));
+    r.push_str(String::from("    requires: h.size < 18446744073709551615,\n"));
     r.push_str(String::from("    ensures: result.size == h.size + 1,\n"));
-    r.push_str(String::from("    ensures: result.size == result.data.len() as i64\n"));
+    r.push_str(String::from("    ensures: result.size == result.data.len()\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Function (min; `max_*` mirrors) | Signature | Key contracts |\n"));
     r.push_str(String::from("|---------------------------------|-----------|---------------|\n"));
     r.push_str(String::from("| `min_heap_new` | `() -> MinHeap` | `ensures result.size == 0, result.data.len() == 0` |\n"));
-    r.push_str(String::from("| `min_heap_len` | `(h) -> i64` | `ensures result == h.size` |\n"));
+    r.push_str(String::from("| `min_heap_len` | `(h) -> u64` | `ensures result == h.size` |\n"));
     r.push_str(String::from("| `min_heap_is_empty` | `(h) -> bool` | `ensures result == (h.size == 0)` |\n"));
     r.push_str(String::from("| `min_heap_push` | `(h, val: i64) -> MinHeap` | size-shadow in/out; `ensures result.size == h.size + 1` |\n"));
     r.push_str(String::from("| `min_heap_peek` | `(h) -> i64` | `requires h.size > 0, size-shadow`; `ensures result == h.data[0]` |\n"));
@@ -12847,12 +12886,12 @@ fn skill_support_content_reference_stdlib_md_347c6c47() -> String {
     r.push_str(String::from("- Compare: `bignum_cmp`, `bignum_cmp_abs`, `bignum_eq`, `bignum_lt`, `bignum_gt`, `bignum_le`, `bignum_ge`\n"));
     r.push_str(String::from("- Arithmetic: `bignum_negate`, `bignum_abs`, `bignum_add`, `bignum_sub`, `bignum_monus`, `bignum_mul`, `bignum_div`, `bignum_mod`, `bignum_divmod`\n"));
     r.push_str(String::from("- Bitwise (on magnitude): `bignum_and`, `bignum_or`, `bignum_xor`, `bignum_shl`, `bignum_shr`\n"));
-    r.push_str(String::from("- Higher-level: `bignum_pow(base, exp: i64)`, `bignum_gcd`, `bignum_factorial(n: i64)`\n"));
+    r.push_str(String::from("- Higher-level: `bignum_pow(base, exp: u64)`, `bignum_gcd`, `bignum_factorial(n: u64)`\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Contracts present:** `bignum_div`/`bignum_mod`/`bignum_divmod` require\n"));
-    r.push_str(String::from("`!bignum_is_zero(b)`; `bignum_pow` requires `exp >= 0`; `bignum_shl`/`bignum_shr`\n"));
-    r.push_str(String::from("require `n >= 0`; `bignum_factorial` requires `n >= 0` (internal `bigmag_sub_abs`\n"));
-    r.push_str(String::from("requires `bigmag_cmp_abs(a, b) >= 0`).\n"));
+    r.push_str(String::from("`!bignum_is_zero(b)`; the `bignum_pow` exponent, the `bignum_shl`/`bignum_shr` shift\n"));
+    r.push_str(String::from("count and the `bignum_factorial` argument are `u64`, so non-negativity is carried by\n"));
+    r.push_str(String::from("the type (internal `bigmag_sub_abs` requires `bigmag_cmp_abs(a, b) >= 0`).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Semantics to know:**\n"));
     r.push_str(String::from("- **Canonicalization invariant:** a value fits `i64` ⟺ it is `Small`. Every\n"));
@@ -12871,7 +12910,7 @@ fn skill_support_content_reference_stdlib_md_347c6c47() -> String {
     r.push_str(String::from("- Bitwise `and`/`or`/`xor` act on the **magnitude** (Nat semantics) and return a\n"));
     r.push_str(String::from("  non-negative result; `shl`/`shr` shift the magnitude and preserve the sign\n"));
     r.push_str(String::from("  (= multiply / floor-divide by 2ⁿ; a logical bit shift for non-negative operands).\n"));
-    r.push_str(String::from("- `bignum_pow`/`bignum_factorial` take a native `i64` exponent/argument, not a BigNum.\n"));
+    r.push_str(String::from("- `bignum_pow`/`bignum_factorial` take a native `u64` exponent/argument, not a BigNum.\n"));
     r.push_str(String::from("- `bignum_gcd` operates on absolute values; the result is non-negative.\n"));
     r.push_str(String::from("- Multiplication is O(n·m) schoolbook (no Karatsuba).\n"));
     r.push_str(String::from("- The limb algorithms live in internal `bigmag_*` functions over the `BigMag`\n"));
@@ -13093,14 +13132,13 @@ fn skill_support_content_examples_examples_md_d533c48e() -> String {
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("module VecFill\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("fn fill_vec(n: i64) -> Vec<i64> vow {\n"));
-    r.push_str(String::from("    requires: n >= 0,\n"));
-    r.push_str(String::from("    ensures: result.len() as i64 == n\n"));
+    r.push_str(String::from("fn fill_vec(n: u64) -> Vec<i64> vow {\n"));
+    r.push_str(String::from("    ensures: result.len() == n\n"));
     r.push_str(String::from("} {\n"));
     r.push_str(String::from("    let v: Vec<i64> = Vec::new();\n"));
     r.push_str(String::from("    let mut i: u64 = 0;\n"));
-    r.push_str(String::from("    while i < n as u64 vow {\n"));
-    r.push_str(String::from("        invariant: i <= n as u64\n"));
+    r.push_str(String::from("    while i < n vow {\n"));
+    r.push_str(String::from("        invariant: i <= n\n"));
     r.push_str(String::from("    } {\n"));
     r.push_str(String::from("        v.push(i as i64);\n"));
     r.push_str(String::from("        i = i + 1;\n"));
@@ -13126,8 +13164,8 @@ fn skill_support_content_examples_examples_md_d533c48e() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Key points:**\n"));
-    r.push_str(String::from("- `invariant: i <= n as u64` is inductive: true on entry, preserved by the loop body. The lower bound `i >= 0` is carried by the `u64` type, so it needs no clause (and `TautologicalComparison` rejects one)\n"));
-    r.push_str(String::from("- The Vec model tracks `len`, so ESBMC can reason about `result.len() as i64 == n`\n"));
+    r.push_str(String::from("- `invariant: i <= n` is inductive: true on entry, preserved by the loop body. The lower bounds `i >= 0` and `n >= 0` are carried by the `u64` type, so they need no clause (and `TautologicalComparison` rejects one)\n"));
+    r.push_str(String::from("- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`\n"));
     r.push_str(String::from("- The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.\n"));
     r.push_str(String::from("- `VerifyFailed` with `verify_status: \"unknown\"` records the current verifier's limit; it does not make the contract false.\n"));
     r.push_str(String::from("\n"));
@@ -14164,13 +14202,13 @@ fn skill_support_content_schemas_vow_violation_schema_json_169d051f() -> String 
     r
 }
 
-fn skill_support_content_index_guard(index: i64) vow {
-    requires: index >= 0 && index < skill_support_count()
+fn skill_support_content_index_guard(index: u64) vow {
+    requires: index < skill_support_count()
 } {
     let _ok: i64 = 0;
 }
 
-fn skill_support_content(index: i64) -> String {
+fn skill_support_content(index: u64) -> String {
     skill_support_content_index_guard(index);
     if index == 0 { return skill_support_content_reference_grammar_md_92418de9(); }
     if index == 1 { return skill_support_content_reference_cli_md_31f8541a(); }
@@ -14224,7 +14262,7 @@ fn install_skill_tree(root: String, emit_errors: bool) -> String [io, write] {
         return String::from("");
     }
 
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < skill_support_count() {
         let support_path: String = str3(dir, String::from("/"), skill_support_path(i));
         let support_parent: String = skill_parent_dir(support_path);

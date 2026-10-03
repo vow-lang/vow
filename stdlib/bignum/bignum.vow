@@ -580,15 +580,13 @@ fn bigmag_divmod_long(a: BigMag, b: BigMag) -> BigMagDivResult {
     }
 }
 
-fn bigmag_pow(base_val: BigMag, exp: i64) -> BigMag vow {
-    requires: exp >= 0
-} {
+fn bigmag_pow(base_val: BigMag, exp: u64) -> BigMag {
     if exp == 0 {
         bigmag_from_i64(1)
     } else {
         let mut result: BigMag = bigmag_from_i64(1);
         let mut b: BigMag = base_val;
-        let mut e: i64 = exp;
+        let mut e: u64 = exp;
         while e > 0 {
             if e - (e / 2) * 2 == 1 {
                 result = bigmag_mul(result, b);
@@ -611,13 +609,11 @@ fn bigmag_gcd(a: BigMag, b: BigMag) -> BigMag {
     x
 }
 
-fn bigmag_factorial(n: i64) -> BigMag vow {
-    requires: n >= 0
-} {
+fn bigmag_factorial(n: u64) -> BigMag {
     let mut result: BigMag = bigmag_from_i64(1);
-    let mut i: i64 = 2;
+    let mut i: u64 = 2;
     while i <= n {
-        result = bigmag_mul(result, bigmag_from_i64(i));
+        result = bigmag_mul(result, bigmag_from_u64(i));
         i = i + 1;
     }
     result
@@ -676,18 +672,16 @@ fn bigmag_xor(a: BigMag, b: BigMag) -> BigMag {
 }
 
 // Shift the magnitude left by n bits (= multiply by 2^n); sign is preserved.
-fn bigmag_shl(a: BigMag, n: i64) -> BigMag vow {
-    requires: n >= 0
-} {
+fn bigmag_shl(a: BigMag, n: u64) -> BigMag {
     if n == 0 || bigmag_is_zero(a) {
         a
     } else {
-        let limb_shift: i64 = n / 32;
-        let bit_shift: i64 = n - (n / 32) * 32;
+        let limb_shift: u64 = n / 32;
+        let bit_shift: u64 = n - (n / 32) * 32;
         let ad: Vec<u64> = a.limbs;
         let alen: u64 = ad.len();
         let result: Vec<u64> = Vec::new();
-        let mut z: i64 = 0;
+        let mut z: u64 = 0;
         while z < limb_shift {
             result.push(0u64);
             z = z + 1;
@@ -718,33 +712,31 @@ fn bigmag_shl(a: BigMag, n: i64) -> BigMag vow {
 
 // Shift the magnitude right by n bits (= floor-divide magnitude by 2^n);
 // sign is preserved (truncation toward zero for negative operands).
-fn bigmag_shr(a: BigMag, n: i64) -> BigMag vow {
-    requires: n >= 0
-} {
+fn bigmag_shr(a: BigMag, n: u64) -> BigMag {
     if n == 0 || bigmag_is_zero(a) {
         a
     } else {
-        let limb_shift: i64 = n / 32;
-        let bit_shift: i64 = n - (n / 32) * 32;
+        let limb_shift: u64 = n / 32;
+        let bit_shift: u64 = n - (n / 32) * 32;
         let ad: Vec<u64> = a.limbs;
-        let alen: i64 = ad.len() as i64;
+        let alen: u64 = ad.len();
         if limb_shift >= alen {
             bigmag_zero()
         } else {
             let result: Vec<u64> = Vec::new();
             if bit_shift == 0 {
-                let mut i: i64 = limb_shift;
+                let mut i: u64 = limb_shift;
                 while i < alen {
-                    result.push(ad[i as u64]);
+                    result.push(ad[i]);
                     i = i + 1;
                 }
             } else {
                 let pow2: u64 = bigmag_pow2(bit_shift);
                 let inv: u64 = bigmag_pow2(32 - bit_shift);
-                let mut i: i64 = limb_shift;
+                let mut i: u64 = limb_shift;
                 while i < alen {
-                    let low: u64 = ad[i as u64] / pow2;
-                    let high: u64 = if i + 1 < alen { (ad[(i + 1) as u64] % pow2) * inv } else { 0u64 };
+                    let low: u64 = ad[i] / pow2;
+                    let high: u64 = if i + 1 < alen { (ad[i + 1] % pow2) * inv } else { 0u64 };
                     result.push((low + high) & 4294967295u64);
                     i = i + 1;
                 }
@@ -755,9 +747,9 @@ fn bigmag_shr(a: BigMag, n: i64) -> BigMag vow {
 }
 
 // 2^k for k in [0, 32], computed without a dynamic shift count.
-fn bigmag_pow2(k: i64) -> u64 {
+fn bigmag_pow2(k: u64) -> u64 {
     let mut r: u64 = 1u64;
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < k {
         r = r * 2u64;
         i = i + 1;
@@ -1192,9 +1184,7 @@ fn bignum_divmod(a: BigNum, b: BigNum) -> DivResult vow {
     }
 }
 
-fn bignum_pow(base_val: BigNum, exp: i64) -> BigNum vow {
-    requires: exp >= 0
-} {
+fn bignum_pow(base_val: BigNum, exp: u64) -> BigNum {
     bignum_normalize(bigmag_pow(bignum_to_bigmag(base_val), exp))
 }
 
@@ -1202,9 +1192,7 @@ fn bignum_gcd(a: BigNum, b: BigNum) -> BigNum {
     bignum_normalize(bigmag_gcd(bignum_to_bigmag(a), bignum_to_bigmag(b)))
 }
 
-fn bignum_factorial(n: i64) -> BigNum vow {
-    requires: n >= 0
-} {
+fn bignum_factorial(n: u64) -> BigNum {
     bignum_normalize(bigmag_factorial(n))
 }
 
@@ -1222,14 +1210,10 @@ fn bignum_xor(a: BigNum, b: BigNum) -> BigNum {
     bignum_normalize(bigmag_xor(bignum_to_bigmag(a), bignum_to_bigmag(b)))
 }
 
-fn bignum_shl(a: BigNum, n: i64) -> BigNum vow {
-    requires: n >= 0
-} {
+fn bignum_shl(a: BigNum, n: u64) -> BigNum {
     bignum_normalize(bigmag_shl(bignum_to_bigmag(a), n))
 }
 
-fn bignum_shr(a: BigNum, n: i64) -> BigNum vow {
-    requires: n >= 0
-} {
+fn bignum_shr(a: BigNum, n: u64) -> BigNum {
     bignum_normalize(bigmag_shr(bignum_to_bigmag(a), n))
 }

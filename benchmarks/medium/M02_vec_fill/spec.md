@@ -7,15 +7,15 @@ Implement a function `fill_vec` that creates a Vec of `n` elements.
 ## Signature
 
 ```vow
-fn fill_vec(n: i64) -> Vec<i64>
+fn fill_vec(n: u64) -> Vec<i64>
 ```
 
 ## Contracts
 
-- `requires: n >= 0` — count is non-negative
-- `ensures: result.len() as i64 == n` — resulting Vec has exactly `n` elements
-- The loop counter `i` is a `u64` local, so it needs no `invariant: i >= 0`; convert with `n as u64` and `i as i64`
-- Loop `invariant: i <= n as u64`
+- `n` is a `u64` count, so the type already says it is non-negative; no `requires: n >= 0` is needed (and `TautologicalComparison` rejects one)
+- `ensures: result.len() == n` — resulting Vec has exactly `n` elements
+- The loop counter `i` is a `u64` local, so it needs no `invariant: i >= 0`; convert with `i as i64` when pushing
+- Loop `invariant: i <= n`
 
 ## Constraints
 
