@@ -51,13 +51,13 @@ fn cx_read_source(path: String) -> CxReadSource [read] {
 // branch-count form is the one comparable to the AST decision count.
 fn cx_cyclomatic_ir(f: IrFunction) -> i64 {
     let blocks: Vec<IrBlock> = f.blocks;
-    let nb: u64 = blocks.len() as u64;
+    let nb: u64 = blocks.len();
     let mut branches: i64 = 0;
     let mut bi: u64 = 0u64;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: u64 = insts.len() as u64;
+        let ni: u64 = insts.len();
         let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
@@ -74,7 +74,7 @@ fn cx_analyze_ir(f: IrFunction) -> CxIr {
 }
 
 fn cx_vec_has(v: Vec<i64>, x: i64) -> bool {
-    let n: u64 = v.len() as u64;
+    let n: u64 = v.len();
     let mut i: u64 = 0u64;
     while i < n {
         if v[i] == x { return true; }
@@ -87,13 +87,13 @@ fn cx_vec_has(v: Vec<i64>, x: i64) -> bool {
 // consume/borrow ops).
 fn cx_fn_count_op(f: IrFunction, want: i64) -> i64 {
     let blocks: Vec<IrBlock> = f.blocks;
-    let nb: u64 = blocks.len() as u64;
+    let nb: u64 = blocks.len();
     let mut c: i64 = 0;
     let mut bi: u64 = 0u64;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: u64 = insts.len() as u64;
+        let ni: u64 = insts.len();
         let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
@@ -111,12 +111,12 @@ fn cx_fn_count_op(f: IrFunction, want: i64) -> i64 {
 fn cx_fn_callees(f: IrFunction) -> Vec<i64> {
     let out: Vec<i64> = Vec::new();
     let blocks: Vec<IrBlock> = f.blocks;
-    let nb: u64 = blocks.len() as u64;
+    let nb: u64 = blocks.len();
     let mut bi: u64 = 0u64;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: u64 = insts.len() as u64;
+        let ni: u64 = insts.len();
         let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
@@ -142,7 +142,7 @@ fn cx_henry_kafura(nloc: i64, fan_in: i64, fan_out: i64) -> i64 {
 // Is `name` a linear struct? Lookup over parallel name/is-linear Vecs built
 // from the module's struct definitions.
 fn cx_struct_is_linear(name: String, names: Vec<String>, slin: Vec<i64>) -> bool {
-    let n: u64 = names.len() as u64;
+    let n: u64 = names.len();
     let mut i: u64 = 0u64;
     while i < n {
         let nm: String = names[i];
@@ -697,7 +697,7 @@ fn cx_popcount(mask: i64) -> i64 {
 }
 
 fn cx_seen_contains(seen: Vec<String>, s: String) -> bool {
-    let n: u64 = seen.len() as u64;
+    let n: u64 = seen.len();
     let mut i: u64 = 0u64;
     while i < n {
         let e: String = seen[i];

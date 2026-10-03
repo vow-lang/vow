@@ -202,7 +202,7 @@ fn site_to_json(s: Site) -> String {
 fn enumerate_root(read_dir: String, repo_relative_root: String) -> Vec<Site> [read] {
     let all: Vec<Site> = Vec::new();
     let entries: Vec<String> = fs_listdir(read_dir);
-    let n: u64 = entries.len() as u64;
+    let n: u64 = entries.len();
     let mut i: u64 = 0u64;
     while i < n {
         let name: String = entries[i];
@@ -212,7 +212,7 @@ fn enumerate_root(read_dir: String, repo_relative_root: String) -> Vec<Site> [re
             let src: String = fs_read(read_full);
             if src.len() > 0 {
                 let file_sites: Vec<Site> = enumerate_sites(src, display_full);
-                let m: u64 = file_sites.len() as u64;
+                let m: u64 = file_sites.len();
                 let mut j: u64 = 0u64;
                 while j < m {
                     all.push(file_sites[j]);
@@ -267,7 +267,7 @@ fn classify_oracle_rc(rc: i64) -> i64 {
 // paths require it.
 fn shell_quote(s: String) -> String {
     let r: String = String::from("'");
-    let n: u64 = s.len() as u64;
+    let n: u64 = s.len();
     let mut i: u64 = 0u64;
     while i < n {
         let b: i64 = s.byte_at(i as i64);
@@ -351,7 +351,7 @@ fn log_path_for(output_dir: String, id: i64) -> String {
 // supplied here; per-record commas are added between entries.
 fn sites_array_json(sites: Vec<Site>) -> String {
     let r: String = String::from("[\n");
-    let n: u64 = sites.len() as u64;
+    let n: u64 = sites.len();
     let mut i: u64 = 0u64;
     while i < n {
         if i > 0 { r.push_str(String::from(",\n")); }
@@ -444,9 +444,9 @@ fn write_status_lists(output_dir: String, sites: Vec<Site>, statuses: Vec<i64>) 
     buckets.push(ST_TIMEOUT());
     buckets.push(ST_UNVIABLE());
     buckets.push(ST_UNRUN());
-    let n: u64 = sites.len() as u64;
+    let n: u64 = sites.len();
     let mut bi: u64 = 0u64;
-    while bi < buckets.len() as u64 {
+    while bi < buckets.len() {
         let bs: i64 = buckets[bi];
         let body: String = String::from("");
         let mut i: u64 = 0u64;
@@ -684,7 +684,7 @@ fn run_mutants(argv: Vec<String>) -> i32 [io, read, write] {
     let inner: Vec<String> = Vec::new();
     inner.push(String::from("vowc-mutants"));
     let mut i: u64 = 2u64;
-    while i < argv.len() as u64 {
+    while i < argv.len() {
         inner.push(argv[i]);
         i = i + 1;
     }

@@ -117,7 +117,7 @@ fn trace_sample(t: TraceCtx, ts: i64) [io] {
     let raw: String = proc_sample();
     if raw.len() == 0 { return; }
     let lines: Vec<String> = string_split(raw, String::from("\n"));
-    let n: u64 = lines.len() as u64;
+    let n: u64 = lines.len();
     let mut i: u64 = 0u64;
     while i < n {
         let line: String = lines[i];
@@ -207,7 +207,7 @@ fn trace_event_json(ev: TraceEvent) -> String {
 fn trace_serialize(t: TraceCtx) -> String {
     let r: String = String::from("{\"traceEvents\":[");
     let evs: Vec<TraceEvent> = t.events;
-    let n: u64 = evs.len() as u64;
+    let n: u64 = evs.len();
     let mut i: u64 = 0u64;
     while i < n {
         if i > 0 { r.push_byte(44); }

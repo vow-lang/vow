@@ -14,7 +14,7 @@ fn cx_int_flag(argv: Vec<String>, name: String, dflt: i64) -> i64 {
 }
 
 fn cx_flag_present(argv: Vec<String>, name: String) -> bool {
-    let n: u64 = argv.len() as u64;
+    let n: u64 = argv.len();
     let mut i: u64 = 1;
     while i < n {
         if argv[i] == name { return true; }
@@ -37,7 +37,7 @@ fn cx_int_flag_ok(argv: Vec<String>, name: String) -> bool {
 // Look up an IR-derived per-function value by name (parallel name/value Vecs).
 // Returns -1 if the function has no IR (e.g. a body-less declaration).
 fn cx_ir_val_for(name: String, ir_names: Vec<String>, ir_vals: Vec<i64>) -> i64 {
-    let n: u64 = ir_names.len() as u64;
+    let n: u64 = ir_names.len();
     let mut i: u64 = 0;
     while i < n {
         let nm: String = ir_names[i];
@@ -229,7 +229,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let a: AstArena = m.arena;
     let items: Vec<i64> = m.items;
     let item_files: Vec<String> = fr.item_files;
-    let n: u64 = items.len() as u64;
+    let n: u64 = items.len();
 
     // Struct definitions (name -> is_linear) for linear-value counting.
     let struct_names: Vec<String> = Vec::new();
@@ -284,7 +284,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
         ir_fanin.push(cx_ir_fan_in_lookup(ir_fanin_counts, z));
         let mut efo: i64 = 0;
         let mut ci: u64 = 0;
-        let ncs: u64 = cs.len() as u64;
+        let ncs: u64 = cs.len();
         while ci < ncs {
             let callee: i64 = cs[ci];
             if callee >= 0 && callee < nirf {

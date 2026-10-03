@@ -56,7 +56,7 @@ struct FrontendPrep {
 }
 
 fn str_rfind_byte(s: String, b: i64) -> Option<u64> {
-    let n: u64 = s.len() as u64;
+    let n: u64 = s.len();
     let mut i: u64 = n;
     while i > 0 {
         i = i - 1;
@@ -94,7 +94,7 @@ fn resolve_use_path(arena: AstArena, root_dir: String, use_lid: i64) -> String [
 fn load_frontend_deps(root_dir: String, m: Module, arena: AstArena, all_items: Vec<i64>, item_files: Vec<String>, visited: Vec<String>, dctx: DiagCtx, importing_file: String) [io] {
     let uses: Vec<i64> = m.uses;
     let uses_spans: Vec<i64> = m.uses_spans;
-    let n_uses: u64 = uses.len() as u64;
+    let n_uses: u64 = uses.len();
     let mut ui: u64 = 0u64;
     while ui < n_uses {
         let use_lid: i64 = uses[ui];
@@ -114,7 +114,7 @@ fn load_frontend_deps(root_dir: String, m: Module, arena: AstArena, all_items: V
                 let dep_m: Module = parse_module_into(tokens, arena, dctx, dep_path);
                 load_frontend_deps(root_dir, dep_m, arena, all_items, item_files, visited, dctx, dep_path);
                 let dep_items: Vec<i64> = dep_m.items;
-                let n_dep: u64 = dep_items.len() as u64;
+                let n_dep: u64 = dep_items.len();
                 let mut di: u64 = 0u64;
                 while di < n_dep {
                     all_items.push(dep_items[di]);
@@ -169,7 +169,7 @@ fn frontend_prepare_path_traced(path: String, module_root: String, t: TraceCtx) 
     trace_span(t, String::from("module-load"), PID_COMPILER(), TID_MAIN(), t_load, trace_now(t) - t_load, String::from(""));
     let t_merge: i64 = trace_now(t);
     let root_items: Vec<i64> = m.items;
-    let n_root: u64 = root_items.len() as u64;
+    let n_root: u64 = root_items.len();
     let mut ri: u64 = 0u64;
     while ri < n_root {
         all_items.push(root_items[ri]);
@@ -242,7 +242,7 @@ fn frontend_lower_path_traced(path: String, module_root: String, t: TraceCtx) ->
     // bails before this path on errors, but pinning the delta keeps the
     // recount correct under future stage reordering or upstream invariant
     // changes.
-    let pre_diags_len: u64 = checked.dctx.diags.len() as u64;
+    let pre_diags_len: u64 = checked.dctx.diags.len();
     let ir_mod: IrModule = {
         if checked.n_errors > 0 {
             // Keep callers on one lowered entry point even when checking fails.
@@ -292,7 +292,7 @@ fn frontend_lower_path_traced(path: String, module_root: String, t: TraceCtx) ->
     let all_diags: Vec<Diagnostic> = dctx_after.diags;
     let mut region_new_errors: i64 = 0;
     let mut di: u64 = pre_diags_len;
-    while di < all_diags.len() as u64 {
+    while di < all_diags.len() {
         if all_diags[di].severity == SEV_ERROR() {
             region_new_errors = region_new_errors + 1;
         }
