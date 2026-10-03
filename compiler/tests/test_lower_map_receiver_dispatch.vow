@@ -88,6 +88,13 @@ fn main() -> i32 {
     if count_extern_calls(for_each, String::from("__vow_map_get")) != 1 { return 7; }
     if payload_field_ty(for_each) != ITY_U8() { return 8; }
 
+    let nested: IrFunction = probe_function(lower_fixture(
+        String::from("module MapNestedForEach\nfn probe(vv: Vec<Vec<HashMap<i64, u8>>>) -> u8 [panic] {\n    let mut r: u8 = 0;\n    for inner in vv { r = inner[0].get(1).unwrap(); }\n    r\n}\n"),
+        String::from("map_nested_for_each.vow")
+    ));
+    if count_extern_calls(nested, String::from("__vow_map_get")) != 1 { return 12; }
+    if payload_field_ty(nested) != ITY_U8() { return 13; }
+
     let width: IrFunction = probe_function(lower_fixture(
         String::from("module MapElemWidth\nfn probe(v: Vec<HashMap<i64, u8>>) -> u8 [panic] { v[0].get(1).unwrap() }\n"),
         String::from("map_elem_width.vow")

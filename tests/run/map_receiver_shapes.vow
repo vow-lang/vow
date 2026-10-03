@@ -1,4 +1,4 @@
-// TEST: stdout "vec elem=ok\nvec vec=ok\nfield vec=ok\nparen=ok\nlet index=ok\nfor each=ok\nstruct field=ok\ncall result=ok\nunwrap chain=ok\nmap of map=ok\ncontains_key=ok\nlen=ok\ninsert via elem=ok\nremove via elem=ok\nbtree elem=ok\nbtree insert via elem=ok\ni64 value=ok\n"
+// TEST: stdout "vec elem=ok\nvec vec=ok\nfield vec=ok\nparen=ok\nlet index=ok\nfor each=ok\nfor each nested=ok\nfor each struct=ok\nstruct field=ok\ncall result=ok\nunwrap chain=ok\nmap of map=ok\ncontains_key=ok\nlen=ok\ninsert via elem=ok\nremove via elem=ok\nbtree elem=ok\nbtree insert via elem=ok\ni64 value=ok\n"
 module MapReceiverShapes
 
 struct Inner {
@@ -78,6 +78,30 @@ fn for_each() -> bool [panic] {
     seen == 2
 }
 
+fn for_each_nested() -> bool [panic] {
+    let w: Vec<HashMap<i64, u8>> = Vec::new();
+    w.push(mk());
+    let vv: Vec<Vec<HashMap<i64, u8>>> = Vec::new();
+    vv.push(w);
+    let mut seen: u64 = 0;
+    for inner in vv {
+        if inner[0].get(1).unwrap() == 200 && inner[0].contains_key(1) { seen = seen + 1; }
+    }
+    seen == 1
+}
+
+fn for_each_struct() -> bool [panic] {
+    let vs: Vec<HashMap<i64, u8>> = Vec::new();
+    vs.push(mk());
+    let os: Vec<Outer> = Vec::new();
+    os.push(Outer { inner: mk_inner(), vs: vs });
+    let mut seen: u64 = 0;
+    for o in os {
+        if o.vs[0].get(1).unwrap() == 200 && o.inner.m.contains_key(1) { seen = seen + 1; }
+    }
+    seen == 1
+}
+
 fn struct_field() -> bool [panic] {
     let o: Outer = Outer { inner: mk_inner(), vs: Vec::new() };
     o.inner.m.get(1).unwrap() == 200 && mk_inner().m.get(1).unwrap() == 200
@@ -153,6 +177,8 @@ fn main() -> i32 [io, panic] {
     report(String::from("paren"), paren());
     report(String::from("let index"), let_index());
     report(String::from("for each"), for_each());
+    report(String::from("for each nested"), for_each_nested());
+    report(String::from("for each struct"), for_each_struct());
     report(String::from("struct field"), struct_field());
     report(String::from("call result"), call_result());
     report(String::from("unwrap chain"), unwrap_chain());
