@@ -493,6 +493,22 @@ fn lctx_generic_ast_arg_tid(ctx: LowerCtx, tid: i64, expected_name: String, inde
     list_get(ctx.arena, args_lid, index)
 }
 
+// The map tag ("HashMap" or "BTreeMap", else "") of a declared AST type. Method
+// dispatch keys on the receiver tag, so an instruction whose only evidence of
+// being a map is its declared type (a `Vec<HashMap<..>>` element) would
+// otherwise drop `get`/`contains_key`/`insert` silently. Mirrors Rust
+// `map_ast_tag`.
+fn lctx_map_tag_of_ast_tid(ctx: LowerCtx, tid: i64) -> String {
+    if tid == -1 { return String::from(""); }
+    if lctx_generic_ast_arg_tid(ctx, tid, String::from("HashMap"), 0) != -1 {
+        return String::from("HashMap");
+    }
+    if lctx_generic_ast_arg_tid(ctx, tid, String::from("BTreeMap"), 0) != -1 {
+        return String::from("BTreeMap");
+    }
+    String::from("")
+}
+
 // A map stores each value in one 64-bit slot, so the `Option<V>` that `get` and
 // `BTreeMap::insert` return carries the value at full width. For a narrow
 // integer `V` the payload is typed at `V`'s width, or an unwrapped value mixes
@@ -3675,6 +3691,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         get_args.push(idx_phi);
         let elem_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), get_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"));
         lctx_project_vec_index_metadata(ctx, iter_id, elem_id);
+        let iter_elem_ast_tid: i64 = lctx_generic_ast_arg_tid(
+            ctx, lctx_get_declared_ast_tid(ctx, iter_id), String::from("Vec"), 0
+        );
+        if lctx_map_tag_of_ast_tid(ctx, iter_elem_ast_tid) != String::from("") {
+            lctx_tag_declared_ast_tid(ctx, elem_id, iter_elem_ast_tid);
+        }
 
         let for_scope_depth: u64 = ctx.scope_vars.len();
         lctx_push_scope(ctx);
@@ -4174,6 +4196,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut recv_tag_str: String = lctx_get_tag(ctx, recv_id);
         if recv_tag_str == String::from("") && lctx_is_str_eid(ctx, recv_eid) {
             recv_tag_str = String::from("String");
+        }
+        if recv_tag_str == String::from("") {
+            recv_tag_str = lctx_map_tag_of_ast_tid(ctx, lctx_get_declared_ast_tid(ctx, recv_id));
         }
 
         let method_spec: i64 = builtin_method_spec(recv_tag_str, method_name);
