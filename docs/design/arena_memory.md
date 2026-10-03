@@ -534,24 +534,31 @@ wrapper (`__vow_string_parse_i64_opt`, `__vow_map_get`, `__vow_btreemap_get`,
 `__vow_i64_to_u8_try`, `__vow_fs_read`, `__vow_vec_sort`, ...) and
 `<name>_in_arena`, which takes the target arena as its first argument and
 otherwise keeps the base parameters. The set is the `arena_routes` section of
-`docs/spec/operations.json`; `scripts/generate_operations.py` generates
-`vow_ir::FRESH_ARENA_VARIANTS` (and its lookups), the copy in `vow-clif-shim`
-and `fresh_arena_base_extern` / `fresh_arena_variant_extern` in
-`compiler/ir.vow`, and its `--check` verifies the runtime defines every symbol:
+`docs/spec/operations.json`, a plain list of the base symbols (the variant is
+always `<symbol>_in_arena`). `scripts/generate_operations.py` generates
+`vow_ir::FRESH_ARENA_VARIANTS` (with hand-written lookups over it), the copy in
+`vow-clif-shim` and `fresh_arena_base_extern` in `compiler/ir.vow`
+(`fresh_arena_variant_extern` strips the suffix and reuses that one tree), and
+its `--check` verifies the runtime defines every symbol:
 
 - `Option` cells: the `parse_*_opt` family, `HashMap::get`, `BTreeMap::get` and
-  every `<src>_to_<tgt>_try` narrowing conversion.
-- `String` results: `fs_read`, `fs_read_line`, `stdin_read`, `hex_encode`,
-  `format_f64_bits`, `process_get_stdout`, `process_get_stderr`,
-  `process_stdout_for`, `process_stderr_for`.
-- `Vec` results: `vec_sort`, `hex_decode`, `fs_listdir` and `args` (the strings
-  inside the last two are allocated in the same arena as the vector).
+  `BTreeMap::insert`, and every `<src>_to_<tgt>_try` narrowing conversion.
+- `String` results: the string constructors and transformers (`string_new`,
+  `from_cstr`, `clone`, `substr`, `substring`, `from_i64`, `from_u64`, `trim`,
+  `to_upper`, `to_lower`, `replace`, `join`), `fs_read`, `fs_read_line`,
+  `stdin_read`, `hex_encode`, `format_f64_bits`, `process_get_stdout`,
+  `process_get_stderr`, `process_stdout_for` and `process_stderr_for`.
+- `Vec` results: `String::split`, `vec_sort`, `hex_decode`, `fs_listdir` and
+  `args` (the strings inside `fs_listdir`, `args` and `split` are allocated in
+  the same arena as the vector).
+- Map headers: `HashMap::new` and `BTreeMap::new`.
 
 `stdin_read_line` is deliberately absent: it returns a reusable thread-local
-scratch String, not a fresh allocation. Region
-inference treats each builtin in the table (and `BTreeMap::new`/`insert`) as a
-heap-producing extern, so the result is assigned to a block, caller or root
-region like any other fresh allocation, and codegen routes accordingly:
+scratch String, not a fresh allocation.
+
+Region inference treats each builtin in the table as a heap-producing extern,
+so the result is assigned to a block, caller or root region like any other
+fresh allocation, and codegen routes accordingly:
 
 | Result region | Symbol | Lifetime of the cell |
 |---|---|---|
@@ -563,14 +570,20 @@ The root case is the defined owner for escaping lookups: the cell is retained
 in the root arena for the life of the process because the value genuinely
 outlives every region, and the compiler says so with the note. It is 16 bytes
 (it was a 32-byte descriptor), and it no longer takes the process-wide root
-arena lock unless it really is root-owned. A loop of 10^6 non-escaping
-`BTreeMap::get`, `BTreeMap::insert`, `HashMap::get`, `parse_u64` or `_try`
-calls therefore no longer grows resident memory (`bench/memory`
-`alloc_loop_btreemap_get`, `alloc_loop_btreemap_insert`,
-`alloc_loop_btreemap_new`, `alloc_loop_hashmap_get`, `alloc_loop_option_conv`
-and `alloc_loop_fresh_builtins`). The I/O builtins in the table gather their data (file reads, stdin, process
-capture, handle-table access) before allocating, so a root wrapper never holds
-the root-arena lock across blocking I/O or while holding a handle-table lock.
+arena lock unless it really is root-owned.
+
+A loop of 10^6 non-escaping `BTreeMap::get`, `BTreeMap::insert`,
+`HashMap::get`, `parse_u64` or `_try` calls therefore no longer grows resident
+memory. The `bench/memory` programs `alloc_loop_btreemap_get`,
+`alloc_loop_btreemap_insert`, `alloc_loop_btreemap_new`,
+`alloc_loop_hashmap_get`, `alloc_loop_option_conv` and
+`alloc_loop_fresh_builtins` pin this.
+
+The I/O builtins in the table gather their data before allocating: file reads,
+stdin and `args` are collected, and the file and process handle tables are
+copied out and unlocked, before the arena (or the root-arena lock) is touched.
+A root wrapper therefore never holds the root-arena lock across blocking I/O or
+while holding a handle-table lock.
 
 ### 3.4. Determinism
 
