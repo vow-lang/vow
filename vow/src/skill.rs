@@ -4809,7 +4809,7 @@ fn f(a: i64, b: i64) -> i64 vow {
 
 **Fix:** Compare the elements individually, e.g. `requires: a != 1 || b != 2`.
 
-The same code reports a map type whose key or value cannot be stored in the runtime's single 64-bit map slot: a `HashMap` key that is not an integer type of at most 64 bits or `bool`, a `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64`, and a `HashMap` value that is or contains a `linear struct` (see [HashMap key and value types](grammar.md#hashmapk-v-methods)).
+The same code reports a map type whose key or value cannot be stored in the runtime's single 64-bit map slot: a `HashMap` key that is not an integer type of at most 64 bits or `bool`, a `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64`, and a `HashMap` value that is or contains a `linear struct` (see [HashMap key and value types](grammar.md#hashmap-methods)).
 
 ```vow
 fn f() -> () {
@@ -10335,7 +10335,7 @@ fn f(a: i64, b: i64) -> i64 vow {
 
 **Fix:** Compare the elements individually, e.g. `requires: a != 1 || b != 2`.
 
-The same code reports a map type whose key or value cannot be stored in the runtime's single 64-bit map slot: a `HashMap` key that is not an integer type of at most 64 bits or `bool`, a `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64`, and a `HashMap` value that is or contains a `linear struct` (see [HashMap key and value types](grammar.md#hashmapk-v-methods)).
+The same code reports a map type whose key or value cannot be stored in the runtime's single 64-bit map slot: a `HashMap` key that is not an integer type of at most 64 bits or `bool`, a `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64`, and a `HashMap` value that is or contains a `linear struct` (see [HashMap key and value types](grammar.md#hashmap-methods)).
 
 ```vow
 fn f() -> () {
