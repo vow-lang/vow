@@ -489,9 +489,13 @@ The runtime stores each key and each value in one 64-bit slot, with an
 O(n) linear-scan backing (matching the existing root-region
 implementation). Keys compare by value, so a `HashMap` key must be an
 integer of at most 64 bits or `bool`, and a map value may not be
-`i128`/`u128`/`f32`/`f64` (nor, for `HashMap`, linear); the type checker rejects every other map key or value type
-with `UnsupportedFeature` (see `docs/spec/grammar.md`). Heap-typed values
-(`String`, `Vec`, structs) are stored as pointers to their own backings.
+`i128`/`u128`/`f32`/`f64` (nor, for `HashMap`, linear). The type checker
+rejects a `HashMap` key or any map value outside those sets with
+`UnsupportedFeature`, a `BTreeMap` key that is not `i64` with
+`BTreeMapKeyTypeMustBeI64`, and a linear `BTreeMap` value with
+`BTreeMapValueMustBeNonLinear` (see `docs/spec/grammar.md`). Heap-typed
+values (`String`, `Vec`, structs) are stored as pointers to their own
+backings.
 
 ### 3.4. Determinism
 

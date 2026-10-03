@@ -441,7 +441,7 @@ fn f() -> () {
 ### UnsupportedFeature
 
 **Phase:** Type Checker
-**Meaning:** A language feature that is not supported in Vow was used.
+**Meaning:** A language feature that is not supported in Vow was used, or a `HashMap`/`BTreeMap` was written with a key or value type the runtime cannot store (see [Map key and value types](#map-key-and-value-types)).
 
 ```vow
 trait Foo {
@@ -452,6 +452,8 @@ trait Foo {
 **Output:** `trait blocks are not supported in Vow`
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
+
+#### Map key and value types
 
 The same code reports a map type whose key or value cannot be stored in the runtime's single 64-bit map slot: a `HashMap` key that is not an integer type of at most 64 bits or `bool`, a `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64`, and a `HashMap` value that is or contains a `linear struct` (see [HashMap key and value types](grammar.md#hashmap-methods)).
 
@@ -464,6 +466,8 @@ fn f() -> () {
 **Output:** ``HashMap key type `String` is not supported: keys are compared by value as a single machine word``
 
 **Fix:** Hash or intern the key to a `u64` at the call site and keep a side table for the originals. For a 128-bit value, store the two `u64` halves separately. For a linear value, keep it in a local binding and store only an integer handle in the map.
+
+A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
 
 ### BTreeMapKeyTypeMustBeI64
 
