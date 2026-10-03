@@ -1960,12 +1960,25 @@ fn string_creation_extern(sym: &str) -> bool {
 fn option_creation_extern(sym: &str) -> bool {
     matches!(
         sym,
-        "__vow_string_parse_i64_opt" | "__vow_string_parse_i64_opt_in_arena"
+        "__vow_string_parse_i64_opt"
+            | "__vow_string_parse_i64_opt_in_arena"
+            | "__vow_string_parse_u64_opt"
+            | "__vow_string_parse_i8_opt"
+            | "__vow_string_parse_u8_opt"
+            | "__vow_string_parse_i16_opt"
+            | "__vow_string_parse_u16_opt"
+            | "__vow_string_parse_i32_opt"
+            | "__vow_string_parse_u32_opt"
+            | "__vow_btreemap_insert"
+            | "__vow_btreemap_get"
     )
 }
 
 fn map_creation_extern(sym: &str) -> bool {
-    matches!(sym, "__vow_map_new" | "__vow_map_new_in_arena")
+    matches!(
+        sym,
+        "__vow_map_new" | "__vow_map_new_in_arena" | "__vow_btreemap_new"
+    )
 }
 
 fn heap_producing_extern(sym: &str) -> bool {

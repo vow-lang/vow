@@ -4304,11 +4304,21 @@ fn string_creation_extern(sym: String) -> bool {
 fn option_creation_extern(sym: String) -> bool {
     sym == String::from("__vow_string_parse_i64_opt")
         || sym == String::from("__vow_string_parse_i64_opt_in_arena")
+        || sym == String::from("__vow_string_parse_u64_opt")
+        || sym == String::from("__vow_string_parse_i8_opt")
+        || sym == String::from("__vow_string_parse_u8_opt")
+        || sym == String::from("__vow_string_parse_i16_opt")
+        || sym == String::from("__vow_string_parse_u16_opt")
+        || sym == String::from("__vow_string_parse_i32_opt")
+        || sym == String::from("__vow_string_parse_u32_opt")
+        || sym == String::from("__vow_btreemap_insert")
+        || sym == String::from("__vow_btreemap_get")
 }
 
 fn map_creation_extern(sym: String) -> bool {
     sym == String::from("__vow_map_new")
         || sym == String::from("__vow_map_new_in_arena")
+        || sym == String::from("__vow_btreemap_new")
 }
 
 fn heap_producing_extern(sym: String) -> bool {
