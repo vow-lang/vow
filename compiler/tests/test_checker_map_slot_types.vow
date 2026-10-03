@@ -125,18 +125,14 @@ fn check_linear_values() -> i32 [io] {
 }
 
 fn check_forward_referenced_linear_value() -> i32 [io] {
-    let src: String = String::from("module MapSlot\nstruct Holder { m: BTreeMap<i64, Wrap> }\nstruct Wrap { t: Token }\nlinear struct Token { id: i64 }\nfn main() -> i32 { 0 }");
-    let msgs: Vec<Diagnostic> = diagnostics_of(src);
-    let mut found: i64 = 0;
-    let mut j: u64 = 0u64;
-    while j < msgs.len() {
-        let d: Diagnostic = msgs[j];
-        if d.code == EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR() {
-            if d.message.contains(String::from("found 'Wrap'")) { found = found + 1; }
-        }
-        j = j + 1;
-    }
-    if found == 0 { return 51; }
+    let hm: String = String::from("module MapSlot\nstruct Holder { m: HashMap<i64, Wrap> }\nenum Wrap { Has(Token), Nope }\nlinear struct Token { id: i64 }\nfn main() -> i32 { 0 }");
+    if count_code(hm, EC_UNSUPPORTED_FEATURE()) != 1 { return 51; }
+    if !only_message(hm).contains(String::from("HashMap value type must be non-linear; found 'Wrap'")) { return 52; }
+    let bt: String = String::from("module MapSlot\nstruct Holder { m: BTreeMap<i64, Wrap> }\nenum Wrap { Has(Token), Nope }\nlinear struct Token { id: i64 }\nfn main() -> i32 { 0 }");
+    if count_code(bt, EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR()) != 1 { return 53; }
+    if diagnostics_of(bt).len() != 1 { return 54; }
+    let direct: String = String::from("module MapSlot\nlinear struct Token { id: i64 }\nstruct Holder { m: BTreeMap<i64, Token>, h: HashMap<i64, Token> }\nfn main() -> i32 { 0 }");
+    if diagnostics_of(direct).len() != 2 { return 55; }
     0
 }
 
