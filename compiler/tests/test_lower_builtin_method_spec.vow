@@ -73,11 +73,11 @@ fn check_precedence_and_declines() -> i64 {
 }
 
 fn inst_opcode_by_id(function: IrFunction, id: i64) -> i64 {
-    let mut block_index: i64 = 0;
-    while block_index < function.blocks.len() as i64 {
+    let mut block_index: u64 = 0;
+    while block_index < function.blocks.len() {
         let block: IrBlock = function.blocks[block_index];
-        let mut inst_index: i64 = 0;
-        while inst_index < block.insts.len() as i64 {
+        let mut inst_index: u64 = 0;
+        while inst_index < block.insts.len() {
             let inst: IrInst = block.insts[inst_index];
             if inst.id == id { return inst.op; }
             inst_index = inst_index + 1;
@@ -112,11 +112,11 @@ fn check_emitted_calls() -> i64 {
     seen.push(false);
     seen.push(false);
     seen.push(false);
-    let mut block_index: i64 = 0;
-    while block_index < function.blocks.len() as i64 {
+    let mut block_index: u64 = 0;
+    while block_index < function.blocks.len() {
         let block: IrBlock = function.blocks[block_index];
-        let mut inst_index: i64 = 0;
-        while inst_index < block.insts.len() as i64 {
+        let mut inst_index: u64 = 0;
+        while inst_index < block.insts.len() {
             let inst: IrInst = block.insts[inst_index];
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
                 if inst.ds == String::from("__vow_string_len") {
@@ -142,7 +142,7 @@ fn check_emitted_calls() -> i64 {
     }
     let mut i: i64 = 0;
     while i < seen.len() as i64 {
-        if !seen[i] { return 156 + i; }
+        if !seen[i as u64] { return 156 + i; }
         i = i + 1;
     }
     0
@@ -157,11 +157,11 @@ fn check_missing_argument_fallbacks() -> i64 {
     let function: IrFunction = lowered.functions[0];
     let mut unit_fallbacks: i64 = 0;
     let mut zero_fallbacks: i64 = 0;
-    let mut block_index: i64 = 0;
-    while block_index < function.blocks.len() as i64 {
+    let mut block_index: u64 = 0;
+    while block_index < function.blocks.len() {
         let block: IrBlock = function.blocks[block_index];
-        let mut inst_index: i64 = 0;
-        while inst_index < block.insts.len() as i64 {
+        let mut inst_index: u64 = 0;
+        while inst_index < block.insts.len() {
             let inst: IrInst = block.insts[inst_index];
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.args.len() == 2 {
                 if inst.ds == String::from("__vow_string_eq") || inst.ds == String::from("__vow_string_contains") || inst.ds == String::from("__vow_btreemap_get") || inst.ds == String::from("__vow_btreemap_contains") {

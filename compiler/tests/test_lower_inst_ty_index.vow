@@ -17,13 +17,13 @@ fn check_emit_records_inst_types() -> i64 {
     let first_id: i64 = lctx_emit(ctx, IOP_CONST_BOOL(), ITY_BOOL(), Vec::new(), IDATA_CONST_BOOL(), 1, 0, String::from(""));
     if first_id != 0 { return 4; }
     if ctx.inst_ty_by_id.len() != 1 { return 5; }
-    if ctx.inst_ty_by_id[first_id] != ITY_BOOL() { return 6; }
+    if ctx.inst_ty_by_id[first_id as u64] != ITY_BOOL() { return 6; }
     if lctx_inst_ty(ctx, first_id) != ITY_BOOL() { return 7; }
 
     let second_id: i64 = lctx_emit(ctx, IOP_CONST_F64(), ITY_F64(), Vec::new(), IDATA_CONST_F64(), 0, 0, String::from(""));
     if second_id != 1 { return 8; }
     if ctx.inst_ty_by_id.len() != 2 { return 9; }
-    if ctx.inst_ty_by_id[second_id] != ITY_F64() { return 10; }
+    if ctx.inst_ty_by_id[second_id as u64] != ITY_F64() { return 10; }
     if lctx_inst_ty(ctx, second_id) != ITY_F64() { return 11; }
     if lctx_inst_ty(ctx, second_id + 1) != ITY_I64() { return 12; }
 
@@ -40,8 +40,8 @@ fn check_cross_block_lookup() -> i64 {
     if first_id != 0 { return 13; }
     if second_id != 1 { return 14; }
     if ctx.inst_ty_by_id.len() != 2 { return 15; }
-    if ctx.inst_ty_by_id[first_id] != ITY_BOOL() { return 16; }
-    if ctx.inst_ty_by_id[second_id] != ITY_U64() { return 17; }
+    if ctx.inst_ty_by_id[first_id as u64] != ITY_BOOL() { return 16; }
+    if ctx.inst_ty_by_id[second_id as u64] != ITY_U64() { return 17; }
     if lctx_inst_ty(ctx, first_id) != ITY_BOOL() { return 18; }
     if lctx_inst_ty(ctx, second_id) != ITY_U64() { return 19; }
 
@@ -65,7 +65,7 @@ fn check_terminated_emit_does_not_poison_index() -> i64 {
     let real_id: i64 = lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 7, 0, String::from(""));
     if real_id != skipped_id { return 26; }
     if ctx.inst_ty_by_id.len() != 2 { return 27; }
-    if ctx.inst_ty_by_id[real_id] != ITY_U64() { return 28; }
+    if ctx.inst_ty_by_id[real_id as u64] != ITY_U64() { return 28; }
     if lctx_inst_ty(ctx, real_id) != ITY_U64() { return 29; }
 
     0
