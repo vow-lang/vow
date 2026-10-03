@@ -4304,9 +4304,9 @@ fn string_creation_extern(sym: String) -> bool {
         || sym == String::from("__vow_string_join_in_arena")
 }
 
-fn option_creation_extern(sym: String) -> bool {
-    option_arena_base_extern(sym)
-        || option_arena_variant_base(sym).len() > 0
+fn fresh_builtin_extern(sym: String) -> bool {
+    fresh_arena_base_extern(sym)
+        || fresh_arena_variant_base(sym).len() > 0
         || sym == String::from("__vow_btreemap_insert")
         || sym == String::from("__vow_btreemap_insert_in_arena")
 }
@@ -4322,7 +4322,7 @@ fn heap_producing_extern(sym: String) -> bool {
     extern_fresh_in_caller(sym)
         || vec_creation_extern(sym)
         || string_creation_extern(sym)
-        || option_creation_extern(sym)
+        || fresh_builtin_extern(sym)
         || map_creation_extern(sym)
 }
 

@@ -1,0 +1,124 @@
+// TEST: stdout "read=11000\nlines=2,11\nlisted=2\nsorted=1000\nhex=4\nkept=11,11\nargs=1\nproc=80\n"
+// Builtins that return a fresh String or Vec (fs_read, fs_read_line,
+// fs_listdir, vec_sort, hex_encode/decode, args, process_get_stdout) allocate
+// their result in the inferred region: freed with the block in a loop, owned by
+// the caller when returned, retained in the root arena when published through
+// a parameter container. All shapes must read back correctly.
+module FreshBuiltinsRegionRouting
+
+fn read_len(path: String) -> u64 [read] {
+    let s: String = fs_read(path);
+    s.len()
+}
+
+fn read_many(path: String, n: i64) -> u64 [read] {
+    let mut i: i64 = 0;
+    let mut total: u64 = 0;
+    while i < n {
+        total = total + read_len(path);
+        i = i + 1;
+    }
+    total
+}
+
+fn line_stats(path: String) -> String [read] {
+    let h: i64 = fs_open(path);
+    let mut lines: u64 = 0;
+    let mut bytes: u64 = 0;
+    let mut line: String = fs_read_line(h);
+    while line.len() > 0 {
+        lines = lines + 1;
+        bytes = bytes + line.len();
+        line = fs_read_line(h);
+    }
+    fs_close(h);
+    let out: String = i64_to_string(lines as i64);
+    out.push_str(String::from(","));
+    out.push_str(i64_to_string(bytes as i64));
+    out
+}
+
+fn first_sorted(v: Vec<i64>) -> i64 {
+    let s: Vec<i64> = vec_sort(v);
+    s[0]
+}
+
+fn sort_many(n: i64) -> i64 {
+    let v: Vec<i64> = Vec::new();
+    v.push(5);
+    v.push(1);
+    v.push(3);
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < n {
+        total = total + first_sorted(v);
+        i = i + 1;
+    }
+    total
+}
+
+fn hex_len(n: i64) -> u64 {
+    let v: Vec<u8> = Vec::new();
+    v.push(10);
+    v.push(255);
+    let mut i: i64 = 0;
+    let mut total: u64 = 0;
+    while i < n {
+        let back: Vec<u8> = hex_decode(hex_encode(v));
+        total = total + back.len() + hex_encode(v).len() - 2;
+        i = i + 1;
+    }
+    total / (n as u64)
+}
+
+fn keep(results: Vec<String>, path: String) [read] {
+    results.push(fs_read(path));
+    results.push(fs_read(path));
+}
+
+fn proc_len(n: i64) -> u64 [io] {
+    let args: Vec<String> = Vec::new();
+    args.push(String::from("-c"));
+    args.push(String::from("echo abc"));
+    let mut i: i64 = 0;
+    let mut total: u64 = 0;
+    while i < n {
+        process_run(String::from("sh"), args);
+        total = total + process_get_stdout().len() + process_get_stderr().len();
+        i = i + 1;
+    }
+    total
+}
+
+fn main() -> i32 [io, read, write] {
+    let dir: String = String::from("/tmp/vow_fresh_builtins_region_routing");
+    fs_mkdir(dir);
+    let path: String = String::from("/tmp/vow_fresh_builtins_region_routing/data.txt");
+    fs_write(path, String::from("alpha\nbeta\n"));
+    fs_write(String::from("/tmp/vow_fresh_builtins_region_routing/other.txt"), String::from("x"));
+    print_str(String::from("read="));
+    print_u64(read_many(path, 1000));
+    print_str(String::from("\nlines="));
+    print_str(line_stats(path));
+    print_str(String::from("\nlisted="));
+    print_u64(fs_listdir(dir).len());
+    print_str(String::from("\nsorted="));
+    print_i64(sort_many(1000));
+    print_str(String::from("\nhex="));
+    print_u64(hex_len(100));
+    let results: Vec<String> = Vec::new();
+    keep(results, path);
+    print_str(String::from("\nkept="));
+    print_u64(results[0].len());
+    print_str(String::from(","));
+    print_u64(results[1].len());
+    print_str(String::from("\nargs="));
+    print_u64(if args().len() > 0 { 1 } else { 0 });
+    print_str(String::from("\nproc="));
+    print_u64(proc_len(20) - 0);
+    print_str(String::from("\n"));
+    fs_remove(path);
+    fs_remove(String::from("/tmp/vow_fresh_builtins_region_routing/other.txt"));
+    fs_remove_dir(dir);
+    0
+}

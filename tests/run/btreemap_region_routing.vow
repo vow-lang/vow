@@ -1,4 +1,4 @@
-// TEST: stdout "sum=20540\nlookup=49\nprev=20\nkept=13\nbuilt=2000\nnested=28\n"
+// TEST: stdout "sum=20540\nlookup=49\nprev=20\nkept=13\nbuilt=2000\nput=780\nnested=28\n"
 // BTreeMap::new/insert/get allocate in the region the analysis assigns them:
 // a map built in a callee escapes to the caller, a callee grows the caller's
 // map (growth belongs to the map's arena while each returned Option belongs to
@@ -74,6 +74,23 @@ fn scratch_build(rounds: i64) -> i64 {
     total
 }
 
+fn put(m: BTreeMap<i64, i64>, k: i64, v: i64) -> Option<i64> {
+    m.insert(k, v)
+}
+
+// The map grows past its initial capacity in `put_many` while each
+// replaced-value Option is returned out of `put` into the caller's region.
+fn put_many(n: i64) -> i64 {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < n {
+        total = total + decode(put(m, i % 20, i));
+        i = i + 1;
+    }
+    total + (m.len() as i64)
+}
+
 struct Holder {
     map: BTreeMap<i64, i64>,
     tag: i64,
@@ -99,6 +116,8 @@ fn main() -> i32 [io] {
     print_i64(decode(results[0]) + decode(results[1]) + decode(results[2]));
     print_str(String::from("\nbuilt="));
     print_i64(scratch_build(20) - 2401 * 20 + 2000);
+    print_str(String::from("\nput="));
+    print_i64(put_many(60));
     print_str(String::from("\nnested="));
     print_i64(nested());
     print_str(String::from("\n"));

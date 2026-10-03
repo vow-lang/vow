@@ -385,10 +385,11 @@ fn ir_module_new(name: String) -> IrModule {
     }
 }
 
-// Every builtin that returns a fresh Option cell. Each has an `<name>_in_arena`
-// variant that takes the target arena first and otherwise keeps the base
-// parameters; vow-ir's OPTION_ARENA_VARIANTS is the Rust twin of this list.
-fn option_arena_base_extern(sym: String) -> bool {
+// Every runtime builtin whose result is a fresh heap aggregate (an Option
+// cell, a String or a Vec). Each has an `<name>_in_arena` variant that takes
+// the target arena first and otherwise keeps the base parameters; vow-ir's
+// FRESH_ARENA_VARIANTS is the Rust twin of this list.
+fn fresh_arena_base_extern(sym: String) -> bool {
     sym == String::from("__vow_string_parse_i64_opt")
         || sym == String::from("__vow_string_parse_u64_opt")
         || sym == String::from("__vow_string_parse_i8_opt")
@@ -426,26 +427,43 @@ fn option_arena_base_extern(sym: String) -> bool {
         || sym == String::from("__vow_u64_to_u16_try")
         || sym == String::from("__vow_u64_to_u32_try")
         || sym == String::from("__vow_u64_to_u8_try")
+        || sym == String::from("__vow_vec_sort")
+        || sym == String::from("__vow_hex_encode")
+        || sym == String::from("__vow_hex_decode")
+        || sym == String::from("__vow_format_f64_bits")
+        || sym == String::from("__vow_fs_read")
+        || sym == String::from("__vow_fs_read_line")
+        || sym == String::from("__vow_fs_listdir")
+        || sym == String::from("__vow_stdin_read")
+        || sym == String::from("__vow_args")
+        || sym == String::from("__vow_process_get_stdout")
+        || sym == String::from("__vow_process_get_stderr")
+        || sym == String::from("__vow_process_stdout_for")
+        || sym == String::from("__vow_process_stderr_for")
 }
 
-fn option_arena_variant_base(sym: String) -> String {
+fn fresh_arena_variant_base(sym: String) -> String {
     let suffix: String = String::from("_in_arena");
     let n: u64 = sym.len();
     let k: u64 = suffix.len();
     if n <= k {
         return String::from("");
     }
-    if !(sym.substring(n - k, n) == suffix) {
-        return String::from("");
+    let mut i: u64 = 0;
+    while i < k {
+        if sym.byte_at(n - k + i) != suffix.byte_at(i) {
+            return String::from("");
+        }
+        i = i + 1;
     }
     let base: String = sym.substring(0, n - k);
-    if option_arena_base_extern(base) {
+    if fresh_arena_base_extern(base) {
         return base;
     }
     String::from("")
 }
 
-fn option_arena_variant_name(base: String) -> String {
+fn fresh_arena_variant_name(base: String) -> String {
     let variant: String = String::from("");
     variant.push_str(base);
     variant.push_str(String::from("_in_arena"));

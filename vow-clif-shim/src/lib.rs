@@ -622,11 +622,12 @@ fn arena_value_for_region(
     }
 }
 
-/// Every builtin that returns a fresh `Option` cell, paired with its
-/// `<name>_in_arena` variant (target arena first, then the base parameters).
-/// Mirrors `vow_ir::OPTION_ARENA_VARIANTS`; this crate cannot depend on
-/// `vow-ir`, so `option_arena_variants_match_vow_ir` keeps the copies in sync.
-const OPTION_ARENA_VARIANTS: &[(&str, &str)] = &[
+/// Every runtime builtin whose result is a fresh heap aggregate (`Option` cell,
+/// `String` or `Vec`), paired with its `<name>_in_arena` variant (target arena
+/// first, then the base parameters).
+/// Mirrors `vow_ir::FRESH_ARENA_VARIANTS`; this crate cannot depend on
+/// `vow-ir`, so `fresh_arena_variants_match_vow_ir` keeps the copies in sync.
+const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[
     (
         "__vow_string_parse_i64_opt",
         "__vow_string_parse_i64_opt_in_arena",
@@ -688,17 +689,42 @@ const OPTION_ARENA_VARIANTS: &[(&str, &str)] = &[
     ("__vow_u64_to_u16_try", "__vow_u64_to_u16_try_in_arena"),
     ("__vow_u64_to_u32_try", "__vow_u64_to_u32_try_in_arena"),
     ("__vow_u64_to_u8_try", "__vow_u64_to_u8_try_in_arena"),
+    ("__vow_vec_sort", "__vow_vec_sort_in_arena"),
+    ("__vow_hex_encode", "__vow_hex_encode_in_arena"),
+    ("__vow_hex_decode", "__vow_hex_decode_in_arena"),
+    ("__vow_format_f64_bits", "__vow_format_f64_bits_in_arena"),
+    ("__vow_fs_read", "__vow_fs_read_in_arena"),
+    ("__vow_fs_read_line", "__vow_fs_read_line_in_arena"),
+    ("__vow_fs_listdir", "__vow_fs_listdir_in_arena"),
+    ("__vow_stdin_read", "__vow_stdin_read_in_arena"),
+    ("__vow_args", "__vow_args_in_arena"),
+    (
+        "__vow_process_get_stdout",
+        "__vow_process_get_stdout_in_arena",
+    ),
+    (
+        "__vow_process_get_stderr",
+        "__vow_process_get_stderr_in_arena",
+    ),
+    (
+        "__vow_process_stdout_for",
+        "__vow_process_stdout_for_in_arena",
+    ),
+    (
+        "__vow_process_stderr_for",
+        "__vow_process_stderr_for_in_arena",
+    ),
 ];
 
-fn option_arena_variant(sym: &str) -> Option<&'static str> {
-    OPTION_ARENA_VARIANTS
+fn fresh_arena_variant(sym: &str) -> Option<&'static str> {
+    FRESH_ARENA_VARIANTS
         .iter()
         .find(|(base, _)| *base == sym)
         .map(|(_, variant)| *variant)
 }
 
-fn option_arena_base(sym: &str) -> Option<&'static str> {
-    OPTION_ARENA_VARIANTS
+fn fresh_arena_base(sym: &str) -> Option<&'static str> {
+    FRESH_ARENA_VARIANTS
         .iter()
         .find(|(_, variant)| *variant == sym)
         .map(|(base, _)| *base)
@@ -913,7 +939,7 @@ fn routed_vec_extern(
             }
         }
         _ => {
-            if let Some(variant) = option_arena_variant(sym) {
+            if let Some(variant) = fresh_arena_variant(sym) {
                 if (inst_rgn & 3) == REGION_KIND_ROOT {
                     (sym, None)
                 } else {
@@ -3602,7 +3628,7 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
     let call_conv = obj_module.isa().default_call_conv();
     let mut sig = Signature::new(call_conv);
-    if let Some(base) = option_arena_base(sym) {
+    if let Some(base) = fresh_arena_base(sym) {
         let mut sig = make_extern_sig(base, obj_module);
         sig.params.insert(0, AbiParam::new(types::I64));
         return sig;
@@ -4207,10 +4233,10 @@ mod tests {
     }
 
     #[test]
-    fn option_builtins_route_to_their_result_region() {
+    fn fresh_builtins_route_to_their_result_region() {
         let root = region_root();
         let block = region_pack(REGION_KIND_BLOCK, 7);
-        for (base, variant) in OPTION_ARENA_VARIANTS {
+        for (base, variant) in FRESH_ARENA_VARIANTS {
             assert_eq!(
                 routed_vec_extern(base, root, ReceiverRoute::direct(root)),
                 (*base, None),
@@ -4278,11 +4304,11 @@ mod tests {
     }
 
     #[test]
-    fn option_arena_extern_signatures_prepend_the_arena_to_the_base() {
+    fn fresh_arena_extern_signatures_prepend_the_arena_to_the_base() {
         let ctx = __vow_clif_create(0, 0);
         assert_ne!(ctx, 0);
         let module_ctx = unsafe { &*(ctx as *const ModuleContext) };
-        for (base, variant) in OPTION_ARENA_VARIANTS {
+        for (base, variant) in FRESH_ARENA_VARIANTS {
             let base_sig = make_extern_sig(base, &module_ctx.obj_module);
             let variant_sig = make_extern_sig(variant, &module_ctx.obj_module);
             assert!(!base_sig.returns.is_empty(), "{base} must be declared");
@@ -4304,22 +4330,22 @@ mod tests {
     }
 
     #[test]
-    fn option_arena_variants_match_vow_ir() {
+    fn fresh_arena_variants_match_vow_ir() {
         let region_rs = include_str!("../../vow-ir/src/region.rs")
             .split_whitespace()
             .collect::<String>()
             .replace(",)", ")");
         let start = region_rs
-            .find("OPTION_ARENA_VARIANTS:&[(&str,&str)]=&[")
-            .expect("vow_ir::OPTION_ARENA_VARIANTS");
+            .find("FRESH_ARENA_VARIANTS:&[(&str,&str)]=&[")
+            .expect("vow_ir::FRESH_ARENA_VARIANTS");
         let table = &region_rs[start..start + region_rs[start..].find("];").unwrap()];
-        for (base, variant) in OPTION_ARENA_VARIANTS {
+        for (base, variant) in FRESH_ARENA_VARIANTS {
             let row = format!("(\"{base}\",\"{variant}\")");
             assert!(table.contains(&row), "vow_ir table is missing {row}");
         }
         assert_eq!(
             table.matches("_in_arena\")").count(),
-            OPTION_ARENA_VARIANTS.len(),
+            FRESH_ARENA_VARIANTS.len(),
             "vow_ir table has rows the shim table lacks"
         );
     }

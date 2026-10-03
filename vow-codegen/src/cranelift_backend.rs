@@ -16,7 +16,7 @@ use std::sync::Arc;
 use vow_ir::{
     BlockId, FuncId as IrFuncId, Function as IrFunction, HiddenRegionIdx, Inst, InstData, InstId,
     IntegerSignedness, IntegerType, IntegerWidth, Module as IrModule, Opcode, RegionConstraint,
-    RegionId, RegionSummary, Ty as IrTy, option_arena_base, option_arena_variant,
+    RegionId, RegionSummary, Ty as IrTy, fresh_arena_base, fresh_arena_variant,
 };
 
 use crate::return_materialization::{
@@ -914,7 +914,7 @@ fn routed_vec_extern<'a>(
             }
         }
         _ => {
-            if let Some(variant) = option_arena_variant(sym) {
+            if let Some(variant) = fresh_arena_variant(sym) {
                 match inst.region {
                     RegionId::Root => (sym, None),
                     region => (variant, Some(region)),
@@ -2595,7 +2595,7 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
     let call_conv = obj_module.isa().default_call_conv();
     let mut sig = Signature::new(call_conv);
-    if let Some(base) = option_arena_base(sym) {
+    if let Some(base) = fresh_arena_base(sym) {
         let mut sig = make_extern_sig(base, obj_module);
         sig.params.insert(0, AbiParam::new(types::I64)); // target arena
         return sig;
@@ -5600,6 +5600,35 @@ mod tests {
             ),
             ("__vow_i64_to_u8_try", "__vow_i64_to_u8_try_in_arena", 1),
             ("__vow_u64_to_u32_try", "__vow_u64_to_u32_try_in_arena", 1),
+            ("__vow_vec_sort", "__vow_vec_sort_in_arena", 1),
+            ("__vow_hex_encode", "__vow_hex_encode_in_arena", 1),
+            ("__vow_hex_decode", "__vow_hex_decode_in_arena", 1),
+            ("__vow_format_f64_bits", "__vow_format_f64_bits_in_arena", 1),
+            ("__vow_fs_read", "__vow_fs_read_in_arena", 1),
+            ("__vow_fs_read_line", "__vow_fs_read_line_in_arena", 1),
+            ("__vow_fs_listdir", "__vow_fs_listdir_in_arena", 1),
+            ("__vow_stdin_read", "__vow_stdin_read_in_arena", 0),
+            ("__vow_args", "__vow_args_in_arena", 0),
+            (
+                "__vow_process_get_stdout",
+                "__vow_process_get_stdout_in_arena",
+                0,
+            ),
+            (
+                "__vow_process_get_stderr",
+                "__vow_process_get_stderr_in_arena",
+                0,
+            ),
+            (
+                "__vow_process_stdout_for",
+                "__vow_process_stdout_for_in_arena",
+                1,
+            ),
+            (
+                "__vow_process_stderr_for",
+                "__vow_process_stderr_for_in_arena",
+                1,
+            ),
         ];
 
         let mut insts = vec![
@@ -5635,13 +5664,26 @@ mod tests {
     }
 
     #[test]
-    fn root_region_option_builtins_keep_wrapper_symbols() {
+    fn root_region_fresh_builtins_keep_wrapper_symbols() {
         let cases = [
             ("__vow_btreemap_get", 2),
             ("__vow_btreemap_new", 0),
             ("__vow_btreemap_insert", 3),
             ("__vow_string_parse_u64_opt", 1),
             ("__vow_i64_to_u8_try", 1),
+            ("__vow_vec_sort", 1),
+            ("__vow_hex_encode", 1),
+            ("__vow_hex_decode", 1),
+            ("__vow_format_f64_bits", 1),
+            ("__vow_fs_read", 1),
+            ("__vow_fs_read_line", 1),
+            ("__vow_fs_listdir", 1),
+            ("__vow_stdin_read", 0),
+            ("__vow_args", 0),
+            ("__vow_process_get_stdout", 0),
+            ("__vow_process_get_stderr", 0),
+            ("__vow_process_stdout_for", 1),
+            ("__vow_process_stderr_for", 1),
         ];
         let mut insts = vec![
             inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
@@ -5673,7 +5715,7 @@ mod tests {
     }
 
     #[test]
-    fn option_arena_variant_signatures_prepend_the_arena_to_the_base() {
+    fn fresh_arena_variant_signatures_prepend_the_arena_to_the_base() {
         let isa = make_isa(BuildMode::Debug).unwrap();
         let obj_module = ObjectModule::new(
             ObjectBuilder::new(
@@ -5683,7 +5725,7 @@ mod tests {
             )
             .unwrap(),
         );
-        for (base, variant) in vow_ir::OPTION_ARENA_VARIANTS {
+        for (base, variant) in vow_ir::FRESH_ARENA_VARIANTS {
             let base_sig = make_extern_sig(base, &obj_module);
             let variant_sig = make_extern_sig(variant, &obj_module);
             assert_eq!(variant_sig.returns, base_sig.returns, "{variant}");

@@ -491,7 +491,7 @@ Heap-typed keys or values are not yet supported; the surface grammar
 permits them syntactically (`HashMap<K, V>`), but only `i64` × `i64`
 is wired through the runtime.
 
-### 3.3.1. BTreeMap and `Option`-returning builtins
+### 3.3.1. BTreeMap and fresh-aggregate builtins
 
 `BTreeMap<i64, V>` follows the HashMap contract: its header and both parallel
 backing buffers (keys and values) live in one arena, and growth on `insert`
@@ -529,15 +529,26 @@ sanitize`, no shadow-table entry (the previous descriptor-based cell added one
 entry per call that was never removed). A single runtime helper,
 `alloc_option_in_arena`, allocates it and traps on a null arena.
 
-Every builtin that returns a fresh `Option` is a pair: the root wrapper
-(`__vow_string_parse_i64_opt`, `__vow_map_get`, `__vow_btreemap_get`,
-`__vow_i64_to_u8_try`, ...) and `<name>_in_arena`, which takes the target arena
-as its first argument and otherwise keeps the base parameters. The set is the
-table `vow_ir::OPTION_ARENA_VARIANTS` (twin: `option_arena_base_extern` in
+Every runtime builtin that returns a fresh heap aggregate is a pair: the root
+wrapper (`__vow_string_parse_i64_opt`, `__vow_map_get`, `__vow_btreemap_get`,
+`__vow_i64_to_u8_try`, `__vow_fs_read`, `__vow_vec_sort`, ...) and
+`<name>_in_arena`, which takes the target arena as its first argument and
+otherwise keeps the base parameters. The set is the table
+`vow_ir::FRESH_ARENA_VARIANTS` (twin: `fresh_arena_base_extern` in
 `compiler/ir.vow`, plus a copy in `vow-clif-shim`; a test keeps all copies and
-the runtime exports in sync): the `parse_*_opt` family, `HashMap::get`,
-`BTreeMap::get` and every `<src>_to_<tgt>_try` narrowing conversion. Region
-inference treats each of them (and `BTreeMap::new`/`insert`) as a
+the runtime exports in sync):
+
+- `Option` cells: the `parse_*_opt` family, `HashMap::get`, `BTreeMap::get` and
+  every `<src>_to_<tgt>_try` narrowing conversion.
+- `String` results: `fs_read`, `fs_read_line`, `stdin_read`, `hex_encode`,
+  `format_f64_bits`, `process_get_stdout`, `process_get_stderr`,
+  `process_stdout_for`, `process_stderr_for`.
+- `Vec` results: `vec_sort`, `hex_decode`, `fs_listdir` and `args` (the strings
+  inside the last two are allocated in the same arena as the vector).
+
+`stdin_read_line` is deliberately absent: it returns a reusable thread-local
+scratch String, not a fresh allocation. Region
+inference treats each builtin in the table (and `BTreeMap::new`/`insert`) as a
 heap-producing extern, so the result is assigned to a block, caller or root
 region like any other fresh allocation, and codegen routes accordingly:
 
@@ -555,8 +566,10 @@ arena lock unless it really is root-owned. A loop of 10^6 non-escaping
 `BTreeMap::get`, `BTreeMap::insert`, `HashMap::get`, `parse_u64` or `_try`
 calls therefore no longer grows resident memory (`bench/memory`
 `alloc_loop_btreemap_get`, `alloc_loop_btreemap_insert`,
-`alloc_loop_btreemap_new`, `alloc_loop_hashmap_get` and
-`alloc_loop_option_conv`).
+`alloc_loop_btreemap_new`, `alloc_loop_hashmap_get`, `alloc_loop_option_conv`
+and `alloc_loop_fresh_builtins`). The root-wrapper locking order is root lock
+first, then any runtime handle-table lock (`fs_read_line`, `process_*_for`); no
+path takes the root lock while holding a table lock.
 
 ### 3.4. Determinism
 

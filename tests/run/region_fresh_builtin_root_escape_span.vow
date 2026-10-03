@@ -1,0 +1,21 @@
+// TEST: stdout ""
+// vec_sort and fs_read return fresh aggregates that are allocated in the
+// inferred region, so region inference must treat them as heap-producing:
+// publishing either result through a parameter container must surface a
+// RegionRootEscape note instead of freeing the value with the callee's block.
+module RegionFreshBuiltinRootEscapeSpan
+
+fn keep(sorted: Vec<Vec<i64>>, texts: Vec<String>, v: Vec<i64>, path: String) [read] {
+    sorted.push(vec_sort(v));
+    texts.push(fs_read(path));
+}
+
+fn main() -> i32 [read] {
+    let sorted: Vec<Vec<i64>> = Vec::new();
+    let texts: Vec<String> = Vec::new();
+    let v: Vec<i64> = Vec::new();
+    v.push(2);
+    v.push(1);
+    keep(sorted, texts, v, String::from("/dev/null"));
+    0
+}

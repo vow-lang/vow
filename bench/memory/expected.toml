@@ -51,6 +51,11 @@ file = "programs/alloc_loop_btreemap_new.vow"
 max_rss_kb = 6928
 expected = "pass"
 
+[alloc_loop_fresh_builtins]
+file = "programs/alloc_loop_fresh_builtins.vow"
+max_rss_kb = 7248
+expected = "pass"
+
 [alloc_loop_hashmap_get]
 file = "programs/alloc_loop_hashmap_get.vow"
 max_rss_kb = 7012

@@ -1957,12 +1957,14 @@ fn string_creation_extern(sym: &str) -> bool {
     )
 }
 
-/// Every builtin that returns a fresh `Option` cell, paired with its
-/// `<name>_in_arena` variant. The variant takes the target arena as its first
-/// argument and otherwise keeps the base symbol's parameters, so both backends
-/// route the pair generically: the base symbol when the result region is the
-/// root, the variant (with that region's arena prepended) otherwise.
-pub const OPTION_ARENA_VARIANTS: &[(&str, &str)] = &[
+/// Every runtime builtin whose result is a fresh heap aggregate (an `Option`
+/// cell, a `String` or a `Vec`) that is not built from Vow-level allocation
+/// opcodes, paired with its `<name>_in_arena` variant. The variant takes the
+/// target arena as its first argument and otherwise keeps the base symbol's
+/// parameters, so both backends route the pair generically: the base symbol
+/// when the result region is the root, the variant (with that region's arena
+/// prepended) otherwise.
+pub const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[
     (
         "__vow_string_parse_i64_opt",
         "__vow_string_parse_i64_opt_in_arena",
@@ -2024,27 +2026,52 @@ pub const OPTION_ARENA_VARIANTS: &[(&str, &str)] = &[
     ("__vow_u64_to_u16_try", "__vow_u64_to_u16_try_in_arena"),
     ("__vow_u64_to_u32_try", "__vow_u64_to_u32_try_in_arena"),
     ("__vow_u64_to_u8_try", "__vow_u64_to_u8_try_in_arena"),
+    ("__vow_vec_sort", "__vow_vec_sort_in_arena"),
+    ("__vow_hex_encode", "__vow_hex_encode_in_arena"),
+    ("__vow_hex_decode", "__vow_hex_decode_in_arena"),
+    ("__vow_format_f64_bits", "__vow_format_f64_bits_in_arena"),
+    ("__vow_fs_read", "__vow_fs_read_in_arena"),
+    ("__vow_fs_read_line", "__vow_fs_read_line_in_arena"),
+    ("__vow_fs_listdir", "__vow_fs_listdir_in_arena"),
+    ("__vow_stdin_read", "__vow_stdin_read_in_arena"),
+    ("__vow_args", "__vow_args_in_arena"),
+    (
+        "__vow_process_get_stdout",
+        "__vow_process_get_stdout_in_arena",
+    ),
+    (
+        "__vow_process_get_stderr",
+        "__vow_process_get_stderr_in_arena",
+    ),
+    (
+        "__vow_process_stdout_for",
+        "__vow_process_stdout_for_in_arena",
+    ),
+    (
+        "__vow_process_stderr_for",
+        "__vow_process_stderr_for_in_arena",
+    ),
 ];
 
-/// The `_in_arena` variant of an `Option`-returning builtin, if it has one.
-pub fn option_arena_variant(sym: &str) -> Option<&'static str> {
-    OPTION_ARENA_VARIANTS
+/// The `_in_arena` variant of a fresh-aggregate builtin, if it has one.
+pub fn fresh_arena_variant(sym: &str) -> Option<&'static str> {
+    FRESH_ARENA_VARIANTS
         .iter()
         .find(|(base, _)| *base == sym)
         .map(|(_, variant)| *variant)
 }
 
-/// The base symbol an `Option`-returning `_in_arena` variant routes from.
-pub fn option_arena_base(sym: &str) -> Option<&'static str> {
-    OPTION_ARENA_VARIANTS
+/// The base symbol a fresh-aggregate `_in_arena` variant routes from.
+pub fn fresh_arena_base(sym: &str) -> Option<&'static str> {
+    FRESH_ARENA_VARIANTS
         .iter()
         .find(|(_, variant)| *variant == sym)
         .map(|(base, _)| *base)
 }
 
-fn option_creation_extern(sym: &str) -> bool {
-    option_arena_variant(sym).is_some()
-        || option_arena_base(sym).is_some()
+fn fresh_builtin_extern(sym: &str) -> bool {
+    fresh_arena_variant(sym).is_some()
+        || fresh_arena_base(sym).is_some()
         || matches!(
             sym,
             "__vow_btreemap_insert" | "__vow_btreemap_insert_in_arena"
@@ -2065,7 +2092,7 @@ fn heap_producing_extern(sym: &str) -> bool {
     extern_fresh_in_caller(sym)
         || vec_creation_extern(sym)
         || string_creation_extern(sym)
-        || option_creation_extern(sym)
+        || fresh_builtin_extern(sym)
         || map_creation_extern(sym)
 }
 
@@ -6996,6 +7023,76 @@ mod tests {
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::FreshInCaller
+        );
+    }
+
+    #[test]
+    fn returned_fresh_runtime_aggregates_allocate_in_caller_region() {
+        for (sym, arity) in [
+            ("__vow_vec_sort", 1),
+            ("__vow_hex_encode", 1),
+            ("__vow_hex_decode", 1),
+            ("__vow_fs_read", 1),
+            ("__vow_fs_read_line", 1),
+            ("__vow_fs_listdir", 1),
+            ("__vow_stdin_read", 0),
+            ("__vow_args", 0),
+            ("__vow_process_get_stdout", 0),
+            ("__vow_process_stderr_for", 1),
+        ] {
+            let mut insts = vec![inst(
+                0,
+                Opcode::GetArg,
+                Ty::Ptr,
+                vec![],
+                InstData::ArgIndex(0),
+            )];
+            insts.push(inst(
+                1,
+                Opcode::Call,
+                Ty::Ptr,
+                (0..arity).collect(),
+                InstData::CallExtern(sym.to_string()),
+            ));
+            insts.push(inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None));
+            let f = function(0, "fresh", vec![Ty::Ptr], Ty::Ptr, vec![block(0, insts)]);
+            let mut m = module(vec![f]);
+            infer_regions(&mut m);
+
+            assert_eq!(
+                m.functions[0].blocks[0].insts[1].region,
+                RegionId::Caller(HiddenRegionIdx(0)),
+                "{sym}: a returned fresh aggregate must outlive the callee"
+            );
+            assert_eq!(
+                m.functions[0].summary.return_region,
+                RegionConstraint::FreshInCaller,
+                "{sym}"
+            );
+        }
+    }
+
+    #[test]
+    fn unescaped_fresh_runtime_aggregates_are_block_owned() {
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                1,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0],
+                InstData::CallExtern("__vow_fs_read".to_string()),
+            ),
+            inst(2, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(0, "drop_it", vec![Ty::Ptr], Ty::Unit, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            matches!(m.functions[0].blocks[0].insts[1].region, RegionId::Block(_)),
+            "an unused fs_read result dies with the block, got {:?}",
+            m.functions[0].blocks[0].insts[1].region
         );
     }
 

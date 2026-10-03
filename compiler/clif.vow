@@ -310,11 +310,11 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         }
         return String::from("__vow_string_from_u64_in_arena");
     }
-    if option_arena_base_extern(sym) {
+    if fresh_arena_base_extern(sym) {
         if region_kind(inst.rgn) == REGION_KIND_ROOT() {
             return sym;
         }
-        return option_arena_variant_name(sym);
+        return fresh_arena_variant_name(sym);
     }
     if sym == String::from("__vow_string_split") {
         if region_kind(inst.rgn) == REGION_KIND_ROOT() {

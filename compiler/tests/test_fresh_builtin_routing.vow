@@ -1,4 +1,4 @@
-module TestOptionRouting
+module TestFreshBuiltinRouting
 
 use ir
 use region
@@ -6,33 +6,40 @@ use clif
 use tests.builders
 
 // Region inference and the Cranelift extern-symbol routing must agree on which
-// builtins return a fresh Option cell and where `BTreeMap` allocations go.
+// builtins return a fresh heap aggregate (Option cell, String, Vec) and where
+// `BTreeMap` allocations go.
 // Mirrors the routing tests in vow-clif-shim and vow-codegen. Each check
 // returns 0 on pass and a non-zero code on failure.
 
-fn check_option_table() -> i64 {
-    if !option_arena_base_extern(String::from("__vow_string_parse_i64_opt")) { return 1; }
-    if !option_arena_base_extern(String::from("__vow_string_parse_u32_opt")) { return 2; }
-    if !option_arena_base_extern(String::from("__vow_map_get")) { return 3; }
-    if !option_arena_base_extern(String::from("__vow_btreemap_get")) { return 4; }
-    if !option_arena_base_extern(String::from("__vow_i64_to_u8_try")) { return 5; }
-    if !option_arena_base_extern(String::from("__vow_u128_to_u8_try")) { return 6; }
-    if option_arena_base_extern(String::from("__vow_btreemap_insert")) { return 7; }
-    if option_arena_base_extern(String::from("__vow_btreemap_new")) { return 8; }
-    if option_arena_base_extern(String::from("__vow_i64_to_u8_wrap")) { return 9; }
-    if option_arena_base_extern(String::from("__vow_string_parse_i64_opt_in_arena")) { return 10; }
+fn check_fresh_table() -> i64 {
+    if !fresh_arena_base_extern(String::from("__vow_string_parse_i64_opt")) { return 1; }
+    if !fresh_arena_base_extern(String::from("__vow_string_parse_u32_opt")) { return 2; }
+    if !fresh_arena_base_extern(String::from("__vow_map_get")) { return 3; }
+    if !fresh_arena_base_extern(String::from("__vow_btreemap_get")) { return 4; }
+    if !fresh_arena_base_extern(String::from("__vow_i64_to_u8_try")) { return 5; }
+    if !fresh_arena_base_extern(String::from("__vow_u128_to_u8_try")) { return 6; }
+    if fresh_arena_base_extern(String::from("__vow_btreemap_insert")) { return 7; }
+    if fresh_arena_base_extern(String::from("__vow_btreemap_new")) { return 8; }
+    if fresh_arena_base_extern(String::from("__vow_i64_to_u8_wrap")) { return 9; }
+    if fresh_arena_base_extern(String::from("__vow_string_parse_i64_opt_in_arena")) { return 10; }
+    if !fresh_arena_base_extern(String::from("__vow_vec_sort")) { return 11; }
+    if !fresh_arena_base_extern(String::from("__vow_fs_read")) { return 12; }
+    if !fresh_arena_base_extern(String::from("__vow_fs_listdir")) { return 13; }
+    if !fresh_arena_base_extern(String::from("__vow_args")) { return 14; }
+    if !fresh_arena_base_extern(String::from("__vow_process_stderr_for")) { return 15; }
+    if fresh_arena_base_extern(String::from("__vow_stdin_read_line")) { return 16; }
     0
 }
 
 fn check_variant_base() -> i64 {
-    let b1: String = option_arena_variant_base(String::from("__vow_btreemap_get_in_arena"));
+    let b1: String = fresh_arena_variant_base(String::from("__vow_btreemap_get_in_arena"));
     if !(b1 == String::from("__vow_btreemap_get")) { return 1; }
-    let b2: String = option_arena_variant_base(String::from("__vow_i64_to_u8_try_in_arena"));
+    let b2: String = fresh_arena_variant_base(String::from("__vow_i64_to_u8_try_in_arena"));
     if !(b2 == String::from("__vow_i64_to_u8_try")) { return 2; }
-    if option_arena_variant_base(String::from("__vow_btreemap_get")).len() > 0 { return 3; }
-    if option_arena_variant_base(String::from("__vow_string_trim_in_arena")).len() > 0 { return 4; }
-    if option_arena_variant_base(String::from("_in_arena")).len() > 0 { return 5; }
-    if !(option_arena_variant_name(String::from("__vow_map_get")) == String::from("__vow_map_get_in_arena")) { return 6; }
+    if fresh_arena_variant_base(String::from("__vow_btreemap_get")).len() > 0 { return 3; }
+    if fresh_arena_variant_base(String::from("__vow_string_trim_in_arena")).len() > 0 { return 4; }
+    if fresh_arena_variant_base(String::from("_in_arena")).len() > 0 { return 5; }
+    if !(fresh_arena_variant_name(String::from("__vow_map_get")) == String::from("__vow_map_get_in_arena")) { return 6; }
     0
 }
 
@@ -92,6 +99,13 @@ fn check_option_builtins_route_by_result_region() -> i64 {
     if !(routed_symbol(narrow, 1, root, block) == String::from("__vow_i64_to_u8_try_in_arena")) { return 4; }
     let parse: String = String::from("__vow_string_parse_u64_opt");
     if !(routed_symbol(parse, 1, root, block) == String::from("__vow_string_parse_u64_opt_in_arena")) { return 5; }
+    let fsr: String = String::from("__vow_fs_read");
+    if !(routed_symbol(fsr, 1, root, root) == fsr) { return 7; }
+    if !(routed_symbol(fsr, 1, root, block) == String::from("__vow_fs_read_in_arena")) { return 8; }
+    let args: String = String::from("__vow_args");
+    if !(routed_symbol(args, 0, root, block) == String::from("__vow_args_in_arena")) { return 9; }
+    let line: String = String::from("__vow_stdin_read_line");
+    if !(routed_symbol(line, 0, root, block) == line) { return 10; }
     let hget: String = String::from("__vow_map_get");
     if !(routed_symbol(hget, 2, root, block) == String::from("__vow_map_get_in_arena")) { return 6; }
     0
@@ -122,7 +136,7 @@ fn check_btreemap_insert_routes_by_receiver_and_result() -> i64 {
 }
 
 fn main() -> i32 {
-    let r1: i64 = check_option_table();
+    let r1: i64 = check_fresh_table();
     if r1 != 0 { return i64_to_i32_wrap(r1); }
     let r2: i64 = check_variant_base();
     if r2 != 0 { return i64_to_i32_wrap(100 + r2); }
