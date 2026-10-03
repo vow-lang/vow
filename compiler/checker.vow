@@ -1237,7 +1237,7 @@ fn wide_literal_decimal(a: AstArena, lit_eid: i64) -> String {
         magnitude_eid = expr_a(a, magnitude_eid);
     }
     let result: String = String::from("");
-    if negative && (expr_int_lo(a, magnitude_eid) != 0u64 || expr_int_hi(a, magnitude_eid) != 0u64) {
+    if negative && !expr_folds_to_zero(a, magnitude_eid) {
         result.push_str(String::from("-"));
     }
     result.push_str(expr_int_text(a, magnitude_eid));
