@@ -1,0 +1,66 @@
+// TEST: stdout "-128\n-32768\n-2147483648\n-9223372036854775808\n128 0\n255\n65535\n4294967295\n18446744073709551615\n255 255\n30\n18446744073709551614\nT\nT\nT\n"
+module ConstIntegerTypes
+
+const C_I8: i8 = -128;
+const C_I16: i16 = -32768;
+const C_I32: i32 = -2147483648;
+const C_I64: i64 = -9223372036854775808;
+const C_I128: i128 = -170141183460469231731687303715884105728;
+const C_U8: u8 = 255;
+const C_U16: u16 = 65535;
+const C_U32: u32 = 4294967295;
+const C_U64: u64 = 18446744073709551615;
+const C_U128: u128 = 340282366920938463463374607431768211455;
+const IDX: u64 = 2;
+const FLAG: bool = true;
+
+fn show_wide(v: u128) -> () [io] {
+    print_i64(u128_to_u8_wrap(v >> 120) as i64);
+    print_str(" ");
+    print_i64(u128_to_u8_wrap(v) as i64);
+    print_str("\n");
+}
+
+fn show_bool(b: bool) -> () [io] {
+    if b {
+        print_str("T\n");
+    } else {
+        print_str("F\n");
+    }
+}
+
+fn main() -> () [io] {
+    print_i64(C_I8 as i64);
+    print_str("\n");
+    print_i64(C_I16 as i64);
+    print_str("\n");
+    print_i64(C_I32 as i64);
+    print_str("\n");
+    print_i64(C_I64);
+    print_str("\n");
+    show_wide(C_I128 as u128);
+    print_i64(C_U8 as i64);
+    print_str("\n");
+    print_i64(C_U16 as i64);
+    print_str("\n");
+    print_i64(C_U32 as i64);
+    print_str("\n");
+    print_u64(C_U64);
+    print_str("\n");
+    show_wide(C_U128);
+
+    let v: Vec<i64> = Vec::new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    print_i64(v[IDX]);
+    print_str("\n");
+
+    let almost: u64 = C_U64 - 1;
+    print_u64(almost);
+    print_str("\n");
+
+    show_bool(C_U32 > 5);
+    show_bool(IDX < v.len());
+    show_bool(FLAG);
+}

@@ -1,0 +1,19 @@
+// TEST: category callee-blame
+// TEST: counterexample-fn "limit"
+// TEST: counterexample-blame callee
+// A u64 const must reach the verifier model as its exact typed value: the
+// true value is the u64 maximum, so an off-by-one ensures has to fail.
+module ConstU64MaxEnsures
+
+const LIMIT: u64 = 18446744073709551615;
+
+fn limit() -> u64 vow {
+  ensures: result == 18446744073709551614
+} {
+  LIMIT
+}
+
+fn main() -> i32 [io] {
+  print_u64(limit());
+  0
+}

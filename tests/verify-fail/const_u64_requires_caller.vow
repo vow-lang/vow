@@ -1,0 +1,26 @@
+// TEST: category caller-blame
+// TEST: counterexample-fn "caller"
+// TEST: counterexample-blame caller
+// TEST: counterexample-violation "requires i < SLOTS"
+// A u64 const used as the bound of a requires clause: passing the bound
+// itself violates the precondition, and the caller is blamed.
+module ConstU64RequiresCaller
+
+const SLOTS: u64 = 8;
+
+fn advance(i: u64) -> u64 vow {
+  requires: i < SLOTS
+} {
+  i + 1
+}
+
+fn caller() -> u64 vow {
+  ensures: result == 9
+} {
+  advance(8)
+}
+
+fn main() -> i32 [io] {
+  print_u64(caller());
+  0
+}

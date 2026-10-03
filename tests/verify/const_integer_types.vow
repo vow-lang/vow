@@ -1,0 +1,56 @@
+// TEST: category bounds
+// Named constants of every verifiable integer width verify against their
+// literal values, including the u64 maximum and a negative narrow value, and
+// compose with contract clauses as typed bounds.
+module ConstIntegerTypesVerify
+
+const LIMIT: u64 = 18446744073709551615;
+const STEP: u8 = 200;
+const BIAS: i8 = -5;
+const WIDE: u32 = 4294967295;
+const SLOTS: u64 = 8;
+const OFFSET: u64 = 1;
+
+fn limit() -> u64 vow {
+  ensures: result == 18446744073709551615
+} {
+  LIMIT
+}
+
+fn step() -> u8 vow {
+  ensures: result == 200
+} {
+  STEP
+}
+
+fn bias() -> i8 vow {
+  ensures: result == -5
+} {
+  BIAS
+}
+
+fn wide() -> u32 vow {
+  ensures: result == 4294967295
+} {
+  WIDE
+}
+
+fn in_slots(i: u64) -> bool vow {
+  ensures: result == (i < 8)
+} {
+  i < SLOTS
+}
+
+fn advance(i: u64) -> u64 vow {
+  requires: i < SLOTS
+  ensures: result == i + OFFSET
+  ensures: result <= SLOTS
+} {
+  i + OFFSET
+}
+
+fn advance_from_three() -> u64 vow {
+  ensures: result == 4
+} {
+  advance(3)
+}

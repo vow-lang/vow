@@ -1,0 +1,20 @@
+// TEST: category callee-blame
+// TEST: counterexample-fn "wide"
+// TEST: counterexample-blame callee
+// TEST: counterexample-violation "ensures result == 4294967294"
+// A u32 const above i32::MAX must reach the verifier model as an unsigned
+// value, so an off-by-one ensures has to fail.
+module ConstU32MaxEnsures
+
+const WIDE: u32 = 4294967295;
+
+fn wide() -> u32 vow {
+  ensures: result == 4294967294
+} {
+  WIDE
+}
+
+fn main() -> i32 [io] {
+  print_i64(wide() as i64);
+  0
+}

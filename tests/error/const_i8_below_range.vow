@@ -1,0 +1,9 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal -129 does not fit in i8"
+module ConstI8BelowRange
+
+const BAD: i8 = -129;
+
+fn main() -> i32 {
+    0
+}

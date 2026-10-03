@@ -1,0 +1,99 @@
+module TestCheckerConstIntTypes
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use checker
+use env
+
+fn checked_error_count(source: String) -> i64 [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("const_ty.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < parsed.items.len() {
+        item_files.push(String::from("const_ty.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("const_ty.vow"));
+    check_module(check_env, parsed, item_files);
+    dctx.error_count
+}
+
+fn const_errors(ty: String, value: String) -> i64 [io] {
+    let src: String = String::from("module ConstTy\nconst X: ");
+    src.push_str(ty);
+    src.push_str(String::from(" = "));
+    src.push_str(value);
+    src.push_str(String::from(";\nfn main() -> i32 { 0 }"));
+    checked_error_count(src)
+}
+
+fn check_in_range() -> i32 [io] {
+    if const_errors(String::from("i8"), String::from("-128")) != 0 { return 1; }
+    if const_errors(String::from("i8"), String::from("127")) != 0 { return 2; }
+    if const_errors(String::from("i16"), String::from("-32768")) != 0 { return 3; }
+    if const_errors(String::from("i32"), String::from("-2147483648")) != 0 { return 4; }
+    if const_errors(String::from("i64"), String::from("-9223372036854775808")) != 0 { return 5; }
+    if const_errors(String::from("i128"), String::from("-170141183460469231731687303715884105728")) != 0 { return 6; }
+    if const_errors(String::from("u8"), String::from("255")) != 0 { return 7; }
+    if const_errors(String::from("u16"), String::from("65535")) != 0 { return 8; }
+    if const_errors(String::from("u32"), String::from("4294967295")) != 0 { return 9; }
+    if const_errors(String::from("u64"), String::from("18446744073709551615")) != 0 { return 10; }
+    if const_errors(String::from("u128"), String::from("340282366920938463463374607431768211455")) != 0 { return 11; }
+    0
+}
+
+fn check_out_of_range() -> i32 [io] {
+    if const_errors(String::from("i8"), String::from("128")) != 1 { return 21; }
+    if const_errors(String::from("i8"), String::from("-129")) != 1 { return 22; }
+    if const_errors(String::from("u8"), String::from("256")) != 1 { return 23; }
+    if const_errors(String::from("u16"), String::from("65536")) != 1 { return 24; }
+    if const_errors(String::from("u32"), String::from("4294967296")) != 1 { return 25; }
+    if const_errors(String::from("u64"), String::from("18446744073709551616")) != 1 { return 26; }
+    if const_errors(String::from("u64"), String::from("-1")) != 1 { return 27; }
+    if const_errors(String::from("u128"), String::from("-1")) != 1 { return 28; }
+    0
+}
+
+fn check_non_integer_types() -> i32 [io] {
+    if const_errors(String::from("bool"), String::from("42")) != 1 { return 31; }
+    if const_errors(String::from("String"), String::from("42")) != 1 { return 32; }
+    if const_errors(String::from("u64"), String::from("true")) != 1 { return 33; }
+    0
+}
+
+fn check_use_sites() -> i32 [io] {
+    let idx: String = String::from(
+        "module ConstTy\nconst IDX: u64 = 2;\nfn probe(v: Vec<i64>) -> i64 { v[IDX] }"
+    );
+    if checked_error_count(idx) != 0 { return 41; }
+    let signed_idx: String = String::from(
+        "module ConstTy\nconst IDX: i64 = 2;\nfn probe(v: Vec<i64>) -> i64 { v[IDX] }"
+    );
+    if checked_error_count(signed_idx) != 1 { return 42; }
+    let typed_cmp: String = String::from(
+        "module ConstTy\nconst LIMIT: u64 = 10;\nfn probe(n: u64) -> bool { n < LIMIT }"
+    );
+    if checked_error_count(typed_cmp) != 0 { return 43; }
+    let mixed_cmp: String = String::from(
+        "module ConstTy\nconst LIMIT: u64 = 10;\nfn probe(n: i64) -> bool { n < LIMIT }"
+    );
+    if checked_error_count(mixed_cmp) != 1 { return 44; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let in_range: i32 = check_in_range();
+    if in_range != 0 { return in_range; }
+    let out_of_range: i32 = check_out_of_range();
+    if out_of_range != 0 { return out_of_range; }
+    let non_integer: i32 = check_non_integer_types();
+    if non_integer != 0 { return non_integer; }
+    check_use_sites()
+}

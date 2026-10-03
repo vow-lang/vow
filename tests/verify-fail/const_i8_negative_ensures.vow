@@ -1,0 +1,20 @@
+// TEST: category callee-blame
+// TEST: counterexample-fn "bias"
+// TEST: counterexample-blame callee
+// TEST: counterexample-violation "ensures result == -4"
+// A negative i8 const must reach the verifier model as -5, not as its
+// unsigned byte pattern, so an off-by-one ensures has to fail.
+module ConstI8NegativeEnsures
+
+const BIAS: i8 = -5;
+
+fn bias() -> i8 vow {
+  ensures: result == -4
+} {
+  BIAS
+}
+
+fn main() -> i32 [io] {
+  print_i64(bias() as i64);
+  0
+}

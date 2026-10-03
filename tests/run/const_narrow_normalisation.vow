@@ -1,0 +1,38 @@
+// TEST: stdout "3000000000\n3000000001\n-1\n255\n-2\n65535\nT\nT\nT\nT\n"
+module ConstNarrowNormalisation
+
+const BIG_U32: u32 = 3000000000;
+const MAX_U32: u32 = 4294967295;
+const NEG_I8: i8 = -1;
+const MAX_U8: u8 = 255;
+const NEG_I16: i16 = -2;
+const MAX_U16: u16 = 65535;
+
+fn show_bool(b: bool) -> () [io] {
+    if b {
+        print_str("T\n");
+    } else {
+        print_str("F\n");
+    }
+}
+
+fn main() -> () [io] {
+    print_u64(BIG_U32 as u64);
+    print_str("\n");
+    print_u64((BIG_U32 + 1) as u64);
+    print_str("\n");
+    print_i64(NEG_I8 as i64);
+    print_str("\n");
+    print_u64(MAX_U8 as u64);
+    print_str("\n");
+    print_i64(NEG_I16 as i64);
+    print_str("\n");
+    print_u64(MAX_U16 as u64);
+    print_str("\n");
+
+    let lit: u32 = 4294967295;
+    show_bool(lit == MAX_U32);
+    show_bool(BIG_U32 > 2147483648);
+    show_bool(MAX_U32 > BIG_U32);
+    show_bool(MAX_U16 as u64 == 65535);
+}

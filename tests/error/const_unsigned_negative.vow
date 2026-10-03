@@ -1,0 +1,9 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal -1 does not fit in u64"
+module ConstUnsignedNegative
+
+const BAD: u64 = -1;
+
+fn main() -> i32 {
+    0
+}

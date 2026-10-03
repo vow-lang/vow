@@ -981,7 +981,6 @@ pub struct Checker<'e> {
     /// Stack of break-value type collectors. `Some(vec)` for `loop` (collects
     /// break types), `None` for `while` (break-with-value is an error).
     break_types_stack: Vec<Option<Vec<Ty>>>,
-    pub const_values: HashMap<String, i64>,
     pub const_types: HashMap<String, Ty>,
 }
 
@@ -1025,7 +1024,6 @@ impl<'e> Checker<'e> {
             nonneg_casts: HashMap::new(),
             in_loop: 0,
             break_types_stack: Vec::new(),
-            const_values: HashMap::new(),
             const_types: HashMap::new(),
         }
     }
@@ -1280,8 +1278,8 @@ impl<'e> Checker<'e> {
                     }
                 };
                 match &c.value.kind {
-                    ExprKind::Lit(Lit::Int(v)) => {
-                        if ty != Ty::I64 && ty != Ty::I32 {
+                    ExprKind::Lit(Lit::Int(_)) => {
+                        if !ty.is_integer() {
                             self.emit_error(
                                 ErrorCode::TypeMismatch,
                                 format!(
@@ -1292,10 +1290,9 @@ impl<'e> Checker<'e> {
                             );
                         }
                         self.check_integer_literal_range(&c.value, &ty);
-                        self.const_values.insert(c.name.clone(), *v as i64);
                         self.const_types.insert(c.name.clone(), ty.clone());
                     }
-                    ExprKind::Lit(Lit::Bool(b)) => {
+                    ExprKind::Lit(Lit::Bool(_)) => {
                         if ty != Ty::Bool {
                             self.emit_error(
                                 ErrorCode::TypeMismatch,
@@ -1303,14 +1300,13 @@ impl<'e> Checker<'e> {
                                 c.span,
                             );
                         }
-                        self.const_values.insert(c.name.clone(), *b as i64);
                         self.const_types.insert(c.name.clone(), ty.clone());
                     }
                     ExprKind::UnaryOp {
                         op: UnOp::Neg,
                         operand,
                     } => {
-                        if ty != Ty::I64 && ty != Ty::I32 {
+                        if !ty.is_integer() {
                             self.emit_error(
                                 ErrorCode::TypeMismatch,
                                 format!(
@@ -1321,8 +1317,7 @@ impl<'e> Checker<'e> {
                             );
                         }
                         self.check_integer_literal_range(&c.value, &ty);
-                        if let ExprKind::Lit(Lit::Int(v)) = &operand.kind {
-                            self.const_values.insert(c.name.clone(), -(*v as i64));
+                        if let ExprKind::Lit(Lit::Int(_)) = &operand.kind {
                             self.const_types.insert(c.name.clone(), ty.clone());
                         } else {
                             self.emit_error(

@@ -51,7 +51,9 @@ struct LowerCtx {
     cur_vow_lid: i64,
     str_eids: Vec<i64>,
     const_names: Vec<String>,
+    // low and high 64-bit limbs of the 128-bit two's-complement literal pattern
     const_values: Vec<i64>,
+    const_his: Vec<i64>,
     const_tids: Vec<i64>,
     loop_exit_blocks: Vec<i64>,
     loop_header_blocks: Vec<i64>,
@@ -150,6 +152,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         str_eids: str_eids,
         const_names: Vec::new(),
         const_values: Vec::new(),
+        const_his: Vec::new(),
         const_tids: Vec::new(),
         loop_exit_blocks: Vec::new(),
         loop_header_blocks: Vec::new(),
@@ -2345,23 +2348,75 @@ fn merge_if_result_ty(then_ty: i64, then_is_marker: bool, else_ty: i64) -> i64 {
     then_ty
 }
 
-fn emit_narrow_integer_constant(ctx: LowerCtx, value: i64, ty: i64) -> i64 {
+// Stored data bits of a narrow integer constant: the low byte for i8/u8, the
+// low 32 bits sign-extended for i16/u16/i32/u32. Twin of the casts inside
+// emit_narrow_integer_constant in vow-ir/src/lower/mod.rs.
+fn narrow_const_bits(value: i64, ty: i64) -> i64 {
+    if ty == ITY_I8() || ty == ITY_U8() {
+        return value & 255;
+    }
+    let low: i64 = value & 4294967295;
+    if low >= 2147483648 {
+        return low - 4294967296;
+    }
+    low
+}
+
+fn emit_narrow_integer_constant(ctx: LowerCtx, raw_value: i64, ty: i64) -> i64 {
     if ty == ITY_U64() {
         let u64_args: Vec<i64> = Vec::new();
-        return lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), u64_args, IDATA_CONST_U64(), value, 0, String::from(""));
+        return lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), u64_args, IDATA_CONST_U64(), raw_value, 0, String::from(""));
     }
+    let value: i64 = narrow_const_bits(raw_value, ty);
     let narrow_op: i64 = if ty == ITY_I8() || ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
     let narrow_data: i64 = if ty == ITY_I8() || ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
     let const_args: Vec<i64> = Vec::new();
     lctx_emit(ctx, narrow_op, ty, const_args, narrow_data, value, 0, String::from(""))
 }
 
-fn emit_wide_integer_constant(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) -> i64 {
+fn emit_wide_limbs_constant(ctx: LowerCtx, ty: i64, lo: i64, hi: i64) -> i64 {
     let wide_op: i64 = if ty == ITY_I128() { IOP_CONST_I128() } else { IOP_CONST_U128() };
     let wide_data: i64 = if ty == ITY_I128() { IDATA_CONST_I128() } else { IDATA_CONST_U128() };
     let const_args: Vec<i64> = Vec::new();
-    lctx_emit(ctx, wide_op, ty, const_args, wide_data,
-        expr_int_lo(a, eid) as i64, expr_int_hi(a, eid) as i64, String::from(""))
+    lctx_emit(ctx, wide_op, ty, const_args, wide_data, lo, hi, String::from(""))
+}
+
+fn emit_wide_integer_constant(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) -> i64 {
+    emit_wide_limbs_constant(ctx, ty, expr_int_lo(a, eid) as i64, expr_int_hi(a, eid) as i64)
+}
+
+// Low and high 64-bit limbs of a const declaration's value. A negated literal
+// is the 128-bit two's complement of its magnitude.
+fn const_decl_lo(a: AstArena, eid: i64) -> i64 {
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_LIT_INT() || tag == EXPR_LIT_BOOL() {
+        return expr_a(a, eid);
+    }
+    if tag == EXPR_UNOP() {
+        let inner_eid: i64 = expr_b(a, eid);
+        if expr_tag(a, inner_eid) == EXPR_LIT_INT() {
+            return 0 - expr_a(a, inner_eid);
+        }
+    }
+    0
+}
+
+fn const_decl_hi(a: AstArena, eid: i64) -> i64 {
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_LIT_INT() {
+        return expr_b(a, eid);
+    }
+    if tag == EXPR_UNOP() {
+        let inner_eid: i64 = expr_b(a, eid);
+        if expr_tag(a, inner_eid) == EXPR_LIT_INT() {
+            let hi: i64 = expr_b(a, inner_eid);
+            if expr_a(a, inner_eid) == 0 {
+                return 0 - hi;
+            }
+            return 0 - hi - 1;
+        }
+    }
+    0
 }
 
 fn emit_integer_zero(ctx: LowerCtx, ty: i64) -> i64 {
@@ -2619,6 +2674,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let args: Vec<i64> = Vec::new();
                 if ct == ITY_BOOL() {
                     return lctx_emit(ctx, IOP_CONST_BOOL(), ITY_BOOL(), args, IDATA_CONST_BOOL(), cv, 0, String::from(""));
+                }
+                if ct == ITY_I128() || ct == ITY_U128() {
+                    return emit_wide_limbs_constant(ctx, ct, cv, ctx.const_his[ci]);
+                }
+                if diverges_from_speculative_int(ct) {
+                    return emit_narrow_integer_constant(ctx, cv, ct);
                 }
                 return lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), args, IDATA_CONST_I64(), cv, 0, String::from(""));
             }
@@ -5977,6 +6038,7 @@ fn lower_module_vow(
 
     let cnames: Vec<String> = Vec::new();
     let cvals: Vec<i64> = Vec::new();
+    let chis: Vec<i64> = Vec::new();
     let ctids: Vec<i64> = Vec::new();
     let mut ci: u64 = 0;
     while ci < n_items {
@@ -5987,26 +6049,10 @@ fn lower_module_vow(
             let cn_sid: i64 = cdef_name_sid(a, iid);
             let cn: String = arena_str(a, cn_sid);
             let cv_eid: i64 = cdef_value_eid(a, iid);
-            let cv_tag: i64 = expr_tag(a, cv_eid);
-            let cv: i64 = {
-                if cv_tag == EXPR_LIT_INT() {
-                    expr_a(a, cv_eid)
-                } else if cv_tag == EXPR_LIT_BOOL() {
-                    expr_a(a, cv_eid)
-                } else if cv_tag == EXPR_UNOP() {
-                    let inner_eid: i64 = expr_b(a, cv_eid);
-                    let inner_tag: i64 = expr_tag(a, inner_eid);
-                    if inner_tag == EXPR_LIT_INT() {
-                        0 - expr_a(a, inner_eid)
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                }
-            };
-            let ct: i64 = lower_ast_ty_linear(a, cdef_type_tid(a, iid), linear_owner_names, type_alias_names, type_alias_target_tids);
+            let cv: i64 = const_decl_lo(a, cv_eid);
             cnames.push(cn);
+            chis.push(const_decl_hi(a, cv_eid));
+            let ct: i64 = lower_ast_ty_linear(a, cdef_type_tid(a, iid), linear_owner_names, type_alias_names, type_alias_target_tids);
             cvals.push(cv);
             ctids.push(ct);
         }
@@ -6050,6 +6096,7 @@ fn lower_module_vow(
     ctx.enum_variant_payload_ast_tids = enum_variant_payload_ast_tids;
     ctx.const_names = cnames;
     ctx.const_values = cvals;
+    ctx.const_his = chis;
     ctx.const_tids = ctids;
 
     let all_strings: Vec<String> = Vec::new();

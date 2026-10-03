@@ -1,0 +1,9 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal 18446744073709551616 does not fit in u64"
+module ConstU64AboveMax
+
+const BAD: u64 = 18446744073709551616;
+
+fn main() -> i32 {
+    0
+}

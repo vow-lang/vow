@@ -965,8 +965,9 @@ pub(crate) struct LowerCtx {
     struct_field_ast_types: Rc<HashMap<String, Vec<AstType>>>,
     // expr addresses whose resolved type is String (from checker)
     string_exprs: StringExprSet,
-    // const name → (compile-time value, declared type)
-    const_map: HashMap<String, (i64, Ty)>,
+    // const name → (128-bit two's-complement pattern of the literal, declared
+    // type); the emitters truncate the pattern to the declared width
+    const_map: HashMap<String, (u128, Ty)>,
     // loop exit block stack for break
     loop_exit_blocks: Vec<BlockId>,
     // loop header block stack for continue
@@ -1609,12 +1610,26 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         },
         ExprKind::Ident(name) => {
             if let Some(&(val, ref ty)) = ctx.const_map.get(name.as_str()) {
-                let (opcode, data) = if *ty == Ty::Bool {
-                    (Opcode::ConstBool, InstData::ConstBool(val != 0))
-                } else {
-                    (Opcode::ConstI64, InstData::ConstI64(val))
-                };
-                return ctx.emit(opcode, *ty, vec![], data, span);
+                let ty = *ty;
+                if ty == Ty::Bool {
+                    return ctx.emit(
+                        Opcode::ConstBool,
+                        ty,
+                        vec![],
+                        InstData::ConstBool(val != 0),
+                        span,
+                    );
+                }
+                if diverges_from_speculative_int(ty) {
+                    return emit_narrow_integer_constant(ctx, val, ty, span);
+                }
+                return ctx.emit(
+                    Opcode::ConstI64,
+                    ty,
+                    vec![],
+                    InstData::ConstI64(val as i64),
+                    span,
+                );
             }
             ctx.lookup(name)
                 .unwrap_or_else(|| panic!("undefined variable: {name}"))
@@ -5005,7 +5020,7 @@ fn lower_function_with_pattern_aggregates(
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
     pattern_aggregates: &Rc<PatternAggregateMap>,
-    const_map: &HashMap<String, (i64, Ty)>,
+    const_map: &HashMap<String, (u128, Ty)>,
 ) -> (Function, Vec<String>, Vec<vow_diag::Diagnostic>) {
     let params: Vec<Ty> = fn_def
         .params
@@ -5156,7 +5171,7 @@ fn lower_function(
     struct_field_type_names: HashMap<String, Vec<String>>,
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
-    const_map: &HashMap<String, (i64, Ty)>,
+    const_map: &HashMap<String, (u128, Ty)>,
 ) -> (Function, Vec<String>, Vec<vow_diag::Diagnostic>) {
     lower_function_with_pattern_aggregates(
         fn_def,
@@ -5244,18 +5259,18 @@ pub fn lower_module_with_pattern_aggregates(
         .collect();
 
     // Collect const declarations
-    let mut const_map: HashMap<String, (i64, Ty)> = HashMap::new();
+    let mut const_map: HashMap<String, (u128, Ty)> = HashMap::new();
     for item in &module.items {
         if let Item::Const(c) = item {
             let val = match &c.value.kind {
-                ExprKind::Lit(Lit::Int(v)) => *v as i64,
-                ExprKind::Lit(Lit::Bool(b)) => *b as i64,
+                ExprKind::Lit(Lit::Int(v)) => *v,
+                ExprKind::Lit(Lit::Bool(b)) => u128::from(*b),
                 ExprKind::UnaryOp {
                     op: UnOp::Neg,
                     operand,
                 } => {
                     if let ExprKind::Lit(Lit::Int(v)) = &operand.kind {
-                        -(*v as i64)
+                        v.wrapping_neg()
                     } else {
                         0
                     }
@@ -6467,6 +6482,65 @@ fn unsigned_max() -> u128 {
 
     fn insts_of(func: &Function) -> Vec<&Inst> {
         func.blocks.iter().flat_map(|block| &block.insts).collect()
+    }
+
+    #[test]
+    fn const_idents_lower_to_their_declared_width() {
+        let module = lower_source_to_module(
+            r#"
+module ConstWidths
+
+const A: u64 = 18446744073709551615;
+const B: i8 = -1;
+const C: u32 = 3000000000;
+const D: i128 = -18446744073709551625;
+const E: i64 = -1;
+const F: u128 = 55340232221128654855;
+const G: i16 = -2;
+const H: bool = true;
+
+fn a() -> u64 { A }
+fn b() -> i8 { B }
+fn c() -> u32 { C }
+fn d() -> i128 { D }
+fn e() -> i64 { E }
+fn f() -> u128 { F }
+fn g() -> i16 { G }
+fn h() -> bool { H }
+"#,
+            "const_widths.vow",
+        );
+
+        let expected = [
+            ("a", Ty::U64, InstData::ConstU64(u64::MAX)),
+            ("b", Ty::I8, InstData::ConstU8(255)),
+            ("c", Ty::U32, InstData::ConstI32(3_000_000_000_u32 as i32)),
+            (
+                "d",
+                Ty::I128,
+                InstData::ConstI128(-18_446_744_073_709_551_625),
+            ),
+            ("e", Ty::I64, InstData::ConstI64(-1)),
+            ("f", Ty::U128, InstData::ConstU128((3_u128 << 64) | 7)),
+            ("g", Ty::I16, InstData::ConstI32(-2)),
+            ("h", Ty::Bool, InstData::ConstBool(true)),
+        ];
+        for (name, ty, data) in expected {
+            let func = module
+                .functions
+                .iter()
+                .find(|func| func.name == name)
+                .unwrap_or_else(|| panic!("missing function {name}"));
+            let insts = insts_of(func);
+            assert_eq!(
+                insts.len(),
+                2,
+                "function {name} must lower to exactly a const and a return"
+            );
+            let inst = insts[0];
+            assert_eq!(inst.ty, ty, "function {name} const type");
+            assert_eq!(inst.data, data, "function {name} const data");
+        }
     }
 
     #[test]
