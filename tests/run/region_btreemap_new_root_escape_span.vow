@@ -1,0 +1,15 @@
+// TEST: stdout ""
+// Issue #1265 regression: the inline BTreeMap::new() is published through a
+// parameter container, so its allocation must surface as a RegionRootEscape
+// note, mirroring region_vec_new_root_escape_span.vow's HashMap/Vec coverage.
+module RegionBTreeMapNewRootEscapeSpan
+
+fn push_empty(maps: Vec<BTreeMap<i64, i64>>) {
+    maps.push(BTreeMap::new());
+}
+
+fn main() -> i32 {
+    let maps: Vec<BTreeMap<i64, i64>> = Vec::new();
+    push_empty(maps);
+    0
+}
