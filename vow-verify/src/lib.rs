@@ -1,12 +1,13 @@
 pub mod c_emitter;
 mod const_fold;
 pub mod esbmc;
+pub mod model_bounds;
 pub mod solver_strategy;
 
 pub use c_emitter::{
     ARITH_ASSERT_SUPPRESS_MACRO, ArithAbort, CALLER_PRECONDITION_VOW_ID, ConstantValue,
-    ModelCapacityBound, UNATTRIBUTED_VOW_ID, UNSUPPORTED_OP_VOW_ID, VerifyLimits,
-    contracts_only_source, detect_constant_functions, model_capacity_bounds, non_modelable_reason,
+    UNATTRIBUTED_VOW_ID, UNSUPPORTED_OP_VOW_ID, VerifyLimits, contracts_only_source,
+    detect_constant_functions, non_modelable_reason,
 };
 pub use esbmc::{
     ArithOverflowSite, CalleePrecondition, Counterexample, DEFAULT_MAX_K_STEP, ReachVerdict,
@@ -16,6 +17,7 @@ pub use esbmc::{
     run_esbmc_k_induction, run_esbmc_multi_property, run_esbmc_reach, run_esbmc_with_max_k_step,
     verify,
 };
+pub use model_bounds::{ModelCapacityBound, model_capacity_bounds};
 pub use solver_strategy::{
     DEFAULT_AUTO_TIMEOUT_SECS, DEFAULT_ESBMC_MEMLIMIT_MB, Encoding, Solver, SolverConfig,
     classify_function, default_memlimit_mb, run_with_fallback,

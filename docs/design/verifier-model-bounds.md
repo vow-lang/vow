@@ -158,11 +158,18 @@ capacity. That is inherent to a bounded model checker and is not hidden by
 changing the verdict or by moving the bound into a contract; instead the bound is
 made visible in the structured output:
 
-- Every emitted capacity assumption carries a `/* vow:model-bound <Kind> <cap> */`
-  marker. The marker is the single source of truth; nothing else decides whether
-  a proof is bounded.
+- Every emitted capacity assumption (collection length caps and the struct-heap
+  slot cap) carries a `/* vow:model-bound <Kind> <digits> */` marker, `Kind`
+  being `Vec`, `String`, `HashMap`, `BTreeMap` or `Heap`. The marker is the
+  single source of truth; nothing else decides whether a proof is bounded. A
+  malformed marker is ignored by both compilers, and a kind carrying several
+  capacities is reported with the smallest. The other `__ESBMC_assume`s in the
+  model (preconditions, aborts, nondeterministic values within their own type,
+  the `BTreeMap` sorted-key invariant) prune nothing the runtime can produce and
+  carry no marker.
 - After a function is proved, the driver reads the markers off the model it
-  just checked and, when there is at least one, adds a `ModelCapacityAssumed`
+  just checked (the same source that was sent to the solver, never a re-emission)
+  and, when there is at least one, adds a `ModelCapacityAssumed`
   **note** to `diagnostics[]` (`errors.md#modelcapacityassumed`). Status and exit
   code are unchanged.
 - A length that is provably constant carries no marker: an in-range constant

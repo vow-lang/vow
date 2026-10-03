@@ -248,39 +248,136 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
     out
 }
 
-// One `Kind: capacity` entry of the model-bound note, read off the first
-// `vow:model-bound <kind> <cap>` marker in an emitted model, or "" when the model
-// carries none for that kind. Mirrors `model_capacity_bounds` in
-// vow-verify/src/c_emitter.rs; the effective capacity is uniform within a model,
-// so the first marker per kind is the only one.
-fn model_bound_entry(c_src: String, kind: String, display: String) -> String {
-    let needle: String = str3(String::from("/* vow:model-bound "), kind, String::from(" "));
-    let at: i64 = str_find_str(c_src, needle);
-    if at < 0 { return String::from(""); }
-    let cap: i64 = parse_digits_at(c_src, at + needle.len() as i64);
-    if cap < 0 { return String::from(""); }
-    str3(display, String::from(": "), i64_to_string(cap))
+// The model-bound kinds, in the fixed order the note reports them: the four
+// collections, then the user-struct heap. Mirrors `MODEL_BOUND_KINDS` in
+// vow-verify/src/model_bounds.rs.
+fn model_bound_kind_count() -> i64 { 5 }
+
+fn model_bound_kind_name(k: i64) -> String {
+    if k == 0 { return String::from("Vec"); }
+    if k == 1 { return String::from("String"); }
+    if k == 2 { return String::from("HashMap"); }
+    if k == 3 { return String::from("BTreeMap"); }
+    String::from("Heap")
 }
 
-// The collection kinds whose length the emitted model restricts to the model
-// capacity, rendered `Vec<T>: 128, String: 256` in the fixed kind order, or ""
-// when it restricts none.
+fn model_bound_kind_display(k: i64) -> String {
+    if k == 0 { return String::from("Vec<T>"); }
+    if k == 2 { return String::from("HashMap<K, V>"); }
+    if k == 3 { return String::from("BTreeMap<K, V>"); }
+    model_bound_kind_name(k)
+}
+
+fn bytes_match_at(hay: String, at: i64, needle: String) -> bool {
+    let nlen: i64 = needle.len() as i64;
+    if at < 0 || at + nlen > hay.len() as i64 { return false; }
+    let mut j: i64 = 0;
+    while j < nlen {
+        if hay.byte_at(at + j) != needle.byte_at(j) { return false; }
+        j = j + 1;
+    }
+    true
+}
+
+// Index of the first occurrence of `needle` at or after `from`, or -1.
+fn find_from(hay: String, from: i64, needle: String) -> i64 {
+    let last: i64 = (hay.len() as i64) - (needle.len() as i64);
+    let mut i: i64 = from;
+    while i <= last {
+        if bytes_match_at(hay, i, needle) { return i; }
+        i = i + 1;
+    }
+    -1
+}
+
+// Index of the kind named by `c_src[from, to)`, or -1 when it names none.
+fn model_bound_kind_in(c_src: String, from: i64, to: i64) -> i64 {
+    let mut k: i64 = 0;
+    while k < model_bound_kind_count() {
+        let name: String = model_bound_kind_name(k);
+        if (name.len() as i64) == to - from && bytes_match_at(c_src, from, name) { return k; }
+        k = k + 1;
+    }
+    -1
+}
+
+// Value of the run of 1..=18 ASCII digits that spans exactly `c_src[from, to)`,
+// or -1 for anything else (empty, a sign, a stray character, too long).
+fn model_bound_digits_value(c_src: String, from: i64, to: i64) -> i64 {
+    let n: i64 = to - from;
+    if n < 1 || n > 18 { return -1; }
+    let mut q: i64 = from;
+    while q < to {
+        let b: i64 = c_src.byte_at(q);
+        if b < 48 || b > 57 { return -1; }
+        q = q + 1;
+    }
+    str_to_i64(str_substring(c_src, from, to))
+}
+
+// Fold one marker body `c_src[body, end)` (`<Kind> <digits>`) into `caps`,
+// keeping the smallest capacity per kind. A malformed body is ignored.
+fn record_model_bound(c_src: String, body: i64, end: i64, caps: Vec<i64>) {
+    let mut sp: i64 = body;
+    while sp < end && c_src.byte_at(sp) != 32 { sp = sp + 1; }
+    if sp >= end { return; }
+    let kind: i64 = model_bound_kind_in(c_src, body, sp);
+    if kind < 0 { return; }
+    let cap: i64 = model_bound_digits_value(c_src, sp + 1, end);
+    if cap < 0 { return; }
+    let seen: i64 = caps[kind as u64];
+    if seen < 0 || cap < seen { caps[kind as u64] = cap; }
+}
+
+// The smallest capacity per kind among the `/* vow:model-bound <Kind> <digits> */`
+// markers in an emitted model, -1 for a kind with none. A malformed marker is
+// ignored, and scanning stops at a marker with no terminator. The smallest
+// capacity is reported because the proof is only claimed for executions within
+// every bound the model applied. Mirrors `model_capacity_bounds` in
+// vow-verify/src/model_bounds.rs.
+fn model_bound_caps(c_src: String) -> Vec<i64> {
+    let caps: Vec<i64> = Vec::new();
+    let mut k: i64 = 0;
+    while k < model_bound_kind_count() {
+        caps.push(-1);
+        k = k + 1;
+    }
+    let prefix: String = String::from("/* vow:model-bound ");
+    let terminator: String = String::from(" */");
+    let plen: i64 = prefix.len() as i64;
+    let n: i64 = c_src.len() as i64;
+    let mut i: i64 = 0;
+    while i < n {
+        if c_src.byte_at(i) == 47 && bytes_match_at(c_src, i, prefix) {
+            let body: i64 = i + plen;
+            let end: i64 = find_from(c_src, body, terminator);
+            if end < 0 {
+                i = n;
+            } else {
+                record_model_bound(c_src, body, end, caps);
+                i = body;
+            }
+        } else {
+            i = i + 1;
+        }
+    }
+    caps
+}
+
+// The capacities the emitted model restricts executions to, rendered
+// `Vec<T>: 128, String: 256, Heap: 1024` in the fixed kind order, or "" when it
+// restricts none.
 fn model_bounds_text(c_src: String) -> String {
-    let parts: Vec<String> = Vec::new();
-    let vec_e: String = model_bound_entry(c_src, String::from("Vec"), String::from("Vec<T>"));
-    let str_e: String = model_bound_entry(c_src, String::from("String"), String::from("String"));
-    let hm_e: String = model_bound_entry(c_src, String::from("HashMap"), String::from("HashMap<K, V>"));
-    let bt_e: String = model_bound_entry(c_src, String::from("BTreeMap"), String::from("BTreeMap<K, V>"));
-    if vec_e.len() > 0 { parts.push(vec_e); }
-    if str_e.len() > 0 { parts.push(str_e); }
-    if hm_e.len() > 0 { parts.push(hm_e); }
-    if bt_e.len() > 0 { parts.push(bt_e); }
+    let caps: Vec<i64> = model_bound_caps(c_src);
     let out: String = String::from("");
-    let mut i: u64 = 0u64;
-    while i < parts.len() {
-        if i > 0u64 { out.push_str(String::from(", ")); }
-        out.push_str(parts[i]);
-        i = i + 1u64;
+    let mut k: i64 = 0;
+    while k < model_bound_kind_count() {
+        let cap: i64 = caps[k as u64];
+        if cap >= 0 {
+            if out.len() > 0 { out.push_str(String::from(", ")); }
+            out.push_str(str3(model_bound_kind_display(k), String::from(": "), i64_to_string(cap)));
+        }
+        k = k + 1;
     }
     out
 }

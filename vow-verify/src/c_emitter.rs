@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::const_fold::fold_const_bits;
+use crate::model_bounds::model_bound_marker;
 
 use vow_ir::{
     FuncId, Function, Inst, InstData, IntegerSignedness, IntegerType, IntegerWidth, Module, Opcode,
@@ -159,64 +160,6 @@ fn emit_bounds_assert(idx: u32, container: u32, idx_ty: Ty, label: &str, out: &m
             "  __ESBMC_assert(v{idx} >= 0 && v{idx} < (int64_t)v{container}.len, \"{label}\");\n"
         ));
     }
-}
-
-/// Marker appended to every emitted `__ESBMC_assume` that restricts a
-/// collection length to the model capacity. It is the single source of truth for
-/// [`model_capacity_bounds`], so the structured "this proof is bounded" note can
-/// never disagree with the model that was actually checked. Shared wire format
-/// with `compiler/c_emitter.vow`.
-const MODEL_BOUND_MARKER: &str = "/* vow:model-bound ";
-
-fn model_bound_marker(kind: &str, cap: usize) -> String {
-    format!(" {MODEL_BOUND_MARKER}{kind} {cap} */")
-}
-
-/// Collection kinds in the fixed order [`model_capacity_bounds`] reports them.
-const MODEL_BOUND_KINDS: [&str; 4] = ["Vec", "String", "HashMap", "BTreeMap"];
-
-/// A collection whose length the emitted model restricts to `capacity`. Every
-/// proof of a function whose model carries one is a proof *within* that bound:
-/// executions with longer collections were pruned, not checked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ModelCapacityBound {
-    pub collection: &'static str,
-    pub capacity: usize,
-}
-
-/// The capacity assumptions present in an emitted verification model, in the
-/// fixed order `Vec`, `String`, `HashMap`, `BTreeMap`, one entry per kind (the
-/// effective capacity is uniform within a model, so the first marker wins).
-pub fn model_capacity_bounds(c_src: &str) -> Vec<ModelCapacityBound> {
-    let mut found: Vec<ModelCapacityBound> = Vec::new();
-    let mut rest = c_src;
-    while let Some(pos) = rest.find(MODEL_BOUND_MARKER) {
-        rest = &rest[pos + MODEL_BOUND_MARKER.len()..];
-        let Some(end) = rest.find(" */") else { break };
-        let mut parts = rest[..end].split(' ');
-        let (Some(kind), Some(cap)) = (parts.next(), parts.next()) else {
-            continue;
-        };
-        if let (Some(collection), Ok(capacity)) = (
-            MODEL_BOUND_KINDS.iter().find(|k| **k == kind),
-            cap.parse::<usize>(),
-        ) {
-            let bound = ModelCapacityBound {
-                collection,
-                capacity,
-            };
-            if !found.iter().any(|b| b.collection == bound.collection) {
-                found.push(bound);
-            }
-        }
-    }
-    found.sort_by_key(|b| {
-        MODEL_BOUND_KINDS
-            .iter()
-            .position(|k| *k == b.collection)
-            .unwrap_or(usize::MAX)
-    });
-    found
 }
 
 /// The collection kind a raw-parts style constructor builds and the model
@@ -2083,9 +2026,10 @@ fn emit_inst(
                 _ => 1,
             };
             let heap_max = limits.heap_max;
+            let marker = model_bound_marker("Heap", heap_max);
             out.push_str(&format!(
                 "  v{id} = __vow_heap_top;\n  __vow_heap_top += {slots};\n\
-                 \x20 __ESBMC_assume(__vow_heap_top <= {heap_max});\n"
+                 \x20 __ESBMC_assume(__vow_heap_top <= {heap_max});{marker}\n"
             ));
         }
 
@@ -3298,6 +3242,7 @@ pub fn emit_c_module_with_callees(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model_bounds::{ModelCapacityBound, model_capacity_bounds};
     use vow_diag::Blame;
     use vow_ir::{
         BasicBlock, BlockId, FuncId, InstId, Module, RegionId, RegionSummary, VowEntry, VowId,
@@ -9188,17 +9133,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn model_capacity_bounds_reads_markers_in_fixed_order() {
-        let src = "x; /* vow:model-bound String 256 */\n y; /* vow:model-bound Vec 128 */\n \
-                   z; /* vow:model-bound Vec 128 */\n w; /* vow:model-bound BTreeMap 64 */\n \
-                   v; /* vow:model-bound Bogus 1 */\n u; /* vow:model-bound Vec nope */\n";
-        let bounds = model_capacity_bounds(src);
-        let got: Vec<(&str, usize)> = bounds.iter().map(|b| (b.collection, b.capacity)).collect();
-        assert_eq!(got, [("Vec", 128), ("String", 256), ("BTreeMap", 64)]);
-        assert!(model_capacity_bounds("no markers here").is_empty());
-    }
-
     /// Every site that restricts a collection length to the model capacity
     /// carries a marker, and nothing else does: the structured "proof is
     /// bounded" note is read off these.
@@ -9233,5 +9167,43 @@ mod tests {
         );
         let c = emit_c_function(&scalar, &HashMap::new(), &VerifyLimits::default());
         assert!(model_capacity_bounds(&c).is_empty(), "{c}");
+    }
+
+    /// The struct-heap slot cap prunes executions that allocate more, so it is a
+    /// model bound like a collection capacity and carries the same marker.
+    #[test]
+    fn struct_allocation_carries_a_heap_bound_marker() {
+        let (func, _) = one_block_func_module(
+            "alloc",
+            Ty::Ptr,
+            vec![
+                inst(
+                    0,
+                    Opcode::RegionAlloc,
+                    Ty::Ptr,
+                    vec![],
+                    InstData::AllocSize { size: 16, align: 8 },
+                ),
+                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        for heap_max in [HEAP_MODEL_CAP, 32] {
+            let limits = VerifyLimits {
+                heap_max,
+                ..VerifyLimits::default()
+            };
+            let c = emit_c_function(&func, &HashMap::new(), &limits);
+            let expected = format!(
+                "__ESBMC_assume(__vow_heap_top <= {heap_max}); /* vow:model-bound Heap {heap_max} */\n"
+            );
+            assert!(c.contains(&expected), "{c}");
+            assert_eq!(
+                model_capacity_bounds(&c),
+                [ModelCapacityBound {
+                    collection: "Heap",
+                    capacity: heap_max
+                }]
+            );
+        }
     }
 }

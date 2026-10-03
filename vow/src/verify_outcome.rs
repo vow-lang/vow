@@ -66,14 +66,14 @@ pub(crate) struct ArithOverflowWarning {
     pub(crate) length: u32,
 }
 
-/// A proof whose model restricted collection lengths to the verifier's model
-/// capacity. Surfaces as a `ModelCapacityAssumed` Note: the contracts are proved,
+/// A proof whose model restricted collection lengths or struct allocations to
+/// the verifier's model capacity. Surfaces as a `ModelCapacityAssumed` Note: the contracts are proved,
 /// but only for executions within the bound.
 #[derive(Debug, Clone)]
 pub(crate) struct CapacityBoundNote {
     pub(crate) function: String,
-    /// The bounds rendered as `Vec<T>: 128, String: 256`, in the fixed order of
-    /// [`vow_verify::model_capacity_bounds`].
+    /// The bounds rendered as `Vec<T>: 128, String: 256, Heap: 1024`, in the fixed
+    /// order of [`vow_verify::model_capacity_bounds`].
     pub(crate) bounds: String,
 }
 
@@ -191,8 +191,8 @@ impl VerifyWarning {
                 severity: Severity::Note,
                 code: vow_diag::ErrorCode::ModelCapacityAssumed,
                 message: format!(
-                    "proof of `{}` is bounded: collection lengths were checked only up to the \
-                     verifier model capacity ({})",
+                    "proof of `{}` is bounded: only executions within the verifier model \
+                     capacity were checked ({})",
                     n.function, n.bounds
                 ),
                 primary: vow_diag::SourceLocation {
@@ -204,7 +204,8 @@ impl VerifyWarning {
                 blame: vow_diag::Blame::None,
                 hints: vec![
                     "the bound belongs to the bounded model checker, not to the program or its \
-                     contracts; executions with longer collections were not checked"
+                     contracts; executions beyond it (longer collections, more struct \
+                     allocations) were not checked"
                         .to_string(),
                     "do not add a length bound to a contract to silence this note; an unbounded \
                      verifier removes it without any source change"
@@ -895,6 +896,7 @@ mod tests {
                 bound("String", 256),
                 bound("HashMap", 64),
                 bound("BTreeMap", 64),
+                bound("Heap", 1024),
             ],
         )
         .expect("non-empty bounds yield a note");
@@ -911,9 +913,9 @@ mod tests {
         assert_eq!(d.code, ErrorCode::ModelCapacityAssumed);
         assert_eq!(
             d.message,
-            "proof of `scan` is bounded: collection lengths were checked only up to the \
-             verifier model capacity (Vec<T>: 128, String: 256, HashMap<K, V>: 64, \
-             BTreeMap<K, V>: 64)"
+            "proof of `scan` is bounded: only executions within the verifier model \
+             capacity were checked (Vec<T>: 128, String: 256, HashMap<K, V>: 64, \
+             BTreeMap<K, V>: 64, Heap: 1024)"
         );
         assert_eq!(d.blame, Blame::None);
         assert_eq!(d.hints.len(), 2);
