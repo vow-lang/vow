@@ -147,3 +147,10 @@ BigInt subprojects.
   rejection rationale recorded under *Considered options* ("Breaks 64-bit-only
   determinism; cross-compilation would produce different binaries") applies
   only to the former. See epic #1104.
+- **2026-10-03 — Decision 6.** "Dynamic shifts get a runtime contract" described
+  the verifier check, not a runtime trap. The shipped behaviour is: ESBMC proves
+  `0 <= count < width` at every dynamic shift; at runtime only 8-bit shifts
+  (`i8`/`u8`, count `>= 8`) trap with `ArithmeticOverflow`, in every build mode,
+  and wider shifts mask the count to the operand width. Both compilers behave
+  identically. For 64- and 128-bit left operands a count of the left operand's
+  own type is also accepted (`docs/spec/grammar.md`, "Shift count type").
