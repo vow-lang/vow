@@ -4504,7 +4504,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index -- `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Lengths are `u64` (see [the Vec method table](#vect-methods)), so an index derived from one needs no conversion:\n"));
+    r.push_str(String::from("Lengths are `u64` (see [the Vec method table](#vec-methods)), so an index derived from one needs no conversion:\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("let n: u64 = v.len();\n"));
@@ -5327,7 +5327,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |\n"));
     r.push_str(String::from("| `substantive`  | Everything else -- equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`as` casts are transparent to both verdicts. `result >= 0 as i64` is `weak` exactly as `result >= 0` is, `result as i64 >= 0` folds the same way, and `0 as i64 >= 0` is `tautological` -- a cast never makes a constant bound substantive. This matters because the cast form is the idiom a `v.len() as u64`-style bridge produces at every consuming site; without the fold a `weak` ratchet stops meaning anything. Only a primitive numeric target is folded, so `x as Foo` is left alone, and a cast never turns a program value into a literal (`result >= x as i64` stays `substantive`).\n"));
+    r.push_str(String::from("`as` casts are transparent to both verdicts. `result >= 0 as i64` is `weak` exactly as `result >= 0` is, `result as i64 >= 0` folds the same way, and `0 as i64 >= 0` is `tautological` -- a cast never makes a constant bound substantive. This matters because an agent can still wrap a literal bound in a cast (`0 as i64`) and the clause would otherwise read as `substantive`; without the fold a `weak` ratchet stops meaning anything. Only a primitive numeric target is folded, so `x as Foo` is left alone, and a cast never turns a program value into a literal (`result >= x as i64` stays `substantive`).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("An always-true or always-false comparison against `0` on an unsigned -- or zero-extended unsigned -- operand is not a quality verdict at all: it is the hard [`TautologicalComparison`](errors.md#tautologicalcomparison) type error, so such a clause never reaches `vow contracts`.\n"));
     r.push_str(String::from("\n"));
@@ -7709,7 +7709,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("fn main() -> i32 [io] {\n"));
     r.push_str(String::from("    let v: Vec<i64> = fill_vec(5);\n"));
-    r.push_str(String::from("    print_u64(v.len() as u64);\n"));
+    r.push_str(String::from("    print_u64(v.len());\n"));
     r.push_str(String::from("    0\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
@@ -7747,7 +7747,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("    vow { requires: data.len() > 0 }\n"));
     r.push_str(String::from("{\n"));
     r.push_str(String::from("    let mut i: u64 = 0;\n"));
-    r.push_str(String::from("    let n: u64 = data.len() as u64;\n"));
+    r.push_str(String::from("    let n: u64 = data.len();\n"));
     r.push_str(String::from("    let result: i64 = loop {\n"));
     r.push_str(String::from("        if i >= n {\n"));
     r.push_str(String::from("            break -1;\n"));
@@ -7807,7 +7807,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("module CmdLoop\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("fn trim_newline(s: String) -> String {\n"));
-    r.push_str(String::from("    let n: u64 = s.len() as u64;\n"));
+    r.push_str(String::from("    let n: u64 = s.len();\n"));
     r.push_str(String::from("    if n == 0 { return s; }\n"));
     r.push_str(String::from("    let last: i64 = s.byte_at(n - 1);\n"));
     r.push_str(String::from("    if last == 10 {\n"));
@@ -7824,7 +7824,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("fn skip_spaces(s: String, start: u64) -> u64 {\n"));
     r.push_str(String::from("    let mut i: u64 = start;\n"));
-    r.push_str(String::from("    let n: u64 = s.len() as u64;\n"));
+    r.push_str(String::from("    let n: u64 = s.len();\n"));
     r.push_str(String::from("    while i < n {\n"));
     r.push_str(String::from("        if s.byte_at(i) != 32 { return i; }\n"));
     r.push_str(String::from("        i = i + 1;\n"));
@@ -9799,7 +9799,7 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index -- `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Lengths are `u64` (see [the Vec method table](#vect-methods)), so an index derived from one needs no conversion:\n"));
+    r.push_str(String::from("Lengths are `u64` (see [the Vec method table](#vec-methods)), so an index derived from one needs no conversion:\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("let n: u64 = v.len();\n"));
@@ -10624,7 +10624,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |\n"));
     r.push_str(String::from("| `substantive`  | Everything else -- equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`as` casts are transparent to both verdicts. `result >= 0 as i64` is `weak` exactly as `result >= 0` is, `result as i64 >= 0` folds the same way, and `0 as i64 >= 0` is `tautological` -- a cast never makes a constant bound substantive. This matters because the cast form is the idiom a `v.len() as u64`-style bridge produces at every consuming site; without the fold a `weak` ratchet stops meaning anything. Only a primitive numeric target is folded, so `x as Foo` is left alone, and a cast never turns a program value into a literal (`result >= x as i64` stays `substantive`).\n"));
+    r.push_str(String::from("`as` casts are transparent to both verdicts. `result >= 0 as i64` is `weak` exactly as `result >= 0` is, `result as i64 >= 0` folds the same way, and `0 as i64 >= 0` is `tautological` -- a cast never makes a constant bound substantive. This matters because an agent can still wrap a literal bound in a cast (`0 as i64`) and the clause would otherwise read as `substantive`; without the fold a `weak` ratchet stops meaning anything. Only a primitive numeric target is folded, so `x as Foo` is left alone, and a cast never turns a program value into a literal (`result >= x as i64` stays `substantive`).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("An always-true or always-false comparison against `0` on an unsigned -- or zero-extended unsigned -- operand is not a quality verdict at all: it is the hard [`TautologicalComparison`](errors.md#tautologicalcomparison) type error, so such a clause never reaches `vow contracts`.\n"));
     r.push_str(String::from("\n"));
@@ -13016,7 +13016,7 @@ fn skill_support_content_examples_examples_md_d533c48e() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("fn main() -> i32 [io] {\n"));
     r.push_str(String::from("    let v: Vec<i64> = fill_vec(5);\n"));
-    r.push_str(String::from("    print_u64(v.len() as u64);\n"));
+    r.push_str(String::from("    print_u64(v.len());\n"));
     r.push_str(String::from("    0\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
@@ -13054,7 +13054,7 @@ fn skill_support_content_examples_examples_md_d533c48e() -> String {
     r.push_str(String::from("    vow { requires: data.len() > 0 }\n"));
     r.push_str(String::from("{\n"));
     r.push_str(String::from("    let mut i: u64 = 0;\n"));
-    r.push_str(String::from("    let n: u64 = data.len() as u64;\n"));
+    r.push_str(String::from("    let n: u64 = data.len();\n"));
     r.push_str(String::from("    let result: i64 = loop {\n"));
     r.push_str(String::from("        if i >= n {\n"));
     r.push_str(String::from("            break -1;\n"));
@@ -13114,7 +13114,7 @@ fn skill_support_content_examples_examples_md_d533c48e() -> String {
     r.push_str(String::from("module CmdLoop\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("fn trim_newline(s: String) -> String {\n"));
-    r.push_str(String::from("    let n: u64 = s.len() as u64;\n"));
+    r.push_str(String::from("    let n: u64 = s.len();\n"));
     r.push_str(String::from("    if n == 0 { return s; }\n"));
     r.push_str(String::from("    let last: i64 = s.byte_at(n - 1);\n"));
     r.push_str(String::from("    if last == 10 {\n"));
@@ -13131,7 +13131,7 @@ fn skill_support_content_examples_examples_md_d533c48e() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("fn skip_spaces(s: String, start: u64) -> u64 {\n"));
     r.push_str(String::from("    let mut i: u64 = start;\n"));
-    r.push_str(String::from("    let n: u64 = s.len() as u64;\n"));
+    r.push_str(String::from("    let n: u64 = s.len();\n"));
     r.push_str(String::from("    while i < n {\n"));
     r.push_str(String::from("        if s.byte_at(i) != 32 { return i; }\n"));
     r.push_str(String::from("        i = i + 1;\n"));

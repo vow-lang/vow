@@ -2362,7 +2362,7 @@ The type checker also accepts a 128-bit index, consistent with 128-bit limits be
 
 The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).
 
-Lengths are `u64` (see [the Vec method table](#vect-methods)), so an index derived from one needs no conversion:
+Lengths are `u64` (see [the Vec method table](#vec-methods)), so an index derived from one needs no conversion:
 
 ```vow
 let n: u64 = v.len();
@@ -3185,7 +3185,7 @@ The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g
 | `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |
 | `substantive`  | Everything else — equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |
 
-`as` casts are transparent to both verdicts. `result >= 0 as i64` is `weak` exactly as `result >= 0` is, `result as i64 >= 0` folds the same way, and `0 as i64 >= 0` is `tautological` — a cast never makes a constant bound substantive. This matters because the cast form is the idiom a `v.len() as u64`-style bridge produces at every consuming site; without the fold a `weak` ratchet stops meaning anything. Only a primitive numeric target is folded, so `x as Foo` is left alone, and a cast never turns a program value into a literal (`result >= x as i64` stays `substantive`).
+`as` casts are transparent to both verdicts. `result >= 0 as i64` is `weak` exactly as `result >= 0` is, `result as i64 >= 0` folds the same way, and `0 as i64 >= 0` is `tautological` — a cast never makes a constant bound substantive. This matters because an agent can still wrap a literal bound in a cast (`0 as i64`) and the clause would otherwise read as `substantive`; without the fold a `weak` ratchet stops meaning anything. Only a primitive numeric target is folded, so `x as Foo` is left alone, and a cast never turns a program value into a literal (`result >= x as i64` stays `substantive`).
 
 An always-true or always-false comparison against `0` on an unsigned — or zero-extended unsigned — operand is not a quality verdict at all: it is the hard [`TautologicalComparison`](errors.md#tautologicalcomparison) type error, so such a clause never reaches `vow contracts`.
 
@@ -5567,7 +5567,7 @@ fn fill_vec(n: i64) -> Vec<i64> vow {
 
 fn main() -> i32 [io] {
     let v: Vec<i64> = fill_vec(5);
-    print_u64(v.len() as u64);
+    print_u64(v.len());
     0
 }
 ```
@@ -5605,7 +5605,7 @@ fn linear_search(data: Vec<i64>, target: i64) -> i64
     vow { requires: data.len() > 0 }
 {
     let mut i: u64 = 0;
-    let n: u64 = data.len() as u64;
+    let n: u64 = data.len();
     let result: i64 = loop {
         if i >= n {
             break -1;
@@ -5665,7 +5665,7 @@ Write a line-oriented command interpreter that reads from stdin, dispatches comm
 module CmdLoop
 
 fn trim_newline(s: String) -> String {
-    let n: u64 = s.len() as u64;
+    let n: u64 = s.len();
     if n == 0 { return s; }
     let last: i64 = s.byte_at(n - 1);
     if last == 10 {
@@ -5682,7 +5682,7 @@ fn trim_newline(s: String) -> String {
 
 fn skip_spaces(s: String, start: u64) -> u64 {
     let mut i: u64 = start;
-    let n: u64 = s.len() as u64;
+    let n: u64 = s.len();
     while i < n {
         if s.byte_at(i) != 32 { return i; }
         i = i + 1;
@@ -7635,7 +7635,7 @@ The type checker also accepts a 128-bit index, consistent with 128-bit limits be
 
 The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).
 
-Lengths are `u64` (see [the Vec method table](#vect-methods)), so an index derived from one needs no conversion:
+Lengths are `u64` (see [the Vec method table](#vec-methods)), so an index derived from one needs no conversion:
 
 ```vow
 let n: u64 = v.len();
@@ -8459,7 +8459,7 @@ The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g
 | `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |
 | `substantive`  | Everything else — equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |
 
-`as` casts are transparent to both verdicts. `result >= 0 as i64` is `weak` exactly as `result >= 0` is, `result as i64 >= 0` folds the same way, and `0 as i64 >= 0` is `tautological` — a cast never makes a constant bound substantive. This matters because the cast form is the idiom a `v.len() as u64`-style bridge produces at every consuming site; without the fold a `weak` ratchet stops meaning anything. Only a primitive numeric target is folded, so `x as Foo` is left alone, and a cast never turns a program value into a literal (`result >= x as i64` stays `substantive`).
+`as` casts are transparent to both verdicts. `result >= 0 as i64` is `weak` exactly as `result >= 0` is, `result as i64 >= 0` folds the same way, and `0 as i64 >= 0` is `tautological` — a cast never makes a constant bound substantive. This matters because an agent can still wrap a literal bound in a cast (`0 as i64`) and the clause would otherwise read as `substantive`; without the fold a `weak` ratchet stops meaning anything. Only a primitive numeric target is folded, so `x as Foo` is left alone, and a cast never turns a program value into a literal (`result >= x as i64` stays `substantive`).
 
 An always-true or always-false comparison against `0` on an unsigned — or zero-extended unsigned — operand is not a quality verdict at all: it is the hard [`TautologicalComparison`](errors.md#tautologicalcomparison) type error, so such a clause never reaches `vow contracts`.
 
@@ -10846,7 +10846,7 @@ fn fill_vec(n: i64) -> Vec<i64> vow {
 
 fn main() -> i32 [io] {
     let v: Vec<i64> = fill_vec(5);
-    print_u64(v.len() as u64);
+    print_u64(v.len());
     0
 }
 ```
@@ -10884,7 +10884,7 @@ fn linear_search(data: Vec<i64>, target: i64) -> i64
     vow { requires: data.len() > 0 }
 {
     let mut i: u64 = 0;
-    let n: u64 = data.len() as u64;
+    let n: u64 = data.len();
     let result: i64 = loop {
         if i >= n {
             break -1;
@@ -10944,7 +10944,7 @@ Write a line-oriented command interpreter that reads from stdin, dispatches comm
 module CmdLoop
 
 fn trim_newline(s: String) -> String {
-    let n: u64 = s.len() as u64;
+    let n: u64 = s.len();
     if n == 0 { return s; }
     let last: i64 = s.byte_at(n - 1);
     if last == 10 {
@@ -10961,7 +10961,7 @@ fn trim_newline(s: String) -> String {
 
 fn skip_spaces(s: String, start: u64) -> u64 {
     let mut i: u64 = start;
-    let n: u64 = s.len() as u64;
+    let n: u64 = s.len();
     while i < n {
         if s.byte_at(i) != 32 { return i; }
         i = i + 1;

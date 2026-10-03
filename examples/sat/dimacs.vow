@@ -79,7 +79,7 @@ fn append_formula_clause(formula: Formula, clause: Vec<i64>) {
     lens.push(clause.len() as i64);
 
     let mut i: u64 = 0;
-    let n: u64 = clause.len() as u64;
+    let n: u64 = clause.len();
     while i < n vow {
         invariant: i <= n
     } {
@@ -90,7 +90,7 @@ fn append_formula_clause(formula: Formula, clause: Vec<i64>) {
 
 fn add_lit_to_clause(clause: Vec<i64>, lit: i64) -> i64 {
     let mut i: u64 = 0;
-    let n: u64 = clause.len() as u64;
+    let n: u64 = clause.len();
     while i < n vow {
         invariant: i <= n
     } {

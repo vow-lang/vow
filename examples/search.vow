@@ -4,7 +4,7 @@ fn linear_search(data: Vec<i64>, target: i64) -> i64
     vow { requires: data.len() > 0 }
 {
     let mut i: u64 = 0;
-    let n: u64 = data.len() as u64;
+    let n: u64 = data.len();
     let result: i64 = loop {
         if i >= n {
             break -1;
