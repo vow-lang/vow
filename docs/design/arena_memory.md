@@ -433,7 +433,7 @@ The existing root-region `HashMap` symbols remain ABI-stable:
 ```c
 void*    __vow_map_new(void);
 void     __vow_map_insert(void* map, int64_t key, int64_t val);
-int64_t  __vow_map_get(const void* map, int64_t key);
+void*    __vow_map_get(const void* map, int64_t key);
 _Bool    __vow_map_contains(const void* map, int64_t key);
 void     __vow_map_remove(void* map, int64_t key);
 uintptr_t __vow_map_len(const void* map);
@@ -451,12 +451,14 @@ introduced by the `_in_arena` forms below.
 `__vow_map_new` and `__vow_map_insert` are root wrappers: they acquire
 the root-arena lock, ensure the root arena is open, then delegate to the
 corresponding explicit-arena primitive with `&__vow_root_arena`.
-`__vow_map_remove` is **not** a root wrapper — it performs an in-place
+`__vow_map_get` is a root wrapper too: it returns a fresh `Option<V>`
+(tag 1 and the stored value, or tag 0 for a missing key) allocated in the
+arena, never a default value. `__vow_map_remove` is **not** a root wrapper — it performs an in-place
 linear-scan removal that never touches the arena, so the relationship
 inverts: `__vow_map_remove_in_arena` traps on a null arena and then
 delegates to `__vow_map_remove` directly. The non-allocating accessors
-(`__vow_map_get`, `__vow_map_contains`, `__vow_map_len`) read the map
-in place and never touch any arena.
+(`__vow_map_contains`, `__vow_map_len`) read the map in place and never
+touch any arena.
 
 The explicit-arena forms are:
 
@@ -466,6 +468,8 @@ void  __vow_map_insert_in_arena(struct VowArena* arena, void* map,
                                 int64_t key, int64_t val);
 void  __vow_map_remove_in_arena(struct VowArena* arena, void* map,
                                 int64_t key);
+void* __vow_map_get_in_arena(struct VowArena* arena, const void* map,
+                             int64_t key);
 ```
 
 Every explicit-arena HashMap entry traps with

@@ -1,0 +1,8 @@
+// TEST: exit 134
+module HashMapGetUnwrapMissingAborts
+
+fn main() -> () [panic] {
+    let m: HashMap<i64, i64> = HashMap::new();
+    m.insert(1, 10);
+    m.get(2).unwrap();
+}

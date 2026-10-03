@@ -1971,6 +1971,8 @@ fn option_creation_extern(sym: &str) -> bool {
             | "__vow_string_parse_u32_opt"
             | "__vow_btreemap_insert"
             | "__vow_btreemap_get"
+            | "__vow_map_get"
+            | "__vow_map_get_in_arena"
     )
 }
 

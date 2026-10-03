@@ -2781,7 +2781,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     let val_tid: i64 = if ts_arg_len(e.ts, hargs_lid) > 1 {
                         ts_arg_get(e.ts, hargs_lid, 1)
                     } else {
-                        CTY_UNIT()
+                        CTY_I64()
                     };
                     if mname == String::from("insert") {
                         check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0));
@@ -2793,7 +2793,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0));
                     }
                     if mname == String::from("insert") { return CTY_UNIT(); }
-                    if mname == String::from("get") { return val_tid; }
+                    if mname == String::from("get") {
+                        let hopt_base: i64 = ts_make_enum(e.ts, String::from("Option"));
+                        let hopt_args: Vec<i64> = Vec::new();
+                        hopt_args.push(val_tid);
+                        return ts_make_applied(e.ts, hopt_base, hopt_args);
+                    }
                     if mname == String::from("contains_key") { return CTY_BOOL(); }
                     if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("remove") { return CTY_UNIT(); }

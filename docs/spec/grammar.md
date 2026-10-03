@@ -978,10 +978,12 @@ m.contains_key(k)
 |---------------------|-----------------------------|
 | `HashMap::new()`    | `() -> HashMap<K, V>`       |
 | `.insert(k, v)`     | `(K, V) -> ()`              |
-| `.get(k)`           | `(K) -> V`                  |
+| `.get(k)`           | `(K) -> Option<V>`                                                       |
 | `.contains_key(k)`  | `(K) -> bool`               |
 | `.remove(k)`        | `(K) -> ()`                 |
 | `.len()`            | `() -> u64`                 |
+
+`HashMap::get` returns `Option<V>`, exactly like `BTreeMap::get`: a missing key is `None`, never a default value, so `let a: i64 = m.get(k);` is a `TypeMismatch` in both compilers. Handle both cases with `match` (or `?`), or call `.unwrap()` to assert the key is present: it aborts with `UnwrapOnNone` on a missing key and requires the `[panic]` effect. A contract can state a binding as `result.get(k).unwrap() == v`; guard it with an earlier `result.contains_key(k)` clause (as in the examples), because the verifier reports a missing key there as a failed `unwrap()` on `None`, which carries no contract blame.
 
 ### BTreeMap<K, V> Methods
 

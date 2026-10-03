@@ -1,0 +1,74 @@
+// TEST: stdout "i64 present=0\ni64 missing=none\nbool present=true\nbool missing=none\nstring present=hi\nstring missing=none\nstruct present=7\nstruct missing=none\nunwrap=42\n"
+module HashMapGetOption
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn show_i64(m: HashMap<i64, i64>, k: i64, label: String) [io] {
+    print_str(label);
+    match m.get(k) {
+        Option::Some(v) => { print_i64(v); },
+        Option::None => { print_str(String::from("none")); },
+    }
+    print_str(String::from("\n"));
+}
+
+fn show_bool(m: HashMap<i64, bool>, k: i64, label: String) [io] {
+    print_str(label);
+    match m.get(k) {
+        Option::Some(v) => {
+            if v { print_str(String::from("true")); } else { print_str(String::from("false")); }
+        },
+        Option::None => { print_str(String::from("none")); },
+    }
+    print_str(String::from("\n"));
+}
+
+fn show_string(m: HashMap<i64, String>, k: i64, label: String) [io] {
+    print_str(label);
+    match m.get(k) {
+        Option::Some(v) => { print_str(v); },
+        Option::None => { print_str(String::from("none")); },
+    }
+    print_str(String::from("\n"));
+}
+
+fn show_struct(m: HashMap<i64, Point>, k: i64, label: String) [io] {
+    print_str(label);
+    match m.get(k) {
+        Option::Some(p) => { print_i64(p.x + p.y); },
+        Option::None => { print_str(String::from("none")); },
+    }
+    print_str(String::from("\n"));
+}
+
+fn main() -> i32 [io, panic] {
+    let mi: HashMap<i64, i64> = HashMap::new();
+    mi.insert(1, 0);
+    show_i64(mi, 1, String::from("i64 present="));
+    show_i64(mi, 2, String::from("i64 missing="));
+
+    let mb: HashMap<i64, bool> = HashMap::new();
+    mb.insert(1, true);
+    show_bool(mb, 1, String::from("bool present="));
+    show_bool(mb, 2, String::from("bool missing="));
+
+    let ms: HashMap<i64, String> = HashMap::new();
+    ms.insert(1, String::from("hi"));
+    show_string(ms, 1, String::from("string present="));
+    show_string(ms, 2, String::from("string missing="));
+
+    let mp: HashMap<i64, Point> = HashMap::new();
+    mp.insert(1, Point { x: 3, y: 4 });
+    show_struct(mp, 1, String::from("struct present="));
+    show_struct(mp, 2, String::from("struct missing="));
+
+    let mo: HashMap<i64, i64> = HashMap::new();
+    mo.insert(9, 42);
+    print_str(String::from("unwrap="));
+    print_i64(mo.get(9).unwrap());
+    print_str(String::from("\n"));
+    0
+}

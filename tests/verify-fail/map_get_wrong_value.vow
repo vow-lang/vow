@@ -1,0 +1,19 @@
+// TEST: category callee-blame
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-fn "store_wrong"
+// TEST: counterexample-blame callee
+module MapGetWrongValue
+
+fn store_wrong() -> HashMap<i64, i64> vow {
+  ensures: result.get(42).unwrap() == 101
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  m.insert(42, 100);
+  m
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i64, i64> = store_wrong();
+  print_u64(m.len());
+  0
+}
