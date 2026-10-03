@@ -1409,7 +1409,7 @@ fn assert_fixture_root_escape_note(
     });
     let Some(diagnostics) = parsed["diagnostics"].as_array() else {
         assert!(
-            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            label == "self-hosted" && self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
             "{label}: diagnostics missing and build did not fail with the recognized \
              missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
         );
