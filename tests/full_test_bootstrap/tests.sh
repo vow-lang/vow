@@ -310,6 +310,11 @@ test_tier15_only_gate_sits_between_8c_and_9_and_calls_print_summary() {
     local gate_block
     gate_block=$(sed -n "${line_tier15},+5p" "$script")
     assert_contains "$gate_block" "print_summary" "tier15 gate: must call print_summary, not a bare exit 0"
+    # print_summary's presence alone doesn't prove its result is propagated —
+    # a `print_summary; exit 0` regression would still contain the string
+    # "print_summary" and pass the check above while always reporting
+    # success. Pin the actual exit expression too.
+    assert_contains "$gate_block" 'exit "$summary_status"' "tier15 gate: must exit with \$summary_status, not a hardcoded code"
 }
 
 test_tier15_only_gate_sits_between_8c_and_9_and_calls_print_summary

@@ -39,6 +39,13 @@ Tier 1 almost always gets a verdict from Tier 1.5 in ~10 minutes instead of payi
 ~30-46 minute Tier-2 run; only mutants Tier 1.5 can't catch fall through to Tier 2. See #1328 for
 the rationale and the measured section timings that motivated the Section 0-8c cutoff.
 
+Tier 2's default command is the unmodified, full `scripts/full_test.sh` (Sections 0 through 13),
+so a mutant that survives Tier 1.5 and falls through to Tier 2 re-runs the Section 0-8c prefix a
+second time as part of that full run. This is a deliberate, minimal-diff trade-off (see #1328):
+Tier 1.5's whole purpose is triage for the common case, and most mutants never reach Tier 2 at
+all. Only mutants that *do* reach Tier 2 pay the Section 0-8c prefix twice, costing roughly
+`--tier15-timeout-secs`'s measured ~10 minutes in addition to the full Tier-2 run.
+
 ## Worktree mode
 
 `vowc mutants run` operates on a fresh `git worktree` (created via `git worktree add --detach`) instead of mutating the live source tree. This guarantees the original `compiler/` (or any `--root`) is byte-identical before and after the run, even on Ctrl-C or oracle crashes. The worktree is removed via `git worktree remove --force` at exit.
@@ -108,6 +115,8 @@ mutants.out/
   "summary": {"total": 34, "caught": 12, "missed": 2, "timeout": 0, "unviable": 0, "unrun": 20, "shard": "0/8"},
   "outcomes": [
     {"id": 0, "name": "compiler/lower.vow:1234:17: + → -",
+     "status": "caught", "tier": 1.5, "oracle_ms": 612000},
+    {"id": 1, "name": "compiler/checker.vow:89:5: 0 → 1",
      "status": "missed", "tier": 2, "oracle_ms": 2731000},
     …
   ]
