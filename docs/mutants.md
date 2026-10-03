@@ -10,8 +10,8 @@ Mutation testing is **local-only** — it is not wired into CI. A full sweep acr
 vowc mutants version
 vowc mutants list  [--root DIR] [--shard X/Y]
 vowc mutants run   [--root DIR] [--shard X/Y]
-                   [--tier1-cmd 'cmd'] [--tier2-cmd 'cmd']
-                   [--tier1-timeout-secs N] [--tier2-timeout-secs N]
+                   [--tier1-cmd 'cmd'] [--tier15-cmd 'cmd'] [--tier2-cmd 'cmd']
+                   [--tier1-timeout-secs N] [--tier15-timeout-secs N] [--tier2-timeout-secs N]
                    [--tier2-budget-secs N]
                    [--workdir DIR] [--output-dir DIR] [--force-unlock]
 ```
@@ -21,13 +21,30 @@ vowc mutants run   [--root DIR] [--shard X/Y]
 | `--root` | `compiler` | Directory whose `*.vow` files are mutated. `test_*.vow` files are excluded. Path is interpreted relative to the worktree (see Worktree mode below). |
 | `--shard X/Y` | `0/1` | Round-robin split of the deterministic mutant ID space. Mutant `id` is selected iff `id % Y == X`. |
 | `--tier1-cmd` | `scripts/bootstrap.sh --skip-cargo` | Fast oracle. Anything but exit 0 = caught at Tier 1. |
-| `--tier2-cmd` | `VOW_FULL_TEST_SKIP_CARGO=1 scripts/full_test.sh` | Full oracle. Only run on Tier-1 survivors. The env var skips `full_test.sh`'s `cargo build --all --release` step: every mutant comes from `*.vow` source, so the Rust bootstrap compiler never changes across a run, making that rebuild always redundant — and, under the symlinked-`target/` fast path below, actively destructive (see Caveats). A custom override must preserve this (or avoid `cargo build --all --release` some other way) to stay safe under that fast path. |
+| `--tier15-cmd` | `VOW_FULL_TEST_SKIP_CARGO=1 VOW_FULL_TEST_TIER15_ONLY=1 scripts/full_test.sh` | Checkpoint oracle, run on Tier-1 survivors only. `VOW_FULL_TEST_TIER15_ONLY=1` makes `full_test.sh` exit right after Section 8c, before the two expensive, largely redundant-for-mutation-purposes sections (Section 9's bootstrap triple test, which re-does what Tier 1 already verified, and Section 10b's `vowc test` run, ~564s alone). This fast prefix still exercises real program behavior (unlike Tier 1, which only checks that the self-hosted compiler builds to a fixed point) and historically catches most real mutant kills — see #1328 for the measurement. The default shells out to *this repo's own* `scripts/full_test.sh`, which is meaningless as an oracle when `--root` points at a different Vow source tree; pass `--tier15-cmd 'true'` to opt back out to the old two-tier behavior in that case (or in hermetic tests against `tests/fixtures/mutants`). |
+| `--tier2-cmd` | `VOW_FULL_TEST_SKIP_CARGO=1 scripts/full_test.sh` | Full oracle. Only run on Tier-1.5 survivors. The env var skips `full_test.sh`'s `cargo build --all --release` step: every mutant comes from `*.vow` source, so the Rust bootstrap compiler never changes across a run, making that rebuild always redundant — and, under the symlinked-`target/` fast path below, actively destructive (see Caveats). A custom override must preserve this (or avoid `cargo build --all --release` some other way) to stay safe under that fast path. |
 | `--tier1-timeout-secs` | `180` | Per-mutant Tier-1 wall-clock cap. |
+| `--tier15-timeout-secs` | `1200` | Per-mutant Tier-1.5 wall-clock cap (20 min — roughly 2x the measured ~10 min cost of the Section 0-8c prefix, with headroom for slower machines). |
 | `--tier2-timeout-secs` | `3600` | Per-mutant Tier-2 wall-clock cap. |
-| `--tier2-budget-secs` | `7200` | Per-shard total Tier-2 budget. Once exhausted, surviving Tier-1 mutants are emitted with `status:"unrun"`. |
+| `--tier2-budget-secs` | `7200` | Per-shard total Tier-2 budget. Once exhausted, surviving Tier-1.5 mutants are emitted with `status:"unrun"`. Tier-1.5 itself has no aggregate budget — it always runs for every Tier-1 survivor, bounded only per-mutant by `--tier15-timeout-secs`. |
 | `--workdir` | `/tmp/vow-mutants-<ms>` | Path of the throwaway `git worktree` used for all mutations. Created at run start, removed at exit. |
 | `--output-dir` | `mutants.out` | Directory where `mutants.json`, `outcomes.json`, status text files, `diff/`, `logs/` are written. |
 | `--force-unlock` | off | Remove a stale `output_dir/.lock` before starting (recovery from a previous run that exited abnormally). |
+
+### Tier 1.5
+
+The oracle is a three-tier pipeline: Tier 1 (build-to-fixed-point only) → Tier 1.5 (a fast,
+behavior-exercising prefix of `full_test.sh`) → Tier 2 (the full suite). A mutant that survives
+Tier 1 almost always gets a verdict from Tier 1.5 in ~10 minutes instead of paying for the full
+~30-46 minute Tier-2 run; only mutants Tier 1.5 can't catch fall through to Tier 2. See #1328 for
+the rationale and the measured section timings that motivated the Section 0-8c cutoff.
+
+Tier 2's default command is the unmodified, full `scripts/full_test.sh` (Sections 0 through 13),
+so a mutant that survives Tier 1.5 and falls through to Tier 2 re-runs the Section 0-8c prefix a
+second time as part of that full run. This is a deliberate, minimal-diff trade-off (see #1328):
+Tier 1.5's whole purpose is triage for the common case, and most mutants never reach Tier 2 at
+all. Only mutants that *do* reach Tier 2 pay the Section 0-8c prefix twice, costing roughly
+`--tier15-timeout-secs`'s measured ~10 minutes in addition to the full Tier-2 run.
 
 ## Worktree mode
 
@@ -67,9 +84,9 @@ mutants.out/
 ├── missed.txt
 ├── timeout.txt
 ├── unviable.txt
-├── unrun.txt          # Tier-1 survivors not run because Tier-2 budget was exhausted
+├── unrun.txt          # Tier-1.5 survivors not run because Tier-2 budget was exhausted
 ├── diff/<id>.diff     # per-mutant unified diff, captured from the worktree
-└── logs/<id>.log      # per-mutant oracle stdout+stderr (Tier 1 followed by Tier 2 if reached)
+└── logs/<id>.log      # per-mutant oracle stdout+stderr (Tier 1, then Tier 1.5, then Tier 2 if reached)
 ```
 
 `mutants.json` schema (abbreviated):
@@ -98,6 +115,8 @@ mutants.out/
   "summary": {"total": 34, "caught": 12, "missed": 2, "timeout": 0, "unviable": 0, "unrun": 20, "shard": "0/8"},
   "outcomes": [
     {"id": 0, "name": "compiler/lower.vow:1234:17: + → -",
+     "status": "caught", "tier": 1.5, "oracle_ms": 612000},
+    {"id": 1, "name": "compiler/checker.vow:89:5: 0 → 1",
      "status": "missed", "tier": 2, "oracle_ms": 2731000},
     …
   ]
@@ -120,7 +139,7 @@ When a `missed.txt` entry appears, the actionable response is to either (a) writ
 
 ## Limitations (v1)
 
-- **Wall-clock at scale**: a full Tier-2 sweep across `compiler/*.vow` takes hours. The `--tier2-budget-secs` cap (default 7200 = 2 h) ensures graceful degradation: surviving Tier-1 mutants beyond the budget are emitted with `status:"unrun"` so coverage gaps are explicit rather than silent. Multiple sessions across different shards reach full coverage; the determinism guarantee makes the union well-defined.
+- **Wall-clock at scale**: a full Tier-2 sweep across `compiler/*.vow` takes hours. The `--tier2-budget-secs` cap (default 7200 = 2 h) ensures graceful degradation: surviving Tier-1.5 mutants beyond the budget are emitted with `status:"unrun"` so coverage gaps are explicit rather than silent. Multiple sessions across different shards reach full coverage; the determinism guarantee makes the union well-defined.
 - **Equivalent mutants**: weakening a non-load-bearing `ensures` clause (e.g., a `result >= 0` clause on a constant function) yields a `missed` record even though the contract is functionally redundant. There is no equivalent-mutant detector in v1.
 - **Lock TOCTOU race**: the `.lock` directory is created with `fs_mkdir` after an `fs_exists` probe; vow-runtime's `fs_mkdir` is `mkdir -p` semantics, not atomic. Two nearly-simultaneous invocations against the same `--output-dir` could both pass the existence check. In practice you only run one mutation pass at a time per output dir; if you parallelise, point each invocation at its own `--output-dir`.
 - **JSON output is escaped** for `"`, `\`, and ASCII control bytes (newline / carriage-return / tab / backspace / form-feed → `\n` / `\r` / `\t` / `\b` / `\f`; other bytes < 0x20 → `?`). Non-ASCII bytes (UTF-8 continuation bytes for multi-byte codepoints) pass through unescaped, which is valid in modern JSON parsers but technically not pure-ASCII JSON.

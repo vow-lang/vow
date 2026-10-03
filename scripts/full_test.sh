@@ -1672,6 +1672,12 @@ print('; '.join(errors) if errors else 'OK')
 fi
 echo ""
 
+if [ "${VOW_FULL_TEST_TIER15_ONLY:-0}" = "1" ]; then
+    summary_status=0
+    print_summary || summary_status=$?
+    exit "$summary_status"
+fi
+
 # ─── Section 9: Bootstrap Triple Test ──────────────────────────────
 
 section_begin "Section 9: Bootstrap Triple Test"

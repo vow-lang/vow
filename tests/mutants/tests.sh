@@ -94,7 +94,9 @@ do_run() {
     local outdir="$TMP/out_$label"
     rm -rf "$outdir"
     set +e
-    run_vowm run --output-dir "$outdir" "$@" >/dev/null 2>&1
+    # --tier15-cmd default of 'true' (pass-through); get_flag_arg returns
+    # the first match, so a caller's own --tier15-cmd in "$@" still wins.
+    run_vowm run --output-dir "$outdir" "$@" --tier15-cmd 'true' >/dev/null 2>&1
     local rc=$?
     set -e
     echo "$rc:$outdir"
@@ -152,7 +154,7 @@ t11_run_classifies_caught_and_missed() {
     result=$(do_run caught_t1 --root tests/fixtures/mutants --tier1-cmd 'false' --tier2-cmd 'true')
     outdir="${result#*:}"
     local caught_t1
-    caught_t1=$(grep -cE '"status":"caught","tier":1' "$outdir/outcomes.json" 2>/dev/null || true)
+    caught_t1=$(grep -cE '"status":"caught","tier":1,' "$outdir/outcomes.json" 2>/dev/null || true)
     if [ "$caught_t1" -ge 1 ]; then
         printf "  ${GREEN}PASS${RESET} T11: false-tier1 oracle yields tier-1 caught records (got %d)\n" "$caught_t1"
         PASS=$((PASS + 1))
@@ -164,7 +166,7 @@ t11_run_classifies_caught_and_missed() {
     result=$(do_run caught_t2 --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'false')
     outdir="${result#*:}"
     local caught_t2
-    caught_t2=$(grep -cE '"status":"caught","tier":2' "$outdir/outcomes.json" 2>/dev/null || true)
+    caught_t2=$(grep -cE '"status":"caught","tier":2,' "$outdir/outcomes.json" 2>/dev/null || true)
     if [ "$caught_t2" -ge 1 ]; then
         printf "  ${GREEN}PASS${RESET} T11: false-tier2 oracle yields tier-2 caught records (got %d)\n" "$caught_t2"
         PASS=$((PASS + 1))
@@ -195,6 +197,9 @@ t12_tier2_budget_zero_marks_remaining_unrun() {
     local unrun_txt_lines
     unrun_txt_lines=$(wc -l < "$outdir/unrun.txt" 2>/dev/null || echo 0)
     assert_eq "T12: unrun.txt line count matches outcomes count" "$unrun_count" "$unrun_txt_lines"
+    # Tier-1.5 passed (default 'true') before the exhausted Tier-2 budget
+    # forced unrun, so the verdict must be attributed to tier 1.5, not 1.
+    assert_grep "T12: unrun records carry tier 1.5 (Tier-1.5 passed before budget check)" '"status":"unrun","tier":1\.5,' "$(cat "$outdir/outcomes.json" 2>/dev/null)"
 }
 
 t15_lock_prevents_concurrent_runs() {
@@ -202,13 +207,13 @@ t15_lock_prevents_concurrent_runs() {
     rm -rf "$outdir"
     mkdir -p "$outdir/.lock"
     set +e
-    run_vowm run --output-dir "$outdir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
+    run_vowm run --output-dir "$outdir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
     local rc=$?
     set -e
     assert_eq "T15: stale .lock causes run to refuse with exit 1" "1" "$rc"
     # --force-unlock recovers
     set +e
-    run_vowm run --output-dir "$outdir" --force-unlock --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
+    run_vowm run --output-dir "$outdir" --force-unlock --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
     rc=$?
     set -e
     assert_eq "T15: --force-unlock recovers stale lock" "0" "$rc"
@@ -331,7 +336,7 @@ t20_relative_output_dir_works() {
     local reldir="autofix_t20_out_$$"
     rm -rf "$reldir"
     set +e
-    run_vowm run --output-dir "$reldir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
+    run_vowm run --output-dir "$reldir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
     local rc=$?
     set -e
     assert_eq "T20: relative --output-dir run exits 0" "0" "$rc"
@@ -350,7 +355,7 @@ t20_relative_output_dir_works() {
 
 t14_per_mutant_diff_and_log_captured() {
     local result outdir
-    result=$(do_run difflog --root tests/fixtures/mutants --tier1-cmd 'echo TIER1 PROBE' --tier2-cmd 'echo TIER2 PROBE')
+    result=$(do_run difflog --root tests/fixtures/mutants --tier1-cmd 'echo TIER1 PROBE' --tier15-cmd 'echo TIER15 PROBE' --tier2-cmd 'echo TIER2 PROBE')
     outdir="${result#*:}"
     # diff/<id>.diff must exist for at least one mutant and contain unified diff markers
     local any_diff
@@ -363,14 +368,18 @@ t14_per_mutant_diff_and_log_captured() {
         FAIL=$((FAIL + 1))
         FAILURES+=("T14-diff")
     fi
-    # logs/<id>.log must contain the tier markers and probe text from the oracle
-    local any_log
+    # logs/<id>.log must contain the tier1/tier15/tier2 probes, in that order.
+    local any_log log_content t1_line t15_line t2_line
     any_log=$(ls "$outdir/logs/" 2>/dev/null | head -1)
-    if [ -n "$any_log" ] && grep -q "TIER1 PROBE" "$outdir/logs/$any_log" && grep -q "TIER2 PROBE" "$outdir/logs/$any_log"; then
-        printf "  ${GREEN}PASS${RESET} T14: per-mutant log captured oracle stdout from both tiers\n"
+    log_content=$(cat "$outdir/logs/$any_log" 2>/dev/null)
+    t1_line=$(grep -n "TIER1 PROBE" <<<"$log_content" | head -1 | cut -d: -f1 || true)
+    t15_line=$(grep -n "TIER15 PROBE" <<<"$log_content" | head -1 | cut -d: -f1 || true)
+    t2_line=$(grep -n "TIER2 PROBE" <<<"$log_content" | head -1 | cut -d: -f1 || true)
+    if [ -n "$t1_line" ] && [ -n "$t15_line" ] && [ -n "$t2_line" ] && [ "$t1_line" -lt "$t15_line" ] && [ "$t15_line" -lt "$t2_line" ]; then
+        printf "  ${GREEN}PASS${RESET} T14: per-mutant log captures tier1/tier15/tier2 probes in order\n"
         PASS=$((PASS + 1))
     else
-        printf "  ${RED}FAIL${RESET} T14: expected TIER1/TIER2 probe lines in %s/logs/%s\n    log:\n%s\n" "$outdir" "$any_log" "$(cat "$outdir/logs/$any_log" 2>/dev/null)"
+        printf "  ${RED}FAIL${RESET} T14: expected TIER1 < TIER15 < TIER2 probe order in %s/logs/%s\n    log:\n%s\n" "$outdir" "$any_log" "$log_content"
         FAIL=$((FAIL + 1))
         FAILURES+=("T14-log")
     fi
@@ -415,7 +424,7 @@ t22_lock_released_when_worktree_creation_fails() {
     # Pre-populate with a file so git worktree add refuses
     echo "occupier" > "$bad_workdir/file"
     set +e
-    run_vowm run --output-dir "$outdir" --workdir "$bad_workdir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
+    run_vowm run --output-dir "$outdir" --workdir "$bad_workdir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
     local rc=$?
     set -e
     assert_eq "T22: run exits nonzero when worktree creation fails" "1" "$rc"
@@ -438,7 +447,7 @@ t23_workdir_with_spaces_is_shell_quoted() {
     local spaced_workdir="$TMP/wt with spaces $$"
     rm -rf "$outdir" "$spaced_workdir"
     set +e
-    run_vowm run --output-dir "$outdir" --workdir "$spaced_workdir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
+    run_vowm run --output-dir "$outdir" --workdir "$spaced_workdir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
     local rc=$?
     set -e
     assert_eq "T23: run with --workdir containing spaces exits 0" "0" "$rc"
@@ -857,6 +866,13 @@ t2_list_empty_dir_prints_total_zero() {
     assert_grep "T2: summary line contains \"total\":0" '"total":0' "$summary"
 }
 
+t28_run_classifies_caught_at_tier15() {
+    local result outdir
+    result=$(do_run caught_t15 --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'false' --tier2-cmd 'true')
+    outdir="${result#*:}"
+    assert_grep "T28: false-tier15 oracle yields tier-1.5 caught records" '"status":"caught","tier":1\.5,' "$(cat "$outdir/outcomes.json" 2>/dev/null)"
+}
+
 # --- main ---
 
 setup
@@ -889,6 +905,7 @@ t24_invalid_shard_warns_to_stderr
 t25_body_replace_label_has_no_double_space
 t26_modulo_paired_with_division
 t27_json_escapes_control_bytes_in_paths
+t28_run_classifies_caught_at_tier15
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then

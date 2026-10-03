@@ -295,7 +295,7 @@ fn shell_quote(s: String) -> String {
 fn cd_with_log(workdir: String, cmd: String, log_path: String, tier_label: String, append: bool) -> String {
     let r: String = String::from("cd ");
     r.push_str(shell_quote(workdir));
-    // tier_label is currently always "tier1" or "tier2" (hardcoded
+    // tier_label is currently always "tier1", "tier15", or "tier2" (hardcoded
     // constants), but quote it defensively so future callers passing
     // arbitrary strings can't inject shell metacharacters via `echo`.
     r.push_str(String::from(" && (echo --- "));
@@ -374,7 +374,7 @@ fn outcome_record_json(id: i64, s: Site, status: i64, tier: i64, oracle_ms: i64)
     r.push_str(String::from("\",\"status\":\""));
     r.push_str(diag_json_escape_str(status_str(status)));
     r.push_str(String::from("\",\"tier\":"));
-    r.push_str(i64_to_string(tier));
+    r.push_str(tier_json_str(tier));
     r.push_str(String::from(",\"oracle_ms\":"));
     r.push_str(i64_to_string(oracle_ms));
     r.push_str(String::from("}"));
@@ -478,13 +478,17 @@ fn run_mutants_run(argv: Vec<String>) -> i32 [io, read, write] {
 
     let tier1_in: String = get_flag_arg(argv, String::from("--tier1-cmd"));
     let tier1_cmd: String = if tier1_in.len() == 0 { String::from("scripts/bootstrap.sh --skip-cargo") } else { tier1_in };
+    let tier15_in: String = get_flag_arg(argv, String::from("--tier15-cmd"));
+    let tier15_cmd: String = if tier15_in.len() == 0 { default_tier15_cmd() } else { tier15_in };
     let tier2_in: String = get_flag_arg(argv, String::from("--tier2-cmd"));
     let tier2_cmd: String = if tier2_in.len() == 0 { default_tier2_cmd() } else { tier2_in };
 
     let t1_to_secs: i64 = parse_i64_default(get_flag_arg(argv, String::from("--tier1-timeout-secs")), 180);
+    let t15_to_secs: i64 = parse_i64_default(get_flag_arg(argv, String::from("--tier15-timeout-secs")), 1200);
     let t2_to_secs: i64 = parse_i64_default(get_flag_arg(argv, String::from("--tier2-timeout-secs")), 3600);
     let t2_budget_secs: i64 = parse_i64_default(get_flag_arg(argv, String::from("--tier2-budget-secs")), 7200);
     let t1_to_ms: i64 = t1_to_secs * 1000;
+    let t15_to_ms: i64 = t15_to_secs * 1000;
     let t2_to_ms: i64 = t2_to_secs * 1000;
     let t2_budget_ms: i64 = t2_budget_secs * 1000;
 
@@ -590,9 +594,18 @@ fn run_mutants_run(argv: Vec<String>) -> i32 [io, read, write] {
         } else if rc1 != 0 {
             status = ST_CAUGHT();
         } else {
-            if t2_used_ms >= t2_budget_ms {
+            // Survived Tier 1: run the fast Tier-1.5 checkpoint before
+            // committing to the full Tier-2 suite.
+            let t15_full: String = cd_with_log(workdir, tier15_cmd, log_p, String::from("tier15"), true);
+            let t15_start: i64 = time_unix_ms();
+            let rc15: i64 = run_shell(t15_full, t15_to_ms);
+            let t15_dur: i64 = time_unix_ms() - t15_start;
+            oracle_ms = t1_dur + t15_dur;
+            tier = TIER_15();
+            if rc15 != 0 {
+                status = classify_oracle_rc(rc15);
+            } else if t2_used_ms >= t2_budget_ms {
                 status = ST_UNRUN();
-                tier = 1;
             } else {
                 // Cap the per-mutant Tier-2 timeout at the remaining
                 // budget so a single late-shard mutant cannot overshoot
@@ -606,7 +619,7 @@ fn run_mutants_run(argv: Vec<String>) -> i32 [io, read, write] {
                 let rc2: i64 = run_shell(t2_full, this_t2_to_ms);
                 let t2_dur: i64 = time_unix_ms() - t2_start;
                 t2_used_ms = t2_used_ms + t2_dur;
-                oracle_ms = t1_dur + t2_dur;
+                oracle_ms = t1_dur + t15_dur + t2_dur;
                 tier = 2;
                 status = classify_oracle_rc(rc2);
             }

@@ -7,6 +7,21 @@ fn ST_TIMEOUT()  -> i64 { 2 }
 fn ST_UNVIABLE() -> i64 { 3 }
 fn ST_UNRUN()    -> i64 { 4 }
 
+// Tier sentinel for the Tier-1.5 checkpoint (fast partial `full_test.sh`,
+// between Tier 1's build-only oracle and Tier 2's full suite). Deliberately
+// not 1 or 2, so every existing "tier":1/"tier":2 meaning is untouched;
+// `tier_json_str` special-cases this value to serialize the literal
+// JSON number 1.5 instead of 15.
+fn TIER_15() -> i64 { 15 }
+
+// Mirrors status_str(): the single formatter every tier-serializing call
+// site goes through, so a future tier (e.g. 1.75) adds one case here
+// instead of a second ad hoc branch at its own call site.
+fn tier_json_str(tier: i64) -> String {
+    if tier == TIER_15() { return String::from("1.5"); }
+    i64_to_string(tier)
+}
+
 fn status_str(s: i64) -> String {
     if s == ST_CAUGHT()   { return String::from("caught"); }
     if s == ST_MISSED()   { return String::from("missed"); }
