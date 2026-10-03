@@ -486,11 +486,13 @@ exposed for ABI symmetry with the other in-arena forms; the operation
 itself never allocates and the arena pointer is consumed only for the
 null-arena trap, then ignored.
 
-The current MVP runtime uses i64 keys and i64 values with an O(n)
-linear-scan backing (matching the existing root-region implementation).
-Heap-typed keys or values are not yet supported; the surface grammar
-permits them syntactically (`HashMap<K, V>`), but only `i64` × `i64`
-is wired through the runtime.
+The runtime stores each key and each value in one 64-bit slot, with an
+O(n) linear-scan backing (matching the existing root-region
+implementation). Keys compare by value, so a `HashMap` key must be an
+integer of at most 64 bits or `bool`, and a map value may not be
+`i128`/`u128`/`f32`/`f64` (nor, for `HashMap`, linear); the type checker rejects every other map key or value type
+with `UnsupportedFeature` (see `docs/spec/grammar.md`). Heap-typed values
+(`String`, `Vec`, structs) are stored as pointers to their own backings.
 
 ### 3.3.1. BTreeMap and fresh-aggregate builtins
 

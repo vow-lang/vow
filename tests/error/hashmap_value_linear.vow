@@ -1,0 +1,12 @@
+// TEST: error-code UnsupportedFeature
+// TEST: stderr "HashMap value type must be non-linear"
+module HashMapValueLinear
+
+linear struct Token {
+    id: i64,
+}
+
+fn main() -> i32 {
+    let m: HashMap<i64, Token> = HashMap::new();
+    0
+}

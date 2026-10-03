@@ -333,6 +333,41 @@ fn method_argument_expectations(receiver: &Ty, method: &str) -> Vec<Ty> {
     }
 }
 
+/// `HashMap` keys are stored and compared as one machine word, so only types
+/// whose equality is value equality of a single canonical word qualify:
+/// integers of at most 64 bits and `bool`. `Never` is the already-diagnosed
+/// unresolved marker. Heap-backed keys (`String`, `Vec`, structs, enums,
+/// tuples, `Option`) would compare by pointer, `i128`/`u128` would truncate,
+/// and floats have no total equality.
+fn hashmap_key_supported(key: &Ty) -> bool {
+    matches!(
+        key,
+        Ty::I8
+            | Ty::I16
+            | Ty::I32
+            | Ty::I64
+            | Ty::U8
+            | Ty::U16
+            | Ty::U32
+            | Ty::U64
+            | Ty::Bool
+            | Ty::Never
+    )
+}
+
+/// Map values occupy one 64-bit integer runtime slot, so a 128-bit integer
+/// would be truncated and a float has no slot encoding.
+fn map_value_supported(value: &Ty) -> bool {
+    !matches!(value, Ty::I128 | Ty::U128 | Ty::F32 | Ty::F64)
+}
+
+fn map_ty_name(ty: &Ty) -> String {
+    match ty {
+        Ty::Str => "String".to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// The result type of a builtin method call `receiver.method(..)`, or `None`
 /// when `receiver` exposes no builtin method by that name. Pure sibling of
 /// `method_argument_expectations`: it reads the receiver (including its type
@@ -1113,7 +1148,7 @@ impl<'e> Checker<'e> {
                         .map(|f| {
                             let ty = match self.env.resolve(&f.ty) {
                                 Ok(ty) => {
-                                    self.check_btreemap_key_in_ty(&ty, f.span);
+                                    self.check_map_types_in_ty(&ty, f.span);
                                     ty
                                 }
                                 Err(msg) => {
@@ -1144,7 +1179,7 @@ impl<'e> Checker<'e> {
                                         .iter()
                                         .map(|t| match self.env.resolve(t) {
                                             Ok(ty) => {
-                                                self.check_btreemap_key_in_ty(&ty, t.span());
+                                                self.check_map_types_in_ty(&ty, t.span());
                                                 ty
                                             }
                                             Err(msg) => {
@@ -1165,7 +1200,7 @@ impl<'e> Checker<'e> {
                                         .map(|f| {
                                             let ty = match self.env.resolve(&f.ty) {
                                                 Ok(ty) => {
-                                                    self.check_btreemap_key_in_ty(&ty, f.span);
+                                                    self.check_map_types_in_ty(&ty, f.span);
                                                     ty
                                                 }
                                                 Err(msg) => {
@@ -1212,7 +1247,7 @@ impl<'e> Checker<'e> {
                 Item::Struct(s) => {
                     for f in &s.fields {
                         if let Ok(ty) = self.env.resolve(&f.ty) {
-                            self.check_btreemap_key_in_ty(&ty, f.span);
+                            self.check_map_types_in_ty(&ty, f.span);
                             if crate::linear::is_linear_owner_ty(&ty, &self.env) {
                                 self.emit_error(
                                     ErrorCode::LinearTypeViolation,
@@ -1232,14 +1267,14 @@ impl<'e> Checker<'e> {
                             vow_syntax::ast::VariantKind::Tuple(types) => {
                                 for t in types {
                                     if let Ok(ty) = self.env.resolve(t) {
-                                        self.check_btreemap_key_in_ty(&ty, t.span());
+                                        self.check_map_types_in_ty(&ty, t.span());
                                     }
                                 }
                             }
                             vow_syntax::ast::VariantKind::Struct(fields) => {
                                 for f in fields {
                                     if let Ok(ty) = self.env.resolve(&f.ty) {
-                                        self.check_btreemap_key_in_ty(&ty, f.span);
+                                        self.check_map_types_in_ty(&ty, f.span);
                                     }
                                 }
                             }
@@ -1249,7 +1284,7 @@ impl<'e> Checker<'e> {
                 }
                 Item::TypeAlias(a) => {
                     if let Ok(ty) = self.env.resolve(&a.ty) {
-                        self.check_btreemap_key_in_ty(&ty, a.ty.span());
+                        self.check_map_types_in_ty(&ty, a.ty.span());
                     }
                 }
                 _ => {}
@@ -1262,7 +1297,7 @@ impl<'e> Checker<'e> {
             if let Item::Const(c) = item {
                 let ty = match self.env.resolve(&c.ty) {
                     Ok(ty) => {
-                        self.check_btreemap_key_in_ty(&ty, c.ty.span());
+                        self.check_map_types_in_ty(&ty, c.ty.span());
                         ty
                     }
                     Err(msg) => {
@@ -1343,7 +1378,7 @@ impl<'e> Checker<'e> {
                         .iter()
                         .map(|p| match self.env.resolve(&p.ty) {
                             Ok(ty) => {
-                                self.check_btreemap_key_in_ty(&ty, p.span);
+                                self.check_map_types_in_ty(&ty, p.span);
                                 ty
                             }
                             Err(msg) => {
@@ -1354,7 +1389,7 @@ impl<'e> Checker<'e> {
                         .collect();
                     let return_ty = match self.env.resolve(&fn_def.return_ty) {
                         Ok(ty) => {
-                            self.check_btreemap_key_in_ty(&ty, fn_def.return_ty.span());
+                            self.check_map_types_in_ty(&ty, fn_def.return_ty.span());
                             ty
                         }
                         Err(msg) => {
@@ -1389,7 +1424,7 @@ impl<'e> Checker<'e> {
                             .iter()
                             .map(|p| match self.env.resolve(&p.ty) {
                                 Ok(ty) => {
-                                    self.check_btreemap_key_in_ty(&ty, p.span);
+                                    self.check_map_types_in_ty(&ty, p.span);
                                     ty
                                 }
                                 Err(msg) => {
@@ -1400,7 +1435,7 @@ impl<'e> Checker<'e> {
                             .collect();
                         let return_ty = match self.env.resolve(&f.return_ty) {
                             Ok(ty) => {
-                                self.check_btreemap_key_in_ty(&ty, f.return_ty.span());
+                                self.check_map_types_in_ty(&ty, f.return_ty.span());
                                 ty
                             }
                             Err(msg) => {
@@ -1622,7 +1657,7 @@ impl<'e> Checker<'e> {
                 let binding_ty = if let Some(ann) = ty {
                     match self.env.resolve(ann) {
                         Ok(ann_ty) => {
-                            self.check_btreemap_key_in_ty(&ann_ty, ann.span());
+                            self.check_map_types_in_ty(&ann_ty, ann.span());
                             self.check_contextual_integer_literal_ranges(init, &ann_ty);
                             if !can_context_coerce(&init_ty, &ann_ty) {
                                 self.emit_error_with_hints(
@@ -2474,6 +2509,8 @@ impl<'e> Checker<'e> {
                     );
                 }
 
+                self.check_map_slot_types(&recv_ty, expr.span);
+
                 let result_ty = method_result_type(&recv_ty, method);
 
                 if is_option_or_result {
@@ -2617,18 +2654,21 @@ impl<'e> Checker<'e> {
                     );
                 }
                 match &base_ty {
-                    Ty::Applied(_, args) => args.first().cloned().unwrap_or(Ty::Unit),
+                    Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Struct(n) if n == "Vec") => {
+                        args.first().cloned().unwrap_or(Ty::Unit)
+                    }
+                    Ty::Never => Ty::Never,
                     _ => {
                         self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
                             format!("index operation on non-indexable type `{base_ty}`"),
                             expr.span,
                             vec![
-                                "indexing is supported on Vec<T>, HashMap<K,V>, and String"
+                                "indexing is supported on Vec<T> only; read a map entry with `get`, which returns an `Option`"
                                     .to_string(),
                             ],
                         );
-                        Ty::Unit
+                        Ty::Never
                     }
                 }
             }
@@ -3540,12 +3580,73 @@ impl<'e> Checker<'e> {
         }
     }
 
-    // K violations use BTreeMapKeyTypeMustBeI64; V violations use
-    // BTreeMapValueMustBeNonLinear. Called from the major type-resolution sites
-    // (Stmt::Let annotations, function param / return / field / alias / const
-    // types) so the error fires at type formation rather than only at
-    // method-call sites.
-    fn check_btreemap_key_in_ty(&mut self, ty: &Ty, span: vow_syntax::span::Span) {
+    // The runtime stores every map key and value in one 64-bit slot, so a
+    // HashMap key that is not a by-value scalar, or a 128-bit value in either
+    // map, is rejected (UnsupportedFeature) instead of silently comparing by
+    // pointer or truncating. Non-recursive: callers own the recursion.
+    fn check_map_slot_types(&mut self, ty: &Ty, span: vow_syntax::span::Span) {
+        let Ty::Applied(base, args) = ty else {
+            return;
+        };
+        let Ty::Struct(map_name) = base.as_ref() else {
+            return;
+        };
+        if map_name != "HashMap" && map_name != "BTreeMap" {
+            return;
+        }
+        if map_name == "HashMap"
+            && let Some(key_ty) = args.first()
+            && !hashmap_key_supported(key_ty)
+        {
+            let key_name = map_ty_name(key_ty);
+            self.emit_error_with_hints(
+                ErrorCode::UnsupportedFeature,
+                format!(
+                    "HashMap key type `{key_name}` is not supported: keys are compared by value as a single machine word"
+                ),
+                span,
+                vec![
+                    "use an integer type of at most 64 bits or `bool` as the key; hash or intern other keys to `u64` at the call site and keep a side table for the originals".to_string(),
+                ],
+            );
+        }
+        if let Some(val_ty) = args.get(1)
+            && !map_value_supported(val_ty)
+        {
+            let val_name = map_ty_name(val_ty);
+            self.emit_error_with_hints(
+                ErrorCode::UnsupportedFeature,
+                format!(
+                    "{map_name} value type `{val_name}` is not supported: map values occupy a single 64-bit integer slot"
+                ),
+                span,
+                vec![
+                    "keep a 128-bit value as two `u64` halves under separate keys or in two maps; floats cannot be map values".to_string(),
+                ],
+            );
+        }
+        if map_name == "HashMap"
+            && let Some(val_ty) = args.get(1)
+            && self.is_linear_ty(val_ty)
+        {
+            let val_name = map_ty_name(val_ty);
+            self.emit_error(
+                ErrorCode::UnsupportedFeature,
+                format!(
+                    "HashMap value type must be non-linear; found `{val_name}`: the map copies values bitwise and would duplicate the linear obligation"
+                ),
+                span,
+            );
+        }
+    }
+
+    // BTreeMap K violations use BTreeMapKeyTypeMustBeI64, BTreeMap V violations
+    // BTreeMapValueMustBeNonLinear; a HashMap key outside the by-value scalar
+    // set and a 128-bit map value use UnsupportedFeature. Called from the major
+    // type-resolution sites (Stmt::Let annotations, function param / return /
+    // field / alias / const types) so the error fires at type formation rather
+    // than only at method-call sites.
+    fn check_map_types_in_ty(&mut self, ty: &Ty, span: vow_syntax::span::Span) {
         if let Ty::Applied(base, args) = ty
             && matches!(base.as_ref(), Ty::Struct(n) if n == "BTreeMap")
         {
@@ -3568,20 +3669,21 @@ impl<'e> Checker<'e> {
                 );
             }
         }
+        self.check_map_slot_types(ty, span);
         // Recurse through composite types so nested maps (e.g. Vec<BTreeMap<bool, i64>>)
         // are also caught.
         match ty {
             Ty::Applied(_, args) => {
                 for a in args {
-                    self.check_btreemap_key_in_ty(a, span);
+                    self.check_map_types_in_ty(a, span);
                 }
             }
             Ty::Tuple(tys) => {
                 for t in tys {
-                    self.check_btreemap_key_in_ty(t, span);
+                    self.check_map_types_in_ty(t, span);
                 }
             }
-            Ty::Reference(inner) => self.check_btreemap_key_in_ty(inner, span),
+            Ty::Reference(inner) => self.check_map_types_in_ty(inner, span),
             _ => {}
         }
     }
@@ -7281,7 +7383,7 @@ mod tests {
             Box::new(Ty::Struct("BTreeMap".to_string())),
             vec![Ty::I64, Ty::Struct("Token".to_string())],
         );
-        checker.check_btreemap_key_in_ty(&ty, dummy_span());
+        checker.check_map_types_in_ty(&ty, dummy_span());
         assert!(
             emitter
                 .0
@@ -7308,7 +7410,7 @@ mod tests {
             Box::new(Ty::Struct("BTreeMap".to_string())),
             vec![Ty::I64, Ty::Struct("Pair".to_string())],
         );
-        checker.check_btreemap_key_in_ty(&ty, dummy_span());
+        checker.check_map_types_in_ty(&ty, dummy_span());
         assert!(
             !emitter
                 .0
@@ -7342,7 +7444,7 @@ mod tests {
             Box::new(Ty::Struct("BTreeMap".to_string())),
             vec![Ty::I64, Ty::Struct("Outer".to_string())],
         );
-        checker.check_btreemap_key_in_ty(&ty, dummy_span());
+        checker.check_map_types_in_ty(&ty, dummy_span());
         assert!(
             emitter
                 .0
@@ -7458,7 +7560,7 @@ mod tests {
             Box::new(Ty::Struct("BTreeMap".to_string())),
             vec![Ty::I64, Ty::Enum("Wrap".to_string())],
         );
-        checker.check_btreemap_key_in_ty(&ty, dummy_span());
+        checker.check_map_types_in_ty(&ty, dummy_span());
         assert!(
             emitter
                 .0
@@ -7487,7 +7589,7 @@ mod tests {
             Box::new(Ty::Struct("BTreeMap".to_string())),
             vec![Ty::I64, Ty::Enum("Tag".to_string())],
         );
-        checker.check_btreemap_key_in_ty(&ty, dummy_span());
+        checker.check_map_types_in_ty(&ty, dummy_span());
         assert!(
             !emitter
                 .0
@@ -7521,7 +7623,7 @@ mod tests {
             Box::new(Ty::Struct("BTreeMap".to_string())),
             vec![Ty::I64, Ty::Struct("Node".to_string())],
         );
-        checker.check_btreemap_key_in_ty(&ty, dummy_span());
+        checker.check_map_types_in_ty(&ty, dummy_span());
         assert!(
             !emitter
                 .0
@@ -7566,7 +7668,7 @@ mod tests {
             Box::new(Ty::Struct("BTreeMap".to_string())),
             vec![Ty::I64, Ty::Struct("Holder".to_string())],
         );
-        checker.check_btreemap_key_in_ty(&ty, dummy_span());
+        checker.check_map_types_in_ty(&ty, dummy_span());
         assert!(
             emitter
                 .0
@@ -7652,6 +7754,149 @@ mod tests {
 
     fn map_of(name: &str, key: Ty, value: Ty) -> Ty {
         Ty::Applied(Box::new(Ty::Struct(name.to_string())), vec![key, value])
+    }
+
+    fn map_slot_codes(ty: Ty) -> Vec<ErrorCode> {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.check_map_types_in_ty(&ty, dummy_span());
+        emitter.0.iter().map(|d| d.code).collect()
+    }
+
+    #[test]
+    fn hashmap_key_must_be_a_by_value_scalar() {
+        for key in [
+            Ty::I8,
+            Ty::I16,
+            Ty::I32,
+            Ty::I64,
+            Ty::U8,
+            Ty::U16,
+            Ty::U32,
+            Ty::U64,
+            Ty::Bool,
+        ] {
+            assert!(
+                map_slot_codes(map_of("HashMap", key.clone(), Ty::I64)).is_empty(),
+                "HashMap key `{key}` must be accepted"
+            );
+        }
+        for key in [
+            Ty::Str,
+            Ty::I128,
+            Ty::U128,
+            Ty::F64,
+            Ty::Unit,
+            Ty::Tuple(vec![Ty::I64]),
+            Ty::Struct("Point".to_string()),
+            Ty::Enum("Option".to_string()),
+            vec_of(Ty::I64),
+        ] {
+            assert_eq!(
+                map_slot_codes(map_of("HashMap", key.clone(), Ty::I64)),
+                vec![ErrorCode::UnsupportedFeature],
+                "HashMap key `{key}` must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn map_values_reject_wide_integers_and_floats() {
+        for name in ["HashMap", "BTreeMap"] {
+            for value in [Ty::I128, Ty::U128, Ty::F32, Ty::F64] {
+                assert_eq!(
+                    map_slot_codes(map_of(name, Ty::I64, value.clone())),
+                    vec![ErrorCode::UnsupportedFeature],
+                    "{name} value `{value}` must be rejected"
+                );
+            }
+            for value in [
+                Ty::I64,
+                Ty::U64,
+                Ty::U8,
+                Ty::Bool,
+                Ty::Str,
+                vec_of(Ty::I128),
+            ] {
+                assert!(
+                    map_slot_codes(map_of(name, Ty::I64, value.clone())).is_empty(),
+                    "{name} value `{value}` must be accepted"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hashmap_values_reject_linear_types() {
+        use crate::env::StructInfo;
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_struct(
+            "Token",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+        checker.env.define_struct(
+            "Plain",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: false,
+            },
+        );
+        checker.check_map_types_in_ty(
+            &map_of("HashMap", Ty::I64, Ty::Struct("Plain".to_string())),
+            dummy_span(),
+        );
+        assert!(emitter.0.is_empty());
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_struct(
+            "Token",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+        checker.check_map_types_in_ty(
+            &map_of("HashMap", Ty::I64, Ty::Struct("Token".to_string())),
+            dummy_span(),
+        );
+        let codes: Vec<ErrorCode> = emitter.0.iter().map(|d| d.code).collect();
+        assert_eq!(codes, vec![ErrorCode::UnsupportedFeature]);
+    }
+
+    #[test]
+    fn nested_maps_are_checked_through_composite_types() {
+        let nested = vec_of(map_of("HashMap", Ty::Str, Ty::I64));
+        assert_eq!(map_slot_codes(nested), vec![ErrorCode::UnsupportedFeature]);
+        let value_nested = map_of("HashMap", Ty::I64, map_of("HashMap", Ty::I128, Ty::I64));
+        assert_eq!(
+            map_slot_codes(value_nested),
+            vec![ErrorCode::UnsupportedFeature]
+        );
+    }
+
+    #[test]
+    fn indexing_a_map_is_a_type_mismatch() {
+        for name in ["HashMap", "BTreeMap"] {
+            let mut emitter = TestEmitter(vec![]);
+            let mut checker = new_checker(&mut emitter);
+            checker.env.define("m", map_of(name, Ty::I64, Ty::I64));
+            checker.check_expr(&make_expr(ExprKind::Index {
+                base: Box::new(ident("m")),
+                index: Box::new(int_lit()),
+            }));
+            assert!(
+                emitter
+                    .0
+                    .iter()
+                    .any(|d| d.code == ErrorCode::TypeMismatch
+                        && d.message.contains("non-indexable")),
+                "indexing a {name} must be a TypeMismatch"
+            );
+        }
     }
 
     #[test]

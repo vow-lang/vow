@@ -1,0 +1,9 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "non-indexable"
+module IndexStringRead
+
+fn main() -> i32 {
+    let s: String = String::from("abc");
+    let c: i64 = s[0];
+    0
+}

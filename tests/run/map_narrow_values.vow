@@ -1,0 +1,93 @@
+// TEST: stdout "hash u8=ok\nhash i8=ok\nhash u16=ok\nhash i32=ok\nhash u32=ok\nbtree u8=ok\nbtree i8=ok\nbtree i32=ok\nbtree insert=ok\n"
+module MapNarrowValues
+
+fn report(label: String, ok: bool) [io] {
+    print_str(label);
+    if ok { print_str(String::from("=ok\n")); } else { print_str(String::from("=FAIL\n")); }
+}
+
+fn hash_u8() -> bool [panic] {
+    let m: HashMap<i64, u8> = HashMap::new();
+    let v: u8 = 200;
+    m.insert(1, v);
+    if m.get(1).unwrap() != v { return false; }
+    let x: u8 = m.get(1).unwrap();
+    x == 200
+}
+
+fn hash_i8() -> bool [panic] {
+    let m: HashMap<i64, i8> = HashMap::new();
+    let v: i8 = -3;
+    m.insert(1, v);
+    if m.get(1).unwrap() != v { return false; }
+    let x: i8 = m.get(1).unwrap();
+    x == v
+}
+
+fn hash_u16() -> bool [panic] {
+    let m: HashMap<i64, u16> = HashMap::new();
+    let v: u16 = 65535;
+    m.insert(1, v);
+    m.get(1).unwrap() == v
+}
+
+fn hash_i32() -> bool [panic] {
+    let m: HashMap<i64, i32> = HashMap::new();
+    let v: i32 = -70000;
+    m.insert(1, v);
+    if m.get(1).unwrap() != v { return false; }
+    match m.get(1) {
+        Option::Some(got) => got == v,
+        Option::None => false,
+    }
+}
+
+fn hash_u32() -> bool [panic] {
+    let m: HashMap<i64, u32> = HashMap::new();
+    let v: u32 = 4294967295;
+    m.insert(1, v);
+    m.get(1).unwrap() == v
+}
+
+fn btree_u8() -> bool [panic] {
+    let m: BTreeMap<i64, u8> = BTreeMap::new();
+    let v: u8 = 255;
+    m.insert(1, v);
+    m.get(1).unwrap() == v
+}
+
+fn btree_i8() -> bool [panic] {
+    let m: BTreeMap<i64, i8> = BTreeMap::new();
+    let v: i8 = -128;
+    m.insert(1, v);
+    m.get(1).unwrap() == v
+}
+
+fn btree_i32() -> bool [panic] {
+    let m: BTreeMap<i64, i32> = BTreeMap::new();
+    let v: i32 = -2147483648;
+    m.insert(1, v);
+    m.get(1).unwrap() == v
+}
+
+fn btree_insert_prev() -> bool [panic] {
+    let m: BTreeMap<i64, i8> = BTreeMap::new();
+    let first: i8 = -9;
+    m.insert(1, first);
+    let prev: Option<i8> = m.insert(1, 5);
+    if prev.unwrap() != first { return false; }
+    m.get(1).unwrap() == 5
+}
+
+fn main() -> i32 [io, panic] {
+    report(String::from("hash u8"), hash_u8());
+    report(String::from("hash i8"), hash_i8());
+    report(String::from("hash u16"), hash_u16());
+    report(String::from("hash i32"), hash_i32());
+    report(String::from("hash u32"), hash_u32());
+    report(String::from("btree u8"), btree_u8());
+    report(String::from("btree i8"), btree_i8());
+    report(String::from("btree i32"), btree_i32());
+    report(String::from("btree insert"), btree_insert_prev());
+    0
+}

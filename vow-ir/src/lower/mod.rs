@@ -3716,6 +3716,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 );
                 if let Some(tag) = result_tag {
                     ctx.inst_struct_type.insert(result, tag.to_string());
+                    if matches!(recv, Some("HashMap" | "BTreeMap")) {
+                        record_map_value_option_ty(ctx, recv_id, result);
+                    }
                 }
                 return result;
             }
@@ -3785,6 +3788,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     );
                     ctx.inst_struct_type.insert(result, "Option".to_string());
+                    record_map_value_option_ty(ctx, recv_id, result);
                     result
                 }
                 (Some("HashMap"), "insert") => {
@@ -4351,6 +4355,23 @@ fn known_map_argument_ast_types(
             (args.first().cloned(), args.get(1).cloned())
         }
         _ => (None, None),
+    }
+}
+
+/// A map stores each value in one 64-bit slot, so the `Option<V>` that `get` and
+/// `BTreeMap::insert` return carries the value at full width. For a narrow integer
+/// `V` the payload must be typed at `V`'s width, or an unwrapped value mixes an `i64`
+/// with `V`-typed operands and fails Cranelift verification.
+fn record_map_value_option_ty(ctx: &mut LowerCtx, map_id: InstId, option_id: InstId) {
+    let (_, Some(value_ast_ty)) = known_map_argument_ast_types(ctx, map_id) else {
+        return;
+    };
+    let value_ty = lower_ty_with_linear(&value_ast_ty, &ctx.linear_owner_names, &ctx.type_aliases);
+    if matches!(
+        value_ty,
+        Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32
+    ) {
+        ctx.inst_option_elem_ty.insert(option_id, value_ty);
     }
 }
 
@@ -6493,6 +6514,51 @@ fn unsigned_max() -> u128 {
 
     fn insts_of(func: &Function) -> Vec<&Inst> {
         func.blocks.iter().flat_map(|block| &block.insts).collect()
+    }
+
+    #[test]
+    fn map_get_unwrap_types_the_payload_at_the_narrow_value_width() {
+        for (map, value, value_ty) in [
+            ("HashMap<i64, u8>", "u8", Ty::U8),
+            ("HashMap<i64, i32>", "i32", Ty::I32),
+            ("BTreeMap<i64, i16>", "i16", Ty::I16),
+            ("BTreeMap<i64, u32>", "u32", Ty::U32),
+        ] {
+            let source = format!(
+                "module MapNarrow\nfn probe(m: {map}) -> {value} [panic] {{ m.get(1).unwrap() }}\n"
+            );
+            let module = lower_source_to_module(&source, "map_narrow.vow");
+            let func = module
+                .functions
+                .iter()
+                .find(|func| func.name == "probe")
+                .expect("probe function");
+            let payload = insts_of(func)
+                .into_iter()
+                .find(|inst| {
+                    inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1)
+                })
+                .expect("payload FieldGet");
+            assert_eq!(payload.ty, value_ty, "{map}");
+        }
+    }
+
+    #[test]
+    fn map_get_unwrap_keeps_full_width_for_i64_values() {
+        let module = lower_source_to_module(
+            "module MapWide\nfn probe(m: HashMap<i64, i64>) -> i64 [panic] { m.get(1).unwrap() }\n",
+            "map_wide.vow",
+        );
+        let func = module
+            .functions
+            .iter()
+            .find(|func| func.name == "probe")
+            .expect("probe function");
+        let payload = insts_of(func)
+            .into_iter()
+            .find(|inst| inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1))
+            .expect("payload FieldGet");
+        assert_eq!(payload.ty, Ty::I64);
     }
 
     #[test]
