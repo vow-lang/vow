@@ -1,5 +1,5 @@
 use crate::types::Ty;
-use std::collections::{BTreeSet, BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
 use vow_syntax::ast::{Effect, Type as AstType};
 use vow_syntax::span::Span;
 
@@ -109,6 +109,14 @@ pub struct TypeEnv {
     /// calls to IR yet, so silently falling through to the generic unresolved-
     /// call path would use a fabricated signature instead of the declared one.
     extern_fn_names: HashSet<String>,
+    /// Per-function "may write through a parameter" bit, keyed by function
+    /// name. Populated once per module by `effects::compute_may_write_table`
+    /// before any `check_vow_purity` call, so contract clauses can reject a
+    /// helper that writes through a shared argument even though it declares
+    /// no effect (issue #1032) — declared effects only cover
+    /// filesystem/stdio/panic/FFI, never heap mutation through a parameter.
+    /// `BTreeMap`, not `HashMap`, for deterministic iteration order.
+    may_write_fns: BTreeMap<String, bool>,
     struct_defs: HashMap<String, StructInfo>,
     enum_defs: HashMap<String, EnumInfo>,
     type_aliases: HashMap<String, Ty>,
@@ -465,6 +473,7 @@ impl TypeEnv {
             mut_info: vec![Vec::new()],
             fn_sigs: HashMap::new(),
             extern_fn_names: HashSet::new(),
+            may_write_fns: BTreeMap::new(),
             struct_defs: HashMap::new(),
             enum_defs: HashMap::new(),
             type_aliases: HashMap::new(),
@@ -564,6 +573,22 @@ impl TypeEnv {
 
     pub fn is_extern_fn(&self, name: &str) -> bool {
         self.extern_fn_names.contains(name)
+    }
+
+    /// Replaces the may-write side table wholesale. Called once per fixed-point
+    /// iteration by `effects::compute_may_write_table`, and once more at the
+    /// end with the converged table, before `check_fn`/`check_vow_purity` run.
+    pub fn install_may_write_table(&mut self, table: BTreeMap<String, bool>) {
+        self.may_write_fns = table;
+    }
+
+    /// `Some(bit)` for a module-level function already analyzed by
+    /// `compute_may_write_table`; `None` for anything else (a builtin free
+    /// function, or a name not yet/never in the table), which the caller must
+    /// classify itself (builtins are read-only unless effectful; an
+    /// unresolvable name fails closed).
+    pub fn may_write(&self, name: &str) -> Option<bool> {
+        self.may_write_fns.get(name).copied()
     }
 
     pub fn define_struct(&mut self, name: impl Into<String>, info: StructInfo) {
