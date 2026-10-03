@@ -1577,11 +1577,13 @@ class SoundnessModeTest(unittest.TestCase):
                 ("error", "self-hosted timed out"),
             ],
         ):
-            verdict, _, _ = pair_review.confirm_soundness_pair(
+            verdict, _, unjudged = pair_review.confirm_soundness_pair(
                 "module M\n", "rust-vow", "self-vow", 7
             )
 
         self.assertEqual("error", verdict)
+        self.assertIn("rust gate did not run", unjudged)
+        self.assertIn("self-hosted gate did not run", unjudged)
 
     def test_soundness_ignores_the_equivalence_ledger(self):
         # Soundness runs never stamp the ledger, so an equivalence stamp must
