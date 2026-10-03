@@ -1844,8 +1844,8 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, 
         out.push_str(str5(String::from("  v"), ids,
             String::from(" = __vow_heap_top;\n  __vow_heap_top += "),
             i64_to_string(slots), String::from(";\n")));
-        out.push_str(str3(String::from("  __ESBMC_assume(__vow_heap_top <= "),
-            i64_to_string(VOW_HEAP_MAX()), String::from(");\n")));
+        out.push_str(String::from("  __ESBMC_assume(__vow_heap_top <= "));
+        out.push_str(bound_tail(String::from("Heap"), VOW_HEAP_MAX()));
         return;
     }
 
