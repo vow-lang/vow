@@ -8,6 +8,30 @@ use parser
 use checker
 use env
 
+fn diagnostics_of(source: String) -> Vec<Diagnostic> [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("map_slot.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < parsed.items.len() {
+        item_files.push(String::from("map_slot.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("map_slot.vow"));
+    check_module(check_env, parsed, item_files);
+    dctx.diags
+}
+
+fn only_message(source: String) -> String [io] {
+    let diags: Vec<Diagnostic> = diagnostics_of(source);
+    if diags.len() != 1 { return String::from("<expected exactly one diagnostic>"); }
+    let d: Diagnostic = diags[0];
+    d.message
+}
+
 fn count_code(source: String, code: i64) -> i64 [io] {
     let dctx: DiagCtx = diag_ctx_new();
     let arena: AstArena = arena_new();
@@ -120,6 +144,21 @@ fn check_map_index_rejected() -> i32 [io] {
     0
 }
 
+fn check_unannotated_collections() -> i32 [io] {
+    let hm: String = body_probe(String::from("let m = HashMap::new(); m.insert(1, 2); 0"));
+    if !only_message(hm).contains(String::from("cannot infer the collection type of the receiver of `insert`: annotate its binding with a full type")) { return 71; }
+    let bt: String = body_probe(String::from("let m = BTreeMap::new(); m.insert(1, 2); 0"));
+    if !only_message(bt).contains(String::from("cannot infer the collection type of the receiver of `insert`: annotate its binding with a full type")) { return 72; }
+    let vc: String = body_probe(String::from("let v = Vec::new(); v.push(1); 0"));
+    if !only_message(vc).contains(String::from("cannot infer the collection type of the receiver of `push`: annotate its binding with a full type")) { return 73; }
+    let two: String = body_probe(String::from("let m = HashMap::new(); m.insert(String::from(\"a\"), 1); let o: Option<i64> = m.get(String::from(\"a\")); 0"));
+    if count_code(two, EC_TYPE_MISMATCH()) != 2 { return 74; }
+    if diagnostics_of(two).len() != 2 { return 75; }
+    let annotated: String = body_probe(String::from("let m: HashMap<i64, i64> = HashMap::new(); m.insert(1, 2); 0"));
+    if diagnostics_of(annotated).len() != 0 { return 76; }
+    0
+}
+
 fn main() -> i32 [io] {
     let keys: i32 = check_hashmap_keys();
     if keys != 0 { return keys; }
@@ -129,5 +168,7 @@ fn main() -> i32 [io] {
     if linears != 0 { return linears; }
     let methods: i32 = check_method_site();
     if methods != 0 { return methods; }
-    check_map_index_rejected()
+    let indexing: i32 = check_map_index_rejected();
+    if indexing != 0 { return indexing; }
+    check_unannotated_collections()
 }

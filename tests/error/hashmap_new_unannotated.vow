@@ -1,0 +1,11 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 2
+// TEST: stderr "cannot infer the collection type of the receiver of `insert`"
+module HashMapNewUnannotated
+
+fn main() -> i32 [panic] {
+    let m = HashMap::new();
+    m.insert(String::from("a"), 1);
+    let o: Option<i64> = m.get(String::from("a"));
+    0
+}
