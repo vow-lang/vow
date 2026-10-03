@@ -1,0 +1,10 @@
+// TEST: error-code UnknownMethod
+// TEST: error-count 1
+// TEST: build-json x.get('hints') == ['did you mean `contains_key`?']
+module UnknownMethodHashMapDidYouMean
+
+fn main() -> i32 {
+    let m: HashMap<i64, i64> = HashMap::new();
+    m.contain_key(1);
+    0
+}

@@ -99,6 +99,87 @@ fn diag_add_hint(d: Diagnostic, hint: String) {
     h.push(hint);
 }
 
+fn DIAG_HINT_MAX_NAME_BYTES() -> u64 { 128 }
+fn DIAG_HINT_MAX_DISTANCE() -> i64 { 3 }
+
+fn diag_edit_distance(a: String, b: String) -> i64 {
+    let n: u64 = b.len();
+    let prev: Vec<i64> = Vec::new();
+    let curr: Vec<i64> = Vec::new();
+    let mut j: u64 = 0;
+    while j <= n {
+        prev.push(j as i64);
+        curr.push(0);
+        j = j + 1;
+    }
+    let mut i: u64 = 0;
+    while i < a.len() {
+        curr[0] = (i + 1) as i64;
+        j = 0;
+        while j < n {
+            let cost: i64 = if a.byte_at(i) == b.byte_at(j) { 0 } else { 1 };
+            let mut best: i64 = prev[j] + cost;
+            if prev[j + 1] + 1 < best { best = prev[j + 1] + 1; }
+            if curr[j] + 1 < best { best = curr[j] + 1; }
+            curr[j + 1] = best;
+            j = j + 1;
+        }
+        j = 0;
+        while j <= n {
+            prev[j] = curr[j];
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    prev[n]
+}
+
+fn diag_suggest_similar(name: String, candidates: Vec<String>) -> String {
+    if name.len() > DIAG_HINT_MAX_NAME_BYTES() {
+        return String::new();
+    }
+    let mut best: String = String::new();
+    let mut best_distance: i64 = DIAG_HINT_MAX_DISTANCE() + 1;
+    let mut k: u64 = 0;
+    while k < candidates.len() {
+        let c: String = candidates[k];
+        if c != name {
+            let d: i64 = diag_edit_distance(name, c);
+            if d <= DIAG_HINT_MAX_DISTANCE() && d < best_distance {
+                best = c;
+                best_distance = d;
+            }
+        }
+        k = k + 1;
+    }
+    best
+}
+
+fn diag_candidate_hint(name: String, candidates: Vec<String>, noun: String) -> String {
+    let suggestion: String = diag_suggest_similar(name, candidates);
+    if suggestion.len() > 0 {
+        let hint: String = String::from("did you mean `");
+        hint.push_str(suggestion);
+        hint.push_str(String::from("`?"));
+        return hint;
+    }
+    if candidates.len() == 0 {
+        return String::new();
+    }
+    let listing: String = String::from("available ");
+    listing.push_str(noun);
+    listing.push_str(String::from(": "));
+    let mut k: u64 = 0;
+    while k < candidates.len() {
+        if k > 0 {
+            listing.push_str(String::from(", "));
+        }
+        listing.push_str(candidates[k]);
+        k = k + 1;
+    }
+    listing
+}
+
 fn diag_ctx_new() -> DiagCtx {
     DiagCtx {
         diags: Vec::new(),

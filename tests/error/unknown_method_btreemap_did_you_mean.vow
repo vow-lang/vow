@@ -1,0 +1,10 @@
+// TEST: error-code UnknownMethod
+// TEST: error-count 1
+// TEST: build-json x.get('hints') == ['did you mean `contains`?']
+module UnknownMethodBTreeMapDidYouMean
+
+fn main() -> i32 {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    m.contain(1);
+    0
+}

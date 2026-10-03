@@ -1,0 +1,10 @@
+// TEST: error-code UnknownMethod
+// TEST: error-count 1
+// TEST: build-json x.get('hints') == ['available methods: len, push_str, eq, contains, byte_at, push_byte, substring, parse_i64, parse_u64, clear']
+module UnknownMethodStringAvailable
+
+fn main() -> i32 {
+    let s: String = String::from("x");
+    s.reverse_all();
+    0
+}

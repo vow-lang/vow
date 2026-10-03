@@ -1,0 +1,13 @@
+// TEST: error-code UnknownMethod
+// TEST: error-count 1
+// TEST: build-json x.get('hints') == ['did you mean `unwrap`?']
+module UnknownMethodResultDidYouMean
+
+fn probe(r: Result<i64, i64>) -> i32 {
+    r.unwrap_or(0);
+    0
+}
+
+fn main() -> i32 {
+    0
+}
