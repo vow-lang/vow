@@ -152,14 +152,13 @@ Fill a vector with `n` elements and prove its length equals `n`.
 ```vow
 module VecFill
 
-fn fill_vec(n: i64) -> Vec<i64> vow {
-    requires: n >= 0,
-    ensures: result.len() as i64 == n
+fn fill_vec(n: u64) -> Vec<i64> vow {
+    ensures: result.len() == n
 } {
     let v: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
-    while i < n as u64 vow {
-        invariant: i <= n as u64
+    while i < n vow {
+        invariant: i <= n
     } {
         v.push(i as i64);
         i = i + 1;
@@ -185,8 +184,8 @@ $ vow verify examples/vec_fill.vow
 ```
 
 **Key points:**
-- `invariant: i <= n as u64` is inductive: true on entry, preserved by the loop body. The lower bound `i >= 0` is carried by the `u64` type, so it needs no clause (and `TautologicalComparison` rejects one)
-- The Vec model tracks `len`, so ESBMC can reason about `result.len() as i64 == n`
+- `invariant: i <= n` is inductive: true on entry, preserved by the loop body. The lower bounds `i >= 0` and `n >= 0` are carried by the `u64` type, so they need no clause (and `TautologicalComparison` rejects one)
+- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
 - The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
 - `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 

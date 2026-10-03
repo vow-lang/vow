@@ -5210,7 +5210,7 @@ general signed wrappers.
 | `safe_mul` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, b == 0 \|\| a <= I64_MAX / b`; `ensures result == a * b` | |
 | `safe_div` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result <= a` | `b > 0`, not just `b != 0`. |
 | `safe_mod` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result < b` | |
-| `pow` | `(base, exp: i64) -> i64` | `requires base >= 0, exp >= 0`; `ensures result >= 0` | O(exp) — no fast exponentiation; no overflow guard on the running product. |
+| `pow` | `(base: i64, exp: u64) -> i64` | `requires base >= 0`; `ensures result >= 0` | O(exp) — no fast exponentiation; no overflow guard on the running product. |
 | `midpoint` | `(a, b: i64) -> i64` | `requires a >= 0, a <= b`; `ensures a <= result <= b` | Overflow-safe `a + (b-a)/2`. |
 | `diff` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0`; `ensures result >= 0` | `|a - b|`. |
 | `divides` | `(d, n: i64) -> bool` | `requires d != 0` | |
@@ -5235,12 +5235,12 @@ pub fn safe_mul(a: i64, b: i64) -> i64 vow {
 | `gcd` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a > 0 \|\| b > 0`; `ensures result > 0` | Euclid; loop invariants `x >= 0, y >= 0`. |
 | `lcm` | `(a, b: i64) -> i64` | `requires a > 0, b > 0`; `ensures result > 0` | No overflow guard on `(a/g)*b`. |
 | `is_prime` | `(n: i64) -> bool` | `requires n >= 0` | Trial division to `i*i <= n`. |
-| `power_mod` | `(base, exp, modulus: i64) -> i64` | `requires base >= 0, exp >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |
+| `power_mod` | `(base: i64, exp: u64, modulus: i64) -> i64` | `requires base >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |
 | `factorial` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 1` | No upper bound on `n` — product overflows past 20!. |
 | `fibonacci` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0` | Iterative; overflows past F(92). |
 | `isqrt` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0, result*result <= n` | Floor integer sqrt; postcondition is the real spec. |
 | `largest_divisor` | `(n: i64) -> i64` | `requires n > 1`; `ensures 1 <= result < n` | Largest proper divisor. |
-| `count_divisors` | `(n: i64) -> i64` | `requires n > 0`; `ensures result >= 1` | |
+| `count_divisors` | `(n: i64) -> u64` | `requires n > 0`; `ensures result >= 1` | |
 
 ### math.vec_math
 
@@ -5253,7 +5253,7 @@ overflow — use on bounded data, or add `requires` bounds at the call site.
 | `vec_min` / `vec_max` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | |
 | `vec_mean` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | Integer mean. |
 | `vec_dot` | `(a, b: Vec<i64>) -> i64` | `requires a.len() == b.len()` | |
-| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures result >= 0, result <= v.len() as i64` | Invariant `count <= i`. |
+| `vec_count` | `(v: Vec<i64>, target: i64) -> u64` | `ensures result <= v.len()` | Invariant `count <= i`. |
 | `vec_all_in_range` | `(v: Vec<i64>, lo, hi: i64) -> bool` | `requires lo <= hi` | |
 | `vec_is_sorted` | `(v: Vec<i64>) -> bool` | — | Ascending. |
 | `vec_prefix_sum` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |
@@ -5267,22 +5267,22 @@ overflow — use on bounded data, or add `requires` bounds at the call site.
 a max-heap over `i64`), with the comparator flipped. Both are value types: every
 mutator takes a heap by value and returns a new one.
 
-The defining contract pattern is the **size-shadow invariant** `size == data.len() as i64`
-(`size` is `i64`, `.len()` is `u64`), threaded through every mutator. This is what
+The defining contract pattern is the **size-shadow invariant** `size == data.len()`
+(`size` and `.len()` are both `u64`), threaded through every mutator. This is what
 lets ESBMC reason about in-bounds `data[i]` access without a universal quantifier:
 ```vow
 pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {
-    requires: h.size == h.data.len() as i64,
+    requires: h.size == h.data.len(),
     requires: h.size < 9223372036854775807,
     ensures: result.size == h.size + 1,
-    ensures: result.size == result.data.len() as i64
+    ensures: result.size == result.data.len()
 }
 ```
 
 | Function (min; `max_*` mirrors) | Signature | Key contracts |
 |---------------------------------|-----------|---------------|
 | `min_heap_new` | `() -> MinHeap` | `ensures result.size == 0, result.data.len() == 0` |
-| `min_heap_len` | `(h) -> i64` | `ensures result == h.size` |
+| `min_heap_len` | `(h) -> u64` | `ensures result == h.size` |
 | `min_heap_is_empty` | `(h) -> bool` | `ensures result == (h.size == 0)` |
 | `min_heap_push` | `(h, val: i64) -> MinHeap` | size-shadow in/out; `ensures result.size == h.size + 1` |
 | `min_heap_peek` | `(h) -> i64` | `requires h.size > 0, size-shadow`; `ensures result == h.data[0]` |
@@ -5371,12 +5371,12 @@ memory on small-op-heavy loops vs. the always-allocating representation.
 - Compare: `bignum_cmp`, `bignum_cmp_abs`, `bignum_eq`, `bignum_lt`, `bignum_gt`, `bignum_le`, `bignum_ge`
 - Arithmetic: `bignum_negate`, `bignum_abs`, `bignum_add`, `bignum_sub`, `bignum_monus`, `bignum_mul`, `bignum_div`, `bignum_mod`, `bignum_divmod`
 - Bitwise (on magnitude): `bignum_and`, `bignum_or`, `bignum_xor`, `bignum_shl`, `bignum_shr`
-- Higher-level: `bignum_pow(base, exp: i64)`, `bignum_gcd`, `bignum_factorial(n: i64)`
+- Higher-level: `bignum_pow(base, exp: u64)`, `bignum_gcd`, `bignum_factorial(n: u64)`
 
 **Contracts present:** `bignum_div`/`bignum_mod`/`bignum_divmod` require
-`!bignum_is_zero(b)`; `bignum_pow` requires `exp >= 0`; `bignum_shl`/`bignum_shr`
-require `n >= 0`; `bignum_factorial` requires `n >= 0` (internal `bigmag_sub_abs`
-requires `bigmag_cmp_abs(a, b) >= 0`).
+`!bignum_is_zero(b)`; the `bignum_pow` exponent, the `bignum_shl`/`bignum_shr` shift
+count and the `bignum_factorial` argument are `u64`, so non-negativity is carried by
+the type (internal `bigmag_sub_abs` requires `bigmag_cmp_abs(a, b) >= 0`).
 
 **Semantics to know:**
 - **Canonicalization invariant:** a value fits `i64` ⟺ it is `Small`. Every
@@ -5395,7 +5395,7 @@ requires `bigmag_cmp_abs(a, b) >= 0`).
 - Bitwise `and`/`or`/`xor` act on the **magnitude** (Nat semantics) and return a
   non-negative result; `shl`/`shr` shift the magnitude and preserve the sign
   (= multiply / floor-divide by 2ⁿ; a logical bit shift for non-negative operands).
-- `bignum_pow`/`bignum_factorial` take a native `i64` exponent/argument, not a BigNum.
+- `bignum_pow`/`bignum_factorial` take a native `u64` exponent/argument, not a BigNum.
 - `bignum_gcd` operates on absolute values; the result is non-negative.
 - Multiplication is O(n·m) schoolbook (no Karatsuba).
 - The limb algorithms live in internal `bigmag_*` functions over the `BigMag`
@@ -5615,14 +5615,13 @@ Fill a vector with `n` elements and prove its length equals `n`.
 ```vow
 module VecFill
 
-fn fill_vec(n: i64) -> Vec<i64> vow {
-    requires: n >= 0,
-    ensures: result.len() as i64 == n
+fn fill_vec(n: u64) -> Vec<i64> vow {
+    ensures: result.len() == n
 } {
     let v: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
-    while i < n as u64 vow {
-        invariant: i <= n as u64
+    while i < n vow {
+        invariant: i <= n
     } {
         v.push(i as i64);
         i = i + 1;
@@ -5648,8 +5647,8 @@ $ vow verify examples/vec_fill.vow
 ```
 
 **Key points:**
-- `invariant: i <= n as u64` is inductive: true on entry, preserved by the loop body. The lower bound `i >= 0` is carried by the `u64` type, so it needs no clause (and `TautologicalComparison` rejects one)
-- The Vec model tracks `len`, so ESBMC can reason about `result.len() as i64 == n`
+- `invariant: i <= n` is inductive: true on entry, preserved by the loop body. The lower bounds `i >= 0` and `n >= 0` are carried by the `u64` type, so they need no clause (and `TautologicalComparison` rejects one)
+- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
 - The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
 - `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 
@@ -10553,7 +10552,7 @@ general signed wrappers.
 | `safe_mul` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, b == 0 \|\| a <= I64_MAX / b`; `ensures result == a * b` | |
 | `safe_div` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result <= a` | `b > 0`, not just `b != 0`. |
 | `safe_mod` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result < b` | |
-| `pow` | `(base, exp: i64) -> i64` | `requires base >= 0, exp >= 0`; `ensures result >= 0` | O(exp) — no fast exponentiation; no overflow guard on the running product. |
+| `pow` | `(base: i64, exp: u64) -> i64` | `requires base >= 0`; `ensures result >= 0` | O(exp) — no fast exponentiation; no overflow guard on the running product. |
 | `midpoint` | `(a, b: i64) -> i64` | `requires a >= 0, a <= b`; `ensures a <= result <= b` | Overflow-safe `a + (b-a)/2`. |
 | `diff` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0`; `ensures result >= 0` | `|a - b|`. |
 | `divides` | `(d, n: i64) -> bool` | `requires d != 0` | |
@@ -10578,12 +10577,12 @@ pub fn safe_mul(a: i64, b: i64) -> i64 vow {
 | `gcd` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a > 0 \|\| b > 0`; `ensures result > 0` | Euclid; loop invariants `x >= 0, y >= 0`. |
 | `lcm` | `(a, b: i64) -> i64` | `requires a > 0, b > 0`; `ensures result > 0` | No overflow guard on `(a/g)*b`. |
 | `is_prime` | `(n: i64) -> bool` | `requires n >= 0` | Trial division to `i*i <= n`. |
-| `power_mod` | `(base, exp, modulus: i64) -> i64` | `requires base >= 0, exp >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |
+| `power_mod` | `(base: i64, exp: u64, modulus: i64) -> i64` | `requires base >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |
 | `factorial` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 1` | No upper bound on `n` — product overflows past 20!. |
 | `fibonacci` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0` | Iterative; overflows past F(92). |
 | `isqrt` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0, result*result <= n` | Floor integer sqrt; postcondition is the real spec. |
 | `largest_divisor` | `(n: i64) -> i64` | `requires n > 1`; `ensures 1 <= result < n` | Largest proper divisor. |
-| `count_divisors` | `(n: i64) -> i64` | `requires n > 0`; `ensures result >= 1` | |
+| `count_divisors` | `(n: i64) -> u64` | `requires n > 0`; `ensures result >= 1` | |
 
 ### math.vec_math
 
@@ -10596,7 +10595,7 @@ overflow — use on bounded data, or add `requires` bounds at the call site.
 | `vec_min` / `vec_max` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | |
 | `vec_mean` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | Integer mean. |
 | `vec_dot` | `(a, b: Vec<i64>) -> i64` | `requires a.len() == b.len()` | |
-| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures result >= 0, result <= v.len() as i64` | Invariant `count <= i`. |
+| `vec_count` | `(v: Vec<i64>, target: i64) -> u64` | `ensures result <= v.len()` | Invariant `count <= i`. |
 | `vec_all_in_range` | `(v: Vec<i64>, lo, hi: i64) -> bool` | `requires lo <= hi` | |
 | `vec_is_sorted` | `(v: Vec<i64>) -> bool` | — | Ascending. |
 | `vec_prefix_sum` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |
@@ -10610,22 +10609,22 @@ overflow — use on bounded data, or add `requires` bounds at the call site.
 a max-heap over `i64`), with the comparator flipped. Both are value types: every
 mutator takes a heap by value and returns a new one.
 
-The defining contract pattern is the **size-shadow invariant** `size == data.len() as i64`
-(`size` is `i64`, `.len()` is `u64`), threaded through every mutator. This is what
+The defining contract pattern is the **size-shadow invariant** `size == data.len()`
+(`size` and `.len()` are both `u64`), threaded through every mutator. This is what
 lets ESBMC reason about in-bounds `data[i]` access without a universal quantifier:
 ```vow
 pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {
-    requires: h.size == h.data.len() as i64,
+    requires: h.size == h.data.len(),
     requires: h.size < 9223372036854775807,
     ensures: result.size == h.size + 1,
-    ensures: result.size == result.data.len() as i64
+    ensures: result.size == result.data.len()
 }
 ```
 
 | Function (min; `max_*` mirrors) | Signature | Key contracts |
 |---------------------------------|-----------|---------------|
 | `min_heap_new` | `() -> MinHeap` | `ensures result.size == 0, result.data.len() == 0` |
-| `min_heap_len` | `(h) -> i64` | `ensures result == h.size` |
+| `min_heap_len` | `(h) -> u64` | `ensures result == h.size` |
 | `min_heap_is_empty` | `(h) -> bool` | `ensures result == (h.size == 0)` |
 | `min_heap_push` | `(h, val: i64) -> MinHeap` | size-shadow in/out; `ensures result.size == h.size + 1` |
 | `min_heap_peek` | `(h) -> i64` | `requires h.size > 0, size-shadow`; `ensures result == h.data[0]` |
@@ -10714,12 +10713,12 @@ memory on small-op-heavy loops vs. the always-allocating representation.
 - Compare: `bignum_cmp`, `bignum_cmp_abs`, `bignum_eq`, `bignum_lt`, `bignum_gt`, `bignum_le`, `bignum_ge`
 - Arithmetic: `bignum_negate`, `bignum_abs`, `bignum_add`, `bignum_sub`, `bignum_monus`, `bignum_mul`, `bignum_div`, `bignum_mod`, `bignum_divmod`
 - Bitwise (on magnitude): `bignum_and`, `bignum_or`, `bignum_xor`, `bignum_shl`, `bignum_shr`
-- Higher-level: `bignum_pow(base, exp: i64)`, `bignum_gcd`, `bignum_factorial(n: i64)`
+- Higher-level: `bignum_pow(base, exp: u64)`, `bignum_gcd`, `bignum_factorial(n: u64)`
 
 **Contracts present:** `bignum_div`/`bignum_mod`/`bignum_divmod` require
-`!bignum_is_zero(b)`; `bignum_pow` requires `exp >= 0`; `bignum_shl`/`bignum_shr`
-require `n >= 0`; `bignum_factorial` requires `n >= 0` (internal `bigmag_sub_abs`
-requires `bigmag_cmp_abs(a, b) >= 0`).
+`!bignum_is_zero(b)`; the `bignum_pow` exponent, the `bignum_shl`/`bignum_shr` shift
+count and the `bignum_factorial` argument are `u64`, so non-negativity is carried by
+the type (internal `bigmag_sub_abs` requires `bigmag_cmp_abs(a, b) >= 0`).
 
 **Semantics to know:**
 - **Canonicalization invariant:** a value fits `i64` ⟺ it is `Small`. Every
@@ -10738,7 +10737,7 @@ requires `bigmag_cmp_abs(a, b) >= 0`).
 - Bitwise `and`/`or`/`xor` act on the **magnitude** (Nat semantics) and return a
   non-negative result; `shl`/`shr` shift the magnitude and preserve the sign
   (= multiply / floor-divide by 2ⁿ; a logical bit shift for non-negative operands).
-- `bignum_pow`/`bignum_factorial` take a native `i64` exponent/argument, not a BigNum.
+- `bignum_pow`/`bignum_factorial` take a native `u64` exponent/argument, not a BigNum.
 - `bignum_gcd` operates on absolute values; the result is non-negative.
 - Multiplication is O(n·m) schoolbook (no Karatsuba).
 - The limb algorithms live in internal `bigmag_*` functions over the `BigMag`
@@ -10959,14 +10958,13 @@ Fill a vector with `n` elements and prove its length equals `n`.
 ```vow
 module VecFill
 
-fn fill_vec(n: i64) -> Vec<i64> vow {
-    requires: n >= 0,
-    ensures: result.len() as i64 == n
+fn fill_vec(n: u64) -> Vec<i64> vow {
+    ensures: result.len() == n
 } {
     let v: Vec<i64> = Vec::new();
     let mut i: u64 = 0;
-    while i < n as u64 vow {
-        invariant: i <= n as u64
+    while i < n vow {
+        invariant: i <= n
     } {
         v.push(i as i64);
         i = i + 1;
@@ -10992,8 +10990,8 @@ $ vow verify examples/vec_fill.vow
 ```
 
 **Key points:**
-- `invariant: i <= n as u64` is inductive: true on entry, preserved by the loop body. The lower bound `i >= 0` is carried by the `u64` type, so it needs no clause (and `TautologicalComparison` rejects one)
-- The Vec model tracks `len`, so ESBMC can reason about `result.len() as i64 == n`
+- `invariant: i <= n` is inductive: true on entry, preserved by the loop body. The lower bounds `i >= 0` and `n >= 0` are carried by the `u64` type, so they need no clause (and `TautologicalComparison` rejects one)
+- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
 - The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
 - `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 

@@ -161,6 +161,17 @@ against an unmodified compiler.
    compilers. Unsuffixed literals still coerce; a literal that does not fit is
    `LiteralOutOfRange`; any other integer type or a non-integer is
    `TypeMismatch`.
+9. **`>= 0` residue sweep (this seam).** Every remaining `<length or index> >= 0`
+   clause was resolved by its subject. Loop counters, sizes, counts and
+   positions in `compiler/module_io.vow`, `examples/sat`, `stdlib/{heap,bignum,math}`,
+   `examples/{sum_range,vec_fill}`, the `tests/verify` fixtures and the
+   benchmark references moved to `u64` and the clause was deleted as a
+   type-level fact (never weakened or bounded). The survivors are genuine
+   signed domains: i64 value and arithmetic-result clauses, `-1` sentinels,
+   bit-packed handles, the documented-opaque `stdlib/gc` slots, a bound taken
+   from a named const (both compilers reject unsigned-typed consts today), i64
+   dynamic shift counts, String offsets, and
+   `examples/vec_bounds.vow` (Decision 4's case).
 
 **What deliberately remains `i64`.** `String` offsets are `i64` in v1:
 `byte_at`, `substr`, `substring`, and `matches_literal_at`. `push_byte` takes a
