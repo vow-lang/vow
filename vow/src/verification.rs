@@ -17,7 +17,7 @@ use std::thread;
 use vow_verify::{
     ArithOverflowSite, ConstantValue, Encoding, Solver, SolverConfig, VerificationResult,
     VerifyLimits, contracts_only_source, detect_constant_functions, emit_verify_c_source,
-    find_esbmc, model_capacity_bounds, non_modelable_reason, run_with_fallback,
+    model_capacity_bounds, non_modelable_reason, run_c_source,
 };
 
 use crate::cache::VerifyCache;
@@ -120,27 +120,8 @@ fn verify_one_function(
     // is keyed on, and what the capacity-bound note is read from.
     let c_src = emit_verify_c_source(func, ir_module, const_fns, limits);
 
-    // Lookup under the pre-fallback `func_config`; only FAILED entries come
-    // back (a forged PROVEN file is discarded inside the cache, so it can never
-    // bypass ESBMC).
-    let cached =
-        verify_cache.and_then(|vc| vc.lookup_failure(&c_src, limits.max_k_step, &func_config));
-    let result = if let Some(ce) = cached {
-        VerificationResult::Failed(ce)
-    } else {
-        let esbmc = match find_esbmc() {
-            Some(p) => p,
-            None => return PerFuncResult::Halt(VerifyOutcome::ToolNotFound),
-        };
-        let (res, resolved_config) =
-            run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, &func_config);
-        // Store under the config that actually produced the result. Only a
-        // Counterexample can be handed to `store_failure`, so a PROVEN result is
-        // structurally uncacheable and can never bypass ESBMC on a later run.
-        if let (Some(vc), VerificationResult::Failed(ce)) = (verify_cache, &res) {
-            vc.store_failure(&c_src, limits.max_k_step, &resolved_config, ce);
-        }
-        res
+    let Some(first) = prove_cached(&c_src, &func.name, verify_cache, limits, &func_config) else {
+        return PerFuncResult::Halt(VerifyOutcome::ToolNotFound);
     };
 
     // #585: an `arith:` counterexample reports a checked operator whose
@@ -149,12 +130,20 @@ fn verify_one_function(
     // does hide the contract verdict, because ESBMC reports one violated
     // property per run and this one fired first. Ask again with the arith
     // obligations suppressed to get the verdict on returning executions.
-    let (result, arith_warning) = match result {
+    let (result, arith_warning) = match first {
         VerificationResult::Failed(ce) if ce.arith_overflow.is_some() => {
             let site = ce.arith_overflow.expect("matched Some above");
             let warning = arith_overflow_warning(ir_module, func, file, site);
-            let contract_result =
-                verify_contracts_only(func, &c_src, verify_cache, limits, &func_config);
+            // Only the asserts are suppressed: the abort *assumes* remain, so
+            // this asks whether the contracts hold on every returning execution.
+            let contracts_only = contracts_only_source(&c_src);
+            let contract_result = prove_cached(
+                &contracts_only,
+                &func.name,
+                verify_cache,
+                limits,
+                &func_config,
+            );
             (contract_result, Some(warning))
         }
         other => (Some(other), None),
@@ -272,35 +261,33 @@ fn arith_overflow_warning(
     }
 }
 
-/// Re-verify `func` with the checked-arithmetic obligations suppressed, so the
-/// contract verdict is not masked by an `arith:` property that fired first.
+/// Prove one emitted model, consulting the failure cache first. Returns `None`
+/// when ESBMC cannot be located.
 ///
-/// Only the asserts are suppressed — the abort *assumes* remain, so this asks
-/// exactly the right question: do the contracts hold on every execution that
-/// returns? Returns `None` when ESBMC cannot be located.
-fn verify_contracts_only(
-    func: &vow_ir::Function,
-    full_c_src: &str,
+/// The cache is looked up under the pre-fallback `func_config`; only FAILED
+/// entries come back (a forged PROVEN file is discarded inside the cache, so it
+/// can never bypass ESBMC). A result is stored under the config that actually
+/// produced it, and only a `Counterexample` can be handed to `store_failure`, so
+/// a PROVEN result is structurally uncacheable. `c_src` is hashed into the key,
+/// so a derived model (the contracts-only variant) can never be confused with
+/// the full obligation set.
+fn prove_cached(
+    c_src: &str,
+    func_name: &str,
     verify_cache: Option<&VerifyCache>,
     limits: &VerifyLimits,
     func_config: &SolverConfig,
 ) -> Option<VerificationResult> {
-    let c_src = contracts_only_source(full_c_src);
-
-    // The suppressed source hashes to its own cache key, so replaying it can
-    // never be confused with the full obligation set.
     if let Some(vc) = verify_cache
-        && let Some(ce) = vc.lookup_failure(&c_src, limits.max_k_step, func_config)
+        && let Some(ce) = vc.lookup_failure(c_src, limits.max_k_step, func_config)
     {
         return Some(VerificationResult::Failed(ce));
     }
-    let esbmc = find_esbmc()?;
-    let (res, resolved_config) =
-        run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, func_config);
+    let (res, resolved_config) = run_c_source(c_src, func_name, limits.max_k_step, func_config)?;
     if let Some(vc) = verify_cache
         && let VerificationResult::Failed(ce) = &res
     {
-        vc.store_failure(&c_src, limits.max_k_step, &resolved_config, ce);
+        vc.store_failure(c_src, limits.max_k_step, &resolved_config, ce);
     }
     Some(res)
 }
@@ -871,7 +858,7 @@ mod tests {
             CapacityBoundNote::new(
                 function,
                 &[vow_verify::ModelCapacityBound {
-                    collection: "Vec",
+                    kind: vow_verify::ModelBoundKind::Vec,
                     capacity: 128,
                 }],
             )

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::const_fold::fold_const_bits;
-use crate::model_bounds::model_bound_marker;
+use crate::const_fold::LazyConstBits;
+use crate::model_bounds::{ModelBoundKind, model_bound_marker};
 
 use vow_ir::{
     FuncId, Function, Inst, InstData, IntegerSignedness, IntegerType, IntegerWidth, Module, Opcode,
@@ -100,6 +100,18 @@ pub struct VerifyLimits {
     pub heap_max: usize,
 }
 
+impl VerifyLimits {
+    fn capacity(&self, kind: ModelBoundKind) -> usize {
+        match kind {
+            ModelBoundKind::Vec => self.vec_max,
+            ModelBoundKind::String => self.string_max,
+            ModelBoundKind::HashMap => self.hashmap_max,
+            ModelBoundKind::BTreeMap => self.btreemap_max,
+            ModelBoundKind::Heap => self.heap_max,
+        }
+    }
+}
+
 impl Default for VerifyLimits {
     fn default() -> Self {
         Self {
@@ -162,57 +174,42 @@ fn emit_bounds_assert(idx: u32, container: u32, idx_ty: Ty, label: &str, out: &m
     }
 }
 
-/// The collection kind a raw-parts style constructor builds and the model
-/// capacity its length is checked against.
-#[derive(Clone, Copy)]
-struct CapacityModel {
-    kind: &'static str,
-    max: usize,
-}
-
-/// The instruction ids and length type of one constructor call.
-#[derive(Clone, Copy)]
-struct RawParts {
-    id: u32,
-    ptr: u32,
-    len: u32,
-    len_ty: Ty,
-}
-
 /// Model for a constructor copying `len` elements from `ptr`
-/// (`from_raw_parts_copy`, `String::new`). The runtime returns an empty value
-/// for a null `ptr` whatever `len` is, so the model does too: a provably null
-/// source is empty, and otherwise the capacity restriction only applies to a
-/// non-null source. A length that is provably constant and outside the model
-/// capacity cannot be assumed (the assumption would be unsatisfiable and prove
-/// everything after it), so a non-null source fails closed with the capacity
-/// label. A `u64` length drops the vacuous `>= 0` lower bound.
+/// (`from_raw_parts_copy`, `String::new`): `inst` is the call and `ptr_arg` the
+/// index of its source-pointer argument, followed by the length. The runtime
+/// returns an empty value for a null `ptr` whatever `len` is, so the model does
+/// too: a provably null source is empty, and otherwise the capacity restriction
+/// only applies to a non-null source. A length that is provably constant and
+/// outside the model capacity cannot be assumed (the assumption would be
+/// unsatisfiable and prove everything after it), so a non-null source fails
+/// closed with the capacity label. A `u64` length drops the vacuous `>= 0` lower
+/// bound.
 fn emit_raw_parts_len(
-    model: CapacityModel,
-    parts: RawParts,
-    const_bits: &HashMap<u32, u64>,
+    inst: &Inst,
+    ptr_arg: usize,
+    kind: ModelBoundKind,
+    limits: &VerifyLimits,
+    inst_by_id: &HashMap<u32, &Inst>,
+    const_bits: &LazyConstBits,
     out: &mut String,
 ) {
-    let RawParts {
-        id,
-        ptr,
-        len,
-        len_ty,
-    } = parts;
-    let CapacityModel { kind, max } = model;
+    let id = inst.id.0;
+    let ptr = inst.args[ptr_arg].0;
+    let len = inst.args[ptr_arg + 1].0;
+    let max = limits.capacity(kind);
+    let const_bits = const_bits.get();
     if const_bits.get(&ptr) == Some(&0) {
         out.push_str(&format!("  v{id}.len = 0;\n"));
         return;
     }
-    let cap = max as u64;
-    if const_bits.get(&len).is_some_and(|&bits| bits >= cap) {
-        let label = format!("{} capacity", kind.to_lowercase());
+    if const_bits.get(&len).is_some_and(|&bits| bits >= max as u64) {
+        let label = kind.capacity_label();
         out.push_str(&format!(
             "  __ESBMC_assert(v{ptr} == 0, \"{label}\");\n  v{id}.len = 0;\n"
         ));
         return;
     }
-    let lower = if ty_is_unsigned(len_ty) {
+    let lower = if ty_is_unsigned(operand_ty(len, inst_by_id)) {
         String::new()
     } else {
         format!("v{len} >= 0 && ")
@@ -225,6 +222,54 @@ fn emit_raw_parts_len(
     out.push_str(&format!(
         "  __ESBMC_assume(v{ptr} == 0 || ({lower}v{len} < {max}));{marker}\n  v{id}.len = v{ptr} == 0 ? 0 : v{len};\n"
     ));
+}
+
+/// `v{id}.len` assumed within `kind`'s capacity, tagged with its bound marker.
+fn emit_len_assume(id: u32, kind: ModelBoundKind, max: usize, cmp: &str, out: &mut String) {
+    let marker = model_bound_marker(kind, max);
+    out.push_str(&format!(
+        "  __ESBMC_assume(v{id}.len {cmp} {max});{marker}\n"
+    ));
+}
+
+/// A collection value of unknown length: `lead` precedes the nondeterministic
+/// length on its first line, and the length is assumed within `kind`'s capacity.
+/// A `BTreeMap` additionally assumes ascending keys, which the
+/// get/contains/insert C model requires.
+fn emit_nondet_collection_len(
+    id: u32,
+    kind: ModelBoundKind,
+    limits: &VerifyLimits,
+    lead: &str,
+    out: &mut String,
+) {
+    out.push_str(&format!(
+        "{lead}v{id}.len = __VERIFIER_nondet_unsigned_long();\n"
+    ));
+    emit_len_assume(id, kind, limits.capacity(kind), "<=", out);
+    if kind == ModelBoundKind::BTreeMap {
+        out.push_str(&format!(
+            "  for (uint64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
+             \x20   __ESBMC_assume(v{id}.keys[__si] < v{id}.keys[__si + 1]);\n"
+        ));
+    }
+}
+
+fn typed_collection_kind(
+    id: u32,
+    vec_vars: &HashSet<u32>,
+    string_vars: &HashSet<u32>,
+    hashmap_vars: &HashSet<u32>,
+    btreemap_vars: &HashSet<u32>,
+) -> Option<ModelBoundKind> {
+    [
+        (vec_vars, ModelBoundKind::Vec),
+        (string_vars, ModelBoundKind::String),
+        (hashmap_vars, ModelBoundKind::HashMap),
+        (btreemap_vars, ModelBoundKind::BTreeMap),
+    ]
+    .into_iter()
+    .find_map(|(vars, kind)| vars.contains(&id).then_some(kind))
 }
 
 /// IR type of the instruction producing `id`, defaulting to the signed form
@@ -1037,7 +1082,7 @@ fn emit_inst(
     const_str_indices: &HashMap<u32, u32>,
     eq_pairs: &[(u32, u32)],
     inst_by_id: &HashMap<u32, &Inst>,
-    const_bits: &HashMap<u32, u64>,
+    const_bits: &LazyConstBits,
     module: &Module,
     limits: &VerifyLimits,
     func_return_ty: Ty,
@@ -1412,19 +1457,12 @@ fn emit_inst(
                         out.push_str(&format!("  v{id}.len = 0;\n"));
                     }
                     "__vow_vec_from_raw_parts_copy_val" => {
-                        let ptr = inst.args[0].0;
-                        let len = inst.args[1].0;
                         emit_raw_parts_len(
-                            CapacityModel {
-                                kind: "Vec",
-                                max: limits.vec_max,
-                            },
-                            RawParts {
-                                id,
-                                ptr,
-                                len,
-                                len_ty: operand_ty(len, inst_by_id),
-                            },
+                            inst,
+                            0,
+                            ModelBoundKind::Vec,
+                            limits,
+                            inst_by_id,
                             const_bits,
                             out,
                         );
@@ -1501,20 +1539,12 @@ fn emit_inst(
             if let InstData::CallExtern(ref name) = inst.data {
                 match name.as_str() {
                     "__vow_string_new" | "__vow_string_new_in_arena" => {
-                        let ptr_arg = usize::from(name == "__vow_string_new_in_arena");
-                        let ptr = inst.args[ptr_arg].0;
-                        let len = inst.args[ptr_arg + 1].0;
                         emit_raw_parts_len(
-                            CapacityModel {
-                                kind: "String",
-                                max: limits.string_max,
-                            },
-                            RawParts {
-                                id,
-                                ptr,
-                                len,
-                                len_ty: operand_ty(len, inst_by_id),
-                            },
+                            inst,
+                            usize::from(name == "__vow_string_new_in_arena"),
+                            ModelBoundKind::String,
+                            limits,
+                            inst_by_id,
                             const_bits,
                             out,
                         );
@@ -1538,19 +1568,12 @@ fn emit_inst(
                         }
                     }
                     "__vow_string_from_raw_parts_copy" => {
-                        let ptr = inst.args[0].0;
-                        let len = inst.args[1].0;
                         emit_raw_parts_len(
-                            CapacityModel {
-                                kind: "String",
-                                max: limits.string_max,
-                            },
-                            RawParts {
-                                id,
-                                ptr,
-                                len,
-                                len_ty: operand_ty(len, inst_by_id),
-                            },
+                            inst,
+                            0,
+                            ModelBoundKind::String,
+                            limits,
+                            inst_by_id,
                             const_bits,
                             out,
                         );
@@ -2026,7 +2049,7 @@ fn emit_inst(
                 _ => 1,
             };
             let heap_max = limits.heap_max;
-            let marker = model_bound_marker("Heap", heap_max);
+            let marker = model_bound_marker(ModelBoundKind::Heap, heap_max);
             out.push_str(&format!(
                 "  v{id} = __vow_heap_top;\n  __vow_heap_top += {slots};\n\
                  \x20 __ESBMC_assume(__vow_heap_top <= {heap_max});{marker}\n"
@@ -2044,33 +2067,11 @@ fn emit_inst(
             out.push_str(&format!("  __vow_heap[v{base} + {idx}] = v{val};\n"));
         }
         Opcode::FieldGet => {
-            if vec_vars.contains(&id) {
-                let vec_max = limits.vec_max;
-                out.push_str(&format!(
-                    "  /* FieldGet -> vec */ v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                     \x20 __ESBMC_assume(v{id}.len <= {vec_max}); /* vow:model-bound Vec {vec_max} */\n"
-                ));
-            } else if string_vars.contains(&id) {
-                let string_max = limits.string_max;
-                out.push_str(&format!(
-                    "  /* FieldGet -> string */ v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                     \x20 __ESBMC_assume(v{id}.len <= {string_max}); /* vow:model-bound String {string_max} */\n"
-                ));
-            } else if hashmap_vars.contains(&id) {
-                let hashmap_max = limits.hashmap_max;
-                out.push_str(&format!(
-                    "  /* FieldGet -> hashmap */ v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                     \x20 __ESBMC_assume(v{id}.len <= {hashmap_max}); /* vow:model-bound HashMap {hashmap_max} */\n"
-                ));
-            } else if btreemap_vars.contains(&id) {
-                let btreemap_max = limits.btreemap_max;
-                // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
-                out.push_str(&format!(
-                    "  /* FieldGet -> btreemap */ v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                     \x20 __ESBMC_assume(v{id}.len <= {btreemap_max}); /* vow:model-bound BTreeMap {btreemap_max} */\n\
-                     \x20 for (uint64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
-                     \x20   __ESBMC_assume(v{id}.keys[__si] < v{id}.keys[__si + 1]);\n"
-                ));
+            if let Some(kind) =
+                typed_collection_kind(id, vec_vars, string_vars, hashmap_vars, btreemap_vars)
+            {
+                let lead = format!("  /* FieldGet -> {} */ ", kind.marker_name().to_lowercase());
+                emit_nondet_collection_len(id, kind, limits, &lead, out);
             } else if let Some(&src_id) = inst.args.first() {
                 if option_vars.contains(&src_id.0) {
                     if let InstData::FieldIndex(idx) = inst.data {
@@ -2157,9 +2158,9 @@ fn emit_string_eq_invalidate(operand: u32, eq_pairs: &[(u32, u32)], out: &mut St
 
 fn emit_nondet_string_len(id: u32, string_max: usize, out: &mut String) {
     out.push_str(&format!(
-        "  v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-         \x20 __ESBMC_assume(v{id}.len < {string_max}); /* vow:model-bound String {string_max} */\n",
+        "  v{id}.len = __VERIFIER_nondet_unsigned_long();\n"
     ));
+    emit_len_assume(id, ModelBoundKind::String, string_max, "<", out);
 }
 
 /// Sentinel `vow_id` reported when ESBMC fails on an
@@ -2368,33 +2369,16 @@ pub fn emit_c_function_full(
             {
                 let id = inst.id.0;
                 if let Some(&(_, cl)) = arg_var_map.iter().find(|(ir, _)| *ir == idx) {
-                    if vec_vars.contains(&id) {
-                        let vec_max = limits.vec_max;
-                        out.push_str(&format!(
-                            "  __vow_vec_t v{id};\n  v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len <= {vec_max}); /* vow:model-bound Vec {vec_max} */\n"
-                        ));
-                    } else if string_vars.contains(&id) {
-                        let string_max = limits.string_max;
-                        out.push_str(&format!(
-                            "  __vow_string_t v{id};\n  v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len <= {string_max}); /* vow:model-bound String {string_max} */\n"
-                        ));
-                    } else if hashmap_vars.contains(&id) {
-                        let hashmap_max = limits.hashmap_max;
-                        out.push_str(&format!(
-                            "  __vow_hashmap_t v{id};\n  v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len <= {hashmap_max}); /* vow:model-bound HashMap {hashmap_max} */\n"
-                        ));
-                    } else if btreemap_vars.contains(&id) {
-                        let btreemap_max = limits.btreemap_max;
-                        // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
-                        out.push_str(&format!(
-                            "  __vow_btreemap_t v{id};\n  v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len <= {btreemap_max}); /* vow:model-bound BTreeMap {btreemap_max} */\n\
-                             \x20 for (uint64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
-                             \x20   __ESBMC_assume(v{id}.keys[__si] < v{id}.keys[__si + 1]);\n"
-                        ));
+                    if let Some(kind) = typed_collection_kind(
+                        id,
+                        &vec_vars,
+                        &string_vars,
+                        &hashmap_vars,
+                        &btreemap_vars,
+                    ) {
+                        let lead =
+                            format!("  __vow_{}_t v{id};\n  ", kind.marker_name().to_lowercase());
+                        emit_nondet_collection_len(id, kind, limits, &lead, &mut out);
                     } else {
                         let c_ty = match inst.ty {
                             Ty::Ptr | Ty::LinearPtr => "int64_t",
@@ -2520,7 +2504,7 @@ pub fn emit_c_function_full(
             inst_by_id.insert(inst.id.0, inst);
         }
     }
-    let const_bits = fold_const_bits(func);
+    let const_bits = LazyConstBits::new(func);
 
     // Block-visit tracking variables
     for block in &func.blocks {
@@ -8426,6 +8410,7 @@ mod tests {
             enum_layouts: vec![],
             warnings: vec![],
         };
+        let (dummy, _) = one_block_func_module("dummy", Ty::I64, vec![]);
         let mut out = String::new();
         emit_inst(
             &call_inst,
@@ -8440,7 +8425,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &HashMap::new(),
-            &HashMap::new(),
+            &LazyConstBits::new(&dummy),
             &empty_module,
             &VerifyLimits::default(),
             Ty::I64,
@@ -8469,6 +8454,7 @@ mod tests {
             origin: sp(),
             region: RegionId::Root,
         };
+        let (dummy, _) = one_block_func_module("dummy", Ty::I64, vec![]);
         let mut out = String::new();
         emit_inst(
             &call_inst,
@@ -8483,7 +8469,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &HashMap::new(),
-            &HashMap::new(),
+            &LazyConstBits::new(&dummy),
             &empty_module,
             &VerifyLimits::default(),
             Ty::I64,
@@ -8666,7 +8652,9 @@ mod tests {
 
     /// A `u64` length argument drops the vacuous `>= 0` conjunct; a signed
     /// (literal) one keeps it. Both forms bound a non-null source's length by the
-    /// model cap, and tag the assumption so the proof is reported as bounded.
+    /// model cap, and tag the assumption so the proof is reported as bounded. A
+    /// null source is empty whatever the length, as at runtime, so the assumption
+    /// only restricts a non-null one.
     #[test]
     fn raw_parts_copy_len_assumption_follows_argument_signedness() {
         for (extern_name, kind, cap) in RAW_PARTS_CASES {
@@ -8937,19 +8925,6 @@ mod tests {
         }
     }
 
-    /// The null-pointer model mirrors the runtime: `from_raw_parts_copy` of a
-    /// null pointer is empty whatever the length, and the capacity assumption
-    /// does not constrain that case.
-    #[test]
-    fn raw_parts_copy_null_pointer_is_empty() {
-        for (extern_name, _, _) in RAW_PARTS_CASES {
-            let f = raw_parts_copy_fn(extern_name, Ty::U64);
-            let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
-            assert!(c.contains("v2.len = v0 == 0 ? 0 : v1;"), "{c}");
-            assert!(c.contains("__ESBMC_assume(v0 == 0 || (v1 <"), "{c}");
-        }
-    }
-
     /// `extern_name(ptr, len)` over an instruction `ptr` (id 1) and `len` (id 2),
     /// with a leading arena argument when `in_arena`.
     fn ctor_fn(extern_name: &str, in_arena: bool, ptr: Inst, len: Inst) -> Function {
@@ -9133,32 +9108,116 @@ mod tests {
         }
     }
 
+    /// `len_extern(c)` over a collection that is parameter 0 (`GetArg`), or, when
+    /// `via_field_get`, a `FieldGet` of a constant base.
+    fn collection_len_fn(len_extern: &str, via_field_get: bool) -> Function {
+        let source = if via_field_get {
+            vec![
+                inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                inst(
+                    1,
+                    Opcode::FieldGet,
+                    Ty::Ptr,
+                    vec![0],
+                    InstData::FieldIndex(0),
+                ),
+            ]
+        } else {
+            vec![inst(
+                0,
+                Opcode::GetArg,
+                Ty::Ptr,
+                vec![],
+                InstData::ArgIndex(0),
+            )]
+        };
+        let coll = source.len() as u32 - 1;
+        let call = Inst {
+            id: InstId(coll + 1),
+            opcode: Opcode::Call,
+            ty: Ty::I64,
+            args: vec![InstId(coll)],
+            data: InstData::CallExtern(len_extern.to_string()),
+            origin: sp(),
+            region: RegionId::Root,
+        };
+        let ret = inst(
+            coll + 2,
+            Opcode::Return,
+            Ty::Unit,
+            vec![coll + 1],
+            InstData::None,
+        );
+        let params = if via_field_get { vec![] } else { vec![Ty::Ptr] };
+        let (mut func, _) = one_block_func_module(
+            "collection_len",
+            Ty::I64,
+            source.into_iter().chain([call, ret]).collect(),
+        );
+        func.param_names = vec!["c".to_string(); params.len()];
+        func.params = params;
+        func
+    }
+
     /// Every site that restricts a collection length to the model capacity
     /// carries a marker, and nothing else does: the structured "proof is
-    /// bounded" note is read off these.
+    /// bounded" note is read off these. Pinned for every collection kind, on both
+    /// the parameter and the struct-field path.
     #[test]
-    fn collection_parameters_carry_model_bound_markers() {
+    fn collection_lengths_carry_model_bound_markers() {
         let kinds = [
-            ("__vow_vec_len", "__vow_vec_get_val", "Vec", VEC_MODEL_CAP),
+            ("__vow_vec_len", ModelBoundKind::Vec, "Vec", "vec", 128),
             (
                 "__vow_string_len",
-                "__vow_string_byte_at",
+                ModelBoundKind::String,
                 "String",
-                STRING_MODEL_CAP,
+                "string",
+                256,
+            ),
+            (
+                "__vow_map_len",
+                ModelBoundKind::HashMap,
+                "HashMap",
+                "hashmap",
+                64,
+            ),
+            (
+                "__vow_btreemap_len",
+                ModelBoundKind::BTreeMap,
+                "BTreeMap",
+                "btreemap",
+                64,
             ),
         ];
-        for (len_extern, index_extern, kind, cap) in kinds {
-            let f = indexed_container_fn(len_extern, index_extern, Ty::U64);
-            let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
-            let bounds = model_capacity_bounds(&c);
-            assert_eq!(
-                bounds,
-                [ModelCapacityBound {
-                    collection: kind,
-                    capacity: cap
-                }],
-                "{len_extern}: {c}"
-            );
+        for (len_extern, kind, name, slug, cap) in kinds {
+            for via_field_get in [false, true] {
+                let f = collection_len_fn(len_extern, via_field_get);
+                let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
+                let (id, lead) = if via_field_get {
+                    (1, format!("  /* FieldGet -> {slug} */ "))
+                } else {
+                    (0, format!("  __vow_{slug}_t v0;\n  "))
+                };
+                let mut expected = format!(
+                    "{lead}v{id}.len = __VERIFIER_nondet_unsigned_long();\n  \
+                     __ESBMC_assume(v{id}.len <= {cap}); /* vow:model-bound {name} {cap} */\n"
+                );
+                if kind == ModelBoundKind::BTreeMap {
+                    expected.push_str(&format!(
+                        "  for (uint64_t __si = 0; __si + 1 < v{id}.len; __si++)\n    \
+                         __ESBMC_assume(v{id}.keys[__si] < v{id}.keys[__si + 1]);\n"
+                    ));
+                }
+                assert!(c.contains(&expected), "{len_extern} {via_field_get}: {c}");
+                assert_eq!(
+                    model_capacity_bounds(&c),
+                    [ModelCapacityBound {
+                        kind,
+                        capacity: cap
+                    }],
+                    "{len_extern} {via_field_get}: {c}"
+                );
+            }
         }
         let scalar = raw_parts_copy_fn_with_len(
             "__vow_vec_from_raw_parts_copy_val",
@@ -9167,6 +9226,35 @@ mod tests {
         );
         let c = emit_c_function(&scalar, &HashMap::new(), &VerifyLimits::default());
         assert!(model_capacity_bounds(&c).is_empty(), "{c}");
+    }
+
+    /// A `String` of unknown length that is not a parameter (a literal-free
+    /// constructor result) is assumed strictly below the cap and carries the same
+    /// `String` marker.
+    #[test]
+    fn nondet_string_length_carries_a_string_bound_marker() {
+        let (func, _) = one_block_func_module(
+            "nondet_string",
+            Ty::I64,
+            vec![
+                inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("__ESBMC_assume(v1.len < 256); /* vow:model-bound String 256 */\n"),
+            "{c}"
+        );
     }
 
     /// The struct-heap slot cap prunes executions that allocate more, so it is a
@@ -9200,7 +9288,7 @@ mod tests {
             assert_eq!(
                 model_capacity_bounds(&c),
                 [ModelCapacityBound {
-                    collection: "Heap",
+                    kind: ModelBoundKind::Heap,
                     capacity: heap_max
                 }]
             );

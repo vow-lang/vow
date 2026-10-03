@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::collections::HashMap;
 
 use vow_ir::{Function, Inst, InstData, IntegerSignedness, IntegerType, IntegerWidth, Opcode, Ty};
@@ -101,7 +102,7 @@ fn fold_const_inst(inst: &Inst, known: &HashMap<u32, u64>) -> Option<u64> {
 /// and checked `+ - *` over constants, integer casts of constants, and a `Phi`
 /// whose every `Upsilon` carries the same constant. Facts only ever grow from
 /// known operands, so the fixpoint is sound and cyclic phis stay unknown.
-pub(crate) fn fold_const_bits(func: &Function) -> HashMap<u32, u64> {
+fn fold_const_bits(func: &Function) -> HashMap<u32, u64> {
     let mut phi_sources: HashMap<u32, Vec<u32>> = HashMap::new();
     for block in &func.blocks {
         for inst in &block.insts {
@@ -139,5 +140,26 @@ pub(crate) fn fold_const_bits(func: &Function) -> HashMap<u32, u64> {
         if !changed {
             return known;
         }
+    }
+}
+
+/// The folded constants of one function, computed on first read. The folds only
+/// feed the raw-parts capacity model, so a function that never builds one never
+/// pays for the fixpoint.
+pub(crate) struct LazyConstBits<'a> {
+    func: &'a Function,
+    bits: OnceCell<HashMap<u32, u64>>,
+}
+
+impl<'a> LazyConstBits<'a> {
+    pub(crate) fn new(func: &'a Function) -> Self {
+        Self {
+            func,
+            bits: OnceCell::new(),
+        }
+    }
+
+    pub(crate) fn get(&self) -> &HashMap<u32, u64> {
+        self.bits.get_or_init(|| fold_const_bits(self.func))
     }
 }
