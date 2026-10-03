@@ -77,9 +77,13 @@ fn a_bad_map_type_is_reported_once_however_often_the_map_is_used() {
         "hashmap_key_string_reported_once.vow",
         &[("UnsupportedFeature", KEY_STRING)],
     );
-    let btree = error_diagnostics("btreemap_key_string_reported_once.vow");
-    let codes: Vec<&str> = btree.iter().map(|(code, _)| code.as_str()).collect();
-    assert_eq!(codes, vec!["BTreeMapKeyTypeMustBeI64"], "{btree:?}");
+    assert_diagnostics(
+        "btreemap_key_string_reported_once.vow",
+        &[(
+            "BTreeMapKeyTypeMustBeI64",
+            "BTreeMap key type must be i64; found 'String'",
+        )],
+    );
 }
 
 #[test]
@@ -91,5 +95,36 @@ fn a_bad_map_type_is_reported_once_per_written_site() {
             .iter()
             .all(|(code, message)| code == "UnsupportedFeature" && message == KEY_STRING),
         "{sites:?}"
+    );
+}
+
+#[test]
+fn non_indexable_messages_print_the_full_type() {
+    assert_diagnostics(
+        "index_hashmap_read.vow",
+        &[(
+            "TypeMismatch",
+            "index operation on non-indexable type `HashMap<i64, i64>`",
+        )],
+    );
+    assert_diagnostics(
+        "index_string_read.vow",
+        &[(
+            "TypeMismatch",
+            "index operation on non-indexable type `String`",
+        )],
+    );
+    assert_diagnostics(
+        "index_hashmap_vec_key.vow",
+        &[
+            (
+                "UnsupportedFeature",
+                "HashMap key type `Vec<i64>` is not supported: keys are compared by value as a single machine word",
+            ),
+            (
+                "TypeMismatch",
+                "index operation on non-indexable type `HashMap<Vec<i64>, i64>`",
+            ),
+        ],
     );
 }

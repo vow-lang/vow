@@ -1,0 +1,10 @@
+// TEST: error-count 2
+// TEST: stderr "index operation on non-indexable type `HashMap<Vec<i64>, i64>`"
+module IndexHashMapVecKey
+
+fn main() -> i32 [io, panic] {
+    let m: HashMap<Vec<i64>, i64> = HashMap::new();
+    let x: i64 = m[1];
+    print_i64(x);
+    0
+}

@@ -48,6 +48,36 @@ fn ty_value_display_name(ts: TyStore, tid: i64) -> String {
     ty_tag_name(tag)
 }
 
+// The full user-facing spelling of a type, identical to Rust `user_ty_name`:
+// `String`, `HashMap<i64, i64>`, `&T`, `!`. Diagnostics that name a type use it
+// so both compilers print the same text. The applied case copies the base name
+// before appending: `ty_struct_name` returns the interned string itself, and
+// pushing onto it would corrupt the type store.
+fn ty_full_display_name(ts: TyStore, tid: i64) -> String {
+    let tag: i64 = ty_tag(ts, tid);
+    if tag == CTY_APPLIED() {
+        let out: String = String::from(ty_full_display_name(ts, ty_a(ts, tid)));
+        out.push_str(String::from("<"));
+        let args_lid: i64 = ty_b(ts, tid);
+        let n: i64 = ts_arg_len(ts, args_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            if i > 0 { out.push_str(String::from(", ")); }
+            out.push_str(ty_full_display_name(ts, ts_arg_get(ts, args_lid, i)));
+            i = i + 1;
+        }
+        out.push_str(String::from(">"));
+        return out;
+    }
+    if tag == CTY_REF() {
+        let out: String = String::from("&");
+        out.push_str(ty_full_display_name(ts, ty_a(ts, tid)));
+        return out;
+    }
+    if tag == CTY_NEVER() { return String::from("!"); }
+    ty_value_display_name(ts, tid)
+}
+
 // Returns 1 if `tid` is or transitively contains a linear struct.
 // Mirrors vow-types/src/check.rs::is_linear_ty. Used to gate BTreeMap value
 // payloads: bitwise shift/copy in the runtime/verifier would silently
@@ -323,14 +353,14 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
                     let bkey_tag: i64 = ty_tag(e.ts, bkey_tid);
                     if bkey_tag != CTY_I64() && bkey_tag != CTY_NEVER() {
                         let kerr_msg: String = String::from("BTreeMap key type must be i64; found '");
-                        kerr_msg.push_str(ty_tag_name(bkey_tag));
+                        kerr_msg.push_str(ty_full_display_name(e.ts, bkey_tid));
                         kerr_msg.push_str(String::from("'"));
                         env_emit_error_code(e, EC_BTREEMAP_KEY_TYPE_MUST_BE_I64(), kerr_msg, type_span(a, ast_tid));
                     }
                     let bval_tid: i64 = arg_tids[1];
                     if is_linear_ty(e, bval_tid) == 1 {
                         let verr_msg: String = String::from("BTreeMap value type must be non-linear; found '");
-                        verr_msg.push_str(ty_value_display_name(e.ts, bval_tid));
+                        verr_msg.push_str(ty_full_display_name(e.ts, bval_tid));
                         verr_msg.push_str(String::from("'"));
                         env_emit_error_code(e, EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR(), verr_msg, type_span(a, ast_tid));
                     }
@@ -386,7 +416,7 @@ fn check_map_slot_types(e: CheckEnv, name: String, key_tid: i64, val_tid: i64, s
     if name == String::from("HashMap") && key_tid >= 0 {
         if !hashmap_key_tag_supported(ty_tag(e.ts, key_tid)) {
             let kmsg: String = String::from("HashMap key type `");
-            kmsg.push_str(ty_value_display_name(e.ts, key_tid));
+            kmsg.push_str(ty_full_display_name(e.ts, key_tid));
             kmsg.push_str(String::from("` is not supported: keys are compared by value as a single machine word"));
             env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), kmsg, span);
         }
@@ -396,13 +426,13 @@ fn check_map_slot_types(e: CheckEnv, name: String, key_tid: i64, val_tid: i64, s
         if vtag == CTY_I128() || vtag == CTY_U128() || vtag == CTY_F32() || vtag == CTY_F64() {
             let vmsg: String = String::from(name);
             vmsg.push_str(String::from(" value type `"));
-            vmsg.push_str(ty_value_display_name(e.ts, val_tid));
+            vmsg.push_str(ty_full_display_name(e.ts, val_tid));
             vmsg.push_str(String::from("` is not supported: map values occupy a single 64-bit integer slot"));
             env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), vmsg, span);
         }
         if name == String::from("HashMap") && is_linear_ty(e, val_tid) == 1 {
             let lmsg: String = String::from("HashMap value type must be non-linear; found `");
-            lmsg.push_str(ty_value_display_name(e.ts, val_tid));
+            lmsg.push_str(ty_full_display_name(e.ts, val_tid));
             lmsg.push_str(String::from("`: the map copies values bitwise and would duplicate the linear obligation"));
             env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), lmsg, span);
         }
@@ -2932,16 +2962,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 return CTY_UNIT();
             }
         }
-        let mut idisp: String = ty_value_display_name(e.ts, recv_tid);
-        if ty_tag(e.ts, recv_tid) == CTY_APPLIED() {
-            let dbase_tid: i64 = ty_a(e.ts, recv_tid);
-            let dbase_tag: i64 = ty_tag(e.ts, dbase_tid);
-            if dbase_tag == CTY_STRUCT() || dbase_tag == CTY_ENUM() {
-                idisp = ty_struct_name(e.ts, dbase_tid);
-            }
-        }
         let inmsg: String = String::from("index operation on non-indexable type `");
-        inmsg.push_str(idisp);
+        inmsg.push_str(ty_full_display_name(e.ts, recv_tid));
         inmsg.push_str(String::from("`"));
         env_emit_error_code(e, EC_TYPE_MISMATCH(), inmsg, expr_span(a, eid));
         return CTY_NEVER();
