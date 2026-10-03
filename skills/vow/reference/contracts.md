@@ -50,6 +50,12 @@ capacities are an internal property of the verifier, not of the language:
 | `String`          | 256            | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |
 | `HashMap<K, V>`   | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
 | `BTreeMap<K, V>`  | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
+| User structs (heap) | 1024 slots   | construction (`RegionAlloc`), field reads and writes |
+
+The numbers are defaults. The effective `String` capacity is raised to the
+longest string literal in the module (see below), and the
+[`ModelCapacityAssumed`](errors.md#modelcapacityassumed) note reports the
+capacity that was actually applied.
 
 **These bounds are not a language feature and are not user-tunable.** A `Vec`
 in a Vow program grows dynamically on the heap with no fixed maximum; the
@@ -77,8 +83,7 @@ model capacity fails closed with the capacity-limit diagnostic rather than being
 assumed away. "Provably constant" covers a literal, `+`/`-`/`*` (wrapping or
 checked) over constants, an integer cast of a constant, and a `let mut` whose
 every assignment is the same constant; it is computed over the IR, so
-`n + 300` with a constant `n` is recognised exactly like `301`. Both emitters
-fold identically, so the emitted model stays byte-identical.
+`n + 300` with a constant `n` is recognised exactly like `301`.
 
 `from_raw_parts_copy` models the runtime's null-pointer behaviour: a null source
 (`ptr == 0`) yields an empty value whatever the length is, and the capacity
@@ -95,10 +100,10 @@ collection read from a struct field, `String::from_cstr`, a non-constant
 `from_raw_parts_copy` length — is modelled as nondeterministic but restricted to
 the capacity above (`__ESBMC_assume(len <= CAP)`). The user-struct heap is
 bounded the same way: every struct allocation bump-allocates slots from a model
-heap of 1024 slots and prunes executions that allocate more
+heap (1024 slots by default) and prunes executions that allocate more
 (`__ESBMC_assume(__vow_heap_top <= 1024)`). That prunes every longer or larger
 execution, so a `Verified` result for such a function means "verified for
-collections no longer than the model capacity and at most 1024 struct slots",
+collections no longer than the model capacity and at most that many struct slots",
 not "verified for all collections". The verifier makes this explicit rather than
 silent: every function proved from a model that carries such an assumption adds
 one [`ModelCapacityAssumed`](errors.md#modelcapacityassumed) **note** (severity

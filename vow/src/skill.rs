@@ -3018,7 +3018,7 @@ rationale.
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* (`severity: "note"`, emitted only on a `Verified` result of `verify` or `build`, after the other diagnostics) per proved function whose model assumed a capacity: a parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled only up to the verifier's model capacity (`Vec<T>` 128, `String` 256, maps 64), and struct allocations only up to a 1024-slot `Heap`, so that proof covers executions within those capacities. The note names each bounded kind and its capacity and changes neither the status nor the exit code. Agents and CEGIS loops should read it as "bounded proof", never as a reason to add a length bound to a contract. See [`errors.md`](errors.md#modelcapacityassumed). |
+| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
@@ -3422,6 +3422,12 @@ capacities are an internal property of the verifier, not of the language:
 | `String`          | 256            | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |
 | `HashMap<K, V>`   | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
 | `BTreeMap<K, V>`  | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
+| User structs (heap) | 1024 slots   | construction (`RegionAlloc`), field reads and writes |
+
+The numbers are defaults. The effective `String` capacity is raised to the
+longest string literal in the module (see below), and the
+[`ModelCapacityAssumed`](errors.md#modelcapacityassumed) note reports the
+capacity that was actually applied.
 
 **These bounds are not a language feature and are not user-tunable.** A `Vec`
 in a Vow program grows dynamically on the heap with no fixed maximum; the
@@ -3449,8 +3455,7 @@ model capacity fails closed with the capacity-limit diagnostic rather than being
 assumed away. "Provably constant" covers a literal, `+`/`-`/`*` (wrapping or
 checked) over constants, an integer cast of a constant, and a `let mut` whose
 every assignment is the same constant; it is computed over the IR, so
-`n + 300` with a constant `n` is recognised exactly like `301`. Both emitters
-fold identically, so the emitted model stays byte-identical.
+`n + 300` with a constant `n` is recognised exactly like `301`.
 
 `from_raw_parts_copy` models the runtime's null-pointer behaviour: a null source
 (`ptr == 0`) yields an empty value whatever the length is, and the capacity
@@ -3467,10 +3472,10 @@ collection read from a struct field, `String::from_cstr`, a non-constant
 `from_raw_parts_copy` length — is modelled as nondeterministic but restricted to
 the capacity above (`__ESBMC_assume(len <= CAP)`). The user-struct heap is
 bounded the same way: every struct allocation bump-allocates slots from a model
-heap of 1024 slots and prunes executions that allocate more
+heap (1024 slots by default) and prunes executions that allocate more
 (`__ESBMC_assume(__vow_heap_top <= 1024)`). That prunes every longer or larger
 execution, so a `Verified` result for such a function means "verified for
-collections no longer than the model capacity and at most 1024 struct slots",
+collections no longer than the model capacity and at most that many struct slots",
 not "verified for all collections". The verifier makes this explicit rather than
 silent: every function proved from a model that carries such an assumption adds
 one [`ModelCapacityAssumed`](errors.md#modelcapacityassumed) **note** (severity
@@ -5034,7 +5039,7 @@ The structured counterexample's `violation` field carries the stable property de
 ### ModelCapacityAssumed
 
 **Phase:** Verification (Note; the build status stays `Verified`)
-**Meaning:** The function's contracts were proved, but the proof's model restricts at least one capacity to the verifier's model capacity (`Vec<T>` 128, `String` 256, `HashMap<K, V>` and `BTreeMap<K, V>` 64, user-struct `Heap` 1024 slots; see [`contracts.md`](contracts.md#collection-models-for-verification)). A parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled as nondeterministic *within* its capacity, and struct allocations stop at the heap capacity, so executions with longer collections or more struct allocations were pruned, not checked: `Verified` means "verified for executions up to the capacities".
+**Meaning:** The function's contracts were proved, but the proof's model restricts at least one capacity to the verifier's model capacity (defaults: `Vec<T>` 128, `String` 256, `HashMap<K, V>` and `BTreeMap<K, V>` 64, user-struct `Heap` 1024 slots; the `String` capacity is raised to the longest string literal in the module, and the note's message reports the capacity actually applied; see [`contracts.md`](contracts.md#collection-models-for-verification)). A parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled as nondeterministic *within* its capacity, and struct allocations stop at the heap capacity, so executions with longer collections or more struct allocations were pruned, not checked: `Verified` means "verified for executions up to the capacities".
 
 ```json
 {
@@ -8466,7 +8471,7 @@ rationale.
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* (`severity: "note"`, emitted only on a `Verified` result of `verify` or `build`, after the other diagnostics) per proved function whose model assumed a capacity: a parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled only up to the verifier's model capacity (`Vec<T>` 128, `String` 256, maps 64), and struct allocations only up to a 1024-slot `Heap`, so that proof covers executions within those capacities. The note names each bounded kind and its capacity and changes neither the status nor the exit code. Agents and CEGIS loops should read it as "bounded proof", never as a reason to add a length bound to a contract. See [`errors.md`](errors.md#modelcapacityassumed). |
+| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
@@ -8871,6 +8876,12 @@ capacities are an internal property of the verifier, not of the language:
 | `String`          | 256            | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |
 | `HashMap<K, V>`   | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
 | `BTreeMap<K, V>`  | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
+| User structs (heap) | 1024 slots   | construction (`RegionAlloc`), field reads and writes |
+
+The numbers are defaults. The effective `String` capacity is raised to the
+longest string literal in the module (see below), and the
+[`ModelCapacityAssumed`](errors.md#modelcapacityassumed) note reports the
+capacity that was actually applied.
 
 **These bounds are not a language feature and are not user-tunable.** A `Vec`
 in a Vow program grows dynamically on the heap with no fixed maximum; the
@@ -8898,8 +8909,7 @@ model capacity fails closed with the capacity-limit diagnostic rather than being
 assumed away. "Provably constant" covers a literal, `+`/`-`/`*` (wrapping or
 checked) over constants, an integer cast of a constant, and a `let mut` whose
 every assignment is the same constant; it is computed over the IR, so
-`n + 300` with a constant `n` is recognised exactly like `301`. Both emitters
-fold identically, so the emitted model stays byte-identical.
+`n + 300` with a constant `n` is recognised exactly like `301`.
 
 `from_raw_parts_copy` models the runtime's null-pointer behaviour: a null source
 (`ptr == 0`) yields an empty value whatever the length is, and the capacity
@@ -8916,10 +8926,10 @@ collection read from a struct field, `String::from_cstr`, a non-constant
 `from_raw_parts_copy` length — is modelled as nondeterministic but restricted to
 the capacity above (`__ESBMC_assume(len <= CAP)`). The user-struct heap is
 bounded the same way: every struct allocation bump-allocates slots from a model
-heap of 1024 slots and prunes executions that allocate more
+heap (1024 slots by default) and prunes executions that allocate more
 (`__ESBMC_assume(__vow_heap_top <= 1024)`). That prunes every longer or larger
 execution, so a `Verified` result for such a function means "verified for
-collections no longer than the model capacity and at most 1024 struct slots",
+collections no longer than the model capacity and at most that many struct slots",
 not "verified for all collections". The verifier makes this explicit rather than
 silent: every function proved from a model that carries such an assumption adds
 one [`ModelCapacityAssumed`](errors.md#modelcapacityassumed) **note** (severity
@@ -10485,7 +10495,7 @@ The structured counterexample's `violation` field carries the stable property de
 ### ModelCapacityAssumed
 
 **Phase:** Verification (Note; the build status stays `Verified`)
-**Meaning:** The function's contracts were proved, but the proof's model restricts at least one capacity to the verifier's model capacity (`Vec<T>` 128, `String` 256, `HashMap<K, V>` and `BTreeMap<K, V>` 64, user-struct `Heap` 1024 slots; see [`contracts.md`](contracts.md#collection-models-for-verification)). A parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled as nondeterministic *within* its capacity, and struct allocations stop at the heap capacity, so executions with longer collections or more struct allocations were pruned, not checked: `Verified` means "verified for executions up to the capacities".
+**Meaning:** The function's contracts were proved, but the proof's model restricts at least one capacity to the verifier's model capacity (defaults: `Vec<T>` 128, `String` 256, `HashMap<K, V>` and `BTreeMap<K, V>` 64, user-struct `Heap` 1024 slots; the `String` capacity is raised to the longest string literal in the module, and the note's message reports the capacity actually applied; see [`contracts.md`](contracts.md#collection-models-for-verification)). A parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled as nondeterministic *within* its capacity, and struct allocations stop at the heap capacity, so executions with longer collections or more struct allocations were pruned, not checked: `Verified` means "verified for executions up to the capacities".
 
 ```json
 {
