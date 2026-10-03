@@ -771,12 +771,13 @@ fn emit_raw_parts_copy_c(extern_name: String, len_ty: i64) -> String {
     emit_c_module(mk_module(funcs), 16, 16, 16, 16)
 }
 
-fn check_raw_parts_copy_len_assumption(extern_name: String, base_code: i64) -> i64 {
+fn check_raw_parts_copy_len_assumption(extern_name: String, kind: String, base_code: i64) -> i64 {
+    let marker: String = str3(String::from(" /* vow:model-bound "), kind, String::from(" 16 */\n  v2.len = v0 == 0 ? 0 : v1;\n"));
     let unsigned_c: String = emit_raw_parts_copy_c(extern_name, ITY_U64());
-    if !unsigned_c.contains(String::from("  __ESBMC_assume(v1 < 16);\n  v2.len = v1;\n")) { return base_code; }
+    if !unsigned_c.contains(cemit_str2(String::from("  __ESBMC_assume(v0 == 0 || (v1 < 16));"), marker)) { return base_code; }
     if unsigned_c.contains(String::from("v1 >= 0")) { return base_code + 1; }
     let signed_c: String = emit_raw_parts_copy_c(extern_name, ITY_I64());
-    if !signed_c.contains(String::from("  __ESBMC_assume(v1 >= 0 && v1 < 16);\n  v2.len = v1;\n")) { return base_code + 2; }
+    if !signed_c.contains(cemit_str2(String::from("  __ESBMC_assume(v0 == 0 || (v1 >= 0 && v1 < 16));"), marker)) { return base_code + 2; }
     0
 }
 
@@ -803,19 +804,168 @@ fn emit_raw_parts_copy_const_len_c(extern_name: String, op: i64, ty: i64, value:
 }
 
 fn check_raw_parts_copy_const_len(extern_name: String, label: String, base_code: i64) -> i64 {
-    let fail_closed: String = String::from("  __ESBMC_assert(0, \"");
+    let fail_closed: String = String::from("  __ESBMC_assert(v0 == 0, \"");
     fail_closed.push_str(label);
     fail_closed.push_str(String::from("\");\n  v2.len = 0;\n"));
     let at_cap: String = emit_raw_parts_copy_const_len_c(extern_name, IOP_CONST_U64(), ITY_U64(), 16);
     if !at_cap.contains(fail_closed) { return base_code; }
-    if at_cap.contains(String::from("__ESBMC_assume(v1")) { return base_code + 1; }
+    if at_cap.contains(String::from("__ESBMC_assume(v0 == 0")) { return base_code + 1; }
     let above_i64_max: String = emit_raw_parts_copy_const_len_c(extern_name, IOP_CONST_U64(), ITY_U64(), 0 - 1);
     if !above_i64_max.contains(fail_closed) { return base_code + 2; }
     let negative: String = emit_raw_parts_copy_const_len_c(extern_name, IOP_CONST_I64(), ITY_I64(), 0 - 1);
     if !negative.contains(fail_closed) { return base_code + 3; }
     let in_range: String = emit_raw_parts_copy_const_len_c(extern_name, IOP_CONST_U64(), ITY_U64(), 15);
-    if !in_range.contains(String::from("  __ESBMC_assume(v1 < 16);\n  v2.len = v1;\n")) { return base_code + 4; }
+    if !in_range.contains(String::from("  __ESBMC_assume(v0 == 0 || (v1 < 16));\n  v2.len = v0 == 0 ? 0 : v1;\n")) { return base_code + 4; }
     if in_range.contains(fail_closed) { return base_code + 5; }
+    if in_range.contains(String::from("vow:model-bound")) { return base_code + 6; }
+    0
+}
+
+// `from_raw_parts_copy(p, <len>)` where `body` computes the length, the value
+// named by `len_id`. The call is value 100.
+fn emit_raw_parts_body_c(extern_name: String, body: Vec<IrInst>, len_id: i64) -> String {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    let mut bi: u64 = 0u64;
+    while bi < body.len() {
+        insts.push(body[bi]);
+        bi = bi + 1u64;
+    }
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(0);
+    call_args.push(len_id);
+    insts.push(mk_inst_call_extern(100, ITY_PTR(), call_args, extern_name));
+    insts.push(mk_inst_return(101, 100));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_I64());
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(0, String::from("raw_parts"), params, ITY_PTR(), blocks));
+    emit_c_module(mk_module(funcs), 16, 16, 16, 16)
+}
+
+fn fold_const_u64(id: i64, value: i64) -> IrInst {
+    ir_inst_new(id, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), value, 0, String::from(""))
+}
+
+fn fold_u64_op(id: i64, op: i64, a: i64, b: i64) -> IrInst {
+    let args: Vec<i64> = Vec::new();
+    args.push(a);
+    args.push(b);
+    ir_inst_new(id, op, ITY_U64(), args, IDATA_NONE(), 0, 0, String::from(""))
+}
+
+fn fold_phi_of_two(a: i64, b: i64) -> Vec<IrInst> {
+    let body: Vec<IrInst> = Vec::new();
+    body.push(fold_const_u64(1, a));
+    body.push(fold_const_u64(2, b));
+    body.push(ir_inst_new(3, IOP_PHI(), ITY_U64(), Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+    let a1: Vec<i64> = Vec::new();
+    a1.push(1);
+    body.push(ir_inst_new(4, IOP_UPSILON(), ITY_UNIT(), a1, IDATA_PHI_TARGET(), 3, 0, String::from("")));
+    let a2: Vec<i64> = Vec::new();
+    a2.push(2);
+    body.push(ir_inst_new(5, IOP_UPSILON(), ITY_UNIT(), a2, IDATA_PHI_TARGET(), 3, 0, String::from("")));
+    body
+}
+
+fn fails_closed(c: String, label: String) -> bool {
+    let fail_closed: String = String::from("  __ESBMC_assert(v0 == 0, \"");
+    fail_closed.push_str(label);
+    fail_closed.push_str(String::from("\");\n  v100.len = 0;\n"));
+    c.contains(fail_closed) && !c.contains(String::from("__ESBMC_assume(v0 == 0 ||"))
+}
+
+fn keeps_assumption(c: String) -> bool {
+    c.contains(String::from("__ESBMC_assume(v0 == 0 || (v")) && !c.contains(String::from("__ESBMC_assert(v0 == 0"))
+}
+
+// A provably-constant length reaches the capacity check through constant
+// arithmetic, a cast, or a phi of identical constants exactly as a literal
+// does; what is not provably constant keeps the assumption. Mirrors
+// raw_parts_copy_folded_constant_len_fails_closed and
+// raw_parts_copy_unfoldable_len_keeps_assumption in
+// vow-verify/src/c_emitter.rs.
+fn check_raw_parts_folded_len(extern_name: String, label: String, base_code: i64) -> i64 {
+    let sum: Vec<IrInst> = Vec::new();
+    sum.push(fold_const_u64(1, 1));
+    sum.push(fold_const_u64(2, 116));
+    sum.push(fold_u64_op(3, IOP_WADD(), 1, 2));
+    if !fails_closed(emit_raw_parts_body_c(extern_name, sum, 3), label) { return base_code; }
+
+    let cmul: Vec<IrInst> = Vec::new();
+    cmul.push(fold_const_u64(1, 16));
+    cmul.push(fold_const_u64(2, 2));
+    cmul.push(fold_u64_op(3, IOP_CMUL(), 1, 2));
+    if !fails_closed(emit_raw_parts_body_c(extern_name, cmul, 3), label) { return base_code + 1; }
+
+    let wrapped: Vec<IrInst> = Vec::new();
+    wrapped.push(fold_const_u64(1, 0));
+    wrapped.push(fold_const_u64(2, 1));
+    wrapped.push(fold_u64_op(3, IOP_WSUB(), 1, 2));
+    if !fails_closed(emit_raw_parts_body_c(extern_name, wrapped, 3), label) { return base_code + 2; }
+
+    let widened: Vec<IrInst> = Vec::new();
+    widened.push(ir_inst_new(1, IOP_CONST_I32(), ITY_I32(), Vec::new(), IDATA_CONST_I32(), 0 - 1, 0, String::from("")));
+    let cast_args: Vec<i64> = Vec::new();
+    cast_args.push(1);
+    widened.push(ir_inst_new(2, IOP_INT_CAST(), ITY_U64(), cast_args, IDATA_INTEGER_CAST(), 0, 0, String::from("")));
+    if !fails_closed(emit_raw_parts_body_c(extern_name, widened, 2), label) { return base_code + 3; }
+
+    if !fails_closed(emit_raw_parts_body_c(extern_name, fold_phi_of_two(23, 23), 3), label) { return base_code + 4; }
+
+    if !keeps_assumption(emit_raw_parts_body_c(extern_name, fold_phi_of_two(1, 17), 3)) { return base_code + 5; }
+
+    let overflow: Vec<IrInst> = Vec::new();
+    overflow.push(fold_const_u64(1, 0 - 1));
+    overflow.push(fold_const_u64(2, 2));
+    overflow.push(fold_u64_op(3, IOP_CADD(), 1, 2));
+    if !keeps_assumption(emit_raw_parts_body_c(extern_name, overflow, 3)) { return base_code + 6; }
+
+    let small: Vec<IrInst> = Vec::new();
+    small.push(fold_const_u64(1, 1));
+    small.push(fold_const_u64(2, 2));
+    small.push(fold_u64_op(3, IOP_WADD(), 1, 2));
+    let small_c: String = emit_raw_parts_body_c(extern_name, small, 3);
+    if !keeps_assumption(small_c) { return base_code + 7; }
+    if small_c.contains(String::from("vow:model-bound")) { return base_code + 8; }
+    0
+}
+
+// A literal null source is empty whatever the length, so the capacity assumption
+// restricts nothing and carries no bound marker. Mirrors
+// raw_parts_copy_literal_null_source_carries_no_bound in
+// vow-verify/src/c_emitter.rs.
+fn check_raw_parts_literal_null_carries_no_bound(extern_name: String, base_code: i64) -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(ir_inst_new(0, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from("")));
+    insts.push(mk_inst_arg(1, ITY_U64(), 0));
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(0);
+    call_args.push(1);
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), call_args, extern_name));
+    insts.push(mk_inst_return(3, 2));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_U64());
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(0, String::from("raw_parts"), params, ITY_PTR(), blocks));
+    let c: String = emit_c_module(mk_module(funcs), 16, 16, 16, 16);
+    if !c.contains(String::from("__ESBMC_assume(v0 == 0 || (v1 <")) { return base_code; }
+    if c.contains(String::from("vow:model-bound")) { return base_code + 1; }
+    0
+}
+
+// The null-pointer model mirrors the runtime: from_raw_parts_copy of a null
+// pointer is empty whatever the length, and the capacity assumption does not
+// constrain that case. Mirrors raw_parts_copy_null_pointer_is_empty in
+// vow-verify/src/c_emitter.rs.
+fn check_raw_parts_null_pointer_is_empty(extern_name: String, base_code: i64) -> i64 {
+    let c: String = emit_raw_parts_copy_c(extern_name, ITY_U64());
+    if !c.contains(String::from("v2.len = v0 == 0 ? 0 : v1;")) { return base_code; }
+    if !c.contains(String::from("__ESBMC_assume(v0 == 0 || (v1 <")) { return base_code + 1; }
     0
 }
 
@@ -1087,9 +1237,9 @@ fn main() -> i32 {
     if r21 != 0 { return i64_to_i32_wrap(r21); }
     let r22: i64 = check_wide_shifts_use_helpers();
     if r22 != 0 { return i64_to_i32_wrap(r22); }
-    let r23: i64 = check_raw_parts_copy_len_assumption(String::from("__vow_vec_from_raw_parts_copy_val"), 230);
+    let r23: i64 = check_raw_parts_copy_len_assumption(String::from("__vow_vec_from_raw_parts_copy_val"), String::from("Vec"), 230);
     if r23 != 0 { return i64_to_i32_wrap(r23); }
-    let r24: i64 = check_raw_parts_copy_len_assumption(String::from("__vow_string_from_raw_parts_copy"), 235);
+    let r24: i64 = check_raw_parts_copy_len_assumption(String::from("__vow_string_from_raw_parts_copy"), String::from("String"), 235);
     if r24 != 0 { return i64_to_i32_wrap(r24); }
     let r25: i64 = check_raw_parts_copy_const_len(String::from("__vow_vec_from_raw_parts_copy_val"), String::from("vec capacity"), 240);
     if r25 != 0 { return i64_to_i32_wrap(r25); }
@@ -1103,5 +1253,17 @@ fn main() -> i32 {
     if r29 != 0 { return i64_to_i32_wrap(r29); }
     let r30: i64 = check_string_matches_literal_at_oob_index_falls_back();
     if r30 != 0 { return i64_to_i32_wrap(r30); }
+    let r31: i64 = check_raw_parts_folded_len(String::from("__vow_vec_from_raw_parts_copy_val"), String::from("vec capacity"), 300);
+    if r31 != 0 { return i64_to_i32_wrap(r31); }
+    let r32: i64 = check_raw_parts_folded_len(String::from("__vow_string_from_raw_parts_copy"), String::from("string capacity"), 320);
+    if r32 != 0 { return i64_to_i32_wrap(r32); }
+    let r33: i64 = check_raw_parts_null_pointer_is_empty(String::from("__vow_vec_from_raw_parts_copy_val"), 340);
+    if r33 != 0 { return i64_to_i32_wrap(r33); }
+    let r34: i64 = check_raw_parts_null_pointer_is_empty(String::from("__vow_string_from_raw_parts_copy"), 342);
+    if r34 != 0 { return i64_to_i32_wrap(r34); }
+    let r35: i64 = check_raw_parts_literal_null_carries_no_bound(String::from("__vow_vec_from_raw_parts_copy_val"), 344);
+    if r35 != 0 { return i64_to_i32_wrap(r35); }
+    let r36: i64 = check_raw_parts_literal_null_carries_no_bound(String::from("__vow_string_from_raw_parts_copy"), 346);
+    if r36 != 0 { return i64_to_i32_wrap(r36); }
     0
 }

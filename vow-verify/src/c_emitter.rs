@@ -159,27 +159,219 @@ fn emit_bounds_assert(idx: u32, container: u32, idx_ty: Ty, label: &str, out: &m
     }
 }
 
-/// Length model for `from_raw_parts_copy`. A constant length outside the model
-/// capacity fails closed with the capacity label (an assumption would be
-/// unsatisfiable and prove everything after it). A `u64` length drops the
-/// vacuous `>= 0` lower bound.
+/// Marker appended to every emitted `__ESBMC_assume` that restricts a
+/// collection length to the model capacity. It is the single source of truth for
+/// [`model_capacity_bounds`], so the structured "this proof is bounded" note can
+/// never disagree with the model that was actually checked. Shared wire format
+/// with `compiler/c_emitter.vow`.
+const MODEL_BOUND_MARKER: &str = "/* vow:model-bound ";
+
+fn model_bound_marker(kind: &str, cap: usize) -> String {
+    format!(" {MODEL_BOUND_MARKER}{kind} {cap} */")
+}
+
+/// Collection kinds in the fixed order [`model_capacity_bounds`] reports them.
+const MODEL_BOUND_KINDS: [&str; 4] = ["Vec", "String", "HashMap", "BTreeMap"];
+
+/// A collection whose length the emitted model restricts to `capacity`. Every
+/// proof of a function whose model carries one is a proof *within* that bound:
+/// executions with longer collections were pruned, not checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelCapacityBound {
+    pub collection: &'static str,
+    pub capacity: usize,
+}
+
+/// The capacity assumptions present in an emitted verification model, in the
+/// fixed order `Vec`, `String`, `HashMap`, `BTreeMap`, one entry per kind (the
+/// effective capacity is uniform within a model, so the first marker wins).
+pub fn model_capacity_bounds(c_src: &str) -> Vec<ModelCapacityBound> {
+    let mut found: Vec<ModelCapacityBound> = Vec::new();
+    let mut rest = c_src;
+    while let Some(pos) = rest.find(MODEL_BOUND_MARKER) {
+        rest = &rest[pos + MODEL_BOUND_MARKER.len()..];
+        let Some(end) = rest.find(" */") else { break };
+        let mut parts = rest[..end].split(' ');
+        let (Some(kind), Some(cap)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        if let (Some(collection), Ok(capacity)) = (
+            MODEL_BOUND_KINDS.iter().find(|k| **k == kind),
+            cap.parse::<usize>(),
+        ) {
+            let bound = ModelCapacityBound {
+                collection,
+                capacity,
+            };
+            if !found.iter().any(|b| b.collection == bound.collection) {
+                found.push(bound);
+            }
+        }
+    }
+    found.sort_by_key(|b| {
+        MODEL_BOUND_KINDS
+            .iter()
+            .position(|k| *k == b.collection)
+            .unwrap_or(usize::MAX)
+    });
+    found
+}
+
+/// Wrap `bits` into the value range of `int_ty` (sign-extended when signed,
+/// zero-extended when unsigned), keeping a 64-bit pattern.
+fn normalize_const_bits(bits: u64, int_ty: IntegerType) -> u64 {
+    let width = u32::from(int_ty.width.bits());
+    if width >= 64 {
+        return bits;
+    }
+    let mask = (1u64 << width) - 1;
+    let low = bits & mask;
+    if int_ty.signedness == IntegerSignedness::Signed && (low >> (width - 1)) & 1 == 1 {
+        low | !mask
+    } else {
+        low
+    }
+}
+
+fn narrow_int_type(ty: Ty) -> Option<IntegerType> {
+    ir_ty_to_integer_type(ty).filter(|t| t.width != IntegerWidth::W128)
+}
+
+fn const_leaf_bits(inst: &Inst) -> Option<u64> {
+    let int_ty = narrow_int_type(inst.ty)?;
+    let raw = match inst.data {
+        InstData::ConstI32(v) => i64::from(v) as u64,
+        InstData::ConstI64(v) => v as u64,
+        InstData::ConstU64(v) => v,
+        InstData::ConstU8(v) => u64::from(v),
+        _ => return None,
+    };
+    Some(normalize_const_bits(raw, int_ty))
+}
+
+/// Exact `a op b` for a checked operator, `None` when it overflows `int_ty`
+/// (the operator aborts there, so no value flows on).
+fn checked_const_bits(opcode: Opcode, a: u64, b: u64, int_ty: IntegerType) -> Option<u64> {
+    let exact = match int_ty.signedness {
+        IntegerSignedness::Signed => {
+            let (x, y) = (a as i64, b as i64);
+            match opcode {
+                Opcode::CheckedAdd => x.checked_add(y),
+                Opcode::CheckedSub => x.checked_sub(y),
+                _ => x.checked_mul(y),
+            }
+            .map(|r| r as u64)
+        }
+        IntegerSignedness::Unsigned => match opcode {
+            Opcode::CheckedAdd => a.checked_add(b),
+            Opcode::CheckedSub => a.checked_sub(b),
+            _ => a.checked_mul(b),
+        },
+    }?;
+    (normalize_const_bits(exact, int_ty) == exact).then_some(exact)
+}
+
+fn fold_const_inst(inst: &Inst, known: &HashMap<u32, u64>) -> Option<u64> {
+    if let Some(bits) = const_leaf_bits(inst) {
+        return Some(bits);
+    }
+    let arg = |i: usize| inst.args.get(i).and_then(|a| known.get(&a.0)).copied();
+    match inst.opcode {
+        Opcode::WrappingAdd | Opcode::WrappingSub | Opcode::WrappingMul => {
+            let int_ty = checked_integer_type(inst)?;
+            let (a, b) = (arg(0)?, arg(1)?);
+            let raw = match inst.opcode {
+                Opcode::WrappingAdd => a.wrapping_add(b),
+                Opcode::WrappingSub => a.wrapping_sub(b),
+                _ => a.wrapping_mul(b),
+            };
+            Some(normalize_const_bits(raw, int_ty))
+        }
+        Opcode::CheckedAdd | Opcode::CheckedSub | Opcode::CheckedMul => {
+            let int_ty = checked_integer_type(inst)?;
+            checked_const_bits(inst.opcode, arg(0)?, arg(1)?, int_ty)
+        }
+        Opcode::IntCast => {
+            let to = match inst.data {
+                InstData::IntegerCast { to, .. } => Some(to),
+                _ => narrow_int_type(inst.ty),
+            }
+            .filter(|t| t.width != IntegerWidth::W128)?;
+            Some(normalize_const_bits(arg(0)?, to))
+        }
+        _ => None,
+    }
+}
+
+/// Constant integer value (as a type-normalized 64-bit pattern) of every
+/// instruction in `func` that provably always computes one: literals, wrapping
+/// and checked `+ - *` over constants, integer casts of constants, and a `Phi`
+/// whose every `Upsilon` carries the same constant. Facts only ever grow from
+/// known operands, so the fixpoint is sound and cyclic phis stay unknown.
+fn fold_const_bits(func: &Function) -> HashMap<u32, u64> {
+    let mut phi_sources: HashMap<u32, Vec<u32>> = HashMap::new();
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Upsilon
+                && let (InstData::PhiTarget(phi), Some(src)) = (&inst.data, inst.args.first())
+            {
+                phi_sources.entry(phi.0).or_default().push(src.0);
+            }
+        }
+    }
+    let mut known: HashMap<u32, u64> = HashMap::new();
+    loop {
+        let mut changed = false;
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if known.contains_key(&inst.id.0) {
+                    continue;
+                }
+                let folded = if inst.opcode == Opcode::Phi {
+                    phi_sources.get(&inst.id.0).and_then(|srcs| {
+                        let first = known.get(srcs.first()?).copied()?;
+                        srcs.iter()
+                            .all(|s| known.get(s) == Some(&first))
+                            .then_some(first)
+                    })
+                } else {
+                    fold_const_inst(inst, &known)
+                };
+                if let Some(bits) = folded {
+                    known.insert(inst.id.0, bits);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            return known;
+        }
+    }
+}
+
+/// Model for `from_raw_parts_copy(ptr, len)`. The runtime returns an empty
+/// value for a null `ptr` whatever `len` is, so the model does too: the
+/// capacity restriction only applies to a non-null source. A length that is
+/// provably constant and outside the model capacity cannot be assumed (the
+/// assumption would be unsatisfiable and prove everything after it), so a
+/// non-null source fails closed with the capacity label. A `u64` length drops
+/// the vacuous `>= 0` lower bound.
+#[allow(clippy::too_many_arguments)]
 fn emit_raw_parts_len(
     id: u32,
+    ptr: u32,
     len: u32,
+    const_bits: &HashMap<u32, u64>,
     inst_by_id: &HashMap<u32, &Inst>,
     max: usize,
-    capacity_label: &str,
+    kind: &str,
     out: &mut String,
 ) {
     let cap = max as u64;
-    let constant_exceeds_model = inst_by_id.get(&len).is_some_and(|i| match i.data {
-        InstData::ConstU64(v) => v >= cap,
-        InstData::ConstI64(v) => v < 0 || v as u64 >= cap,
-        _ => false,
-    });
-    if constant_exceeds_model {
+    let label = format!("{} capacity", kind.to_lowercase());
+    if const_bits.get(&len).is_some_and(|&bits| bits >= cap) {
         out.push_str(&format!(
-            "  __ESBMC_assert(0, \"{capacity_label}\");\n  v{id}.len = 0;\n"
+            "  __ESBMC_assert(v{ptr} == 0, \"{label}\");\n  v{id}.len = 0;\n"
         ));
         return;
     }
@@ -188,8 +380,14 @@ fn emit_raw_parts_len(
     } else {
         format!("v{len} >= 0 && ")
     };
+    let null_source = const_bits.get(&ptr) == Some(&0);
+    let marker = if const_bits.contains_key(&len) || null_source {
+        String::new()
+    } else {
+        model_bound_marker(kind, max)
+    };
     out.push_str(&format!(
-        "  __ESBMC_assume({lower}v{len} < {max});\n  v{id}.len = v{len};\n"
+        "  __ESBMC_assume(v{ptr} == 0 || ({lower}v{len} < {max}));{marker}\n  v{id}.len = v{ptr} == 0 ? 0 : v{len};\n"
     ));
 }
 
@@ -1003,6 +1201,7 @@ fn emit_inst(
     const_str_indices: &HashMap<u32, u32>,
     eq_pairs: &[(u32, u32)],
     inst_by_id: &HashMap<u32, &Inst>,
+    const_bits: &HashMap<u32, u64>,
     module: &Module,
     limits: &VerifyLimits,
     func_return_ty: Ty,
@@ -1377,13 +1576,16 @@ fn emit_inst(
                         out.push_str(&format!("  v{id}.len = 0;\n"));
                     }
                     "__vow_vec_from_raw_parts_copy_val" => {
+                        let ptr = inst.args[0].0;
                         let len = inst.args[1].0;
                         emit_raw_parts_len(
                             id,
+                            ptr,
                             len,
+                            const_bits,
                             inst_by_id,
                             limits.vec_max,
-                            "vec capacity",
+                            "Vec",
                             out,
                         );
                     }
@@ -1466,8 +1668,13 @@ fn emit_inst(
                         };
                         let len = inst.args[len_arg].0;
                         let string_max = limits.string_max;
+                        let marker = if const_bits.contains_key(&len) {
+                            String::new()
+                        } else {
+                            model_bound_marker("String", string_max)
+                        };
                         out.push_str(&format!(
-                            "  __ESBMC_assume(v{len} >= 0 && v{len} < {string_max});\n  v{id}.len = v{len};\n"
+                            "  __ESBMC_assume(v{len} >= 0 && v{len} < {string_max});{marker}\n  v{id}.len = v{len};\n"
                         ));
                     }
                     "__vow_string_from_cstr" | "__vow_string_from_cstr_in_arena" => {
@@ -1489,13 +1696,16 @@ fn emit_inst(
                         }
                     }
                     "__vow_string_from_raw_parts_copy" => {
+                        let ptr = inst.args[0].0;
                         let len = inst.args[1].0;
                         emit_raw_parts_len(
                             id,
+                            ptr,
                             len,
+                            const_bits,
                             inst_by_id,
                             limits.string_max,
-                            "string capacity",
+                            "String",
                             out,
                         );
                     }
@@ -1988,26 +2198,26 @@ fn emit_inst(
                 let vec_max = limits.vec_max;
                 out.push_str(&format!(
                     "  /* FieldGet -> vec */ v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                     \x20 __ESBMC_assume(v{id}.len <= {vec_max});\n"
+                     \x20 __ESBMC_assume(v{id}.len <= {vec_max}); /* vow:model-bound Vec {vec_max} */\n"
                 ));
             } else if string_vars.contains(&id) {
                 let string_max = limits.string_max;
                 out.push_str(&format!(
                     "  /* FieldGet -> string */ v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                     \x20 __ESBMC_assume(v{id}.len <= {string_max});\n"
+                     \x20 __ESBMC_assume(v{id}.len <= {string_max}); /* vow:model-bound String {string_max} */\n"
                 ));
             } else if hashmap_vars.contains(&id) {
                 let hashmap_max = limits.hashmap_max;
                 out.push_str(&format!(
                     "  /* FieldGet -> hashmap */ v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                     \x20 __ESBMC_assume(v{id}.len <= {hashmap_max});\n"
+                     \x20 __ESBMC_assume(v{id}.len <= {hashmap_max}); /* vow:model-bound HashMap {hashmap_max} */\n"
                 ));
             } else if btreemap_vars.contains(&id) {
                 let btreemap_max = limits.btreemap_max;
                 // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
                 out.push_str(&format!(
                     "  /* FieldGet -> btreemap */ v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                     \x20 __ESBMC_assume(v{id}.len <= {btreemap_max});\n\
+                     \x20 __ESBMC_assume(v{id}.len <= {btreemap_max}); /* vow:model-bound BTreeMap {btreemap_max} */\n\
                      \x20 for (uint64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
                      \x20   __ESBMC_assume(v{id}.keys[__si] < v{id}.keys[__si + 1]);\n"
                 ));
@@ -2098,7 +2308,7 @@ fn emit_string_eq_invalidate(operand: u32, eq_pairs: &[(u32, u32)], out: &mut St
 fn emit_nondet_string_len(id: u32, string_max: usize, out: &mut String) {
     out.push_str(&format!(
         "  v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-         \x20 __ESBMC_assume(v{id}.len < {string_max});\n",
+         \x20 __ESBMC_assume(v{id}.len < {string_max}); /* vow:model-bound String {string_max} */\n",
     ));
 }
 
@@ -2312,26 +2522,26 @@ pub fn emit_c_function_full(
                         let vec_max = limits.vec_max;
                         out.push_str(&format!(
                             "  __vow_vec_t v{id};\n  v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len <= {vec_max});\n"
+                             \x20 __ESBMC_assume(v{id}.len <= {vec_max}); /* vow:model-bound Vec {vec_max} */\n"
                         ));
                     } else if string_vars.contains(&id) {
                         let string_max = limits.string_max;
                         out.push_str(&format!(
                             "  __vow_string_t v{id};\n  v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len <= {string_max});\n"
+                             \x20 __ESBMC_assume(v{id}.len <= {string_max}); /* vow:model-bound String {string_max} */\n"
                         ));
                     } else if hashmap_vars.contains(&id) {
                         let hashmap_max = limits.hashmap_max;
                         out.push_str(&format!(
                             "  __vow_hashmap_t v{id};\n  v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len <= {hashmap_max});\n"
+                             \x20 __ESBMC_assume(v{id}.len <= {hashmap_max}); /* vow:model-bound HashMap {hashmap_max} */\n"
                         ));
                     } else if btreemap_vars.contains(&id) {
                         let btreemap_max = limits.btreemap_max;
                         // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
                         out.push_str(&format!(
                             "  __vow_btreemap_t v{id};\n  v{id}.len = __VERIFIER_nondet_unsigned_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len <= {btreemap_max});\n\
+                             \x20 __ESBMC_assume(v{id}.len <= {btreemap_max}); /* vow:model-bound BTreeMap {btreemap_max} */\n\
                              \x20 for (uint64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
                              \x20   __ESBMC_assume(v{id}.keys[__si] < v{id}.keys[__si + 1]);\n"
                         ));
@@ -2460,6 +2670,7 @@ pub fn emit_c_function_full(
             inst_by_id.insert(inst.id.0, inst);
         }
     }
+    let const_bits = fold_const_bits(func);
 
     // Block-visit tracking variables
     for block in &func.blocks {
@@ -2512,6 +2723,7 @@ pub fn emit_c_function_full(
                 &const_str_indices,
                 &eq_pairs,
                 &inst_by_id,
+                &const_bits,
                 module,
                 limits,
                 func.return_ty,
@@ -2548,6 +2760,7 @@ pub fn emit_c_function_full(
                 &const_str_indices,
                 &eq_pairs,
                 &inst_by_id,
+                &const_bits,
                 module,
                 limits,
                 func.return_ty,
@@ -8394,6 +8607,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &HashMap::new(),
+            &HashMap::new(),
             &empty_module,
             &VerifyLimits::default(),
             Ty::I64,
@@ -8435,6 +8649,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             &[],
+            &HashMap::new(),
             &HashMap::new(),
             &empty_module,
             &VerifyLimits::default(),
@@ -8607,46 +8822,48 @@ mod tests {
         }
     }
 
+    const RAW_PARTS_CASES: [(&str, &str, usize); 2] = [
+        ("__vow_vec_from_raw_parts_copy_val", "Vec", VEC_MODEL_CAP),
+        (
+            "__vow_string_from_raw_parts_copy",
+            "String",
+            STRING_MODEL_CAP,
+        ),
+    ];
+
     /// A `u64` length argument drops the vacuous `>= 0` conjunct; a signed
-    /// (literal) one keeps it. Both forms bound the length by the model cap.
+    /// (literal) one keeps it. Both forms bound a non-null source's length by the
+    /// model cap, and tag the assumption so the proof is reported as bounded.
     #[test]
     fn raw_parts_copy_len_assumption_follows_argument_signedness() {
-        let cases = [
-            ("__vow_vec_from_raw_parts_copy_val", VEC_MODEL_CAP),
-            ("__vow_string_from_raw_parts_copy", STRING_MODEL_CAP),
-        ];
-        for (extern_name, cap) in cases {
+        for (extern_name, kind, cap) in RAW_PARTS_CASES {
             let unsigned = raw_parts_copy_fn(extern_name, Ty::U64);
             let c = emit_c_function(&unsigned, &HashMap::new(), &VerifyLimits::default());
-            let expected = format!("__ESBMC_assume(v1 < {cap});\n  v2.len = v1;");
+            let expected = format!(
+                "__ESBMC_assume(v0 == 0 || (v1 < {cap})); /* vow:model-bound {kind} {cap} */\n  \
+                 v2.len = v0 == 0 ? 0 : v1;"
+            );
             assert!(c.contains(&expected), "{extern_name} u64 len: {c}");
             assert!(!c.contains("v1 >= 0"), "{extern_name} u64 len: {c}");
 
             let signed = raw_parts_copy_fn(extern_name, Ty::I64);
             let c = emit_c_function(&signed, &HashMap::new(), &VerifyLimits::default());
-            let expected = format!("__ESBMC_assume(v1 >= 0 && v1 < {cap});\n  v2.len = v1;");
+            let expected = format!(
+                "__ESBMC_assume(v0 == 0 || (v1 >= 0 && v1 < {cap})); \
+                 /* vow:model-bound {kind} {cap} */\n  v2.len = v0 == 0 ? 0 : v1;"
+            );
             assert!(c.contains(&expected), "{extern_name} i64 len: {c}");
         }
     }
 
     /// A constant length outside the model capacity cannot be assumed (the
-    /// assumption would be unsatisfiable and prove everything after it), so it
-    /// fails closed with the capacity label; in-range constants keep the assume.
+    /// assumption would be unsatisfiable and prove everything after it), so a
+    /// non-null source fails closed with the capacity label; in-range constants
+    /// keep the assume, with no bound marker because nothing is restricted.
     #[test]
     fn raw_parts_copy_constant_len_beyond_model_fails_closed() {
-        let cases = [
-            (
-                "__vow_vec_from_raw_parts_copy_val",
-                VEC_MODEL_CAP,
-                "vec capacity",
-            ),
-            (
-                "__vow_string_from_raw_parts_copy",
-                STRING_MODEL_CAP,
-                "string capacity",
-            ),
-        ];
-        for (extern_name, cap, label) in cases {
+        for (extern_name, kind, cap) in RAW_PARTS_CASES {
+            let label = format!("{} capacity", kind.to_lowercase());
             let beyond = [
                 (Ty::U64, Opcode::ConstU64, InstData::ConstU64(cap as u64)),
                 (Ty::U64, Opcode::ConstU64, InstData::ConstU64(u64::MAX)),
@@ -8661,10 +8878,14 @@ mod tests {
             for (ty, opcode, data) in beyond {
                 let f = raw_parts_copy_fn_with_len(extern_name, ty, Some((opcode, data.clone())));
                 let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
-                let expected = format!("__ESBMC_assert(0, \"{label}\");\n  v2.len = 0;");
+                let expected = format!("__ESBMC_assert(v0 == 0, \"{label}\");\n  v2.len = 0;");
                 assert!(c.contains(&expected), "{extern_name} {data:?}: {c}");
                 assert!(
-                    !c.contains("__ESBMC_assume(v1"),
+                    !c.contains("__ESBMC_assume(v0 == 0"),
+                    "{extern_name} {data:?}: {c}"
+                );
+                assert!(
+                    !c.contains("vow:model-bound"),
                     "{extern_name} {data:?}: {c}"
                 );
             }
@@ -8672,9 +8893,292 @@ mod tests {
             let in_range = (Opcode::ConstU64, InstData::ConstU64(cap as u64 - 1));
             let f = raw_parts_copy_fn_with_len(extern_name, Ty::U64, Some(in_range));
             let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
-            let expected = format!("__ESBMC_assume(v1 < {cap});\n  v2.len = v1;");
+            let expected = format!("__ESBMC_assume(v0 == 0 || (v1 < {cap}));\n");
             assert!(c.contains(&expected), "{extern_name} in range: {c}");
-            assert!(!c.contains(label), "{extern_name} in range: {c}");
+            assert!(!c.contains(&label), "{extern_name} in range: {c}");
+            assert!(
+                !c.contains("vow:model-bound"),
+                "{extern_name} in range: {c}"
+            );
         }
+    }
+
+    fn test_inst(id: u32, opcode: Opcode, ty: Ty, args: &[u32], data: InstData) -> Inst {
+        Inst {
+            id: vow_ir::InstId(id),
+            opcode,
+            ty,
+            args: args.iter().copied().map(vow_ir::InstId).collect(),
+            data: integer_test_data(opcode, ty, data),
+            origin: sp(),
+            region: RegionId::Root,
+        }
+    }
+
+    /// `from_raw_parts_copy(p, len)` where `body` computes `len`, the value
+    /// named by `len_id`.
+    fn raw_parts_fn_with_body(extern_name: &str, body: Vec<Inst>, len_id: u32) -> Function {
+        let call_id = body.iter().map(|i| i.id.0).max().unwrap_or(0) + 1;
+        let mut insts = vec![test_inst(
+            0,
+            Opcode::GetArg,
+            Ty::I64,
+            &[],
+            InstData::ArgIndex(0),
+        )];
+        insts.extend(body);
+        insts.push(test_inst(
+            call_id,
+            Opcode::Call,
+            Ty::Ptr,
+            &[0, len_id],
+            InstData::CallExtern(extern_name.to_string()),
+        ));
+        insts.push(test_inst(
+            call_id + 1,
+            Opcode::Return,
+            Ty::Unit,
+            &[call_id],
+            InstData::None,
+        ));
+        let mut f = raw_parts_copy_fn(extern_name, Ty::U64);
+        f.params = vec![Ty::I64];
+        f.param_names = vec!["p".to_string()];
+        f.blocks = vec![BasicBlock {
+            id: BlockId(0),
+            insts,
+        }];
+        f
+    }
+
+    fn const_u64(id: u32, v: u64) -> Inst {
+        test_inst(id, Opcode::ConstU64, Ty::U64, &[], InstData::ConstU64(v))
+    }
+
+    fn u64_op(id: u32, opcode: Opcode, a: u32, b: u32) -> Inst {
+        test_inst(id, opcode, Ty::U64, &[a, b], InstData::None)
+    }
+
+    fn phi_of_two(a: u64, b: u64) -> Vec<Inst> {
+        let ups = |id: u32, src: u32| {
+            test_inst(
+                id,
+                Opcode::Upsilon,
+                Ty::Unit,
+                &[src],
+                InstData::PhiTarget(vow_ir::InstId(3)),
+            )
+        };
+        vec![
+            const_u64(1, a),
+            const_u64(2, b),
+            test_inst(3, Opcode::Phi, Ty::U64, &[], InstData::None),
+            ups(4, 1),
+            ups(5, 2),
+        ]
+    }
+
+    fn assert_fails_closed(f: &Function, kind: &str, what: &str) {
+        let c = emit_c_function(f, &HashMap::new(), &VerifyLimits::default());
+        let label = format!("{} capacity", kind.to_lowercase());
+        assert!(
+            c.contains(&format!("__ESBMC_assert(v0 == 0, \"{label}\");")),
+            "{what} must fail closed: {c}"
+        );
+        assert!(
+            !c.contains("__ESBMC_assume(v0 == 0 ||"),
+            "{what} must not be assumed: {c}"
+        );
+    }
+
+    /// A provably-constant length reaches the capacity check through constant
+    /// arithmetic, a cast, or a phi of identical constants exactly as a literal
+    /// does.
+    #[test]
+    fn raw_parts_copy_folded_constant_len_fails_closed() {
+        for (extern_name, kind, cap) in RAW_PARTS_CASES {
+            let cap = cap as u64;
+            let cases = [
+                (
+                    "n + c",
+                    vec![
+                        const_u64(1, 1),
+                        const_u64(2, cap + 100),
+                        u64_op(3, Opcode::WrappingAdd, 1, 2),
+                    ],
+                    3,
+                ),
+                (
+                    "checked mul",
+                    vec![
+                        const_u64(1, cap),
+                        const_u64(2, 2),
+                        u64_op(3, Opcode::CheckedMul, 1, 2),
+                    ],
+                    3,
+                ),
+                (
+                    "0 - 1 wraps to u64::MAX",
+                    vec![
+                        const_u64(1, 0),
+                        const_u64(2, 1),
+                        u64_op(3, Opcode::WrappingSub, 1, 2),
+                    ],
+                    3,
+                ),
+                (
+                    "i32 -1 as u64 sign-extends",
+                    vec![
+                        test_inst(1, Opcode::ConstI32, Ty::I32, &[], InstData::ConstI32(-1)),
+                        test_inst(
+                            2,
+                            Opcode::IntCast,
+                            Ty::U64,
+                            &[1],
+                            InstData::IntegerCast {
+                                from: IntegerType::new(
+                                    IntegerWidth::W32,
+                                    IntegerSignedness::Signed,
+                                ),
+                                to: IntegerType::new(
+                                    IntegerWidth::W64,
+                                    IntegerSignedness::Unsigned,
+                                ),
+                            },
+                        ),
+                    ],
+                    2,
+                ),
+                (
+                    "phi of identical constants",
+                    phi_of_two(cap + 7, cap + 7),
+                    3,
+                ),
+            ];
+            for (what, body, len_id) in cases {
+                let f = raw_parts_fn_with_body(extern_name, body, len_id);
+                assert_fails_closed(&f, kind, what);
+            }
+        }
+    }
+
+    /// What is *not* provably constant keeps the capacity assumption: a phi of
+    /// different constants, a checked operator that overflows (it aborts), and
+    /// folded values that are in range.
+    #[test]
+    fn raw_parts_copy_unfoldable_len_keeps_assumption() {
+        let (extern_name, _, cap) = RAW_PARTS_CASES[0];
+        let cases = [
+            (
+                "phi of different constants",
+                phi_of_two(1, cap as u64 + 1),
+                3,
+            ),
+            (
+                "overflowing checked add",
+                vec![
+                    const_u64(1, u64::MAX),
+                    const_u64(2, 2),
+                    u64_op(3, Opcode::CheckedAdd, 1, 2),
+                ],
+                3,
+            ),
+            (
+                "in-range sum",
+                vec![
+                    const_u64(1, 1),
+                    const_u64(2, 2),
+                    u64_op(3, Opcode::WrappingAdd, 1, 2),
+                ],
+                3,
+            ),
+        ];
+        for (what, body, len_id) in cases {
+            let f = raw_parts_fn_with_body(extern_name, body, len_id);
+            let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
+            assert!(
+                c.contains("__ESBMC_assume(v0 == 0 || (v"),
+                "{what} keeps the assumption: {c}"
+            );
+            assert!(!c.contains("__ESBMC_assert(v0 == 0"), "{what}: {c}");
+        }
+    }
+
+    /// The null-pointer model mirrors the runtime: `from_raw_parts_copy` of a
+    /// null pointer is empty whatever the length, and the capacity assumption
+    /// does not constrain that case.
+    #[test]
+    fn raw_parts_copy_null_pointer_is_empty() {
+        for (extern_name, _, _) in RAW_PARTS_CASES {
+            let f = raw_parts_copy_fn(extern_name, Ty::U64);
+            let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
+            assert!(c.contains("v2.len = v0 == 0 ? 0 : v1;"), "{c}");
+            assert!(c.contains("__ESBMC_assume(v0 == 0 || (v1 <"), "{c}");
+        }
+    }
+
+    /// A literal null source is empty whatever the length, so the capacity
+    /// assumption restricts nothing and the proof is not reported as bounded.
+    #[test]
+    fn raw_parts_copy_literal_null_source_carries_no_bound() {
+        for (extern_name, _, _) in RAW_PARTS_CASES {
+            let mut f = raw_parts_copy_fn(extern_name, Ty::U64);
+            f.params = vec![Ty::U64];
+            f.param_names = vec!["n".to_string()];
+            f.blocks[0].insts[0] =
+                test_inst(0, Opcode::ConstI64, Ty::I64, &[], InstData::ConstI64(0));
+            f.blocks[0].insts[1] =
+                test_inst(1, Opcode::GetArg, Ty::U64, &[], InstData::ArgIndex(0));
+            let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
+            assert!(c.contains("__ESBMC_assume(v0 == 0 || (v1 <"), "{c}");
+            assert!(!c.contains("vow:model-bound"), "{extern_name}: {c}");
+        }
+    }
+
+    #[test]
+    fn model_capacity_bounds_reads_markers_in_fixed_order() {
+        let src = "x; /* vow:model-bound String 256 */\n y; /* vow:model-bound Vec 128 */\n \
+                   z; /* vow:model-bound Vec 128 */\n w; /* vow:model-bound BTreeMap 64 */\n \
+                   v; /* vow:model-bound Bogus 1 */\n u; /* vow:model-bound Vec nope */\n";
+        let bounds = model_capacity_bounds(src);
+        let got: Vec<(&str, usize)> = bounds.iter().map(|b| (b.collection, b.capacity)).collect();
+        assert_eq!(got, [("Vec", 128), ("String", 256), ("BTreeMap", 64)]);
+        assert!(model_capacity_bounds("no markers here").is_empty());
+    }
+
+    /// Every site that restricts a collection length to the model capacity
+    /// carries a marker, and nothing else does: the structured "proof is
+    /// bounded" note is read off these.
+    #[test]
+    fn collection_parameters_carry_model_bound_markers() {
+        let kinds = [
+            ("__vow_vec_len", "__vow_vec_get_val", "Vec", VEC_MODEL_CAP),
+            (
+                "__vow_string_len",
+                "__vow_string_byte_at",
+                "String",
+                STRING_MODEL_CAP,
+            ),
+        ];
+        for (len_extern, index_extern, kind, cap) in kinds {
+            let f = indexed_container_fn(len_extern, index_extern, Ty::U64);
+            let c = emit_c_function(&f, &HashMap::new(), &VerifyLimits::default());
+            let bounds = model_capacity_bounds(&c);
+            assert_eq!(
+                bounds,
+                [ModelCapacityBound {
+                    collection: kind,
+                    capacity: cap
+                }],
+                "{len_extern}: {c}"
+            );
+        }
+        let scalar = raw_parts_copy_fn_with_len(
+            "__vow_vec_from_raw_parts_copy_val",
+            Ty::U64,
+            Some((Opcode::ConstU64, InstData::ConstU64(3))),
+        );
+        let c = emit_c_function(&scalar, &HashMap::new(), &VerifyLimits::default());
+        assert!(model_capacity_bounds(&c).is_empty(), "{c}");
     }
 }

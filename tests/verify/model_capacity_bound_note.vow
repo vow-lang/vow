@@ -1,0 +1,47 @@
+// TEST: category bounds
+// Each function below verifies; scripts/full_test.sh additionally asserts which
+// of them carry a `ModelCapacityAssumed` note (a parameter collection is modelled
+// only up to the verifier's model capacity) and which do not (scalars, and a
+// constant in-range length that restricts nothing), identically in both compilers.
+module ModelCapacityBoundNote
+
+fn first_byte(v: Vec<u8>) -> u64 vow {
+    ensures: result <= 255 as u64
+} {
+    if v.len() == 0 as u64 { return 0 as u64; }
+    v[0 as u64] as u64
+}
+
+fn string_len(s: String) -> u64 vow {
+    ensures: result == s.len()
+} {
+    s.len()
+}
+
+fn map_size(m: HashMap<i64, i64>) -> u64 vow {
+    ensures: result == m.len()
+} {
+    m.len()
+}
+
+fn vec_and_string(v: Vec<u8>, s: String) -> u64 vow {
+    ensures: result == v.len()
+} {
+    let n: u64 = v.len();
+    let m: u64 = s.len();
+    n + m - m
+}
+
+fn scalar_only(x: u64) -> u64 vow {
+    ensures: result == x
+} {
+    x
+}
+
+fn constant_in_range(p: i64) -> u64 vow {
+    requires: p != 0
+    ensures: result == 3 as u64
+} {
+    let v: Vec<u8> = Vec::from_raw_parts_copy(p, 3 as u64);
+    v.len()
+}

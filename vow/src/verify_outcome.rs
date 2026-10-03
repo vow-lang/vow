@@ -66,16 +66,53 @@ pub(crate) struct ArithOverflowWarning {
     pub(crate) length: u32,
 }
 
-/// A non-fatal finding from verifying one function. The two kinds differ in
+/// A proof whose model restricted collection lengths to the verifier's model
+/// capacity. Surfaces as a `ModelCapacityAssumed` Note: the contracts are proved,
+/// but only for executions within the bound.
+#[derive(Debug, Clone)]
+pub(crate) struct CapacityBoundNote {
+    pub(crate) function: String,
+    /// The bounds rendered as `Vec<T>: 128, String: 256`, in the fixed order of
+    /// [`vow_verify::model_capacity_bounds`].
+    pub(crate) bounds: String,
+}
+
+impl CapacityBoundNote {
+    pub(crate) fn new(function: &str, bounds: &[vow_verify::ModelCapacityBound]) -> Option<Self> {
+        if bounds.is_empty() {
+            return None;
+        }
+        let rendered: Vec<String> = bounds
+            .iter()
+            .map(|b| {
+                let name = match b.collection {
+                    "Vec" => "Vec<T>",
+                    "HashMap" => "HashMap<K, V>",
+                    "BTreeMap" => "BTreeMap<K, V>",
+                    other => other,
+                };
+                format!("{name}: {}", b.capacity)
+            })
+            .collect();
+        Some(Self {
+            function: function.to_string(),
+            bounds: rendered.join(", "),
+        })
+    }
+}
+
+/// A non-fatal finding from verifying one function. The kinds differ in
 /// consequence, not just wording: a skip means a contract went **unproved** and
-/// fails the run closed, whereas a reachable checked-arithmetic abort leaves
-/// every contract proved and only reports a runtime behaviour. Keeping them in
-/// one enum is what lets [`crate::verification::run_pool`] aggregate both while
-/// still asking `is_skip` before it lifts the build status.
+/// fails the run closed, whereas a reachable checked-arithmetic abort or a
+/// capacity-bounded proof leaves every contract proved and only reports a
+/// runtime behaviour or the proof's scope. Keeping them in one enum is what lets
+/// [`crate::verification::run_pool`] aggregate all of them while still asking
+/// `is_skip` before it lifts the build status.
 #[derive(Debug, Clone)]
 pub(crate) enum VerifyWarning {
     Skipped(SkippedFunction),
     ArithOverflow(ArithOverflowWarning),
+    CapacityBound(CapacityBoundNote),
 }
 
 impl VerifyWarning {
@@ -83,6 +120,11 @@ impl VerifyWarning {
     /// the run closed.
     pub(crate) fn is_skip(&self) -> bool {
         matches!(self, Self::Skipped(_))
+    }
+
+    /// True for the informational kind that only describes a completed proof.
+    pub(crate) fn is_capacity_note(&self) -> bool {
+        matches!(self, Self::CapacityBound(_))
     }
 
     /// Identity of the diagnostic this warning renders to, for deduplication.
@@ -100,6 +142,7 @@ impl VerifyWarning {
                 a.length,
                 a.cause,
             ),
+            Self::CapacityBound(n) => (2, n.function.as_str(), "", 0, 0, n.bounds.as_str()),
         }
     }
 
@@ -141,6 +184,30 @@ impl VerifyWarning {
                         .to_string(),
                     "constrain the operands in `requires` to rule the abort out, or use the \
                      wrapping operator if wrapping is intended"
+                        .to_string(),
+                ],
+            },
+            Self::CapacityBound(n) => Diagnostic {
+                severity: Severity::Note,
+                code: vow_diag::ErrorCode::ModelCapacityAssumed,
+                message: format!(
+                    "proof of `{}` is bounded: collection lengths were checked only up to the \
+                     verifier model capacity ({})",
+                    n.function, n.bounds
+                ),
+                primary: vow_diag::SourceLocation {
+                    file: String::new(),
+                    byte_offset: 0,
+                    byte_len: 0,
+                },
+                secondary: vec![],
+                blame: vow_diag::Blame::None,
+                hints: vec![
+                    "the bound belongs to the bounded model checker, not to the program or its \
+                     contracts; executions with longer collections were not checked"
+                        .to_string(),
+                    "do not add a length bound to a contract to silence this note; an unbounded \
+                     verifier removes it without any source change"
                         .to_string(),
                 ],
             },
@@ -208,8 +275,21 @@ pub(crate) fn to_output_with_warnings(
     warnings: &[VerifyWarning],
     executable: Option<PathBuf>,
 ) -> BuildOutput {
-    for w in dedup_warnings(warnings) {
+    // Capacity notes describe a *completed* proof run: they follow every other
+    // finding, in function order, and are dropped when the run did not end in a
+    // proof. A halt cuts the set of functions that were verified short in a
+    // scheduling-dependent way, so a note about one of them would be
+    // nondeterministic noise next to the real failure.
+    let (notes, findings): (Vec<&VerifyWarning>, Vec<&VerifyWarning>) = dedup_warnings(warnings)
+        .into_iter()
+        .partition(|w| w.is_capacity_note());
+    for w in findings {
         diagnostics.push(w.to_diagnostic());
+    }
+    if matches!(outcome, VerifyOutcome::Proven) {
+        for w in notes {
+            diagnostics.push(w.to_diagnostic());
+        }
     }
     let (status, counterexamples, verify_status, verify_message) = match outcome {
         VerifyOutcome::Failed {
@@ -795,6 +875,119 @@ mod tests {
             .map(|d| d.primary.file.as_str())
             .collect();
         assert_eq!(names, ["b.vow", "a.vow"]);
+    }
+
+    fn bound(collection: &'static str, capacity: usize) -> vow_verify::ModelCapacityBound {
+        vow_verify::ModelCapacityBound {
+            collection,
+            capacity,
+        }
+    }
+
+    // A bounded proof stays `Verified` (exit 0) and carries a Note naming every
+    // bounded collection kind and its capacity.
+    #[test]
+    fn capacity_bound_note_is_a_note_and_leaves_status_verified() {
+        let note = CapacityBoundNote::new(
+            "scan",
+            &[
+                bound("Vec", 128),
+                bound("String", 256),
+                bound("HashMap", 64),
+                bound("BTreeMap", 64),
+            ],
+        )
+        .expect("non-empty bounds yield a note");
+        let out = to_output_with_warnings(
+            VerifyOutcome::Proven,
+            vec![],
+            &[VerifyWarning::CapacityBound(note)],
+            None,
+        );
+        assert!(matches!(out.status, BuildStatus::Verified));
+        assert_eq!(out.diagnostics.len(), 1);
+        let d = &out.diagnostics[0];
+        assert_eq!(d.severity, Severity::Note);
+        assert_eq!(d.code, ErrorCode::ModelCapacityAssumed);
+        assert_eq!(
+            d.message,
+            "proof of `scan` is bounded: collection lengths were checked only up to the \
+             verifier model capacity (Vec<T>: 128, String: 256, HashMap<K, V>: 64, \
+             BTreeMap<K, V>: 64)"
+        );
+        assert_eq!(d.blame, Blame::None);
+        assert_eq!(d.hints.len(), 2);
+    }
+
+    // Notes follow every other finding, and exist only for a completed proof: a
+    // halted run (here a counterexample) or a fail-closed skip drops them, so the
+    // diagnostics never depend on which functions a halt happened to cut short.
+    #[test]
+    fn capacity_notes_follow_findings_and_vanish_without_a_proof() {
+        let note = VerifyWarning::CapacityBound(
+            CapacityBoundNote::new("a", &[bound("Vec", 128)]).expect("note"),
+        );
+        let out = to_output_with_warnings(
+            VerifyOutcome::Proven,
+            vec![],
+            &[
+                note.clone(),
+                arith_warn("b", "b.vow", 2),
+                arith_warn("c", "c.vow", 3),
+            ],
+            None,
+        );
+        let codes: Vec<ErrorCode> = out.diagnostics.iter().map(|d| d.code).collect();
+        assert_eq!(
+            codes,
+            [
+                ErrorCode::ArithOverflowReachable,
+                ErrorCode::ArithOverflowReachable,
+                ErrorCode::ModelCapacityAssumed
+            ]
+        );
+
+        for outcome in [
+            VerifyOutcome::SkippedNonModelable,
+            VerifyOutcome::Timeout {
+                function: "f".to_string(),
+            },
+        ] {
+            let out = to_output_with_warnings(
+                outcome,
+                vec![],
+                &[note.clone(), arith_warn("b", "b.vow", 2)],
+                None,
+            );
+            let codes: Vec<ErrorCode> = out.diagnostics.iter().map(|d| d.code).collect();
+            assert_eq!(codes, [ErrorCode::ArithOverflowReachable]);
+        }
+    }
+
+    #[test]
+    fn capacity_bound_note_requires_a_bound() {
+        assert!(CapacityBoundNote::new("f", &[]).is_none());
+    }
+
+    #[test]
+    fn identical_capacity_notes_are_reported_once_and_distinct_ones_kept() {
+        let note = |f: &str, cap: usize| {
+            VerifyWarning::CapacityBound(
+                CapacityBoundNote::new(f, &[bound("Vec", cap)]).expect("note"),
+            )
+        };
+        let out = to_output_with_warnings(
+            VerifyOutcome::Proven,
+            vec![],
+            &[
+                note("a", 128),
+                note("a", 128),
+                note("b", 128),
+                note("a", 64),
+            ],
+            None,
+        );
+        assert_eq!(out.diagnostics.len(), 3);
     }
 
     #[test]

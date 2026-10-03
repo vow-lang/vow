@@ -148,6 +148,31 @@ Tightening the *reported status* for a model-capacity hit so it never reads as a
 contract `FAILED` is tracked as follow-up work alongside #552; it does not
 affect the flag removal, which is complete.
 
+## Reporting a bounded proof
+
+A *non-constant* collection length (a parameter, a struct-field collection,
+`String::from_cstr`, a non-constant `from_raw_parts_copy` length) is modelled as
+nondeterministic restricted by `__ESBMC_assume(len <= CAP)`. The assumption prunes
+every longer execution, so the resulting `Verified` is a proof *within* the
+capacity. That is inherent to a bounded model checker and is not hidden by
+changing the verdict or by moving the bound into a contract; instead the bound is
+made visible in the structured output:
+
+- Every emitted capacity assumption carries a `/* vow:model-bound <Kind> <cap> */`
+  marker. The marker is the single source of truth; nothing else decides whether
+  a proof is bounded.
+- After a function is proved, the driver reads the markers off the model it
+  just checked and, when there is at least one, adds a `ModelCapacityAssumed`
+  **note** to `diagnostics[]` (`errors.md#modelcapacityassumed`). Status and exit
+  code are unchanged.
+- A length that is provably constant carries no marker: an in-range constant
+  restricts nothing, and an out-of-range constant fails closed instead of being
+  assumed (`from_raw_parts_copy`, with constant folding over the IR so
+  `n + 300` is treated like `301`).
+
+Backend independence is preserved: a stronger or unbounded verifier emits no
+markers, so the note disappears without any source or contract change.
+
 ## Migration
 
 The flags were verify-only and had no effect on compiled binaries, so removing

@@ -3028,7 +3028,7 @@ rationale.
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |
+| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* (`severity: "note"`, emitted only on a `Verified` result, after the other diagnostics) per proved function whose model assumed a collection length: a parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled only up to the verifier's model capacity (`Vec<T>` 128, `String` 256, maps 64), so that proof covers collections no longer than the capacity. The note names each bounded collection kind and its capacity and changes neither the status nor the exit code. Agents and CEGIS loops should read it as "bounded proof", never as a reason to add a length bound to a contract. See [`errors.md`](errors.md#modelcapacityassumed). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
@@ -3466,11 +3466,38 @@ not statically known, such as `String::from_cstr`, produce a nondeterministic
 length (0 to max-1). `string_matches_literal_at` is modeled against the
 literal's concrete bytes and byte length; the third argument must be a string
 literal so the verifier never has to infer static text from a dynamic `String`.
-A constant length passed to `String::from_raw_parts_copy` or
-`Vec::from_raw_parts_copy` that does not fit the model capacity fails closed
-with the capacity-limit diagnostic rather than being assumed away. A
-non-constant length is still assumed to be below the model capacity, so a
-postcondition that depends on it is verified only within that bound.
+A length passed to `String::from_raw_parts_copy` or
+`Vec::from_raw_parts_copy` that is *provably constant* and does not fit the
+model capacity fails closed with the capacity-limit diagnostic rather than being
+assumed away. "Provably constant" covers a literal, `+`/`-`/`*` (wrapping or
+checked) over constants, an integer cast of a constant, and a `let mut` whose
+every assignment is the same constant; it is computed over the IR, so
+`n + 300` with a constant `n` is recognised exactly like `301`. Both emitters
+fold identically, so the emitted model stays byte-identical.
+
+`from_raw_parts_copy` models the runtime's null-pointer behaviour: a null source
+(`ptr == 0`) yields an empty value whatever the length is, and the capacity
+restriction applies only to a non-null source. `ensures: result.len() == n`
+therefore needs a real `requires: p != 0`, exactly as the runtime does.
+
+**A proof is bounded when the model had to assume a length.** Any *non-constant*
+collection length — a `Vec`/`String`/`HashMap`/`BTreeMap` parameter, a
+collection read from a struct field, `String::from_cstr`, a non-constant
+`from_raw_parts_copy` length — is modelled as nondeterministic but restricted to
+the capacity above (`__ESBMC_assume(len <= CAP)`). That prunes every longer
+execution, so a `Verified` result for such a function means "verified for
+collections no longer than the model capacity", not "verified for all
+collections". The verifier makes this explicit rather than silent: every
+function proved from a model that carries such an assumption adds one
+[`ModelCapacityAssumed`](errors.md#modelcapacityassumed) **note** (severity
+`note`, on a `Verified` result) to the result's `diagnostics[]`, naming each bounded collection kind and
+its capacity. The note changes neither the `status` nor the exit code, and the
+verdict itself is never altered. The note is read off the emitted model (every
+capacity assumption is tagged in the C source), so it cannot disagree with what
+was actually checked. It is a statement about the *prover*, never about the
+program: do not respond to it by adding a length bound to a contract (see the
+anti-pattern below) — an unbounded verifier removes the note without any source
+change.
 
 ## Blame Model
 
@@ -5036,6 +5063,33 @@ The structured counterexample's `violation` field carries the stable property de
 
 **Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
 
+### ModelCapacityAssumed
+
+**Phase:** Verification (Note; the build status stays `Verified`)
+**Meaning:** The function's contracts were proved, but the proof's model restricts at least one collection length to the verifier's model capacity (`Vec<T>` 128, `String` 256, `HashMap<K, V>` and `BTreeMap<K, V>` 64; see [`contracts.md`](contracts.md#collection-models-for-verification)). A parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled as nondeterministic *within* that capacity, so executions with longer collections were pruned, not checked: `Verified` means "verified for collections up to the capacity".
+
+```json
+{
+  "error_code": "ModelCapacityAssumed",
+  "severity": "note",
+  "message": "proof of `first_or_zero` is bounded: collection lengths were checked only up to the verifier model capacity (Vec<T>: 128)",
+  "hints": [
+    "the bound belongs to the bounded model checker, not to the program or its contracts; executions with longer collections were not checked",
+    "do not add a length bound to a contract to silence this note; an unbounded verifier removes it without any source change"
+  ]
+}
+```
+
+The `message` lists every bounded collection kind as `Kind: capacity`, in the fixed order `Vec<T>`, `String`, `HashMap<K, V>`, `BTreeMap<K, V>`. At most one note is emitted per proved function. The span is empty (the note describes the model, not a source location).
+
+**Why this is a Note and not a failure.** The verdict is genuine for every execution inside the bound and the verifier never changes a verdict because of the note. It is informational so that an agent or CEGIS loop can tell a bounded proof from an unbounded one — for example, to treat a `Verified` function that handles untrusted-length collections with extra scrutiny, or to test it with the runtime checks of `--mode debug`.
+
+**Fix:** None is required. Do **not** add `requires: v.len() <= 128` (or any other capacity) to silence it: that distorts a true contract to fit a prover limitation, and an unbounded backend removes the note without any source change.
+
+**Ordering and presence.** Notes describe a *completed* proof run, so they are emitted only when the overall `status` is `Verified`, one per proved function, after every other diagnostic and in function declaration order. A run that ends in a counterexample, `unknown`, `timeout`, `error`, or a fail-closed skip carries no note: a halt cuts the set of verified functions short in a scheduling-dependent way, and a note about one of them would be noise next to the real failure.
+
+**Not emitted when:** the function's model restricts no collection length (scalar-only functions, and collections built by the function itself from constant lengths), or the overall status is not `Verified`.
+
 ## Runtime Errors
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).
@@ -6525,7 +6579,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "RegionConflict",
         "RegionLinear",
         "RegionRootEscape",
-        "VerifierAssertionUnattributed"
+        "VerifierAssertionUnattributed",
+        "ModelCapacityAssumed"
       ],
       "description": "Machine-readable error code"
     },
@@ -8453,7 +8508,7 @@ rationale.
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |
+| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* (`severity: "note"`, emitted only on a `Verified` result, after the other diagnostics) per proved function whose model assumed a collection length: a parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled only up to the verifier's model capacity (`Vec<T>` 128, `String` 256, maps 64), so that proof covers collections no longer than the capacity. The note names each bounded collection kind and its capacity and changes neither the status nor the exit code. Agents and CEGIS loops should read it as "bounded proof", never as a reason to add a length bound to a contract. See [`errors.md`](errors.md#modelcapacityassumed). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
@@ -8892,11 +8947,38 @@ not statically known, such as `String::from_cstr`, produce a nondeterministic
 length (0 to max-1). `string_matches_literal_at` is modeled against the
 literal's concrete bytes and byte length; the third argument must be a string
 literal so the verifier never has to infer static text from a dynamic `String`.
-A constant length passed to `String::from_raw_parts_copy` or
-`Vec::from_raw_parts_copy` that does not fit the model capacity fails closed
-with the capacity-limit diagnostic rather than being assumed away. A
-non-constant length is still assumed to be below the model capacity, so a
-postcondition that depends on it is verified only within that bound.
+A length passed to `String::from_raw_parts_copy` or
+`Vec::from_raw_parts_copy` that is *provably constant* and does not fit the
+model capacity fails closed with the capacity-limit diagnostic rather than being
+assumed away. "Provably constant" covers a literal, `+`/`-`/`*` (wrapping or
+checked) over constants, an integer cast of a constant, and a `let mut` whose
+every assignment is the same constant; it is computed over the IR, so
+`n + 300` with a constant `n` is recognised exactly like `301`. Both emitters
+fold identically, so the emitted model stays byte-identical.
+
+`from_raw_parts_copy` models the runtime's null-pointer behaviour: a null source
+(`ptr == 0`) yields an empty value whatever the length is, and the capacity
+restriction applies only to a non-null source. `ensures: result.len() == n`
+therefore needs a real `requires: p != 0`, exactly as the runtime does.
+
+**A proof is bounded when the model had to assume a length.** Any *non-constant*
+collection length — a `Vec`/`String`/`HashMap`/`BTreeMap` parameter, a
+collection read from a struct field, `String::from_cstr`, a non-constant
+`from_raw_parts_copy` length — is modelled as nondeterministic but restricted to
+the capacity above (`__ESBMC_assume(len <= CAP)`). That prunes every longer
+execution, so a `Verified` result for such a function means "verified for
+collections no longer than the model capacity", not "verified for all
+collections". The verifier makes this explicit rather than silent: every
+function proved from a model that carries such an assumption adds one
+[`ModelCapacityAssumed`](errors.md#modelcapacityassumed) **note** (severity
+`note`, on a `Verified` result) to the result's `diagnostics[]`, naming each bounded collection kind and
+its capacity. The note changes neither the `status` nor the exit code, and the
+verdict itself is never altered. The note is read off the emitted model (every
+capacity assumption is tagged in the C source), so it cannot disagree with what
+was actually checked. It is a statement about the *prover*, never about the
+program: do not respond to it by adding a length bound to a contract (see the
+anti-pattern below) — an unbounded verifier removes the note without any source
+change.
 
 ## Blame Model
 
@@ -10464,6 +10546,33 @@ The structured counterexample's `violation` field carries the stable property de
 
 **Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
 
+### ModelCapacityAssumed
+
+**Phase:** Verification (Note; the build status stays `Verified`)
+**Meaning:** The function's contracts were proved, but the proof's model restricts at least one collection length to the verifier's model capacity (`Vec<T>` 128, `String` 256, `HashMap<K, V>` and `BTreeMap<K, V>` 64; see [`contracts.md`](contracts.md#collection-models-for-verification)). A parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled as nondeterministic *within* that capacity, so executions with longer collections were pruned, not checked: `Verified` means "verified for collections up to the capacity".
+
+```json
+{
+  "error_code": "ModelCapacityAssumed",
+  "severity": "note",
+  "message": "proof of `first_or_zero` is bounded: collection lengths were checked only up to the verifier model capacity (Vec<T>: 128)",
+  "hints": [
+    "the bound belongs to the bounded model checker, not to the program or its contracts; executions with longer collections were not checked",
+    "do not add a length bound to a contract to silence this note; an unbounded verifier removes it without any source change"
+  ]
+}
+```
+
+The `message` lists every bounded collection kind as `Kind: capacity`, in the fixed order `Vec<T>`, `String`, `HashMap<K, V>`, `BTreeMap<K, V>`. At most one note is emitted per proved function. The span is empty (the note describes the model, not a source location).
+
+**Why this is a Note and not a failure.** The verdict is genuine for every execution inside the bound and the verifier never changes a verdict because of the note. It is informational so that an agent or CEGIS loop can tell a bounded proof from an unbounded one — for example, to treat a `Verified` function that handles untrusted-length collections with extra scrutiny, or to test it with the runtime checks of `--mode debug`.
+
+**Fix:** None is required. Do **not** add `requires: v.len() <= 128` (or any other capacity) to silence it: that distorts a true contract to fit a prover limitation, and an unbounded backend removes the note without any source change.
+
+**Ordering and presence.** Notes describe a *completed* proof run, so they are emitted only when the overall `status` is `Verified`, one per proved function, after every other diagnostic and in function declaration order. A run that ends in a counterexample, `unknown`, `timeout`, `error`, or a fail-closed skip carries no note: a halt cuts the set of verified functions short in a scheduling-dependent way, and a note about one of them would be noise next to the real failure.
+
+**Not emitted when:** the function's model restricts no collection length (scalar-only functions, and collections built by the function itself from constant lengths), or the overall status is not `Verified`.
+
 ## Runtime Errors
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).
@@ -11947,7 +12056,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "RegionConflict",
         "RegionLinear",
         "RegionRootEscape",
-        "VerifierAssertionUnattributed"
+        "VerifierAssertionUnattributed",
+        "ModelCapacityAssumed"
       ],
       "description": "Machine-readable error code"
     },

@@ -1128,6 +1128,53 @@ for compiler in rust self; do
 done
 echo ""
 
+# ─── Model-capacity bound note (ModelCapacityAssumed) ─────────────
+#
+# A proof from a model that restricts a collection length to the verifier's model
+# capacity is bounded; the verifier reports that as one `ModelCapacityAssumed`
+# note per proved function (severity `note`, status and exit code unchanged),
+# naming each bounded collection kind and capacity. Both compilers must emit the
+# same note, and functions whose model restricts nothing (scalars, a constant
+# in-range length) must carry none.
+section_begin "Model-capacity bound note"
+
+# Print the ModelCapacityAssumed message naming a function, or nothing.
+bound_note() {
+    python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+fn = sys.argv[2]
+for g in d.get('diagnostics', []):
+    if (g.get('error_code') == 'ModelCapacityAssumed'
+            and g.get('severity') == 'note'
+            and ('\`' + fn + '\`') in g.get('message', '')):
+        print(g['message'].rsplit('(', 1)[1].rstrip(')'))
+" "$1" "$2" 2>/dev/null || echo "ERR"
+}
+
+for compiler in rust self; do
+    if [ "$compiler" = rust ]; then
+        j=$($RUST verify --no-cache tests/verify/model_capacity_bound_note.vow 2>/dev/null) || true
+    else
+        j=$(run_self verify --no-cache tests/verify/model_capacity_bound_note.vow 2>/dev/null) || true
+    fi
+    errors=()
+    [ "$(arith_status "$j")" = "Verified" ] || errors+=("fixture should verify, got $(arith_status "$j")")
+    [ "$(bound_note "$j" first_byte)" = "Vec<T>: 128" ] || errors+=("first_byte note: '$(bound_note "$j" first_byte)'")
+    [ "$(bound_note "$j" string_len)" = "String: 256" ] || errors+=("string_len note: '$(bound_note "$j" string_len)'")
+    [ "$(bound_note "$j" map_size)" = "HashMap<K, V>: 64" ] || errors+=("map_size note: '$(bound_note "$j" map_size)'")
+    [ "$(bound_note "$j" vec_and_string)" = "Vec<T>: 128, String: 256" ] || errors+=("vec_and_string note: '$(bound_note "$j" vec_and_string)'")
+    [ -z "$(bound_note "$j" scalar_only)" ] || errors+=("scalar_only must not carry a capacity note")
+    [ -z "$(bound_note "$j" constant_in_range)" ] || errors+=("constant_in_range restricts nothing and must not carry a capacity note")
+
+    if [ ${#errors[@]} -eq 0 ]; then
+        pass "model_capacity_bound_note/$compiler"
+    else
+        fail "model_capacity_bound_note/$compiler" "$(IFS='; '; echo "${errors[*]}")"
+    fi
+done
+echo ""
+
 # ─── span_pack verifier-bound regression (#1308) ──────────────────
 #
 # `span_pack` (compiler/parser.vow) packs a byte offset (`start`) and a

@@ -1,0 +1,20 @@
+// TEST: category overflow
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-fn "big"
+// TEST: counterexample-blame none
+// A `let mut` whose every assignment is the same constant reaches the call
+// through a phi, yet the length is provably 500: above the model capacity of
+// both String (256) and Vec (128), so it must fail closed rather than be
+// assumed away (which would make the true postcondition below vacuous).
+module RawPartsCopyFoldedPhiLenBeyondModelCap
+
+fn big(p: i64, c: bool) -> i64 vow {
+    ensures: result == 1
+} {
+    let mut n: u64 = 500;
+    if c {
+        n = 500;
+    }
+    let s: String = String::from_raw_parts_copy(p, n);
+    1
+}
