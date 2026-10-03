@@ -1,0 +1,9 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "non-indexable"
+module IndexBTreeMapRead
+
+fn main() -> i32 {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    let x: Option<i64> = m[1];
+    0
+}

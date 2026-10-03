@@ -1,0 +1,68 @@
+// TEST: stdout "u8=ok\ni8=ok\nu32=ok\nbool=ok\nbtree=ok\n"
+module HashMapScalarKeys
+
+fn check_u8() -> bool [panic] {
+    let m: HashMap<u8, i64> = HashMap::new();
+    let k: u8 = 255;
+    m.insert(k, 3);
+    let a: u8 = 250;
+    let wrapped: u8 = a + 10;
+    m.insert(wrapped, 7);
+    let k2: u8 = 200 + 55;
+    if !m.contains_key(k2) { return false; }
+    if m.get(k2).unwrap() != 3 { return false; }
+    if !m.contains_key(4) { return false; }
+    if m.get(wrapped).unwrap() != 7 { return false; }
+    m.len() == 2
+}
+
+fn check_i8() -> bool [panic] {
+    let m: HashMap<i8, i64> = HashMap::new();
+    let k: i8 = -5;
+    m.insert(k, 65535);
+    let k2: i8 = -10 + 5;
+    if !m.contains_key(k2) { return false; }
+    if m.get(k2).unwrap() != 65535 { return false; }
+    if m.get(-5).unwrap() != 65535 { return false; }
+    m.remove(k2);
+    !m.contains_key(k)
+}
+
+fn check_u32() -> bool [panic] {
+    let m: HashMap<u32, u64> = HashMap::new();
+    let big: u32 = 4294967295;
+    m.insert(big, 1);
+    m.insert(0, 2);
+    let k: u32 = 4294967290 + 5;
+    m.get(k).unwrap() == 1 && m.get(0).unwrap() == 2 && !m.contains_key(1)
+}
+
+fn check_bool() -> bool [panic] {
+    let m: HashMap<bool, i64> = HashMap::new();
+    m.insert(true, 10);
+    m.insert(false, 20);
+    let t: bool = 1 < 2;
+    let f: bool = 2 < 1;
+    m.get(t).unwrap() == 10 && m.get(f).unwrap() == 20 && m.len() == 2
+}
+
+fn check_btree() -> bool [panic] {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    m.insert(3, 255);
+    m.insert(1, 7);
+    m.get(3).unwrap() == 255 && m.get(1).unwrap() == 7 && m.len() == 2
+}
+
+fn report(label: String, ok: bool) [io] {
+    print_str(label);
+    if ok { print_str(String::from("=ok\n")); } else { print_str(String::from("=FAIL\n")); }
+}
+
+fn main() -> i32 [io, panic] {
+    report(String::from("u8"), check_u8());
+    report(String::from("i8"), check_i8());
+    report(String::from("u32"), check_u32());
+    report(String::from("bool"), check_bool());
+    report(String::from("btree"), check_btree());
+    0
+}

@@ -123,6 +123,11 @@ coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`,
 and `push_byte` takes exactly `u8`; see
 [String offsets](grammar.md#string-offsets).
 
+Only `Vec<T>` has an index operator. Indexing any other type (`HashMap`,
+`BTreeMap`, `String`, `Option`, ...) is a `TypeMismatch` whose message begins
+`index operation on non-indexable type` and names the receiver type; read a map entry
+with `m.get(k)` and a string byte with `s.byte_at(i)`.
+
 ### LiteralOutOfRange
 
 **Phase:** Type Checker
@@ -431,6 +436,18 @@ trait Foo {
 **Output:** `trait blocks are not supported in Vow`
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
+
+The same code reports a map type whose key or value cannot be stored in the runtime's single 64-bit map slot: a `HashMap` key that is not an integer type of at most 64 bits or `bool`, a `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64`, and a `HashMap` value that is or contains a `linear struct` (see [HashMap key and value types](grammar.md#hashmapk-v-methods)).
+
+```vow
+fn f() -> () {
+    let m: HashMap<String, i64> = HashMap::new();
+}
+```
+
+**Output:** ``HashMap key type `String` is not supported: keys are compared by value as a single machine word``
+
+**Fix:** Hash or intern the key to a `u64` at the call site and keep a side table for the originals. For a 128-bit value, store the two `u64` halves separately. For a linear value, keep it in a local binding and store only an integer handle in the map.
 
 ### BTreeMapKeyTypeMustBeI64
 

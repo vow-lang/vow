@@ -1,0 +1,133 @@
+module TestCheckerMapSlotTypes
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use checker
+use env
+
+fn count_code(source: String, code: i64) -> i64 [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("map_slot.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < parsed.items.len() {
+        item_files.push(String::from("map_slot.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("map_slot.vow"));
+    check_module(check_env, parsed, item_files);
+    let diags: Vec<Diagnostic> = dctx.diags;
+    let mut found: i64 = 0;
+    let mut j: u64 = 0u64;
+    while j < diags.len() {
+        let d: Diagnostic = diags[j];
+        if d.code == code { found = found + 1; }
+        j = j + 1;
+    }
+    found
+}
+
+fn param_probe(ty: String) -> String {
+    let src: String = String::from("module MapSlot\nfn probe(m: ");
+    src.push_str(ty);
+    src.push_str(String::from(") -> u64 { m.len() }"));
+    src
+}
+
+fn body_probe(body: String) -> String {
+    let src: String = String::from("module MapSlot\nfn probe() -> i64 { ");
+    src.push_str(body);
+    src.push_str(String::from(" }"));
+    src
+}
+
+fn unsupported(ty: String) -> i64 [io] {
+    count_code(param_probe(ty), EC_UNSUPPORTED_FEATURE())
+}
+
+fn check_hashmap_keys() -> i32 [io] {
+    if unsupported(String::from("HashMap<i64, i64>")) != 0 { return 1; }
+    if unsupported(String::from("HashMap<u8, i64>")) != 0 { return 2; }
+    if unsupported(String::from("HashMap<i8, i64>")) != 0 { return 3; }
+    if unsupported(String::from("HashMap<u32, bool>")) != 0 { return 4; }
+    if unsupported(String::from("HashMap<u64, String>")) != 0 { return 5; }
+    if unsupported(String::from("HashMap<bool, i64>")) != 0 { return 6; }
+    if unsupported(String::from("HashMap<String, i64>")) == 0 { return 11; }
+    if unsupported(String::from("HashMap<i128, i64>")) == 0 { return 12; }
+    if unsupported(String::from("HashMap<u128, i64>")) == 0 { return 13; }
+    if unsupported(String::from("HashMap<f64, i64>")) == 0 { return 14; }
+    if unsupported(String::from("HashMap<Vec<i64>, i64>")) == 0 { return 15; }
+    if unsupported(String::from("HashMap<Option<i64>, i64>")) == 0 { return 16; }
+    if unsupported(String::from("Vec<HashMap<String, bool>>")) == 0 { return 17; }
+    0
+}
+
+fn check_map_values() -> i32 [io] {
+    if unsupported(String::from("HashMap<i64, i128>")) == 0 { return 21; }
+    if unsupported(String::from("HashMap<i64, u128>")) == 0 { return 22; }
+    if unsupported(String::from("BTreeMap<i64, i128>")) == 0 { return 23; }
+    if unsupported(String::from("BTreeMap<i64, u128>")) == 0 { return 24; }
+    if unsupported(String::from("BTreeMap<i64, i64>")) != 0 { return 25; }
+    if unsupported(String::from("BTreeMap<i64, Vec<i128>>")) != 0 { return 26; }
+    if unsupported(String::from("HashMap<i64, String>")) != 0 { return 27; }
+    if unsupported(String::from("HashMap<i64, f64>")) == 0 { return 28; }
+    if unsupported(String::from("HashMap<i64, f32>")) == 0 { return 29; }
+    if unsupported(String::from("BTreeMap<i64, f64>")) == 0 { return 30; }
+    if unsupported(String::from("HashMap<i64, u8>")) != 0 { return 31; }
+    if unsupported(String::from("BTreeMap<i64, i16>")) != 0 { return 32; }
+    0
+}
+
+fn linear_param(ty: String) -> i64 [io] {
+    let src: String = String::from("module MapSlot\nlinear struct Token { id: i64 }\nstruct Plain { id: i64 }\nfn probe(m: ");
+    src.push_str(ty);
+    src.push_str(String::from(") -> u64 { m.len() }"));
+    count_code(src, EC_UNSUPPORTED_FEATURE())
+}
+
+fn check_hashmap_linear_values() -> i32 [io] {
+    if linear_param(String::from("HashMap<i64, Token>")) == 0 { return 51; }
+    if linear_param(String::from("HashMap<i64, Plain>")) != 0 { return 52; }
+    if linear_param(String::from("HashMap<i64, i64>")) != 0 { return 53; }
+    0
+}
+
+fn check_method_site() -> i32 [io] {
+    let hm: String = body_probe(String::from("let m: HashMap<String, i64> = HashMap::new(); 0"));
+    if count_code(hm, EC_UNSUPPORTED_FEATURE()) == 0 { return 61; }
+    let ok: String = body_probe(String::from("let m: HashMap<u16, i64> = HashMap::new(); m.insert(1, 2); 0"));
+    if count_code(ok, EC_UNSUPPORTED_FEATURE()) != 0 { return 62; }
+    0
+}
+
+fn check_map_index_rejected() -> i32 [io] {
+    let hm_read: String = body_probe(String::from("let m: HashMap<i64, i64> = HashMap::new(); let x: i64 = m[1]; x"));
+    if count_code(hm_read, EC_TYPE_MISMATCH()) == 0 { return 41; }
+    let hm_write: String = body_probe(String::from("let m: HashMap<i64, i64> = HashMap::new(); m[1] = 5; 0"));
+    if count_code(hm_write, EC_TYPE_MISMATCH()) == 0 { return 42; }
+    let bt_read: String = body_probe(String::from("let m: BTreeMap<i64, i64> = BTreeMap::new(); let x: Option<i64> = m[1]; 0"));
+    if count_code(bt_read, EC_TYPE_MISMATCH()) == 0 { return 43; }
+    let str_read: String = body_probe(String::from("let s: String = String::from(\"a\"); let c: i64 = s[0]; c"));
+    if count_code(str_read, EC_TYPE_MISMATCH()) == 0 { return 44; }
+    let vec_read: String = body_probe(String::from("let v: Vec<i64> = Vec::new(); v.push(1); v[0]"));
+    if count_code(vec_read, EC_TYPE_MISMATCH()) != 0 { return 45; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let keys: i32 = check_hashmap_keys();
+    if keys != 0 { return keys; }
+    let values: i32 = check_map_values();
+    if values != 0 { return values; }
+    let linears: i32 = check_hashmap_linear_values();
+    if linears != 0 { return linears; }
+    let methods: i32 = check_method_site();
+    if methods != 0 { return methods; }
+    check_map_index_rejected()
+}

@@ -336,6 +336,9 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
                     }
                 }
             }
+            let mkey_tid: i64 = if arg_tids.len() > 0 { arg_tids[0] } else { -1 };
+            let mval_tid: i64 = if arg_tids.len() > 1 { arg_tids[1] } else { -1 };
+            check_map_slot_types(e, name, mkey_tid, mval_tid, type_span(a, ast_tid));
             return ts_make_applied(e.ts, ts_make_struct(e.ts, name), arg_tids);
         }
         let sidx: i64 = env_lookup_struct(e, name);
@@ -365,6 +368,45 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         return ty_add(e.ts, CTY_TUPLE(), lid, 0);
     }
     CTY_UNIT()
+}
+
+fn hashmap_key_tag_supported(tag: i64) -> bool {
+    (tag >= CTY_I8() && tag <= CTY_U64() && tag != CTY_I128())
+        || tag == CTY_BOOL()
+        || tag == CTY_NEVER()
+        || tag == CTY_UNKNOWN()
+}
+
+// Map keys and values live in one 64-bit integer runtime slot. Mirrors Rust
+// `check_map_slot_types`: a HashMap key must be a by-value scalar (<= 64-bit
+// integer or bool); a 128-bit or float value is rejected in either map; a
+// linear HashMap value is rejected because the map copies values bitwise. A
+// tid of -1 means the type argument is absent.
+fn check_map_slot_types(e: CheckEnv, name: String, key_tid: i64, val_tid: i64, span: i64) {
+    if name == String::from("HashMap") && key_tid >= 0 {
+        if !hashmap_key_tag_supported(ty_tag(e.ts, key_tid)) {
+            let kmsg: String = String::from("HashMap key type `");
+            kmsg.push_str(ty_value_display_name(e.ts, key_tid));
+            kmsg.push_str(String::from("` is not supported: keys are compared by value as a single machine word"));
+            env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), kmsg, span);
+        }
+    }
+    if val_tid >= 0 {
+        let vtag: i64 = ty_tag(e.ts, val_tid);
+        if vtag == CTY_I128() || vtag == CTY_U128() || vtag == CTY_F32() || vtag == CTY_F64() {
+            let vmsg: String = String::from(name);
+            vmsg.push_str(String::from(" value type `"));
+            vmsg.push_str(ty_value_display_name(e.ts, val_tid));
+            vmsg.push_str(String::from("` is not supported: map values occupy a single 64-bit integer slot"));
+            env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), vmsg, span);
+        }
+        if name == String::from("HashMap") && is_linear_ty(e, val_tid) == 1 {
+            let lmsg: String = String::from("HashMap value type must be non-linear; found `");
+            lmsg.push_str(ty_value_display_name(e.ts, val_tid));
+            lmsg.push_str(String::from("`: the map copies values bitwise and would duplicate the linear obligation"));
+            env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), lmsg, span);
+        }
+    }
 }
 
 fn is_opaque(tid: i64) -> bool vow {
@@ -2764,6 +2806,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     } else {
                         CTY_I64()
                     };
+                    check_map_slot_types(e, base_name, key_tid, val_tid, expr_span(a, eid));
                     if mname == String::from("insert") {
                         check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0));
                         check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, hargs_lid, 1));
@@ -2808,6 +2851,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         kerr_msg.push_str(String::from("'"));
                         env_emit_error_code(e, EC_BTREEMAP_KEY_TYPE_MUST_BE_I64(), kerr_msg, expr_span(a, eid));
                     }
+                    check_map_slot_types(e, base_name, -1, bval_tid, expr_span(a, eid));
                     if mname == String::from("insert") {
                         check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0));
                         check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, bargs_lid, 1));
@@ -2890,17 +2934,30 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if is_opaque(recv_tid) {
             return recv_tid;
         }
-        let recv_tag: i64 = ty_tag(e.ts, recv_tid);
-        if recv_tag == CTY_APPLIED() {
-            let hargs_lid: i64 = ty_b(e.ts, recv_tid);
-            if ts_arg_len(e.ts, hargs_lid) > 0 {
-                return ts_arg_get(e.ts, hargs_lid, 0);
+        if ty_tag(e.ts, recv_tid) == CTY_APPLIED() {
+            let ibase_tid: i64 = ty_a(e.ts, recv_tid);
+            let ibase_tag: i64 = ty_tag(e.ts, ibase_tid);
+            if (ibase_tag == CTY_STRUCT() || ibase_tag == CTY_ENUM()) && ty_struct_name(e.ts, ibase_tid) == String::from("Vec") {
+                let hargs_lid: i64 = ty_b(e.ts, recv_tid);
+                if ts_arg_len(e.ts, hargs_lid) > 0 {
+                    return ts_arg_get(e.ts, hargs_lid, 0);
+                }
+                return CTY_UNIT();
             }
         }
-        if recv_tag == CTY_STR() {
-            return CTY_I64();
+        let mut idisp: String = ty_value_display_name(e.ts, recv_tid);
+        if ty_tag(e.ts, recv_tid) == CTY_APPLIED() {
+            let dbase_tid: i64 = ty_a(e.ts, recv_tid);
+            let dbase_tag: i64 = ty_tag(e.ts, dbase_tid);
+            if dbase_tag == CTY_STRUCT() || dbase_tag == CTY_ENUM() {
+                idisp = ty_struct_name(e.ts, dbase_tid);
+            }
         }
-        return CTY_UNIT();
+        let inmsg: String = String::from("index operation on non-indexable type `");
+        inmsg.push_str(idisp);
+        inmsg.push_str(String::from("`"));
+        env_emit_error_code(e, EC_TYPE_MISMATCH(), inmsg, expr_span(a, eid));
+        return CTY_NEVER();
     }
 
     if tag == EXPR_IF() {

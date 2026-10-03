@@ -1,0 +1,9 @@
+// TEST: error-code UnsupportedFeature
+// TEST: stderr "HashMap key type"
+module HashMapKeyString
+
+fn main() -> i32 {
+    let m: HashMap<String, i64> = HashMap::new();
+    m.insert(String::from("a"), 5);
+    0
+}

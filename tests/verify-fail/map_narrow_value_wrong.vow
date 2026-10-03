@@ -1,0 +1,19 @@
+// TEST: category callee-blame
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-fn "store_narrow"
+// TEST: counterexample-blame callee
+module MapNarrowValueWrong
+
+fn store_narrow() -> HashMap<i64, u8> vow {
+  ensures: result.get(1).unwrap() == 201
+} {
+  let m: HashMap<i64, u8> = HashMap::new();
+  m.insert(1, 200);
+  m
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i64, u8> = store_narrow();
+  print_u64(m.len());
+  0
+}
