@@ -2362,7 +2362,7 @@ The type checker also accepts a 128-bit index, consistent with 128-bit limits be
 
 The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).
 
-Lengths are `u64` (see [the Vec method table](#vect-methods)), so an index derived from one needs no conversion:
+Lengths are `u64` (see [the Vec method table](#vec-methods)), so an index derived from one needs no conversion:
 
 ```vow
 let n: u64 = v.len();
@@ -7635,7 +7635,7 @@ The type checker also accepts a 128-bit index, consistent with 128-bit limits be
 
 The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).
 
-Lengths are `u64` (see [the Vec method table](#vect-methods)), so an index derived from one needs no conversion:
+Lengths are `u64` (see [the Vec method table](#vec-methods)), so an index derived from one needs no conversion:
 
 ```vow
 let n: u64 = v.len();
