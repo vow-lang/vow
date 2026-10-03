@@ -58,11 +58,27 @@ STRICT_SPAN_FIXTURES = frozenset(
         "let_tuple_arity_mismatch.vow",
     }
 )
-# Fixtures whose diagnostic `hints` must match the Rust compiler's exactly. The
-# Rust checker attaches many suggestion hints the self-hosted checker does not
-# (did-you-mean lists, available methods), so corpus-wide equality would pin
-# unrelated gaps; a hint is a parity contract only where both checkers emit it.
-STRICT_HINT_FIXTURES = frozenset({"vec_get_unknown_method.vow"})
+# Diagnostic `hints` are compared on every error fixture, for every error code
+# except the ones listed here. Each entry is a code whose hints are
+# intentionally NOT compared, with the reason; a code missing from this table
+# is a parity contract, so a new or reworded hint in only one compiler fails
+# the gate. Remove an entry as soon as the self-hosted checker mirrors the code.
+HINT_UNCOMPARED_CODES = {
+    "TypeMismatch": (
+        "the Rust checker attaches about two dozen distinct hint templates "
+        "(annotation/return/argument types, index and shift-count types, "
+        "did-you-mean for variables, functions, fields and structs, expected "
+        "signatures, FFI pointer rules) at sites the self-hosted checker "
+        "reports with a bare message"
+    ),
+    "LinearTypeViolation": (
+        "linearity is checked on the AST in Rust and on the IR in the "
+        "self-hosted compiler: the mutation-phi leak fixtures are "
+        "LinearTypeViolation in Rust but RegionLinear in the self-hosted "
+        "compiler, and the self-hosted duplicate-consume hint has no 'clone "
+        "it or' variant for enum payloads"
+    ),
+}
 # Fixtures on which the self-hosted compiler still reports offset 0, length 0
 # for a diagnostic the Rust compiler locates. #1353 fixed the last of these;
 # kept as an empty set (not deleted) so a future drop has this same
@@ -361,17 +377,16 @@ def _dropped_spans(rust_diagnostics, self_diagnostics):
 
 
 def _hints_by_code(diagnostics):
-    """Each diagnostic's (error code, hints), ordered for multiset comparison."""
+    """(error code, hints) of every hint-compared diagnostic, for multiset diffing."""
     return sorted(
         (diagnostic.get("error_code", ""), tuple(diagnostic.get("hints", [])))
         for diagnostic in diagnostics
+        if diagnostic.get("error_code", "") not in HINT_UNCOMPARED_CODES
     )
 
 
-def _hint_errors(rust_diagnostics, self_diagnostics, fixture_name):
-    """Hint parity on the curated fixtures; other fixtures are not compared."""
-    if fixture_name not in STRICT_HINT_FIXTURES:
-        return []
+def _hint_errors(rust_diagnostics, self_diagnostics):
+    """Hint parity on every diagnostic whose code is not in HINT_UNCOMPARED_CODES."""
     return _mismatch(
         HINTS_LABEL,
         _hints_by_code(rust_diagnostics),
@@ -412,21 +427,22 @@ def compare_error(rust, self_hosted, rust_exit, self_exit, fixture_name=None):
             )
         if len(document.get("diagnostics", [])) < 1:
             errors.append(f"{name} has no diagnostics")
-    errors += _mismatch(
+    code_errors = _mismatch(
         ERROR_CODES_LABEL,
         _error_codes(rust.get("diagnostics", [])),
         _error_codes(self_hosted.get("diagnostics", [])),
     )
+    errors += code_errors
     if fixture_name is not None:
         errors += _span_errors(
             rust.get("diagnostics", []),
             self_hosted.get("diagnostics", []),
             fixture_name,
         )
+    if not code_errors:
         errors += _hint_errors(
             rust.get("diagnostics", []),
             self_hosted.get("diagnostics", []),
-            fixture_name,
         )
     return errors
 
