@@ -1,5 +1,6 @@
 // TEST: exit 134
 // TEST: stderr "VowViolation"
+// TEST: stderr "Caller"
 // TEST: stderr "as u64"
 module CastInContractViolation
 

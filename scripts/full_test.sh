@@ -221,6 +221,11 @@ run_discard_with_optional_stdin() {
     fi
 }
 
+capture_stderr_with_optional_stdin() {
+    local err_file="$1" stdin_file="${2:-}"; shift 2
+    "$@" < "${stdin_file:-/dev/null}" >/dev/null 2>"$err_file"
+}
+
 compare_error() {
     run_parity error "$@"
 }
@@ -388,13 +393,8 @@ run_promoted_run_tests() {
         if grep -q '^// TEST: stderr "' "$vow_file"; then
             rust_err_file="$TMPDIR/test_rust_${name}.stderr"
             self_err_file="$TMPDIR/test_self_${name}.stderr"
-            if [ -n "$stdin_path" ]; then
-                "$TMPDIR/test_rust_${name}" < "$stdin_path" >/dev/null 2>"$rust_err_file" || true
-                run_self_bin "$TMPDIR/test_self_${name}" < "$stdin_path" >/dev/null 2>"$self_err_file" || true
-            else
-                "$TMPDIR/test_rust_${name}" </dev/null >/dev/null 2>"$rust_err_file" || true
-                run_self_bin "$TMPDIR/test_self_${name}" </dev/null >/dev/null 2>"$self_err_file" || true
-            fi
+            capture_stderr_with_optional_stdin "$rust_err_file" "$stdin_path" "$TMPDIR/test_rust_${name}" || true
+            capture_stderr_with_optional_stdin "$self_err_file" "$stdin_path" run_self_bin "$TMPDIR/test_self_${name}" || true
             check_stderr_directives "${name}/test-stderr" "$vow_file" "$rust_err_file" "$self_err_file"
         fi
     done
@@ -1286,31 +1286,6 @@ else
     fail "i128_requires_violation/debug-violation" "$(IFS='; '; echo "${errors[*]}")"
 fi
 
-# cast_in_contract_violation.vow: the contract text carried into the
-# VowViolation payload must render the cast's real target type on both
-# compilers, not a placeholder (#1113 Half B).
-$RUST build --mode debug --no-verify tests/debug/cast_in_contract_violation.vow -o "$TMPDIR/rust_cast_violation_debug" >/dev/null 2>/dev/null
-run_self build --mode debug --no-verify tests/debug/cast_in_contract_violation.vow -o "$TMPDIR/self_cast_violation_debug" >/dev/null 2>/dev/null
-
-rust_exit=0 self_exit=0
-"$TMPDIR/rust_cast_violation_debug" </dev/null >"$TMPDIR/rust_cast_dbg_out" 2>"$TMPDIR/rust_cast_dbg_err" || rust_exit=$?
-run_self_bin "$TMPDIR/self_cast_violation_debug" </dev/null >"$TMPDIR/self_cast_dbg_out" 2>"$TMPDIR/self_cast_dbg_err" || self_exit=$?
-rust_err=$(cat "$TMPDIR/rust_cast_dbg_err")
-self_err=$(cat "$TMPDIR/self_cast_dbg_err")
-
-errors=()
-if [ "$rust_exit" -ne 134 ]; then errors+=("rust exit=$rust_exit, expected 134"); fi
-if [ "$self_exit" -ne 134 ]; then errors+=("self exit=$self_exit, expected 134"); fi
-for pattern in VowViolation Caller "as u64"; do
-    if ! echo "$rust_err" | grep -qF "$pattern"; then errors+=("rust stderr missing '$pattern'"); fi
-    if ! echo "$self_err" | grep -qF "$pattern"; then errors+=("self stderr missing '$pattern'"); fi
-done
-if [ ${#errors[@]} -eq 0 ]; then
-    pass "cast_in_contract_violation/debug-violation"
-else
-    fail "cast_in_contract_violation/debug-violation" "$(IFS='; '; echo "${errors[*]}")"
-fi
-
 # Every tests/debug fixture that carries `// TEST: stderr` directives: build in
 # debug mode with both compilers, run, and require the expected exit code
 # (`// TEST: exit N`, default 134 = runtime abort) plus every stderr substring.
@@ -1327,8 +1302,8 @@ for vow_file in tests/debug/*.vow; do
     run_self build --mode debug --no-verify "$vow_file" -o "$TMPDIR/self_dbgstderr_${name}" >/dev/null 2>/dev/null
 
     rust_exit=0 self_exit=0
-    "$TMPDIR/rust_dbgstderr_${name}" </dev/null >/dev/null 2>"$TMPDIR/rust_dbgstderr_${name}.err" || rust_exit=$?
-    run_self_bin "$TMPDIR/self_dbgstderr_${name}" </dev/null >/dev/null 2>"$TMPDIR/self_dbgstderr_${name}.err" || self_exit=$?
+    capture_stderr_with_optional_stdin "$TMPDIR/rust_dbgstderr_${name}.err" "" "$TMPDIR/rust_dbgstderr_${name}" || rust_exit=$?
+    capture_stderr_with_optional_stdin "$TMPDIR/self_dbgstderr_${name}.err" "" run_self_bin "$TMPDIR/self_dbgstderr_${name}" || self_exit=$?
 
     if [ "$rust_exit" -ne "$expected_exit" ] || [ "$self_exit" -ne "$expected_exit" ]; then
         fail "${name}/debug-stderr" "expected exit $expected_exit, rust=$rust_exit self=$self_exit"
