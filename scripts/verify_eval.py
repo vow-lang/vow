@@ -493,9 +493,16 @@ def corpus_category_counts():
 def render_corpus_counts(total, counts):
     """Render the generated docs block for the given corpus counts."""
     names = sorted(CATEGORIES, key=lambda c: (-counts.get(c, 0), c))
+    empty = [name for name in sorted(CATEGORIES) if not counts.get(name, 0)]
+    if empty:
+        summary = f"{total} programs; no program yet for: {', '.join(empty)}:"
+    else:
+        summary = (
+            f"All {len(CATEGORIES)} categories are represented ({total} programs):"
+        )
     lines = [
         DOCS_START,
-        f"All {len(CATEGORIES)} categories are represented ({total} programs):",
+        summary,
         "",
         "| Category | Count |",
         "| --- | --- |",
@@ -735,6 +742,8 @@ def main():
     )
     args = ap.parse_args()
 
+    if args.check_docs and args.write_docs:
+        ap.error("--check-docs and --write-docs are mutually exclusive")
     if args.check_docs or args.write_docs:
         return sync_docs(check=args.check_docs)
 

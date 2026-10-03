@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Behavior tests for scripts/verify_eval.py."""
 
+import io
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import verify_eval
 
@@ -131,7 +134,33 @@ class CorpusCountsDocsTest(unittest.TestCase):
         self.assertEqual(len(verify_eval.CATEGORIES), len(rows))
         self.assertEqual("| bounds | 2 |", rows[0])
         self.assertEqual("| overflow | 1 |", rows[1])
-        self.assertIn("(3 programs)", block)
+        self.assertIn("3 programs", block)
+
+    def test_render_states_full_coverage_only_when_every_category_has_programs(self):
+        full = {name: 1 for name in verify_eval.CATEGORIES}
+        block = verify_eval.render_corpus_counts(len(full), full)
+        self.assertIn(
+            f"All {len(verify_eval.CATEGORIES)} categories are represented", block
+        )
+
+        partial = dict(full)
+        missing = min(verify_eval.CATEGORIES)
+        del partial[missing]
+        block = verify_eval.render_corpus_counts(len(partial), partial)
+        self.assertNotIn("categories are represented", block)
+        self.assertIn(f"no program yet for: {missing}", block)
+        self.assertIn(f"| {missing} | 0 |", block)
+
+    def test_conflicting_docs_flags_are_rejected(self):
+        argv = ["verify_eval.py", "--check-docs", "--write-docs"]
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.object(sys, "stderr", io.StringIO()) as err,
+            self.assertRaises(SystemExit) as ctx,
+        ):
+            verify_eval.main()
+        self.assertEqual(2, ctx.exception.code)
+        self.assertIn("mutually exclusive", err.getvalue())
 
     def test_splice_replaces_only_the_marked_block(self):
         block = verify_eval.render_corpus_counts(1, {"bounds": 1})
