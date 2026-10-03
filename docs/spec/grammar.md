@@ -938,7 +938,7 @@ m.contains_key(k)
 | `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |
 | `.len()`            | `() -> u64`                 |
 | `.byte_at(i)`       | `(<int>) -> i64`            |
-| `.push_byte(b)`     | `(<int>) -> ()`             |
+| `.push_byte(b)`     | `(<int>) -> ()` — appends one byte; `b` is a byte value in `0..=255` |
 | `.push_str(s)`      | `(String) -> ()`            |
 | `.clear()`          | `() -> ()` — frees buffer, resets to empty |
 | `.contains(s)`      | `(String) -> bool`          |
@@ -948,6 +948,8 @@ m.contains_key(k)
 | `.parse_u64()`      | `() -> Option<u64>`         |
 
 `<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
+
+`push_byte`'s argument is a byte *value*, not an index. The valid range is `0..=255`. The compiler does not diagnose a value outside that range (only a literal that does not fit `i64` is a `LiteralOutOfRange` error), and the runtime appends the low 8 bits, so `s.push_byte(300)` appends `44`. Keep byte values within `0..=255`.
 
 ### HashMap<K, V> Methods
 
@@ -998,7 +1000,7 @@ let val: i64 = v[0];
 v[i] = new_val;
 ```
 
-The index expression must have an **integer type**. Any width and either signedness is accepted (`i8` … `i64`, `u8` … `u64`, and unsuffixed integer literals); a non-integer index is a `TypeMismatch` error. The same rule applies to index-shaped builtin-method arguments: `String::byte_at`, `String::push_byte`, both arguments of `String::substring`, and `Vec::get` / `Vec::truncate`.
+The index expression must have an **integer type**. Any width and either signedness is accepted (`i8` … `i64`, `u8` … `u64`, and unsuffixed integer literals); a non-integer index is a `TypeMismatch` error. The same rule applies to index-shaped builtin-method arguments: `String::byte_at`, both arguments of `String::substring`, and `Vec::get` / `Vec::truncate`. `String::push_byte` takes a byte value, not an index; it is checked with the same integer rule but has its own valid range (see the String method table).
 
 The type checker also accepts a 128-bit index, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `Vec` and `String` element helpers are i64-only, so such a program fails codegen instead. Use a 64-bit or narrower index until epic #526 lands 128-bit lowering.
 

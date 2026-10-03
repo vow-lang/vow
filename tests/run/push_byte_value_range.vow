@@ -1,0 +1,27 @@
+// TEST: stdout "abc,A:97:98:99:44:65"
+// push_byte accepts any integer type, does not diagnose a value outside
+// 0..=255, and the runtime appends the low 8 bits (300 appends 44).
+module push_byte_value_range
+
+fn main() -> i32 [io] {
+    let s: String = String::from("");
+    let wide: u64 = 97;
+    let narrow: u8 = 98;
+    s.push_byte(wide);
+    s.push_byte(narrow);
+    s.push_byte(99);
+    s.push_byte(300);
+    s.push_byte(65 + 256);
+    print_str(s);
+    print_str(":");
+    print_i64(s.byte_at(0));
+    print_str(":");
+    print_i64(s.byte_at(1));
+    print_str(":");
+    print_i64(s.byte_at(2));
+    print_str(":");
+    print_i64(s.byte_at(3));
+    print_str(":");
+    print_i64(s.byte_at(4));
+    0
+}

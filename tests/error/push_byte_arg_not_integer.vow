@@ -1,0 +1,9 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "expects an integer type"
+module PushByteArgNotInteger
+
+fn main() -> i32 {
+    let s: String = String::from("hi");
+    s.push_byte(String::from("x"));
+    0
+}
