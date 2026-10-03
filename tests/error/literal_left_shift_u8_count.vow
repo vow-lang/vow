@@ -1,0 +1,11 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "u8 shift count must be u32, found `u8`"
+module LiteralLeftShiftU8Count
+
+fn bit(n: u8) -> u8 {
+    1 >> n
+}
+
+fn main() -> i32 {
+    bit(3 as u8) as i32
+}

@@ -1,0 +1,9 @@
+// TEST: error-code ShiftCountOutOfRange
+// TEST: stderr "shift count 9223372036854775809 is out of range for u64"
+module U64ShiftCountAboveI64Max
+
+fn main() -> i32 {
+    let value: u64 = 1u64;
+    let shifted: u64 = value >> 9223372036854775809;
+    0
+}

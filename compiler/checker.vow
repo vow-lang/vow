@@ -1325,6 +1325,33 @@ fn wide_literal_range_message(a: AstArena, lit_eid: i64, target_tag: i64) -> Str
     msg
 }
 
+// 64- and 128-bit shifts additionally accept a count of the left operand's
+// own type (docs/spec/grammar.md "Shift count type"); narrower ones are u32-only.
+fn shift_own_type_count_allowed(width: i64) -> bool {
+    width >= 64
+}
+
+// A constant shift count is out of range when negative or >= the shifted
+// type's bit width. Reads both literal limbs so a magnitude of 2^64 or more is
+// never truncated to its low 64 bits.
+fn shift_count_out_of_range(a: AstArena, count_eid: i64, width: i64) -> bool {
+    let mut magnitude_eid: i64 = count_eid;
+    let mut negative: bool = false;
+    if expr_tag(a, count_eid) == EXPR_UNOP() && expr_a(a, count_eid) == UNOP_NEG() {
+        negative = true;
+        magnitude_eid = expr_b(a, count_eid);
+    }
+    if expr_tag(a, magnitude_eid) != EXPR_LIT_INT() {
+        return false;
+    }
+    let lo: u64 = expr_int_lo(a, magnitude_eid);
+    let hi: u64 = expr_int_hi(a, magnitude_eid);
+    if lo == 0u64 && hi == 0u64 {
+        return false;
+    }
+    negative || hi != 0u64 || lo >= (width as u64)
+}
+
 fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_tag: i64) {
     if !expr_is_const_int(a, lit_eid) {
         if expr_tag(a, lit_eid) == EXPR_MATCH() {
@@ -2436,31 +2463,35 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 env_emit_error(e, String::from("bitwise operator requires integer operands"), expr_span(a, eid));
                 return CTY_I64();
             }
-            let lhs_tag: i64 = ty_tag(e.ts, lhs_tid);
-            if (op == BINOP_SHL() || op == BINOP_SHR()) && ty_is_integer(e.ts, lhs_tid) {
-                let width: i64 = integer_tag_width(lhs_tag);
-                let same_type_count_ok: bool = width >= 64 && ty_tag(e.ts, rhs_tid) == lhs_tag;
+            let literal_lhs_shift: bool = ty_is_lit_int(e.ts, lhs_tid) && ty_is_integer(e.ts, rhs_tid);
+            if (op == BINOP_SHL() || op == BINOP_SHR()) && (ty_is_integer(e.ts, lhs_tid) || literal_lhs_shift) {
+                // An unsuffixed-literal left operand has no type of its own: it
+                // takes the count's type, and that pair must satisfy the rule.
+                let shift_tid: i64 = if literal_lhs_shift { rhs_tid } else { lhs_tid };
+                let shift_tag: i64 = ty_tag(e.ts, shift_tid);
+                let width: i64 = integer_tag_width(shift_tag);
+                let same_type_count_ok: bool = shift_own_type_count_allowed(width) && ty_tag(e.ts, rhs_tid) == shift_tag;
                 if ty_tag(e.ts, rhs_tid) != CTY_U32() && !ty_is_lit_int(e.ts, rhs_tid) && !is_opaque(rhs_tid) && !same_type_count_ok {
-                    let type_msg: String = ty_tag_name(lhs_tag);
-                    if width >= 64 {
+                    let type_msg: String = ty_tag_name(shift_tag);
+                    if shift_own_type_count_allowed(width) {
                         type_msg.push_str(String::from(" shift count must be u32 or "));
-                        type_msg.push_str(ty_tag_name(lhs_tag));
+                        type_msg.push_str(ty_tag_name(shift_tag));
                     } else {
                         type_msg.push_str(String::from(" shift count must be u32"));
                     }
+                    type_msg.push_str(String::from(", found `"));
+                    type_msg.push_str(ty_value_display_name(e.ts, rhs_tid));
+                    type_msg.push_str(String::from("`"));
                     env_emit_error_code(e, EC_TYPE_MISMATCH(), type_msg, expr_span(a, rhs_eid));
                 }
-                if expr_is_const_int(a, rhs_eid) {
-                    let count: i64 = expr_const_int_value(a, rhs_eid);
-                    if count >= width || count < 0 {
-                        let message: String = String::from("shift count ");
-                        message.push_str(i64_to_string(count));
-                        message.push_str(String::from(" is out of range for "));
-                        message.push_str(ty_tag_name(lhs_tag));
-                        env_emit_error_code(e, EC_SHIFT_COUNT_OUT_OF_RANGE(), message, expr_span(a, rhs_eid));
-                    }
+                if expr_is_const_int(a, rhs_eid) && shift_count_out_of_range(a, rhs_eid, width) {
+                    let message: String = String::from("shift count ");
+                    message.push_str(wide_literal_decimal(a, rhs_eid));
+                    message.push_str(String::from(" is out of range for "));
+                    message.push_str(ty_tag_name(shift_tag));
+                    env_emit_error_code(e, EC_SHIFT_COUNT_OUT_OF_RANGE(), message, expr_span(a, rhs_eid));
                 }
-                return lhs_tid;
+                return shift_tid;
             }
             // An unsuffixed-literal marker coerces to the other
             // operand's integer type; two markers stay a marker.

@@ -1,0 +1,9 @@
+// TEST: error-code ShiftCountOutOfRange
+// TEST: stderr "shift count 18446744073709551619 is out of range for u128"
+module U128ShiftCountAboveU64Max
+
+fn main() -> i32 {
+    let value: u128 = 1u128;
+    let shifted: u128 = value << 18446744073709551619;
+    0
+}

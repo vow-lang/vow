@@ -511,6 +511,26 @@ impl ConstIntValue {
     }
 }
 
+/// The integer type a shift is performed in. A concrete left operand keeps its
+/// own type; an unsuffixed-literal left operand has none, so it takes the
+/// count's type (and that pair must satisfy the shift-count rule).
+fn shift_operand_ty(lhs: &Ty, rhs: &Ty) -> Option<Ty> {
+    if lhs.integer_width().is_some() {
+        Some(lhs.clone())
+    } else if lhs.is_lit_int() && rhs.integer_width().is_some() {
+        Some(rhs.clone())
+    } else {
+        None
+    }
+}
+
+/// 64- and 128-bit shifts additionally accept a count of the left operand's own
+/// type; narrower ones accept `u32` only (docs/spec/grammar.md, "Shift count
+/// type").
+fn shift_own_type_count_allowed(width: u16) -> bool {
+    width >= 64
+}
+
 /// Evaluates a constant integer expression: a bare unsigned magnitude, or a
 /// magnitude wrapped in unary negation (e.g. `-1`). Returns `None` for anything
 /// else.
@@ -2139,26 +2159,29 @@ impl<'e> Checker<'e> {
                     BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
                         self.check_same_integer(lhs_ty, rhs_ty, expr.span)
                     }
-                    BinOp::Shl | BinOp::Shr if lhs_ty.integer_width().is_some() => {
-                        let width = lhs_ty
+                    BinOp::Shl | BinOp::Shr if shift_operand_ty(&lhs_ty, &rhs_ty).is_some() => {
+                        let shift_ty = shift_operand_ty(&lhs_ty, &rhs_ty)
+                            .expect("guarded by shift_operand_ty(..).is_some()");
+                        let width = shift_ty
                             .integer_width()
-                            .expect("guarded by integer_width().is_some()");
-                        let same_type_count_ok = width >= 64 && rhs_ty == lhs_ty;
+                            .expect("shift operand types have an integer width");
+                        let own_type_count = shift_own_type_count_allowed(width);
+                        let same_type_count_ok = own_type_count && rhs_ty == shift_ty;
                         if rhs_ty != Ty::U32
                             && !rhs_ty.is_lit_int()
                             && rhs_ty != Ty::Never
                             && !same_type_count_ok
                         {
-                            let (message, hint) = if width >= 64 {
+                            let (message, hint) = if own_type_count {
                                 (
                                     format!(
-                                        "{lhs_ty} shift count must be u32 or {lhs_ty}, found `{rhs_ty}`"
+                                        "{shift_ty} shift count must be u32 or {shift_ty}, found `{rhs_ty}`"
                                     ),
-                                    format!("use a u32 or {lhs_ty} shift count"),
+                                    format!("use a u32 or {shift_ty} shift count"),
                                 )
                             } else {
                                 (
-                                    format!("{lhs_ty} shift count must be u32, found `{rhs_ty}`"),
+                                    format!("{shift_ty} shift count must be u32, found `{rhs_ty}`"),
                                     "use a u32 shift count".to_string(),
                                 )
                             };
@@ -2175,14 +2198,14 @@ impl<'e> Checker<'e> {
                             self.emit_error_with_hints(
                                 ErrorCode::ShiftCountOutOfRange,
                                 format!(
-                                    "shift count {} is out of range for {lhs_ty}",
+                                    "shift count {} is out of range for {shift_ty}",
                                     count.display()
                                 ),
                                 rhs.span,
-                                vec![format!("{lhs_ty} shift counts must be in 0..{width}")],
+                                vec![format!("{shift_ty} shift counts must be in 0..{width}")],
                             );
                         }
-                        lhs_ty
+                        shift_ty
                     }
                     BinOp::Shl | BinOp::Shr => self.check_same_integer(lhs_ty, rhs_ty, expr.span),
                     BinOp::And | BinOp::Or => {
@@ -5032,6 +5055,73 @@ mod tests {
             checker.check_expr(&shift_of(BinOp::Shr, cast_to(1, ty_name), lit_int(count)));
             assert!(!checker.has_errors(), "{ty_name} >> {count} is in range");
         }
+    }
+
+    #[test]
+    fn shift_const_count_uses_full_literal_magnitude() {
+        let counts: [u128; 5] = [
+            (1u128 << 64) + 3,
+            u128::from(u64::MAX),
+            u128::from(u64::MAX) + 1,
+            u128::from(i64::MAX as u64) + 2,
+            u128::MAX,
+        ];
+        for ty_name in ["u8", "i32", "i64", "u64", "i128", "u128"] {
+            for count in counts {
+                let mut emitter = TestEmitter(vec![]);
+                let mut checker = new_checker(&mut emitter);
+                checker.check_expr(&shift_of(BinOp::Shl, cast_to(1, ty_name), lit_int(count)));
+                assert_eq!(
+                    emitter.0.len(),
+                    1,
+                    "{ty_name} << {count} must give exactly one diagnostic"
+                );
+                assert_eq!(emitter.0[0].code, ErrorCode::ShiftCountOutOfRange);
+                assert!(
+                    emitter.0[0].message.contains(&count.to_string()),
+                    "unexpected message: {}",
+                    emitter.0[0].message
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn literal_left_shift_takes_the_count_type_and_enforces_the_count_rule() {
+        for ty_name in ["u32", "i64", "u64", "i128", "u128"] {
+            for op in [BinOp::Shl, BinOp::Shr] {
+                let mut emitter = TestEmitter(vec![]);
+                let mut checker = new_checker(&mut emitter);
+                let ty = checker.check_expr(&shift_of(op, lit_int(1), cast_to(3, ty_name)));
+                assert!(!checker.has_errors(), "1 << {ty_name} must type-check");
+                assert_eq!(ty.to_string(), ty_name);
+            }
+        }
+        for ty_name in ["i8", "u8", "i16", "u16", "i32"] {
+            for op in [BinOp::Shl, BinOp::Shr] {
+                let mut emitter = TestEmitter(vec![]);
+                let mut checker = new_checker(&mut emitter);
+                checker.check_expr(&shift_of(op, lit_int(1), cast_to(3, ty_name)));
+                assert_eq!(emitter.0.len(), 1, "1 << {ty_name} must be rejected");
+                assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
+                assert!(
+                    emitter.0[0].message.contains(&format!(
+                        "{ty_name} shift count must be u32, found `{ty_name}`"
+                    )),
+                    "unexpected message: {}",
+                    emitter.0[0].message
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn literal_left_shift_with_literal_count_stays_a_literal() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&shift_of(BinOp::Shl, lit_int(1), lit_int(3)));
+        assert!(!checker.has_errors());
+        assert!(ty.is_lit_int());
     }
 
     // --- Checked arithmetic ---
