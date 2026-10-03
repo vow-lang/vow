@@ -312,13 +312,13 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
     let mut saw_nested_index_assignment_limb: bool = false;
     let mut function_index: i64 = 0;
     while function_index < lowered.functions.len() as i64 {
-        let f: IrFunction = lowered.functions[function_index];
+        let f: IrFunction = lowered.functions[function_index as u64];
         let mut block_index: i64 = 0;
         while block_index < f.blocks.len() as i64 {
-            let block: IrBlock = f.blocks[block_index];
+            let block: IrBlock = f.blocks[block_index as u64];
             let mut inst_index: i64 = 0;
             while inst_index < block.insts.len() as i64 {
-                let inst: IrInst = block.insts[inst_index];
+                let inst: IrInst = block.insts[inst_index as u64];
                 if inst.dk == IDATA_CONST_U128() && inst.dv2 == 1 {
                     if inst.dv == 0 { saw_struct_limb = true; }
                     if inst.dv == 1 { saw_enum_limb = true; }
@@ -404,13 +404,13 @@ fn check_wide_suffix_parser_path() -> i32 {
 
     let target_tid: i64 = expr_b(arena, cast_eid);
     if type_tag(arena, target_tid) != TY_NAMED() { return 13; }
-    let target_name: String = arena.strs[type_a(arena, target_tid)];
+    let target_name: String = arena.strs[type_a(arena, target_tid) as u64];
     if target_name != String::from("u128") { return 14; }
 
     let ctx: LowerCtx = lctx_new(String::from("wide"), ITY_U128(), 0, arena, Vec::new());
     let wide_id: i64 = lower_expr(ctx, cast_eid);
     let block: IrBlock = ctx.func.blocks[0];
-    let wide_inst: IrInst = block.insts[wide_id];
+    let wide_inst: IrInst = block.insts[wide_id as u64];
     if wide_inst.op != IOP_CONST_U128() { return 15; }
     if wide_inst.ty != ITY_U128() { return 16; }
     if wide_inst.dk != IDATA_CONST_U128() { return 17; }
@@ -421,7 +421,7 @@ fn check_wide_suffix_parser_path() -> i32 {
     if encoded.len() != 17 || encoded[0] != 21 { return 19; }
     let mut i: i64 = 1;
     while i < encoded.len() as i64 {
-        if encoded[i] != 255 { return 20; }
+        if encoded[i as u64] != 255 { return 20; }
         i = i + 1;
     }
     0

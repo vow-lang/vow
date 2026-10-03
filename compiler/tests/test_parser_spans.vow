@@ -148,7 +148,7 @@ fn check_probe() -> i32 {
     add_case(tags, wants, EXPR_MATCH(), String::from("match a { 0 => { 1 }, _ => 2 }"));
     let mut i: i64 = 0;
     while i < tags.len() as i64 {
-        if !has_expr_text(arena, src, tags[i], wants[i]) { return 10 + i64_to_i32_wrap(i); }
+        if !has_expr_text(arena, src, tags[i as u64], wants[i as u64]) { return 10 + i64_to_i32_wrap(i); }
         i = i + 1;
     }
 
@@ -162,7 +162,7 @@ fn check_probe() -> i32 {
     types.push(String::from("5u64"));
     let mut j: i64 = 0;
     while j < types.len() as i64 {
-        if !has_type_text(arena, src, types[j]) { return 50 + i64_to_i32_wrap(j); }
+        if !has_type_text(arena, src, types[j as u64]) { return 50 + i64_to_i32_wrap(j); }
         j = j + 1;
     }
     0

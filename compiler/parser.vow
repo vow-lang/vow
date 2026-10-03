@@ -25,7 +25,7 @@ fn parser_new(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx, file: String) 
 }
 
 fn peek(p: Parser) -> Token {
-    p.tokens[p.pos]
+    p.tokens[p.pos as u64]
 }
 
 fn peek_tag(p: Parser) -> i64 {
@@ -41,7 +41,7 @@ fn peek_offset(p: Parser, offset: i64) -> Token {
     let idx: i64 = p.pos + offset;
     let n: u64 = p.tokens.len();
     if idx >= 0 && (idx as u64) < n {
-        p.tokens[idx]
+        p.tokens[idx as u64]
     } else if n > 0 {
         p.tokens[n - 1]
     } else {
@@ -110,7 +110,7 @@ fn span_pack(start: i64, len: i64) -> i64 vow {
 
 fn span_end_here(p: Parser) -> i64 {
     if p.pos > 0 {
-        let prev: Token = p.tokens[p.pos - 1];
+        let prev: Token = p.tokens[(p.pos - 1) as u64];
         prev.span_start + prev.span_len
     } else {
         0
