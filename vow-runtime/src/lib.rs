@@ -4,7 +4,7 @@ mod profile;
 mod violation;
 
 use profile::render_profile_report;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char};
 use std::io::Write as _;
@@ -1171,8 +1171,7 @@ static ROOT_ARENA_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static ROOT_ARENA_LOCK: Mutex<()> = Mutex::new(());
 
 unsafe fn ensure_root_arena() {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
+    unsafe { with_root_arena(|_| ()) }
 }
 
 unsafe fn ensure_root_arena_locked() {
@@ -1182,31 +1181,48 @@ unsafe fn ensure_root_arena_locked() {
     }
 }
 
-/// Run `f` against the process-wide root arena with `ROOT_ARENA_LOCK` held
-/// for the whole call, so a root wrapper that allocates several objects takes
-/// the lock once rather than once per allocation.
+thread_local! {
+    static ROOT_LOCK_HELD: Cell<bool> = const { Cell::new(false) };
+}
+
+struct RootLockHeld;
+
+impl RootLockHeld {
+    fn set() -> Self {
+        ROOT_LOCK_HELD.with(|held| held.set(true));
+        RootLockHeld
+    }
+}
+
+impl Drop for RootLockHeld {
+    fn drop(&mut self) {
+        ROOT_LOCK_HELD.with(|held| held.set(false));
+    }
+}
+
+/// Run `f` against the process-wide root arena with `ROOT_ARENA_LOCK` held for
+/// the whole call, so a root wrapper that allocates several objects locks once.
 unsafe fn with_root_arena<R>(f: impl FnOnce(*mut VowArena) -> R) -> R {
     let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    let _held = RootLockHeld::set();
     unsafe { ensure_root_arena_locked() };
     f(&raw mut __vow_root_arena)
 }
 
-/// Grow a map backing buffer in the arena that owns the map (`owner`, recorded
-/// in the map header when it was created) rather than in whichever arena the
-/// compiler routed the call to: a receiver reached through a struct field or a
-/// `Vec` element has no provable region, and growing its buffers in the wrong
-/// arena would leak them into the root arena or outlive the map's owner.
-/// `caller_arena` is the arena the entry point was handed; a root-owned map
-/// reached through a non-root entry point needs the root lock that the root
-/// wrappers (`caller_arena == owner`) already hold.
+/// Grow a map backing buffer in the arena recorded in the map header, not the
+/// arena the entry point was handed: a map reached through a struct field or a
+/// `Vec` element has no provable region. A root-owned map takes the root lock
+/// unless this thread already holds it.
 unsafe fn arena_grow_map_buffer(
     owner: *mut VowArena,
-    caller_arena: *mut VowArena,
     ptr: *mut u8,
     old_size: usize,
     new_size: usize,
 ) -> *mut u8 {
-    if std::ptr::eq(owner, caller_arena) || !std::ptr::eq(owner, &raw mut __vow_root_arena) {
+    if owner.is_null() {
+        null_arena_trap("map growth");
+    }
+    if !std::ptr::eq(owner, &raw mut __vow_root_arena) || ROOT_LOCK_HELD.with(Cell::get) {
         return unsafe { arena_grow_backing(owner, ptr, old_size, new_size, 8) };
     }
     unsafe { with_root_arena(|root| arena_grow_backing(root, ptr, old_size, new_size, 8)) }
@@ -1428,9 +1444,7 @@ pub unsafe extern "C" fn __vow_vec_new_in_arena(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_vec_new(elem_size: usize, align: usize) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_vec_new_in_arena(&raw mut __vow_root_arena, elem_size, align) }
+    unsafe { with_root_arena(|root| __vow_vec_new_in_arena(root, elem_size, align)) }
 }
 
 #[unsafe(no_mangle)]
@@ -1440,9 +1454,7 @@ pub unsafe extern "C" fn __vow_vec_new_val_in_arena(arena: *mut VowArena) -> *mu
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_vec_new_val() -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_vec_new_val_in_arena(&raw mut __vow_root_arena) }
+    unsafe { with_root_arena(|root| __vow_vec_new_val_in_arena(root)) }
 }
 
 #[unsafe(no_mangle)]
@@ -1476,10 +1488,10 @@ pub unsafe extern "C" fn __vow_vec_pin_to_root_val(source: *const u8) -> *mut u8
     }
     sanitize_on_read(source as usize, 0);
     let src = unsafe { &*(source as *const VowVec) };
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
     unsafe {
-        __vow_vec_from_raw_parts_copy_val(&raw mut __vow_root_arena, src.ptr as *const i64, src.len)
+        with_root_arena(|root| {
+            __vow_vec_from_raw_parts_copy_val(root, src.ptr as *const i64, src.len)
+        })
     }
 }
 
@@ -1547,17 +1559,11 @@ pub unsafe extern "C" fn __vow_vec_reserve_in_arena(
 }
 
 unsafe fn __vow_vec_reserve(vec: *mut u8, additional: usize, elem_size: usize, elem_align: usize) {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
     unsafe {
-        vec_reserve_in_arena_no_null_check(
-            &raw mut __vow_root_arena,
-            vec,
-            additional,
-            elem_size,
-            elem_align,
-        )
-    };
+        with_root_arena(|root| {
+            vec_reserve_in_arena_no_null_check(root, vec, additional, elem_size, elem_align)
+        })
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1585,9 +1591,9 @@ pub unsafe extern "C" fn __vow_vec_push(
     elem_size: usize,
     elem_align: usize,
 ) {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_vec_push_in_arena(&raw mut __vow_root_arena, vec, elem, elem_size, elem_align) };
+    unsafe {
+        with_root_arena(|root| __vow_vec_push_in_arena(root, vec, elem, elem_size, elem_align))
+    }
 }
 
 unsafe fn vec_push_no_sanitize_in_arena(
@@ -1637,9 +1643,7 @@ pub unsafe extern "C" fn __vow_vec_push_val_in_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_vec_push_val_in_arena(&raw mut __vow_root_arena, vec, value) };
+    unsafe { with_root_arena(|root| __vow_vec_push_val_in_arena(root, vec, value)) }
 }
 
 #[unsafe(no_mangle)]
@@ -1746,9 +1750,7 @@ pub unsafe extern "C" fn __vow_string_new_in_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_new(ptr: *const c_char, len: usize) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_new_in_arena(&raw mut __vow_root_arena, ptr, len) }
+    unsafe { with_root_arena(|root| __vow_string_new_in_arena(root, ptr, len)) }
 }
 
 #[unsafe(no_mangle)]
@@ -1769,9 +1771,7 @@ pub unsafe extern "C" fn __vow_string_from_cstr_in_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_from_cstr(ptr: *const c_char) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_from_cstr_in_arena(&raw mut __vow_root_arena, ptr) }
+    unsafe { with_root_arena(|root| __vow_string_from_cstr_in_arena(root, ptr)) }
 }
 
 /// Deep-copy `source` (a `VowString` / `Vec<u8>` descriptor) into `arena`,
@@ -1828,9 +1828,7 @@ pub unsafe extern "C" fn __vow_string_clone_into_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_clone(source: *const u8) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_clone_into_arena(&raw mut __vow_root_arena, source) }
+    unsafe { with_root_arena(|root| __vow_string_clone_into_arena(root, source)) }
 }
 
 #[unsafe(no_mangle)]
@@ -1849,9 +1847,7 @@ pub unsafe extern "C" fn __vow_string_clone_in_arena(
 // to root", not just "produce a mutable copy", even though both copy today.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_pin_to_root(source: *const u8) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_clone_into_arena(&raw mut __vow_root_arena, source) }
+    unsafe { with_root_arena(|root| __vow_string_clone_into_arena(root, source)) }
 }
 
 #[unsafe(no_mangle)]
@@ -2038,16 +2034,12 @@ pub unsafe extern "C" fn __vow_string_push_str_in_candidate_arena(
         unsafe { string_push_str_in_arena_no_sanitize(candidate, dest, src) };
         return;
     }
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { string_push_str_in_arena_no_sanitize(&raw mut __vow_root_arena, dest, src) };
+    unsafe { with_root_arena(|root| string_push_str_in_arena_no_sanitize(root, dest, src)) }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_str(dest: *mut u8, src: *const u8) {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_push_str_in_arena(&raw mut __vow_root_arena, dest, src) };
+    unsafe { with_root_arena(|root| __vow_string_push_str_in_arena(root, dest, src)) }
 }
 
 #[unsafe(no_mangle)]
@@ -2061,9 +2053,7 @@ pub unsafe extern "C" fn __vow_string_from_i64_in_arena(arena: *mut VowArena, v:
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_from_i64(v: i64) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_from_i64_in_arena(&raw mut __vow_root_arena, v) }
+    unsafe { with_root_arena(|root| __vow_string_from_i64_in_arena(root, v)) }
 }
 
 #[unsafe(no_mangle)]
@@ -2077,9 +2067,7 @@ pub unsafe extern "C" fn __vow_string_from_u64_in_arena(arena: *mut VowArena, v:
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_from_u64(v: u64) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_from_u64_in_arena(&raw mut __vow_root_arena, v) }
+    unsafe { with_root_arena(|root| __vow_string_from_u64_in_arena(root, v)) }
 }
 
 #[unsafe(no_mangle)]
@@ -2141,16 +2129,12 @@ pub unsafe extern "C" fn __vow_string_push_byte_in_candidate_arena(
         unsafe { string_push_byte_in_arena_no_sanitize(candidate, s, byte as u8) };
         return;
     }
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { string_push_byte_in_arena_no_sanitize(&raw mut __vow_root_arena, s, byte as u8) };
+    unsafe { with_root_arena(|root| string_push_byte_in_arena_no_sanitize(root, s, byte)) }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_byte(s: *mut u8, byte: u64) {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_push_byte_in_arena(&raw mut __vow_root_arena, s, byte) };
+    unsafe { with_root_arena(|root| __vow_string_push_byte_in_arena(root, s, byte)) }
 }
 
 // ---------------------------------------------------------------------------
@@ -2188,9 +2172,7 @@ pub unsafe extern "C" fn __vow_string_substr_in_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_substr(s: *const u8, start: u64, len: u64) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_substr_in_arena(&raw mut __vow_root_arena, s, start, len) }
+    unsafe { with_root_arena(|root| __vow_string_substr_in_arena(root, s, start, len)) }
 }
 
 #[unsafe(no_mangle)]
@@ -2220,9 +2202,7 @@ pub unsafe extern "C" fn __vow_string_substring_in_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_substring(s: *const u8, start: u64, end: u64) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_substring_in_arena(&raw mut __vow_root_arena, s, start, end) }
+    unsafe { with_root_arena(|root| __vow_string_substring_in_arena(root, s, start, end)) }
 }
 
 #[unsafe(no_mangle)]
@@ -2278,9 +2258,7 @@ pub unsafe extern "C" fn __vow_string_split_in_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_split(haystack: *const u8, separator: *const u8) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_split_in_arena(&raw mut __vow_root_arena, haystack, separator) }
+    unsafe { with_root_arena(|root| __vow_string_split_in_arena(root, haystack, separator)) }
 }
 
 #[unsafe(no_mangle)]
@@ -2331,9 +2309,7 @@ pub unsafe extern "C" fn __vow_string_trim_in_arena(arena: *mut VowArena, s: *co
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_trim(s: *const u8) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_trim_in_arena(&raw mut __vow_root_arena, s) }
+    unsafe { with_root_arena(|root| __vow_string_trim_in_arena(root, s)) }
 }
 
 #[unsafe(no_mangle)]
@@ -2359,9 +2335,7 @@ pub unsafe extern "C" fn __vow_string_to_upper_in_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_to_upper(s: *const u8) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_to_upper_in_arena(&raw mut __vow_root_arena, s) }
+    unsafe { with_root_arena(|root| __vow_string_to_upper_in_arena(root, s)) }
 }
 
 #[unsafe(no_mangle)]
@@ -2387,9 +2361,7 @@ pub unsafe extern "C" fn __vow_string_to_lower_in_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_to_lower(s: *const u8) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_to_lower_in_arena(&raw mut __vow_root_arena, s) }
+    unsafe { with_root_arena(|root| __vow_string_to_lower_in_arena(root, s)) }
 }
 
 #[unsafe(no_mangle)]
@@ -2432,9 +2404,7 @@ pub unsafe extern "C" fn __vow_string_replace(
     from: *const u8,
     to: *const u8,
 ) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_replace_in_arena(&raw mut __vow_root_arena, s, from, to) }
+    unsafe { with_root_arena(|root| __vow_string_replace_in_arena(root, s, from, to)) }
 }
 
 #[unsafe(no_mangle)]
@@ -2466,16 +2436,11 @@ pub unsafe extern "C" fn __vow_string_join_in_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_join(vec_ptr: *const u8, sep: *const u8) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_string_join_in_arena(&raw mut __vow_root_arena, vec_ptr, sep) }
+    unsafe { with_root_arena(|root| __vow_string_join_in_arena(root, vec_ptr, sep)) }
 }
 
-/// A fresh `Option<N>` cell owned by `arena`: two `i64` words `[tag, payload]`,
-/// tag 1 with the payload for `Some`, tag 0 with a zero payload for `None`.
-/// This is the bare 16-byte shape the compilers allocate for a source-level
-/// `Option`, not a `VowVec` descriptor: it carries no owner prefix and no
-/// sanitize shadow entry, and it is released only with `arena`.
+/// A fresh `Option<N>` cell owned by `arena`: the bare 16-byte `[tag, payload]`
+/// shape the compilers use for a source-level `Option`, not a `VowVec` descriptor.
 unsafe fn alloc_option_in_arena(
     arena: *mut VowArena,
     operation: &'static str,
@@ -3022,24 +2987,34 @@ pub extern "C" fn __vow_u128_mul_overflow(a: u128, b: u128) -> i8 {
 // model if this algorithm changes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_sort_in_arena(arena: *mut VowArena, vec: *const u8) -> *mut u8 {
-    let result = unsafe { __vow_vec_new_val_in_arena(arena) };
+    let sorted = unsafe { sorted_values(vec) };
+    unsafe { alloc_vec_of_values(arena, &sorted) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_sort(vec: *const u8) -> *mut u8 {
+    let sorted = unsafe { sorted_values(vec) };
+    unsafe { with_root_arena(|arena| alloc_vec_of_values(arena, &sorted)) }
+}
+
+unsafe fn sorted_values(vec: *const u8) -> Vec<i64> {
     if vec.is_null() {
-        return result;
+        return Vec::new();
     }
     sanitize_on_read(vec as usize, 0);
     let v = unsafe { &*(vec as *const VowVec) };
     let src = unsafe { std::slice::from_raw_parts(v.ptr as *const i64, v.len) };
     let mut sorted: Vec<i64> = src.to_vec();
     sorted.sort_unstable();
-    for &val in &sorted {
+    sorted
+}
+
+unsafe fn alloc_vec_of_values(arena: *mut VowArena, values: &[i64]) -> *mut u8 {
+    let result = unsafe { __vow_vec_new_val_in_arena(arena) };
+    for &val in values {
         unsafe { __vow_vec_push_val_in_arena(arena, result, val) };
     }
     result
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_vec_sort(vec: *const u8) -> *mut u8 {
-    unsafe { with_root_arena(|arena| __vow_vec_sort_in_arena(arena, vec)) }
 }
 
 #[unsafe(no_mangle)]
@@ -3314,54 +3289,79 @@ pub unsafe extern "C" fn __vow_hex_encode_in_arena(
     arena: *mut VowArena,
     vec: *const u8,
 ) -> *mut u8 {
-    if vec.is_null() {
-        return unsafe { __vow_vec_new_in_arena(arena, 1, 1) };
-    }
-    sanitize_on_read(vec as usize, 0);
-    let v = unsafe { &*(vec as *const VowVec) };
-    let vals = unsafe { std::slice::from_raw_parts(v.ptr as *const i64, v.len) };
-    let mut hex = String::new();
-    for &val in vals {
-        hex.push_str(&format!("{:02x}", (val & 0xff) as u8));
-    }
-    unsafe { __vow_string_new_in_arena(arena, hex.as_ptr() as *const c_char, hex.len()) }
+    let hex = unsafe { hex_text(vec) };
+    unsafe { alloc_hex_result(arena, hex.as_deref()) }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_hex_encode(vec: *const u8) -> *mut u8 {
-    unsafe { with_root_arena(|arena| __vow_hex_encode_in_arena(arena, vec)) }
+    let hex = unsafe { hex_text(vec) };
+    unsafe { with_root_arena(|arena| alloc_hex_result(arena, hex.as_deref())) }
+}
+
+unsafe fn hex_text(vec: *const u8) -> Option<String> {
+    if vec.is_null() {
+        return None;
+    }
+    sanitize_on_read(vec as usize, 0);
+    let v = unsafe { &*(vec as *const VowVec) };
+    let vals = unsafe { std::slice::from_raw_parts(v.ptr as *const i64, v.len) };
+    let mut hex = String::with_capacity(vals.len() * 2);
+    for &val in vals {
+        hex.push_str(&format!("{:02x}", (val & 0xff) as u8));
+    }
+    Some(hex)
+}
+
+unsafe fn alloc_hex_result(arena: *mut VowArena, hex: Option<&str>) -> *mut u8 {
+    match hex {
+        None => unsafe { __vow_vec_new_in_arena(arena, 1, 1) },
+        Some(hex) => unsafe {
+            __vow_string_new_in_arena(arena, hex.as_ptr() as *const c_char, hex.len())
+        },
+    }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_hex_decode_in_arena(arena: *mut VowArena, s: *const u8) -> *mut u8 {
-    let result = unsafe { __vow_vec_new_val_in_arena(arena) };
-    if s.is_null() {
-        return result;
-    }
-    sanitize_on_read(s as usize, 0);
-    let v = unsafe { &*(s as *const VowVec) };
-    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
-    let hex_str = match std::str::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(_) => return result,
-    };
-    if hex_str.len() % 2 != 0 {
-        return result;
-    }
-    let mut i = 0;
-    while i < hex_str.len() {
-        match u8::from_str_radix(&hex_str[i..i + 2], 16) {
-            Ok(byte) => unsafe { __vow_vec_push_val_in_arena(arena, result, byte as i64) },
-            Err(_) => return unsafe { __vow_vec_new_val_in_arena(arena) },
-        }
-        i += 2;
-    }
-    result
+    let decoded = unsafe { decoded_hex(s) };
+    unsafe { alloc_vec_of_values(arena, &decoded) }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_hex_decode(s: *const u8) -> *mut u8 {
-    unsafe { with_root_arena(|arena| __vow_hex_decode_in_arena(arena, s)) }
+    let decoded = unsafe { decoded_hex(s) };
+    unsafe { with_root_arena(|arena| alloc_vec_of_values(arena, &decoded)) }
+}
+
+/// The decoded bytes, or an empty list when `s` is null, not UTF-8, of odd
+/// length or not entirely hexadecimal.
+unsafe fn decoded_hex(s: *const u8) -> Vec<i64> {
+    if s.is_null() {
+        return Vec::new();
+    }
+    sanitize_on_read(s as usize, 0);
+    let v = unsafe { &*(s as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let Ok(hex_str) = std::str::from_utf8(bytes) else {
+        return Vec::new();
+    };
+    if hex_str.len() % 2 != 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(hex_str.len() / 2);
+    let mut i = 0;
+    while i < hex_str.len() {
+        match hex_str
+            .get(i..i + 2)
+            .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+        {
+            Some(byte) => out.push(byte as i64),
+            None => return Vec::new(),
+        }
+        i += 2;
+    }
+    out
 }
 
 #[unsafe(no_mangle)]
@@ -3390,16 +3390,19 @@ pub unsafe extern "C" fn __vow_format_f64_bits_in_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_format_f64_bits(bits: u64) -> *mut u8 {
-    unsafe { with_root_arena(|arena| __vow_format_f64_bits_in_arena(arena, bits)) }
+    let text = f64::from_bits(bits).to_string();
+    unsafe {
+        with_root_arena(|arena| {
+            __vow_string_new_in_arena(arena, text.as_ptr() as *const c_char, text.len())
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
 // File I/O runtime
 // ---------------------------------------------------------------------------
 
-/// File contents for `fs_read`, or `None` on any error. Runs without any arena
-/// lock: a root wrapper must not hold the process-wide root-arena lock across
-/// blocking I/O.
+/// File contents for `fs_read`, or `None` on any error; takes no arena lock.
 unsafe fn fs_read_bytes(path_ptr: *const u8) -> Option<Vec<u8>> {
     if path_ptr.is_null() {
         return None;
@@ -3464,18 +3467,17 @@ pub unsafe extern "C" fn __vow_fs_open(path_ptr: *const u8) -> i64 {
     handle
 }
 
-/// The next line for `fs_read_line` (empty at EOF, for an invalid handle or
-/// after a read error). The handle-table lock is held only while reading and
-/// copying the line out, never while an arena is allocated into.
-fn fs_read_line_bytes(handle: i64) -> Vec<u8> {
+/// Reads the next line of `handle` and passes it to `f` while the handle table
+/// is locked (empty at EOF, for an invalid handle or after a read error).
+fn with_file_line<R>(handle: i64, f: impl FnOnce(&[u8]) -> R) -> R {
     use std::io::BufRead;
 
     let mut map_guard = FILE_READ_MAP.lock().unwrap();
     let Some(map) = map_guard.as_mut() else {
-        return Vec::new();
+        return f(&[]);
     };
     let Some(state) = map.get_mut(&handle) else {
-        return Vec::new();
+        return f(&[]);
     };
     state.line_buf.clear();
     // The process-global handle table lock is intentionally held while reading;
@@ -3483,15 +3485,15 @@ fn fs_read_line_bytes(handle: i64) -> Vec<u8> {
     match state.reader.read_until(b'\n', &mut state.line_buf) {
         Ok(0) => {
             state.status = 1;
-            Vec::new()
+            f(&[])
         }
         Ok(_) => {
             state.status = 0;
-            state.line_buf.clone()
+            f(&state.line_buf)
         }
         Err(_) => {
             state.status = -1;
-            Vec::new()
+            f(&[])
         }
     }
 }
@@ -3502,13 +3504,14 @@ unsafe fn alloc_bytes_string(arena: *mut VowArena, bytes: &[u8]) -> *mut u8 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_fs_read_line_in_arena(arena: *mut VowArena, handle: i64) -> *mut u8 {
-    unsafe { alloc_bytes_string(arena, &fs_read_line_bytes(handle)) }
+    with_file_line(handle, |line| unsafe { alloc_bytes_string(arena, line) })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_fs_read_line(handle: i64) -> *mut u8 {
-    let line = fs_read_line_bytes(handle);
-    unsafe { with_root_arena(|arena| alloc_bytes_string(arena, &line)) }
+    with_file_line(handle, |line| unsafe {
+        with_root_arena(|arena| alloc_bytes_string(arena, line))
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -3756,7 +3759,7 @@ pub unsafe extern "C" fn __vow_eprintln_str(s: *const u8) {
     }
 }
 
-/// All of stdin. Blocks until EOF, so it runs before any arena lock is taken.
+/// All of stdin; blocks until EOF, so callers read it before locking an arena.
 fn read_all_stdin() -> Vec<u8> {
     use std::io::Read;
     let mut buf = Vec::new();
@@ -3855,26 +3858,24 @@ pub unsafe extern "C" fn __vow_process_run(cmd_ptr: i64, args_ptr: i64) -> i64 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_process_get_stdout_in_arena(arena: *mut VowArena) -> *mut u8 {
-    let bytes = LAST_STDOUT.with(|cell| cell.borrow().clone());
-    unsafe { alloc_bytes_string(arena, &bytes) }
+    LAST_STDOUT.with(|cell| unsafe { alloc_bytes_string(arena, &cell.borrow()) })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_process_get_stdout() -> *mut u8 {
-    let bytes = LAST_STDOUT.with(|cell| cell.borrow().clone());
-    unsafe { with_root_arena(|arena| alloc_bytes_string(arena, &bytes)) }
+    LAST_STDOUT
+        .with(|cell| unsafe { with_root_arena(|arena| alloc_bytes_string(arena, &cell.borrow())) })
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_process_get_stderr_in_arena(arena: *mut VowArena) -> *mut u8 {
-    let bytes = LAST_STDERR.with(|cell| cell.borrow().clone());
-    unsafe { alloc_bytes_string(arena, &bytes) }
+    LAST_STDERR.with(|cell| unsafe { alloc_bytes_string(arena, &cell.borrow()) })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_process_get_stderr() -> *mut u8 {
-    let bytes = LAST_STDERR.with(|cell| cell.borrow().clone());
-    unsafe { with_root_arena(|arena| alloc_bytes_string(arena, &bytes)) }
+    LAST_STDERR
+        .with(|cell| unsafe { with_root_arena(|arena| alloc_bytes_string(arena, &cell.borrow())) })
 }
 
 // ---------------------------------------------------------------------------
@@ -3952,13 +3953,16 @@ pub extern "C" fn __vow_process_wait(handle: i64) -> i64 {
     }
 }
 
-/// Captured stdout of a finished process; empty if the handle is unknown or the
-/// process has not completed.
-fn process_stdout_bytes(handle: i64) -> Vec<u8> {
+/// Passes the captured stdout (or stderr) of a finished process to `f` while
+/// the process table is locked; empty if the handle is unknown or unfinished.
+fn with_process_stream<R>(handle: i64, stderr: bool, f: impl FnOnce(&[u8]) -> R) -> R {
     let guard = PROCESS_MAP.lock().unwrap();
     match guard.as_ref().and_then(|m| m.get(&handle)) {
-        Some(ProcessState::Completed { stdout, .. }) => stdout.clone(),
-        _ => Vec::new(),
+        Some(ProcessState::Completed {
+            stdout,
+            stderr: captured_stderr,
+        }) => f(if stderr { captured_stderr } else { stdout }),
+        _ => f(&[]),
     }
 }
 
@@ -3967,23 +3971,16 @@ pub unsafe extern "C" fn __vow_process_stdout_for_in_arena(
     arena: *mut VowArena,
     handle: i64,
 ) -> *mut u8 {
-    unsafe { alloc_bytes_string(arena, &process_stdout_bytes(handle)) }
+    with_process_stream(handle, false, |bytes| unsafe {
+        alloc_bytes_string(arena, bytes)
+    })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_process_stdout_for(handle: i64) -> *mut u8 {
-    let bytes = process_stdout_bytes(handle);
-    unsafe { with_root_arena(|arena| alloc_bytes_string(arena, &bytes)) }
-}
-
-/// Captured stderr of a finished process; empty if the handle is unknown or the
-/// process has not completed.
-fn process_stderr_bytes(handle: i64) -> Vec<u8> {
-    let guard = PROCESS_MAP.lock().unwrap();
-    match guard.as_ref().and_then(|m| m.get(&handle)) {
-        Some(ProcessState::Completed { stderr, .. }) => stderr.clone(),
-        _ => Vec::new(),
-    }
+    with_process_stream(handle, false, |bytes| unsafe {
+        with_root_arena(|arena| alloc_bytes_string(arena, bytes))
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -3991,13 +3988,16 @@ pub unsafe extern "C" fn __vow_process_stderr_for_in_arena(
     arena: *mut VowArena,
     handle: i64,
 ) -> *mut u8 {
-    unsafe { alloc_bytes_string(arena, &process_stderr_bytes(handle)) }
+    with_process_stream(handle, true, |bytes| unsafe {
+        alloc_bytes_string(arena, bytes)
+    })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_process_stderr_for(handle: i64) -> *mut u8 {
-    let bytes = process_stderr_bytes(handle);
-    unsafe { with_root_arena(|arena| alloc_bytes_string(arena, &bytes)) }
+    with_process_stream(handle, true, |bytes| unsafe {
+        with_root_arena(|arena| alloc_bytes_string(arena, bytes))
+    })
 }
 
 /// Wait for a process with a timeout in milliseconds.
@@ -4249,9 +4249,7 @@ pub unsafe extern "C" fn __vow_map_new_in_arena(arena: *mut VowArena) -> *mut u8
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_map_new() -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_map_new_in_arena(&raw mut __vow_root_arena) }
+    unsafe { with_root_arena(|root| __vow_map_new_in_arena(root)) }
 }
 
 #[unsafe(no_mangle)]
@@ -4279,7 +4277,7 @@ pub unsafe extern "C" fn __vow_map_insert_in_arena(
         let old_size = m.cap * MAP_ENTRY_BYTES;
         let new_cap = m.cap * 2;
         let new_size = new_cap * MAP_ENTRY_BYTES;
-        let new_ptr = unsafe { arena_grow_map_buffer(m.owner, arena, m.ptr, old_size, new_size) };
+        let new_ptr = unsafe { arena_grow_map_buffer(m.owner, m.ptr, old_size, new_size) };
         m.ptr = new_ptr;
         m.cap = new_cap;
     }
@@ -4291,9 +4289,7 @@ pub unsafe extern "C" fn __vow_map_insert_in_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_map_insert(map: *mut u8, key: i64, val: i64) {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_map_insert_in_arena(&raw mut __vow_root_arena, map, key, val) };
+    unsafe { with_root_arena(|root| __vow_map_insert_in_arena(root, map, key, val)) }
 }
 
 /// `HashMap::get`: a fresh `Option<V>` allocated in `arena` (tag 1 and the
@@ -4446,10 +4442,7 @@ fn btreemap_search(keys: &[i64], key: i64) -> Result<usize, usize> {
 }
 
 /// `BTreeMap::insert`: returns a fresh `Option<V>` in `arena` holding the
-/// replaced value (tag 0 when the key was new). Growth of the map's buffers is
-/// not routed by the caller: it always happens in the arena recorded in the map
-/// header, so the returned `Option` can live in the call's own region without
-/// tying every replaced-value cell to the map's lifetime.
+/// replaced value (tag 0 when the key was new); buffers grow in the map's owner.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_btreemap_insert_in_arena(
     arena: *mut VowArena,
@@ -4473,12 +4466,10 @@ pub unsafe extern "C" fn __vow_btreemap_insert_in_arena(
                 let old_size = m.keys_cap * BTREEMAP_ENTRY_BYTES;
                 let new_cap = m.keys_cap * 2;
                 let new_size = new_cap * BTREEMAP_ENTRY_BYTES;
-                m.keys_ptr = unsafe {
-                    arena_grow_map_buffer(m.owner, arena, m.keys_ptr, old_size, new_size)
-                };
-                m.vals_ptr = unsafe {
-                    arena_grow_map_buffer(m.owner, arena, m.vals_ptr, old_size, new_size)
-                };
+                m.keys_ptr =
+                    unsafe { arena_grow_map_buffer(m.owner, m.keys_ptr, old_size, new_size) };
+                m.vals_ptr =
+                    unsafe { arena_grow_map_buffer(m.owner, m.vals_ptr, old_size, new_size) };
                 m.keys_cap = new_cap;
                 m.vals_cap = new_cap;
             }
@@ -5428,10 +5419,8 @@ mod tests {
         unsafe { __vow_arena_close(&mut a) };
     }
 
-    /// Sanitize state is process-global and `SHADOW_TABLE` entries are never
-    /// removed, so a parallel test's freed descriptor can leave a stale entry at
-    /// an address a later allocation reuses. The check therefore runs in its own
-    /// worker process (see `spawn_trap_worker`) and reports through the exit code.
+    /// Runs in a worker process: `SHADOW_TABLE` is process-global and never
+    /// shrinks, so parallel tests would leave stale entries at reused addresses.
     #[test]
     fn option_cells_leave_no_sanitize_shadow_entry() {
         let (out, stderr) = spawn_trap_worker("option_cells_shadow_untracked");
@@ -5804,6 +5793,101 @@ mod tests {
         unsafe { __vow_arena_close(&mut other) };
         assert_eq!(unsafe { __vow_btreemap_len(bt) }, n as usize + 1);
         unsafe { __vow_arena_close(&mut owner) };
+    }
+
+    fn root_arena_ptr() -> *mut VowArena {
+        &raw mut __vow_root_arena
+    }
+
+    #[test]
+    fn with_root_arena_marks_the_lock_as_held_only_inside_the_closure() {
+        assert!(!ROOT_LOCK_HELD.with(Cell::get));
+        let map = __vow_map_new();
+        unsafe {
+            with_root_arena(|root| {
+                assert!(ROOT_LOCK_HELD.with(Cell::get));
+                for i in 0..(MAP_INITIAL_CAP as i64 * 4) {
+                    __vow_map_insert_in_arena(root, map, i, i);
+                }
+            })
+        };
+        assert!(!ROOT_LOCK_HELD.with(Cell::get));
+        let header = unsafe { &*(map as *const VowMap) };
+        assert_eq!(header.len, MAP_INITIAL_CAP * 4);
+    }
+
+    #[test]
+    fn root_owned_map_growth_from_the_root_arena_entry_point_takes_the_root_lock() {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+
+        let map = __vow_map_new() as usize;
+        let root = root_arena_ptr() as usize;
+        let n = MAP_INITIAL_CAP as i64 * 4;
+        let done = Arc::new(AtomicBool::new(false));
+        let guard = ROOT_ARENA_LOCK.lock().unwrap();
+        let worker = {
+            let done = Arc::clone(&done);
+            std::thread::spawn(move || {
+                for i in 0..n {
+                    unsafe {
+                        __vow_map_insert_in_arena(root as *mut VowArena, map as *mut u8, i, i)
+                    };
+                }
+                done.store(true, Ordering::SeqCst);
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            !done.load(Ordering::SeqCst),
+            "growth of a root-owned map must wait for the root-arena lock"
+        );
+        drop(guard);
+        worker.join().unwrap();
+        assert!(done.load(Ordering::SeqCst));
+        for i in 0..n {
+            assert_eq!(
+                option_pair(unsafe { __vow_map_get(map as *const u8, i) }),
+                (1, i)
+            );
+        }
+    }
+
+    #[test]
+    fn concurrent_growth_of_root_owned_maps_through_the_arena_entry_point() {
+        let root = root_arena_ptr() as usize;
+        let n = 2000i64;
+        let workers: Vec<_> = (0..8i64)
+            .map(|t| {
+                std::thread::spawn(move || {
+                    let map = __vow_map_new() as usize;
+                    let bt = __vow_btreemap_new() as usize;
+                    for i in 0..n {
+                        let root = root as *mut VowArena;
+                        unsafe { __vow_map_insert_in_arena(root, map as *mut u8, i, i + t) };
+                        unsafe { __vow_btreemap_insert(bt as *mut u8, i, i + t) };
+                        if i % 64 == 0 {
+                            let s = format!("worker-{t}-{i}");
+                            unsafe { __vow_string_new(s.as_ptr() as *const c_char, s.len()) };
+                        }
+                    }
+                    (t, map, bt)
+                })
+            })
+            .collect();
+        for worker in workers {
+            let (t, map, bt) = worker.join().unwrap();
+            for i in 0..n {
+                assert_eq!(
+                    option_pair(unsafe { __vow_map_get(map as *const u8, i) }),
+                    (1, i + t)
+                );
+                assert_eq!(
+                    option_pair(unsafe { __vow_btreemap_get(bt as *const u8, i) }),
+                    (1, i + t)
+                );
+            }
+        }
     }
 
     #[test]
@@ -7211,6 +7295,25 @@ mod tests {
             eprintln!("rodata_trap_worker: null arena map new did NOT trap");
             std::process::exit(42);
         }
+        if op == "HashMap::grow_null_owner" || op == "BTreeMap::grow_null_owner" {
+            let mut a = empty_arena_header();
+            unsafe { __vow_arena_open(&mut a) };
+            if op == "HashMap::grow_null_owner" {
+                let m = unsafe { __vow_map_new_in_arena(&mut a) };
+                unsafe { (*(m as *mut VowMap)).owner = std::ptr::null_mut() };
+                for i in 0..=MAP_INITIAL_CAP as i64 {
+                    unsafe { __vow_map_insert_in_arena(&mut a, m, i, i) };
+                }
+            } else {
+                let m = unsafe { __vow_btreemap_new_in_arena(&mut a) };
+                unsafe { (*(m as *mut VowBTreeMap)).owner = std::ptr::null_mut() };
+                for i in 0..=BTREEMAP_INITIAL_CAP as i64 {
+                    unsafe { __vow_btreemap_insert_in_arena(&mut a, m, i, i) };
+                }
+            }
+            eprintln!("rodata_trap_worker: null owner map growth did NOT trap");
+            std::process::exit(42);
+        }
         if op == "option_cells_shadow_untracked" {
             __vow_sanitize_init();
             let mut a = empty_arena_header();
@@ -7618,6 +7721,12 @@ mod tests {
         for (op, expected) in cases {
             assert_runtime_invariant_null_arena(op, expected);
         }
+    }
+
+    #[test]
+    fn map_growth_traps_on_a_null_owner_arena() {
+        assert_runtime_invariant("HashMap::grow_null_owner", "map growth", "null arena");
+        assert_runtime_invariant("BTreeMap::grow_null_owner", "map growth", "null arena");
     }
 
     #[test]
