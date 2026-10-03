@@ -1,0 +1,76 @@
+module TestLowerShiftCount
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+
+// Twin of u32_shift_count_keeps_left_operand_type_at_every_width in
+// vow-ir/src/lower/mod.rs: a concrete left operand keeps its own type when the
+// count is u32, including the i64 case lower.vow retypes to the count's type
+// for an unsuffixed literal.
+
+fn lower_shift_source(type_name: String, op: String) -> IrModule {
+    let source: String = String::from("module ShiftCountLowering\nfn shift(x: ");
+    source.push_str(type_name);
+    source.push_str(String::from(", s: u32) -> "));
+    source.push_str(type_name);
+    source.push_str(String::from(" { x "));
+    source.push_str(op);
+    source.push_str(String::from(" s }"));
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, diag_ctx_new(), String::from("shift_count_lowering.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    item_files.push(String::from("shift_count_lowering.vow"));
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), item_files
+    )
+}
+
+fn shift_inst_type(m: IrModule, opcode: i64, want_ty: i64) -> i64 {
+    if m.functions.len() != 1 { return 1; }
+    let function: IrFunction = m.functions[0];
+    let mut block_index: u64 = 0;
+    while block_index < function.blocks.len() {
+        let block: IrBlock = function.blocks[block_index];
+        let mut inst_index: u64 = 0;
+        while inst_index < block.insts.len() {
+            let inst: IrInst = block.insts[inst_index];
+            if inst.op == opcode {
+                if inst.dk != IDATA_INTEGER() { return 2; }
+                if inst.dv != want_ty { return 3; }
+                if inst.ty != want_ty { return 4; }
+                return 0;
+            }
+            inst_index = inst_index + 1;
+        }
+        block_index = block_index + 1;
+    }
+    5
+}
+
+fn check_type_keeps_own_width(type_name: String, base: i64) -> i64 {
+    let want_ty: i64 = ity_for_scalar_type_name(type_name);
+    let shl_result: i64 = shift_inst_type(lower_shift_source(type_name, String::from("<<")), IOP_SHL(), want_ty);
+    if shl_result != 0 { return base + shl_result; }
+    let shr_result: i64 = shift_inst_type(lower_shift_source(type_name, String::from(">>")), IOP_SHR(), want_ty);
+    if shr_result != 0 { return base + 10 + shr_result; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_type_keeps_own_width(String::from("i8"), 100);
+    if r == 0 { r = check_type_keeps_own_width(String::from("u16"), 130); }
+    if r == 0 { r = check_type_keeps_own_width(String::from("i32"), 160); }
+    if r == 0 { r = check_type_keeps_own_width(String::from("i64"), 190); }
+    if r == 0 { r = check_type_keeps_own_width(String::from("u64"), 220); }
+    if r == 0 { r = check_type_keeps_own_width(String::from("i128"), 250); }
+    if r == 0 { r = check_type_keeps_own_width(String::from("u128"), 280); }
+    i64_to_i32_wrap(r)
+}
