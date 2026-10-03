@@ -213,7 +213,7 @@ fn u128_limbs_to_text(lo: u64, hi: u64) -> String {
     let mut j: u64 = n;
     while j > 0u64 {
         j = j - 1u64;
-        out.push_byte(rev_digits[j]);
+        out.push_byte(i64_to_u8_wrap(rev_digits[j]));
     }
     out
 }
