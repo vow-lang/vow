@@ -2,7 +2,8 @@
 // Each function below verifies; scripts/full_test.sh additionally asserts which
 // of them carry a `ModelCapacityAssumed` note (a parameter collection is modelled
 // only up to the verifier's model capacity) and which do not (scalars, and a
-// constant in-range length that restricts nothing), identically in both compilers.
+// constant in-range length that restricts nothing), identically in both compilers
+// and on both the `verify` and `build` paths (hence the trivial `main`).
 module ModelCapacityBoundNote
 
 fn first_byte(v: Vec<u8>) -> u64 vow {
@@ -44,4 +45,8 @@ fn constant_in_range(p: i64) -> u64 vow {
 } {
     let v: Vec<u8> = Vec::from_raw_parts_copy(p, 3 as u64);
     v.len()
+}
+
+fn main() -> i32 {
+    0
 }

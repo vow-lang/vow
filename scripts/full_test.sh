@@ -1152,25 +1152,51 @@ for g in d.get('diagnostics', []):
 " "$1" "$2" 2>/dev/null || echo "ERR"
 }
 
-for compiler in rust self; do
-    if [ "$compiler" = rust ]; then
-        j=$($RUST verify --no-cache tests/verify/model_capacity_bound_note.vow 2>/dev/null) || true
-    else
-        j=$(run_self verify --no-cache tests/verify/model_capacity_bound_note.vow 2>/dev/null) || true
-    fi
-    errors=()
-    [ "$(arith_status "$j")" = "Verified" ] || errors+=("fixture should verify, got $(arith_status "$j")")
-    [ "$(bound_note "$j" first_byte)" = "Vec<T>: 128" ] || errors+=("first_byte note: '$(bound_note "$j" first_byte)'")
-    [ "$(bound_note "$j" string_len)" = "String: 256" ] || errors+=("string_len note: '$(bound_note "$j" string_len)'")
-    [ "$(bound_note "$j" map_size)" = "HashMap<K, V>: 64" ] || errors+=("map_size note: '$(bound_note "$j" map_size)'")
-    [ "$(bound_note "$j" vec_and_string)" = "Vec<T>: 128, String: 256" ] || errors+=("vec_and_string note: '$(bound_note "$j" vec_and_string)'")
-    [ -z "$(bound_note "$j" scalar_only)" ] || errors+=("scalar_only must not carry a capacity note")
-    [ -z "$(bound_note "$j" constant_in_range)" ] || errors+=("constant_in_range restricts nothing and must not carry a capacity note")
+# Every ModelCapacityAssumed message, in output order, one per line.
+bound_notes_in_order() {
+    python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+for g in d.get('diagnostics', []):
+    if g.get('error_code') == 'ModelCapacityAssumed':
+        print(g['message'])
+" "$1" 2>/dev/null || echo "ERR"
+}
 
-    if [ ${#errors[@]} -eq 0 ]; then
-        pass "model_capacity_bound_note/$compiler"
+# The notes are asserted on both pipelines: `verify` (frontend + verification
+# only) and `build` (the default user path, which verifies and then compiles the
+# fixture's trivial `main`). Both compilers must agree on the full ordered list.
+fixture="tests/verify/model_capacity_bound_note.vow"
+for cmd in verify build; do
+    notes_by_compiler=()
+    for compiler in rust self; do
+        extra=()
+        [ "$cmd" = build ] && extra=(-o "$TMPDIR/model_capacity_bound_note_${compiler}")
+        if [ "$compiler" = rust ]; then
+            j=$($RUST "$cmd" --no-cache "$fixture" ${extra[@]+"${extra[@]}"} 2>/dev/null) || true
+        else
+            j=$(run_self "$cmd" --no-cache "$fixture" ${extra[@]+"${extra[@]}"} 2>/dev/null) || true
+        fi
+        errors=()
+        [ "$(arith_status "$j")" = "Verified" ] || errors+=("fixture should verify, got $(arith_status "$j")")
+        [ "$(bound_note "$j" first_byte)" = "Vec<T>: 128" ] || errors+=("first_byte note: '$(bound_note "$j" first_byte)'")
+        [ "$(bound_note "$j" string_len)" = "String: 256" ] || errors+=("string_len note: '$(bound_note "$j" string_len)'")
+        [ "$(bound_note "$j" map_size)" = "HashMap<K, V>: 64" ] || errors+=("map_size note: '$(bound_note "$j" map_size)'")
+        [ "$(bound_note "$j" vec_and_string)" = "Vec<T>: 128, String: 256" ] || errors+=("vec_and_string note: '$(bound_note "$j" vec_and_string)'")
+        [ -z "$(bound_note "$j" scalar_only)" ] || errors+=("scalar_only must not carry a capacity note")
+        [ -z "$(bound_note "$j" constant_in_range)" ] || errors+=("constant_in_range restricts nothing and must not carry a capacity note")
+        notes_by_compiler+=("$(bound_notes_in_order "$j")")
+
+        if [ ${#errors[@]} -eq 0 ]; then
+            pass "model_capacity_bound_note/$cmd/$compiler"
+        else
+            fail "model_capacity_bound_note/$cmd/$compiler" "$(IFS='; '; echo "${errors[*]}")"
+        fi
+    done
+    if [ "${notes_by_compiler[0]}" = "${notes_by_compiler[1]}" ] && [ -n "${notes_by_compiler[0]}" ]; then
+        pass "model_capacity_bound_note/$cmd/parity"
     else
-        fail "model_capacity_bound_note/$compiler" "$(IFS='; '; echo "${errors[*]}")"
+        fail "model_capacity_bound_note/$cmd/parity" "rust and self-hosted $cmd notes differ"
     fi
 done
 echo ""
