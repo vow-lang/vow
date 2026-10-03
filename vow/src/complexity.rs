@@ -2312,4 +2312,106 @@ mod tests {
         assert_eq!(totals.fan_out_max, 0);
         assert_eq!(totals.hk_max, 0);
     }
+
+    fn verif_of(source: &str) -> Verif {
+        let (module, diags) = vow_syntax::parser::parse_module(source, "t.vow");
+        assert!(diags.is_empty(), "unexpected parse diagnostics: {diags:?}");
+        let f = module
+            .items
+            .iter()
+            .find_map(|i| match i {
+                vow_syntax::ast::Item::Fn(f) if f.name == "subject" => Some(f),
+                _ => None,
+            })
+            .expect("fn subject");
+        analyze_verif(f, 7)
+    }
+
+    #[test]
+    fn analyze_verif_reports_no_loops_for_straight_line_code() {
+        let v = verif_of("module T\nfn subject(a: i64) -> i64 { if a > 0 { a } else { 0 - a } }\n");
+        assert_eq!(v.loops_total, 0);
+        assert_eq!(v.loops_without_invariant, 0);
+        assert_eq!(v.max_loop_nesting, 0);
+        assert_eq!(v.contract_predicate_cost, 7);
+    }
+
+    #[test]
+    fn analyze_verif_counts_loop_kinds_and_missing_invariants() {
+        let v = verif_of(
+            "module T
+fn subject(items: Vec<i64>) -> i64 {
+    let mut i: i64 = 0;
+    while i < 3 vow { invariant: i >= 0 } { i = i + 1; }
+    while i < 6 { i = i + 1; }
+    while i < 9 vow { requires: i >= 0 } { i = i + 1; }
+    for x in items { i = i + x; }
+    let r: i64 = loop { break i; };
+    r
+}
+",
+        );
+        assert_eq!(v.loops_total, 5);
+        assert_eq!(v.loops_without_invariant, 4);
+        assert_eq!(v.max_loop_nesting, 1);
+    }
+
+    #[test]
+    fn analyze_verif_tracks_maximum_nesting_depth() {
+        let v = verif_of(
+            "module T
+fn subject(items: Vec<i64>) -> i64 {
+    let mut i: i64 = 0;
+    while i < 3 vow { invariant: i >= 0 } {
+        for x in items {
+            loop { break 0; }
+            i = i + x;
+        }
+        i = i + 1;
+    }
+    while i < 5 { i = i + 1; }
+    i
+}
+",
+        );
+        assert_eq!(v.loops_total, 4);
+        assert_eq!(v.loops_without_invariant, 3);
+        assert_eq!(v.max_loop_nesting, 3);
+    }
+
+    #[test]
+    fn analyze_verif_finds_loops_inside_every_expression_form() {
+        let v = verif_of(
+            "module T
+struct P { a: i64, b: i64 }
+enum E { A(i64), B }
+fn id(x: i64) -> i64 { x }
+fn subject(items: Vec<i64>, o: Option<i64>) -> Option<i64> {
+    let mut k: i64 = 0;
+    let c: i64 = if 0 < (loop { break 1; }) { 1 } else { while k < 1 { k = k + 1; } 2 };
+    match o {
+        Option::Some(n) => { while k < n { k = k + 1; } },
+        Option::None => { k = k; },
+    }
+    { while k < 2 { k = k + 1; } }
+    let s: i64 = 1 + loop { break 2; };
+    items[loop { break 0; }] = 3;
+    let t: i64 = items[loop { break 0; }];
+    let n: i64 = -loop { break 1; };
+    let p: P = P { a: loop { break 1; }, b: 2 };
+    let f: i64 = p.a + (loop { break 1; }) as i64;
+    let e: E = E::A(loop { break 3; });
+    let u: (i64, i64) = (loop { break 1; }, 2);
+    let w: i64 = id(loop { break 4; });
+    let z: i64 = items.len() as i64 + items.get_or(loop { break 0; });
+    let b: i64 = &loop { break 6; };
+    let q: i64 = parse_i32(String::from(\"1\"))?;
+    if k > 100 { return Option::Some(loop { break 5; }); }
+    Option::Some(c + s + t + n + f + w + z + q)
+}
+",
+        );
+        assert_eq!(v.loops_total, 16);
+        assert_eq!(v.loops_without_invariant, v.loops_total);
+    }
 }
