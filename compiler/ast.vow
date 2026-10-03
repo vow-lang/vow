@@ -152,11 +152,11 @@ fn arena_add_list(a: AstArena, items: Vec<i64>) -> i64 {
 }
 
 fn list_len(a: AstArena, lid: i64) -> i64 {
-    a.list_size[lid]
+    a.list_size[lid as u64]
 }
 
 fn list_get(a: AstArena, lid: i64, i: i64) -> i64 {
-    a.list_data[a.list_head[lid] + i]
+    a.list_data[(a.list_head[lid as u64] + i) as u64]
 }
 
 fn arena_add_expr(a: AstArena, tag: i64, av: i64, bv: i64, cv: i64, span: i64) -> i64 {
@@ -173,10 +173,10 @@ fn arena_add_int_expr(a: AstArena, lo: u64, hi: u64, span: i64) -> i64 {
     arena_add_expr(a, EXPR_LIT_INT(), lo as i64, hi as i64, 0, span)
 }
 
-fn expr_tag(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5] }
-fn expr_a(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 1] }
-fn expr_b(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 2] }
-fn expr_c(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 3] }
+fn expr_tag(a: AstArena, eid: i64) -> i64 { a.expr_data[(eid * 5) as u64] }
+fn expr_a(a: AstArena, eid: i64) -> i64 { a.expr_data[(eid * 5 + 1) as u64] }
+fn expr_b(a: AstArena, eid: i64) -> i64 { a.expr_data[(eid * 5 + 2) as u64] }
+fn expr_c(a: AstArena, eid: i64) -> i64 { a.expr_data[(eid * 5 + 3) as u64] }
 fn expr_int_lo(a: AstArena, eid: i64) -> u64 { expr_a(a, eid) as u64 }
 fn expr_int_hi(a: AstArena, eid: i64) -> u64 { expr_b(a, eid) as u64 }
 
@@ -225,17 +225,17 @@ fn arena_add_type(a: AstArena, tag: i64, av: i64, bv: i64, span: i64) -> i64 {
     tid
 }
 
-fn type_tag(a: AstArena, tid: i64) -> i64 { a.type_data[tid * 4] }
-fn type_a(a: AstArena, tid: i64) -> i64 { a.type_data[tid * 4 + 1] }
-fn type_b(a: AstArena, tid: i64) -> i64 { a.type_data[tid * 4 + 2] }
+fn type_tag(a: AstArena, tid: i64) -> i64 { a.type_data[(tid * 4) as u64] }
+fn type_a(a: AstArena, tid: i64) -> i64 { a.type_data[(tid * 4 + 1) as u64] }
+fn type_b(a: AstArena, tid: i64) -> i64 { a.type_data[(tid * 4 + 2) as u64] }
 
-fn blk_stmts(a: AstArena, bid: i64) -> i64 { a.blk_data[bid * 3] }
-fn blk_trail(a: AstArena, bid: i64) -> i64 { a.blk_data[bid * 3 + 1] }
+fn blk_stmts(a: AstArena, bid: i64) -> i64 { a.blk_data[(bid * 3) as u64] }
+fn blk_trail(a: AstArena, bid: i64) -> i64 { a.blk_data[(bid * 3 + 1) as u64] }
 
-fn stmt_tag(a: AstArena, sid: i64) -> i64 { a.stmt_data[sid * 5] }
-fn stmt_a(a: AstArena, sid: i64) -> i64 { a.stmt_data[sid * 5 + 1] }
-fn stmt_b(a: AstArena, sid: i64) -> i64 { a.stmt_data[sid * 5 + 2] }
-fn stmt_c(a: AstArena, sid: i64) -> i64 { a.stmt_data[sid * 5 + 3] }
+fn stmt_tag(a: AstArena, sid: i64) -> i64 { a.stmt_data[(sid * 5) as u64] }
+fn stmt_a(a: AstArena, sid: i64) -> i64 { a.stmt_data[(sid * 5 + 1) as u64] }
+fn stmt_b(a: AstArena, sid: i64) -> i64 { a.stmt_data[(sid * 5 + 2) as u64] }
+fn stmt_c(a: AstArena, sid: i64) -> i64 { a.stmt_data[(sid * 5 + 3) as u64] }
 
 fn loop_break_push_block_exprs(a: AstArena, bid: i64, pending: Vec<i64>) {
     let stmts_lid: i64 = blk_stmts(a, bid);
@@ -344,34 +344,34 @@ fn loop_break_value_eids(a: AstArena, bid: i64) -> Vec<i64> {
     values
 }
 
-fn pat_tag(a: AstArena, pid: i64) -> i64 { a.pat_data[pid * 4] }
-fn pat_a(a: AstArena, pid: i64) -> i64 { a.pat_data[pid * 4 + 1] }
-fn pat_b(a: AstArena, pid: i64) -> i64 { a.pat_data[pid * 4 + 2] }
+fn pat_tag(a: AstArena, pid: i64) -> i64 { a.pat_data[(pid * 4) as u64] }
+fn pat_a(a: AstArena, pid: i64) -> i64 { a.pat_data[(pid * 4 + 1) as u64] }
+fn pat_b(a: AstArena, pid: i64) -> i64 { a.pat_data[(pid * 4 + 2) as u64] }
 
-fn fn_name_sid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 8] }
-fn fn_params_lid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 8 + 1] }
-fn fn_ret_ast_tid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 8 + 2] }
-fn fn_eff(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 8 + 3] }
-fn fn_body_bid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 8 + 4] }
-fn fn_vow_lid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 8 + 5] }
-fn fn_is_declaration(a: AstArena, fid: i64) -> bool { a.fn_data[fid * 8 + 6] == 1 }
+fn fn_name_sid(a: AstArena, fid: i64) -> i64 { a.fn_data[(fid * 8) as u64] }
+fn fn_params_lid(a: AstArena, fid: i64) -> i64 { a.fn_data[(fid * 8 + 1) as u64] }
+fn fn_ret_ast_tid(a: AstArena, fid: i64) -> i64 { a.fn_data[(fid * 8 + 2) as u64] }
+fn fn_eff(a: AstArena, fid: i64) -> i64 { a.fn_data[(fid * 8 + 3) as u64] }
+fn fn_body_bid(a: AstArena, fid: i64) -> i64 { a.fn_data[(fid * 8 + 4) as u64] }
+fn fn_vow_lid(a: AstArena, fid: i64) -> i64 { a.fn_data[(fid * 8 + 5) as u64] }
+fn fn_is_declaration(a: AstArena, fid: i64) -> bool { a.fn_data[(fid * 8 + 6) as u64] == 1 }
 
-fn sdef_name_sid(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4] }
-fn sdef_fields_lid(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4 + 1] }
-fn sdef_is_linear(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4 + 2] }
+fn sdef_name_sid(a: AstArena, sid: i64) -> i64 { a.sdef_data[(sid * 4) as u64] }
+fn sdef_fields_lid(a: AstArena, sid: i64) -> i64 { a.sdef_data[(sid * 4 + 1) as u64] }
+fn sdef_is_linear(a: AstArena, sid: i64) -> i64 { a.sdef_data[(sid * 4 + 2) as u64] }
 
-fn edef_name_sid(a: AstArena, eid: i64) -> i64 { a.edef_data[eid * 3] }
-fn edef_variants_lid(a: AstArena, eid: i64) -> i64 { a.edef_data[eid * 3 + 1] }
+fn edef_name_sid(a: AstArena, eid: i64) -> i64 { a.edef_data[(eid * 3) as u64] }
+fn edef_variants_lid(a: AstArena, eid: i64) -> i64 { a.edef_data[(eid * 3 + 1) as u64] }
 
-fn cdef_name_sid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 4] }
-fn cdef_type_tid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 4 + 1] }
-fn cdef_value_eid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 4 + 2] }
+fn cdef_name_sid(a: AstArena, cid: i64) -> i64 { a.cdef_data[(cid * 4) as u64] }
+fn cdef_type_tid(a: AstArena, cid: i64) -> i64 { a.cdef_data[(cid * 4 + 1) as u64] }
+fn cdef_value_eid(a: AstArena, cid: i64) -> i64 { a.cdef_data[(cid * 4 + 2) as u64] }
 
-fn alias_name_sid(a: AstArena, aid: i64) -> i64 { a.alias_data[aid * 3] }
-fn alias_type_tid(a: AstArena, aid: i64) -> i64 { a.alias_data[aid * 3 + 1] }
+fn alias_name_sid(a: AstArena, aid: i64) -> i64 { a.alias_data[(aid * 3) as u64] }
+fn alias_type_tid(a: AstArena, aid: i64) -> i64 { a.alias_data[(aid * 3 + 1) as u64] }
 
-fn ext_vow_lid(a: AstArena, xid: i64) -> i64 { a.ext_data[xid * 3] }
-fn ext_fns_lid(a: AstArena, xid: i64) -> i64 { a.ext_data[xid * 3 + 1] }
+fn ext_vow_lid(a: AstArena, xid: i64) -> i64 { a.ext_data[(xid * 3) as u64] }
+fn ext_fns_lid(a: AstArena, xid: i64) -> i64 { a.ext_data[(xid * 3 + 1) as u64] }
 
 fn clone_string(src: String) -> String {
     let out: String = String::from("");
@@ -384,19 +384,19 @@ fn clone_string(src: String) -> String {
     out
 }
 
-fn arena_str(a: AstArena, sid: i64) -> String { a.strs[sid] }
+fn arena_str(a: AstArena, sid: i64) -> String { a.strs[sid as u64] }
 
-fn expr_span(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 4] }
-fn stmt_span(a: AstArena, sid: i64) -> i64 { a.stmt_data[sid * 5 + 4] }
-fn blk_span(a: AstArena, bid: i64) -> i64 { a.blk_data[bid * 3 + 2] }
-fn fn_span(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 8 + 7] }
-fn type_span(a: AstArena, tid: i64) -> i64 { a.type_data[tid * 4 + 3] }
-fn pat_span(a: AstArena, pid: i64) -> i64 { a.pat_data[pid * 4 + 3] }
-fn sdef_span(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4 + 3] }
-fn edef_span(a: AstArena, eid: i64) -> i64 { a.edef_data[eid * 3 + 2] }
-fn cdef_span(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 4 + 3] }
-fn alias_span(a: AstArena, aid: i64) -> i64 { a.alias_data[aid * 3 + 2] }
-fn ext_span(a: AstArena, xid: i64) -> i64 { a.ext_data[xid * 3 + 2] }
+fn expr_span(a: AstArena, eid: i64) -> i64 { a.expr_data[(eid * 5 + 4) as u64] }
+fn stmt_span(a: AstArena, sid: i64) -> i64 { a.stmt_data[(sid * 5 + 4) as u64] }
+fn blk_span(a: AstArena, bid: i64) -> i64 { a.blk_data[(bid * 3 + 2) as u64] }
+fn fn_span(a: AstArena, fid: i64) -> i64 { a.fn_data[(fid * 8 + 7) as u64] }
+fn type_span(a: AstArena, tid: i64) -> i64 { a.type_data[(tid * 4 + 3) as u64] }
+fn pat_span(a: AstArena, pid: i64) -> i64 { a.pat_data[(pid * 4 + 3) as u64] }
+fn sdef_span(a: AstArena, sid: i64) -> i64 { a.sdef_data[(sid * 4 + 3) as u64] }
+fn edef_span(a: AstArena, eid: i64) -> i64 { a.edef_data[(eid * 3 + 2) as u64] }
+fn cdef_span(a: AstArena, cid: i64) -> i64 { a.cdef_data[(cid * 4 + 3) as u64] }
+fn alias_span(a: AstArena, aid: i64) -> i64 { a.alias_data[(aid * 3 + 2) as u64] }
+fn ext_span(a: AstArena, xid: i64) -> i64 { a.ext_data[(xid * 3 + 2) as u64] }
 
 fn arena_add_stmt(a: AstArena, tag: i64, av: i64, bv: i64, cv: i64, span: i64) -> i64 {
     let sid: i64 = (a.stmt_data.len() / 5) as i64;
@@ -446,9 +446,9 @@ fn arena_add_vow_clause(a: AstArena, kind: i64, eid: i64, span: i64) -> i64 {
     cid
 }
 
-fn vow_clause_kind(a: AstArena, cid: i64) -> i64 { a.vow_data[cid * 3] }
-fn vow_clause_expr(a: AstArena, cid: i64) -> i64 { a.vow_data[cid * 3 + 1] }
-fn vow_clause_span(a: AstArena, cid: i64) -> i64 { a.vow_data[cid * 3 + 2] }
+fn vow_clause_kind(a: AstArena, cid: i64) -> i64 { a.vow_data[(cid * 3) as u64] }
+fn vow_clause_expr(a: AstArena, cid: i64) -> i64 { a.vow_data[(cid * 3 + 1) as u64] }
+fn vow_clause_span(a: AstArena, cid: i64) -> i64 { a.vow_data[(cid * 3 + 2) as u64] }
 
 fn arena_add_sdef(a: AstArena, name_sid: i64, fields_lid: i64, is_linear: i64, span: i64) -> i64 {
     let sid: i64 = (a.sdef_data.len() / 4) as i64;

@@ -32,8 +32,8 @@ fn get_flag_arg(argv: Vec<String>, flag: String) -> String {
     let n: i64 = argv.len() as i64;
     let mut i: i64 = 1;
     while n > 1 && i < n - 1 {
-        if argv[i] == flag {
-            return argv[i + 1];
+        if argv[i as u64] == flag {
+            return argv[(i + 1) as u64];
         }
         i = i + 1;
     }
@@ -44,11 +44,11 @@ fn get_source_path(argv: Vec<String>) -> String {
     let argc: i64 = argv.len() as i64;
     let mut i: i64 = argc - 1;
     while i >= 1 {
-        let a: String = argv[i];
+        let a: String = argv[i as u64];
         let first_byte: i64 = a.byte_at(0);
         if first_byte != 45 {
             if i > 1 {
-                let prev: String = argv[i - 1];
+                let prev: String = argv[(i - 1) as u64];
                 if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--verify-jobs" || prev == "--module-root" || prev == "--max-score" || prev == "--max-cognitive" || prev == "--max-cyclomatic" || prev == "--cog-anchor" || prev == "--nloc-anchor" || prev == "--perfetto" {
                     i = i - 1;
                 } else {
@@ -67,11 +67,11 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
     let argc: i64 = argv.len() as i64;
     let mut i: i64 = argc - 1;
     while i >= 2 {
-        let a: String = argv[i];
+        let a: String = argv[i as u64];
         let first_byte: i64 = a.byte_at(0);
         if first_byte != 45 {
             if i > 2 {
-                let prev: String = argv[i - 1];
+                let prev: String = argv[(i - 1) as u64];
                 if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--verify-jobs" || prev == "--module-root" || prev == "--max-score" || prev == "--max-cognitive" || prev == "--max-cyclomatic" || prev == "--cog-anchor" || prev == "--nloc-anchor" || prev == "--perfetto" {
                     i = i - 1;
                 } else {
@@ -170,7 +170,7 @@ fn frontend_path_from_argv(argv: Vec<String>, sub: bool, cmd: String) -> String 
 fn find_ir_function_index_by_id(fns: Vec<IrFunction>, id: i64) -> i64 {
     let mut i: i64 = 0;
     while i < fns.len() as i64 {
-        let f: IrFunction = fns[i];
+        let f: IrFunction = fns[i as u64];
         if f.id == id {
             return i;
         }
@@ -182,7 +182,7 @@ fn find_ir_function_index_by_id(fns: Vec<IrFunction>, id: i64) -> i64 {
 fn find_ir_vow_index(vows: Vec<IrVowEntry>, id: i64) -> i64 {
     let mut i: i64 = 0;
     while i < vows.len() as i64 {
-        let ve: IrVowEntry = vows[i];
+        let ve: IrVowEntry = vows[i as u64];
         if ve.id == id {
             return i;
         }
@@ -194,7 +194,7 @@ fn find_ir_vow_index(vows: Vec<IrVowEntry>, id: i64) -> i64 {
 fn find_param_index(names: Vec<String>, name: String) -> i64 {
     let mut i: i64 = 0;
     while i < names.len() as i64 {
-        if names[i] == name {
+        if names[i as u64] == name {
             return i;
         }
         i = i + 1;
@@ -281,7 +281,7 @@ fn callee_i64_string_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, c
                 if inst.op == IOP_GET_ARG() && inst.dk == IDATA_ARG_INDEX() {
                     let pidx: i64 = inst.dv;
                     if pidx >= 0 && pidx < call_inst.args.len() as i64 {
-                        return inst_const_i64_string_by_id(f, call_inst.args[pidx]);
+                        return inst_const_i64_string_by_id(f, call_inst.args[pidx as u64]);
                     }
                     return String::from("");
                 }
@@ -433,7 +433,7 @@ fn call_matches_callee_precondition_values(f: IrFunction, callee: IrFunction, ve
         if ce_val.len() == 0 {
             return false;
         }
-        let arg_val: String = inst_const_i64_string_by_id(f, inst.args[pidx]);
+        let arg_val: String = inst_const_i64_string_by_id(f, inst.args[pidx as u64]);
         if arg_val.len() == 0 {
             return false;
         }
@@ -536,11 +536,11 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
     } else if vr.callee_precondition_func_id >= 0 && vr.callee_precondition_vow_id >= 0 {
         let fi: i64 = find_ir_function_index_by_id(ir_mod.functions, vr.callee_precondition_func_id);
         if fi >= 0 {
-            let callee: IrFunction = ir_mod.functions[fi];
+            let callee: IrFunction = ir_mod.functions[fi as u64];
             let vows: Vec<IrVowEntry> = callee.vows;
             let vi: i64 = find_ir_vow_index(vows, vr.callee_precondition_vow_id);
             if vi >= 0 {
-                let ve: IrVowEntry = vows[vi];
+                let ve: IrVowEntry = vows[vi as u64];
                 ce_violation = ve.description;
                 ce_blame = DIAG_BLAME_CALLER();
 
@@ -565,7 +565,7 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
                                     let pidx: i64 = find_param_index(callee.param_names, bname);
                                     if pidx >= 0 && pidx < inst.args.len() as i64 {
                                         violating_arg_params.push(bname);
-                                        let arg_inst_id: i64 = inst.args[pidx];
+                                        let arg_inst_id: i64 = inst.args[pidx as u64];
                                         let ce_val: String = ce_value_for_param(vr.var_names, vr.var_values, bname, pidx);
                                         if ce_val.len() > 0 {
                                             violating_arg_values.push(ce_val);
@@ -744,7 +744,7 @@ fn replay_value_for(name: String, names: Vec<String>, vals: Vec<String>) -> Stri
 fn replay_find_fn(fns: Vec<IrFunction>, name: String) -> i64 {
     let mut i: i64 = 0;
     while i < fns.len() as i64 {
-        let f: IrFunction = fns[i];
+        let f: IrFunction = fns[i as u64];
         if f.name == name { return i; }
         i = i + 1;
     }
@@ -784,7 +784,7 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     if fi < 0 {
         return replay_skip(str3(String::from("no IR for function `"), ce.function, String::from("`")));
     }
-    let f: IrFunction = fns[fi];
+    let f: IrFunction = fns[fi as u64];
     let src: String = fs_read(path);
     if src.len() == 0 {
         return replay_skip(String::from("replay: could not read source"));
@@ -800,14 +800,14 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     let call_args: String = String::from("");
     let mut pi: i64 = 0;
     while pi < np {
-        let ty: i64 = params[pi];
+        let ty: i64 = params[pi as u64];
         if ty == ITY_UNIT() {
             return replay_skip(String::from("function has a Unit parameter"));
         }
         if ty != ITY_I64() && ty != ITY_U64() && ty != ITY_BOOL() {
             return replay_skip(str3(String::from("parameter "), i64_to_string(pi), String::from(": unsupported type (self-hosted v1: scalars only)")));
         }
-        let pname: String = pnames[pi];
+        let pname: String = pnames[pi as u64];
         let raw: String = replay_value_for(pname, ce.var_names, ce.var_values);
         if raw.len() == 0 {
             return replay_skip(str3(String::from("parameter "), pname, String::from(": no counterexample value")));
@@ -1101,7 +1101,7 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
     let in_flight_tmp: Vec<String> = Vec::new();
     let mut fi: i64 = 0;
     while fi < fns.len() as i64 {
-        let f: IrFunction = fns[fi];
+        let f: IrFunction = fns[fi as u64];
         let vows: Vec<IrVowEntry> = f.vows;
         // Stop launching new ESBMC jobs once any in-flight verification has failed.
         if vows.len() > 0 && all_proven == 1 {
@@ -1109,7 +1109,7 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
                 let oldest_h: i64 = in_flight_h[0];
                 let oldest_fi: i64 = in_flight_fi[0];
                 let oldest_tmp: String = in_flight_tmp[0];
-                let oldest_f: IrFunction = fns[oldest_fi];
+                let oldest_f: IrFunction = fns[oldest_fi as u64];
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
                 vec_string_remove_front(in_flight_tmp);
@@ -1137,7 +1137,7 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
         let oldest_h: i64 = in_flight_h[0];
         let oldest_fi: i64 = in_flight_fi[0];
         let oldest_tmp: String = in_flight_tmp[0];
-        let oldest_f: IrFunction = fns[oldest_fi];
+        let oldest_f: IrFunction = fns[oldest_fi as u64];
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
         vec_string_remove_front(in_flight_tmp);
@@ -1224,7 +1224,7 @@ fn record_soft_fail(meta: Vec<String>, status: String, message: String, function
 fn verify_function_index(fns: Vec<IrFunction>, name: String) -> i64 {
     let mut i: i64 = 0;
     while i < fns.len() as i64 {
-        let f: IrFunction = fns[i];
+        let f: IrFunction = fns[i as u64];
         if f.name == name {
             return i;
         }
@@ -1297,7 +1297,7 @@ fn arith_owner_index(m: IrModule, owner_id: i64) -> i64 {
     let fns: Vec<IrFunction> = m.functions;
     let mut i: i64 = 0;
     while i < fns.len() as i64 {
-        let f: IrFunction = fns[i];
+        let f: IrFunction = fns[i as u64];
         if f.id == owner_id { return i; }
         i = i + 1;
     }
@@ -1325,8 +1325,8 @@ fn arith_already_reported(dctx: DiagCtx, owner_name: String, file: String, ostar
 fn report_arith_overflow(f: IrFunction, ir_mod: IrModule, path: String, site: ParsedArithSite, dctx: DiagCtx) [io] {
     let idx: i64 = arith_owner_index(ir_mod, site.owner);
     let fns: Vec<IrFunction> = ir_mod.functions;
-    let owner_name: String = if idx >= 0 { let o: IrFunction = fns[idx]; o.name } else { f.name };
-    let owner_src: String = if idx >= 0 { let o2: IrFunction = fns[idx]; o2.source_file } else { String::from("") };
+    let owner_name: String = if idx >= 0 { let o: IrFunction = fns[idx as u64]; o.name } else { f.name };
+    let owner_src: String = if idx >= 0 { let o2: IrFunction = fns[idx as u64]; o2.source_file } else { String::from("") };
     // A function's own source_file is authoritative under multi-module
     // compilation; `path` is only the entry path the CLI was given.
     let owner_file: String = if owner_src.len() > 0 { owner_src } else { path };
@@ -1614,7 +1614,7 @@ fn build_verify_phase(
     let mut any_skipped: i64 = 0;
     let mut fi: i64 = 0;
     while fi < fns.len() as i64 {
-        let f: IrFunction = fns[fi];
+        let f: IrFunction = fns[fi as u64];
         let vows: Vec<IrVowEntry> = f.vows;
         // Stop launching new ESBMC jobs once any in-flight verification has failed.
         if vows.len() > 0 && all_proven == 1 {
@@ -1622,7 +1622,7 @@ fn build_verify_phase(
                 let oldest_h: i64 = in_flight_h[0];
                 let oldest_fi: i64 = in_flight_fi[0];
                 let oldest_tmp: String = in_flight_tmp[0];
-                let oldest_f: IrFunction = fns[oldest_fi];
+                let oldest_f: IrFunction = fns[oldest_fi as u64];
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
                 vec_string_remove_front(in_flight_tmp);
@@ -1666,7 +1666,7 @@ fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_
         let oldest_h: i64 = in_flight_h[0];
         let oldest_fi: i64 = in_flight_fi[0];
         let oldest_tmp: String = in_flight_tmp[0];
-        let oldest_f: IrFunction = fns[oldest_fi];
+        let oldest_f: IrFunction = fns[oldest_fi as u64];
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
         vec_string_remove_front(in_flight_tmp);
@@ -1993,7 +1993,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                 let t_const_fns: Vec<i64> = detect_const_fns(ir_mod);
                 let mut vfi: i64 = 0;
                 while vfi < vfns.len() as i64 {
-                    let vf: IrFunction = vfns[vfi];
+                    let vf: IrFunction = vfns[vfi as u64];
                     let vows: Vec<IrVowEntry> = vf.vows;
                     // Stop launching new ESBMC jobs after a failure is observed.
                     if vows.len() > 0 && !verify_failed {
@@ -2001,7 +2001,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                             let oh: i64 = vin_flight_h[0];
                             let ofi: i64 = vin_flight_fi[0];
                             let otmp: String = vin_flight_tmp[0];
-                            let ovf: IrFunction = vfns[ofi];
+                            let ovf: IrFunction = vfns[ofi as u64];
                             vec_i64_remove_front(vin_flight_h);
                             vec_i64_remove_front(vin_flight_fi);
                             vec_string_remove_front(vin_flight_tmp);
@@ -2050,7 +2050,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                     let oh: i64 = vin_flight_h[0];
                     let ofi: i64 = vin_flight_fi[0];
                     let otmp: String = vin_flight_tmp[0];
-                    let ovf: IrFunction = vfns[ofi];
+                    let ovf: IrFunction = vfns[ofi as u64];
                     vec_i64_remove_front(vin_flight_h);
                     vec_i64_remove_front(vin_flight_fi);
                     vec_string_remove_front(vin_flight_tmp);
@@ -14638,25 +14638,25 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
             json.push_str(String::from(","));
         }
         json.push_str(String::from("{\"vow_id\":"));
-        json.push_str(i64_to_string(e_vow_ids[ci]));
+        json.push_str(i64_to_string(e_vow_ids[ci as u64]));
         json.push_str(String::from(",\"function\":\""));
-        json.push_str(diag_json_escape_str(e_func_names[ci]));
+        json.push_str(diag_json_escape_str(e_func_names[ci as u64]));
         json.push_str(String::from("\",\"kind\":\""));
-        json.push_str(e_kinds[ci]);
+        json.push_str(e_kinds[ci as u64]);
         json.push_str(String::from("\",\"description\":\""));
-        json.push_str(diag_json_escape_str(e_descs[ci]));
+        json.push_str(diag_json_escape_str(e_descs[ci as u64]));
         json.push_str(String::from("\",\"blame\":\""));
-        json.push_str(e_blames[ci]);
+        json.push_str(e_blames[ci as u64]);
         json.push_str(String::from("\",\"source\":{\"file\":\""));
-        json.push_str(diag_json_escape_str(e_files[ci]));
+        json.push_str(diag_json_escape_str(e_files[ci as u64]));
         json.push_str(String::from("\",\"offset\":"));
-        json.push_str(i64_to_string(e_offsets[ci]));
+        json.push_str(i64_to_string(e_offsets[ci as u64]));
         json.push_str(String::from("},\"status\":\""));
-        json.push_str(e_statuses[ci]);
+        json.push_str(e_statuses[ci as u64]);
         json.push_str(String::from("\",\"quality\":\""));
-        json.push_str(e_qualities[ci]);
+        json.push_str(e_qualities[ci as u64]);
         json.push_str(String::from("\",\"trivially_satisfiable\":"));
-        if e_trivial[ci] == 1 {
+        if e_trivial[ci as u64] == 1 {
             json.push_str(String::from("true"));
         } else {
             json.push_str(String::from("false"));
@@ -14677,8 +14677,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     let mut n_trivial: i64 = 0;
     let mut si: i64 = 0;
     while si < total {
-        let s: String = e_statuses[si];
-        if e_trivial[si] == 1 {
+        let s: String = e_statuses[si as u64];
+        if e_trivial[si as u64] == 1 {
             n_trivial = n_trivial + 1;
         }
         if s == String::from("proven") || s == String::from("proven-ir") {
@@ -14714,7 +14714,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     let mut n_subst: i64 = 0;
     let mut qi: i64 = 0;
     while qi < total {
-        let q: String = e_qualities[qi];
+        let q: String = e_qualities[qi as u64];
         if q == String::from("weak") {
             n_weak = n_weak + 1;
         } else if q == String::from("tautological") {
