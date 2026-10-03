@@ -687,16 +687,44 @@ def _ledger_verdict(rust, self_hosted, errors, fixture_path):
     )
 
 
+def classify_empty_output(rust_empty, self_empty):
+    """Verdict for a both-compilers call site where at least one side's JSON is empty.
+
+    Both empty: neither compiler produced anything to compare against the other
+    — SKIP. Exactly one empty: that compiler produced nothing while its
+    counterpart succeeded, which is itself a parity divergence (most often a
+    crash) — FAIL.
+    """
+    return "SKIP" if rust_empty and self_empty else "FAIL"
+
+
+# Each mode's (min, max) argument count, keyed by its mode name so adding a
+# mode extends this table instead of widening one `or` chain.
+MODE_ARITY = {
+    "json": (5, 6),
+    "error": (5, 6),
+    "test": (5, 6),
+    "empty-output": (3, 3),
+}
+
+
 def main(argv=None):
     """Run a comparator over two JSON files for scripts/full_test.sh."""
     args = sys.argv[1:] if argv is None else argv
-    if len(args) not in (5, 6) or args[0] not in ("json", "error", "test"):
+    arity = MODE_ARITY.get(args[0]) if args else None
+    if arity is None or not (arity[0] <= len(args) <= arity[1]):
         print(
             "usage: parity.py {json,error,test} RUST_JSON SELF_JSON "
-            "RUST_EXIT SELF_EXIT [FIXTURE]",
+            "RUST_EXIT SELF_EXIT [FIXTURE]\n"
+            "       parity.py empty-output RUST_EMPTY SELF_EMPTY",
             file=sys.stderr,
         )
         return 2
+
+    mode = args[0]
+    if mode == "empty-output":
+        print(classify_empty_output(bool(int(args[1])), bool(int(args[2]))))
+        return 0
 
     mode, rust_path, self_path, rust_exit, self_exit = args[:5]
     fixture_path = args[5] if len(args) == 6 else None

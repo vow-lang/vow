@@ -225,6 +225,32 @@ compare_error() {
     run_parity error "$@"
 }
 
+# Verdict for a both-compilers call site where at least one side's JSON is
+# empty. Both empty means neither compiler produced anything to compare, a
+# benign SKIP; exactly one empty means that compiler produced nothing while
+# its counterpart succeeded, which is a real divergence (most often a crash)
+# and must FAIL rather than be silently swallowed as a SKIP.
+# Returns 0 (caller should skip the comparison) after logging SKIP or FAIL;
+# returns 1 (caller should proceed to compare_json/compare_error) if neither
+# side is empty.
+check_empty_output() {
+    local label="$1" rust_json="$2" self_json="$3" rust_exit="$4" self_exit="$5"
+    local rust_empty=0 self_empty=0
+    [ -z "$rust_json" ] && rust_empty=1
+    [ -z "$self_json" ] && self_empty=1
+    if [ "$rust_empty" = 0 ] && [ "$self_empty" = 0 ]; then
+        return 1
+    fi
+    local verdict
+    verdict=$(python3 scripts/parity.py empty-output "$rust_empty" "$self_empty")
+    if [ "$verdict" = "SKIP" ]; then
+        skip "$label" "empty output (rust=$rust_exit, self=$self_exit)"
+    else
+        fail "$label" "one-sided empty output (rust=$rust_exit, self=$self_exit)"
+    fi
+    return 0
+}
+
 run_promoted_run_tests() {
     section_begin "Section 4: Run Tests"
     for vow_file in tests/run/*.vow; do
@@ -241,9 +267,7 @@ run_promoted_run_tests() {
             rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
             self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
 
-            if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
-                skip "${name}/test-verify" "empty output (rust=$rust_exit, self=$self_exit)"
-            else
+            if ! check_empty_output "${name}/test-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
                 compare_json "${name}/test-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
                 # Parity alone would pass a regression that makes BOTH compilers
                 # reject the fixture, so pin the absolute expectation too (as
@@ -261,8 +285,7 @@ run_promoted_run_tests() {
         rust_json=$($RUST build --no-verify "$vow_file" -o "$TMPDIR/test_rust_${name}" 2>/dev/null) || rust_exit=$?
         self_json=$(run_self build --no-verify "$vow_file" -o "$TMPDIR/test_self_${name}" 2>/dev/null) || self_exit=$?
 
-        if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
-            skip "${name}/test-build" "empty output (rust=$rust_exit, self=$self_exit)"
+        if check_empty_output "${name}/test-build" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
             continue
         fi
 
@@ -359,8 +382,7 @@ EOF
         rust_json=$($RUST build --no-verify "$fixture_path" -o "$TMPDIR/rust_${fixture}" 2>/dev/null) || rust_exit=$?
         self_json=$(run_self build --no-verify "$fixture_path" -o "$TMPDIR/self_${fixture}" 2>/dev/null) || self_exit=$?
 
-        if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
-            skip "${fixture}/error" "empty output (rust=$rust_exit, self=$self_exit)"
+        if check_empty_output "${fixture}/error" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
             continue
         fi
 
@@ -588,8 +610,7 @@ for vow_file in examples/*.vow; do
     rust_json=$($RUST build --no-verify "$vow_file" -o "$TMPDIR/rust_${name}" 2>/dev/null) || rust_exit=$?
     self_json=$(run_self build --no-verify "$vow_file" -o "$TMPDIR/self_${name}" 2>/dev/null) || self_exit=$?
 
-    if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
-        skip "${name}/build-no-verify" "empty output (rust=$rust_exit, self=$self_exit)"
+    if check_empty_output "${name}/build-no-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         continue
     fi
 
@@ -673,8 +694,7 @@ for vow_file in examples/*.vow; do
     rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
     self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
 
-    if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
-        skip "${name}/verify" "empty output (rust=$rust_exit, self=$self_exit)"
+    if check_empty_output "${name}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         continue
     fi
 
@@ -815,8 +835,7 @@ for vow_file in tests/verify/*.vow; do
     rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
     self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
 
-    if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
-        skip "${name}/verify-test" "empty output (rust=$rust_exit, self=$self_exit)"
+    if check_empty_output "${name}/verify-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         continue
     fi
 
@@ -838,8 +857,7 @@ for vow_file in tests/verify-fail/*.vow; do
     rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
     self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
 
-    if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
-        skip "${name}/verify-fail-test" "empty output (rust=$rust_exit, self=$self_exit)"
+    if check_empty_output "${name}/verify-fail-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         continue
     fi
 
@@ -1085,8 +1103,7 @@ for vow_file in tests/verify-skip/*.vow; do
     rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
     self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
 
-    if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
-        skip "${name}/verify-skip-test" "empty output (rust=$rust_exit, self=$self_exit)"
+    if check_empty_output "${name}/verify-skip-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         continue
     fi
 
@@ -1293,9 +1310,7 @@ for multi in stack geometry bignum gc math heap; do
     rust_json=$($RUST build --no-verify "$main_file" -o "$TMPDIR/rust_${multi}_main" 2>/dev/null) || rust_exit=$?
     self_json=$(run_self build --no-verify "$main_file" -o "$TMPDIR/self_${multi}_main" 2>/dev/null) || self_exit=$?
 
-    if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
-        skip "${multi}/build-no-verify" "empty output (rust=$rust_exit, self=$self_exit)"
-    else
+    if ! check_empty_output "${multi}/build-no-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         compare_json "${multi}/build-no-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
     fi
 
@@ -1304,9 +1319,7 @@ for multi in stack geometry bignum gc math heap; do
     rust_json=$($RUST verify "$main_file" 2>/dev/null) || rust_exit=$?
     self_json=$(run_self verify "$main_file" 2>/dev/null) || self_exit=$?
 
-    if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
-        skip "${multi}/verify" "empty output (rust=$rust_exit, self=$self_exit)"
-    else
+    if ! check_empty_output "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         compare_json "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
     fi
 
@@ -1334,8 +1347,7 @@ for dir in tests/multi/*/; do
     rust_json=$($RUST build --no-verify "$main_file" -o "$TMPDIR/rust_multi_${name}" 2>/dev/null) || rust_exit=$?
     self_json=$(run_self build --no-verify "$main_file" -o "$TMPDIR/self_multi_${name}" 2>/dev/null) || self_exit=$?
 
-    if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
-        skip "${name}/build" "empty output (rust=$rust_exit, self=$self_exit)"
+    if check_empty_output "${name}/build" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         continue
     fi
     compare_json "${name}/build" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
@@ -1685,8 +1697,7 @@ for name in clamp max callee_blame cegis_broken; do
     rust_json=$($RUST build "$vow_file" -o "$TMPDIR/rust_bv_${name}" 2>/dev/null) || rust_exit=$?
     self_json=$(run_self build "$vow_file" -o "$TMPDIR/self_bv_${name}" 2>/dev/null) || self_exit=$?
 
-    if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
-        skip "${name}/build-verify" "empty output (rust=$rust_exit, self=$self_exit)"
+    if check_empty_output "${name}/build-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         continue
     fi
 
@@ -1703,9 +1714,7 @@ rust_test_exit=0 self_test_exit=0
 rust_test_json=$($RUST test compiler/ 2>/dev/null) || rust_test_exit=$?
 self_test_json=$(run_self test compiler/ 2>/dev/null) || self_test_exit=$?
 
-if [ -z "$rust_test_json" ] || [ -z "$self_test_json" ]; then
-    skip "test/subcommand" "empty output"
-else
+if ! check_empty_output "test/subcommand" "$rust_test_json" "$self_test_json" "$rust_test_exit" "$self_test_exit"; then
     run_parity test "test/parity" "$rust_test_json" "$self_test_json" "$rust_test_exit" "$self_test_exit"
 
     # Check contract_density field exists
