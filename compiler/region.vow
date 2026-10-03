@@ -4275,62 +4275,31 @@ fn vec_creation_extern(sym: String) -> bool {
         || sym == String::from("__vow_vec_new_val")
 }
 
-fn string_creation_extern(sym: String) -> bool {
-    sym == String::from("__vow_string_new")
-        || sym == String::from("__vow_string_new_in_arena")
-        || sym == String::from("__vow_string_from_cstr")
-        || sym == String::from("__vow_string_from_cstr_in_arena")
-        || sym == String::from("__vow_string_clone")
-        || sym == String::from("__vow_string_clone_in_arena")
-        || sym == String::from("__vow_string_substr")
-        || sym == String::from("__vow_string_substr_in_arena")
-        || sym == String::from("__vow_string_substring")
-        || sym == String::from("__vow_string_substring_in_arena")
-        || sym == String::from("__vow_string_from_i64")
-        || sym == String::from("__vow_string_from_i64_in_arena")
-        || sym == String::from("__vow_string_from_u64")
-        || sym == String::from("__vow_string_from_u64_in_arena")
-        || sym == String::from("__vow_string_split")
-        || sym == String::from("__vow_string_split_in_arena")
-        || sym == String::from("__vow_string_trim")
-        || sym == String::from("__vow_string_trim_in_arena")
-        || sym == String::from("__vow_string_to_upper")
-        || sym == String::from("__vow_string_to_upper_in_arena")
-        || sym == String::from("__vow_string_to_lower")
-        || sym == String::from("__vow_string_to_lower_in_arena")
-        || sym == String::from("__vow_string_replace")
-        || sym == String::from("__vow_string_replace_in_arena")
-        || sym == String::from("__vow_string_join")
-        || sym == String::from("__vow_string_join_in_arena")
-}
-
 fn fresh_builtin_extern(sym: String) -> bool {
     fresh_arena_base_extern(sym) || fresh_arena_variant_extern(sym)
-}
-
-fn map_creation_extern(sym: String) -> bool {
-    sym == String::from("__vow_map_new")
-        || sym == String::from("__vow_map_new_in_arena")
-        || sym == String::from("__vow_btreemap_new")
-        || sym == String::from("__vow_btreemap_new_in_arena")
 }
 
 fn heap_producing_extern(sym: String) -> bool {
     extern_fresh_in_caller(sym)
         || vec_creation_extern(sym)
-        || string_creation_extern(sym)
         || fresh_builtin_extern(sym)
-        || map_creation_extern(sym)
+}
+
+fn is_map_insert(sym: String) -> bool {
+    sym == String::from("__vow_map_insert") || sym == String::from("__vow_btreemap_insert")
+}
+
+fn is_map_insert_in_arena(sym: String) -> bool {
+    sym == String::from("__vow_map_insert_in_arena")
+        || sym == String::from("__vow_btreemap_insert_in_arena")
 }
 
 fn extern_store_edge_count(sym: String) -> i64 {
     if sym == String::from("__vow_vec_push_val") { return 1; }
     if sym == String::from("__vow_vec_push_val_in_arena") { return 1; }
     if sym == String::from("__vow_vec_set_val") { return 1; }
-    if sym == String::from("__vow_map_insert") { return 2; }
-    if sym == String::from("__vow_map_insert_in_arena") { return 2; }
-    if sym == String::from("__vow_btreemap_insert") { return 2; }
-    if sym == String::from("__vow_btreemap_insert_in_arena") { return 2; }
+    if is_map_insert(sym) { return 2; }
+    if is_map_insert_in_arena(sym) { return 2; }
     0
 }
 
@@ -4339,8 +4308,7 @@ fn extern_store_target_pos(sym: String, edge_idx: i64) -> i64 {
         return -1;
     }
     if sym == String::from("__vow_vec_push_val_in_arena") && edge_idx == 0 { return 1; }
-    if sym == String::from("__vow_map_insert_in_arena") { return 1; }
-    if sym == String::from("__vow_btreemap_insert_in_arena") { return 1; }
+    if is_map_insert_in_arena(sym) { return 1; }
     0
 }
 
@@ -4348,20 +4316,10 @@ fn extern_store_source_pos(sym: String, edge_idx: i64) -> i64 {
     if sym == String::from("__vow_vec_push_val") && edge_idx == 0 { return 1; }
     if sym == String::from("__vow_vec_push_val_in_arena") && edge_idx == 0 { return 2; }
     if sym == String::from("__vow_vec_set_val") && edge_idx == 0 { return 2; }
-    if (sym == String::from("__vow_map_insert") || sym == String::from("__vow_btreemap_insert"))
-        && edge_idx == 0
-    {
-        return 1;
-    }
-    if (sym == String::from("__vow_map_insert") || sym == String::from("__vow_btreemap_insert"))
-        && edge_idx == 1
-    {
-        return 2;
-    }
-    if sym == String::from("__vow_map_insert_in_arena") && edge_idx == 0 { return 2; }
-    if sym == String::from("__vow_map_insert_in_arena") && edge_idx == 1 { return 3; }
-    if sym == String::from("__vow_btreemap_insert_in_arena") && edge_idx == 0 { return 2; }
-    if sym == String::from("__vow_btreemap_insert_in_arena") && edge_idx == 1 { return 3; }
+    if is_map_insert(sym) && edge_idx == 0 { return 1; }
+    if is_map_insert(sym) && edge_idx == 1 { return 2; }
+    if is_map_insert_in_arena(sym) && edge_idx == 0 { return 2; }
+    if is_map_insert_in_arena(sym) && edge_idx == 1 { return 3; }
     -1
 }
 
@@ -4375,10 +4333,8 @@ fn extern_growth_target_pos(sym: String) -> i64 {
     if sym == String::from("__vow_string_push_byte") { return 0; }
     if sym == String::from("__vow_string_clear") { return 0; }
     if sym == String::from("__vow_string_push_byte_in_arena") { return 1; }
-    if sym == String::from("__vow_map_insert") { return 0; }
-    if sym == String::from("__vow_map_insert_in_arena") { return 1; }
-    if sym == String::from("__vow_btreemap_insert") { return 0; }
-    if sym == String::from("__vow_btreemap_insert_in_arena") { return 1; }
+    if is_map_insert(sym) { return 0; }
+    if is_map_insert_in_arena(sym) { return 1; }
     -1
 }
 

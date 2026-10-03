@@ -663,97 +663,6 @@ fn routed_vec_extern(
                 (sym, None)
             }
         }
-        "__vow_string_new" => {
-            if (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                ("__vow_string_new_in_arena", Some(inst_rgn))
-            }
-        }
-        "__vow_string_from_cstr" => {
-            if (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                ("__vow_string_from_cstr_in_arena", Some(inst_rgn))
-            }
-        }
-        "__vow_string_clone" => {
-            if (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                ("__vow_string_clone_in_arena", Some(inst_rgn))
-            }
-        }
-        "__vow_string_substr" => {
-            if (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                ("__vow_string_substr_in_arena", Some(inst_rgn))
-            }
-        }
-        "__vow_string_substring" => {
-            if (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                ("__vow_string_substring_in_arena", Some(inst_rgn))
-            }
-        }
-        "__vow_string_from_i64" => {
-            if (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                ("__vow_string_from_i64_in_arena", Some(inst_rgn))
-            }
-        }
-        "__vow_string_from_u64" => {
-            if (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                ("__vow_string_from_u64_in_arena", Some(inst_rgn))
-            }
-        }
-        "__vow_string_split" => {
-            if (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                ("__vow_string_split_in_arena", Some(inst_rgn))
-            }
-        }
-        "__vow_string_trim" => {
-            if (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                ("__vow_string_trim_in_arena", Some(inst_rgn))
-            }
-        }
-        "__vow_string_to_upper" => {
-            if (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                ("__vow_string_to_upper_in_arena", Some(inst_rgn))
-            }
-        }
-        "__vow_string_to_lower" => {
-            if (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                ("__vow_string_to_lower_in_arena", Some(inst_rgn))
-            }
-        }
-        "__vow_string_replace" => {
-            if (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                ("__vow_string_replace_in_arena", Some(inst_rgn))
-            }
-        }
-        "__vow_string_join" => {
-            if (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                ("__vow_string_join_in_arena", Some(inst_rgn))
-            }
-        }
         "__vow_string_push_str" => {
             let kind = receiver_rgn & 3;
             if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
@@ -784,13 +693,6 @@ fn routed_vec_extern(
                 (sym, None)
             }
         }
-        "__vow_map_new" => {
-            if (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                ("__vow_map_new_in_arena", Some(inst_rgn))
-            }
-        }
         "__vow_map_insert" => {
             let kind = receiver_rgn & 3;
             if !receiver_route.projection_candidate
@@ -799,13 +701,6 @@ fn routed_vec_extern(
                 ("__vow_map_insert_in_arena", Some(receiver_rgn))
             } else {
                 (sym, None)
-            }
-        }
-        "__vow_btreemap_new" => {
-            if (inst_rgn & 3) == REGION_KIND_ROOT {
-                (sym, None)
-            } else {
-                ("__vow_btreemap_new_in_arena", Some(inst_rgn))
             }
         }
         _ => {
@@ -3482,7 +3377,6 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
 
 /// Builtins returning a fresh heap aggregate, paired with their
 /// `<name>_in_arena` variant (target arena first, then the base parameters).
-#[cfg(test)]
 const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[
     (
         "__vow_string_parse_i64_opt",
@@ -3571,124 +3465,39 @@ const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[
         "__vow_process_stderr_for",
         "__vow_process_stderr_for_in_arena",
     ),
+    ("__vow_map_new", "__vow_map_new_in_arena"),
+    ("__vow_btreemap_new", "__vow_btreemap_new_in_arena"),
+    ("__vow_string_new", "__vow_string_new_in_arena"),
+    ("__vow_string_from_cstr", "__vow_string_from_cstr_in_arena"),
+    ("__vow_string_clone", "__vow_string_clone_in_arena"),
+    ("__vow_string_substr", "__vow_string_substr_in_arena"),
+    ("__vow_string_substring", "__vow_string_substring_in_arena"),
+    ("__vow_string_from_i64", "__vow_string_from_i64_in_arena"),
+    ("__vow_string_from_u64", "__vow_string_from_u64_in_arena"),
+    ("__vow_string_split", "__vow_string_split_in_arena"),
+    ("__vow_string_trim", "__vow_string_trim_in_arena"),
+    ("__vow_string_to_upper", "__vow_string_to_upper_in_arena"),
+    ("__vow_string_to_lower", "__vow_string_to_lower_in_arena"),
+    ("__vow_string_replace", "__vow_string_replace_in_arena"),
+    ("__vow_string_join", "__vow_string_join_in_arena"),
 ];
+// GENERATE:OPERATIONS:END
 
 /// The `_in_arena` variant of a fresh-aggregate builtin, if it has one.
 fn fresh_arena_variant(sym: &str) -> Option<&'static str> {
-    match sym {
-        "__vow_string_parse_i64_opt" => Some("__vow_string_parse_i64_opt_in_arena"),
-        "__vow_string_parse_u64_opt" => Some("__vow_string_parse_u64_opt_in_arena"),
-        "__vow_string_parse_i8_opt" => Some("__vow_string_parse_i8_opt_in_arena"),
-        "__vow_string_parse_u8_opt" => Some("__vow_string_parse_u8_opt_in_arena"),
-        "__vow_string_parse_i16_opt" => Some("__vow_string_parse_i16_opt_in_arena"),
-        "__vow_string_parse_u16_opt" => Some("__vow_string_parse_u16_opt_in_arena"),
-        "__vow_string_parse_i32_opt" => Some("__vow_string_parse_i32_opt_in_arena"),
-        "__vow_string_parse_u32_opt" => Some("__vow_string_parse_u32_opt_in_arena"),
-        "__vow_map_get" => Some("__vow_map_get_in_arena"),
-        "__vow_btreemap_get" => Some("__vow_btreemap_get_in_arena"),
-        "__vow_btreemap_insert" => Some("__vow_btreemap_insert_in_arena"),
-        "__vow_i128_to_u8_try" => Some("__vow_i128_to_u8_try_in_arena"),
-        "__vow_i16_to_i8_try" => Some("__vow_i16_to_i8_try_in_arena"),
-        "__vow_i16_to_u8_try" => Some("__vow_i16_to_u8_try_in_arena"),
-        "__vow_i32_to_i16_try" => Some("__vow_i32_to_i16_try_in_arena"),
-        "__vow_i32_to_i8_try" => Some("__vow_i32_to_i8_try_in_arena"),
-        "__vow_i32_to_u16_try" => Some("__vow_i32_to_u16_try_in_arena"),
-        "__vow_i32_to_u8_try" => Some("__vow_i32_to_u8_try_in_arena"),
-        "__vow_i64_to_i16_try" => Some("__vow_i64_to_i16_try_in_arena"),
-        "__vow_i64_to_i32_try" => Some("__vow_i64_to_i32_try_in_arena"),
-        "__vow_i64_to_i8_try" => Some("__vow_i64_to_i8_try_in_arena"),
-        "__vow_i64_to_u16_try" => Some("__vow_i64_to_u16_try_in_arena"),
-        "__vow_i64_to_u32_try" => Some("__vow_i64_to_u32_try_in_arena"),
-        "__vow_i64_to_u8_try" => Some("__vow_i64_to_u8_try_in_arena"),
-        "__vow_u128_to_u8_try" => Some("__vow_u128_to_u8_try_in_arena"),
-        "__vow_u16_to_i8_try" => Some("__vow_u16_to_i8_try_in_arena"),
-        "__vow_u16_to_u8_try" => Some("__vow_u16_to_u8_try_in_arena"),
-        "__vow_u32_to_i16_try" => Some("__vow_u32_to_i16_try_in_arena"),
-        "__vow_u32_to_i32_try" => Some("__vow_u32_to_i32_try_in_arena"),
-        "__vow_u32_to_i8_try" => Some("__vow_u32_to_i8_try_in_arena"),
-        "__vow_u32_to_u16_try" => Some("__vow_u32_to_u16_try_in_arena"),
-        "__vow_u32_to_u8_try" => Some("__vow_u32_to_u8_try_in_arena"),
-        "__vow_u64_to_i16_try" => Some("__vow_u64_to_i16_try_in_arena"),
-        "__vow_u64_to_i32_try" => Some("__vow_u64_to_i32_try_in_arena"),
-        "__vow_u64_to_i8_try" => Some("__vow_u64_to_i8_try_in_arena"),
-        "__vow_u64_to_u16_try" => Some("__vow_u64_to_u16_try_in_arena"),
-        "__vow_u64_to_u32_try" => Some("__vow_u64_to_u32_try_in_arena"),
-        "__vow_u64_to_u8_try" => Some("__vow_u64_to_u8_try_in_arena"),
-        "__vow_vec_sort" => Some("__vow_vec_sort_in_arena"),
-        "__vow_hex_encode" => Some("__vow_hex_encode_in_arena"),
-        "__vow_hex_decode" => Some("__vow_hex_decode_in_arena"),
-        "__vow_format_f64_bits" => Some("__vow_format_f64_bits_in_arena"),
-        "__vow_fs_read" => Some("__vow_fs_read_in_arena"),
-        "__vow_fs_read_line" => Some("__vow_fs_read_line_in_arena"),
-        "__vow_fs_listdir" => Some("__vow_fs_listdir_in_arena"),
-        "__vow_stdin_read" => Some("__vow_stdin_read_in_arena"),
-        "__vow_args" => Some("__vow_args_in_arena"),
-        "__vow_process_get_stdout" => Some("__vow_process_get_stdout_in_arena"),
-        "__vow_process_get_stderr" => Some("__vow_process_get_stderr_in_arena"),
-        "__vow_process_stdout_for" => Some("__vow_process_stdout_for_in_arena"),
-        "__vow_process_stderr_for" => Some("__vow_process_stderr_for_in_arena"),
-        _ => None,
-    }
+    FRESH_ARENA_VARIANTS
+        .iter()
+        .find(|(base, _)| *base == sym)
+        .map(|&(_, variant)| variant)
 }
 
 /// The base symbol a fresh-aggregate `_in_arena` variant routes from.
 fn fresh_arena_base(sym: &str) -> Option<&'static str> {
-    match sym {
-        "__vow_string_parse_i64_opt_in_arena" => Some("__vow_string_parse_i64_opt"),
-        "__vow_string_parse_u64_opt_in_arena" => Some("__vow_string_parse_u64_opt"),
-        "__vow_string_parse_i8_opt_in_arena" => Some("__vow_string_parse_i8_opt"),
-        "__vow_string_parse_u8_opt_in_arena" => Some("__vow_string_parse_u8_opt"),
-        "__vow_string_parse_i16_opt_in_arena" => Some("__vow_string_parse_i16_opt"),
-        "__vow_string_parse_u16_opt_in_arena" => Some("__vow_string_parse_u16_opt"),
-        "__vow_string_parse_i32_opt_in_arena" => Some("__vow_string_parse_i32_opt"),
-        "__vow_string_parse_u32_opt_in_arena" => Some("__vow_string_parse_u32_opt"),
-        "__vow_map_get_in_arena" => Some("__vow_map_get"),
-        "__vow_btreemap_get_in_arena" => Some("__vow_btreemap_get"),
-        "__vow_btreemap_insert_in_arena" => Some("__vow_btreemap_insert"),
-        "__vow_i128_to_u8_try_in_arena" => Some("__vow_i128_to_u8_try"),
-        "__vow_i16_to_i8_try_in_arena" => Some("__vow_i16_to_i8_try"),
-        "__vow_i16_to_u8_try_in_arena" => Some("__vow_i16_to_u8_try"),
-        "__vow_i32_to_i16_try_in_arena" => Some("__vow_i32_to_i16_try"),
-        "__vow_i32_to_i8_try_in_arena" => Some("__vow_i32_to_i8_try"),
-        "__vow_i32_to_u16_try_in_arena" => Some("__vow_i32_to_u16_try"),
-        "__vow_i32_to_u8_try_in_arena" => Some("__vow_i32_to_u8_try"),
-        "__vow_i64_to_i16_try_in_arena" => Some("__vow_i64_to_i16_try"),
-        "__vow_i64_to_i32_try_in_arena" => Some("__vow_i64_to_i32_try"),
-        "__vow_i64_to_i8_try_in_arena" => Some("__vow_i64_to_i8_try"),
-        "__vow_i64_to_u16_try_in_arena" => Some("__vow_i64_to_u16_try"),
-        "__vow_i64_to_u32_try_in_arena" => Some("__vow_i64_to_u32_try"),
-        "__vow_i64_to_u8_try_in_arena" => Some("__vow_i64_to_u8_try"),
-        "__vow_u128_to_u8_try_in_arena" => Some("__vow_u128_to_u8_try"),
-        "__vow_u16_to_i8_try_in_arena" => Some("__vow_u16_to_i8_try"),
-        "__vow_u16_to_u8_try_in_arena" => Some("__vow_u16_to_u8_try"),
-        "__vow_u32_to_i16_try_in_arena" => Some("__vow_u32_to_i16_try"),
-        "__vow_u32_to_i32_try_in_arena" => Some("__vow_u32_to_i32_try"),
-        "__vow_u32_to_i8_try_in_arena" => Some("__vow_u32_to_i8_try"),
-        "__vow_u32_to_u16_try_in_arena" => Some("__vow_u32_to_u16_try"),
-        "__vow_u32_to_u8_try_in_arena" => Some("__vow_u32_to_u8_try"),
-        "__vow_u64_to_i16_try_in_arena" => Some("__vow_u64_to_i16_try"),
-        "__vow_u64_to_i32_try_in_arena" => Some("__vow_u64_to_i32_try"),
-        "__vow_u64_to_i8_try_in_arena" => Some("__vow_u64_to_i8_try"),
-        "__vow_u64_to_u16_try_in_arena" => Some("__vow_u64_to_u16_try"),
-        "__vow_u64_to_u32_try_in_arena" => Some("__vow_u64_to_u32_try"),
-        "__vow_u64_to_u8_try_in_arena" => Some("__vow_u64_to_u8_try"),
-        "__vow_vec_sort_in_arena" => Some("__vow_vec_sort"),
-        "__vow_hex_encode_in_arena" => Some("__vow_hex_encode"),
-        "__vow_hex_decode_in_arena" => Some("__vow_hex_decode"),
-        "__vow_format_f64_bits_in_arena" => Some("__vow_format_f64_bits"),
-        "__vow_fs_read_in_arena" => Some("__vow_fs_read"),
-        "__vow_fs_read_line_in_arena" => Some("__vow_fs_read_line"),
-        "__vow_fs_listdir_in_arena" => Some("__vow_fs_listdir"),
-        "__vow_stdin_read_in_arena" => Some("__vow_stdin_read"),
-        "__vow_args_in_arena" => Some("__vow_args"),
-        "__vow_process_get_stdout_in_arena" => Some("__vow_process_get_stdout"),
-        "__vow_process_get_stderr_in_arena" => Some("__vow_process_get_stderr"),
-        "__vow_process_stdout_for_in_arena" => Some("__vow_process_stdout_for"),
-        "__vow_process_stderr_for_in_arena" => Some("__vow_process_stderr_for"),
-        _ => None,
-    }
+    FRESH_ARENA_VARIANTS
+        .iter()
+        .find(|(_, variant)| *variant == sym)
+        .map(|&(base, _)| base)
 }
-// GENERATE:OPERATIONS:END
 
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
     let call_conv = obj_module.isa().default_call_conv();
@@ -3815,27 +3624,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "__vow_string_new_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
         "__vow_string_from_cstr" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "__vow_string_from_cstr_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
         "__vow_string_clone" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_string_clone_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
@@ -3910,32 +3703,13 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "__vow_string_from_i64_in_arena" | "__vow_string_from_u64_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
         "__vow_string_substr" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "__vow_string_substr_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
         "__vow_string_substring" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_string_substring_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -3953,12 +3727,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_string_split" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_string_split_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
@@ -3985,20 +3753,7 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "__vow_string_replace_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
         "__vow_string_join" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_string_join_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
@@ -4057,10 +3812,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_map_new" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "__vow_map_new_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.returns.push(AbiParam::new(types::I64));
-        }
         "__vow_map_insert" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -4096,10 +3847,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_btreemap_new" => {
-            sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_btreemap_new_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_btreemap_len" => {
@@ -4305,20 +4052,6 @@ mod tests {
                 "{base} routes to {variant} for a block-owned result"
             );
         }
-    }
-
-    #[test]
-    fn btreemap_new_routes_to_its_allocation_region() {
-        let root = region_root();
-        let block = region_pack(REGION_KIND_BLOCK, 3);
-        assert_eq!(
-            routed_vec_extern("__vow_btreemap_new", root, ReceiverRoute::direct(root)),
-            ("__vow_btreemap_new", None),
-        );
-        assert_eq!(
-            routed_vec_extern("__vow_btreemap_new", block, ReceiverRoute::direct(root)),
-            ("__vow_btreemap_new_in_arena", Some(block)),
-        );
     }
 
     #[test]

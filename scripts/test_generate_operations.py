@@ -769,14 +769,14 @@ class GenRustIrBlockTest(unittest.TestCase):
             "}\n"
             "// GENERATE:OPERATIONS:END"
         )
-        self.assertEqual(go.gen_rust_ir_block(PRINT_OPS), expected)
+        self.assertEqual(go.gen_rust_ir_block(PRINT_OPS, []), expected)
 
     def test_i64_and_ptr_return_tokens_map_to_rust_ty(self):
         i64_op = dict(PRINT_OPS[1])
         i64_op["return"] = "i64"
         ptr_op = dict(PRINT_OPS[1])
         ptr_op["return"] = "ptr"
-        block = go.gen_rust_ir_block([i64_op, ptr_op])
+        block = go.gen_rust_ir_block([i64_op, ptr_op], [])
         self.assertIn(
             f'"{i64_op["name"]}" => Some(("{i64_op["runtime_symbol"]}", Ty::I64)),',
             block,
@@ -789,18 +789,18 @@ class GenRustIrBlockTest(unittest.TestCase):
     def test_arena_routing_heap_fresh_produces_string_heap_arm(self):
         op = dict(PRINT_OPS[1])
         op["arena_routing"] = "heap_fresh"
-        block = go.gen_rust_ir_block([op])
+        block = go.gen_rust_ir_block([op], [])
         self.assertIn(f'"{op["name"]}" => Some(BuiltinResultTag::StringHeap),', block)
 
     def test_arena_routing_none_produces_no_string_heap_arm(self):
         op = dict(PRINT_OPS[1])
         op["arena_routing"] = "none"
-        block = go.gen_rust_ir_block([op])
+        block = go.gen_rust_ir_block([op], [])
         self.assertNotIn("BuiltinResultTag::StringHeap", block)
         self.assertIn("fn catalogue_builtin_result_tag", block)
 
     def test_missing_arena_routing_produces_no_string_heap_arm(self):
-        block = go.gen_rust_ir_block([PRINT_OPS[1]])
+        block = go.gen_rust_ir_block([PRINT_OPS[1]], [])
         self.assertNotIn("BuiltinResultTag::StringHeap", block)
 
 
@@ -827,7 +827,7 @@ class GenCraneliftBlockTest(unittest.TestCase):
             "}\n"
             "// GENERATE:OPERATIONS:END"
         )
-        self.assertEqual(go.gen_cranelift_block(PRINT_OPS), expected)
+        self.assertEqual(go.gen_cranelift_block(PRINT_OPS, []), expected)
 
     def test_non_unit_return_token_pushes_return_slot(self):
         # RETURN_TOKENS only defines "unit" today (clif_ret=None, no push).
@@ -841,7 +841,7 @@ class GenCraneliftBlockTest(unittest.TestCase):
         try:
             op = dict(PRINT_OPS[1])
             op["return"] = "fake_i64"
-            block = go.gen_cranelift_block([op])
+            block = go.gen_cranelift_block([op], [])
         finally:
             del go.RETURN_TOKENS["fake_i64"]
         self.assertIn(
@@ -853,7 +853,7 @@ class GenCraneliftBlockTest(unittest.TestCase):
         i64_op["return"] = "i64"
         ptr_op = dict(PRINT_OPS[1])
         ptr_op["return"] = "ptr"
-        block = go.gen_cranelift_block([i64_op, ptr_op])
+        block = go.gen_cranelift_block([i64_op, ptr_op], [])
         self.assertEqual(
             block.count(
                 "sig.returns.push(AbiParam::new(types::I64));\n            true"
@@ -872,33 +872,33 @@ class ReturnTokensRenderTest(unittest.TestCase):
 
     def test_i64_return_token_renders(self):
         op = self._op("i64")
-        self.assertIn("Ty::I64", go.gen_rust_ir_block([op]))
-        cranelift = go.gen_cranelift_block([op])
+        self.assertIn("Ty::I64", go.gen_rust_ir_block([op], []))
+        cranelift = go.gen_cranelift_block([op], [])
         self.assertIn(
             "sig.returns.push(AbiParam::new(types::I64));\n            true", cranelift
         )
-        self.assertIn("ITY_I64()", go.gen_vow_lower_block([op]))
+        self.assertIn("ITY_I64()", go.gen_vow_lower_block([op], []))
 
     def test_ptr_return_token_renders(self):
         op = self._op("ptr")
-        self.assertIn("Ty::Ptr", go.gen_rust_ir_block([op]))
-        cranelift = go.gen_cranelift_block([op])
+        self.assertIn("Ty::Ptr", go.gen_rust_ir_block([op], []))
+        cranelift = go.gen_cranelift_block([op], [])
         self.assertIn(
             "sig.returns.push(AbiParam::new(types::I64));\n            true", cranelift
         )
-        self.assertIn("ITY_PTR()", go.gen_vow_lower_block([op]))
+        self.assertIn("ITY_PTR()", go.gen_vow_lower_block([op], []))
 
     def test_bool_return_token_renders_as_i64_in_cranelift(self):
         # stdin_ready is the one operation using this token: the Vow surface
         # type is bool, but Cranelift has no dedicated bool return type, so
         # the ABI must still push types::I64 -- never a narrower I8/bool slot.
         op = self._op("bool")
-        self.assertIn("Ty::Bool", go.gen_rust_ir_block([op]))
-        cranelift = go.gen_cranelift_block([op])
+        self.assertIn("Ty::Bool", go.gen_rust_ir_block([op], []))
+        cranelift = go.gen_cranelift_block([op], [])
         self.assertIn(
             "sig.returns.push(AbiParam::new(types::I64));\n            true", cranelift
         )
-        self.assertIn("ITY_BOOL()", go.gen_vow_lower_block([op]))
+        self.assertIn("ITY_BOOL()", go.gen_vow_lower_block([op], []))
 
 
 class GenVowLowerBlockTest(unittest.TestCase):
@@ -924,14 +924,14 @@ class GenVowLowerBlockTest(unittest.TestCase):
             "}\n"
             "// GENERATE:OPERATIONS:END"
         )
-        self.assertEqual(go.gen_vow_lower_block(PRINT_OPS), expected)
+        self.assertEqual(go.gen_vow_lower_block(PRINT_OPS, []), expected)
 
     def test_i64_and_ptr_return_tokens_map_to_ity_const(self):
         i64_op = dict(PRINT_OPS[1])
         i64_op["return"] = "i64"
         ptr_op = dict(PRINT_OPS[1])
         ptr_op["return"] = "ptr"
-        block = go.gen_vow_lower_block([i64_op, ptr_op])
+        block = go.gen_vow_lower_block([i64_op, ptr_op], [])
         self.assertIn(
             f'if name == String::from("{i64_op["name"]}") {{ return ITY_I64(); }}',
             block,
@@ -944,7 +944,7 @@ class GenVowLowerBlockTest(unittest.TestCase):
     def test_arena_routing_heap_fresh_produces_brt_string_arm(self):
         op = dict(PRINT_OPS[1])
         op["arena_routing"] = "heap_fresh"
-        block = go.gen_vow_lower_block([op])
+        block = go.gen_vow_lower_block([op], [])
         self.assertIn(
             f'if name == String::from("{op["name"]}") {{ return BRT_STRING(); }}',
             block,
@@ -953,26 +953,21 @@ class GenVowLowerBlockTest(unittest.TestCase):
     def test_arena_routing_none_produces_no_brt_string_arm(self):
         op = dict(PRINT_OPS[1])
         op["arena_routing"] = "none"
-        block = go.gen_vow_lower_block([op])
+        block = go.gen_vow_lower_block([op], [])
         self.assertNotIn("BRT_STRING()", block)
         self.assertIn("fn catalogue_builtin_result_tag", block)
 
     def test_missing_arena_routing_produces_no_brt_string_arm(self):
-        block = go.gen_vow_lower_block([PRINT_OPS[1]])
+        block = go.gen_vow_lower_block([PRINT_OPS[1]], [])
         self.assertNotIn("BRT_STRING()", block)
 
 
 class GeneratorDeterminismTest(unittest.TestCase):
     def test_repeated_calls_are_byte_identical(self):
-        self.assertEqual(
-            go.gen_rust_ir_block(PRINT_OPS), go.gen_rust_ir_block(PRINT_OPS)
-        )
-        self.assertEqual(
-            go.gen_cranelift_block(PRINT_OPS), go.gen_cranelift_block(PRINT_OPS)
-        )
-        self.assertEqual(
-            go.gen_vow_lower_block(PRINT_OPS), go.gen_vow_lower_block(PRINT_OPS)
-        )
+        for rel_path, gen_fn in go.TARGET_FILES:
+            self.assertEqual(
+                gen_fn(PRINT_OPS, ROUTES), gen_fn(PRINT_OPS, ROUTES), str(rel_path)
+            )
 
 
 class ReplaceBetweenMarkersTest(unittest.TestCase):
@@ -1200,15 +1195,15 @@ class WriteAndCheckProjectionsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             _write_target_fixtures(tmp)
-            go.write_projections(PRINT_OPS, tmp)
-            mismatches = go.check_projections(PRINT_OPS, tmp)
+            go.write_projections(PRINT_OPS, tmp, [])
+            mismatches = go.check_projections(PRINT_OPS, tmp, [])
         self.assertEqual(mismatches, [])
 
     def test_write_actually_splices_generator_output(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             _write_target_fixtures(tmp)
-            go.write_projections(PRINT_OPS, tmp)
+            go.write_projections(PRINT_OPS, tmp, [])
             content = (tmp / "vow-ir/src/lower/mod.rs").read_text()
         self.assertIn("catalogue_builtin_to_runtime", content)
         self.assertIn("fn vow_static_builtin_to_runtime() {}", content)
@@ -1217,12 +1212,12 @@ class WriteAndCheckProjectionsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             _write_target_fixtures(tmp)
-            go.write_projections(PRINT_OPS, tmp)
+            go.write_projections(PRINT_OPS, tmp, [])
             mod_rs = tmp / "vow-ir/src/lower/mod.rs"
             mod_rs.write_text(
                 mod_rs.read_text().replace("print_str", "print_str_TAMPERED")
             )
-            mismatches = go.check_projections(PRINT_OPS, tmp)
+            mismatches = go.check_projections(PRINT_OPS, tmp, [])
         self.assertTrue(any("mod.rs" in m for m in mismatches))
 
     def test_missing_marker_in_target_raises(self):
@@ -1231,7 +1226,7 @@ class WriteAndCheckProjectionsTest(unittest.TestCase):
             _write_target_fixtures(tmp)
             (tmp / "compiler/lower.vow").write_text("no markers at all\n")
             with self.assertRaises(ValueError):
-                go.check_projections(PRINT_OPS, tmp)
+                go.check_projections(PRINT_OPS, tmp, [])
 
     def test_check_projections_reports_every_stale_target(self):
         # A single catalogue edit (e.g. hand-editing operations.json and
@@ -1240,28 +1235,17 @@ class WriteAndCheckProjectionsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             _write_target_fixtures(tmp)
-            go.write_projections(PRINT_OPS, tmp)
+            go.write_projections(PRINT_OPS, tmp, [])
             edited_ops = [dict(op) for op in PRINT_OPS]
             edited_ops[0] = dict(edited_ops[0])
             edited_ops[0]["runtime_symbol"] = "__vow_string_print_v2"
-            mismatches = go.check_projections(edited_ops, tmp)
+            mismatches = go.check_projections(edited_ops, tmp, [])
         stale_targets = " ".join(mismatches)
         self.assertIn("mod.rs", stale_targets)
         self.assertIn("lower.vow", stale_targets)
 
 
-ROUTES = [
-    {
-        "runtime_symbol": "__vow_map_get",
-        "arena_variant": "__vow_map_get_in_arena",
-        "arena_routing": "heap_fresh",
-    },
-    {
-        "runtime_symbol": "__vow_string_parse_i64_opt",
-        "arena_variant": "__vow_string_parse_i64_opt_in_arena",
-        "arena_routing": "heap_fresh",
-    },
-]
+ROUTES = ["__vow_map_get", "__vow_string_parse_i64_opt"]
 
 
 class LoadArenaRoutesTest(unittest.TestCase):
@@ -1282,10 +1266,10 @@ class LoadArenaRoutesTest(unittest.TestCase):
     def test_real_catalogue_routes_load(self):
         ops = go.load_catalogue(REPO_ROOT)
         routes = go.load_arena_routes(REPO_ROOT, ops)
-        symbols = {r["runtime_symbol"] for r in routes}
-        self.assertIn("__vow_vec_sort", symbols)
-        self.assertIn("__vow_btreemap_insert", symbols)
-        self.assertIn("__vow_i64_to_u8_try", symbols)
+        self.assertIn("__vow_vec_sort", routes)
+        self.assertIn("__vow_btreemap_insert", routes)
+        self.assertIn("__vow_btreemap_new", routes)
+        self.assertIn("__vow_i64_to_u8_try", routes)
 
     def test_missing_section_means_no_routes(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1301,10 +1285,6 @@ class LoadArenaRoutesTest(unittest.TestCase):
             self._write(tmp, ROUTES)
             self.assertEqual(go.load_arena_routes(tmp, []), ROUTES)
 
-    def test_variant_must_be_the_in_arena_suffix(self):
-        bad = dict(ROUTES[0], arena_variant="__vow_map_get_arena")
-        self.assertIn("variant must be '__vow_map_get_in_arena'", self._errors([bad]))
-
     def test_duplicate_symbol_raises(self):
         self.assertIn(
             "'__vow_map_get' appears more than once",
@@ -1312,32 +1292,16 @@ class LoadArenaRoutesTest(unittest.TestCase):
         )
 
     def test_variant_of_another_route_cannot_also_be_a_base(self):
-        chained = {
-            "runtime_symbol": "__vow_map_get_in_arena",
-            "arena_variant": "__vow_map_get_in_arena_in_arena",
-            "arena_routing": "heap_fresh",
-        }
-        self.assertIn("appears more than once", self._errors([ROUTES[0], chained]))
-
-    def test_unknown_field_raises(self):
-        bad = dict(ROUTES[0], arena_variants="x")
-        self.assertIn("unknown field", self._errors([bad]))
-
-    def test_missing_field_raises(self):
-        bad = {"runtime_symbol": "__vow_map_get"}
-        self.assertIn("missing field", self._errors([bad]))
-
-    def test_only_heap_fresh_routing_is_supported(self):
-        bad = dict(ROUTES[0], arena_routing="none")
-        self.assertIn("only 'heap_fresh'", self._errors([bad]))
+        self.assertIn(
+            "appears more than once",
+            self._errors([ROUTES[0], "__vow_map_get_in_arena"]),
+        )
 
     def test_malformed_symbol_raises(self):
-        bad = {
-            "runtime_symbol": "map_get",
-            "arena_variant": "map_get_in_arena",
-            "arena_routing": "heap_fresh",
-        }
-        self.assertIn("malformed symbol", self._errors([bad]))
+        self.assertIn("is not a symbol", self._errors(["map_get"]))
+
+    def test_non_string_route_raises(self):
+        self.assertIn("is not a symbol", self._errors([{"runtime_symbol": "x"}]))
 
     def test_heap_fresh_operation_needs_a_route(self):
         op = dict(
@@ -1364,14 +1328,13 @@ class CheckRuntimeExportsTest(unittest.TestCase):
             return go.check_runtime_exports(ROUTES, tmp)
 
     def test_all_symbols_present_is_clean(self):
-        text = " ".join(
-            sym for r in ROUTES for sym in (r["runtime_symbol"], r["arena_variant"])
-        )
+        text = " ".join(sym for r in ROUTES for sym in (r, go.arena_variant(r)))
         self.assertEqual(self._check(text), [])
 
     def test_base_is_not_satisfied_by_its_variant(self):
         text = (
-            " ".join(r["arena_variant"] for r in ROUTES) + " __vow_string_parse_i64_opt"
+            " ".join(go.arena_variant(r) for r in ROUTES)
+            + " __vow_string_parse_i64_opt"
         )
         self.assertEqual(
             self._check(text),
@@ -1379,7 +1342,7 @@ class CheckRuntimeExportsTest(unittest.TestCase):
         )
 
     def test_missing_variant_is_reported(self):
-        text = " ".join(r["runtime_symbol"] for r in ROUTES)
+        text = " ".join(ROUTES)
         self.assertEqual(len(self._check(text)), 2)
 
 
@@ -1424,29 +1387,21 @@ def _eval_vow_symbol_set(source: str, sym: str) -> bool:
 
 
 class VowSymbolSetFnTest(unittest.TestCase):
-    def _real_symbols(self):
-        routes = go.load_arena_routes(REPO_ROOT, go.load_catalogue(REPO_ROOT))
-        return (
-            [r["runtime_symbol"] for r in routes],
-            [r["arena_variant"] for r in routes],
-        )
+    def _real_routes(self):
+        return go.load_arena_routes(REPO_ROOT, go.load_catalogue(REPO_ROOT))
 
     def test_real_routes_match_exactly_their_symbols(self):
-        bases, variants = self._real_symbols()
-        base_fn = go._vow_symbol_set_fn("f", bases)
-        variant_fn = go._vow_symbol_set_fn("g", variants)
-        for sym in bases:
+        routes = self._real_routes()
+        base_fn = go._vow_symbol_set_fn("f", routes)
+        for sym in routes:
             self.assertTrue(_eval_vow_symbol_set(base_fn, sym), sym)
-            self.assertFalse(_eval_vow_symbol_set(variant_fn, sym), sym)
-        for sym in variants:
-            self.assertTrue(_eval_vow_symbol_set(variant_fn, sym), sym)
-            self.assertFalse(_eval_vow_symbol_set(base_fn, sym), sym)
+            self.assertFalse(_eval_vow_symbol_set(base_fn, go.arena_variant(sym)), sym)
 
     def test_near_misses_are_rejected(self):
-        bases, _ = self._real_symbols()
-        base_fn = go._vow_symbol_set_fn("f", bases)
-        known = set(bases)
-        for sym in bases:
+        routes = self._real_routes()
+        base_fn = go._vow_symbol_set_fn("f", routes)
+        known = set(routes)
+        for sym in routes:
             near = {sym[:-1], sym + "x", ""}
             near |= {sym[:i] + "#" + sym[i + 1 :] for i in range(len(sym))}
             for candidate in near - known:
@@ -1458,9 +1413,9 @@ class VowSymbolSetFnTest(unittest.TestCase):
             self.assertFalse(_eval_vow_symbol_set(base_fn, sym), sym)
 
     def test_each_symbol_is_spelled_once_and_length_is_read_first(self):
-        bases, _ = self._real_symbols()
-        source = go._vow_symbol_set_fn("f", bases)
-        self.assertEqual(source.count("String::from("), len(bases))
+        routes = self._real_routes()
+        source = go._vow_symbol_set_fn("f", routes)
+        self.assertEqual(source.count("String::from("), len(routes))
         self.assertIn("let n: u64 = sym.len();", source)
 
     def test_empty_set_matches_nothing(self):
@@ -1469,51 +1424,18 @@ class VowSymbolSetFnTest(unittest.TestCase):
 
 
 class GenFreshRustBlocksTest(unittest.TestCase):
-    def test_region_block_matches_expected_text(self):
-        block = go.gen_region_block(ROUTES)
-        self.assertEqual(
-            block,
-            "// GENERATE:OPERATIONS:START\n"
-            "/// Builtins returning a fresh heap aggregate, paired with their\n"
-            "/// `<name>_in_arena` variant (target arena first, then the base parameters).\n"
-            "pub const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[\n"
-            '    ("__vow_map_get", "__vow_map_get_in_arena"),\n'
-            "    (\n"
-            '        "__vow_string_parse_i64_opt",\n'
-            '        "__vow_string_parse_i64_opt_in_arena",\n'
-            "    ),\n"
-            "];\n"
-            "\n"
-            "/// The `_in_arena` variant of a fresh-aggregate builtin, if it has one.\n"
-            "pub fn fresh_arena_variant(sym: &str) -> Option<&'static str> {\n"
-            "    match sym {\n"
-            '        "__vow_map_get" => Some("__vow_map_get_in_arena"),\n'
-            '        "__vow_string_parse_i64_opt" => Some("__vow_string_parse_i64_opt_in_arena"),\n'
-            "        _ => None,\n"
-            "    }\n"
-            "}\n"
-            "\n"
-            "/// The base symbol a fresh-aggregate `_in_arena` variant routes from.\n"
-            "pub fn fresh_arena_base(sym: &str) -> Option<&'static str> {\n"
-            "    match sym {\n"
-            '        "__vow_map_get_in_arena" => Some("__vow_map_get"),\n'
-            '        "__vow_string_parse_i64_opt_in_arena" => Some("__vow_string_parse_i64_opt"),\n'
-            "        _ => None,\n"
-            "    }\n"
-            "}\n"
-            "// GENERATE:OPERATIONS:END",
-        )
+    def test_region_block_is_the_public_table(self):
+        block = go.gen_region_block(PRINT_OPS, ROUTES)
+        self.assertIn("pub const FRESH_ARENA_VARIANTS", block)
+        self.assertIn('("__vow_map_get", "__vow_map_get_in_arena")', block)
+        self.assertNotIn("fn ", block)
 
-    def test_shim_block_keeps_the_table_private_and_test_only(self):
+    def test_shim_block_keeps_the_table_private(self):
         block = go.gen_shim_block(PRINT_OPS, ROUTES)
         self.assertIn("fn catalogue_extern_sig(", block)
-        self.assertIn("#[cfg(test)]\nconst FRESH_ARENA_VARIANTS", block)
+        self.assertIn("\nconst FRESH_ARENA_VARIANTS", block)
+        self.assertNotIn("cfg(test)", block)
         self.assertNotIn("pub ", block)
-
-    def test_shim_block_is_deterministic(self):
-        self.assertEqual(
-            go.gen_shim_block(PRINT_OPS, ROUTES), go.gen_shim_block(PRINT_OPS, ROUTES)
-        )
 
 
 class FreshRouteProjectionsTest(unittest.TestCase):

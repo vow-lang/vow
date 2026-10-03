@@ -268,89 +268,11 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         }
         return sym;
     }
-    if sym == String::from("__vow_string_new") {
-        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_string_new_in_arena");
-    }
-    if sym == String::from("__vow_string_from_cstr") {
-        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_string_from_cstr_in_arena");
-    }
-    if sym == String::from("__vow_string_clone") {
-        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_string_clone_in_arena");
-    }
-    if sym == String::from("__vow_string_substr") {
-        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_string_substr_in_arena");
-    }
-    if sym == String::from("__vow_string_substring") {
-        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_string_substring_in_arena");
-    }
-    if sym == String::from("__vow_string_from_i64") {
-        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_string_from_i64_in_arena");
-    }
-    if sym == String::from("__vow_string_from_u64") {
-        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_string_from_u64_in_arena");
-    }
     if fresh_arena_base_extern(sym) {
         if region_kind(inst.rgn) == REGION_KIND_ROOT() {
             return sym;
         }
         return fresh_arena_variant_name(sym);
-    }
-    if sym == String::from("__vow_string_split") {
-        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_string_split_in_arena");
-    }
-    if sym == String::from("__vow_string_trim") {
-        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_string_trim_in_arena");
-    }
-    if sym == String::from("__vow_string_to_upper") {
-        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_string_to_upper_in_arena");
-    }
-    if sym == String::from("__vow_string_to_lower") {
-        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_string_to_lower_in_arena");
-    }
-    if sym == String::from("__vow_string_replace") {
-        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_string_replace_in_arena");
-    }
-    if sym == String::from("__vow_string_join") {
-        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_string_join_in_arena");
     }
     if sym == String::from("__vow_string_push_str") {
         let sr: i64 = clif_receiver_route(f, inst);
@@ -375,18 +297,6 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
             return String::from("__vow_string_push_byte_in_arena");
         }
         return sym;
-    }
-    if sym == String::from("__vow_map_new") {
-        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_map_new_in_arena");
-    }
-    if sym == String::from("__vow_btreemap_new") {
-        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
-            return sym;
-        }
-        return String::from("__vow_btreemap_new_in_arena");
     }
     if sym == String::from("__vow_map_insert") {
         let mr: i64 = clif_receiver_route(f, inst);

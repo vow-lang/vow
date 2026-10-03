@@ -6,10 +6,10 @@ hand-edited source of runtime-symbol/ABI/return-shape/doc facts for a set of
 Builtin Operations) and splices generated lookup functions into:
   - vow-ir/src/lower/mod.rs           (catalogue_builtin_to_runtime)
   - vow-codegen/src/cranelift_backend.rs (catalogue_extern_sig)
-  - vow-clif-shim/src/lib.rs             (catalogue_extern_sig, fresh arena table)
+  - vow-clif-shim/src/lib.rs             (catalogue_extern_sig, FRESH_ARENA_VARIANTS)
   - compiler/lower.vow                (catalogue_builtin_to_extern, catalogue_builtin_ret_ty)
-  - vow-ir/src/region.rs              (FRESH_ARENA_VARIANTS and its two lookups)
-  - compiler/ir.vow                   (fresh_arena_base_extern, fresh_arena_variant_extern)
+  - vow-ir/src/region.rs              (FRESH_ARENA_VARIANTS)
+  - compiler/ir.vow                   (fresh_arena_base_extern)
 between `// GENERATE:OPERATIONS:START` / `// GENERATE:OPERATIONS:END` markers.
 
 Usage:
@@ -271,16 +271,20 @@ def load_catalogue(repo_root: Path) -> list[dict]:
     return ops
 
 
-ARENA_ROUTE_FIELDS = {"runtime_symbol", "arena_variant", "arena_routing"}
 ARENA_SYMBOL_RE = re.compile(r"^__vow_[a-z0-9_]+$")
 ARENA_VARIANT_SUFFIX = "_in_arena"
 
 
-def load_arena_routes(repo_root: Path, ops: list[dict]) -> list[dict]:
-    """Read and validate the catalogue's `arena_routes` section: every runtime
-    builtin whose result is a fresh heap aggregate (an Option cell, a String or
-    a Vec), paired with the `<symbol>_in_arena` variant that takes the target
-    arena as its first argument. A catalogue without the section has none.
+def arena_variant(symbol: str) -> str:
+    return f"{symbol}{ARENA_VARIANT_SUFFIX}"
+
+
+def load_arena_routes(repo_root: Path, ops: list[dict]) -> list[str]:
+    """Read and validate the catalogue's `arena_routes` section: the runtime
+    symbols of every builtin whose result is a fresh heap aggregate (an Option
+    cell, a String or a Vec). Each has a `<symbol>_in_arena` variant that takes
+    the target arena as its first argument. A catalogue without the section
+    has none.
 
     Collects every violation before raising a ValueError, like load_catalogue.
     """
@@ -291,48 +295,22 @@ def load_arena_routes(repo_root: Path, ops: list[dict]) -> list[dict]:
 
     errors: list[str] = []
     seen: set[str] = set()
-    for route in routes:
-        if not isinstance(route, dict):
-            errors.append(f"arena route {route!r} is not an object")
+    for symbol in routes:
+        if not isinstance(symbol, str) or not ARENA_SYMBOL_RE.match(symbol):
+            errors.append(
+                f"arena route {symbol!r} is not a symbol "
+                f"(expected {ARENA_SYMBOL_RE.pattern})"
+            )
             continue
-        symbol = route.get("runtime_symbol", "<unnamed>")
-        missing = sorted(ARENA_ROUTE_FIELDS - set(route))
-        if missing:
-            errors.append(f"arena route '{symbol}' is missing field(s) {missing}")
-            continue
-        unknown = set(route) - ARENA_ROUTE_FIELDS
-        if unknown:
-            errors.append(
-                f"arena route '{symbol}' has unknown field(s) {sorted(unknown)} "
-                f"(allowed: {sorted(ARENA_ROUTE_FIELDS)})"
-            )
-        if route["arena_routing"] != "heap_fresh":
-            errors.append(
-                f"arena route '{symbol}' has arena_routing '{route['arena_routing']}' "
-                "(only 'heap_fresh' routes are supported)"
-            )
-        variant = route["arena_variant"]
-        for sym in (symbol, variant):
-            if not isinstance(sym, str) or not ARENA_SYMBOL_RE.match(sym):
-                errors.append(
-                    f"arena route '{symbol}' names malformed symbol {sym!r} "
-                    f"(expected {ARENA_SYMBOL_RE.pattern})"
-                )
-        if variant != f"{symbol}{ARENA_VARIANT_SUFFIX}":
-            errors.append(
-                f"arena route '{symbol}' variant must be "
-                f"'{symbol}{ARENA_VARIANT_SUFFIX}', got {variant!r}"
-            )
-        for sym in (symbol, variant):
+        for sym in (symbol, arena_variant(symbol)):
             if sym in seen:
                 errors.append(f"arena route symbol '{sym}' appears more than once")
             seen.add(sym)
 
-    route_symbols = {r.get("runtime_symbol") for r in routes if isinstance(r, dict)}
     for op in ops:
         if (
             op.get("arena_routing") == "heap_fresh"
-            and op["runtime_symbol"] not in route_symbols
+            and op["runtime_symbol"] not in routes
         ):
             errors.append(
                 f"operation '{op['name']}' is heap_fresh but its runtime_symbol "
@@ -344,14 +322,14 @@ def load_arena_routes(repo_root: Path, ops: list[dict]) -> list[dict]:
     return routes
 
 
-def check_runtime_exports(routes: list[dict], repo_root: Path) -> list[str]:
+def check_runtime_exports(routes: list[str], repo_root: Path) -> list[str]:
     """Every arena route's base and variant symbol must appear as an
     identifier in vow-runtime (some are generated by macros there), or a
     backend would call a symbol that does not link."""
     runtime = (repo_root / "vow-runtime" / "src" / "lib.rs").read_text()
     mismatches: list[str] = []
     for route in routes:
-        for sym in (route["runtime_symbol"], route["arena_variant"]):
+        for sym in (route, arena_variant(route)):
             if not re.search(rf"\b{re.escape(sym)}\b", runtime):
                 mismatches.append(f"vow-runtime/src/lib.rs: does not define '{sym}'")
     return mismatches
@@ -367,7 +345,7 @@ def _wrap_marker_block(body: str) -> str:
     return f"{MARKER_START}\n{body}{MARKER_END}"
 
 
-def gen_rust_ir_block(ops: list[dict]) -> str:
+def gen_rust_ir_block(ops: list[dict], routes: list[str]) -> str:
     arms = "\n".join(
         f'        "{op["name"]}" => Some(("{op["runtime_symbol"]}", '
         f"{RETURN_TOKENS[op['return']]['rust_ty']})),"
@@ -420,66 +398,42 @@ def _cranelift_sig_fn(ops: list[dict]) -> str:
     )
 
 
-def gen_cranelift_block(ops: list[dict]) -> str:
+def gen_cranelift_block(ops: list[dict], routes: list[str]) -> str:
     return _wrap_marker_block(_cranelift_sig_fn(ops))
 
 
-# rustfmt keeps a tuple on one line only while it fits `fn_call_width` (60).
+# rustfmt keeps a tuple on one line only while its elements fit `fn_call_width` (60).
 RUSTFMT_TUPLE_WIDTH = 60
 
 
-def _rust_fresh_table(routes: list[dict], pub_items: bool, cfg_test: bool) -> str:
+def _rust_fresh_table(routes: list[str], pub_items: bool) -> str:
     rows = []
-    for route in routes:
-        base, variant = route["runtime_symbol"], route["arena_variant"]
-        tuple_text = f'("{base}", "{variant}")'
-        if len(tuple_text) <= RUSTFMT_TUPLE_WIDTH:
-            rows.append(f"    {tuple_text},")
+    for base in routes:
+        inner = f'"{base}", "{arena_variant(base)}"'
+        if len(inner) <= RUSTFMT_TUPLE_WIDTH:
+            rows.append(f"    ({inner}),")
         else:
-            rows.append(f'    (\n        "{base}",\n        "{variant}",\n    ),')
+            rows.append(
+                f'    (\n        "{base}",\n        "{arena_variant(base)}",\n    ),'
+            )
     visibility = "pub " if pub_items else ""
-    attr = "#[cfg(test)]\n" if cfg_test else ""
     table_rows = "\n".join(rows)
-    variant_arms = "\n".join(
-        f'        "{r["runtime_symbol"]}" => Some("{r["arena_variant"]}"),'
-        for r in routes
-    )
-    base_arms = "\n".join(
-        f'        "{r["arena_variant"]}" => Some("{r["runtime_symbol"]}"),'
-        for r in routes
-    )
     return (
         "/// Builtins returning a fresh heap aggregate, paired with their\n"
         "/// `<name>_in_arena` variant (target arena first, then the base parameters).\n"
-        f"{attr}{visibility}const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[\n"
+        f"{visibility}const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[\n"
         f"{table_rows}\n"
         "];\n"
-        "\n"
-        "/// The `_in_arena` variant of a fresh-aggregate builtin, if it has one.\n"
-        f"{visibility}fn fresh_arena_variant(sym: &str) -> Option<&'static str> {{\n"
-        "    match sym {\n"
-        f"{variant_arms}\n"
-        "        _ => None,\n"
-        "    }\n"
-        "}\n"
-        "\n"
-        "/// The base symbol a fresh-aggregate `_in_arena` variant routes from.\n"
-        f"{visibility}fn fresh_arena_base(sym: &str) -> Option<&'static str> {{\n"
-        "    match sym {\n"
-        f"{base_arms}\n"
-        "        _ => None,\n"
-        "    }\n"
-        "}\n"
     )
 
 
-def gen_region_block(routes: list[dict]) -> str:
-    return _wrap_marker_block(_rust_fresh_table(routes, True, False))
+def gen_region_block(ops: list[dict], routes: list[str]) -> str:
+    return _wrap_marker_block(_rust_fresh_table(routes, True))
 
 
-def gen_shim_block(ops: list[dict], routes: list[dict]) -> str:
+def gen_shim_block(ops: list[dict], routes: list[str]) -> str:
     return _wrap_marker_block(
-        _cranelift_sig_fn(ops) + "\n" + _rust_fresh_table(routes, False, True)
+        _cranelift_sig_fn(ops) + "\n" + _rust_fresh_table(routes, False)
     )
 
 
@@ -518,17 +472,11 @@ def _vow_symbol_set_fn(name: str, symbols: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def gen_vow_ir_block(routes: list[dict]) -> str:
-    bases = [r["runtime_symbol"] for r in routes]
-    variants = [r["arena_variant"] for r in routes]
-    return _wrap_marker_block(
-        _vow_symbol_set_fn("fresh_arena_base_extern", bases)
-        + "\n"
-        + _vow_symbol_set_fn("fresh_arena_variant_extern", variants)
-    )
+def gen_vow_ir_block(ops: list[dict], routes: list[str]) -> str:
+    return _wrap_marker_block(_vow_symbol_set_fn("fresh_arena_base_extern", routes))
 
 
-def gen_vow_lower_block(ops: list[dict]) -> str:
+def gen_vow_lower_block(ops: list[dict], routes: list[str]) -> str:
     extern_arms = "\n".join(
         f'    if name == String::from("{op["name"]}") '
         f'{{ return String::from("{op["runtime_symbol"]}"); }}'
@@ -686,25 +634,19 @@ def check_doc_facts(ops: list[dict], repo_root: Path) -> list[str]:
     return mismatches
 
 
-# Each generator takes (ops, routes): the catalogue's operations and its
-# arena routes.
+# Every generator takes (ops, routes): the catalogue's operations and the
+# runtime symbols of its arena routes.
 TARGET_FILES = [
-    (Path("vow-ir/src/lower/mod.rs"), lambda ops, routes: gen_rust_ir_block(ops)),
-    (
-        Path("vow-codegen/src/cranelift_backend.rs"),
-        lambda ops, routes: gen_cranelift_block(ops),
-    ),
+    (Path("vow-ir/src/lower/mod.rs"), gen_rust_ir_block),
+    (Path("vow-codegen/src/cranelift_backend.rs"), gen_cranelift_block),
     (Path("vow-clif-shim/src/lib.rs"), gen_shim_block),
-    (Path("compiler/lower.vow"), lambda ops, routes: gen_vow_lower_block(ops)),
-    (Path("vow-ir/src/region.rs"), lambda ops, routes: gen_region_block(routes)),
-    (Path("compiler/ir.vow"), lambda ops, routes: gen_vow_ir_block(routes)),
+    (Path("compiler/lower.vow"), gen_vow_lower_block),
+    (Path("vow-ir/src/region.rs"), gen_region_block),
+    (Path("compiler/ir.vow"), gen_vow_ir_block),
 ]
 
 
-def write_projections(
-    ops: list[dict], repo_root: Path, routes: list[dict] | None = None
-) -> None:
-    routes = routes or []
+def write_projections(ops: list[dict], repo_root: Path, routes: list[str]) -> None:
     for rel_path, gen_fn in TARGET_FILES:
         path = repo_root / rel_path
         content = path.read_text()
@@ -714,13 +656,10 @@ def write_projections(
         path.write_text(new_content)
 
 
-def check_projections(
-    ops: list[dict], repo_root: Path, routes: list[dict] | None = None
-) -> list[str]:
+def check_projections(ops: list[dict], repo_root: Path, routes: list[str]) -> list[str]:
     """Regenerate each target's block in-memory and diff it against what is
     currently spliced into the checked-in file. Raises if a target is
     missing its marker pair (never silently reports clean)."""
-    routes = routes or []
     mismatches: list[str] = []
     for rel_path, gen_fn in TARGET_FILES:
         path = repo_root / rel_path

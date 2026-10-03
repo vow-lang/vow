@@ -800,58 +800,6 @@ fn routed_vec_extern<'a>(
                 _ => (sym, None),
             }
         }
-        "__vow_string_new" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_new_in_arena", Some(region)),
-        },
-        "__vow_string_from_cstr" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_from_cstr_in_arena", Some(region)),
-        },
-        "__vow_string_clone" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_clone_in_arena", Some(region)),
-        },
-        "__vow_string_substr" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_substr_in_arena", Some(region)),
-        },
-        "__vow_string_substring" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_substring_in_arena", Some(region)),
-        },
-        "__vow_string_from_i64" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_from_i64_in_arena", Some(region)),
-        },
-        "__vow_string_from_u64" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_from_u64_in_arena", Some(region)),
-        },
-        "__vow_string_split" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_split_in_arena", Some(region)),
-        },
-        "__vow_string_trim" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_trim_in_arena", Some(region)),
-        },
-        "__vow_string_to_upper" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_to_upper_in_arena", Some(region)),
-        },
-        "__vow_string_to_lower" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_to_lower_in_arena", Some(region)),
-        },
-        "__vow_string_replace" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_replace_in_arena", Some(region)),
-        },
-        "__vow_string_join" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_string_join_in_arena", Some(region)),
-        },
         "__vow_string_push_str" => {
             let route = first_arg_route(inst, inst_index, current_summary, phi_data);
             match route {
@@ -876,10 +824,6 @@ fn routed_vec_extern<'a>(
                 _ => (sym, None),
             }
         }
-        "__vow_map_new" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_map_new_in_arena", Some(region)),
-        },
         "__vow_map_insert" => {
             let route = first_arg_route(inst, inst_index, current_summary, phi_data);
             match route {
@@ -889,10 +833,6 @@ fn routed_vec_extern<'a>(
                 _ => (sym, None),
             }
         }
-        "__vow_btreemap_new" => match inst.region {
-            RegionId::Root => (sym, None),
-            region => ("__vow_btreemap_new_in_arena", Some(region)),
-        },
         _ => {
             if let Some(variant) = fresh_arena_variant(sym) {
                 match inst.region {
@@ -2688,27 +2628,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // len
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_new_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // ptr
-            sig.params.push(AbiParam::new(types::I64)); // len
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         "__vow_string_from_cstr" => {
             sig.params.push(AbiParam::new(types::I64)); // C-string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_from_cstr_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // C-string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         "__vow_string_clone" => {
-            sig.params.push(AbiParam::new(types::I64)); // source string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // copied *VowVec<u8>
-        }
-        "__vow_string_clone_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // source string ptr
             sig.returns.push(AbiParam::new(types::I64)); // copied *VowVec<u8>
         }
@@ -2783,32 +2707,13 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // value
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_from_i64_in_arena" | "__vow_string_from_u64_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // value
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         "__vow_string_substr" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // start
             sig.params.push(AbiParam::new(types::I64)); // len
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_substr_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.params.push(AbiParam::new(types::I64)); // start
-            sig.params.push(AbiParam::new(types::I64)); // len
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         "__vow_string_substring" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.params.push(AbiParam::new(types::I64)); // start
-            sig.params.push(AbiParam::new(types::I64)); // end (exclusive)
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_string_substring_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // start
             sig.params.push(AbiParam::new(types::I64)); // end (exclusive)
@@ -2830,12 +2735,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // separator ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<String>
         }
-        "__vow_string_split_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // haystack ptr
-            sig.params.push(AbiParam::new(types::I64)); // separator ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<String>
-        }
         "__vow_string_starts_with" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // prefix ptr
@@ -2850,26 +2749,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_trim_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         "__vow_string_to_upper" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_to_upper_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         "__vow_string_to_lower" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_string_to_lower_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
@@ -2879,20 +2763,7 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // to ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_replace_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.params.push(AbiParam::new(types::I64)); // from ptr
-            sig.params.push(AbiParam::new(types::I64)); // to ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
         "__vow_string_join" => {
-            sig.params.push(AbiParam::new(types::I64)); // vec ptr
-            sig.params.push(AbiParam::new(types::I64)); // separator ptr
-            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_string_join_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
             sig.params.push(AbiParam::new(types::I64)); // separator ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
@@ -2952,10 +2823,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_map_new" => {
             sig.returns.push(AbiParam::new(types::I64)); // *VowMap
         }
-        "__vow_map_new_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
-            sig.returns.push(AbiParam::new(types::I64)); // *VowMap
-        }
         "__vow_map_insert" => {
             sig.params.push(AbiParam::new(types::I64)); // map ptr
             sig.params.push(AbiParam::new(types::I64)); // key
@@ -2992,10 +2859,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         // BTreeMap runtime — sorted parallel-Vec backing
         "__vow_btreemap_new" => {
-            sig.returns.push(AbiParam::new(types::I64)); // *VowBTreeMap
-        }
-        "__vow_btreemap_new_in_arena" => {
-            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.returns.push(AbiParam::new(types::I64)); // *VowBTreeMap
         }
         "__vow_btreemap_len" => {
@@ -5537,156 +5400,70 @@ mod tests {
         );
     }
 
-    #[test]
-    fn block_region_fresh_string_helpers_import_arena_variants() {
-        let cases = [
-            ("__vow_string_split", "__vow_string_split_in_arena", 2),
-            ("__vow_string_trim", "__vow_string_trim_in_arena", 1),
-            ("__vow_string_to_upper", "__vow_string_to_upper_in_arena", 1),
-            ("__vow_string_to_lower", "__vow_string_to_lower_in_arena", 1),
-            ("__vow_string_replace", "__vow_string_replace_in_arena", 3),
-            ("__vow_string_join", "__vow_string_join_in_arena", 2),
-            (
-                "__vow_string_parse_i64_opt",
-                "__vow_string_parse_i64_opt_in_arena",
-                1,
-            ),
-            ("__vow_map_get", "__vow_map_get_in_arena", 2),
-            ("__vow_btreemap_get", "__vow_btreemap_get_in_arena", 2),
-            ("__vow_btreemap_new", "__vow_btreemap_new_in_arena", 0),
-            ("__vow_btreemap_insert", "__vow_btreemap_insert_in_arena", 3),
-            (
-                "__vow_string_parse_u64_opt",
-                "__vow_string_parse_u64_opt_in_arena",
-                1,
-            ),
-            ("__vow_i64_to_u8_try", "__vow_i64_to_u8_try_in_arena", 1),
-            ("__vow_u64_to_u32_try", "__vow_u64_to_u32_try_in_arena", 1),
-            ("__vow_vec_sort", "__vow_vec_sort_in_arena", 1),
-            ("__vow_hex_encode", "__vow_hex_encode_in_arena", 1),
-            ("__vow_hex_decode", "__vow_hex_decode_in_arena", 1),
-            ("__vow_format_f64_bits", "__vow_format_f64_bits_in_arena", 1),
-            ("__vow_fs_read", "__vow_fs_read_in_arena", 1),
-            ("__vow_fs_read_line", "__vow_fs_read_line_in_arena", 1),
-            ("__vow_fs_listdir", "__vow_fs_listdir_in_arena", 1),
-            ("__vow_stdin_read", "__vow_stdin_read_in_arena", 0),
-            ("__vow_args", "__vow_args_in_arena", 0),
-            (
-                "__vow_process_get_stdout",
-                "__vow_process_get_stdout_in_arena",
-                0,
-            ),
-            (
-                "__vow_process_get_stderr",
-                "__vow_process_get_stderr_in_arena",
-                0,
-            ),
-            (
-                "__vow_process_stdout_for",
-                "__vow_process_stdout_for_in_arena",
-                1,
-            ),
-            (
-                "__vow_process_stderr_for",
-                "__vow_process_stderr_for_in_arena",
-                1,
-            ),
-        ];
-
-        let mut insts = vec![
-            inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
-            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
-            inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
-        ];
-        for (idx, (sym, _, arity)) in cases.iter().enumerate() {
-            let mut call = inst(
-                10 + idx as u32,
-                Opcode::Call,
-                Ty::Ptr,
-                (0..*arity).collect(),
-                InstData::CallExtern((*sym).to_string()),
-            );
-            call.region = RegionId::Block(BlockId(0));
-            insts.push(call);
-        }
-        insts.push(inst(90, Opcode::Return, Ty::Unit, vec![], InstData::None));
-
-        let module = make_module("test", vec![simple_fn(0, "f", vec![], Ty::Unit, insts)]);
-        let result =
-            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
-        assert!(result.is_ok(), "{:?}", result.err());
-
-        let bytes = result.unwrap().bytes;
-        let symbols = compiled_object_symbols(bytes.as_slice());
-
-        for (root, routed, _) in cases {
-            assert!(symbols.contains(routed), "{routed} should be imported");
-            assert!(!symbols.contains(root), "{root} should not be imported");
-        }
-    }
-
-    #[test]
-    fn root_region_fresh_builtins_keep_wrapper_symbols() {
-        let cases = [
-            ("__vow_btreemap_get", 2),
-            ("__vow_btreemap_new", 0),
-            ("__vow_btreemap_insert", 3),
-            ("__vow_string_parse_u64_opt", 1),
-            ("__vow_i64_to_u8_try", 1),
-            ("__vow_vec_sort", 1),
-            ("__vow_hex_encode", 1),
-            ("__vow_hex_decode", 1),
-            ("__vow_format_f64_bits", 1),
-            ("__vow_fs_read", 1),
-            ("__vow_fs_read_line", 1),
-            ("__vow_fs_listdir", 1),
-            ("__vow_stdin_read", 0),
-            ("__vow_args", 0),
-            ("__vow_process_get_stdout", 0),
-            ("__vow_process_get_stderr", 0),
-            ("__vow_process_stdout_for", 1),
-            ("__vow_process_stderr_for", 1),
-        ];
-        let mut insts = vec![
-            inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
-            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
-            inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
-        ];
-        for (idx, (sym, arity)) in cases.iter().enumerate() {
-            insts.push(inst(
-                10 + idx as u32,
-                Opcode::Call,
-                Ty::Ptr,
-                (0..*arity).collect(),
-                InstData::CallExtern((*sym).to_string()),
-            ));
-        }
-        insts.push(inst(90, Opcode::Return, Ty::Unit, vec![], InstData::None));
-
-        let module = make_module("test", vec![simple_fn(0, "f", vec![], Ty::Unit, insts)]);
-        let result =
-            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
-        assert!(result.is_ok(), "{:?}", result.err());
-
-        let symbols = compiled_object_symbols(result.unwrap().bytes.as_slice());
-        for (root, _) in cases {
-            assert!(symbols.contains(root), "{root} should be imported");
-            let variant = format!("{root}_in_arena");
-            assert!(!symbols.contains(variant.as_str()), "{variant} unexpected");
-        }
-    }
-
-    #[test]
-    fn fresh_arena_variant_signatures_prepend_the_arena_to_the_base() {
+    fn extern_sig_test_module() -> ObjectModule {
         let isa = make_isa(BuildMode::Debug).unwrap();
-        let obj_module = ObjectModule::new(
+        ObjectModule::new(
             ObjectBuilder::new(
                 isa,
                 b"sig".to_vec(),
                 cranelift_module::default_libcall_names(),
             )
             .unwrap(),
-        );
+        )
+    }
+
+    fn fresh_builtin_call_symbols(region: Option<RegionId>) -> HashSet<String> {
+        let obj_module = extern_sig_test_module();
+        let mut insts = vec![
+            inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+        ];
+        for (idx, (base, _)) in vow_ir::FRESH_ARENA_VARIANTS.iter().enumerate() {
+            let arity = make_extern_sig(base, &obj_module).params.len() as u32;
+            assert!(arity <= 3, "{base} needs more argument constants");
+            let mut call = inst(
+                10 + idx as u32,
+                Opcode::Call,
+                Ty::Ptr,
+                (0..arity).collect(),
+                InstData::CallExtern((*base).to_string()),
+            );
+            if let Some(region) = region {
+                call.region = region;
+            }
+            insts.push(call);
+        }
+        insts.push(inst(900, Opcode::Return, Ty::Unit, vec![], InstData::None));
+
+        let module = make_module("test", vec![simple_fn(0, "f", vec![], Ty::Unit, insts)]);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+        compiled_object_symbols(result.unwrap().bytes.as_slice())
+    }
+
+    #[test]
+    fn block_region_fresh_builtins_import_arena_variants() {
+        let symbols = fresh_builtin_call_symbols(Some(RegionId::Block(BlockId(0))));
+        for (base, variant) in vow_ir::FRESH_ARENA_VARIANTS {
+            assert!(symbols.contains(*variant), "{variant} should be imported");
+            assert!(!symbols.contains(*base), "{base} should not be imported");
+        }
+    }
+
+    #[test]
+    fn root_region_fresh_builtins_keep_wrapper_symbols() {
+        let symbols = fresh_builtin_call_symbols(None);
+        for (base, variant) in vow_ir::FRESH_ARENA_VARIANTS {
+            assert!(symbols.contains(*base), "{base} should be imported");
+            assert!(!symbols.contains(*variant), "{variant} unexpected");
+        }
+    }
+
+    #[test]
+    fn fresh_arena_variant_signatures_prepend_the_arena_to_the_base() {
+        let obj_module = extern_sig_test_module();
         for (base, variant) in vow_ir::FRESH_ARENA_VARIANTS {
             let base_sig = make_extern_sig(base, &obj_module);
             let variant_sig = make_extern_sig(variant, &obj_module);
