@@ -15,7 +15,7 @@ fn vec_sum(v: Vec<i64>) -> i64
 
 - `vec_sum` is currently uncontracted because Vow cannot yet express a fold over
   all Vec elements
-- The loop counter `i` is a `u64` local, so it needs no `invariant: i >= 0`; bridge with `n as u64` in `make_vec` (`v.len()` is already `u64` in `vec_sum`)
+- The loop counter `i` is a `u64` local, so it needs no `invariant: i >= 0`; convert with `n as u64` in `make_vec`
 - Loop `invariant: i <= n as u64` in `make_vec` and `invariant: i <= v.len()` in `vec_sum`
 
 ## Constraints

@@ -13,7 +13,7 @@ fn sorted_insert(v: Vec<i64>, val: i64) -> Vec<i64>
 ## Contracts
 
 - `ensures: result.len() == v.len() + 1` — one element added
-- `i` is a `u64` local, so it needs no `>= 0` invariant (`v.len()` is already `u64`)
+- `i` is a `u64` local, so it needs no `>= 0` invariant
 - Loop `invariant: i <= v.len()`
 
 ## Constraints

@@ -14,7 +14,7 @@ fn count_tokens(v: Vec<i64>) -> i64
 
 - `ensures: result >= 0` — token count is non-negative
 - `ensures: result <= v.len() as i64` — at most as many tokens as elements
-- `count` and `i` are `u64` locals, so they need no `>= 0` invariants; `v.len()` is already `u64`; bridge with `count as i64`
+- `count` and `i` are `u64` locals, so they need no `>= 0` invariants; convert with `count as i64`
 - Loop `invariant: count <= i`
 - Loop `invariant: i <= v.len()`
 
