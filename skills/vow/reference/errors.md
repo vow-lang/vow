@@ -118,8 +118,9 @@ fn f(v: Vec<i64>, i: i64) -> i64 {
 
 **Fix:** Keep index counters `u64` (`.len()` is already `u64`), or convert at
 the index site with `as u64` (`v[i as u64]`). Unsuffixed integer literals
-coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`) are
-not `u64` in v1 and are unaffected; see
+coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`,
+`string_substr`, `string_matches_literal_at`) follow the same exact-`u64` rule,
+and `push_byte` takes exactly `u8`; see
 [String offsets](grammar.md#string-offsets).
 
 ### LiteralOutOfRange

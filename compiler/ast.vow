@@ -374,14 +374,7 @@ fn ext_vow_lid(a: AstArena, xid: i64) -> i64 { a.ext_data[(xid * 3) as u64] }
 fn ext_fns_lid(a: AstArena, xid: i64) -> i64 { a.ext_data[(xid * 3 + 1) as u64] }
 
 fn clone_string(src: String) -> String {
-    let out: String = String::from("");
-    let n: u64 = src.len();
-    let mut i: u64 = 0u64;
-    while i < n {
-        out.push_byte(src.byte_at(i as i64));
-        i = i + 1;
-    }
-    out
+    src.substring(0, src.len())
 }
 
 fn arena_str(a: AstArena, sid: i64) -> String { a.strs[sid as u64] }

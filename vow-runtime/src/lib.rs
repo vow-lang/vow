@@ -1931,11 +1931,11 @@ pub unsafe extern "C" fn __vow_string_contains(haystack: *const u8, needle: *con
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_matches_literal_at(
     s: *const u8,
-    pos: i64,
+    pos: u64,
     literal_ptr: *const u8,
-    literal_len: i64,
+    literal_len: u64,
 ) -> i64 {
-    if s.is_null() || literal_ptr.is_null() || pos < 0 || literal_len < 0 {
+    if s.is_null() || literal_ptr.is_null() {
         return 0;
     }
     sanitize_on_read(s as usize, 0);
@@ -2085,10 +2085,10 @@ pub unsafe extern "C" fn __vow_string_print(s: *const u8) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_byte_at(s: *const u8, idx: i64) -> i64 {
+pub unsafe extern "C" fn __vow_string_byte_at(s: *const u8, idx: u64) -> i64 {
     sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
-    if idx < 0 || idx as usize >= v.len {
+    if idx >= v.len as u64 {
         return -1;
     }
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
@@ -2099,7 +2099,7 @@ pub unsafe extern "C" fn __vow_string_byte_at(s: *const u8, idx: i64) -> i64 {
 pub unsafe extern "C" fn __vow_string_push_byte_in_arena(
     arena: *mut VowArena,
     s: *mut u8,
-    byte: i64,
+    byte: u64,
 ) {
     if arena.is_null() {
         null_arena_trap("String::push_byte");
@@ -2109,12 +2109,13 @@ pub unsafe extern "C" fn __vow_string_push_byte_in_arena(
     // sanitizer runs before any dereference (UAF detected first), and the
     // shadow table records a single generation for the one appended byte.
     sanitize_on_push(s as usize);
-    unsafe { string_push_byte_in_arena_no_sanitize(arena, s, byte) };
+    unsafe { string_push_byte_in_arena_no_sanitize(arena, s, byte as u8) };
 }
 
-unsafe fn string_push_byte_in_arena_no_sanitize(arena: *mut VowArena, s: *mut u8, byte: i64) {
-    let b = byte as u8;
-    unsafe { vec_push_no_sanitize_in_arena(arena, s, &b as *const u8, 1, 1, "String::push_byte") };
+unsafe fn string_push_byte_in_arena_no_sanitize(arena: *mut VowArena, s: *mut u8, byte: u8) {
+    unsafe {
+        vec_push_no_sanitize_in_arena(arena, s, &byte as *const u8, 1, 1, "String::push_byte")
+    };
 }
 
 /// Projection-safe byte append; see
@@ -2123,23 +2124,23 @@ unsafe fn string_push_byte_in_arena_no_sanitize(arena: *mut VowArena, s: *mut u8
 pub unsafe extern "C" fn __vow_string_push_byte_in_candidate_arena(
     candidate: *mut VowArena,
     s: *mut u8,
-    byte: i64,
+    byte: u64,
 ) {
     if candidate.is_null() {
         null_arena_trap("String::push_byte");
     }
     sanitize_on_push(s as usize);
     if !arena_is_root(candidate) && unsafe { vow_vec_is_owned_by(s, candidate) } {
-        unsafe { string_push_byte_in_arena_no_sanitize(candidate, s, byte) };
+        unsafe { string_push_byte_in_arena_no_sanitize(candidate, s, byte as u8) };
         return;
     }
     let _guard = ROOT_ARENA_LOCK.lock().unwrap();
     unsafe { ensure_root_arena_locked() };
-    unsafe { string_push_byte_in_arena_no_sanitize(&raw mut __vow_root_arena, s, byte) };
+    unsafe { string_push_byte_in_arena_no_sanitize(&raw mut __vow_root_arena, s, byte as u8) };
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_push_byte(s: *mut u8, byte: i64) {
+pub unsafe extern "C" fn __vow_string_push_byte(s: *mut u8, byte: u64) {
     let _guard = ROOT_ARENA_LOCK.lock().unwrap();
     unsafe { ensure_root_arena_locked() };
     unsafe { __vow_string_push_byte_in_arena(&raw mut __vow_root_arena, s, byte) };
@@ -2153,8 +2154,8 @@ pub unsafe extern "C" fn __vow_string_push_byte(s: *mut u8, byte: i64) {
 pub unsafe extern "C" fn __vow_string_substr_in_arena(
     arena: *mut VowArena,
     s: *const u8,
-    start: i64,
-    len: i64,
+    start: u64,
+    len: u64,
 ) -> *mut u8 {
     if arena.is_null() {
         null_arena_trap("String::substr");
@@ -2164,9 +2165,10 @@ pub unsafe extern "C" fn __vow_string_substr_in_arena(
     }
     sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
-    let slen = v.len as i64;
-    let clamped_start = start.clamp(0, slen) as usize;
-    let clamped_len = len.clamp(0, slen - clamped_start as i64) as usize;
+    let slen = v.len as u64;
+    let clamped_start = start.min(slen);
+    let clamped_len = len.min(slen - clamped_start) as usize;
+    let clamped_start = clamped_start as usize;
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     unsafe {
         __vow_string_new_in_arena(
@@ -2178,7 +2180,7 @@ pub unsafe extern "C" fn __vow_string_substr_in_arena(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_substr(s: *const u8, start: i64, len: i64) -> *mut u8 {
+pub unsafe extern "C" fn __vow_string_substr(s: *const u8, start: u64, len: u64) -> *mut u8 {
     let _guard = ROOT_ARENA_LOCK.lock().unwrap();
     unsafe { ensure_root_arena_locked() };
     unsafe { __vow_string_substr_in_arena(&raw mut __vow_root_arena, s, start, len) }
@@ -2188,8 +2190,8 @@ pub unsafe extern "C" fn __vow_string_substr(s: *const u8, start: i64, len: i64)
 pub unsafe extern "C" fn __vow_string_substring_in_arena(
     arena: *mut VowArena,
     s: *const u8,
-    start: i64,
-    end: i64,
+    start: u64,
+    end: u64,
 ) -> *mut u8 {
     if arena.is_null() {
         null_arena_trap("String::substring");
@@ -2199,9 +2201,9 @@ pub unsafe extern "C" fn __vow_string_substring_in_arena(
     }
     sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
-    let slen = v.len as i64;
-    let clamped_start = start.clamp(0, slen) as usize;
-    let clamped_end = end.clamp(clamped_start as i64, slen) as usize;
+    let slen = v.len as u64;
+    let clamped_start = start.min(slen) as usize;
+    let clamped_end = end.clamp(clamped_start as u64, slen) as usize;
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let len = clamped_end - clamped_start;
     unsafe {
@@ -2210,7 +2212,7 @@ pub unsafe extern "C" fn __vow_string_substring_in_arena(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_substring(s: *const u8, start: i64, end: i64) -> *mut u8 {
+pub unsafe extern "C" fn __vow_string_substring(s: *const u8, start: u64, end: u64) -> *mut u8 {
     let _guard = ROOT_ARENA_LOCK.lock().unwrap();
     unsafe { ensure_root_arena_locked() };
     unsafe { __vow_string_substring_in_arena(&raw mut __vow_root_arena, s, start, end) }
@@ -5706,7 +5708,7 @@ mod tests {
         let hello = unsafe { __vow_string_new_in_arena(&mut a, c"hello".as_ptr(), "hello".len()) };
         let comma = unsafe { __vow_string_from_cstr_in_arena(&mut a, c", ".as_ptr()) };
         unsafe { __vow_string_push_str_in_arena(&mut a, hello, comma) };
-        unsafe { __vow_string_push_byte_in_arena(&mut a, hello, b'w' as i64) };
+        unsafe { __vow_string_push_byte_in_arena(&mut a, hello, b'w' as u64) };
 
         let header = unsafe { &*(hello as *const VowVec) };
         let bytes = unsafe { std::slice::from_raw_parts(header.ptr, header.len) };
@@ -5750,7 +5752,7 @@ mod tests {
         unsafe { __vow_arena_open(&mut owner) };
 
         let s = unsafe { __vow_string_new_in_arena(&mut owner, c"".as_ptr(), 0) };
-        unsafe { __vow_string_push_byte_in_candidate_arena(&mut owner, s, b'x' as i64) };
+        unsafe { __vow_string_push_byte_in_candidate_arena(&mut owner, s, b'x' as u64) };
 
         let desc = unsafe { &*(s as *const VowVec) };
         assert_eq!(desc.len, 1);
@@ -5813,7 +5815,7 @@ mod tests {
             __vow_string_push_byte_in_candidate_arena(
                 &mut candidate,
                 core::ptr::addr_of_mut!(foreign.desc) as *mut u8,
-                b'x' as i64,
+                b'x' as u64,
             )
         };
 
@@ -5899,18 +5901,18 @@ mod tests {
 
         assert_eq!(
             unsafe {
-                __vow_string_matches_literal_at(s_ptr, 1, literal.as_ptr(), literal.len() as i64)
+                __vow_string_matches_literal_at(s_ptr, 1, literal.as_ptr(), literal.len() as u64)
             },
             1
         );
         assert_eq!(
             unsafe {
-                __vow_string_matches_literal_at(s_ptr, 2, literal.as_ptr(), literal.len() as i64)
+                __vow_string_matches_literal_at(s_ptr, 2, literal.as_ptr(), literal.len() as u64)
             },
             0
         );
         assert_eq!(
-            unsafe { __vow_string_matches_literal_at(s_ptr, -1, literal.as_ptr(), 3) },
+            unsafe { __vow_string_matches_literal_at(s_ptr, u64::MAX, literal.as_ptr(), 3) },
             0
         );
         assert_eq!(
@@ -5921,6 +5923,32 @@ mod tests {
             unsafe { __vow_string_matches_literal_at(s_ptr, 6, empty.as_ptr(), 0) },
             0
         );
+    }
+
+    #[test]
+    fn string_offsets_are_unsigned_and_clamp_high() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let hello = unsafe { __vow_string_new_in_arena(&mut a, c"hello".as_ptr(), 5) };
+        assert_eq!(unsafe { __vow_string_byte_at(hello, 0) }, b'h' as i64);
+        assert_eq!(unsafe { __vow_string_byte_at(hello, 4) }, b'o' as i64);
+        assert_eq!(unsafe { __vow_string_byte_at(hello, 5) }, -1);
+        assert_eq!(unsafe { __vow_string_byte_at(hello, u64::MAX) }, -1);
+
+        let read = |p: *mut u8| unsafe {
+            let v = &*(p as *const VowVec);
+            std::slice::from_raw_parts(v.ptr, v.len).to_vec()
+        };
+        let tail = unsafe { __vow_string_substr_in_arena(&mut a, hello, u64::MAX, 3) };
+        assert_eq!(read(tail), b"");
+        let all = unsafe { __vow_string_substr_in_arena(&mut a, hello, 1, u64::MAX) };
+        assert_eq!(read(all), b"ello");
+        let none = unsafe { __vow_string_substring_in_arena(&mut a, hello, u64::MAX, 3) };
+        assert_eq!(read(none), b"");
+        let rev = unsafe { __vow_string_substring_in_arena(&mut a, hello, 3, 1) };
+        assert_eq!(read(rev), b"");
+        let rest = unsafe { __vow_string_substring_in_arena(&mut a, hello, 2, u64::MAX) };
+        assert_eq!(read(rest), b"llo");
     }
 
     #[test]
@@ -6573,7 +6601,7 @@ mod tests {
                 __vow_string_push_byte_in_arena(
                     std::ptr::null_mut(),
                     &mut s as *mut _ as *mut u8,
-                    b'x' as i64,
+                    b'x' as u64,
                 )
             };
             eprintln!("rodata_trap_worker: null arena string push_byte did NOT trap");

@@ -134,8 +134,9 @@ fn span_unpack_len(packed: i64) -> i64 { packed - (packed / 65536) * 65536 }
 
 fn diag_compute_line(src: String, offset: i64) -> i64 {
     let mut line: i64 = 1;
-    let mut i: i64 = 0;
-    while i < offset && i < src.len() as i64 {
+    let limit: u64 = if offset > 0 { offset as u64 } else { 0u64 };
+    let mut i: u64 = 0u64;
+    while i < limit && i < src.len() {
         if src.byte_at(i) == 10 {
             line = line + 1;
         }
@@ -146,10 +147,11 @@ fn diag_compute_line(src: String, offset: i64) -> i64 {
 
 fn diag_compute_col(src: String, offset: i64) -> i64 {
     let mut last_nl: i64 = -1;
-    let mut i: i64 = 0;
-    while i < offset && i < src.len() as i64 {
+    let limit: u64 = if offset > 0 { offset as u64 } else { 0u64 };
+    let mut i: u64 = 0u64;
+    while i < limit && i < src.len() {
         if src.byte_at(i) == 10 {
-            last_nl = i;
+            last_nl = i as i64;
         }
         i = i + 1;
     }
@@ -322,12 +324,23 @@ fn sev_name_lower(s: i64) -> String {
     }
 }
 
+// The byte at `i` as a u8. `byte_at` answers -1 past the end; the contract
+// makes the in-range assumption explicit so that sentinel can never be
+// narrowed into a bogus 0xFF byte.
+fn byte_at_u8(s: String, i: u64) -> u8 vow {
+    requires: i < s.len(),
+    ensures: result as i64 == s.byte_at(i)
+} {
+    i64_to_u8_wrap(s.byte_at(i))
+}
+
 fn diag_json_escape_str(s: String) -> String {
     let r: String = String::from("");
     let n: u64 = s.len();
     let mut i: u64 = 0u64;
     while i < n {
-        let b: i64 = s.byte_at(i as i64);
+        let bu: u8 = byte_at_u8(s, i);
+        let b: i64 = bu as i64;
         if b == 92 {
             r.push_byte(92);
             r.push_byte(92);
@@ -352,7 +365,7 @@ fn diag_json_escape_str(s: String) -> String {
         } else if b < 32 {
             r.push_byte(63);
         } else {
-            r.push_byte(b);
+            r.push_byte(bu);
         }
         i = i + 1;
     }

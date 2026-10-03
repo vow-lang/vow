@@ -1,0 +1,103 @@
+module TestCheckerStringOffsetsU64
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use checker
+use env
+
+fn checked_error_count(source: String) -> i64 [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("string_offsets.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < parsed.items.len() {
+        item_files.push(String::from("string_offsets.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("string_offsets.vow"));
+    check_module(check_env, parsed, item_files);
+    dctx.error_count
+}
+
+fn body_errors(params: String, ret: String, body: String) -> i64 [io] {
+    let src: String = String::from("module StringOffsets\nfn probe(s: String");
+    src.push_str(params);
+    src.push_str(String::from(") -> "));
+    src.push_str(ret);
+    src.push_str(String::from(" { "));
+    src.push_str(body);
+    src.push_str(String::from(" }"));
+    checked_error_count(src)
+}
+
+fn check_byte_at() -> i32 [io] {
+    let i64_ret: String = String::from("i64");
+    if body_errors(String::from(", i: u64"), i64_ret, String::from("s.byte_at(i)")) != 0 { return 1; }
+    if body_errors(String::from(""), i64_ret, String::from("s.byte_at(0)")) != 0 { return 2; }
+    if body_errors(String::from(", i: u64"), i64_ret, String::from("s.byte_at(i + 1)")) != 0 { return 3; }
+    if body_errors(String::from(", i: i64"), i64_ret, String::from("s.byte_at(i as u64)")) != 0 { return 4; }
+    if body_errors(String::from(", i: i64"), i64_ret, String::from("s.byte_at(i)")) != 1 { return 5; }
+    if body_errors(String::from(", i: u32"), i64_ret, String::from("s.byte_at(i)")) != 1 { return 6; }
+    if body_errors(String::from(", i: u8"), i64_ret, String::from("s.byte_at(i)")) != 1 { return 7; }
+    if body_errors(String::from(""), i64_ret, String::from("s.byte_at(true)")) != 1 { return 8; }
+    if body_errors(String::from(""), i64_ret, String::from("s.byte_at(-1)")) != 1 { return 9; }
+    if body_errors(String::from(""), i64_ret, String::from("s.byte_at(18446744073709551616)")) != 1 { return 10; }
+    0
+}
+
+fn check_substring_and_substr() -> i32 [io] {
+    let str_ret: String = String::from("String");
+    if body_errors(String::from(", a: u64, b: u64"), str_ret, String::from("s.substring(a, b)")) != 0 { return 21; }
+    if body_errors(String::from(""), str_ret, String::from("s.substring(0, 2)")) != 0 { return 22; }
+    if body_errors(String::from(", a: i64"), str_ret, String::from("s.substring(a, 2)")) != 1 { return 23; }
+    if body_errors(String::from(", a: i64"), str_ret, String::from("s.substring(0, a)")) != 1 { return 24; }
+    if body_errors(String::from(", a: i64, b: i64"), str_ret, String::from("s.substring(a, b)")) != 2 { return 25; }
+    if body_errors(String::from(", a: u64, b: u64"), str_ret, String::from("string_substr(s, a, b)")) != 0 { return 26; }
+    if body_errors(String::from(", a: i64"), str_ret, String::from("string_substr(s, a, 2)")) != 1 { return 27; }
+    if body_errors(String::from(", a: i64"), str_ret, String::from("string_substr(s, 0, a)")) != 1 { return 28; }
+    if body_errors(String::from(""), str_ret, String::from("string_substr(s, -1, 2)")) != 1 { return 29; }
+    0
+}
+
+fn check_matches_literal_at() -> i32 [io] {
+    let i64_ret: String = String::from("i64");
+    if body_errors(String::from(", p: u64"), i64_ret, String::from("string_matches_literal_at(s, p, \"ab\")")) != 0 { return 31; }
+    if body_errors(String::from(""), i64_ret, String::from("string_matches_literal_at(s, 0, \"ab\")")) != 0 { return 32; }
+    if body_errors(String::from(", p: i64"), i64_ret, String::from("string_matches_literal_at(s, p, \"ab\")")) != 1 { return 33; }
+    if body_errors(String::from(""), i64_ret, String::from("string_matches_literal_at(s, -1, \"ab\")")) != 1 { return 34; }
+    0
+}
+
+fn check_push_byte() -> i32 [io] {
+    let unit_ret: String = String::from("()");
+    if body_errors(String::from(", b: u8"), unit_ret, String::from("s.push_byte(b);")) != 0 { return 41; }
+    if body_errors(String::from(""), unit_ret, String::from("s.push_byte(65);")) != 0 { return 42; }
+    if body_errors(String::from(""), unit_ret, String::from("s.push_byte(0); s.push_byte(255);")) != 0 { return 43; }
+    if body_errors(String::from(", b: i64"), unit_ret, String::from("s.push_byte(b);")) != 1 { return 44; }
+    if body_errors(String::from(", b: u64"), unit_ret, String::from("s.push_byte(b);")) != 1 { return 45; }
+    if body_errors(String::from(", b: u32"), unit_ret, String::from("s.push_byte(b);")) != 1 { return 46; }
+    if body_errors(String::from(", b: i8"), unit_ret, String::from("s.push_byte(b);")) != 1 { return 47; }
+    if body_errors(String::from(""), unit_ret, String::from("s.push_byte(256);")) != 1 { return 48; }
+    if body_errors(String::from(""), unit_ret, String::from("s.push_byte(300);")) != 1 { return 49; }
+    if body_errors(String::from(""), unit_ret, String::from("s.push_byte(-1);")) != 1 { return 50; }
+    if body_errors(String::from(", b: i64"), unit_ret, String::from("s.push_byte(i64_to_u8_wrap(b));")) != 0 { return 51; }
+    if body_errors(String::from(", b: u64"), unit_ret, String::from("s.push_byte(u64_to_u8_wrap(b));")) != 0 { return 52; }
+    if body_errors(String::from(", b: i64"), unit_ret, String::from("s.push_byte(b as u8);")) != 1 { return 53; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let byte_at_result: i32 = check_byte_at();
+    if byte_at_result != 0 { return byte_at_result; }
+    let substring_result: i32 = check_substring_and_substr();
+    if substring_result != 0 { return substring_result; }
+    let matches_result: i32 = check_matches_literal_at();
+    if matches_result != 0 { return matches_result; }
+    check_push_byte()
+}

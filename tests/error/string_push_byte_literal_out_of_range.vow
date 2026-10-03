@@ -1,0 +1,11 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: error-count 1
+// push_byte takes a u8: a literal outside 0..=255 is rejected instead of
+// being silently truncated to its low 8 bits (300 used to append 44).
+module StringPushByteLiteralOutOfRange
+
+fn main() -> i32 {
+    let s: String = String::from("");
+    s.push_byte(300);
+    0
+}

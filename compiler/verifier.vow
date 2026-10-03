@@ -2,6 +2,7 @@ module Verifier
 
 use c_emitter
 use clif
+use diag
 use ir
 use ir_printer
 use perfetto
@@ -75,7 +76,7 @@ fn str_contains_byte(s: String, b: i64) -> bool {
     let n: u64 = s.len();
     let mut i: u64 = 0u64;
     while i < n {
-        if s.byte_at(i as i64) == b {
+        if s.byte_at(i) == b {
             return true;
         }
         i = i + 1;
@@ -84,13 +85,13 @@ fn str_contains_byte(s: String, b: i64) -> bool {
 }
 
 fn str_find_str(haystack: String, needle: String) -> i64 {
-    let hlen: i64 = haystack.len() as i64;
-    let nlen: i64 = needle.len() as i64;
+    let hlen: u64 = haystack.len();
+    let nlen: u64 = needle.len();
     if nlen == 0 { return 0; }
     if nlen > hlen { return -1; }
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i <= hlen - nlen {
-        let mut j: i64 = 0;
+        let mut j: u64 = 0;
         let mut matched: bool = true;
         while j < nlen {
             if haystack.byte_at(i + j) != needle.byte_at(j) {
@@ -99,13 +100,13 @@ fn str_find_str(haystack: String, needle: String) -> i64 {
             }
             j = j + 1;
         }
-        if matched { return i; }
+        if matched { return i as i64; }
         i = i + 1;
     }
     -1
 }
 
-fn ascii_lower_byte(b: i64) -> i64 {
+fn ascii_lower_byte(b: u8) -> u8 {
     if b >= 65 && b <= 90 {
         return b + 32;
     }
@@ -117,20 +118,16 @@ fn str_ascii_lower(s: String) -> String {
     let n: u64 = s.len();
     let mut i: u64 = 0u64;
     while i < n {
-        out.push_byte(ascii_lower_byte(s.byte_at(i as i64)));
+        out.push_byte(ascii_lower_byte(byte_at_u8(s, i)));
         i = i + 1;
     }
     out
 }
 
 fn str_substring(s: String, start: i64, end: i64) -> String {
-    let r: String = String::from("");
-    let mut i: i64 = start;
-    while i < end && i < s.len() as i64 {
-        r.push_byte(s.byte_at(i));
-        i = i + 1;
-    }
-    r
+    let lo: u64 = if start > 0 { start as u64 } else { 0u64 };
+    let hi: u64 = if end > 0 { end as u64 } else { 0u64 };
+    s.substring(lo, hi)
 }
 
 fn is_ws(b: i64) -> bool {
@@ -138,17 +135,17 @@ fn is_ws(b: i64) -> bool {
 }
 
 fn str_trim(s: String) -> String {
-    let n: i64 = s.len() as i64;
-    let mut start: i64 = 0;
+    let n: u64 = s.len();
+    let mut start: u64 = 0;
     while start < n && is_ws(s.byte_at(start)) {
         start = start + 1;
     }
     if start >= n { return String::from(""); }
-    let mut end: i64 = n;
+    let mut end: u64 = n;
     while end > start && is_ws(s.byte_at(end - 1)) {
         end = end - 1;
     }
-    str_substring(s, start, end)
+    s.substring(start, end)
 }
 
 fn str_to_i64(s: String) -> i64 {
@@ -159,27 +156,27 @@ fn str_to_i64(s: String) -> i64 {
 }
 
 fn split_lines(s: String, lines: Vec<String>) {
-    let n: i64 = s.len() as i64;
-    let mut start: i64 = 0;
-    let mut i: i64 = 0;
+    let n: u64 = s.len();
+    let mut start: u64 = 0;
+    let mut i: u64 = 0;
     while i < n {
         if s.byte_at(i) == 10 {
-            lines.push(str_substring(s, start, i));
+            lines.push(s.substring(start, i));
             start = i + 1;
         }
         i = i + 1;
     }
     if start < n {
-        lines.push(str_substring(s, start, n));
+        lines.push(s.substring(start, n));
     }
 }
 
 fn str_find_byte(s: String, b: i64) -> i64 {
-    let n: i64 = s.len() as i64;
-    let mut i: i64 = 0;
+    let n: u64 = s.len();
+    let mut i: u64 = 0;
     while i < n {
         if s.byte_at(i) == b {
-            return i;
+            return i as i64;
         }
         i = i + 1;
     }
@@ -310,19 +307,19 @@ fn verify_tmp_path() -> String [io] {
 fn verify_tmp_dir_for_path(tmp_path: String) -> String {
     // Suffix must match the filename appended by verify_tmp_path.
     let suffix: String = String::from("/esbmc.c");
-    let n: i64 = tmp_path.len() as i64;
-    let sn: i64 = suffix.len() as i64;
+    let n: u64 = tmp_path.len();
+    let sn: u64 = suffix.len();
     if n <= sn {
         return String::from("");
     }
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < sn {
         if tmp_path.byte_at(n - sn + i) != suffix.byte_at(i) {
             return String::from("");
         }
         i = i + 1;
     }
-    str_substring(tmp_path, 0, n - sn)
+    tmp_path.substring(0, n - sn)
 }
 
 fn cleanup_verify_tmp_path(tmp_path: String) [io] {
@@ -842,8 +839,12 @@ fn parse_vow_id(output: String) -> i64 {
 // Read the run of ASCII digits starting at `pos`, returning the parsed value or
 // -1 when no digit is present.
 fn parse_digits_at(line: String, pos: i64) -> i64 {
-    let n: i64 = line.len() as i64;
-    let mut end: i64 = pos;
+    if pos < 0 {
+        return -1;
+    }
+    let n: u64 = line.len();
+    let start: u64 = pos as u64;
+    let mut end: u64 = start;
     let mut scanning: bool = true;
     while end < n && scanning {
         let b: i64 = line.byte_at(end);
@@ -853,10 +854,10 @@ fn parse_digits_at(line: String, pos: i64) -> i64 {
             scanning = false;
         }
     }
-    if end == pos {
+    if end == start {
         return -1;
     }
-    str_to_i64(str_substring(line, pos, end))
+    str_to_i64(line.substring(start, end))
 }
 
 // The `vow:N` claim id on a `--multi-property` verdict line, quoted (`'vow:0'`,

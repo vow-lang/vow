@@ -1,0 +1,107 @@
+module TestCEmitterStringOffsets
+
+use ir
+use c_emitter
+use tests.builders
+
+// String offsets are u64 in both compilers, so the ESBMC model of the offset
+// helpers must treat them as unsigned: no negative clamp, and the comparisons
+// run on uint64_t. These mirror the vow-verify emitter tests.
+
+fn offset_call_function(id: i64, name: String, callee: String) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_const_i64(1, 1));
+    insts.push(mk_inst_const_i64(2, 999));
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(0);
+    call_args.push(1);
+    call_args.push(2);
+    insts.push(mk_inst_call_extern(3, ITY_PTR(), call_args, callee));
+    insts.push(mk_inst_return(4, 3));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    mk_function(id, name, params, ITY_PTR(), blocks)
+}
+
+fn emit_offset_model(id: i64, name: String, callee: String) -> String {
+    let f: IrFunction = offset_call_function(id, name, callee);
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(f);
+    let m: IrModule = mk_module(funcs);
+    let c: String = String::from("");
+    let const_fn_indices: Vec<i64> = Vec::new();
+    let modelable_fi_set: Vec<i64> = Vec::new();
+    emit_c_function(c, f, const_fn_indices, modelable_fi_set, m, 16, 16, 16, 16, false, false, 0);
+    c
+}
+
+fn check_substr_is_unsigned() -> i64 {
+    let c: String = emit_offset_model(500, String::from("substr_u64"), String::from("__vow_string_substr"));
+    if !c.contains(String::from("uint64_t __substr_start_3 = (uint64_t)v1;")) { return 1; }
+    if !c.contains(String::from("uint64_t __substr_len_3 = (uint64_t)v2;")) { return 2; }
+    if !c.contains(String::from("uint64_t __substr_max_len_3 = (uint64_t)v0.len - __substr_start_3;")) { return 3; }
+    if c.contains(String::from(" < 0")) { return 5; }
+    0
+}
+
+fn check_substring_is_unsigned() -> i64 {
+    let c: String = emit_offset_model(510, String::from("substring_u64"), String::from("__vow_string_substring"));
+    if !c.contains(String::from("uint64_t __substring_start_3 = (uint64_t)v1;")) { return 11; }
+    if !c.contains(String::from("uint64_t __substring_end_3 = (uint64_t)v2;")) { return 12; }
+    if !c.contains(String::from("if (__substring_end_3 < __substring_start_3) { __substring_end_3 = __substring_start_3; }")) { return 13; }
+    if c.contains(String::from(" < 0")) { return 14; }
+    0
+}
+
+fn matches_literal_function(id: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_I64(), 1));
+    insts.push(ir_inst_new(2, IOP_CONST_STR(), ITY_PTR(), Vec::new(), IDATA_CONST_STR(), 0, 0, String::from("")));
+    insts.push(mk_inst_const_i64(3, 3));
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(0);
+    call_args.push(1);
+    call_args.push(2);
+    call_args.push(3);
+    insts.push(mk_inst_call_extern(4, ITY_I64(), call_args, String::from("__vow_string_matches_literal_at")));
+    insts.push(mk_inst_return(5, 4));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    params.push(ITY_I64());
+    mk_function(id, String::from("matches_literal_u64"), params, ITY_I64(), blocks)
+}
+
+fn check_matches_literal_at_is_unsigned() -> i64 {
+    let f: IrFunction = matches_literal_function(520);
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(f);
+    let m: IrModule = mk_module(funcs);
+    m.strings.push(String::from("a\0b"));
+    let c: String = String::from("");
+    let const_fn_indices: Vec<i64> = Vec::new();
+    let modelable_fi_set: Vec<i64> = Vec::new();
+    emit_c_function(c, f, const_fn_indices, modelable_fi_set, m, 16, 16, 16, 16, false, false, 0);
+    if !c.contains(String::from("v4 = 0;")) { return 21; }
+    if c.contains(String::from("v4 = __VERIFIER_nondet_long")) { return 22; }
+    if !c.contains(String::from("if ((uint64_t)v1 <= (uint64_t)v0.len && 3ULL <= (uint64_t)v0.len - (uint64_t)v1) {")) { return 23; }
+    if !c.contains(String::from("(unsigned char)v0.data[v1 + 0] != 97")) { return 24; }
+    if !c.contains(String::from("(unsigned char)v0.data[v1 + 1] != 0")) { return 25; }
+    if !c.contains(String::from("(unsigned char)v0.data[v1 + 2] != 98")) { return 26; }
+    0
+}
+
+fn main() -> i32 {
+    let r1: i64 = check_substr_is_unsigned();
+    if r1 != 0 { return i64_to_i32_wrap(r1); }
+    let r2: i64 = check_substring_is_unsigned();
+    if r2 != 0 { return i64_to_i32_wrap(r2); }
+    let r3: i64 = check_matches_literal_at_is_unsigned();
+    if r3 != 0 { return i64_to_i32_wrap(r3); }
+    0
+}

@@ -1,0 +1,37 @@
+module TestMutantsSitesSkipRanges
+
+use lexer
+use clif
+use c_emitter
+use mutants_sites
+
+// A line with the `// GENERATE:` prefix and the `:START` suffix is 17 bytes
+// only when the two share their `:` (`// GENERATE:START`); that shape has no
+// NAME and must never open a skip range, whether it is closed by the
+// empty-name `// GENERATE::END` or by `// GENERATE:START:END`.
+fn check_degenerate_start_is_not_a_block() -> i64 {
+    let src: String = String::from("// GENERATE:START\nfn a() {}\n// GENERATE::END\n// GENERATE:START:END\n");
+    let ranges: Vec<u64> = compute_skip_ranges(src);
+    if ranges.len() != 0 { return 1; }
+    let padded: String = String::from("// GENERATE:xx:START\nfn a() {}\n// GENERATE:xx:END\n");
+    let named: Vec<u64> = compute_skip_ranges(padded);
+    if named.len() != 2 { return 2; }
+    0
+}
+
+fn check_named_block_is_skipped() -> i64 {
+    let src: String = String::from("fn a() {}\n// GENERATE:X:START\nfn b() {}\n// GENERATE:X:END\nfn c() {}\n");
+    let ranges: Vec<u64> = compute_skip_ranges(src);
+    if ranges.len() != 2 { return 11; }
+    if ranges[0] != 10 { return 12; }
+    if ranges[1] <= 10 { return 13; }
+    0
+}
+
+fn main() -> i32 {
+    let r1: i64 = check_degenerate_start_is_not_a_block();
+    if r1 != 0 { return i64_to_i32_wrap(r1); }
+    let r2: i64 = check_named_block_is_skipped();
+    if r2 != 0 { return i64_to_i32_wrap(r2); }
+    0
+}

@@ -903,11 +903,11 @@ fn skill_json() -> String {
       "fs_is_dir": "fn(path: String) -> i64 [read]",
       "fs_is_symlink": "fn(path: String) -> i64 [read]",
       "fs_rename": "fn(old: String, new: String) -> i64 [io]",
-      "string_substr": "fn(s: String, start: i64, len: i64) -> String []",
+      "string_substr": "fn(s: String, start: u64, len: u64) -> String []",
       "string_split": "fn(s: String, delim: String) -> Vec<String> []",
       "string_starts_with": "fn(s: String, prefix: String) -> i64 []",
       "string_ends_with": "fn(s: String, suffix: String) -> i64 []",
-      "string_matches_literal_at": "fn(s: String, pos: i64, literal: String literal) -> i64 []",
+      "string_matches_literal_at": "fn(s: String, pos: u64, literal: String literal) -> i64 []",
       "string_trim": "fn(s: String) -> String []",
       "string_to_upper": "fn(s: String) -> String []",
       "string_to_lower": "fn(s: String) -> String []",
@@ -1221,7 +1221,7 @@ LANGUAGE SUMMARY
 TYPES     : i8  i16  i32  i64  i128  u8  u16  u32  u64  u128  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>  BTreeMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
 BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []   print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]
-            print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: i64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_poll_wait: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
+            print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: u64, len: u64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: u64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_poll_wait: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
 METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/String::from_raw_parts_copy/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   BTreeMap: BTreeMap::new/insert/get/contains/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
@@ -1508,7 +1508,7 @@ length is independent of this determinism rationale, so
 index expression has exactly the type `u64` (see [Indexing](#indexing)), so
 `v[i]` with `i: u64` needs no cast, and `v[i]` with `i: i64` is a
 `TypeMismatch`. `String` offsets (`byte_at`, `substr`, `substring`,
-`matches_literal_at`) stay `i64` as a documented v1 scope decision; see
+`matches_literal_at`) are `u64` too, and `push_byte` takes a `u8`; see
 [String offsets](#string-offsets).
 
 **128-bit implementation status:** `i128`/`u128` types and full-range literal
@@ -2316,19 +2316,19 @@ m.contains_key(k)
 | `String::new()`     | `() -> String`              |
 | `String::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> String` |
 | `.len()`            | `() -> u64`                 |
-| `.byte_at(i)`       | `(<int>) -> i64`            |
-| `.push_byte(b)`     | `(<int>) -> ()` — appends one byte; `b` is a byte value in `0..=255` |
+| `.byte_at(i)`       | `(u64) -> i64` — the byte at offset `i` in `0..=255`, or `-1` when `i >= len()` |
+| `.push_byte(b)`     | `(u8) -> ()` — appends one byte |
 | `.push_str(s)`      | `(String) -> ()`            |
 | `.clear()`          | `() -> ()` — frees buffer, resets to empty |
 | `.contains(s)`      | `(String) -> bool`          |
 | `.eq(s)`            | `(String) -> bool`          |
-| `.substring(start, end)` | `(<int>, <int>) -> String` |
+| `.substring(start, end)` | `(u64, u64) -> String` — bytes `[start, end)`, both bounds clamped to `len()` |
 | `.parse_i64()`      | `() -> Option<i64>`         |
 | `.parse_u64()`      | `() -> Option<u64>`         |
 
-`<int>` marks a `String` offset or byte-value parameter, which is deliberately *not* `u64`: any integer width and either signedness is accepted, per [String offsets](#string-offsets). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
+`String` offsets are exactly `u64` and `push_byte`'s argument is exactly `u8`; see [String offsets](#string-offsets).
 
-`push_byte`'s argument is a byte *value*, not an index. The valid range is `0..=255`. The compiler does not diagnose a value outside that range (only a literal that does not fit `i64` is a `LiteralOutOfRange` error), and the runtime appends the low 8 bits, so `s.push_byte(300)` appends `44`. Keep byte values within `0..=255`.
+`push_byte`'s argument is a byte *value*, not an index. It is typed `u8`, so the byte range `0..=255` is a fact of the type: an unsuffixed literal outside that range is a `LiteralOutOfRange` error, and any other integer type (`i64`, `u64`, ...) is a `TypeMismatch`. A wider value is narrowed explicitly with a narrowing intrinsic (`i64_to_u8_wrap`, `u64_to_u8_wrap`, `i64_to_u8_sat`, `i64_to_u8_try`, ...) — `as u8` from a wider type is `NarrowingCastNotAllowed`. There is no silent truncation: `s.push_byte(300)` is rejected, and the explicit `s.push_byte(i64_to_u8_wrap(300))` appends `44`. `byte_at` returns an `i64` in `-1..=255`, where `-1` means the index is past the end: copy a whole range with `substring` or `push_str`, and when transforming byte by byte make `i < s.len()` a precondition, because wrapping the `-1` sentinel would append `0xFF`.
 
 ### HashMap<K, V> Methods
 
@@ -2400,15 +2400,25 @@ Arithmetic and comparison do not mix signedness: `i64 + u64` and `u64 < i64` are
 
 ### String offsets
 
-`String` offsets stay `i64` in v1, unlike `Vec` indices. This is a documented scope decision, not an oversight: `String::len()` is `u64`, but the runtime helpers that take an offset or span (`byte_at`, `substr`, `substring`, `matches_literal_at`) still take `i64` and keep live negative-offset behaviour — `byte_at` returns `-1` for an out-of-range offset, `substr` and `substring` clamp their arguments, and `matches_literal_at` rejects a negative position. Migrating them to `u64` means deleting those guards, which changes runtime semantics for out-of-range callers.
+`String` offsets are `u64`, exactly like `Vec` indices: a position or length into a `String` is never negative, and `String::len()` is already `u64`. Every offset or length argument has exactly the type `u64`:
 
-What this means at a call site:
+- `s.byte_at(i)` — `i`
+- `s.substring(start, end)` — `start` and `end`
+- `string_substr(s, start, len)` — `start` and `len`
+- `string_matches_literal_at(s, pos, literal)` — `pos`
 
-- The `string_substr` and `string_matches_literal_at` builtins require `i64` offset arguments exactly (see the builtin signature table).
-- The `byte_at` and `substring` methods accept any integer type, not only `u64`; the argument is checked as an integer (a non-integer is a `TypeMismatch`) and unsuffixed literals are range-checked against `i64`. The runtime sees an `i64`, so a `u64` offset above `i64::MAX` is reinterpreted as negative and clamped rather than treated as a large offset — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. A length-derived `u64` offset is always in range, so `s.byte_at(i)` with `i < s.len()` is safe.
-- The checker accepts a 128-bit `String` offset, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `String` helpers are i64-only, so such a program fails codegen. Use a 64-bit or narrower offset until epic #526 lands 128-bit lowering. (A 128-bit `Vec` index is not a codegen question: it is a `TypeMismatch`.) The `u64`-above-`i64::MAX` hazard is tracked in issue #1131.
-- `push_byte` takes a byte *value*, not an offset, and stays `i64`-checked with its own `0..=255` range (see the String method table).
-- `byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64` regardless.
+An unsuffixed literal coerces to `u64` and is range-checked against it (`LiteralOutOfRange` when it does not fit); any other integer type, including `i64`, is a `TypeMismatch`. Convert at the binding with `as u64` (same-width casts between `i64` and `u64` are legal); a negative signed value cast to `u64` becomes a huge offset, which is out of range rather than silently clamped to the start. A 128-bit offset is a `TypeMismatch`, not a codegen question.
+
+Because an offset cannot be negative, the runtime has no negative-offset behaviour. Offsets past the end of the string behave as follows, and this is the whole specification:
+
+- `byte_at` returns `-1` when `i >= len()`. The `-1` is the out-of-range sentinel of the `-1..=255` result; it is not a reachable byte value.
+- `substring(start, end)` clamps `start` to `len()` and then `end` into `[start, len()]`, so a reversed or oversized range yields the empty string or the tail, never a panic.
+- `string_substr(s, start, len)` clamps `start` to `len()` and `len` to the bytes remaining after `start`.
+- `string_matches_literal_at` returns `0` when `pos` plus the literal's byte length exceeds `len()` (including when that sum overflows `u64`).
+
+The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` fails verification as `index out of bounds`, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values.
+
+`byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64`. `push_byte` takes a byte *value*, not an offset, and is `u8` (see the String method table).
 
 Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.
 
@@ -2556,11 +2566,11 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 | Function              | Signature                                        | Effects |
 |-----------------------|--------------------------------------------------|---------|
-| `string_substr`       | `fn(s: String, start: i64, len: i64) -> String`  | `[]`    |
+| `string_substr`       | `fn(s: String, start: u64, len: u64) -> String`  | `[]`    |
 | `string_split`        | `fn(s: String, delim: String) -> Vec<String>`    | `[]`    |
 | `string_starts_with`  | `fn(s: String, prefix: String) -> i64`           | `[]`    |
 | `string_ends_with`    | `fn(s: String, suffix: String) -> i64`           | `[]`    |
-| `string_matches_literal_at` | `fn(s: String, pos: i64, literal: String literal) -> i64` | `[]` |
+| `string_matches_literal_at` | `fn(s: String, pos: u64, literal: String literal) -> i64` | `[]` |
 | `string_trim`         | `fn(s: String) -> String`                        | `[]`    |
 | `string_to_upper`     | `fn(s: String) -> String`                        | `[]`    |
 | `string_to_lower`     | `fn(s: String) -> String`                        | `[]`    |
@@ -4390,8 +4400,9 @@ fn f(v: Vec<i64>, i: i64) -> i64 {
 
 **Fix:** Keep index counters `u64` (`.len()` is already `u64`), or convert at
 the index site with `as u64` (`v[i as u64]`). Unsuffixed integer literals
-coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`) are
-not `u64` in v1 and are unaffected; see
+coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`,
+`string_substr`, `string_matches_literal_at`) follow the same exact-`u64` rule,
+and `push_byte` takes exactly `u8`; see
 [String offsets](grammar.md#string-offsets).
 
 ### LiteralOutOfRange
@@ -6884,7 +6895,7 @@ length is independent of this determinism rationale, so
 index expression has exactly the type `u64` (see [Indexing](#indexing)), so
 `v[i]` with `i: u64` needs no cast, and `v[i]` with `i: i64` is a
 `TypeMismatch`. `String` offsets (`byte_at`, `substr`, `substring`,
-`matches_literal_at`) stay `i64` as a documented v1 scope decision; see
+`matches_literal_at`) are `u64` too, and `push_byte` takes a `u8`; see
 [String offsets](#string-offsets).
 
 **128-bit implementation status:** `i128`/`u128` types and full-range literal
@@ -7692,19 +7703,19 @@ m.contains_key(k)
 | `String::new()`     | `() -> String`              |
 | `String::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> String` |
 | `.len()`            | `() -> u64`                 |
-| `.byte_at(i)`       | `(<int>) -> i64`            |
-| `.push_byte(b)`     | `(<int>) -> ()` — appends one byte; `b` is a byte value in `0..=255` |
+| `.byte_at(i)`       | `(u64) -> i64` — the byte at offset `i` in `0..=255`, or `-1` when `i >= len()` |
+| `.push_byte(b)`     | `(u8) -> ()` — appends one byte |
 | `.push_str(s)`      | `(String) -> ()`            |
 | `.clear()`          | `() -> ()` — frees buffer, resets to empty |
 | `.contains(s)`      | `(String) -> bool`          |
 | `.eq(s)`            | `(String) -> bool`          |
-| `.substring(start, end)` | `(<int>, <int>) -> String` |
+| `.substring(start, end)` | `(u64, u64) -> String` — bytes `[start, end)`, both bounds clamped to `len()` |
 | `.parse_i64()`      | `() -> Option<i64>`         |
 | `.parse_u64()`      | `() -> Option<u64>`         |
 
-`<int>` marks a `String` offset or byte-value parameter, which is deliberately *not* `u64`: any integer width and either signedness is accepted, per [String offsets](#string-offsets). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
+`String` offsets are exactly `u64` and `push_byte`'s argument is exactly `u8`; see [String offsets](#string-offsets).
 
-`push_byte`'s argument is a byte *value*, not an index. The valid range is `0..=255`. The compiler does not diagnose a value outside that range (only a literal that does not fit `i64` is a `LiteralOutOfRange` error), and the runtime appends the low 8 bits, so `s.push_byte(300)` appends `44`. Keep byte values within `0..=255`.
+`push_byte`'s argument is a byte *value*, not an index. It is typed `u8`, so the byte range `0..=255` is a fact of the type: an unsuffixed literal outside that range is a `LiteralOutOfRange` error, and any other integer type (`i64`, `u64`, ...) is a `TypeMismatch`. A wider value is narrowed explicitly with a narrowing intrinsic (`i64_to_u8_wrap`, `u64_to_u8_wrap`, `i64_to_u8_sat`, `i64_to_u8_try`, ...) — `as u8` from a wider type is `NarrowingCastNotAllowed`. There is no silent truncation: `s.push_byte(300)` is rejected, and the explicit `s.push_byte(i64_to_u8_wrap(300))` appends `44`. `byte_at` returns an `i64` in `-1..=255`, where `-1` means the index is past the end: copy a whole range with `substring` or `push_str`, and when transforming byte by byte make `i < s.len()` a precondition, because wrapping the `-1` sentinel would append `0xFF`.
 
 ### HashMap<K, V> Methods
 
@@ -7776,15 +7787,25 @@ Arithmetic and comparison do not mix signedness: `i64 + u64` and `u64 < i64` are
 
 ### String offsets
 
-`String` offsets stay `i64` in v1, unlike `Vec` indices. This is a documented scope decision, not an oversight: `String::len()` is `u64`, but the runtime helpers that take an offset or span (`byte_at`, `substr`, `substring`, `matches_literal_at`) still take `i64` and keep live negative-offset behaviour — `byte_at` returns `-1` for an out-of-range offset, `substr` and `substring` clamp their arguments, and `matches_literal_at` rejects a negative position. Migrating them to `u64` means deleting those guards, which changes runtime semantics for out-of-range callers.
+`String` offsets are `u64`, exactly like `Vec` indices: a position or length into a `String` is never negative, and `String::len()` is already `u64`. Every offset or length argument has exactly the type `u64`:
 
-What this means at a call site:
+- `s.byte_at(i)` — `i`
+- `s.substring(start, end)` — `start` and `end`
+- `string_substr(s, start, len)` — `start` and `len`
+- `string_matches_literal_at(s, pos, literal)` — `pos`
 
-- The `string_substr` and `string_matches_literal_at` builtins require `i64` offset arguments exactly (see the builtin signature table).
-- The `byte_at` and `substring` methods accept any integer type, not only `u64`; the argument is checked as an integer (a non-integer is a `TypeMismatch`) and unsuffixed literals are range-checked against `i64`. The runtime sees an `i64`, so a `u64` offset above `i64::MAX` is reinterpreted as negative and clamped rather than treated as a large offset — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. A length-derived `u64` offset is always in range, so `s.byte_at(i)` with `i < s.len()` is safe.
-- The checker accepts a 128-bit `String` offset, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `String` helpers are i64-only, so such a program fails codegen. Use a 64-bit or narrower offset until epic #526 lands 128-bit lowering. (A 128-bit `Vec` index is not a codegen question: it is a `TypeMismatch`.) The `u64`-above-`i64::MAX` hazard is tracked in issue #1131.
-- `push_byte` takes a byte *value*, not an offset, and stays `i64`-checked with its own `0..=255` range (see the String method table).
-- `byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64` regardless.
+An unsuffixed literal coerces to `u64` and is range-checked against it (`LiteralOutOfRange` when it does not fit); any other integer type, including `i64`, is a `TypeMismatch`. Convert at the binding with `as u64` (same-width casts between `i64` and `u64` are legal); a negative signed value cast to `u64` becomes a huge offset, which is out of range rather than silently clamped to the start. A 128-bit offset is a `TypeMismatch`, not a codegen question.
+
+Because an offset cannot be negative, the runtime has no negative-offset behaviour. Offsets past the end of the string behave as follows, and this is the whole specification:
+
+- `byte_at` returns `-1` when `i >= len()`. The `-1` is the out-of-range sentinel of the `-1..=255` result; it is not a reachable byte value.
+- `substring(start, end)` clamps `start` to `len()` and then `end` into `[start, len()]`, so a reversed or oversized range yields the empty string or the tail, never a panic.
+- `string_substr(s, start, len)` clamps `start` to `len()` and `len` to the bytes remaining after `start`.
+- `string_matches_literal_at` returns `0` when `pos` plus the literal's byte length exceeds `len()` (including when that sum overflows `u64`).
+
+The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` fails verification as `index out of bounds`, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values.
+
+`byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64`. `push_byte` takes a byte *value*, not an offset, and is `u8` (see the String method table).
 
 Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.
 
@@ -7932,11 +7953,11 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 | Function              | Signature                                        | Effects |
 |-----------------------|--------------------------------------------------|---------|
-| `string_substr`       | `fn(s: String, start: i64, len: i64) -> String`  | `[]`    |
+| `string_substr`       | `fn(s: String, start: u64, len: u64) -> String`  | `[]`    |
 | `string_split`        | `fn(s: String, delim: String) -> Vec<String>`    | `[]`    |
 | `string_starts_with`  | `fn(s: String, prefix: String) -> i64`           | `[]`    |
 | `string_ends_with`    | `fn(s: String, suffix: String) -> i64`           | `[]`    |
-| `string_matches_literal_at` | `fn(s: String, pos: i64, literal: String literal) -> i64` | `[]` |
+| `string_matches_literal_at` | `fn(s: String, pos: u64, literal: String literal) -> i64` | `[]` |
 | `string_trim`         | `fn(s: String) -> String`                        | `[]`    |
 | `string_to_upper`     | `fn(s: String) -> String`                        | `[]`    |
 | `string_to_lower`     | `fn(s: String) -> String`                        | `[]`    |
@@ -9770,8 +9791,9 @@ fn f(v: Vec<i64>, i: i64) -> i64 {
 
 **Fix:** Keep index counters `u64` (`.len()` is already `u64`), or convert at
 the index site with `as u64` (`v[i as u64]`). Unsuffixed integer literals
-coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`) are
-not `u64` in v1 and are unaffected; see
+coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`,
+`string_substr`, `string_matches_literal_at`) follow the same exact-`u64` rule,
+and `push_byte` takes exactly `u8`; see
 [String offsets](grammar.md#string-offsets).
 
 ### LiteralOutOfRange

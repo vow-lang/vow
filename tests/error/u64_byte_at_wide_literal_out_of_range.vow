@@ -1,4 +1,4 @@
-module I64ByteAtWideLiteralOutOfRange
+module U64ByteAtWideLiteralOutOfRange
 
 fn first(s: String) -> i64 {
     s.byte_at(340282366920938463463374607431768211455)

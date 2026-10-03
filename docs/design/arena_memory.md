@@ -342,9 +342,9 @@ void* __vow_string_new(const char* ptr, uintptr_t len);
 void* __vow_string_from_cstr(const char* ptr);
 void* __vow_string_clone(const void* source);
 void  __vow_string_push_str(void* dest, const void* src);
-void  __vow_string_push_byte(void* string, int64_t byte);
-void* __vow_string_substr(const void* string, int64_t start, int64_t len);
-void* __vow_string_substring(const void* string, int64_t start, int64_t end);
+void  __vow_string_push_byte(void* string, uint64_t byte);
+void* __vow_string_substr(const void* string, uint64_t start, uint64_t len);
+void* __vow_string_substring(const void* string, uint64_t start, uint64_t end);
 void* __vow_string_from_i64(int64_t value);
 void* __vow_string_from_u64(uint64_t value);
 void* __vow_string_split(const void* haystack, const void* separator);
@@ -375,17 +375,17 @@ void* __vow_string_clone_in_arena(struct VowArena* arena,
 void  __vow_string_push_str_in_arena(struct VowArena* arena,
                                      void* dest, const void* src);
 void  __vow_string_push_byte_in_arena(struct VowArena* arena,
-                                      void* string, int64_t byte);
+                                      void* string, uint64_t byte);
 void  __vow_string_push_str_in_candidate_arena(
           struct VowArena* candidate, void* dest, const void* src);
 void  __vow_string_push_byte_in_candidate_arena(
-          struct VowArena* candidate, void* string, int64_t byte);
+          struct VowArena* candidate, void* string, uint64_t byte);
 void* __vow_string_substr_in_arena(struct VowArena* arena,
                                    const void* string,
-                                   int64_t start, int64_t len);
+                                   uint64_t start, uint64_t len);
 void* __vow_string_substring_in_arena(struct VowArena* arena,
                                       const void* string,
-                                      int64_t start, int64_t end);
+                                      uint64_t start, uint64_t end);
 void* __vow_string_from_i64_in_arena(struct VowArena* arena,
                                      int64_t value);
 void* __vow_string_from_u64_in_arena(struct VowArena* arena,

@@ -1,5 +1,5 @@
 // TEST: error-code TypeMismatch
-// TEST: stderr "expects an integer type"
+// TEST: stderr "argument has type"
 module ByteAtArgNotInteger
 
 fn main() -> i32 {

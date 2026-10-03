@@ -29,7 +29,7 @@ fn compact_hex(s: String) -> String {
     } {
         let b: i64 = s.byte_at(i);
         if b != 10 && b != 13 && b != 32 && b != 9 {
-            out.push_byte(b);
+            out.push_byte(i64_to_u8_wrap(b));
         }
         i = i + 1;
     }
@@ -44,8 +44,8 @@ fn hex_encode_bytes(bytes: Vec<i64>) -> String {
         invariant: i <= n
     } {
         let b: i64 = bytes[i];
-        out.push_byte(hex_digit(b / 16));
-        out.push_byte(hex_digit(b - (b / 16) * 16));
+        out.push_byte(i64_to_u8_wrap(hex_digit(b / 16)));
+        out.push_byte(i64_to_u8_wrap(hex_digit(b - (b / 16) * 16)));
         i = i + 1;
     }
     out

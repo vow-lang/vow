@@ -1,6 +1,6 @@
 //! Enforcement tests for index and builtin-method argument types (#1111).
 //!
-//! The unit tests in `check.rs` cover the `ArgExpect` seam as a pure function;
+//! The unit tests in `check.rs` cover `method_argument_expectations` as a pure function;
 //! these drive real source through parse + check so the wiring at the
 //! `ExprKind::Index` and `ExprKind::MethodCall` sites is covered too. Without
 //! them the enforcement could stop firing while the seam's own tests stayed
@@ -101,13 +101,25 @@ fn an_index_write_is_rejected_through_the_same_site() {
 }
 
 #[test]
-fn string_offset_method_arguments_reject_non_integers() {
-    for (call, expected_count) in [
-        ("let c: i64 = s.byte_at(String::from(\"x\"));", 1),
-        ("s.push_byte(String::from(\"x\"));", 1),
-        ("let d: String = s.substring(String::from(\"a\"), true);", 2),
+fn string_offset_method_arguments_reject_non_u64() {
+    let prelude = "    let i: i64 = 0;\n    let w: u32 = 1;\n    let b: u8 = 2;\n";
+    for (call, expected_count, expected_type) in [
+        ("let c: i64 = s.byte_at(String::from(\"x\"));", 1, "u64"),
+        ("let c: i64 = s.byte_at(i);", 1, "u64"),
+        ("let c: i64 = s.byte_at(w);", 1, "u64"),
+        ("let c: i64 = s.byte_at(b);", 1, "u64"),
+        (
+            "let d: String = s.substring(String::from(\"a\"), true);",
+            2,
+            "u64",
+        ),
+        ("let d: String = s.substring(i, 3);", 1, "u64"),
+        ("let d: String = s.substring(0, i);", 1, "u64"),
+        ("s.push_byte(String::from(\"x\"));", 1, "u8"),
+        ("s.push_byte(i);", 1, "u8"),
+        ("s.push_byte(w);", 1, "u8"),
     ] {
-        let diags = type_mismatches(&program(&format!("    {call}")));
+        let diags = type_mismatches(&program(&format!("{prelude}    {call}")));
         assert_eq!(
             diags.len(),
             expected_count,
@@ -116,12 +128,57 @@ fn string_offset_method_arguments_reject_non_integers() {
         );
         for d in &diags {
             assert!(
-                d.message.contains("expects an integer type"),
+                d.message.contains(&format!("expects `{expected_type}`")),
                 "unexpected message: {}",
                 d.message
             );
         }
     }
+}
+
+#[test]
+fn push_byte_literal_outside_u8_is_out_of_range() {
+    for literal in ["256", "300", "65 + 256"] {
+        let diags = typecheck_source(&program(&format!("    s.push_byte({literal});")));
+        let out_of_range: Vec<_> = diags
+            .iter()
+            .filter(|d| d.code == ErrorCode::LiteralOutOfRange)
+            .collect();
+        assert_eq!(out_of_range.len(), 1, "`{literal}` got {diags:?}");
+        assert!(out_of_range[0].message.contains("does not fit in u8"));
+    }
+    let diags = typecheck_source(&program("    s.push_byte(0);\n    s.push_byte(255);"));
+    assert!(diags.is_empty(), "0 and 255 are valid bytes, got {diags:?}");
+}
+
+#[test]
+fn string_builtin_functions_require_u64_offsets() {
+    let prelude = "    let i: i64 = 0;\n    let u: u64 = 1;\n";
+    for (call, expected_count) in [
+        ("let t: String = string_substr(s, i, 1);", 1),
+        ("let t: String = string_substr(s, 0, i);", 1),
+        ("let t: String = string_substr(s, i, i);", 2),
+        ("let m: i64 = string_matches_literal_at(s, i, \"x\");", 1),
+    ] {
+        let diags = type_mismatches(&program(&format!("{prelude}    {call}")));
+        assert_eq!(
+            diags.len(),
+            expected_count,
+            "`{call}` should yield {expected_count} TypeMismatch, got {:?}",
+            diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+        for d in &diags {
+            assert!(
+                d.message.contains("expects `u64`"),
+                "unexpected message: {}",
+                d.message
+            );
+        }
+    }
+    let ok = typecheck_source(&program(&format!(
+        "{prelude}    let t: String = string_substr(s, u, 1);\n    let m: i64 = string_matches_literal_at(s, u, \"x\");"
+    )));
+    assert!(ok.is_empty(), "u64 offsets must be accepted, got {ok:?}");
 }
 
 #[test]
@@ -288,25 +345,22 @@ fn an_index_literal_that_does_not_fit_u64_is_out_of_range() {
 }
 
 #[test]
-fn string_offset_arguments_stay_any_integer() {
+fn string_offset_arguments_accept_u64_and_byte_values_accept_u8() {
     let src = "module Test\n\nfn main() -> i32 {\n\
         \x20   let s: String = String::from(\"hello\");\n\
-        \x20   let i: i64 = 0;\n\
         \x20   let u: u64 = 1;\n\
-        \x20   let w: u32 = 2;\n\
+        \x20   let b: u8 = 65;\n\
         \x20   let e: i64 = s.byte_at(u);\n\
-        \x20   let e2: i64 = s.byte_at(i);\n\
         \x20   let f: i64 = s.byte_at(0);\n\
-        \x20   s.push_byte(u);\n\
-        \x20   s.push_byte(w);\n\
-        \x20   s.push_byte(i);\n\
+        \x20   s.push_byte(b);\n\
+        \x20   s.push_byte(66);\n\
         \x20   let g: String = s.substring(u, 3);\n\
-        \x20   let h: String = s.substring(i, w);\n\
+        \x20   let h: String = s.substring(0, u);\n\
         \x20   0\n}\n";
     let diags = typecheck_source(src);
     assert!(
         diags.is_empty(),
-        "String offsets and byte values stay any-integer, got {:?}",
+        "u64 offsets and u8 byte values must be accepted, got {:?}",
         diags.iter().map(|d| &d.message).collect::<Vec<_>>()
     );
 }

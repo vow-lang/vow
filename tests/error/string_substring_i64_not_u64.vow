@@ -1,0 +1,12 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 2
+// TEST: stderr "u64"
+module StringSubstringI64NotU64
+
+fn main() -> i32 {
+    let s: String = String::from("hello");
+    let a: i64 = 1;
+    let b: i64 = 3;
+    let t: String = s.substring(a, b);
+    0
+}

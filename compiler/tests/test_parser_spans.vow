@@ -65,8 +65,8 @@ fn expr_total(a: AstArena) -> i64 { (a.expr_data.len() / 5) as i64 }
 fn type_total(a: AstArena) -> i64 { (a.type_data.len() / 4) as i64 }
 
 fn span_text(src: String, span: i64) -> String {
-    let start: i64 = span_unpack_start(span);
-    src.substring(start, start + span_unpack_len(span))
+    let start: u64 = span_unpack_start(span) as u64;
+    src.substring(start, start + (span_unpack_len(span) as u64))
 }
 
 fn spanless_node_count(a: AstArena) -> i64 {

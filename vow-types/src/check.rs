@@ -298,69 +298,32 @@ fn default_literal_integer_types(ty: &Ty) -> Ty {
     }
 }
 
-/// What a builtin method demands of one argument position.
+/// The exact type a builtin method demands of each argument position.
 ///
-/// The `Vec` length position (`truncate`) is `Exact(Ty::U64)`.
-/// `String` offsets (`byte_at`, `substring`) and the `push_byte` value stay
-/// `AnyInteger` because string offsets remain `i64` at the runtime ABI.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ArgExpect {
-    Exact(Ty),
-    AnyInteger,
-}
-
-impl ArgExpect {
-    /// The type used for the contextual integer-literal range check.
-    fn literal_range_target(&self) -> &Ty {
-        match self {
-            ArgExpect::Exact(ty) => ty,
-            ArgExpect::AnyInteger => &Ty::I64,
-        }
-    }
-
-    fn describe(&self) -> String {
-        match self {
-            ArgExpect::Exact(ty) => format!("`{ty}`"),
-            ArgExpect::AnyInteger => "an integer type".to_string(),
-        }
-    }
-
-    fn accepts(&self, actual: &Ty) -> bool {
-        match self {
-            ArgExpect::Exact(ty) => can_assignment_coerce(actual, ty),
-            ArgExpect::AnyInteger => *actual == Ty::Never || is_integer_or_lit_int(actual),
-        }
-    }
-}
-
-fn method_argument_expectations(receiver: &Ty, method: &str) -> Vec<ArgExpect> {
+/// The `Vec` length position (`truncate`) and every `String` offset
+/// (`byte_at`, `substring`) are `Ty::U64`; the `push_byte` value is `Ty::U8`.
+/// An argument is accepted when it assignment-coerces to the expected type,
+/// so unsuffixed integer literals still fit and `Never` never cascades.
+fn method_argument_expectations(receiver: &Ty, method: &str) -> Vec<Ty> {
     match receiver {
         Ty::Str => match method {
-            "push_str" | "eq" | "contains" => vec![ArgExpect::Exact(Ty::Str)],
-            "byte_at" => vec![ArgExpect::AnyInteger],
-            "push_byte" => vec![ArgExpect::AnyInteger],
-            "substring" => vec![ArgExpect::AnyInteger, ArgExpect::AnyInteger],
+            "push_str" | "eq" | "contains" => vec![Ty::Str],
+            "byte_at" => vec![Ty::U64],
+            "push_byte" => vec![Ty::U8],
+            "substring" => vec![Ty::U64, Ty::U64],
             _ => vec![],
         },
         Ty::Applied(base, args) => match base.as_ref() {
             Ty::Struct(name) if name == "Vec" => match method {
-                "push" => args
-                    .first()
-                    .cloned()
-                    .map(ArgExpect::Exact)
-                    .into_iter()
-                    .collect(),
-                "truncate" => vec![ArgExpect::Exact(Ty::U64)],
+                "push" => args.first().cloned().into_iter().collect(),
+                "truncate" => vec![Ty::U64],
                 _ => vec![],
             },
             Ty::Struct(name) if name == "HashMap" || name == "BTreeMap" => match method {
-                "insert" => args.iter().take(2).cloned().map(ArgExpect::Exact).collect(),
-                "get" | "contains" | "contains_key" | "remove" => args
-                    .first()
-                    .cloned()
-                    .map(ArgExpect::Exact)
-                    .into_iter()
-                    .collect(),
+                "insert" => args.iter().take(2).cloned().collect(),
+                "get" | "contains" | "contains_key" | "remove" => {
+                    args.first().cloned().into_iter().collect()
+                }
                 _ => vec![],
             },
             _ => vec![],
@@ -2331,7 +2294,7 @@ impl<'e> Checker<'e> {
                     return arg_ty;
                 }
                 if name == "string_matches_literal_at" {
-                    let expected = [Ty::Str, Ty::I64, Ty::Str];
+                    let expected = [Ty::Str, Ty::U64, Ty::Str];
                     if args.len() != expected.len() {
                         self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
@@ -2340,7 +2303,7 @@ impl<'e> Checker<'e> {
                                 args.len()
                             ),
                             expr.span,
-                            vec!["expected signature: (String, i64, string literal)".to_string()],
+                            vec!["expected signature: (String, u64, string literal)".to_string()],
                         );
                     }
                     for (arg, expected_ty) in args.iter().zip(expected.iter()) {
@@ -2457,16 +2420,12 @@ impl<'e> Checker<'e> {
                     .zip(arg_tys.iter())
                     .zip(method_argument_expectations(&recv_ty, method).iter())
                 {
-                    self.check_contextual_integer_literal_ranges(
-                        arg,
-                        expect.literal_range_target(),
-                    );
-                    if !expect.accepts(arg_ty) {
+                    self.check_contextual_integer_literal_ranges(arg, expect);
+                    if !can_assignment_coerce(arg_ty, expect) {
                         self.emit_error(
                             ErrorCode::TypeMismatch,
                             format!(
-                                "argument has type `{arg_ty}` but `{method}` expects {}",
-                                expect.describe()
+                                "argument has type `{arg_ty}` but `{method}` expects `{expect}`"
                             ),
                             arg.span,
                         );
@@ -7655,39 +7614,72 @@ mod tests {
     }
 
     #[test]
-    fn string_offset_and_byte_arguments_accept_any_integer_width_or_signedness() {
-        for (receiver, method) in [
-            (Ty::Str, "byte_at"),
-            (Ty::Str, "push_byte"),
-            (Ty::Str, "substring"),
-        ] {
-            let expects = method_argument_expectations(&receiver, method);
-            assert!(!expects.is_empty(), "{method} must constrain its index");
+    fn string_offset_arguments_require_exactly_u64() {
+        for method in ["byte_at", "substring"] {
+            let expects = method_argument_expectations(&Ty::Str, method);
+            assert!(!expects.is_empty(), "{method} must constrain its offsets");
             assert!(
-                expects.iter().all(|e| *e == ArgExpect::AnyInteger),
-                "{method} must stay width- and signedness-agnostic, got {expects:?}"
+                expects.iter().all(|e| *e == Ty::U64),
+                "{method} offsets must be exactly u64, got {expects:?}"
             );
-            for ty in [Ty::I64, Ty::U64, Ty::U32, Ty::I8, Ty::LitInt] {
+            for ty in [Ty::U64, Ty::LitInt, Ty::Never] {
                 assert!(
-                    expects[0].accepts(&ty),
-                    "{method} must accept `{ty}` as an index"
+                    can_assignment_coerce(&ty, &expects[0]),
+                    "{method} must accept `{ty}`"
                 );
             }
-            for ty in [Ty::Str, Ty::Bool, Ty::Unit] {
+            for ty in [
+                Ty::I64,
+                Ty::U32,
+                Ty::I8,
+                Ty::U8,
+                Ty::Str,
+                Ty::Bool,
+                Ty::Unit,
+            ] {
                 assert!(
-                    !expects[0].accepts(&ty),
-                    "{method} must reject `{ty}` as an index"
+                    !can_assignment_coerce(&ty, &expects[0]),
+                    "{method} must reject `{ty}`"
                 );
             }
         }
     }
 
     #[test]
+    fn push_byte_argument_requires_exactly_u8() {
+        let expects = method_argument_expectations(&Ty::Str, "push_byte");
+        assert_eq!(expects, vec![Ty::U8]);
+        for ty in [Ty::U8, Ty::LitInt, Ty::Never] {
+            assert!(
+                can_assignment_coerce(&ty, &expects[0]),
+                "push_byte must accept `{ty}`"
+            );
+        }
+        for ty in [
+            Ty::I64,
+            Ty::U64,
+            Ty::I8,
+            Ty::U32,
+            Ty::Str,
+            Ty::Bool,
+            Ty::Unit,
+        ] {
+            assert!(
+                !can_assignment_coerce(&ty, &expects[0]),
+                "push_byte must reject `{ty}`"
+            );
+        }
+    }
+
+    #[test]
     fn vec_truncate_argument_requires_exactly_u64() {
         let expects = method_argument_expectations(&vec_of(Ty::I64), "truncate");
-        assert_eq!(expects, vec![ArgExpect::Exact(Ty::U64)]);
+        assert_eq!(expects, vec![Ty::U64]);
         for ty in [Ty::U64, Ty::LitInt, Ty::Never] {
-            assert!(expects[0].accepts(&ty), "truncate must accept `{ty}`");
+            assert!(
+                can_assignment_coerce(&ty, &expects[0]),
+                "truncate must accept `{ty}`"
+            );
         }
         for ty in [
             Ty::I64,
@@ -7699,40 +7691,39 @@ mod tests {
             Ty::Bool,
             Ty::Unit,
         ] {
-            assert!(!expects[0].accepts(&ty), "truncate must reject `{ty}`");
+            assert!(
+                !can_assignment_coerce(&ty, &expects[0]),
+                "truncate must reject `{ty}`"
+            );
         }
     }
 
     #[test]
     fn value_shaped_method_arguments_require_the_declared_type() {
         let expects = method_argument_expectations(&vec_of(Ty::I64), "push");
-        assert_eq!(expects, vec![ArgExpect::Exact(Ty::I64)]);
-        assert!(expects[0].accepts(&Ty::I64));
-        assert!(expects[0].accepts(&Ty::LitInt));
-        assert!(!expects[0].accepts(&Ty::Str));
-        assert!(!expects[0].accepts(&Ty::U64));
+        assert_eq!(expects, vec![Ty::I64]);
+        assert!(can_assignment_coerce(&Ty::I64, &expects[0]));
+        assert!(can_assignment_coerce(&Ty::LitInt, &expects[0]));
+        assert!(!can_assignment_coerce(&Ty::Str, &expects[0]));
+        assert!(!can_assignment_coerce(&Ty::U64, &expects[0]));
 
         let expects = method_argument_expectations(&Ty::Str, "push_str");
-        assert_eq!(expects, vec![ArgExpect::Exact(Ty::Str)]);
-        assert!(!expects[0].accepts(&Ty::LitInt));
+        assert_eq!(expects, vec![Ty::Str]);
+        assert!(!can_assignment_coerce(&Ty::LitInt, &expects[0]));
 
         let expects = method_argument_expectations(&map_of("HashMap", Ty::I64, Ty::Bool), "insert");
-        assert_eq!(
-            expects,
-            vec![ArgExpect::Exact(Ty::I64), ArgExpect::Exact(Ty::Bool)]
-        );
-        assert!(!expects[0].accepts(&Ty::Str));
-        assert!(!expects[1].accepts(&Ty::I64));
+        assert_eq!(expects, vec![Ty::I64, Ty::Bool]);
+        assert!(!can_assignment_coerce(&Ty::Str, &expects[0]));
+        assert!(!can_assignment_coerce(&Ty::I64, &expects[1]));
     }
 
     #[test]
     fn expectations_never_cascade_on_an_unresolved_type() {
         // `Never` on either side means an earlier diagnostic already fired;
         // a second one here would be noise.
-        assert!(ArgExpect::AnyInteger.accepts(&Ty::Never));
-        assert!(ArgExpect::Exact(Ty::U64).accepts(&Ty::Never));
-        assert!(ArgExpect::Exact(Ty::Str).accepts(&Ty::Never));
-        assert!(ArgExpect::Exact(Ty::Never).accepts(&Ty::Str));
+        assert!(can_assignment_coerce(&Ty::Never, &Ty::U64));
+        assert!(can_assignment_coerce(&Ty::Never, &Ty::Str));
+        assert!(can_assignment_coerce(&Ty::Str, &Ty::Never));
     }
 
     #[test]

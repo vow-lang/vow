@@ -258,6 +258,7 @@ fn lex(src: String) -> Vec<Token> {
 
     while pos < src_len {
         let b: i64 = src.byte_at(pos);
+        let begin: u64 = pos;
         let start: i64 = pos as i64;
 
         if is_whitespace(b) {
@@ -265,7 +266,7 @@ fn lex(src: String) -> Vec<Token> {
         } else if is_ident_start(b) {
             let ident: String = empty_str();
             while pos < src_len && is_ident_cont(src.byte_at(pos)) {
-                ident.push_byte(src.byte_at(pos));
+                ident.push_byte(byte_at_u8(src, pos));
                 pos = pos + 1;
             }
             let tag: i64 = keyword_tag(ident);
@@ -291,7 +292,7 @@ fn lex(src: String) -> Vec<Token> {
                     pos = pos + 1;
                 }
                 let len: i64 = span_len(pos, start);
-                let text: String = string_substr(src, start, len);
+                let text: String = string_substr(src, begin, pos - begin);
                 let bits: u64 = parse_f64_bits(text);
                 // The literal grammar has no unary minus, so only the
                 // positive-infinity bit pattern (0x7FF0000000000000) is
@@ -332,17 +333,18 @@ fn lex(src: String) -> Vec<Token> {
             while pos < src_len && src.byte_at(pos) != 34 {
                 if src.byte_at(pos) == 92 && pos + 1 < src_len {
                     pos = pos + 1;
-                    let esc: i64 = src.byte_at(pos);
+                    let escu: u8 = byte_at_u8(src, pos);
+                    let esc: i64 = escu as i64;
                     if esc == 110 { s.push_byte(10); }
                     else if esc == 116 { s.push_byte(9); }
                     else if esc == 114 { s.push_byte(13); }
                     else if esc == 92 { s.push_byte(92); }
                     else if esc == 34 { s.push_byte(34); }
                     else if esc == 48 { s.push_byte(0); }
-                    else { s.push_byte(92); s.push_byte(esc); }
+                    else { s.push_byte(92); s.push_byte(escu); }
                     pos = pos + 1;
                 } else {
-                    s.push_byte(src.byte_at(pos));
+                    s.push_byte(byte_at_u8(src, pos));
                     pos = pos + 1;
                 }
             }

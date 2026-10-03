@@ -1,0 +1,23 @@
+// TEST: category bounds
+// String offsets are u64: no `>= 0` clause is needed or allowed on them, and
+// the byte_at result stays in 0..=255 for an in-range index. push_byte takes a
+// u8, so the byte range is a fact of the type rather than a contract.
+module StringOffsetsU64
+
+fn byte_in_range(s: String, i: u64) -> i64 vow {
+    requires: i < s.len()
+    ensures: result >= 0
+    ensures: result <= 255
+} {
+    s.byte_at(i)
+}
+
+fn push_byte_grows(s: String, b: u8) vow {
+    requires: s.len() < 8
+} {
+    s.push_byte(b);
+}
+
+fn main() -> i32 {
+    0
+}

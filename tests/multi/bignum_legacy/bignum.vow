@@ -62,11 +62,11 @@ fn bignum_from_i64(val: i64) -> BigNum {
 }
 
 fn bignum_from_string(s: String) -> BigNum {
-    let slen: i64 = s.len() as i64;
+    let slen: u64 = s.len();
     if slen == 0 {
         bignum_zero()
     } else {
-        let mut start: i64 = 0;
+        let mut start: u64 = 0;
         let mut sign: i64 = 1;
         let first_byte: i64 = s.byte_at(0);
         if first_byte == 45 {
@@ -77,7 +77,7 @@ fn bignum_from_string(s: String) -> BigNum {
                 start = 1;
             }
         }
-        let mut nz: i64 = start;
+        let mut nz: u64 = start;
         while nz < slen {
             if s.byte_at(nz) != 48 {
                 break;
@@ -88,13 +88,12 @@ fn bignum_from_string(s: String) -> BigNum {
             bignum_zero()
         } else {
             let d: Vec<i64> = Vec::new();
-            let base_digits: i64 = bignum_base_digits();
-            let mut pos: i64 = slen;
+            let base_digits: u64 = bignum_base_digits() as u64;
+            let mut pos: u64 = slen;
             while pos > nz {
-                let chunk_start: i64 = pos - base_digits;
-                let actual_start: i64 = if chunk_start > nz { chunk_start } else { nz };
+                let actual_start: u64 = if pos - nz > base_digits { pos - base_digits } else { nz };
                 let mut limb: i64 = 0;
-                let mut k: i64 = actual_start;
+                let mut k: u64 = actual_start;
                 while k < pos {
                     limb = limb * 10 + (s.byte_at(k) - 48);
                     k = k + 1;
@@ -589,11 +588,10 @@ fn i64_to_decimal(v: i64) -> String {
             n = n / 10;
         }
         let s: String = String::new();
-        let blen: i64 = buf.len() as i64;
-        let mut i: i64 = blen - 1;
-        while i >= 0 {
-            s.push_byte(buf[i as u64]);
+        let mut i: u64 = buf.len();
+        while i > 0 {
             i = i - 1;
+            s.push_byte(i64_to_u8_wrap(buf[i]));
         }
         s
     }

@@ -1,0 +1,11 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 1
+// TEST: stderr "u64"
+module StringByteAtU32NotU64
+
+fn main() -> i32 {
+    let s: String = String::from("hi");
+    let i: u32 = 0;
+    let b: i64 = s.byte_at(i);
+    0
+}

@@ -70,7 +70,7 @@ fn str_rfind_byte(s: String, b: i64) -> Option<u64> {
 fn frontend_dir_path(path: String) -> String {
     match str_rfind_byte(path, 47) {
         Option::None => String::from("."),
-        Option::Some(k) => path.substring(0, k as i64),
+        Option::Some(k) => path.substring(0, k),
     }
 }
 

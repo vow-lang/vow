@@ -182,26 +182,27 @@ against an unmodified compiler.
    compilers, so a `u64` const can be a `Vec` index or a `requires` bound
    directly. The survivor list above is the state when the sweep ran.
 
-**What deliberately remains `i64`.** `String` offsets are `i64` in v1:
-`byte_at`, `substr`, `substring`, and `matches_literal_at`. `push_byte` takes a
-byte value in `0..=255` and is not a size at all, and `byte_at` returns a byte
-value in `-1..=255`. The runtime still carries the guards that make the signed
-type meaningful there: the negative-index check in `__vow_string_byte_at`, the
-clamping in `__vow_string_substr` and `__vow_string_substring`, and the
-negative-position rejection in `__vow_string_matches_literal_at`
-(`vow-runtime/src/lib.rs`). The `Vec` runtime helpers already took `usize`.
-
-The follow-up for String offsets is a deletion list, not a design question:
-the ` as i64` casts at `byte_at` / `substr` / `substring` /
-`matches_literal_at` call sites, and the runtime negative guards above. It
-changes the runtime behaviour of out-of-range callers, so it needs its own
-seam. It does not touch Decision 1: ADR 0001's `isize`/`usize` exclusion is
-unchanged.
+*Note, 2026-10-03.* The `String` offset follow-up is done. `byte_at`,
+`substring`, `string_substr` and `string_matches_literal_at` now take exactly
+`u64` offsets and lengths in both compilers (unsuffixed literals still coerce;
+any other integer type is a `TypeMismatch`), and `push_byte` takes exactly `u8`
+(a literal outside `0..=255` is `LiteralOutOfRange`; a wider value is narrowed
+with an explicit `*_to_u8_wrap` / `_sat` / `_try` intrinsic, since `as u8` from
+a wider type is `NarrowingCastNotAllowed`). The runtime negative guards are
+deleted: `__vow_string_byte_at` no longer tests `idx < 0`, the substring helpers
+clamp only on the high side, and `__vow_string_matches_literal_at` has no
+negative-position rejection. Out-of-range-high behaviour is unchanged and is now
+the whole specification: `byte_at` returns `-1` past the end, `substring` /
+`string_substr` clamp, `string_matches_literal_at` returns `0`. Both ESBMC C
+models treat the offsets as unsigned. `byte_at` still returns an `i64` in
+`-1..=255` (a value, not a size). The corpus ` as i64` casts at these call
+sites were deleted and the pure counters retyped to `u64`; surviving signed
+positions are `-1`-sentinel returns (`str_find_str`, `str_find_byte`) that are
+converted at the helper boundary. See `docs/spec/grammar.md` "String offsets".
 
 **Superseded text.** Decision 4's remark that an index expression accepts any
 width and either signedness described the state before D1 and no longer holds
-for `Vec`; its inventory warning still applies to `String`
-offsets. The second item under *Open follow-ups* is resolved: the
+for `Vec` or for `String` offsets, which take exactly `u64` too. The second item under *Open follow-ups* is resolved: the
 `as u64` bridge is deleted.
 
 ## Amendments
