@@ -215,8 +215,11 @@ fn check_statements_and_loops() -> i64 {
     expected.push(String::from("requires {\n    if x > 0 {\n    return x;\n}\n    true\n}"));
     expected.push(String::from("requires {\n    let mut i: i64 = 0;\n    while i < 3 {\n    i = i + 1;\n}\n    i == 3\n}"));
     expected.push(String::from("requires {\n    let mut i: i64 = 0;\n    while i < 3 vow {\n    invariant: i >= 0\n} {\n    i = i + 1;\n}\n    i == 3\n}"));
+    expected.push(String::from("invariant i >= 0"));
     expected.push(String::from("requires {\n    let mut i: i64 = 0;\n    let r: i64 = loop vow {\n    invariant: i >= 0\n} {\n    if i > 3 {\n    break i;\n}\n    i = i + 1;\n};\n    r == 4\n}"));
+    expected.push(String::from("invariant i >= 0"));
     expected.push(String::from("requires {\n    let mut t: i64 = 0;\n    for e in v vow {\n    invariant: t >= 0\n} {\n    if e > 3 {\n    continue;\n}\n    t = t + e;\n}\n    t >= 0\n}"));
+    expected.push(String::from("invariant t >= 0"));
     expect_descriptions(source, expected, 900)
 }
 
