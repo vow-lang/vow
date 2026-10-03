@@ -142,7 +142,7 @@ fn inferred_option_payload_defaults_to_i64_before_storage() {
 }
 
 #[test]
-fn vec_truncate_rejects_wide_i64_argument_before_lowering() {
+fn vec_truncate_rejects_wide_u64_argument_before_lowering() {
     assert_literal_out_of_range("i64_vec_truncate_wide_literal_out_of_range.vow");
 }
 
@@ -152,7 +152,7 @@ fn literal_only_comparison_defaults_operands_to_i64() {
 }
 
 #[test]
-fn index_rejects_wide_i64_operand_before_lowering() {
+fn index_rejects_wide_u64_operand_before_lowering() {
     assert_literal_out_of_range("i64_index_wide_literal_out_of_range.vow");
 }
 
