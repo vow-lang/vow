@@ -3401,8 +3401,9 @@ literal's concrete bytes and byte length; the third argument must be a string
 literal so the verifier never has to infer static text from a dynamic `String`.
 A constant length passed to `String::from_raw_parts_copy` or
 `Vec::from_raw_parts_copy` that does not fit the model capacity fails closed
-with the capacity-limit diagnostic rather than being assumed away, so no
-postcondition after the call is proven vacuously.
+with the capacity-limit diagnostic rather than being assumed away. A
+non-constant length is still assumed to be below the model capacity, so a
+postcondition that depends on it is verified only within that bound.
 
 ## Blame Model
 
@@ -8682,8 +8683,9 @@ literal's concrete bytes and byte length; the third argument must be a string
 literal so the verifier never has to infer static text from a dynamic `String`.
 A constant length passed to `String::from_raw_parts_copy` or
 `Vec::from_raw_parts_copy` that does not fit the model capacity fails closed
-with the capacity-limit diagnostic rather than being assumed away, so no
-postcondition after the call is proven vacuously.
+with the capacity-limit diagnostic rather than being assumed away. A
+non-constant length is still assumed to be below the model capacity, so a
+postcondition that depends on it is verified only within that bound.
 
 ## Blame Model
 
