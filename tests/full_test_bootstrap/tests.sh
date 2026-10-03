@@ -287,4 +287,31 @@ test_setup_only_skips_cargo_when_flag_set() {
 test_setup_only_runs_cargo_by_default
 test_setup_only_skips_cargo_when_flag_set
 
+test_tier15_only_gate_sits_between_8c_and_9_and_calls_print_summary() {
+    local script="scripts/full_test.sh"
+    local line_8c line_tier15 line_9
+
+    # Match the banner comments, not `section_begin "Section 9: ..."` calls:
+    # VOW_FULL_TEST_BOOTSTRAP_ONLY has its own early `section_begin "Section
+    # 9: Bootstrap Triple Test"` call near the top of the file (an isolated
+    # boundary-test harness, unrelated to the real Section 9), but only the
+    # real section has a banner comment.
+    line_8c=$(grep -n '^# ─── Section 8c: Contract Quality' "$script" | head -1 | cut -d: -f1 || true)
+    line_tier15=$(grep -n 'VOW_FULL_TEST_TIER15_ONLY' "$script" | head -1 | cut -d: -f1 || true)
+    line_9=$(grep -n '^# ─── Section 9: Bootstrap Triple Test' "$script" | head -1 | cut -d: -f1 || true)
+
+    [ -n "$line_8c" ] || fail_test "tier15 gate: Section 8c marker not found in $script"
+    [ -n "$line_tier15" ] || fail_test "tier15 gate: VOW_FULL_TEST_TIER15_ONLY not found in $script"
+    [ -n "$line_9" ] || fail_test "tier15 gate: Section 9 marker not found in $script"
+
+    [ "$line_tier15" -gt "$line_8c" ] || fail_test "tier15 gate: must appear after Section 8c (line $line_tier15 <= $line_8c)"
+    [ "$line_tier15" -lt "$line_9" ] || fail_test "tier15 gate: must appear before Section 9 (line $line_tier15 >= $line_9)"
+
+    local gate_block
+    gate_block=$(sed -n "${line_tier15},+5p" "$script")
+    assert_contains "$gate_block" "print_summary" "tier15 gate: must call print_summary, not a bare exit 0"
+}
+
+test_tier15_only_gate_sits_between_8c_and_9_and_calls_print_summary
+
 echo "full-test bootstrap tests passed"

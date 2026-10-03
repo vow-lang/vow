@@ -31,7 +31,7 @@
         "id":         { "type": "integer", "minimum": 0, "description": "Position of this mutant within the shard's `mutants.json` array." },
         "name":       { "type": "string", "description": "Same name as the corresponding Mutant record." },
         "status":     { "enum": ["caught", "missed", "timeout", "unviable", "unrun"] },
-        "tier":       { "enum": [1, 2], "description": "Oracle tier that produced the verdict." },
+        "tier":       { "enum": [1, 1.5, 2], "description": "Oracle tier that produced the verdict. 1.5 is the Tier-1.5 checkpoint (fast partial full_test.sh) between Tier 1's build-only oracle and Tier 2's full suite." },
         "oracle_ms":  { "type": "integer", "minimum": 0, "description": "Per-mutant oracle wall-clock in milliseconds. Non-deterministic — excluded from the determinism guarantee." }
       },
       "additionalProperties": false
@@ -46,7 +46,7 @@
         "missed":    { "type": "integer", "minimum": 0 },
         "timeout":   { "type": "integer", "minimum": 0 },
         "unviable":  { "type": "integer", "minimum": 0 },
-        "unrun":     { "type": "integer", "minimum": 0, "description": "Tier-1 survivors not run because the Tier-2 budget was exhausted." },
+        "unrun":     { "type": "integer", "minimum": 0, "description": "Tier-1.5 survivors not run because the Tier-2 budget was exhausted." },
         "shard":     { "type": "string", "pattern": "^[0-9]+/[1-9][0-9]*$" }
       },
       "additionalProperties": false

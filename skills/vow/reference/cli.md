@@ -185,8 +185,8 @@ Run mutation testing on a Vow source tree. Implemented in the self-hosted compil
 vowc mutants version
 vowc mutants list  [--root DIR] [--shard X/Y]
 vowc mutants run   [--root DIR] [--shard X/Y]
-                   [--tier1-cmd 'cmd'] [--tier2-cmd 'cmd']
-                   [--tier1-timeout-secs N] [--tier2-timeout-secs N]
+                   [--tier1-cmd 'cmd'] [--tier15-cmd 'cmd'] [--tier2-cmd 'cmd']
+                   [--tier1-timeout-secs N] [--tier15-timeout-secs N] [--tier2-timeout-secs N]
                    [--tier2-budget-secs N]
                    [--workdir DIR] [--output-dir DIR] [--force-unlock]
 ```
@@ -196,10 +196,12 @@ vowc mutants run   [--root DIR] [--shard X/Y]
 | `--root` | `compiler` | Directory whose `*.vow` files are mutated. `test_*.vow` files are excluded. |
 | `--shard X/Y` | `0/1` | Round-robin split of the deterministic mutant ID space. Mutant `id` is selected iff `id % Y == X`. |
 | `--tier1-cmd` | `scripts/bootstrap.sh --skip-cargo` | Fast oracle. Anything but exit 0 = caught at Tier 1. |
-| `--tier2-cmd` | `VOW_FULL_TEST_SKIP_CARGO=1 scripts/full_test.sh` | Full oracle. Only run on Tier-1 survivors. The env var skips the redundant `cargo build --all --release` step — see `docs/mutants.md`. |
+| `--tier15-cmd` | `VOW_FULL_TEST_SKIP_CARGO=1 VOW_FULL_TEST_TIER15_ONLY=1 scripts/full_test.sh` | Checkpoint oracle, run on Tier-1 survivors only. Fast, behavior-exercising prefix of `full_test.sh` (Sections 0-8c) — see `docs/mutants.md`. |
+| `--tier2-cmd` | `VOW_FULL_TEST_SKIP_CARGO=1 scripts/full_test.sh` | Full oracle. Only run on Tier-1.5 survivors. The env var skips the redundant `cargo build --all --release` step — see `docs/mutants.md`. |
 | `--tier1-timeout-secs` | `180` | Per-mutant Tier-1 wall-clock cap. |
+| `--tier15-timeout-secs` | `1200` | Per-mutant Tier-1.5 wall-clock cap. |
 | `--tier2-timeout-secs` | `3600` | Per-mutant Tier-2 wall-clock cap. |
-| `--tier2-budget-secs` | `7200` | Per-shard total Tier-2 budget. Once exhausted, surviving Tier-1 mutants are emitted with `status:"unrun"`. |
+| `--tier2-budget-secs` | `7200` | Per-shard total Tier-2 budget. Once exhausted, surviving Tier-1.5 mutants are emitted with `status:"unrun"`. |
 | `--workdir` | `/tmp/vow-mutants-<ms>` | Path of the throwaway `git worktree` used for all mutations. |
 | `--output-dir` | `mutants.out` | Directory for `mutants.json`, `outcomes.json`, status text files, `diff/`, `logs/`. |
 | `--force-unlock` | off | Remove a stale `output_dir/.lock` before starting. |

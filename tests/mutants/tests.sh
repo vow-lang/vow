@@ -116,7 +116,7 @@ t10_run_round_trip_leaves_files_unchanged() {
     # the recursive case.
     local before_worktrees
     before_worktrees=$(git worktree list | grep -c '/tmp/vow-mutants-' || true)
-    result=$(do_run rt --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true')
+    result=$(do_run rt --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true')
     rc="${result%%:*}"
     outdir="${result#*:}"
     after_sum=$(sha256sum tests/fixtures/mutants/sample_op.vow | awk '{print $1}')
@@ -137,7 +137,7 @@ t10_run_round_trip_leaves_files_unchanged() {
 
 t11_run_classifies_caught_and_missed() {
     local result outdir
-    result=$(do_run miss --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true')
+    result=$(do_run miss --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true')
     outdir="${result#*:}"
     local missed_count
     missed_count=$(count_status_in_outcomes "$outdir" missed)
@@ -149,10 +149,10 @@ t11_run_classifies_caught_and_missed() {
         FAIL=$((FAIL + 1))
         FAILURES+=("T11-missed")
     fi
-    result=$(do_run caught_t1 --root tests/fixtures/mutants --tier1-cmd 'false' --tier2-cmd 'true')
+    result=$(do_run caught_t1 --root tests/fixtures/mutants --tier1-cmd 'false' --tier15-cmd 'true' --tier2-cmd 'true')
     outdir="${result#*:}"
     local caught_t1
-    caught_t1=$(grep -cE '"status":"caught","tier":1' "$outdir/outcomes.json" 2>/dev/null || true)
+    caught_t1=$(grep -cE '"status":"caught","tier":1,' "$outdir/outcomes.json" 2>/dev/null || true)
     if [ "$caught_t1" -ge 1 ]; then
         printf "  ${GREEN}PASS${RESET} T11: false-tier1 oracle yields tier-1 caught records (got %d)\n" "$caught_t1"
         PASS=$((PASS + 1))
@@ -161,10 +161,10 @@ t11_run_classifies_caught_and_missed() {
         FAIL=$((FAIL + 1))
         FAILURES+=("T11-caught-t1")
     fi
-    result=$(do_run caught_t2 --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'false')
+    result=$(do_run caught_t2 --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'false')
     outdir="${result#*:}"
     local caught_t2
-    caught_t2=$(grep -cE '"status":"caught","tier":2' "$outdir/outcomes.json" 2>/dev/null || true)
+    caught_t2=$(grep -cE '"status":"caught","tier":2,' "$outdir/outcomes.json" 2>/dev/null || true)
     if [ "$caught_t2" -ge 1 ]; then
         printf "  ${GREEN}PASS${RESET} T11: false-tier2 oracle yields tier-2 caught records (got %d)\n" "$caught_t2"
         PASS=$((PASS + 1))
@@ -177,7 +177,7 @@ t11_run_classifies_caught_and_missed() {
 
 t12_tier2_budget_zero_marks_remaining_unrun() {
     local result outdir
-    result=$(do_run unrun --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' --tier2-budget-secs 0)
+    result=$(do_run unrun --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true' --tier2-budget-secs 0)
     outdir="${result#*:}"
     local unrun_count missed_count
     unrun_count=$(count_status_in_outcomes "$outdir" unrun)
@@ -202,13 +202,13 @@ t15_lock_prevents_concurrent_runs() {
     rm -rf "$outdir"
     mkdir -p "$outdir/.lock"
     set +e
-    run_vowm run --output-dir "$outdir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
+    run_vowm run --output-dir "$outdir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
     local rc=$?
     set -e
     assert_eq "T15: stale .lock causes run to refuse with exit 1" "1" "$rc"
     # --force-unlock recovers
     set +e
-    run_vowm run --output-dir "$outdir" --force-unlock --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
+    run_vowm run --output-dir "$outdir" --force-unlock --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
     rc=$?
     set -e
     assert_eq "T15: --force-unlock recovers stale lock" "0" "$rc"
@@ -228,10 +228,10 @@ t16_parse_shard_rejects_x_gte_y() {
     # `--shard 5/3` selected zero records; with the fix it falls back to
     # `0/1` and produces the full set.
     local result outdir total_full total_bad
-    result=$(do_run shard_full --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true')
+    result=$(do_run shard_full --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true')
     outdir="${result#*:}"
     total_full=$(grep -c '"id":[0-9]' "$outdir/outcomes.json" 2>/dev/null || true)
-    result=$(do_run shard_bad --shard 5/3 --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true')
+    result=$(do_run shard_bad --shard 5/3 --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true')
     outdir="${result#*:}"
     total_bad=$(grep -c '"id":[0-9]' "$outdir/outcomes.json" 2>/dev/null || true)
     if [ "$total_bad" -eq "$total_full" ] && [ "$total_full" -gt 0 ]; then
@@ -288,7 +288,7 @@ t18_outcome_ids_are_shard_local() {
     # Regression for "Outcome.id used global gid instead of shard-local index".
     # For shard 1/3, the first outcome.id must be 0 (local) not 1 (global).
     local result outdir first_id
-    result=$(do_run shard_local --shard 1/3 --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true')
+    result=$(do_run shard_local --shard 1/3 --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true')
     outdir="${result#*:}"
     first_id=$(grep -oE '"id":[0-9]+' "$outdir/outcomes.json" | head -1 | grep -oE '[0-9]+')
     assert_eq "T18: first outcome.id in shard 1/3 is 0 (shard-local)" "0" "$first_id"
@@ -308,7 +308,7 @@ fn build() -> String {
 }
 V
     local result outdir
-    result=$(do_run jsonesc --root "$fix" --tier1-cmd 'true' --tier2-cmd 'true')
+    result=$(do_run jsonesc --root "$fix" --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true')
     outdir="${result#*:}"
     if uv run --with-requirements /dev/null python3 -c "import json; json.load(open('$outdir/mutants.json')); json.load(open('$outdir/outcomes.json'))" 2>/dev/null; then
         printf "  ${GREEN}PASS${RESET} T19: mutants.json and outcomes.json parse as valid JSON after String::from() body-replace\n"
@@ -331,7 +331,7 @@ t20_relative_output_dir_works() {
     local reldir="autofix_t20_out_$$"
     rm -rf "$reldir"
     set +e
-    run_vowm run --output-dir "$reldir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
+    run_vowm run --output-dir "$reldir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
     local rc=$?
     set -e
     assert_eq "T20: relative --output-dir run exits 0" "0" "$rc"
@@ -350,7 +350,7 @@ t20_relative_output_dir_works() {
 
 t14_per_mutant_diff_and_log_captured() {
     local result outdir
-    result=$(do_run difflog --root tests/fixtures/mutants --tier1-cmd 'echo TIER1 PROBE' --tier2-cmd 'echo TIER2 PROBE')
+    result=$(do_run difflog --root tests/fixtures/mutants --tier1-cmd 'echo TIER1 PROBE' --tier15-cmd 'true' --tier2-cmd 'echo TIER2 PROBE')
     outdir="${result#*:}"
     # diff/<id>.diff must exist for at least one mutant and contain unified diff markers
     local any_diff
@@ -415,7 +415,7 @@ t22_lock_released_when_worktree_creation_fails() {
     # Pre-populate with a file so git worktree add refuses
     echo "occupier" > "$bad_workdir/file"
     set +e
-    run_vowm run --output-dir "$outdir" --workdir "$bad_workdir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
+    run_vowm run --output-dir "$outdir" --workdir "$bad_workdir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
     local rc=$?
     set -e
     assert_eq "T22: run exits nonzero when worktree creation fails" "1" "$rc"
@@ -438,7 +438,7 @@ t23_workdir_with_spaces_is_shell_quoted() {
     local spaced_workdir="$TMP/wt with spaces $$"
     rm -rf "$outdir" "$spaced_workdir"
     set +e
-    run_vowm run --output-dir "$outdir" --workdir "$spaced_workdir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
+    run_vowm run --output-dir "$outdir" --workdir "$spaced_workdir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
     local rc=$?
     set -e
     assert_eq "T23: run with --workdir containing spaces exits 0" "0" "$rc"
@@ -857,6 +857,74 @@ t2_list_empty_dir_prints_total_zero() {
     assert_grep "T2: summary line contains \"total\":0" '"total":0' "$summary"
 }
 
+t28_run_classifies_caught_at_tier15() {
+    local result outdir
+    result=$(do_run caught_t15 --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'false' --tier2-cmd 'true')
+    outdir="${result#*:}"
+    local caught_t15
+    caught_t15=$(grep -cE '"status":"caught","tier":1\.5,' "$outdir/outcomes.json" 2>/dev/null || true)
+    if [ "$caught_t15" -ge 1 ]; then
+        printf "  ${GREEN}PASS${RESET} T28: false-tier15 oracle yields tier-1.5 caught records (got %d)\n" "$caught_t15"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T28: expected >=1 caught at tier 1.5, got %d\n    outcomes.json: %s\n" "$caught_t15" "$(cat "$outdir/outcomes.json" 2>/dev/null)"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T28-caught-t15")
+    fi
+}
+
+t29_tier15_pass_reaches_tier2() {
+    local result outdir
+    result=$(do_run t15pass --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'false')
+    outdir="${result#*:}"
+    local caught_t2
+    caught_t2=$(grep -cE '"status":"caught","tier":2,' "$outdir/outcomes.json" 2>/dev/null || true)
+    if [ "$caught_t2" -ge 1 ]; then
+        printf "  ${GREEN}PASS${RESET} T29: tier-1.5 pass-through still reaches tier 2 (got %d caught at tier 2)\n" "$caught_t2"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T29: expected >=1 caught at tier 2 after tier-1.5 pass-through, got %d\n    outcomes.json: %s\n" "$caught_t2" "$(cat "$outdir/outcomes.json" 2>/dev/null)"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T29-tier15-passthrough")
+    fi
+}
+
+t30_tier15_log_markers_follow_tier_order() {
+    local result outdir
+    result=$(do_run t15log --root tests/fixtures/mutants --tier1-cmd 'echo TIER1 PROBE' --tier15-cmd 'echo TIER15 PROBE' --tier2-cmd 'echo TIER2 PROBE')
+    outdir="${result#*:}"
+    local any_log log_content t1_line t15_line t2_line
+    any_log=$(ls "$outdir/logs/" 2>/dev/null | head -1)
+    log_content=$(cat "$outdir/logs/$any_log" 2>/dev/null)
+    t1_line=$(grep -n "TIER1 PROBE" <<<"$log_content" | head -1 | cut -d: -f1 || true)
+    t15_line=$(grep -n "TIER15 PROBE" <<<"$log_content" | head -1 | cut -d: -f1 || true)
+    t2_line=$(grep -n "TIER2 PROBE" <<<"$log_content" | head -1 | cut -d: -f1 || true)
+    if [ -n "$t1_line" ] && [ -n "$t15_line" ] && [ -n "$t2_line" ] && [ "$t1_line" -lt "$t15_line" ] && [ "$t15_line" -lt "$t2_line" ]; then
+        printf "  ${GREEN}PASS${RESET} T30: per-mutant log captures tier1/tier15/tier2 probes in order\n"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T30: expected TIER1 < TIER15 < TIER2 probe order in %s/logs/%s\n    log:\n%s\n" "$outdir" "$any_log" "$log_content"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T30-log-order")
+    fi
+}
+
+t31_tier15_pass_with_zero_budget_marks_unrun_at_tier15() {
+    local result outdir
+    result=$(do_run t15unrun --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'true' --tier2-cmd 'true' --tier2-budget-secs 0)
+    outdir="${result#*:}"
+    local unrun_t15
+    unrun_t15=$(grep -cE '"status":"unrun","tier":1\.5,' "$outdir/outcomes.json" 2>/dev/null || true)
+    if [ "$unrun_t15" -ge 1 ]; then
+        printf "  ${GREEN}PASS${RESET} T31: zero Tier-2 budget after Tier-1.5 pass yields unrun at tier 1.5 (got %d)\n" "$unrun_t15"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T31: expected >=1 unrun at tier 1.5, got %d\n    outcomes.json: %s\n" "$unrun_t15" "$(cat "$outdir/outcomes.json" 2>/dev/null)"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T31-unrun-t15")
+    fi
+}
+
 # --- main ---
 
 setup
@@ -889,6 +957,10 @@ t24_invalid_shard_warns_to_stderr
 t25_body_replace_label_has_no_double_space
 t26_modulo_paired_with_division
 t27_json_escapes_control_bytes_in_paths
+t28_run_classifies_caught_at_tier15
+t29_tier15_pass_reaches_tier2
+t30_tier15_log_markers_follow_tier_order
+t31_tier15_pass_with_zero_budget_marks_unrun_at_tier15
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then
