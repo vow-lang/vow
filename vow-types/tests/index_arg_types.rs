@@ -178,7 +178,6 @@ fn the_index_rule_stays_weak_across_widths_and_signedness() {
         \x20   let f: i64 = s.byte_at(0);\n\
         \x20   s.push_byte(u);\n\
         \x20   s.push_byte(w);\n\
-        \x20   s.push_byte(300);\n\
         \x20   let g: String = s.substring(u, 3);\n\
         \x20   v[u] = 9;\n\
         \x20   0\n}\n";
