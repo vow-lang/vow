@@ -2,6 +2,7 @@ module TestCEmitter
 
 use ir
 use c_emitter
+use const_fold
 use tests.builders
 
 fn identity_function(id: i64, name: String) -> IrFunction {

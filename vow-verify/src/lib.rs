@@ -1,4 +1,5 @@
 pub mod c_emitter;
+mod const_fold;
 pub mod esbmc;
 pub mod solver_strategy;
 
