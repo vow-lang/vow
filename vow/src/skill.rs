@@ -3398,7 +3398,7 @@ capacities are an internal property of the verifier, not of the language:
 
 | Type              | Model Capacity | Supported Operations |
 |-------------------|----------------|----------------------------------------------|
-| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `get`, `set`    |
+| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `truncate`, indexing (`v[i]`) |
 | `String`          | 256            | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |
 | `HashMap<K, V>`   | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
 | `BTreeMap<K, V>`  | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
@@ -8741,7 +8741,7 @@ capacities are an internal property of the verifier, not of the language:
 
 | Type              | Model Capacity | Supported Operations |
 |-------------------|----------------|----------------------------------------------|
-| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `get`, `set`    |
+| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `truncate`, indexing (`v[i]`) |
 | `String`          | 256            | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |
 | `HashMap<K, V>`   | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
 | `BTreeMap<K, V>`  | 64             | `new`, `insert`, `get`, `contains_key`, `len`|

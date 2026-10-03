@@ -161,10 +161,10 @@ against an unmodified compiler.
    compilers. Unsuffixed literals still coerce; a literal that does not fit is
    `LiteralOutOfRange`; any other integer type or a non-integer is
    `TypeMismatch`.
-   Follow-up: `Vec::get` was removed from both checkers. It was never in the
-   Vec method table, no lowerer or verifier model implemented it, and the two
-   checkers disagreed on its result type (`Option<T>` vs `T`); `v.get(i)` is now
-   `UnknownMethod`, and `v[i]` is the only element read.
+   Follow-up: `Vec::get` was removed from both checkers. Both accepted it, but
+   no lowerer or verifier model implemented it, and the checkers disagreed on
+   its result type (`Option<T>` vs `T`). `v.get(i)` is now `UnknownMethod`;
+   `v[i]` is the only element read.
 9. **`>= 0` residue sweep (this seam).** Every remaining `<length or index> >= 0`
    clause was resolved by its subject. Loop counters, sizes, counts and
    positions in `compiler/module_io.vow`, `examples/sat`, `stdlib/{heap,bignum,math}`,

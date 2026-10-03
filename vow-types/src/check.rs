@@ -300,7 +300,7 @@ fn default_literal_integer_types(ty: &Ty) -> Ty {
 
 /// What a builtin method demands of one argument position.
 ///
-/// `Vec` index and length positions (`get`, `truncate`) are `Exact(Ty::U64)`.
+/// The `Vec` length position (`truncate`) is `Exact(Ty::U64)`.
 /// `String` offsets (`byte_at`, `substring`) and the `push_byte` value stay
 /// `AnyInteger` because string offsets remain `i64` at the runtime ABI.
 #[derive(Debug, Clone, PartialEq, Eq)]

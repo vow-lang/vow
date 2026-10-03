@@ -5540,7 +5540,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Type              | Model Capacity | Supported Operations |\n"));
     r.push_str(String::from("|-------------------|----------------|----------------------------------------------|\n"));
-    r.push_str(String::from("| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `get`, `set`    |\n"));
+    r.push_str(String::from("| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `truncate`, indexing (`v[i]`) |\n"));
     r.push_str(String::from("| `String`          | 256            | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |\n"));
     r.push_str(String::from("| `HashMap<K, V>`   | 64             | `new`, `insert`, `get`, `contains_key`, `len`|\n"));
     r.push_str(String::from("| `BTreeMap<K, V>`  | 64             | `new`, `insert`, `get`, `contains_key`, `len`|\n"));
@@ -10907,7 +10907,7 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Type              | Model Capacity | Supported Operations |\n"));
     r.push_str(String::from("|-------------------|----------------|----------------------------------------------|\n"));
-    r.push_str(String::from("| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `get`, `set`    |\n"));
+    r.push_str(String::from("| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `truncate`, indexing (`v[i]`) |\n"));
     r.push_str(String::from("| `String`          | 256            | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |\n"));
     r.push_str(String::from("| `HashMap<K, V>`   | 64             | `new`, `insert`, `get`, `contains_key`, `len`|\n"));
     r.push_str(String::from("| `BTreeMap<K, V>`  | 64             | `new`, `insert`, `get`, `contains_key`, `len`|\n"));
