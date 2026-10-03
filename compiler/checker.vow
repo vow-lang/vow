@@ -2772,14 +2772,14 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_STR(), mname);
             }
             if mname == String::from("byte_at") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64());
+                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64(), mname);
             }
             if mname == String::from("push_byte") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U8());
+                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U8(), mname);
             }
             if mname == String::from("substring") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64());
-                check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64());
+                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64(), mname);
+                check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64(), mname);
             }
             if mname == String::from("len") { return CTY_U64(); }
             if mname == String::from("byte_at") { return CTY_I64(); }
