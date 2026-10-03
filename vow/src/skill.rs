@@ -12109,7 +12109,7 @@ mod tests {
     }
 
     fn generated_skill_support_count(source: &str) -> usize {
-        let body = generated_vow_function_lines(source, "fn skill_support_count() -> i64 {");
+        let body = generated_vow_function_lines(source, "fn skill_support_count() -> u64 {");
         let mut literal_lines = body
             .iter()
             .map(|line| line.trim())
@@ -12157,14 +12157,14 @@ mod tests {
         let compiler_main = repo_root.join("compiler/main.vow");
         let source = std::fs::read_to_string(&compiler_main).expect("compiler/main.vow must exist");
 
-        assert!(source.contains("fn skill_support_count() -> i64"));
-        assert!(source.contains("fn skill_support_path(index: i64) -> String vow {"));
-        assert!(source.contains("fn skill_support_content_index_guard(index: i64) vow {"));
-        assert!(source.contains("fn skill_support_content(index: i64) -> String {"));
+        assert!(source.contains("fn skill_support_count() -> u64"));
+        assert!(source.contains("fn skill_support_path(index: u64) -> String vow {"));
+        assert!(source.contains("fn skill_support_content_index_guard(index: u64) vow {"));
+        assert!(source.contains("fn skill_support_content(index: u64) -> String {"));
         assert!(source.contains("    skill_support_content_index_guard(index);"));
         assert_eq!(
             source
-                .matches("requires: index >= 0 && index < skill_support_count()")
+                .matches("requires: index < skill_support_count()")
                 .count(),
             2,
             "indexed support lookup contracts should guard path lookup and content access"
@@ -12172,11 +12172,11 @@ mod tests {
         let support_count = generated_skill_support_count(&source);
         let path_branch_count = generated_skill_support_branch_count(
             &source,
-            "fn skill_support_path(index: i64) -> String vow {",
+            "fn skill_support_path(index: u64) -> String vow {",
         );
         let content_branch_count = generated_skill_support_branch_count(
             &source,
-            "fn skill_support_content(index: i64) -> String {",
+            "fn skill_support_content(index: u64) -> String {",
         );
         assert_eq!(
             path_branch_count, support_count,
