@@ -67,33 +67,61 @@ So this was a **cold-cache run that caught the bug on the first try**. Given
 the cache's FAILED-only, content-keyed design above, *any* run against this
 exact tree — local or CI, cold or warm — must produce the same verdict.
 
-**What this rules in:** since a verified run against #1291's actual final
-tree is guaranteed to fail regardless of cache state, "green locally" can only
-be explained by the local check not having been run against that final tree
-(or not having been run as a verified build at all) — not by a stale cache
-entry. Supporting (if not fully conclusive) circumstantial evidence: the PR's
-`createdAt` is `2026-09-16T10:22:32Z`, 22 seconds after its first commit
-(`c52264d1`, authored `10:22:10Z`), while the commit that introduces
-`span_len` and its contract (`f394565b`) was authored the next day at
-`2026-09-17T17:06:57Z` — 18 seconds before the PR merged at `17:24:43Z`. The
-GraphQL edit history for the PR body (`userContentEdits`) currently shows zero
-recorded edits, even though the body's content (specific cast counts, a
-specific HEAD SHA `4b37ef2a` in its "Ergonomics note") can only have been
-written after the later commits. This is unresolved as forensic proof (GitHub
-edit-history tracking has known gaps for API-driven edits), so this plan does
-not rely on it — the decisive evidence is the cold-run counterexample above,
-which stands on its own.
+**What this rules in, and the actual explanation (not just "rules out the
+cache"):** since a verified run against #1291's actual final tree is
+guaranteed to fail regardless of cache state, "green locally" cannot have
+been checked against that final tree as a verified build. This is confirmed,
+not merely circumstantial:
+
+- `gh pr view 1291 --json baseRefOid` returns `4b37ef2a26a0c42a9b14d18b27d7d63b127a3b8a`
+  — the PR's base is the same SHA the PR body's own "Ergonomics note" cites as
+  "current HEAD" when it was written (`4b37ef2a`), i.e. the state of `main`
+  at the moment the PR was opened, not after any of its own commits landed.
+- `git show c52264d1:compiler/lexer.vow | grep -c span_len` returns `0` —
+  `span_len` does not exist at commit 1 (`c52264d1`, the PR's only commit at
+  the time the body was written).
+- The PR body itself is internally consistent with commit 1's tree and not
+  with the final tree: it says "No contract clauses changed", true only
+  before `f394565b` added `span_len`'s `requires`/`ensures`; it counts "9
+  `pos - start` sites" with `as i64` casts at each one, which is what commit 1
+  looks like — commit 2 (`24e839bd`) replaced those sites with calls to the
+  new `span_len` helper.
+- The PR's `createdAt` (`2026-09-16T10:22:32Z`) is 22 seconds after commit 1
+  was authored (`10:22:10Z`). `f394565b` (the commit that adds `span_len`'s
+  buggy contract) was authored the next day at `17:06:57Z`, about 18 minutes
+  before the PR merged at `17:24:43Z`. The GraphQL edit history for the PR
+  body (`userContentEdits`) shows zero recorded edits.
+
+Taken together: the PR body — including its "`scripts/bootstrap.sh
+--skip-cargo` — green" checklist line — was written against commit 1, before
+`span_len` existed, and was never revisited after commits 2 and 3 added the
+bug 18 minutes before merge. The checklist claim is accurate for the tree it
+was checked against; it was simply never re-checked against the tree that
+actually merged. No cache mechanism, local or otherwise, needs to be invoked
+to explain the discrepancy.
 
 **Conclusion for scope:** there is no cache-key defect to fix (first branch of
 the issue's "Ask"). The actionable branch is the second one — tighten the
-convention so a "green locally" claim (a) is pinned to the actual commit it
-was checked against, and (b) is made with a guaranteed-cold cache as cheap
-defense in depth (it cannot be the fix, since the cache was already proven
-sound above, but it removes any residual doubt a reviewer might raise and
-costs nothing to add). This plan also adds a regression test that pins down
-the "a cache hit can never turn a real failure into a pass" guarantee as a
-checked, executable fact — the literal "confirm" the issue asks for, made
-durable rather than re-derived by hand each time.
+convention so a "green locally" claim (a) is re-checked against and pinned to
+the PR's actual final head SHA (not an earlier commit the author happened to
+be looking at when they last wrote the checklist), and (b) is made with a
+guaranteed-cold cache as cheap defense in depth (it cannot be the fix, since
+the cache was already proven sound above, but it removes any residual doubt a
+reviewer might raise and costs nothing to add). This plan also adds a
+regression test that pins down the "a cache hit can never turn a real failure
+into a pass" guarantee as a checked, executable fact — the literal "confirm"
+the issue asks for, made durable rather than re-derived by hand each time.
+
+**Important — this finding must survive past this plan.** The implementation
+stage deletes `PLAN.md` before opening the PR (`git rm PLAN.md`, per the
+stage-handoff contract), so this section 0 does not itself reach the PR or
+the issue thread. The implementation stage must copy the conclusion above
+(run `35252574778`, the `span_len` counterexample values, the cold-runner
+fact, and the commit-1-vs-final-tree timeline) into **both** the PR body (as
+the answer to "confirm whether the compile cache is the cause") **and** a
+`gh issue comment 1307` posted before or alongside opening the PR — otherwise
+the one piece of information the issue actually asked for ("confirm whether
+...") never reaches anyone who didn't read this now-deleted file.
 
 ## 1. Problem restated
 
@@ -129,15 +157,21 @@ unless the convention changes.
   `VOW_BOOTSTRAP_TEST_LOG`/`fake_compiler.sh` harness needed; `fake_compiler.sh`
   itself does not need to change).
 - `CLAUDE.md` — under "Bootstrap Commands (Rust Stage 0)" / "Bootstrap (Rust
-  Compiler)", add a note that: (a) `.github/workflows/bootstrap.yml` only runs
-  on push to `main` and nightly, never on PRs, so no PR-time CI corroborates a
-  "bootstrap is green" checklist claim; (b) the convention for migration-epic
-  (#1104/#1116) seam PRs is to re-run `scripts/bootstrap.sh --skip-cargo
-  --no-cache` against the PR's actual final head SHA (after the last push,
-  not an earlier one) immediately before ticking that checklist box, and to
-  record the checked SHA in the checklist line; and (c) `--no-cache` is
-  included as cheap defense in depth, not because the cache was found to be
-  the cause — section 0 above is the record of why.
+  Compiler)", add a self-contained note (it will outlive this plan, so it
+  must not reference `PLAN.md`) covering: (a)
+  `.github/workflows/bootstrap.yml` only runs on push to `main` and nightly,
+  never on PRs, so no PR-time CI corroborates a "bootstrap is green"
+  checklist claim; (b) the convention for migration-epic (#1104/#1116) seam
+  PRs is to re-run `scripts/bootstrap.sh --skip-cargo --no-cache` against the
+  PR's actual final head SHA (after the last push, not an earlier one)
+  immediately before ticking that checklist box, and to record the checked
+  SHA in the checklist line; and (c) `--no-cache` is cheap defense in depth,
+  not a fix for a confirmed cache bug — `VerifyCache` only ever caches
+  `FAILED` verdicts (never `PROVEN`), so a stale cache entry can make a build
+  wrongly red, never wrongly green; issue #1307 found the actual cause of a
+  prior "green locally, red in CI" incident (#1291) to be a PR description
+  that was written before the contract-breaking commit landed and never
+  re-checked afterward, not a cache defect.
 - No `docs/spec/*.md` changes: `--no-cache` already exists as a documented
   `vow`/`vowc` CLI flag (`docs/spec/cli.md`); `scripts/bootstrap.sh` is a dev
   script outside the language/CLI spec surface, and `--no-cache` on it is a
@@ -177,17 +211,31 @@ unless the convention changes.
         sequence, with the real toolchain, and it must stay red-for-the-bug
         (i.e. the test must pass, by correctly reporting `VerifyFailed`).
    - Before wiring this into `full_test.sh`, do a one-off sanity check (not
-     committed) that the test actually has teeth: in
-     `vow/src/verification.rs:121-138`, the real hit/miss branch is
-     `if let Some(ce) = vc.lookup_failure(...) { Failed(ce) } else { /* run
-     ESBMC, store on Failed */ }`. Temporarily invert it so a cache **miss**
-     (the `else` branch — which is exactly what step 2 hits, since version
-     B's C text was never cached) short-circuits to `VerificationResult::Proven`
-     *without* calling ESBMC, instead of running ESBMC. Rebuild, confirm the
-     new test now fails (step 2 wrongly reports `Verified`), then revert the
-     temporary change. This proves the test would have caught the
-     hypothesized "cache masks a stale verdict" bug if it existed, rather
-     than passing vacuously.
+     committed) that the test actually has teeth: `vow/src/verification.rs`
+     has **two** hit/miss sites — the primary one at line 121
+     (`if let Some(ce) = vc.lookup_failure(...) { Failed(ce) } else { /* run
+     ESBMC, store on Failed */ }`, inside `verify_one_function`), and a
+     second one at line 283 inside `verify_contracts_only`, which is only
+     reached when the *first* verdict is an `arith:`-tagged counterexample
+     (see the `#585` comment at line 147 — ESBMC reports one violated
+     property per run, and an arithmetic-overflow property can mask the
+     contract verdict, so the driver re-asks with arith obligations
+     suppressed). The `span_len`-shaped bug in this fixture does **not** hit
+     that second site: wrapping `-` (as opposed to checked `-!`) has no
+     overflow obligation to report, so ESBMC's one property violation is the
+     `ensures` postcondition directly — confirmed by the real counterexample
+     in section 0 above, whose JSON has no `arith_overflow`/`arith:` field.
+     So mutating line 121 alone is sufficient for *this* fixture; do not
+     assume it generalizes to a fixture that layers a checked-arithmetic
+     violation on top.
+
+     Temporarily invert line 121's branch so a cache **miss** (the `else`
+     branch — which is exactly what step 2 hits, since version B's C text was
+     never cached) short-circuits to `VerificationResult::Proven` *without*
+     calling ESBMC, instead of running ESBMC. Rebuild, confirm the new test
+     now fails (step 2 wrongly reports `Verified`), then revert the temporary
+     change. This proves the test would have caught the hypothesized "cache
+     masks a stale verdict" bug if it existed, rather than passing vacuously.
    - Production code: none expected — this slice is expected to go green
      immediately against current `main`, because the guarantee already holds
      (as also demonstrated by the real CI run analyzed in section 0). If it
