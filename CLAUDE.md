@@ -351,7 +351,7 @@ Before claiming a directive is "never parsed by any harness," grep `tests/*.sh` 
 
 ## Mutation Testing (`vowc mutants`)
 
-Mutation testing is integrated into the self-hosted compiler as the `vowc mutants` subcommand. It mutates `compiler/*.vow` (or any `--root` directory), runs a tiered oracle (`scripts/bootstrap.sh --skip-cargo` then `scripts/full_test.sh`), and writes structured JSON output to `mutants.out/` (`mutants.json`, `outcomes.json`, per-status `.txt` lists, plus `diff/<id>.diff` and `logs/<id>.log` per mutant). Stdout carries only a one-line summary.
+Mutation testing is integrated into the self-hosted compiler as the `vowc mutants` subcommand. It mutates `compiler/*.vow` (or any `--root` directory), runs a tiered oracle (`scripts/bootstrap.sh --skip-cargo` then `VOW_FULL_TEST_SKIP_CARGO=1 scripts/full_test.sh`), and writes structured JSON output to `mutants.out/` (`mutants.json`, `outcomes.json`, per-status `.txt` lists, plus `diff/<id>.diff` and `logs/<id>.log` per mutant). Stdout carries only a one-line summary.
 
 ```bash
 build/vowc mutants list                                                # enumerate sites only

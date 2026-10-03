@@ -3,6 +3,7 @@ module MutantsMain
 use mutants_sites
 use mutants_patch
 use mutants_oracle
+use mutants_defaults
 use diag
 
 fn mutants_print_usage() [io] {
@@ -477,7 +478,7 @@ fn run_mutants_run(argv: Vec<String>) -> i32 [io, read, write] {
     let tier1_in: String = get_flag_arg(argv, String::from("--tier1-cmd"));
     let tier1_cmd: String = if tier1_in.len() == 0 { String::from("scripts/bootstrap.sh --skip-cargo") } else { tier1_in };
     let tier2_in: String = get_flag_arg(argv, String::from("--tier2-cmd"));
-    let tier2_cmd: String = if tier2_in.len() == 0 { String::from("scripts/full_test.sh") } else { tier2_in };
+    let tier2_cmd: String = if tier2_in.len() == 0 { default_tier2_cmd() } else { tier2_in };
 
     let t1_to_secs: i64 = parse_i64_default(get_flag_arg(argv, String::from("--tier1-timeout-secs")), 180);
     let t2_to_secs: i64 = parse_i64_default(get_flag_arg(argv, String::from("--tier2-timeout-secs")), 3600);

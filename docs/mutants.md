@@ -21,7 +21,7 @@ vowc mutants run   [--root DIR] [--shard X/Y]
 | `--root` | `compiler` | Directory whose `*.vow` files are mutated. `test_*.vow` files are excluded. Path is interpreted relative to the worktree (see Worktree mode below). |
 | `--shard X/Y` | `0/1` | Round-robin split of the deterministic mutant ID space. Mutant `id` is selected iff `id % Y == X`. |
 | `--tier1-cmd` | `scripts/bootstrap.sh --skip-cargo` | Fast oracle. Anything but exit 0 = caught at Tier 1. |
-| `--tier2-cmd` | `scripts/full_test.sh` | Full oracle. Only run on Tier-1 survivors. |
+| `--tier2-cmd` | `VOW_FULL_TEST_SKIP_CARGO=1 scripts/full_test.sh` | Full oracle. Only run on Tier-1 survivors. The env var skips `full_test.sh`'s `cargo build --all --release` step: every mutant comes from `*.vow` source, so the Rust bootstrap compiler never changes across a run, making that rebuild always redundant — and, under the symlinked-`target/` fast path below, actively destructive (see Caveats). A custom override must preserve this (or avoid `cargo build --all --release` some other way) to stay safe under that fast path. |
 | `--tier1-timeout-secs` | `180` | Per-mutant Tier-1 wall-clock cap. |
 | `--tier2-timeout-secs` | `3600` | Per-mutant Tier-2 wall-clock cap. |
 | `--tier2-budget-secs` | `7200` | Per-shard total Tier-2 budget. Once exhausted, surviving Tier-1 mutants are emitted with `status:"unrun"`. |
@@ -34,7 +34,7 @@ vowc mutants run   [--root DIR] [--shard X/Y]
 `vowc mutants run` operates on a fresh `git worktree` (created via `git worktree add --detach`) instead of mutating the live source tree. This guarantees the original `compiler/` (or any `--root`) is byte-identical before and after the run, even on Ctrl-C or oracle crashes. The worktree is removed via `git worktree remove --force` at exit.
 
 **Caveats**:
-- The worktree's `target/` starts empty. The default Tier-1 oracle `scripts/bootstrap.sh --skip-cargo` requires `target/release/vow` to already exist, so it will fail in the worktree unless you (a) pass `--tier1-cmd 'scripts/bootstrap.sh'` to run the full bootstrap inside the worktree, or (b) symlink `target/` from the original tree before invoking. Local development typically uses (b) for speed; (a) is what you'd want when running from a fresh checkout.
+- The worktree's `target/` starts empty. The default Tier-1 oracle `scripts/bootstrap.sh --skip-cargo` requires `target/release/vow` to already exist, so it will fail in the worktree unless you (a) pass `--tier1-cmd 'scripts/bootstrap.sh'` to run the full bootstrap inside the worktree, or (b) symlink `target/` from the original tree before invoking. Local development typically uses (b) for speed; (a) is what you'd want when running from a fresh checkout. Under (b), `target/` is shared with the real repo, so anything that writes through it — like `cargo build --all --release` — writes into the real repo's artifacts from inside the throwaway worktree. The default `--tier2-cmd` above sets `VOW_FULL_TEST_SKIP_CARGO=1` specifically so Tier 2 never does this; a hand-rolled `--tier2-cmd` that drops that env var (or otherwise shells out to `cargo build`) will corrupt the shared `target/` the same way (issue #1296).
 - The repo must be a git working tree. A non-git checkout is not supported in v1.
 
 ## Mutation kinds
