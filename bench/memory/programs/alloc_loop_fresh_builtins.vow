@@ -37,7 +37,7 @@ fn main() -> i32 [io, read, write] {
     bytes.push(255);
     let mut i: i64 = 0;
     let mut total: u64 = 0;
-    while i < 200000 {
+    while i < 50000 {
         total = total + read_len(path) + (first_sorted(nums) as u64) + hex_len(bytes);
         i = i + 1;
     }

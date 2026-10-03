@@ -1,27 +1,24 @@
 // BENCH: max-rss-kb 6928
 module AllocLoopBtreemapNew
 
-fn build() -> i64 {
+fn build() -> u64 {
     let m: BTreeMap<i64, i64> = BTreeMap::new();
     let mut i: i64 = 0;
     while i < 16 {
         m.insert(i, i * 100);
         i = i + 1;
     }
-    match m.get(3) {
-        Option::Some(v) => v,
-        Option::None => 0,
-    }
+    m.len()
 }
 
 fn main() -> i32 [io] {
     let mut i: i64 = 0;
-    let mut total: i64 = 0;
+    let mut total: u64 = 0;
     while i < 200000 {
         total = total + build();
         i = i + 1;
     }
-    print_i64(total);
+    print_u64(total);
     print_str("\n");
     0
 }

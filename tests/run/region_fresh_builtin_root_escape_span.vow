@@ -1,21 +1,31 @@
 // TEST: stdout ""
-// vec_sort and fs_read return fresh aggregates that are allocated in the
+// vec_sort, fs_read and the `_try` narrowing conversions return fresh
+// aggregates (a String, a Vec or an Option cell) that are allocated in the
 // inferred region, so region inference must treat them as heap-producing:
-// publishing either result through a parameter container must surface a
+// publishing any result through a parameter container must surface a
 // RegionRootEscape note instead of freeing the value with the callee's block.
 module RegionFreshBuiltinRootEscapeSpan
 
-fn keep(sorted: Vec<Vec<i64>>, texts: Vec<String>, v: Vec<i64>, path: String) [read] {
+fn keep(
+    sorted: Vec<Vec<i64>>,
+    texts: Vec<String>,
+    narrowed: Vec<Option<u8>>,
+    v: Vec<i64>,
+    path: String,
+    x: i64,
+) [read] {
     sorted.push(vec_sort(v));
     texts.push(fs_read(path));
+    narrowed.push(i64_to_u8_try(x));
 }
 
 fn main() -> i32 [read] {
     let sorted: Vec<Vec<i64>> = Vec::new();
     let texts: Vec<String> = Vec::new();
+    let narrowed: Vec<Option<u8>> = Vec::new();
     let v: Vec<i64> = Vec::new();
     v.push(2);
     v.push(1);
-    keep(sorted, texts, v, String::from("/dev/null"));
+    keep(sorted, texts, narrowed, v, String::from("/dev/null"), 7);
     0
 }
