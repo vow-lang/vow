@@ -575,6 +575,17 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
         i = i + 1;
     }
 
+    // Also collects every ITEM_FN id for the may-write pass below, in the
+    // same scan (issue #1032) — whether calling each module function can
+    // write through its own parameters. That pass must run after every
+    // function's signature is registered here (so env_lookup_fn can tell a
+    // builtin free function apart from an unresolvable name) and before the
+    // check_fn loop below, whose check_clause_purity calls consume the table
+    // via e.may_write_fns. Declarations are included (not filtered out) —
+    // compute_may_write_table seeds them straight to 1, since an
+    // `fn f(..) -> T;` stub's "body" is an empty placeholder, not evidence of
+    // purity.
+    let write_fids: Vec<i64> = Vec::new();
     i = 0u64;
     while i < n {
         let cur: String = item_files[i];
@@ -584,6 +595,7 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
         let id: i64 = item_id(item);
         if kind == ITEM_FN() {
             register_fn(e, m, id);
+            write_fids.push(id);
         } else if kind == ITEM_EXTERN() {
             let a: AstArena = m.arena;
             let fns_lid: i64 = ext_fns_lid(a, id);
@@ -598,27 +610,6 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
                 env_mark_extern_fn(e, arena_str(a, fn_name_sid(a, ext_fid)));
                 fi = fi + 1;
             }
-        }
-        i = i + 1;
-    }
-
-    // Compute the may-write side table (issue #1032) — whether calling each
-    // module function can write through its own parameters. Must run after
-    // every function's signature is registered above (so env_lookup_fn can
-    // tell a builtin free function apart from an unresolvable name) and
-    // before the check_fn loop below, whose check_clause_purity calls consume
-    // the table via e.may_write_fns. Declarations are included (not filtered
-    // out) — compute_may_write_table seeds them straight to 1, since an
-    // `fn f(..) -> T;` stub's "body" is an empty placeholder, not evidence of
-    // purity.
-    let write_fids: Vec<i64> = Vec::new();
-    i = 0u64;
-    while i < n {
-        let item: i64 = m.items[i];
-        let kind: i64 = item_kind(item);
-        let id: i64 = item_id(item);
-        if kind == ITEM_FN() {
-            write_fids.push(id);
         }
         i = i + 1;
     }

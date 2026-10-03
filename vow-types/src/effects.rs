@@ -181,24 +181,29 @@ fn collect_may_write_sites_in_block<'a>(
 /// analyzing it would find no writes and fail *open* on a function this
 /// translation unit has no definition for. Iterates `fn_defs` in
 /// caller-supplied order (the module's own item order), not a `HashMap`, so
-/// the fixed point is deterministic across compiler invocations. Installs
-/// the converged table into `env` — see `TypeEnv::may_write`.
+/// the fixed point is deterministic across compiler invocations. Mutates
+/// `env`'s table bit-by-bit as each write is discovered (mirroring the
+/// self-hosted `e.may_write_fns[fidx] = 1` in-place update) rather than
+/// cloning and reinstalling the whole table every round — sound because a
+/// bit only ever flips `false` → `true`, so a lookup seeing this round's
+/// partial progress for an earlier-processed function in the same round is
+/// still a safe under-approximation, not a correctness hazard.
 pub fn compute_may_write_table(fn_defs: &[&FnDef], env: &mut TypeEnv) {
-    let mut table: BTreeMap<String, bool> = fn_defs
+    let initial: BTreeMap<String, bool> = fn_defs
         .iter()
         .map(|f| (f.name.clone(), f.is_declaration))
         .collect();
+    env.install_may_write_table(initial);
     loop {
-        env.install_may_write_table(table.clone());
         let mut changed = false;
         for f in fn_defs {
-            if f.is_declaration || table[&f.name] {
+            if f.is_declaration || env.may_write(&f.name) == Some(true) {
                 continue;
             }
             let mut sites = Vec::new();
             collect_may_write_sites_in_block(&f.body, env, &mut sites);
             if !sites.is_empty() {
-                table.insert(f.name.clone(), true);
+                env.set_may_write(&f.name, true);
                 changed = true;
             }
         }
@@ -206,7 +211,6 @@ pub fn compute_may_write_table(fn_defs: &[&FnDef], env: &mut TypeEnv) {
             break;
         }
     }
-    env.install_may_write_table(table);
 }
 
 /// Collects the loop-invariant `vow` blocks of every `while`/`for`/`loop` in

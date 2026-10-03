@@ -575,11 +575,20 @@ impl TypeEnv {
         self.extern_fn_names.contains(name)
     }
 
-    /// Replaces the may-write side table wholesale. Called once per fixed-point
-    /// iteration by `effects::compute_may_write_table`, and once more at the
-    /// end with the converged table, before `check_fn`/`check_vow_purity` run.
+    /// Seeds the may-write side table wholesale, once, before
+    /// `effects::compute_may_write_table`'s fixed point starts flipping
+    /// individual bits via `set_may_write` — see that function for why
+    /// in-place mutation (not a clone-and-reinstall per round) is safe here.
     pub fn install_may_write_table(&mut self, table: BTreeMap<String, bool>) {
         self.may_write_fns = table;
+    }
+
+    /// Flips one function's may-write bit in place. Called by
+    /// `effects::compute_may_write_table`'s fixed-point loop as each write is
+    /// discovered, mirroring the self-hosted `e.may_write_fns[fidx] = 1`
+    /// in-place update instead of cloning the whole table per round.
+    pub fn set_may_write(&mut self, name: &str, value: bool) {
+        self.may_write_fns.insert(name.to_string(), value);
     }
 
     /// `Some(bit)` for a module-level function already analyzed by

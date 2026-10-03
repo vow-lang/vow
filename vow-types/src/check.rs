@@ -1343,7 +1343,9 @@ impl<'e> Checker<'e> {
             }
         }
 
-        // Pass 1c: Register function signatures (all types now resolvable)
+        // Pass 1c: Register function signatures (all types now resolvable).
+        // Also collects every `Item::Fn` for Pass 1d below, in the same scan.
+        let mut fn_defs: Vec<&FnDef> = Vec::new();
         for (i, item) in module.items.iter().enumerate() {
             self.set_item_file(item_files, i);
             match item {
@@ -1380,6 +1382,7 @@ impl<'e> Checker<'e> {
                             effects: fn_def.effects.iter().cloned().collect(),
                         },
                     );
+                    fn_defs.push(fn_def);
                 }
                 Item::Extern(block) => {
                     if block.vow.is_none() && !block.fns.is_empty() {
@@ -1442,14 +1445,6 @@ impl<'e> Checker<'e> {
         // included (not filtered out) — `compute_may_write_table` seeds them
         // straight to `true`, since an `fn f(..) -> T;` stub's "body" is an
         // empty placeholder, not evidence of purity.
-        let fn_defs: Vec<&FnDef> = module
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                Item::Fn(fn_def) => Some(fn_def),
-                _ => None,
-            })
-            .collect();
         crate::effects::compute_may_write_table(&fn_defs, &mut self.env);
 
         // Pass 2: Check function bodies.
