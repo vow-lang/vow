@@ -2779,6 +2779,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             i = i + 1;
         }
         if is_opaque(recv_tid) {
+            if recv_tid == CTY_NEVER() {
+                let nmsg: String = String::from("cannot infer the collection type of the receiver of `");
+                nmsg.push_str(mname);
+                nmsg.push_str(String::from("`: annotate its binding with a full type"));
+                env_emit_error_code(e, EC_TYPE_MISMATCH(), nmsg, expr_span(a, eid));
+            }
             return recv_tid;
         }
         let recv_tag: i64 = ty_tag(e.ts, recv_tid);
@@ -3464,6 +3470,15 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64(), second_name);
                     return CTY_NEVER();
                 }
+            }
+        }
+        if n_path > 1 && (first_name == String::from("Vec") || first_name == String::from("HashMap") || first_name == String::from("BTreeMap")) {
+            let ctor_sid: i64 = list_get(a, path_lid, 1);
+            if arena_str(a, ctor_sid) == String::from("new") {
+                // The element types come from the binding's annotation, so the
+                // bare constructor is the unresolved marker; mirrors Rust
+                // `builtin_constructor`.
+                return CTY_NEVER();
             }
         }
         if first_name == String::from("String") {

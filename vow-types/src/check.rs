@@ -2480,6 +2480,19 @@ impl<'e> Checker<'e> {
                         );
                     }
                 }
+                if matches!(recv_ty, Ty::Never) {
+                    self.emit_error_with_hints(
+                        ErrorCode::TypeMismatch,
+                        format!(
+                            "cannot infer the collection type of the receiver of `{method}`: annotate its binding with a full type"
+                        ),
+                        expr.span,
+                        vec![
+                            "`Vec::new()`, `HashMap::new()` and `BTreeMap::new()` take their element types from the annotation, for example `let m: HashMap<i64, i64> = HashMap::new();`".to_string(),
+                        ],
+                    );
+                    return Ty::Never;
+                }
                 let is_str = matches!(recv_ty, Ty::Str);
                 let is_vec = matches!(&recv_ty,
                     Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Struct(n) if n == "Vec")
@@ -7875,6 +7888,26 @@ mod tests {
         assert_eq!(
             map_slot_codes(value_nested),
             vec![ErrorCode::UnsupportedFeature]
+        );
+    }
+
+    #[test]
+    fn method_call_on_an_unresolved_collection_is_a_clear_type_mismatch() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.env.define("m", Ty::Never);
+        let ty = checker.check_expr(&make_expr(ExprKind::MethodCall {
+            receiver: Box::new(ident("m")),
+            method: "insert".to_string(),
+            args: vec![int_lit(), int_lit()],
+        }));
+        assert_eq!(ty, Ty::Never, "the error must not cascade");
+        let codes: Vec<ErrorCode> = emitter.0.iter().map(|d| d.code).collect();
+        assert_eq!(codes, vec![ErrorCode::TypeMismatch]);
+        assert!(
+            emitter.0[0]
+                .message
+                .contains("cannot infer the collection type of the receiver of `insert`")
         );
     }
 

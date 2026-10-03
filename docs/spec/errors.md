@@ -128,6 +128,22 @@ Only `Vec<T>` has an index operator. Indexing any other type (`HashMap`,
 `index operation on non-indexable type` and names the receiver type; read a map entry
 with `m.get(k)` and a string byte with `s.byte_at(i)`.
 
+`Vec::new()`, `HashMap::new()`, and `BTreeMap::new()` take their element, key,
+and value types from the binding's annotation. A method call on a collection
+whose type was never annotated is a `TypeMismatch` in both compilers, one per
+call:
+
+```vow
+fn f() -> () {
+    let m = HashMap::new();
+    m.insert(1, 2);
+}
+```
+
+**Output:** `cannot infer the collection type of the receiver of `insert`: annotate its binding with a full type`
+
+**Fix:** Annotate the binding: `let m: HashMap<i64, i64> = HashMap::new();`.
+
 ### LiteralOutOfRange
 
 **Phase:** Type Checker

@@ -932,6 +932,8 @@ s.byte_at(0)
 m.contains_key(k)
 ```
 
+**Collection constructors take their type from an annotation.** `Vec::new()`, `HashMap::new()`, and `BTreeMap::new()` carry no element, key, or value type of their own; it comes from the binding's annotation (`let m: HashMap<i64, i64> = HashMap::new();`). Calling a method on a collection whose type was never written (`let m = HashMap::new(); m.insert(1, 2);`) is a `TypeMismatch` in both compilers (`cannot infer the collection type of the receiver of ...`), one error per call, so a map can never silently default its key and value to `i64` and bypass the [key and value type](#hashmap-methods) checks.
+
 ### Vec<T> Methods
 
 | Method         | Signature                        |
