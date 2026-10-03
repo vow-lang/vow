@@ -252,14 +252,15 @@ fn lctx_merge_inst_ty(ctx: LowerCtx, inst_id: i64, incoming_ty: i64) {
         return;
     }
     lctx_record_inst_ty(ctx, inst_id, merged_ty);
-    let block_id: i64 = ctx.inst_block_by_id[inst_id as u64];
-    let inst_index: i64 = ctx.inst_index_by_id[inst_id as u64];
+    let iid: u64 = inst_id as u64;
+    let block_id: i64 = ctx.inst_block_by_id[iid];
+    let inst_index: i64 = ctx.inst_index_by_id[iid];
     let block: IrBlock = ctx.func.blocks[block_id as u64];
     let inst: IrInst = block.insts[inst_index as u64];
     inst.ty = merged_ty;
     block.insts[inst_index as u64] = inst;
 
-    let mut edge: i64 = ctx.phi_first_dependent[inst_id as u64];
+    let mut edge: i64 = ctx.phi_first_dependent[iid];
     while edge != -1 {
         lctx_merge_inst_ty(ctx, ctx.phi_dependent_targets[edge as u64], merged_ty);
         edge = ctx.phi_next_dependent[edge as u64];
@@ -797,20 +798,21 @@ fn lctx_copy_pin_result_metadata(ctx: LowerCtx, source_id: i64, result_id: i64) 
 }
 
 fn lctx_apply_call_result_metadata(ctx: LowerCtx, result_id: i64, fidx: i64) {
-    let ret_tag: String = ctx.func_ret_tags[fidx as u64];
+    let fi: u64 = fidx as u64;
+    let ret_tag: String = ctx.func_ret_tags[fi];
     if ret_tag.len() > 0 {
         lctx_tag(ctx, result_id, ret_tag);
     }
-    let ret_vec_elem: String = ctx.func_ret_vec_elems[fidx as u64];
+    let ret_vec_elem: String = ctx.func_ret_vec_elems[fi];
     if ret_vec_elem.len() > 0 {
         lctx_tag_vec_elem(ctx, result_id, ret_vec_elem);
     }
-    let ret_option_elem: i64 = ctx.func_ret_option_elems[fidx as u64];
+    let ret_option_elem: i64 = ctx.func_ret_option_elems[fi];
     if ret_option_elem != -1 {
         lctx_tag(ctx, result_id, String::from("Option"));
         lctx_tag_option_elem(ctx, result_id, ret_option_elem);
     }
-    let ret_variant_tys: Vec<i64> = ctx.func_ret_variant_payload_tys[fidx as u64];
+    let ret_variant_tys: Vec<i64> = ctx.func_ret_variant_payload_tys[fi];
     if ret_variant_tys.len() > 0 {
         lctx_tag_variant_payloads(ctx, result_id, ret_variant_tys);
     }
@@ -1146,20 +1148,20 @@ fn lower_find_type_alias(alias_names: Vec<String>, name: String) -> i64 {
     -1
 }
 
-fn lower_resolve_alias_index(a: AstArena, alias_names: Vec<String>, alias_target_tids: Vec<i64>, states: Vec<i64>, index: i64) -> i64 {
-    if states[index as u64] == 2 { return alias_target_tids[index as u64]; }
-    if states[index as u64] == 1 { return alias_target_tids[index as u64]; }
-    states[index as u64] = 1;
-    let target_tid: i64 = alias_target_tids[index as u64];
+fn lower_resolve_alias_index(a: AstArena, alias_names: Vec<String>, alias_target_tids: Vec<i64>, states: Vec<i64>, index: u64) -> i64 {
+    if states[index] == 2 { return alias_target_tids[index]; }
+    if states[index] == 1 { return alias_target_tids[index]; }
+    states[index] = 1;
+    let target_tid: i64 = alias_target_tids[index];
     if target_tid != -1 && type_tag(a, target_tid) == TY_NAMED() {
         let target_name: String = arena_str(a, type_a(a, target_tid));
         let target_index: i64 = lower_find_type_alias(alias_names, target_name);
         if target_index != -1 {
-            alias_target_tids[index as u64] = lower_resolve_alias_index(a, alias_names, alias_target_tids, states, target_index);
+            alias_target_tids[index] = lower_resolve_alias_index(a, alias_names, alias_target_tids, states, target_index as u64);
         }
     }
-    states[index as u64] = 2;
-    alias_target_tids[index as u64]
+    states[index] = 2;
+    alias_target_tids[index]
 }
 
 fn lower_resolve_type_aliases(a: AstArena, alias_names: Vec<String>, alias_target_tids: Vec<i64>) {
@@ -1172,7 +1174,7 @@ fn lower_resolve_type_aliases(a: AstArena, alias_names: Vec<String>, alias_targe
     }
     let mut i: u64 = 0;
     while i < n_alias {
-        lower_resolve_alias_index(a, alias_names, alias_target_tids, states, i as i64);
+        lower_resolve_alias_index(a, alias_names, alias_target_tids, states, i);
         i = i + 1;
     }
 }
