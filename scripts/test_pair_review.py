@@ -1566,13 +1566,14 @@ class SoundnessModeTest(unittest.TestCase):
                 ("confirmed", "self-hosted false proof"),
             ],
         ) as gate:
-            verdict, detail = pair_review.confirm_soundness_pair(
+            verdict, detail, unjudged = pair_review.confirm_soundness_pair(
                 "module M\n", "rust-vow", "self-vow", 7
             )
 
         self.assertEqual("confirmed", verdict)
         self.assertIn("rust: refuted", detail)
         self.assertIn("self-hosted: confirmed", detail)
+        self.assertIsNone(unjudged)
         self.assertEqual(
             [
                 mock.call("module M\n", "rust-vow", 7),
@@ -1580,6 +1581,67 @@ class SoundnessModeTest(unittest.TestCase):
             ],
             gate.call_args_list,
         )
+
+    def test_a_one_sided_soundness_gate_failure_is_recorded_beside_a_confirmed_finding(
+        self,
+    ):
+        # One side confirms a false proof; the other's gate never ran. The
+        # confirmed verdict must survive, but the failure to run must be
+        # reported under the correct side's name -- not hardcoded to either
+        # one, which is why both directions are checked here.
+        cases = [
+            (
+                "rust",
+                "self-hosted",
+                [("confirmed", "rust false proof"), ("error", "verifier timed out")],
+            ),
+            (
+                "self-hosted",
+                "rust",
+                [
+                    ("error", "verifier timed out"),
+                    ("confirmed", "self-hosted false proof"),
+                ],
+            ),
+        ]
+        for confirmed_side, erroring_side, side_effect in cases:
+            with (
+                self.subTest(confirmed_side=confirmed_side),
+                mock.patch.object(
+                    pair_review, "confirm_soundness", side_effect=side_effect
+                ),
+            ):
+                verdict, detail, unjudged = pair_review.confirm_soundness_pair(
+                    "module M\n", "rust-vow", "self-vow", 7
+                )
+
+                self.assertEqual("confirmed", verdict)
+                self.assertIn(f"{confirmed_side}: confirmed", detail)
+                self.assertIn(f"{erroring_side}: error", detail)
+                self.assertIsNotNone(unjudged)
+                self.assertIn(f"{erroring_side} gate did not run", unjudged)
+                self.assertNotIn(f"{confirmed_side} gate did not run", unjudged)
+                self.assertIn("verifier timed out", unjudged)
+
+    def test_soundness_pair_both_sides_erroring_still_reports_error(self):
+        # Regression: a one-sided gate failure must not reprioritize the
+        # both-sides-failed case -- that one still has to report `error`,
+        # not `confirmed` or `inconclusive`.
+        with mock.patch.object(
+            pair_review,
+            "confirm_soundness",
+            side_effect=[
+                ("error", "rust verifier crashed"),
+                ("error", "self-hosted timed out"),
+            ],
+        ):
+            verdict, _, unjudged = pair_review.confirm_soundness_pair(
+                "module M\n", "rust-vow", "self-vow", 7
+            )
+
+        self.assertEqual("error", verdict)
+        self.assertIn("rust gate did not run", unjudged)
+        self.assertIn("self-hosted gate did not run", unjudged)
 
     def test_soundness_ignores_the_equivalence_ledger(self):
         # Soundness runs never stamp the ledger, so an equivalence stamp must
@@ -1594,6 +1656,50 @@ class SoundnessModeTest(unittest.TestCase):
 
         self.assertEqual(["lexer"], report["skipped_unchanged"])
         self.assertEqual([], report["planned"])
+
+    def test_a_one_sided_soundness_failure_keeps_the_confirmed_finding_but_marks_the_run_incomplete(
+        self,
+    ):
+        # End to end through the real `confirm_soundness_pair` (no `confirm_fn`
+        # fake): the finding must still count as confirmed, and the run must
+        # still report that it did not fully judge everything it touched.
+        llm = fake_llm(
+            json.dumps(
+                {"findings": [{"claim": "false proof", "program": "module M\n"}]}
+            )
+        )
+
+        with (
+            mock.patch.object(
+                pair_review,
+                "load_pair_units",
+                return_value=ReviewReportTest.two_chunk_sources(),
+            ),
+            mock.patch.object(
+                pair_review,
+                "confirm_soundness",
+                side_effect=[
+                    ("confirmed", "rust false proof"),
+                    ("error", "verifier timed out"),
+                ],
+            ),
+        ):
+            result = pair_review.review_pair(
+                "c_emitter",
+                "model",
+                "rust",
+                "self",
+                600,
+                1,
+                max_chunks=1,
+                llm_module=llm,
+                mode="soundness",
+            )
+
+        self.assertEqual("confirmed", result["findings"][0]["verdict"])
+        self.assertIn("claim not judged", result["errors"][0]["error"])
+        self.assertIn("self-hosted gate did not run", result["errors"][0]["error"])
+        self.assertFalse(pair_review.reviewed_completely(result))
 
     def test_soundness_rejects_a_pair_it_does_not_cover(self):
         with (

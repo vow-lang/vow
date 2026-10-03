@@ -752,6 +752,37 @@ def confirm(program, rust, self_bin, timeout, verify_only=False):
         return "refuted", "both compilers agreed"
 
 
+def _combine_sides(noun, sides):
+    """Aggregate labeled (verdict, why) results into one (verdict, observed, unjudged).
+
+    `sides` is `((label, (verdict, why)), ...)` for exactly the gates run. A
+    labeled side's gate failing to run is a fact about that side, independent
+    of what the other side concluded -- a confirmed finding on one side must
+    not let another side's unjudged gate go unreported, so the failure is
+    returned alongside the aggregate verdict rather than in place of it.
+    `noun` names the thing that did not run ("path", "gate") in that message.
+    """
+    observed = "; ".join(
+        f"{label}: {verdict} ({why})" for label, (verdict, why) in sides
+    )
+    unjudged = (
+        "; ".join(
+            f"{label} {noun} did not run: {why}"
+            for label, (verdict, why) in sides
+            if verdict == "error"
+        )
+        or None
+    )
+    verdicts = {verdict for _, (verdict, _) in sides}
+    if "confirmed" in verdicts:
+        return "confirmed", observed, unjudged
+    if verdicts == {"refuted"}:
+        return "refuted", observed, unjudged
+    if "error" in verdicts:
+        return "error", observed, unjudged
+    return "inconclusive", observed, unjudged
+
+
 def confirm_both_paths(program, rust, self_bin, timeout):
     """Judge a candidate through `build` and again through `verify`.
 
@@ -763,22 +794,7 @@ def confirm_both_paths(program, rust, self_bin, timeout):
     """
     build = confirm(program, rust, self_bin, timeout)
     verify = confirm(program, rust, self_bin, timeout, verify_only=True)
-    observed = f"build: {build[0]} ({build[1]}); verify: {verify[0]} ({verify[1]})"
-    # A `build` divergence is a real answer, but it is an answer about a run
-    # that never executed either C emitter. If the verify path -- the one that
-    # does -- failed to run, the pair has not been reviewed however loud the
-    # build path was, so the failure is reported alongside the verdict rather
-    # than in place of it.
-    unjudged = "; ".join(
-        f"{path} path did not run: {why}"
-        for path, (result, why) in (("build", build), ("verify", verify))
-        if result == "error"
-    )
-    verdicts = {build[0], verify[0]}
-    for verdict in ("confirmed", "error", "inconclusive"):
-        if verdict in verdicts:
-            return verdict, observed, unjudged or None
-    return "refuted", observed, unjudged or None
+    return _combine_sides("path", (("build", build), ("verify", verify)))
 
 
 def confirm_soundness(program, verifier, timeout):
@@ -805,20 +821,7 @@ def confirm_soundness_pair(program, rust, self_bin, timeout):
     """Run the model-vs-runtime gate independently for both C emitters."""
     rust_result = confirm_soundness(program, rust, timeout)
     self_result = confirm_soundness(program, self_bin, timeout)
-    observed = (
-        f"rust: {rust_result[0]} ({rust_result[1]}); "
-        f"self-hosted: {self_result[0]} ({self_result[1]})"
-    )
-    verdicts = {rust_result[0], self_result[0]}
-    if "confirmed" in verdicts:
-        return "confirmed", observed
-    if verdicts == {"refuted"}:
-        return "refuted", observed
-    # One side's gate failing to run leaves the claim unjudged, whatever the
-    # other side said.
-    if "error" in verdicts:
-        return "error", observed
-    return "inconclusive", observed
+    return _combine_sides("gate", (("rust", rust_result), ("self-hosted", self_result)))
 
 
 @dataclass(frozen=True)
