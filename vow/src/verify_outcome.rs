@@ -84,15 +84,7 @@ impl CapacityBoundNote {
         }
         let rendered: Vec<String> = bounds
             .iter()
-            .map(|b| {
-                let name = match b.collection {
-                    "Vec" => "Vec<T>",
-                    "HashMap" => "HashMap<K, V>",
-                    "BTreeMap" => "BTreeMap<K, V>",
-                    other => other,
-                };
-                format!("{name}: {}", b.capacity)
-            })
+            .map(|b| format!("{}: {}", b.kind.display_name(), b.capacity))
             .collect();
         Some(Self {
             function: function.to_string(),
@@ -493,6 +485,7 @@ mod tests {
     use crate::{BuildStatus, CeCallSite, CeSource, CeViolatingArg, StructuredCounterexample};
     use vow_codegen::CodegenError;
     use vow_diag::{Blame, ErrorCode, SourceLocation};
+    use vow_verify::ModelBoundKind;
 
     fn ce(function: &str, blame: &str) -> StructuredCounterexample {
         StructuredCounterexample {
@@ -878,11 +871,8 @@ mod tests {
         assert_eq!(names, ["b.vow", "a.vow"]);
     }
 
-    fn bound(collection: &'static str, capacity: usize) -> vow_verify::ModelCapacityBound {
-        vow_verify::ModelCapacityBound {
-            collection,
-            capacity,
-        }
+    fn bound(kind: ModelBoundKind, capacity: usize) -> vow_verify::ModelCapacityBound {
+        vow_verify::ModelCapacityBound { kind, capacity }
     }
 
     // A bounded proof stays `Verified` (exit 0) and carries a Note naming every
@@ -892,11 +882,11 @@ mod tests {
         let note = CapacityBoundNote::new(
             "scan",
             &[
-                bound("Vec", 128),
-                bound("String", 256),
-                bound("HashMap", 64),
-                bound("BTreeMap", 64),
-                bound("Heap", 1024),
+                bound(ModelBoundKind::Vec, 128),
+                bound(ModelBoundKind::String, 256),
+                bound(ModelBoundKind::HashMap, 64),
+                bound(ModelBoundKind::BTreeMap, 64),
+                bound(ModelBoundKind::Heap, 1024),
             ],
         )
         .expect("non-empty bounds yield a note");
@@ -927,7 +917,7 @@ mod tests {
     #[test]
     fn capacity_notes_follow_findings_and_vanish_without_a_proof() {
         let note = VerifyWarning::CapacityBound(
-            CapacityBoundNote::new("a", &[bound("Vec", 128)]).expect("note"),
+            CapacityBoundNote::new("a", &[bound(ModelBoundKind::Vec, 128)]).expect("note"),
         );
         let out = to_output_with_warnings(
             VerifyOutcome::Proven,
@@ -975,7 +965,7 @@ mod tests {
     fn identical_capacity_notes_are_reported_once_and_distinct_ones_kept() {
         let note = |f: &str, cap: usize| {
             VerifyWarning::CapacityBound(
-                CapacityBoundNote::new(f, &[bound("Vec", cap)]).expect("note"),
+                CapacityBoundNote::new(f, &[bound(ModelBoundKind::Vec, cap)]).expect("note"),
             )
         };
         let out = to_output_with_warnings(

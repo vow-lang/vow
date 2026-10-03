@@ -15,13 +15,66 @@ const MODEL_BOUND_END: &str = " */";
 /// anything longer, so a bound is always representable in an `i64`.
 const MAX_CAPACITY_DIGITS: usize = 18;
 
-/// Kinds in the fixed order [`model_capacity_bounds`] reports them: the four
-/// collections, then the user-struct heap.
-const MODEL_BOUND_KINDS: [&str; 5] = ["Vec", "String", "HashMap", "BTreeMap", "Heap"];
+/// A kind of model capacity. The declaration order is the fixed order
+/// [`model_capacity_bounds`] reports them in: the four collections, then the
+/// user-struct heap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelBoundKind {
+    Vec,
+    String,
+    HashMap,
+    BTreeMap,
+    Heap,
+}
+
+impl ModelBoundKind {
+    const ALL: [Self; 5] = [
+        Self::Vec,
+        Self::String,
+        Self::HashMap,
+        Self::BTreeMap,
+        Self::Heap,
+    ];
+
+    /// The name in the marker wire format.
+    pub fn marker_name(self) -> &'static str {
+        match self {
+            Self::Vec => "Vec",
+            Self::String => "String",
+            Self::HashMap => "HashMap",
+            Self::BTreeMap => "BTreeMap",
+            Self::Heap => "Heap",
+        }
+    }
+
+    /// The label of the assertion that fires when a value outgrows the capacity.
+    pub(crate) fn capacity_label(self) -> &'static str {
+        match self {
+            Self::Vec => "vec capacity",
+            Self::String => "string capacity",
+            Self::HashMap => "hashmap capacity",
+            Self::BTreeMap => "btreemap capacity",
+            Self::Heap => "heap capacity",
+        }
+    }
+
+    /// The name in the user-facing bounded-proof note.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Vec => "Vec<T>",
+            Self::HashMap => "HashMap<K, V>",
+            Self::BTreeMap => "BTreeMap<K, V>",
+            Self::String | Self::Heap => self.marker_name(),
+        }
+    }
+}
 
 /// The marker text appended to an emitted capacity assumption.
-pub(crate) fn model_bound_marker(kind: &str, cap: usize) -> String {
-    format!(" {MODEL_BOUND_MARKER}{kind} {cap}{MODEL_BOUND_END}")
+pub(crate) fn model_bound_marker(kind: ModelBoundKind, cap: usize) -> String {
+    format!(
+        " {MODEL_BOUND_MARKER}{} {cap}{MODEL_BOUND_END}",
+        kind.marker_name()
+    )
 }
 
 /// A capacity the emitted model restricts executions to. Every proof of a
@@ -29,16 +82,18 @@ pub(crate) fn model_bound_marker(kind: &str, cap: usize) -> String {
 /// beyond it were pruned, not checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelCapacityBound {
-    pub collection: &'static str,
+    pub kind: ModelBoundKind,
     pub capacity: usize,
 }
 
-/// `(kind index, capacity)` of one marker body (`<Kind> <digits>`), or `None`
-/// when it is malformed: an unknown kind, no digits, a non-digit character, or
-/// more than [`MAX_CAPACITY_DIGITS`] digits.
-fn parse_marker_body(body: &str) -> Option<(usize, usize)> {
+/// `(kind, capacity)` of one marker body (`<Kind> <digits>`), or `None` when it
+/// is malformed: an unknown kind, no digits, a non-digit character, or more
+/// than [`MAX_CAPACITY_DIGITS`] digits.
+fn parse_marker_body(body: &str) -> Option<(ModelBoundKind, usize)> {
     let (kind, digits) = body.split_once(' ')?;
-    let kind = MODEL_BOUND_KINDS.iter().position(|k| *k == kind)?;
+    let kind = ModelBoundKind::ALL
+        .into_iter()
+        .find(|k| k.marker_name() == kind)?;
     if digits.is_empty()
         || digits.len() > MAX_CAPACITY_DIGITS
         || !digits.bytes().all(|b| b.is_ascii_digit())
@@ -56,7 +111,7 @@ fn parse_marker_body(body: &str) -> Option<(usize, usize)> {
 /// bound the model applied, so the strictest one is the honest summary, and it
 /// never overstates what was checked.
 pub fn model_capacity_bounds(c_src: &str) -> Vec<ModelCapacityBound> {
-    let mut smallest: [Option<usize>; MODEL_BOUND_KINDS.len()] = [None; MODEL_BOUND_KINDS.len()];
+    let mut smallest = [None; ModelBoundKind::ALL.len()];
     let mut rest = c_src;
     while let Some(pos) = rest.find(MODEL_BOUND_MARKER) {
         rest = &rest[pos + MODEL_BOUND_MARKER.len()..];
@@ -64,17 +119,15 @@ pub fn model_capacity_bounds(c_src: &str) -> Vec<ModelCapacityBound> {
             break;
         };
         if let Some((kind, cap)) = parse_marker_body(&rest[..end]) {
-            smallest[kind] = Some(smallest[kind].map_or(cap, |seen| seen.min(cap)));
+            let seen: &mut Option<usize> = &mut smallest[kind as usize];
+            *seen = Some(seen.map_or(cap, |seen| seen.min(cap)));
         }
     }
-    MODEL_BOUND_KINDS
-        .iter()
+    ModelBoundKind::ALL
+        .into_iter()
         .zip(smallest)
-        .filter_map(|(collection, capacity)| {
-            capacity.map(|capacity| ModelCapacityBound {
-                collection,
-                capacity,
-            })
+        .filter_map(|(kind, capacity)| {
+            capacity.map(|capacity| ModelCapacityBound { kind, capacity })
         })
         .collect()
 }
@@ -86,8 +139,38 @@ mod tests {
     fn pairs(src: &str) -> Vec<(&'static str, usize)> {
         model_capacity_bounds(src)
             .iter()
-            .map(|b| (b.collection, b.capacity))
+            .map(|b| (b.kind.marker_name(), b.capacity))
             .collect()
+    }
+
+    #[test]
+    fn marker_text_round_trips_for_every_kind() {
+        for kind in ModelBoundKind::ALL {
+            let src = format!("x;{}\n", model_bound_marker(kind, 42));
+            assert_eq!(
+                model_capacity_bounds(&src),
+                [ModelCapacityBound { kind, capacity: 42 }],
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn labels_follow_the_kind() {
+        let names: Vec<_> = ModelBoundKind::ALL
+            .into_iter()
+            .map(|k| (k.marker_name(), k.capacity_label(), k.display_name()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("Vec", "vec capacity", "Vec<T>"),
+                ("String", "string capacity", "String"),
+                ("HashMap", "hashmap capacity", "HashMap<K, V>"),
+                ("BTreeMap", "btreemap capacity", "BTreeMap<K, V>"),
+                ("Heap", "heap capacity", "Heap"),
+            ]
+        );
     }
 
     #[test]
