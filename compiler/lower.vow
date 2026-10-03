@@ -1587,8 +1587,9 @@ fn tag_builtin_result(ctx: LowerCtx, name: String, result: i64) {
 // a temporary Vow struct in the hot method-lowering path.
 fn METHOD_ARG_NONE() -> i64 { 0 }
 fn METHOD_ARG_EXPR_UNIT() -> i64 { 1 }
-// Intentionally unguarded: the HashMap rows preserve their current malformed-
-// arity failure rather than synthesising the Unit used by the BTreeMap rows.
+// Intentionally unguarded: the HashMap `contains_key`/`remove` rows preserve their
+// current malformed-arity failure rather than synthesising the Unit used by the
+// `get` and BTreeMap rows.
 fn METHOD_ARG_CONSUMED() -> i64 { 2 }
 fn METHOD_ARG_CONSUMED_UNIT() -> i64 { 3 }
 fn METHOD_ARG_EXPR_ZERO() -> i64 { 4 }
@@ -1653,7 +1654,7 @@ fn builtin_method_spec(recv_tag: String, method: String) -> i64 {
             return method_spec_pack(10, ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false);
         }
         if method == "get" {
-            return method_spec_pack(11, ITY_I64(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), false);
+            return method_spec_pack(11, ITY_PTR(), METHOD_ARG_CONSUMED_UNIT(), METHOD_TAG_OPTION(), true);
         }
         if method == "contains_key" {
             return method_spec_pack(12, ITY_BOOL(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), false);

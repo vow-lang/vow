@@ -8,7 +8,15 @@ fn fill_map() -> i64 {
         m.insert(i, i * 100);
         i = i + 1;
     }
-    m.len() as i64 + m.get(0) + m.get(15)
+    let first: i64 = match m.get(0) {
+        Option::Some(v) => v,
+        Option::None => 0,
+    };
+    let last: i64 = match m.get(15) {
+        Option::Some(v) => v,
+        Option::None => 0,
+    };
+    m.len() as i64 + first + last
 }
 
 fn main() -> i32 [io] {

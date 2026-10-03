@@ -1,0 +1,16 @@
+// TEST: stdout ""
+// Sibling of region_btreemap_insert_get_root_escape_span.vow: HashMap::get
+// returns a fresh Option<i64>, so publishing the result through a parameter
+// container must surface a RegionRootEscape note.
+module RegionHashMapGetRootEscapeSpan
+
+fn push_result(results: Vec<Option<i64>>, m: HashMap<i64, i64>) {
+    results.push(m.get(1));
+}
+
+fn main() -> i32 {
+    let results: Vec<Option<i64>> = Vec::new();
+    let m: HashMap<i64, i64> = HashMap::new();
+    push_result(results, m);
+    0
+}

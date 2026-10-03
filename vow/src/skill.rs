@@ -2336,10 +2336,12 @@ m.contains_key(k)
 |---------------------|-----------------------------|
 | `HashMap::new()`    | `() -> HashMap<K, V>`       |
 | `.insert(k, v)`     | `(K, V) -> ()`              |
-| `.get(k)`           | `(K) -> V`                  |
+| `.get(k)`           | `(K) -> Option<V>` (returns the value bound to `k`, or `None`)          |
 | `.contains_key(k)`  | `(K) -> bool`               |
 | `.remove(k)`        | `(K) -> ()`                 |
 | `.len()`            | `() -> u64`                 |
+
+`HashMap::get` returns `Option<V>`, exactly like `BTreeMap::get`: a missing key is `None`, never a default value, so `let a: i64 = m.get(k);` is a `TypeMismatch` in both compilers. Handle both cases with `match` (or `?`), or call `.unwrap()` to assert the key is present: it aborts with `UnwrapOnNone` on a missing key and requires the `[panic]` effect. A contract can state a binding as `result.get(k).unwrap() == v`; the verifier reports a missing key there as a failed `unwrap()` on `None`.
 
 ### BTreeMap<K, V> Methods
 
@@ -3555,6 +3557,20 @@ fn make_greeting() -> String vow {
 ```vow
 fn insert_and_check() -> HashMap<i64, i64> vow {
     ensures: result.contains_key(42)
+} {
+    let m: HashMap<i64, i64> = HashMap::new();
+    m.insert(42, 100);
+    m
+}
+```
+
+### Value After Insert
+
+`HashMap::get` returns `Option<V>`, so a contract states the bound value through `.unwrap()`. The verifier proves it when the key is bound, and reports a missing key as a failed `unwrap()` on `None`:
+
+```vow
+fn insert_and_read() -> HashMap<i64, i64> vow {
+    ensures: result.get(42).unwrap() == 100
 } {
     let m: HashMap<i64, i64> = HashMap::new();
     m.insert(42, 100);
@@ -7695,10 +7711,12 @@ m.contains_key(k)
 |---------------------|-----------------------------|
 | `HashMap::new()`    | `() -> HashMap<K, V>`       |
 | `.insert(k, v)`     | `(K, V) -> ()`              |
-| `.get(k)`           | `(K) -> V`                  |
+| `.get(k)`           | `(K) -> Option<V>` (returns the value bound to `k`, or `None`)          |
 | `.contains_key(k)`  | `(K) -> bool`               |
 | `.remove(k)`        | `(K) -> ()`                 |
 | `.len()`            | `() -> u64`                 |
+
+`HashMap::get` returns `Option<V>`, exactly like `BTreeMap::get`: a missing key is `None`, never a default value, so `let a: i64 = m.get(k);` is a `TypeMismatch` in both compilers. Handle both cases with `match` (or `?`), or call `.unwrap()` to assert the key is present: it aborts with `UnwrapOnNone` on a missing key and requires the `[panic]` effect. A contract can state a binding as `result.get(k).unwrap() == v`; the verifier reports a missing key there as a failed `unwrap()` on `None`.
 
 ### BTreeMap<K, V> Methods
 
@@ -8916,6 +8934,20 @@ fn make_greeting() -> String vow {
 ```vow
 fn insert_and_check() -> HashMap<i64, i64> vow {
     ensures: result.contains_key(42)
+} {
+    let m: HashMap<i64, i64> = HashMap::new();
+    m.insert(42, 100);
+    m
+}
+```
+
+### Value After Insert
+
+`HashMap::get` returns `Option<V>`, so a contract states the bound value through `.unwrap()`. The verifier proves it when the key is bound, and reports a missing key as a failed `unwrap()` on `None`:
+
+```vow
+fn insert_and_read() -> HashMap<i64, i64> vow {
+    ensures: result.get(42).unwrap() == 100
 } {
     let m: HashMap<i64, i64> = HashMap::new();
     m.insert(42, 100);

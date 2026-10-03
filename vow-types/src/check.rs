@@ -396,13 +396,16 @@ fn method_result_type(receiver: &Ty, method: &str) -> Option<Ty> {
                 "push" | "pop" | "clear" | "truncate" => Some(Ty::Unit),
                 _ => None,
             },
-            Ty::Struct(name) if name == "HashMap" => match method {
-                "len" => Some(Ty::U64),
-                "insert" | "remove" => Some(Ty::Unit),
-                "get" => Some(Ty::I64),
-                "contains_key" => Some(Ty::Bool),
-                _ => None,
-            },
+            Ty::Struct(name) if name == "HashMap" => {
+                let value_ty = args.get(1).cloned().unwrap_or(Ty::I64);
+                match method {
+                    "len" => Some(Ty::U64),
+                    "insert" | "remove" => Some(Ty::Unit),
+                    "get" => Some(option_of(value_ty)),
+                    "contains_key" => Some(Ty::Bool),
+                    _ => None,
+                }
+            }
             Ty::Struct(name) if name == "BTreeMap" => {
                 let value_ty = args.get(1).cloned().unwrap_or(Ty::I64);
                 match method {
@@ -8116,12 +8119,16 @@ mod tests {
         assert!(method_argument_expectations(&vec_i64, "get").is_empty());
         assert_eq!(method_result_type(&vec_i64, "nope"), None);
 
-        // HashMap: `get` returns the value type directly (pre-existing shape).
+        // HashMap: `get` is an `Option<V>` so a missing key is never a default value.
         let map = map_of("HashMap", Ty::I64, Ty::Bool);
         assert_eq!(method_result_type(&map, "len"), Some(Ty::U64));
         assert_eq!(method_result_type(&map, "insert"), Some(Ty::Unit));
         assert_eq!(method_result_type(&map, "remove"), Some(Ty::Unit));
-        assert_eq!(method_result_type(&map, "get"), Some(Ty::I64));
+        assert_eq!(method_result_type(&map, "get"), Some(opt_of(Ty::Bool)));
+        assert_eq!(
+            method_result_type(&map_of("HashMap", Ty::I64, Ty::Str), "get"),
+            Some(opt_of(Ty::Str))
+        );
         assert_eq!(method_result_type(&map, "contains_key"), Some(Ty::Bool));
         assert_eq!(method_result_type(&map, "nope"), None);
 

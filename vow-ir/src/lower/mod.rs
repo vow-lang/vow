@@ -341,7 +341,7 @@ fn builtin_method_spec(
             Some("Option"),
         ),
         (Some("HashMap"), "len") => ("__vow_map_len", Ty::U64, Absent, None),
-        (Some("HashMap"), "get") => ("__vow_map_get", Ty::I64, Consumed, None),
+        (Some("HashMap"), "get") => ("__vow_map_get", Ty::Ptr, Consumed, Some("Option")),
         (Some("HashMap"), "contains_key") => ("__vow_map_contains", Ty::Bool, Consumed, None),
         (Some("HashMap"), "remove") => ("__vow_map_remove", Ty::Unit, Consumed, None),
         (Some("BTreeMap"), "len") => ("__vow_btreemap_len", Ty::U64, Absent, None),
@@ -5591,7 +5591,7 @@ mod tests {
             (
                 Some("HashMap"),
                 "get",
-                ("__vow_map_get", Ty::I64, Consumed, None),
+                ("__vow_map_get", Ty::Ptr, Consumed, Some("Option")),
             ),
             (
                 Some("HashMap"),
@@ -5698,14 +5698,14 @@ mod tests {
             builtin_method_spec(Some("HashMap"), "remove").unwrap().2,
             Consumed
         );
-        // Two sibling map lookups, two result shapes: only BTreeMap::get is an Option.
+        // Both map lookups are an `Option<V>`: a missing key is never a default value.
         assert_eq!(
             builtin_method_spec(Some("BTreeMap"), "get"),
             Some(("__vow_btreemap_get", Ty::Ptr, Consumed, Some("Option")))
         );
         assert_eq!(
             builtin_method_spec(Some("HashMap"), "get"),
-            Some(("__vow_map_get", Ty::I64, Consumed, None))
+            Some(("__vow_map_get", Ty::Ptr, Consumed, Some("Option")))
         );
     }
 
@@ -6963,10 +6963,11 @@ fn sum(v: Vec<i64>) -> i64 {
             r#"
 module TabledMethodLowering
 
-fn exercise(hay: String, needle: String, m: BTreeMap<i64, i64>) -> i64 {
+fn exercise(hay: String, needle: String, m: BTreeMap<i64, i64>, h: HashMap<i64, i64>) -> i64 {
     let n: i64 = hay.len() as i64;
     let found: bool = hay.contains(needle);
     let hit: Option<i64> = m.get(n);
+    let hash_hit: Option<i64> = h.get(n);
     let mut v: Vec<i64> = Vec::new();
     v.truncate(n);
     n
@@ -6997,11 +6998,12 @@ fn exercise(hay: String, needle: String, m: BTreeMap<i64, i64>) -> i64 {
         assert_eq!(contains.ty, Ty::Bool);
         assert_eq!(contains.args.len(), 2, "receiver then needle");
 
-        // MethodArg::Consumed, plus the result tag: BTreeMap::get is the only
-        // tabled row that records an `inst_struct_type` for its result.
-        let get = call("__vow_btreemap_get");
-        assert_eq!(get.ty, Ty::Ptr);
-        assert_eq!(get.args.len(), 2);
+        // MethodArg::Consumed with an `Option` result: both map `get` rows.
+        for sym in ["__vow_btreemap_get", "__vow_map_get"] {
+            let get = call(sym);
+            assert_eq!(get.ty, Ty::Ptr, "{sym}");
+            assert_eq!(get.args.len(), 2, "{sym}");
+        }
 
         // MethodArg::ConsumedOrZero — Vec::truncate.
         let truncate = call("__vow_vec_truncate");

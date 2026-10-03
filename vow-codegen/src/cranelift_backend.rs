@@ -832,6 +832,10 @@ fn routed_vec_extern<'a>(
             RegionId::Root => (sym, None),
             region => ("__vow_string_parse_i64_opt_in_arena", Some(region)),
         },
+        "__vow_map_get" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_map_get_in_arena", Some(region)),
+        },
         "__vow_string_split" => match inst.region {
             RegionId::Root => (sym, None),
             region => ("__vow_string_split_in_arena", Some(region)),
@@ -2965,7 +2969,13 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_map_get" => {
             sig.params.push(AbiParam::new(types::I64)); // map ptr
             sig.params.push(AbiParam::new(types::I64)); // key
-            sig.returns.push(AbiParam::new(types::I64)); // value (0 if not found)
+            sig.returns.push(AbiParam::new(types::I64)); // *VowOption
+        }
+        "__vow_map_get_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+            sig.returns.push(AbiParam::new(types::I64)); // *VowOption
         }
         "__vow_map_contains" => {
             sig.params.push(AbiParam::new(types::I64)); // map ptr
@@ -5542,6 +5552,7 @@ mod tests {
                 "__vow_string_parse_i64_opt_in_arena",
                 1,
             ),
+            ("__vow_map_get", "__vow_map_get_in_arena", 2),
         ];
 
         let mut insts = vec![
@@ -6682,7 +6693,7 @@ mod tests {
 
     #[test]
     fn compile_map_get_contains_externs() {
-        // __vow_map_get(map: Ptr, key: I64) -> I64
+        // __vow_map_get(map: Ptr, key: I64) -> Ptr (Option)
         let module = make_module(
             "test",
             vec![simple_fn(

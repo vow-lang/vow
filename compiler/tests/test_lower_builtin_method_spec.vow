@@ -42,7 +42,7 @@ fn check_all_rows() -> i64 {
     if r == 0 { r = expect_spec(String::from("String"), String::from("parse_i64"), String::from("__vow_string_parse_i64_opt"), ITY_PTR(), METHOD_ARG_NONE(), METHOD_TAG_OPTION(), true, 43); }
     if r == 0 { r = expect_spec(String::from("String"), String::from("parse_u64"), String::from("__vow_string_parse_u64_opt"), ITY_PTR(), METHOD_ARG_NONE(), METHOD_TAG_OPTION(), true, 49); }
     if r == 0 { r = expect_spec(String::from("HashMap"), String::from("len"), String::from("__vow_map_len"), ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 55); }
-    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("get"), String::from("__vow_map_get"), ITY_I64(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), false, 61); }
+    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("get"), String::from("__vow_map_get"), ITY_PTR(), METHOD_ARG_CONSUMED_UNIT(), METHOD_TAG_OPTION(), true, 61); }
     if r == 0 { r = expect_spec(String::from("HashMap"), String::from("contains_key"), String::from("__vow_map_contains"), ITY_BOOL(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), false, 67); }
     if r == 0 { r = expect_spec(String::from("HashMap"), String::from("remove"), String::from("__vow_map_remove"), ITY_UNIT(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), false, 73); }
     if r == 0 { r = expect_spec(String::from("BTreeMap"), String::from("len"), String::from("__vow_btreemap_len"), ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 79); }
@@ -101,7 +101,7 @@ fn lower_fixture(source: String, file: String) -> IrModule {
 
 fn check_emitted_calls() -> i64 {
     let lowered: IrModule = lower_fixture(
-        String::from("module MethodSpecCalls\nfn exercise(hay: String, needle: String, map: HashMap<i64, i64>, tree: BTreeMap<i64, i64>) -> i64 {\n    let n: i64 = hay.len(123);\n    let found: bool = hay.contains(needle);\n    let map_value: i64 = map.get(n);\n    let tree_value: Option<i64> = tree.get(n);\n    let v: Vec<i64> = Vec::new();\n    v.truncate(n);\n    n\n}"),
+        String::from("module MethodSpecCalls\nfn exercise(hay: String, needle: String, map: HashMap<i64, i64>, tree: BTreeMap<i64, i64>) -> i64 {\n    let n: i64 = hay.len(123);\n    let found: bool = hay.contains(needle);\n    let map_value: Option<i64> = map.get(n);\n    let tree_value: Option<i64> = tree.get(n);\n    let v: Vec<i64> = Vec::new();\n    v.truncate(n);\n    n\n}"),
         String::from("method_spec_calls.vow")
     );
     if lowered.functions.len() != 1 { return 150; }
@@ -126,7 +126,7 @@ fn check_emitted_calls() -> i64 {
                     if inst.ty != ITY_BOOL() || inst.args.len() != 2 { return 152; }
                     seen[1] = true;
                 } else if inst.ds == String::from("__vow_map_get") {
-                    if inst.ty != ITY_I64() || inst.args.len() != 2 { return 153; }
+                    if inst.ty != ITY_PTR() || inst.args.len() != 2 { return 153; }
                     seen[2] = true;
                 } else if inst.ds == String::from("__vow_btreemap_get") {
                     if inst.ty != ITY_PTR() || inst.args.len() != 2 { return 154; }
@@ -150,7 +150,7 @@ fn check_emitted_calls() -> i64 {
 
 fn check_missing_argument_fallbacks() -> i64 {
     let lowered: IrModule = lower_fixture(
-        String::from("module MethodSpecFallbacks\nfn exercise(hay: String, tree: BTreeMap<i64, i64>) -> i64 {\n    let equal: bool = hay.eq();\n    let found: bool = hay.contains();\n    let tree_value: Option<i64> = tree.get();\n    let present: bool = tree.contains();\n    let v: Vec<i64> = Vec::new();\n    v.truncate();\n    v.len()\n}"),
+        String::from("module MethodSpecFallbacks\nfn exercise(hay: String, map: HashMap<i64, i64>, tree: BTreeMap<i64, i64>) -> i64 {\n    let equal: bool = hay.eq();\n    let found: bool = hay.contains();\n    let map_value: Option<i64> = map.get();\n    let tree_value: Option<i64> = tree.get();\n    let present: bool = tree.contains();\n    let v: Vec<i64> = Vec::new();\n    v.truncate();\n    v.len()\n}"),
         String::from("method_spec_fallbacks.vow")
     );
     if lowered.functions.len() != 1 { return 170; }
@@ -164,7 +164,7 @@ fn check_missing_argument_fallbacks() -> i64 {
         while inst_index < block.insts.len() {
             let inst: IrInst = block.insts[inst_index];
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.args.len() == 2 {
-                if inst.ds == String::from("__vow_string_eq") || inst.ds == String::from("__vow_string_contains") || inst.ds == String::from("__vow_btreemap_get") || inst.ds == String::from("__vow_btreemap_contains") {
+                if inst.ds == String::from("__vow_string_eq") || inst.ds == String::from("__vow_string_contains") || inst.ds == String::from("__vow_map_get") || inst.ds == String::from("__vow_btreemap_get") || inst.ds == String::from("__vow_btreemap_contains") {
                     if inst_opcode_by_id(function, inst.args[1]) != IOP_CONST_UNIT() { return 171; }
                     unit_fallbacks = unit_fallbacks + 1;
                 } else if inst.ds == String::from("__vow_vec_truncate") {
@@ -176,7 +176,7 @@ fn check_missing_argument_fallbacks() -> i64 {
         }
         block_index = block_index + 1;
     }
-    if unit_fallbacks != 4 { return 173; }
+    if unit_fallbacks != 5 { return 173; }
     if zero_fallbacks != 1 { return 174; }
     0
 }

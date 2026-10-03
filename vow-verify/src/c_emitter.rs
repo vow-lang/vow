@@ -367,7 +367,9 @@ fn is_map_model_creator(name: &str) -> bool {
 
 fn map_model_receiver_arg(name: &str) -> Option<usize> {
     match name {
-        "__vow_map_insert_in_arena" | "__vow_map_remove_in_arena" => Some(1),
+        "__vow_map_insert_in_arena" | "__vow_map_remove_in_arena" | "__vow_map_get_in_arena" => {
+            Some(1)
+        }
         "__vow_map_insert" | "__vow_map_remove" | "__vow_map_get" | "__vow_map_contains"
         | "__vow_map_len" => Some(0),
         _ => None,
@@ -458,7 +460,9 @@ fn collect_option_vars(func: &Function) -> HashSet<u32> {
                     || name == "__vow_string_parse_i32_opt"
                     || (narrow_target_model(name).is_some() && name.ends_with("_try"))
                     || name == "__vow_btreemap_insert"
-                    || name == "__vow_btreemap_get")
+                    || name == "__vow_btreemap_get"
+                    || name == "__vow_map_get"
+                    || name == "__vow_map_get_in_arena")
             {
                 vars.insert(inst.id.0);
             }
@@ -584,6 +588,7 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_map_insert"
             | "__vow_map_insert_in_arena"
             | "__vow_map_get"
+            | "__vow_map_get_in_arena"
             | "__vow_map_contains"
             | "__vow_map_remove"
             | "__vow_map_remove_in_arena"
@@ -1754,6 +1759,7 @@ fn emit_inst(
                     "__vow_map_new_in_arena"
                         | "__vow_map_insert_in_arena"
                         | "__vow_map_remove_in_arena"
+                        | "__vow_map_get_in_arena"
                 ) {
                     1
                 } else {
@@ -1786,13 +1792,13 @@ fn emit_inst(
                              \x20 }}\n"
                         ));
                     }
-                    "__vow_map_get" => {
+                    "__vow_map_get" | "__vow_map_get_in_arena" => {
                         let m = arg(0);
                         let k = arg(1);
                         out.push_str(&format!(
-                            "  v{id} = 0;\n\
+                            "  v{id}.tag = 0; v{id}.payload = 0;\n\
                              \x20 for (uint64_t __i = 0; __i < v{m}.len; __i++) {{\n\
-                             \x20   if (v{m}.keys[__i] == v{k}) {{ v{id} = v{m}.vals[__i]; break; }}\n\
+                             \x20   if (v{m}.keys[__i] == v{k}) {{ v{id}.tag = 1; v{id}.payload = v{m}.vals[__i]; break; }}\n\
                              \x20 }}\n"
                         ));
                     }
@@ -8001,9 +8007,15 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
-        assert!(c.contains("v2 = 0;"), "get default: {c}");
+        assert!(
+            c.contains("v2.tag = 0; v2.payload = 0;"),
+            "missing key is None: {c}"
+        );
         assert!(c.contains("v0.keys[__i] == v1"), "get key search: {c}");
-        assert!(c.contains("v2 = v0.vals[__i]"), "get reads value: {c}");
+        assert!(
+            c.contains("v2.tag = 1; v2.payload = v0.vals[__i]"),
+            "bound key is Some(value): {c}"
+        );
     }
 
     #[test]

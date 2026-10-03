@@ -4211,16 +4211,40 @@ pub unsafe extern "C" fn __vow_map_insert(map: *mut u8, key: i64, val: i64) {
     unsafe { __vow_map_insert_in_arena(&raw mut __vow_root_arena, map, key, val) };
 }
 
+/// `HashMap::get`: a fresh `Option<V>` allocated in `arena` (tag 1 and the
+/// stored value when `key` is bound, tag 0 otherwise). A missing key is never
+/// reported as a default value.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_map_get(map: *const u8, key: i64) -> i64 {
+pub unsafe extern "C" fn __vow_map_get_in_arena(
+    arena: *mut VowArena,
+    map: *const u8,
+    key: i64,
+) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("HashMap::get");
+    }
+    let ptr = unsafe { __vow_vec_new_in_arena(arena, 8, 8) } as *mut i64;
     let m = unsafe { &*(map as *const VowMap) };
     let entries = unsafe { std::slice::from_raw_parts(m.ptr as *const i64, m.len * 2) };
+    let (mut tag, mut payload) = (0, 0);
     for i in 0..m.len {
         if entries[i * 2] == key {
-            return entries[i * 2 + 1];
+            (tag, payload) = (1, entries[i * 2 + 1]);
+            break;
         }
     }
-    0
+    unsafe {
+        *ptr = tag;
+        *ptr.add(1) = payload;
+    }
+    ptr as *mut u8
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_map_get(map: *const u8, key: i64) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_map_get_in_arena(&raw mut __vow_root_arena, map, key) }
 }
 
 #[unsafe(no_mangle)]
@@ -6248,6 +6272,25 @@ mod tests {
         unsafe { __vow_arena_close(&mut a) };
     }
 
+    fn map_get_pair(arena: &mut VowArena, m: *mut u8, key: i64) -> (i64, i64) {
+        let opt = unsafe { __vow_map_get_in_arena(arena, m, key) } as *const i64;
+        unsafe { (*opt, *opt.add(1)) }
+    }
+
+    #[test]
+    fn map_get_reports_missing_key_as_none_not_zero() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+
+        let m = unsafe { __vow_map_new_in_arena(&mut a) };
+        unsafe { __vow_map_insert_in_arena(&mut a, m, 5, 0) };
+
+        assert_eq!(map_get_pair(&mut a, m, 5), (1, 0), "bound to 0 is Some(0)");
+        assert_eq!(map_get_pair(&mut a, m, 6), (0, 0), "missing is None");
+
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
     #[test]
     fn explicit_arena_map_remove_decrements_len() {
         let mut a = empty_arena_header();
@@ -6261,7 +6304,8 @@ mod tests {
         unsafe { __vow_map_remove_in_arena(&mut a, m, 1) };
         assert_eq!(unsafe { __vow_map_len(m) }, 1);
         assert!(!unsafe { __vow_map_contains(m, 1) });
-        assert_eq!(unsafe { __vow_map_get(m, 2) }, 20);
+        assert_eq!(map_get_pair(&mut a, m, 2), (1, 20));
+        assert_eq!(map_get_pair(&mut a, m, 1), (0, 0));
 
         unsafe { __vow_arena_close(&mut a) };
     }
@@ -6288,7 +6332,7 @@ mod tests {
         assert_eq!(header.len, n as usize);
         assert!(header.cap > MAP_INITIAL_CAP, "cap must have doubled");
         for i in 0..n {
-            assert_eq!(unsafe { __vow_map_get(m, i) }, i * 100);
+            assert_eq!(map_get_pair(&mut a, m, i), (1, i * 100));
         }
 
         unsafe { __vow_arena_close(&mut a) };
@@ -6304,8 +6348,9 @@ mod tests {
         unsafe { __vow_map_insert_in_arena(&mut a, m, 3, 30) };
 
         assert_eq!(unsafe { __vow_map_len(m) }, 2);
-        assert_eq!(unsafe { __vow_map_get(m, 7) }, 70);
-        assert_eq!(unsafe { __vow_map_get(m, 3) }, 30);
+        assert_eq!(map_get_pair(&mut a, m, 7), (1, 70));
+        assert_eq!(map_get_pair(&mut a, m, 3), (1, 30));
+        assert_eq!(map_get_pair(&mut a, m, 99), (0, 0));
         assert!(unsafe { __vow_map_contains(m, 7) });
         assert!(!unsafe { __vow_map_contains(m, 99) });
 

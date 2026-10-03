@@ -719,6 +719,13 @@ fn routed_vec_extern(
                 ("__vow_string_parse_i64_opt_in_arena", Some(inst_rgn))
             }
         }
+        "__vow_map_get" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_map_get_in_arena", Some(inst_rgn))
+            }
+        }
         "__vow_string_split" => {
             if (inst_rgn & 3) == REGION_KIND_ROOT {
                 (sym, None)
@@ -3862,6 +3869,12 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_map_get_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_map_contains" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -4053,6 +4066,36 @@ mod tests {
             ),
             ("__vow_string_parse_i64_opt_in_arena", Some(block)),
         );
+    }
+
+    #[test]
+    fn map_get_option_routes_to_its_allocation_region() {
+        let root = region_root();
+        assert_eq!(
+            routed_vec_extern("__vow_map_get", root, ReceiverRoute::direct(root)),
+            ("__vow_map_get", None),
+        );
+
+        let block = region_pack(REGION_KIND_BLOCK, 7);
+        assert_eq!(
+            routed_vec_extern("__vow_map_get", block, ReceiverRoute::direct(root)),
+            ("__vow_map_get_in_arena", Some(block)),
+        );
+    }
+
+    #[test]
+    fn map_get_arena_extern_accepts_arena_map_and_key() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        let module_ctx = unsafe { &*(ctx as *const ModuleContext) };
+        let sig = make_extern_sig("__vow_map_get_in_arena", &module_ctx.obj_module);
+
+        assert_eq!(sig.params.len(), 3);
+        assert!(sig.params.iter().all(|p| p.value_type == types::I64));
+        assert_eq!(sig.returns.len(), 1);
+        assert_eq!(sig.returns[0].value_type, types::I64);
+
+        unsafe { __vow_clif_destroy(ctx) };
     }
 
     #[test]

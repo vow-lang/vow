@@ -1568,6 +1568,68 @@ fn selfhosted_btreemap_insert_get_root_escape_note() {
     );
 }
 
+/// `HashMap::get` returns a fresh `Option<V>` (`__vow_map_get`), so it must be a
+/// heap-producing extern like `BTreeMap::get`: publishing the result through a
+/// parameter container emits a `RegionRootEscape` note.
+fn assert_hashmap_get_root_escape_note(compiler: &std::path::Path, label: &str) {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_hashmap_get_root_escape_span.vow");
+    let out = Command::new(compiler)
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run {label}: {e}"));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse {label} stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "{label}: diagnostics missing and build did not fail with the recognized \
+             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
+        );
+        eprintln!("SKIP: {label} build failed due to missing libvow_runtime.a");
+        return;
+    };
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d["error_code"].as_str() == Some("RegionRootEscape")),
+        "{label}: HashMap::get() result published through a parameter container \
+         must emit a RegionRootEscape note; diagnostics: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn rust_hashmap_get_root_escape_note() {
+    assert_hashmap_get_root_escape_note(std::path::Path::new(env!("CARGO_BIN_EXE_vow")), "rust");
+}
+
+#[test]
+fn selfhosted_hashmap_get_root_escape_note() {
+    let vowc = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("build")
+        .join("vowc");
+    if !vowc.exists() {
+        eprintln!(
+            "skipping {}: build/vowc not present (run scripts/bootstrap.sh)",
+            module_path!()
+        );
+        return;
+    }
+    assert_hashmap_get_root_escape_note(&vowc, "self-hosted");
+}
+
 /// Issue #1265: `option_creation_extern` only recognized
 /// `__vow_string_parse_i64_opt`/`_in_arena`, omitting `__vow_string_parse_u64_opt`
 /// and the narrow-integer family (`parse_i8/u8/i16/u16/i32/u32_opt`), all of

@@ -1,0 +1,10 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "let binding"
+module HashMapGetIsOption
+
+fn main() -> i32 {
+    let m: HashMap<i64, i64> = HashMap::new();
+    m.insert(1, 10);
+    let direct: i64 = m.get(1);
+    0
+}

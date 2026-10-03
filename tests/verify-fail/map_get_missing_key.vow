@@ -1,0 +1,20 @@
+// TEST: category bounds
+// TEST: counterexample-fn "lookup_absent"
+// TEST: counterexample-blame none
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-violation "unwrap() called on None"
+module MapGetMissingKey
+
+fn lookup_absent() -> HashMap<i64, i64> vow {
+  ensures: result.get(7).unwrap() == 100
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  m.insert(42, 100);
+  m
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i64, i64> = lookup_absent();
+  print_u64(m.len());
+  0
+}
