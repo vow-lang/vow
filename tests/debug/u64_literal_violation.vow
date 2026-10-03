@@ -1,0 +1,21 @@
+// TEST: exit 134
+// TEST: stderr "VowViolation"
+// TEST: stderr ""description":"requires x != 18446744073709551614""
+// TEST: stderr "vow violation: requires x != 18446744073709551614, blame=Caller"
+// TEST: stderr ""x":18446744073709551614"
+module U64LiteralViolation
+
+// A u64 literal above i64::MAX must render as its unsigned decimal in the
+// contract text of the VowViolation payload, not as a wrapped negative number.
+fn reject_near_max(x: u64) -> u64 vow {
+  requires: x != 18446744073709551614
+} {
+  x
+}
+
+fn main() -> i32 [io] {
+  print_u64(reject_near_max(18446744073709551613));
+  print_str("\n");
+  print_u64(reject_near_max(18446744073709551614));
+  0
+}

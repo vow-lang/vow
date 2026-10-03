@@ -1,11 +1,11 @@
 // TEST: exit 134
 // TEST: stderr "VowViolation"
+// TEST: stderr "Caller"
 // TEST: stderr "as u64"
 module CastInContractViolation
 
 // The requires clause carries an `as u64` cast, so the contract text rendered
-// into the VowViolation payload exercises the cast printer on both compilers
-// (#1113 Half B). A placeholder there would show up as "as <type>".
+// into the VowViolation payload exercises the cast printer on both compilers.
 fn bounded(n: u64) -> u64 vow {
   requires: n < 10 as u64
 } {

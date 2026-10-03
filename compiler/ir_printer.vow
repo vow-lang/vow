@@ -245,7 +245,7 @@ fn format_data(inst: IrInst) -> String {
         return out;
     }
     if dk == IDATA_CONST_U64() {
-        let out: String = i64_to_string(inst.dv);
+        let out: String = uint_to_string(inst.dv as u64);
         out.push_str(String::from("u64"));
         return out;
     }

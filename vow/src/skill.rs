@@ -3209,6 +3209,19 @@ the structured diagnostics documented under [Runtime Errors](errors.md#runtime-e
 | `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
 | `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
+`description` is the clause kind followed by the predicate rendered by the canonical
+printer, and the two compilers produce byte-identical text. The same text is carried
+into `VowViolation.description` and the counterexample `violation` field. Integer
+literals print in unsigned decimal at full 128-bit width (a `u64` literal above
+`i64::MAX` such as `18446744073709551614` is never shown as `-2`), a negated literal is
+`-` followed by its magnitude, a suffixed literal prints as the cast it denotes
+(`5u64` is `5 as u64`), a cast prints its real target type, and a nested binary
+operator is parenthesized exactly when its precedence requires it. Block, `if`/`else`,
+`match` and loop expressions print multi-line (so `description` may contain newlines):
+4-space indentation for statements and match arms, `let` statements with their pattern and
+type annotation, and a nested block restarts at column 0 exactly as the canonical printer
+renders it.
+
 `source.offset` anchors differently depending on where the clause comes from: for a
 clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte
 offset of the clause keyword, not the predicate expression, in both compilers. For a
@@ -3470,6 +3483,15 @@ postcondition that depends on it is verified only within that bound.
 ## Clause Purity and Heap Writes
 
 A clause must not write through any argument while it is being evaluated — not just avoid declared effects. Vow passes structs, `Vec`, `String`, and maps by pointer, so a plain helper with no declared effect can still perform a real heap write (a field assignment, a `Vec`/map element write, a mutating builtin method) through a parameter. If such a write were allowed in a contract clause, it would happen every time the clause is evaluated — under `vow verify`, under `--mode debug`, and (today, since nothing elides a predicate's side effects at codegen time) in release too — making the clause's own evaluation an unaccounted-for part of the program's real behavior rather than a side-effect-free check of it. Rejecting this at type-check time (`EffectViolation`, `Blame::Callee`) keeps the predicate a predicate: see `docs/spec/grammar.md` → "Contract Purity" for the exact rule and the `mark(p)` example, and `docs/adr/2026-10-02-2348-contract-heap-write-purity.md` (ADR-2026-10-02-2348) for why this is checked for every clause rather than deferred to a write-footprint mechanism.
+
+## Tuples in Clauses
+
+Tuples are not first-class values (see the `let` tuple-pattern rules in `grammar.md`), so a
+tuple expression, including the empty tuple `()`, cannot appear anywhere inside a `requires`,
+`ensures` or `invariant` clause — not as a comparison operand (`requires: t != (1, 2)`) and not as
+the initializer of a `let` inside a clause block. Both compilers reject it at type-check time with
+`UnsupportedFeature` ("tuple expressions are not supported in contract predicates") at the
+tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.
 
 ## Counterexample Replay (Differential Test)
 
@@ -4713,6 +4735,21 @@ trait Foo {
 **Output:** `trait blocks are not supported in Vow`
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
+
+A tuple expression, including the empty tuple `()`, inside a contract clause is also
+`UnsupportedFeature`, because tuples have no runtime or verifier representation:
+
+```vow
+fn f(a: i64, b: i64) -> i64 vow {
+    requires: (a, b) != (1, 2)
+} {
+    a
+}
+```
+
+**Output:** `tuple expressions are not supported in contract predicates`
+
+**Fix:** Compare the elements individually, e.g. `requires: a != 1 || b != 2`.
 
 ### BTreeMapKeyTypeMustBeI64
 
@@ -8597,6 +8634,19 @@ the structured diagnostics documented under [Runtime Errors](errors.md#runtime-e
 | `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
 | `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
+`description` is the clause kind followed by the predicate rendered by the canonical
+printer, and the two compilers produce byte-identical text. The same text is carried
+into `VowViolation.description` and the counterexample `violation` field. Integer
+literals print in unsigned decimal at full 128-bit width (a `u64` literal above
+`i64::MAX` such as `18446744073709551614` is never shown as `-2`), a negated literal is
+`-` followed by its magnitude, a suffixed literal prints as the cast it denotes
+(`5u64` is `5 as u64`), a cast prints its real target type, and a nested binary
+operator is parenthesized exactly when its precedence requires it. Block, `if`/`else`,
+`match` and loop expressions print multi-line (so `description` may contain newlines):
+4-space indentation for statements and match arms, `let` statements with their pattern and
+type annotation, and a nested block restarts at column 0 exactly as the canonical printer
+renders it.
+
 `source.offset` anchors differently depending on where the clause comes from: for a
 clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte
 offset of the clause keyword, not the predicate expression, in both compilers. For a
@@ -8859,6 +8909,15 @@ postcondition that depends on it is verified only within that bound.
 ## Clause Purity and Heap Writes
 
 A clause must not write through any argument while it is being evaluated — not just avoid declared effects. Vow passes structs, `Vec`, `String`, and maps by pointer, so a plain helper with no declared effect can still perform a real heap write (a field assignment, a `Vec`/map element write, a mutating builtin method) through a parameter. If such a write were allowed in a contract clause, it would happen every time the clause is evaluated — under `vow verify`, under `--mode debug`, and (today, since nothing elides a predicate's side effects at codegen time) in release too — making the clause's own evaluation an unaccounted-for part of the program's real behavior rather than a side-effect-free check of it. Rejecting this at type-check time (`EffectViolation`, `Blame::Callee`) keeps the predicate a predicate: see `docs/spec/grammar.md` → "Contract Purity" for the exact rule and the `mark(p)` example, and `docs/adr/2026-10-02-2348-contract-heap-write-purity.md` (ADR-2026-10-02-2348) for why this is checked for every clause rather than deferred to a write-footprint mechanism.
+
+## Tuples in Clauses
+
+Tuples are not first-class values (see the `let` tuple-pattern rules in `grammar.md`), so a
+tuple expression, including the empty tuple `()`, cannot appear anywhere inside a `requires`,
+`ensures` or `invariant` clause — not as a comparison operand (`requires: t != (1, 2)`) and not as
+the initializer of a `let` inside a clause block. Both compilers reject it at type-check time with
+`UnsupportedFeature` ("tuple expressions are not supported in contract predicates") at the
+tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.
 
 ## Counterexample Replay (Differential Test)
 
@@ -10104,6 +10163,21 @@ trait Foo {
 **Output:** `trait blocks are not supported in Vow`
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
+
+A tuple expression, including the empty tuple `()`, inside a contract clause is also
+`UnsupportedFeature`, because tuples have no runtime or verifier representation:
+
+```vow
+fn f(a: i64, b: i64) -> i64 vow {
+    requires: (a, b) != (1, 2)
+} {
+    a
+}
+```
+
+**Output:** `tuple expressions are not supported in contract predicates`
+
+**Fix:** Compare the elements individually, e.g. `requires: a != 1 || b != 2`.
 
 ### BTreeMapKeyTypeMustBeI64
 

@@ -30,9 +30,7 @@ fn weak_cast_upper(x: i64) -> i64 vow {
   ensures: result <= 100 as i64
 } { x * 10 }
 
-// weak: the STRICT operators are the parity regression case — the `<` and `>`
-// inside the self-hosted printer's ` as <type>` placeholder must not be read as
-// the comparison operator itself.
+// weak: strict comparison operators against a cast literal.
 fn weak_cast_strict_gt(x: i64) -> i64 vow {
   ensures: result > 0 as i64
 } { if x > 0 { x } else { 1 } }

@@ -1240,7 +1240,7 @@ fn hal_expr(a: AstArena, eid: i64, acc: Vec<i64>, seen: Vec<String>) {
     }
     if tag == EXPR_LIT_INT() {
         let c: String = String::from("n:");
-        c.push_str(i64_to_string(expr_a(a, eid)));
+        c.push_str(expr_int_text(a, eid));
         hal_operand(acc, seen, c);
         return;
     }

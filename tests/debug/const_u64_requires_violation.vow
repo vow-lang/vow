@@ -1,5 +1,7 @@
 // TEST: exit 134
 // TEST: stderr "blame=Caller"
+// TEST: stderr ""description":"requires i < SLOTS""
+// TEST: stderr "vow violation: requires i < SLOTS, blame=Caller"
 module ConstU64RequiresViolation
 
 const SLOTS: u64 = 8;
