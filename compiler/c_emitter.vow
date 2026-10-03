@@ -642,34 +642,52 @@ fn emit_bounds_assert(out: String, idx: i64, container: i64, idx_ty: i64, label:
         cemit_str2(String::from(".len, \""), cemit_str2(label, String::from("\");\n")))));
 }
 
-// A constant length >= max (or a u64 constant >= 2^63, stored negative) is
-// outside the model capacity.
-fn raw_parts_const_len_exceeds_model(f: IrFunction, len_arg: i64, max: i64) -> bool {
+// Per-instruction constant integer value indexed by instruction id, built once
+// per function. A u64 constant >= 2^63 (stored negative) saturates to i64::MAX
+// so every entry that is not -1 compares correctly against a model capacity.
+// -1 marks an instruction that is not an integer constant.
+fn build_const_len_by_id(f: IrFunction) -> Vec<i64> {
+    let const_len_by_id: Vec<i64> = Vec::new();
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: u64 = 0u64;
-    while bi < blocks.len() as u64 {
+    while bi < blocks.len() {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let mut ii: u64 = 0u64;
-        while ii < insts.len() as u64 {
+        while ii < insts.len() {
             let inst: IrInst = insts[ii];
-            if inst.id == len_arg && (inst.op == IOP_CONST_U64() || inst.op == IOP_CONST_I64()) {
-                return inst.dv < 0 || inst.dv >= max;
+            if inst.id >= 0 {
+                while const_len_by_id.len() as i64 <= inst.id {
+                    const_len_by_id.push(0 - 1);
+                }
+                if inst.op == IOP_CONST_U64() || inst.op == IOP_CONST_I64() {
+                    const_len_by_id[inst.id] = { if inst.dv < 0 { 9223372036854775807 } else { inst.dv } };
+                }
             }
             ii = ii + 1;
         }
         bi = bi + 1;
     }
-    false
+    const_len_by_id
+}
+
+// A constant length >= max (or a negative / >= 2^63 one) is outside the model
+// capacity.
+fn raw_parts_const_len_exceeds_model(const_len_by_id: Vec<i64>, len_arg: i64, max: i64) -> bool {
+    if len_arg < 0 || len_arg >= const_len_by_id.len() as i64 {
+        return false;
+    }
+    let v: i64 = const_len_by_id[len_arg];
+    v >= 0 && v >= max
 }
 
 // Length model for from_raw_parts_copy. A constant length outside the model
 // capacity fails closed with the capacity label (an assumption would be
 // unsatisfiable and prove everything after it). A u64 length drops the vacuous
 // >= 0 lower bound.
-fn emit_raw_parts_len(out: String, f: IrFunction, id: i64, len_arg: i64, len_ty: i64, max: i64, capacity_label: String) {
+fn emit_raw_parts_len(out: String, const_len_by_id: Vec<i64>, id: i64, len_arg: i64, len_ty: i64, max: i64, capacity_label: String) {
     let ids: String = i64_to_string(id);
-    if raw_parts_const_len_exceeds_model(f, len_arg, max) {
+    if raw_parts_const_len_exceeds_model(const_len_by_id, len_arg, max) {
         out.push_str(str3(String::from("  __ESBMC_assert(0, \""), capacity_label, String::from("\");\n")));
         out.push_str(str3(String::from("  v"), ids, String::from(".len = 0;\n")));
         return;
@@ -1350,7 +1368,7 @@ fn emit_new_narrow_intrinsic(out: String, inst: IrInst) {
     out.push_str(line);
 }
 
-fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>,
+fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, const_len_by_id: Vec<i64>,
              vec_vars: Vec<i64>, string_vars: Vec<i64>,
              hashmap_vars: Vec<i64>, btreemap_vars: Vec<i64>, option_vars: Vec<i64>,
              const_fn_indices: Vec<i64>, modelable_fi_set: Vec<i64>, m: IrModule,
@@ -1663,11 +1681,11 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>,
                 return;
             }
             if str_starts_with(ds, String::from("__vow_vec_")) {
-                emit_vec_op(out, inst, f, inst_ty_by_id, vec_max);
+                emit_vec_op(out, inst, inst_ty_by_id, const_len_by_id, vec_max);
                 return;
             }
             if str_starts_with(ds, String::from("__vow_string_")) {
-                emit_string_op(out, inst, f, inst_ty_by_id, m, vec_max, string_max, const_str_ids, const_str_idxs, eq_lo, eq_hi);
+                emit_string_op(out, inst, f, inst_ty_by_id, const_len_by_id, m, vec_max, string_max, const_str_ids, const_str_idxs, eq_lo, eq_hi);
                 return;
             }
             if str_starts_with(ds, String::from("__vow_map_")) {
@@ -1824,7 +1842,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>,
     emit_unsupported_for_verification(out, inst);
 }
 
-fn emit_vec_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, vec_max: i64) {
+fn emit_vec_op(out: String, inst: IrInst, inst_ty_by_id: Vec<i64>, const_len_by_id: Vec<i64>, vec_max: i64) {
     let id: i64 = inst.id;
     let ds: String = inst.ds;
     let iargs: Vec<i64> = inst.args;
@@ -1839,7 +1857,7 @@ fn emit_vec_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>
     }
     if ds == String::from("__vow_vec_from_raw_parts_copy_val") {
         let len_arg: i64 = iargs[1];
-        emit_raw_parts_len(out, f, id, len_arg, inst_ty_of(inst_ty_by_id, len_arg), vec_max, String::from("vec capacity"));
+        emit_raw_parts_len(out, const_len_by_id, id, len_arg, inst_ty_of(inst_ty_by_id, len_arg), vec_max, String::from("vec capacity"));
         return;
     }
     if ds == String::from("__vow_vec_pin_to_root_val") {
@@ -2006,7 +2024,7 @@ fn emit_narrow_parse_option(out: String, id: i64, min_value: String, max_value: 
     out.push_str(String::from("  }\n"));
 }
 
-fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, m: IrModule, vec_max: i64, string_max: i64,
+fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, const_len_by_id: Vec<i64>, m: IrModule, vec_max: i64, string_max: i64,
                   const_str_ids: Vec<i64>, const_str_idxs: Vec<i64>,
                   eq_lo: Vec<i64>, eq_hi: Vec<i64>) {
     let id: i64 = inst.id;
@@ -2051,7 +2069,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
     }
     if ds == String::from("__vow_string_from_raw_parts_copy") {
         let len_arg: i64 = iargs[1];
-        emit_raw_parts_len(out, f, id, len_arg, inst_ty_of(inst_ty_by_id, len_arg), string_max, String::from("string capacity"));
+        emit_raw_parts_len(out, const_len_by_id, id, len_arg, inst_ty_of(inst_ty_by_id, len_arg), string_max, String::from("string capacity"));
         return;
     }
     if ds == String::from("__vow_string_clone") || ds == String::from("__vow_string_clone_in_arena") || ds == String::from("__vow_string_pin_to_root") {
@@ -2572,6 +2590,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
 
     let blocks: Vec<IrBlock> = f.blocks;
     let inst_ty_by_id: Vec<i64> = build_inst_ty_by_id(f);
+    let const_len_by_id: Vec<i64> = build_const_len_by_id(f);
     let n_blocks: u64 = blocks.len();
     let const_str_ids: Vec<i64> = Vec::new();
     let const_str_idxs: Vec<i64> = Vec::new();
@@ -2890,7 +2909,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         let mut ri: u64 = 0u64;
         while ri < regular.len() {
             let inst: IrInst = insts[regular[ri]];
-            emit_inst(out, inst, f, inst_ty_by_id, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, const_str_ids, const_str_idxs, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max, requires_as_assert);
+            emit_inst(out, inst, f, inst_ty_by_id, const_len_by_id, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, const_str_ids, const_str_idxs, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max, requires_as_assert);
             if regular[ri] == reach_after_idx {
                 out.push_str(String::from("vow_reach:;\n"));
             }
@@ -2920,7 +2939,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
 
         if terminal_idx >= 0 {
             let term: IrInst = insts[terminal_idx];
-            emit_inst(out, term, f, inst_ty_by_id, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, const_str_ids, const_str_idxs, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max, requires_as_assert);
+            emit_inst(out, term, f, inst_ty_by_id, const_len_by_id, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, const_str_ids, const_str_idxs, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max, requires_as_assert);
         }
 
         bi = bi + 1;
