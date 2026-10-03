@@ -64,6 +64,12 @@ diagnostics while the self-hosted runner emits none (#1183), and the schema for
 them has drifted from both emitters (#1184). Both must close before the field
 can be gated.
 
+When one compiler's JSON is empty while the other's is not, `full_test.sh`
+treats that as a FAIL, not a SKIP: `scripts/parity.py`'s `classify_empty_output`
+only skips when *both* sides are empty (nothing to compare), since a one-sided
+empty output is itself a parity divergence — usually a crash on one side that
+the other side didn't hit.
+
 The self-hosted suite produced no JSON before a 45-minute bound in one fresh
 concatenated run; the full Section 10b later completed both compilers plus its
 interface checks in 17.8 minutes. Both measurements came from a contended
