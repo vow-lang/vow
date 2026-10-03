@@ -6,7 +6,7 @@ fn parse_line() -> u64 {
     line.push_str(String::from(":tail-field"));
     let prefix: String = line.substring(0, 12);
     let payload: String = line.substring(13, 49);
-    prefix.len() as u64 + payload.len() as u64
+    prefix.len() + payload.len()
 }
 
 fn main() -> i32 [io] {

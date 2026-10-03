@@ -15,10 +15,10 @@ fn find_min_idx(v: Vec<i64>) -> i64
 - `requires: v.len() > 0` — Vec must be non-empty
 - `ensures: result >= 0` — valid index
 - `ensures: result < v.len() as i64` — within bounds
-- `min_idx` and `i` are `u64` locals, so `min_idx` needs no `>= 0` invariant; bridge with `v.len() as u64` and `min_idx as i64`
-- Loop `invariant: min_idx < v.len() as u64`
+- `min_idx` and `i` are `u64` locals, so `min_idx` needs no `>= 0` invariant; `v.len()` is already `u64`; bridge with `min_idx as i64`
+- Loop `invariant: min_idx < v.len()`
 - Loop `invariant: i >= 1`
-- Loop `invariant: i <= v.len() as u64`
+- Loop `invariant: i <= v.len()`
 
 ## Constraints
 

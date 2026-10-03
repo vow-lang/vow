@@ -6,10 +6,10 @@ fn vec_max(v: Vec<i64>) -> i64 vow {
 } {
   let mut best: i64 = v[0];
   let mut i: u64 = 1;
-  while i < v.len() as u64 vow {
+  while i < v.len() vow {
     invariant: best >= v[0],
     invariant: i >= 1,
-    invariant: i <= v.len() as u64
+    invariant: i <= v.len()
   } {
     if v[i] > best {
       best = v[i];

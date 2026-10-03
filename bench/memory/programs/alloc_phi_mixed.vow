@@ -10,7 +10,7 @@ fn choose_len(flag: bool) -> u64 {
         s.push_str(String::from("-right"));
         s
     };
-    chosen.len() as u64
+    chosen.len()
 }
 
 fn main() -> i32 [io] {
