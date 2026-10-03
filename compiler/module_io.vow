@@ -109,9 +109,8 @@ fn low_byte(v: i64) -> i64 {
 
 fn write_u32_bits(out: Vec<i64>, v: i64) {
     let mut n: i64 = v;
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < 4 vow {
-        invariant: i >= 0,
         invariant: i <= 4
     } {
         let b: i64 = low_byte(n);
@@ -123,9 +122,8 @@ fn write_u32_bits(out: Vec<i64>, v: i64) {
 
 fn write_i64_bits(out: Vec<i64>, v: i64) {
     let mut n: i64 = v;
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < 8 vow {
-        invariant: i >= 0,
         invariant: i <= 8
     } {
         let b: i64 = low_byte(n);
@@ -223,6 +221,16 @@ fn reader_read_leb(r: ModuleReader) -> i64 vow {
     value
 }
 
+fn reader_read_count(r: ModuleReader) -> u64 vow {
+    requires: r.pos < r.buf.len()
+} {
+    let n: i64 = reader_read_leb(r);
+    if n < 0 {
+        return 0;
+    }
+    n as u64
+}
+
 fn write_string(out: Vec<i64>, s: String) {
     let n: u64 = s.len();
     write_leb(out, n);
@@ -236,11 +244,10 @@ fn write_string(out: Vec<i64>, s: String) {
 }
 
 fn reader_read_string(r: ModuleReader) -> String {
-    let n: i64 = reader_read_leb(r);
+    let n: u64 = reader_read_count(r);
     let s: String = String::new();
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < n vow {
-        invariant: i >= 0,
         invariant: i <= n
     } {
         s.push_byte(reader_read_u8(r));
@@ -273,11 +280,10 @@ fn write_effects(out: Vec<i64>, effects: i64) {
 }
 
 fn reader_read_effects(r: ModuleReader) -> i64 {
-    let n: i64 = reader_read_leb(r);
+    let n: u64 = reader_read_count(r);
     let mut effects: i64 = 0;
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < n vow {
-        invariant: i >= 0,
         invariant: i <= n
     } {
         let d: i64 = reader_read_u8(r);
@@ -384,11 +390,10 @@ fn region_constraint_decode(r: ModuleReader) -> WireRegionConstraint [panic] {
     if kind != RSUM_KIND_ALIAS_OF_ANY() {
         return WireRegionConstraint { kind: reject_decode_i64(), aux: 0, aliases: Vec::new() };
     }
-    let n: i64 = reader_read_leb(r);
+    let n: u64 = reader_read_count(r);
     let aliases: Vec<i64> = Vec::new();
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < n vow {
-        invariant: i >= 0,
         invariant: i <= n
     } {
         aliases.push(reader_read_u32_le(r));
@@ -464,11 +469,10 @@ fn write_region_summary(out: Vec<i64>, f: IrFunction) {
 }
 
 fn read_region_summary(r: ModuleReader) -> WireRegionSummary [panic] {
-    let param_n: i64 = reader_read_leb(r);
+    let param_n: u64 = reader_read_count(r);
     let param_regions: Vec<i64> = Vec::new();
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < param_n vow {
-        invariant: i >= 0,
         invariant: i <= param_n
     } {
         param_regions.push(reader_read_u32_le(r));
@@ -477,11 +481,10 @@ fn read_region_summary(r: ModuleReader) -> WireRegionSummary [panic] {
 
     let ret: WireRegionConstraint = region_constraint_decode(r);
 
-    let effects_n: i64 = reader_read_leb(r);
+    let effects_n: u64 = reader_read_count(r);
     let flat: Vec<i64> = Vec::new();
     i = 0;
     while i < effects_n vow {
-        invariant: i >= 0,
         invariant: i <= effects_n
     } {
         let target: i64 = reader_read_u32_le(r);
@@ -714,11 +717,10 @@ fn read_inst(r: ModuleReader) -> IrInst [panic] {
     let id: i64 = reader_read_u32_le(r);
     let op: i64 = disc_opcode(reader_read_u16_le(r));
     let ty: i64 = disc_ty(reader_read_u8(r));
-    let argc: i64 = reader_read_leb(r);
+    let argc: u64 = reader_read_count(r);
     let args: Vec<i64> = Vec::new();
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < argc vow {
-        invariant: i >= 0,
         invariant: i <= argc
     } {
         args.push(reader_read_u32_le(r));
@@ -746,10 +748,9 @@ fn write_block(out: Vec<i64>, block: IrBlock) {
 
 fn read_block(r: ModuleReader) -> IrBlock [panic] {
     let block: IrBlock = ir_block_new(reader_read_u32_le(r));
-    let n: i64 = reader_read_leb(r);
-    let mut i: i64 = 0;
+    let n: u64 = reader_read_count(r);
+    let mut i: u64 = 0;
     while i < n vow {
-        invariant: i >= 0,
         invariant: i <= n
     } {
         block.insts.push(read_inst(r));
@@ -785,10 +786,9 @@ fn read_vow_entry(r: ModuleReader) -> IrVowEntry {
         file: String::from(""),
         offset: 0,
     };
-    let n: i64 = reader_read_leb(r);
-    let mut i: i64 = 0;
+    let n: u64 = reader_read_count(r);
+    let mut i: u64 = 0;
     while i < n vow {
-        invariant: i >= 0,
         invariant: i <= n
     } {
         entry.binding_names.push(reader_read_string(r));
@@ -804,33 +804,30 @@ fn sort_local_names(ids: Vec<i64>, names: Vec<String>) -> SortedLocalNames vow {
     requires: ids.len() == names.len()
 } {
     let used: Vec<i64> = Vec::new();
-    let mut i: i64 = 0;
-    while i < ids.len() as i64 vow {
-        invariant: i >= 0,
-        invariant: i <= ids.len() as i64
+    let mut i: u64 = 0;
+    while i < ids.len() vow {
+        invariant: i <= ids.len()
     } {
         used.push(0);
         i = i + 1;
     }
     let out_ids: Vec<i64> = Vec::new();
     let out_names: Vec<String> = Vec::new();
-    let mut remaining: i64 = ids.len() as i64;
+    let mut remaining: u64 = ids.len();
     while remaining > 0 vow {
-        invariant: remaining >= 0,
-        invariant: remaining <= ids.len() as i64,
+        invariant: remaining <= ids.len(),
         invariant: out_ids.len() <= ids.len()
     } {
         let mut best_idx: i64 = -1;
         let mut best_id: i64 = 0;
         i = 0;
-        while i < ids.len() as i64 vow {
-            invariant: i >= 0,
-            invariant: i <= ids.len() as i64
+        while i < ids.len() vow {
+            invariant: i <= ids.len()
         } {
-            if used[i as u64] == 0 {
-                let cur: i64 = ids[i as u64];
+            if used[i] == 0 {
+                let cur: i64 = ids[i];
                 if best_idx == -1 || cur < best_id {
-                    best_idx = i;
+                    best_idx = i as i64;
                     best_id = cur;
                 }
             }
@@ -839,16 +836,14 @@ fn sort_local_names(ids: Vec<i64>, names: Vec<String>) -> SortedLocalNames vow {
         // Keep the last name for duplicate ids to mirror Rust's HashMap insert semantics.
         let mut chosen_idx: i64 = best_idx;
         i = 0;
-        while i < ids.len() as i64 vow {
-            invariant: i >= 0,
-            invariant: i <= ids.len() as i64,
-            invariant: remaining >= 0,
-            invariant: remaining <= ids.len() as i64
+        while i < ids.len() vow {
+            invariant: i <= ids.len(),
+            invariant: remaining <= ids.len()
         } {
-            if used[i as u64] == 0 && ids[i as u64] == best_id {
-                used[i as u64] = 1;
-                remaining = remaining - 1;
-                chosen_idx = i;
+            if used[i] == 0 && ids[i] == best_id {
+                used[i] = 1;
+                remaining = remaining -! 1;
+                chosen_idx = i as i64;
             }
             i = i + 1;
         }
@@ -889,10 +884,9 @@ fn read_struct_layout(r: ModuleReader) -> IrStructLayout {
         fields: Vec::new(),
         is_linear: 0,
     };
-    let n: i64 = reader_read_leb(r);
-    let mut i: i64 = 0;
+    let n: u64 = reader_read_count(r);
+    let mut i: u64 = 0;
     while i < n vow {
-        invariant: i >= 0,
         invariant: i <= n
     } {
         layout.fields.push(read_field(r));
@@ -921,10 +915,9 @@ fn read_variant(r: ModuleReader) -> IrVariantLayout {
         tag: read_i64_bits(r),
         payload: Vec::new(),
     };
-    let n: i64 = reader_read_leb(r);
-    let mut i: i64 = 0;
+    let n: u64 = reader_read_count(r);
+    let mut i: u64 = 0;
     while i < n vow {
-        invariant: i >= 0,
         invariant: i <= n
     } {
         variant.payload.push(read_field(r));
@@ -950,10 +943,9 @@ fn read_enum_layout(r: ModuleReader) -> IrEnumLayout {
         name: reader_read_string(r),
         variants: Vec::new(),
     };
-    let n: i64 = reader_read_leb(r);
-    let mut i: i64 = 0;
+    let n: u64 = reader_read_count(r);
+    let mut i: u64 = 0;
     while i < n vow {
-        invariant: i >= 0,
         invariant: i <= n
     } {
         layout.variants.push(read_variant(r));
@@ -1024,22 +1016,20 @@ fn read_function(r: ModuleReader) -> IrFunction [panic] {
     let id: i64 = reader_read_u32_le(r);
     let name: String = reader_read_string(r);
 
-    let param_n: i64 = reader_read_leb(r);
+    let param_n: u64 = reader_read_count(r);
     let params: Vec<i64> = Vec::new();
-    let mut i: i64 = 0;
+    let mut i: u64 = 0;
     while i < param_n vow {
-        invariant: i >= 0,
         invariant: i <= param_n
     } {
         params.push(disc_ty(reader_read_u8(r)));
         i = i + 1;
     }
 
-    let param_name_n: i64 = reader_read_leb(r);
+    let param_name_n: u64 = reader_read_count(r);
     let param_names: Vec<String> = Vec::new();
     i = 0;
     while i < param_name_n vow {
-        invariant: i >= 0,
         invariant: i <= param_name_n
     } {
         param_names.push(reader_read_string(r));
@@ -1056,30 +1046,27 @@ fn read_function(r: ModuleReader) -> IrFunction [panic] {
     f.params = params;
     f.param_names = param_names;
 
-    let vow_n: i64 = reader_read_leb(r);
+    let vow_n: u64 = reader_read_count(r);
     i = 0;
     while i < vow_n vow {
-        invariant: i >= 0,
         invariant: i <= vow_n
     } {
         f.vows.push(read_vow_entry(r));
         i = i + 1;
     }
 
-    let block_n: i64 = reader_read_leb(r);
+    let block_n: u64 = reader_read_count(r);
     i = 0;
     while i < block_n vow {
-        invariant: i >= 0,
         invariant: i <= block_n
     } {
         f.blocks.push(read_block(r));
         i = i + 1;
     }
 
-    let local_n: i64 = reader_read_leb(r);
+    let local_n: u64 = reader_read_count(r);
     i = 0;
     while i < local_n vow {
-        invariant: i >= 0,
         invariant: i <= local_n
     } {
         f.local_names_ids.push(reader_read_u32_le(r));
@@ -1160,40 +1147,36 @@ fn module_decode(buf: Vec<i64>) -> IrModule [panic] {
 
     let m: IrModule = ir_module_new(reader_read_string(r));
 
-    let strings_n: i64 = reader_read_leb(r);
-    let mut i: i64 = 0;
+    let strings_n: u64 = reader_read_count(r);
+    let mut i: u64 = 0;
     while i < strings_n vow {
-        invariant: i >= 0,
         invariant: i <= strings_n
     } {
         m.strings.push(reader_read_string(r));
         i = i + 1;
     }
 
-    let struct_n: i64 = reader_read_leb(r);
+    let struct_n: u64 = reader_read_count(r);
     i = 0;
     while i < struct_n vow {
-        invariant: i >= 0,
         invariant: i <= struct_n
     } {
         m.struct_layouts.push(read_struct_layout(r));
         i = i + 1;
     }
 
-    let enum_n: i64 = reader_read_leb(r);
+    let enum_n: u64 = reader_read_count(r);
     i = 0;
     while i < enum_n vow {
-        invariant: i >= 0,
         invariant: i <= enum_n
     } {
         m.enum_layouts.push(read_enum_layout(r));
         i = i + 1;
     }
 
-    let fn_n: i64 = reader_read_leb(r);
+    let fn_n: u64 = reader_read_count(r);
     i = 0;
     while i < fn_n vow {
-        invariant: i >= 0,
         invariant: i <= fn_n
     } {
         m.functions.push(read_function(r));
