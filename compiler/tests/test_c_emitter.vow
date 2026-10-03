@@ -935,6 +935,113 @@ fn check_process_builtins_are_not_known_to_verifier() -> i64 {
     0
 }
 
+fn check_str_starts_with() -> i64 {
+    if str_starts_with(String::from("xbc"), String::from("abc")) { return 400; }
+    if !str_starts_with(String::from("abc"), String::from("abc")) { return 401; }
+    if !str_starts_with(String::from("abcdef"), String::from("abc")) { return 402; }
+    if !str_starts_with(String::from("abc"), String::from("")) { return 403; }
+    if str_starts_with(String::from("ab"), String::from("abc")) { return 404; }
+    if str_starts_with(String::from("abz"), String::from("abc")) { return 405; }
+    0
+}
+
+fn check_wide_field_set_is_non_modelable() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_I128(), 1));
+    let fs_args: Vec<i64> = Vec::new();
+    fs_args.push(0);
+    fs_args.push(1);
+    insts.push(ir_inst_new(2, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), 0, 0, String::from("")));
+    insts.push(mk_inst_const_i64(3, 0));
+    insts.push(mk_inst_return(4, 3));
+
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    params.push(ITY_I128());
+    let f: IrFunction = mk_function(410, String::from("store_wide"), params, ITY_I64(), blocks);
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(f);
+    let m: IrModule = mk_module(funcs);
+    let const_fn_indices: Vec<i64> = Vec::new();
+
+    let reason: String = non_modelable_reason(f, m, const_fn_indices);
+    if reason == String::from("") { return 410; }
+    if !reason.contains(String::from("FieldSet at 128-bit width")) { return 411; }
+
+    // Companion: the gate must reject only the wide FieldSet, not every FieldSet.
+    let narrow_insts: Vec<IrInst> = Vec::new();
+    narrow_insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    narrow_insts.push(mk_inst_const_i64(1, 0));
+    let narrow_fs_args: Vec<i64> = Vec::new();
+    narrow_fs_args.push(0);
+    narrow_fs_args.push(1);
+    narrow_insts.push(ir_inst_new(2, IOP_FIELD_SET(), ITY_UNIT(), narrow_fs_args, IDATA_FIELD(), 0, 0, String::from("")));
+    narrow_insts.push(mk_inst_return(3, 1));
+    let narrow_blocks: Vec<IrBlock> = Vec::new();
+    narrow_blocks.push(mk_block(0, narrow_insts));
+    let narrow_params: Vec<i64> = Vec::new();
+    narrow_params.push(ITY_PTR());
+    let narrow_f: IrFunction = mk_function(411, String::from("store_narrow"), narrow_params, ITY_I64(), narrow_blocks);
+    let narrow_funcs: Vec<IrFunction> = Vec::new();
+    narrow_funcs.push(narrow_f);
+    let narrow_m: IrModule = mk_module(narrow_funcs);
+    if non_modelable_reason(narrow_f, narrow_m, const_fn_indices) != String::from("") { return 412; }
+    0
+}
+
+fn check_string_matches_literal_at_oob_index_falls_back() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 0));
+    insts.push(mk_inst_const_i64(1, 0));
+    insts.push(ir_inst_new(2, IOP_CONST_STR(), ITY_PTR(), Vec::new(), IDATA_CONST_STR(), 1, 0, String::from("")));
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(0);
+    call_args.push(1);
+    call_args.push(2);
+    insts.push(mk_inst_call_extern(3, ITY_I64(), call_args, String::from("__vow_string_matches_literal_at")));
+    insts.push(mk_inst_return(4, 3));
+
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let f: IrFunction = mk_function(420, String::from("matches_literal_oob"), Vec::new(), ITY_I64(), blocks);
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(f);
+    let m: IrModule = mk_module(funcs);
+    m.strings.push(String::from("ab"));
+
+    let c: String = String::from("");
+    let const_fn_indices: Vec<i64> = Vec::new();
+    let modelable_fi_set: Vec<i64> = Vec::new();
+    emit_c_function(c, f, const_fn_indices, modelable_fi_set, m, 16, 16, 16, 16, false, false, 0);
+    if !c.contains(String::from("/* opcode Call not modelled */")) { return 420; }
+
+    // Companion: an in-range index on the same shape must NOT fall back.
+    let insts2: Vec<IrInst> = Vec::new();
+    insts2.push(mk_inst_const_i64(0, 0));
+    insts2.push(mk_inst_const_i64(1, 0));
+    insts2.push(ir_inst_new(2, IOP_CONST_STR(), ITY_PTR(), Vec::new(), IDATA_CONST_STR(), 0, 0, String::from("")));
+    let call_args2: Vec<i64> = Vec::new();
+    call_args2.push(0);
+    call_args2.push(1);
+    call_args2.push(2);
+    insts2.push(mk_inst_call_extern(3, ITY_I64(), call_args2, String::from("__vow_string_matches_literal_at")));
+    insts2.push(mk_inst_return(4, 3));
+    let blocks2: Vec<IrBlock> = Vec::new();
+    blocks2.push(mk_block(0, insts2));
+    let f2: IrFunction = mk_function(421, String::from("matches_literal_in_range"), Vec::new(), ITY_I64(), blocks2);
+    let funcs2: Vec<IrFunction> = Vec::new();
+    funcs2.push(f2);
+    let m2: IrModule = mk_module(funcs2);
+    m2.strings.push(String::from("ab"));
+    let c2: String = String::from("");
+    emit_c_function(c2, f2, const_fn_indices, modelable_fi_set, m2, 16, 16, 16, 16, false, false, 0);
+    if c2.contains(String::from("/* opcode Call not modelled */")) { return 421; }
+    0
+}
+
 fn main() -> i32 {
     let r1: i64 = check_name_modelable_and_mangled(String::from("abs"), 7, 1);
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -996,5 +1103,11 @@ fn main() -> i32 {
     if r26 != 0 { return i64_to_i32_wrap(r26); }
     let r27: i64 = check_const_len_by_id_table();
     if r27 != 0 { return i64_to_i32_wrap(r27); }
+    let r28: i64 = check_str_starts_with();
+    if r28 != 0 { return i64_to_i32_wrap(r28); }
+    let r29: i64 = check_wide_field_set_is_non_modelable();
+    if r29 != 0 { return i64_to_i32_wrap(r29); }
+    let r30: i64 = check_string_matches_literal_at_oob_index_falls_back();
+    if r30 != 0 { return i64_to_i32_wrap(r30); }
     0
 }
