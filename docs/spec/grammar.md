@@ -421,7 +421,8 @@ count it takes the count's type, and the pair must satisfy the rule above. So
 `1 << n` is well-typed (and has type `u32`, `i64`, `u64`, ...) for a count `n`
 of type `u32`, `i64`, `u64`, `i128` or `u128`, and a `TypeMismatch` for any
 other count type (`i8`, `u8`, `i16`, `u16`, `i32`, `f64`, ...). Write `1u64 << n`
-to fix the shifted type explicitly.
+to fix the shifted type explicitly. The literal is not range-checked against
+the count's type.
 
 **Shift count range.** A const-expression shift count that is negative or
 `>= bit-width(LHS)` is a compile-time error (`ShiftCountOutOfRange`), at every

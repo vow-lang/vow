@@ -3921,7 +3921,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("`1 << n` is well-typed (and has type `u32`, `i64`, `u64`, ...) for a count `n`\n"));
     r.push_str(String::from("of type `u32`, `i64`, `u64`, `i128` or `u128`, and a `TypeMismatch` for any\n"));
     r.push_str(String::from("other count type (`i8`, `u8`, `i16`, `u16`, `i32`, `f64`, ...). Write `1u64 << n`\n"));
-    r.push_str(String::from("to fix the shifted type explicitly.\n"));
+    r.push_str(String::from("to fix the shifted type explicitly. The literal is not range-checked against\n"));
+    r.push_str(String::from("the count's type.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Shift count range.** A const-expression shift count that is negative or\n"));
     r.push_str(String::from("`>= bit-width(LHS)` is a compile-time error (`ShiftCountOutOfRange`), at every\n"));
@@ -9299,7 +9300,8 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("`1 << n` is well-typed (and has type `u32`, `i64`, `u64`, ...) for a count `n`\n"));
     r.push_str(String::from("of type `u32`, `i64`, `u64`, `i128` or `u128`, and a `TypeMismatch` for any\n"));
     r.push_str(String::from("other count type (`i8`, `u8`, `i16`, `u16`, `i32`, `f64`, ...). Write `1u64 << n`\n"));
-    r.push_str(String::from("to fix the shifted type explicitly.\n"));
+    r.push_str(String::from("to fix the shifted type explicitly. The literal is not range-checked against\n"));
+    r.push_str(String::from("the count's type.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Shift count range.** A const-expression shift count that is negative or\n"));
     r.push_str(String::from("`>= bit-width(LHS)` is a compile-time error (`ShiftCountOutOfRange`), at every\n"));
