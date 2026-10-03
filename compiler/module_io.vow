@@ -827,8 +827,8 @@ fn sort_local_names(ids: Vec<i64>, names: Vec<String>) -> SortedLocalNames vow {
             invariant: i >= 0,
             invariant: i <= ids.len() as i64
         } {
-            if used[i] == 0 {
-                let cur: i64 = ids[i];
+            if used[i as u64] == 0 {
+                let cur: i64 = ids[i as u64];
                 if best_idx == -1 || cur < best_id {
                     best_idx = i;
                     best_id = cur;
@@ -845,15 +845,15 @@ fn sort_local_names(ids: Vec<i64>, names: Vec<String>) -> SortedLocalNames vow {
             invariant: remaining >= 0,
             invariant: remaining <= ids.len() as i64
         } {
-            if used[i] == 0 && ids[i] == best_id {
-                used[i] = 1;
+            if used[i as u64] == 0 && ids[i as u64] == best_id {
+                used[i as u64] = 1;
                 remaining = remaining - 1;
                 chosen_idx = i;
             }
             i = i + 1;
         }
-        out_ids.push(ids[chosen_idx]);
-        out_names.push(names[chosen_idx]);
+        out_ids.push(ids[chosen_idx as u64]);
+        out_names.push(names[chosen_idx as u64]);
     }
     SortedLocalNames { ids: out_ids, names: out_names }
 }

@@ -20,26 +20,26 @@ use tests.builders
 // effect starts with target, then constraint_kind; if AliasOf, an aux
 // value follows; if AliasOfAny, a count + aux list follows.
 fn has_alias_of_effect(flat: Vec<i64>, target: i64, aux: i64) -> bool {
-    let mut i: i64 = 0;
-    while i < flat.len() as i64 {
+    let mut i: u64 = 0;
+    while i < flat.len() {
         let t: i64 = flat[i];
         i = i + 1;
-        if i >= flat.len() as i64 { return false; }
+        if i >= flat.len() { return false; }
         let kind: i64 = flat[i];
         i = i + 1;
         if kind == RSUM_KIND_ALIAS_OF() {
-            if i >= flat.len() as i64 { return false; }
+            if i >= flat.len() { return false; }
             let a: i64 = flat[i];
             i = i + 1;
             if t == target && a == aux {
                 return true;
             }
         } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
-            if i >= flat.len() as i64 { return false; }
+            if i >= flat.len() { return false; }
             let n: i64 = flat[i];
             i = i + 1;
             let mut ai: i64 = 0;
-            while ai < n && i < flat.len() as i64 {
+            while ai < n && i < flat.len() {
                 i = i + 1;
                 ai = ai + 1;
             }

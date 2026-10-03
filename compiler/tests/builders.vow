@@ -34,8 +34,8 @@ fn mk_inst_return(id: i64, value_id: i64) -> IrInst {
 
 fn mk_block(id: i64, insts: Vec<IrInst>) -> IrBlock {
     let b: IrBlock = ir_block_new(id);
-    let mut i: i64 = 0;
-    while i < insts.len() as i64 {
+    let mut i: u64 = 0;
+    while i < insts.len() {
         b.insts.push(insts[i]);
         i = i + 1;
     }
@@ -46,7 +46,7 @@ fn mk_function(id: i64, name: String, params: Vec<i64>, return_ty: i64, blocks: 
     let f: IrFunction = ir_function_new(id, name, return_ty, 0, String::from("test.vow"));
     let mut pi: i64 = 0;
     while pi < params.len() as i64 {
-        f.params.push(params[pi]);
+        f.params.push(params[pi as u64]);
         // `p{i}` matches the Rust test helper naming so diagnostics that
         // surface param names line up across the two compilers.
         let pname: String = String::from("p");
@@ -54,8 +54,8 @@ fn mk_function(id: i64, name: String, params: Vec<i64>, return_ty: i64, blocks: 
         f.param_names.push(pname);
         pi = pi + 1;
     }
-    let mut bi: i64 = 0;
-    while bi < blocks.len() as i64 {
+    let mut bi: u64 = 0;
+    while bi < blocks.len() {
         f.blocks.push(blocks[bi]);
         bi = bi + 1;
     }
@@ -64,8 +64,8 @@ fn mk_function(id: i64, name: String, params: Vec<i64>, return_ty: i64, blocks: 
 
 fn mk_module(funcs: Vec<IrFunction>) -> IrModule {
     let m: IrModule = ir_module_new(String::from("Test"));
-    let mut i: i64 = 0;
-    while i < funcs.len() as i64 {
+    let mut i: u64 = 0;
+    while i < funcs.len() {
         m.functions.push(funcs[i]);
         i = i + 1;
     }

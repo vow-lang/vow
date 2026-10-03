@@ -260,7 +260,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let ir_effects: Vec<i64> = Vec::new();
     let mut x: i64 = 0;
     while x < nirf {
-        let irf: IrFunction = ir_funcs[x];
+        let irf: IrFunction = ir_funcs[x as u64];
         let irn: String = irf.name;
         ir_names.push(irn);
         ir_cyclo.push(cx_cyclomatic_ir(irf));
@@ -279,7 +279,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let ir_fanin_counts: BTreeMap<i64, i64> = cx_ir_fan_in_counts(path, ir_source_files, ir_callees, nirf);
     let mut z: i64 = 0;
     while z < nirf {
-        let cs: Vec<i64> = ir_callees[z];
+        let cs: Vec<i64> = ir_callees[z as u64];
         ir_fanout.push(cs.len() as i64);
         ir_fanin.push(cx_ir_fan_in_lookup(ir_fanin_counts, z));
         let mut efo: i64 = 0;
@@ -288,7 +288,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
         while ci < ncs {
             let callee: i64 = cs[ci];
             if callee >= 0 && callee < nirf {
-                if ir_effects[callee] != 0 { efo = efo + 1; }
+                if ir_effects[callee as u64] != 0 { efo = efo + 1; }
             }
             ci = ci + 1;
         }
@@ -320,7 +320,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let mut exit_code: i32 = 0;
     let mut j: i64 = 0;
     while j < nf {
-        let rowj: CxRow = rows[j];
+        let rowj: CxRow = rows[j as u64];
         let r: CxFn = rowj.rec;
         let sc: CxScore = rowj.sc;
         if sc.score > file_max { file_max = sc.score; }
@@ -339,7 +339,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let mut hk_max: i64 = 0;
     let mut hi: i64 = 0;
     while hi < nf {
-        let rowh: CxRow = rows[hi];
+        let rowh: CxRow = rows[hi as u64];
         let hr: CxFn = rowh.rec;
         let hrn: String = hr.name;
         let fi: i64 = cx_clamp0(cx_ir_val_for(hrn, ir_names, ir_fanin));
@@ -364,7 +364,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let mut k: i64 = 0;
     while k < nf {
         if k > 0 { out.push_str(String::from(",")); }
-        let rowk: CxRow = rows[k];
+        let rowk: CxRow = rows[k as u64];
         cx_emit_fn(out, rowk.rec, rowk.sc, thr, rowk.ex);
         k = k + 1;
     }
@@ -388,7 +388,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let mut e: i64 = 0;
     let mut emitted: i64 = 0;
     while e < nf {
-        let rowe: CxRow = rows[e];
+        let rowe: CxRow = rows[e as u64];
         let sc: CxScore = rowe.sc;
         if sc.score > thr {
             if emitted > 0 { out.push_str(String::from(",")); }

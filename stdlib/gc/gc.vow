@@ -38,9 +38,9 @@ fn gc_alloc(h: GcHeap, val: i64) -> i64 {
         let slot: i64 = fl[idx];
         fl.pop();
         let vals: Vec<i64> = h.values;
-        vals[slot] = val;
+        vals[slot as u64] = val;
         let alv: Vec<i64> = h.alive;
-        alv[slot] = 1;
+        alv[slot as u64] = 1;
         h.count = h.count + 1;
         slot
     } else {
@@ -59,7 +59,7 @@ fn gc_alloc(h: GcHeap, val: i64) -> i64 {
 fn gc_add_root(h: GcHeap, slot: i64) vow {
     requires: slot >= 0,
     requires: slot < h.values.len() as i64,
-    requires: h.alive[slot] == 1
+    requires: h.alive[slot as u64] == 1
 } {
     let r: Vec<i64> = h.roots;
     r.push(slot);
@@ -88,8 +88,8 @@ fn gc_add_ref(h: GcHeap, from: i64, to: i64) vow {
     requires: from < h.values.len() as i64,
     requires: to >= 0,
     requires: to < h.values.len() as i64,
-    requires: h.alive[from] == 1,
-    requires: h.alive[to] == 1
+    requires: h.alive[from as u64] == 1,
+    requires: h.alive[to as u64] == 1
 } {
     let rf: Vec<i64> = h.ref_from;
     let rt: Vec<i64> = h.ref_to;
@@ -100,19 +100,19 @@ fn gc_add_ref(h: GcHeap, from: i64, to: i64) vow {
 fn gc_read(h: GcHeap, slot: i64) -> i64 vow {
     requires: slot >= 0,
     requires: slot < h.values.len() as i64,
-    requires: h.alive[slot] == 1
+    requires: h.alive[slot as u64] == 1
 } {
     let vals: Vec<i64> = h.values;
-    vals[slot]
+    vals[slot as u64]
 }
 
 fn gc_write(h: GcHeap, slot: i64, val: i64) vow {
     requires: slot >= 0,
     requires: slot < h.values.len() as i64,
-    requires: h.alive[slot] == 1
+    requires: h.alive[slot as u64] == 1
 } {
     let vals: Vec<i64> = h.values;
-    vals[slot] = val;
+    vals[slot as u64] = val;
 }
 
 fn gc_is_alive(h: GcHeap, slot: i64) -> bool vow {
@@ -120,7 +120,7 @@ fn gc_is_alive(h: GcHeap, slot: i64) -> bool vow {
     requires: slot < h.values.len() as i64
 } {
     let alv: Vec<i64> = h.alive;
-    alv[slot] == 1
+    alv[slot as u64] == 1
 }
 
 fn gc_count(h: GcHeap) -> i64 {
@@ -147,8 +147,8 @@ fn gc_collect(h: GcHeap) -> i64 {
     i = 0;
     while i < rlen {
         let root: i64 = r[i];
-        if alv[root] == 1 && mrk[root] == 0 {
-            mrk[root] = 1;
+        if alv[root as u64] == 1 && mrk[root as u64] == 0 {
+            mrk[root as u64] = 1;
             wl.push(root);
         }
         i = i + 1;
@@ -167,8 +167,8 @@ fn gc_collect(h: GcHeap) -> i64 {
         while j < elen {
             if rf[j] == obj {
                 let target: i64 = rt[j];
-                if alv[target] == 1 && mrk[target] == 0 {
-                    mrk[target] = 1;
+                if alv[target as u64] == 1 && mrk[target as u64] == 0 {
+                    mrk[target as u64] = 1;
                     wl.push(target);
                 }
             }
@@ -198,7 +198,7 @@ fn gc_collect(h: GcHeap) -> i64 {
     while i < elen {
         let from_slot: i64 = rf[i];
         let to_slot: i64 = rt[i];
-        if alv[from_slot] == 1 && alv[to_slot] == 1 {
+        if alv[from_slot as u64] == 1 && alv[to_slot as u64] == 1 {
             new_rf.push(from_slot);
             new_rt.push(to_slot);
         }
