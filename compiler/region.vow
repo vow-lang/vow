@@ -843,17 +843,19 @@ fn store_effect_less(
     targets: Vec<i64>, kinds: Vec<i64>, auxs: Vec<i64>, aliases: Vec<Vec<i64>>,
     a: i64, b: i64
 ) -> bool {
-    if targets[a as u64] != targets[b as u64] {
-        return targets[a as u64] < targets[b as u64];
+    let au: u64 = a as u64;
+    let bu: u64 = b as u64;
+    if targets[au] != targets[bu] {
+        return targets[au] < targets[bu];
     }
-    if kinds[a as u64] != kinds[b as u64] {
-        return kinds[a as u64] < kinds[b as u64];
+    if kinds[au] != kinds[bu] {
+        return kinds[au] < kinds[bu];
     }
-    if kinds[a as u64] == RSUM_KIND_ALIAS_OF() && auxs[a as u64] != auxs[b as u64] {
-        return auxs[a as u64] < auxs[b as u64];
+    if kinds[au] == RSUM_KIND_ALIAS_OF() && auxs[au] != auxs[bu] {
+        return auxs[au] < auxs[bu];
     }
-    if kinds[a as u64] == RSUM_KIND_ALIAS_OF_ANY() {
-        return i64_vec_lex_less(aliases[a as u64], aliases[b as u64]);
+    if kinds[au] == RSUM_KIND_ALIAS_OF_ANY() {
+        return i64_vec_lex_less(aliases[au], aliases[bu]);
     }
     false
 }
@@ -2114,6 +2116,7 @@ fn analyze_function(
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
     note_region_keys: Vec<Vec<i64>>, note_region_vals: Vec<Vec<i64>>,
 ) -> bool {
+    let fidx_u: u64 = fidx as u64;
     // Reset this function's note-region snapshot before populating it again
     // so only the convergence iteration's captures contribute. Without this,
     // an earlier iteration's Caller(_) entry could persist past a final-
@@ -2122,20 +2125,20 @@ fn analyze_function(
     // fresh `note_region_map` would not. Mirrors the Rust pass's
     // `let mut note_region_map = BTreeMap::new()` at the top of
     // `analyze_function` (vow-ir/src/region.rs:1427).
-    note_region_keys[fidx as u64].clear();
-    note_region_vals[fidx as u64].clear();
-    let f: IrFunction = m.functions[fidx as u64];
+    note_region_keys[fidx_u].clear();
+    note_region_vals[fidx_u].clear();
+    let f: IrFunction = m.functions[fidx_u];
     let bks: Vec<IrBlock> = f.blocks;
     let n_bks: u64 = bks.len();
 
-    let prev_kind: i64 = int_kinds[fidx as u64];
-    let prev_aux: i64 = int_auxs[fidx as u64];
-    let prev_aliases: Vec<i64> = int_aliases_list[fidx as u64];
-    let prev_return_rodata: bool = int_return_rodata[fidx as u64];
-    let prev_se_targets: Vec<i64> = clone_i64_vec(int_se_targets[fidx as u64]);
-    let prev_se_src_kinds: Vec<i64> = clone_i64_vec(int_se_src_kinds[fidx as u64]);
-    let prev_se_src_aux: Vec<i64> = clone_i64_vec(int_se_src_aux[fidx as u64]);
-    let prev_se_src_aliases: Vec<Vec<i64>> = clone_i64_vec_vec(int_se_src_aliases[fidx as u64]);
+    let prev_kind: i64 = int_kinds[fidx_u];
+    let prev_aux: i64 = int_auxs[fidx_u];
+    let prev_aliases: Vec<i64> = int_aliases_list[fidx_u];
+    let prev_return_rodata: bool = int_return_rodata[fidx_u];
+    let prev_se_targets: Vec<i64> = clone_i64_vec(int_se_targets[fidx_u]);
+    let prev_se_src_kinds: Vec<i64> = clone_i64_vec(int_se_src_kinds[fidx_u]);
+    let prev_se_src_aux: Vec<i64> = clone_i64_vec(int_se_src_aux[fidx_u]);
+    let prev_se_src_aliases: Vec<Vec<i64>> = clone_i64_vec_vec(int_se_src_aliases[fidx_u]);
 
     // 1. Compute return-region contribution by deep-walking the Return arg
     //    through Pizlo Phi/Upsilon arms and Call summaries.
@@ -2194,10 +2197,10 @@ fn analyze_function(
                         source_id,
                         target_param,
                         int_kinds,
-                        int_se_targets[fidx as u64],
-                        int_se_src_kinds[fidx as u64],
-                        int_se_src_aux[fidx as u64],
-                        int_se_src_aliases[fidx as u64],
+                        int_se_targets[fidx_u],
+                        int_se_src_kinds[fidx_u],
+                        int_se_src_aux[fidx_u],
+                        int_se_src_aliases[fidx_u],
                     );
                 }
             }
@@ -2219,10 +2222,10 @@ fn analyze_function(
                                 source_id2,
                                 target_param2,
                                 int_kinds,
-                                int_se_targets[fidx as u64],
-                                int_se_src_kinds[fidx as u64],
-                                int_se_src_aux[fidx as u64],
-                                int_se_src_aliases[fidx as u64],
+                                int_se_targets[fidx_u],
+                                int_se_src_kinds[fidx_u],
+                                int_se_src_aux[fidx_u],
+                                int_se_src_aliases[fidx_u],
                             );
                         }
                     }
@@ -2233,10 +2236,10 @@ fn analyze_function(
                     let growth_target_param: i64 = trace_param(id_to_inst, inst.args[growth_target_pos as u64]);
                     if growth_target_param >= 0 {
                         add_store_effect(
-                            int_se_targets[fidx as u64],
-                            int_se_src_kinds[fidx as u64],
-                            int_se_src_aux[fidx as u64],
-                            int_se_src_aliases[fidx as u64],
+                            int_se_targets[fidx_u],
+                            int_se_src_kinds[fidx_u],
+                            int_se_src_aux[fidx_u],
+                            int_se_src_aliases[fidx_u],
                             growth_target_param,
                             RSUM_KIND_CONSTANT_GLOBAL(),
                             0,
@@ -2254,10 +2257,10 @@ fn analyze_function(
                     int_se_src_kinds,
                     int_se_src_aux,
                     int_se_src_aliases,
-                    int_se_targets[fidx as u64],
-                    int_se_src_kinds[fidx as u64],
-                    int_se_src_aux[fidx as u64],
-                    int_se_src_aliases[fidx as u64],
+                    int_se_targets[fidx_u],
+                    int_se_src_kinds[fidx_u],
+                    int_se_src_aux[fidx_u],
+                    int_se_src_aliases[fidx_u],
                 );
             }
             ii = ii + 1;
@@ -2296,7 +2299,7 @@ fn analyze_function(
                 // Issue #366: record multi-slot widen-to-Root allocs so the
                 // note pass surfaces the leak (mirrors vow-ir/src/region.rs).
                 if widened_flag.len() > 0 {
-                    put_inst_region(note_region_keys[fidx as u64], note_region_vals[fidx as u64], rinst.id, rgn);
+                    put_inst_region(note_region_keys[fidx_u], note_region_vals[fidx_u], rinst.id, rgn);
                 }
                 // Issue #320: record the Caller(_) region so the note pass can
                 // surface internal-call heap producers routed through a hidden
@@ -2315,10 +2318,10 @@ fn analyze_function(
                         // dropped: with hidden-arena threading for store targets,
                         // a Caller(_) internal-call result is placed in the
                         // caller's arena instead of leaking to root (issue #871).
-                        put_inst_region(note_region_keys[fidx as u64], note_region_vals[fidx as u64], rinst.id, rgn);
+                        put_inst_region(note_region_keys[fidx_u], note_region_vals[fidx_u], rinst.id, rgn);
                     }
                 }
-                put_inst_region(region_keys[fidx as u64], region_vals[fidx as u64], rinst.id, rgn);
+                put_inst_region(region_keys[fidx_u], region_vals[fidx_u], rinst.id, rgn);
             }
             rii = rii + 1;
         }
@@ -2329,10 +2332,10 @@ fn analyze_function(
     let new_aux: i64 = acc_aux;
     let new_aliases: Vec<i64> = acc_aliases;
 
-    int_kinds[fidx as u64] = new_kind;
-    int_auxs[fidx as u64] = new_aux;
-    int_aliases_list[fidx as u64] = new_aliases;
-    int_return_rodata[fidx as u64] = acc_return_rodata;
+    int_kinds[fidx_u] = new_kind;
+    int_auxs[fidx_u] = new_aux;
+    int_aliases_list[fidx_u] = new_aliases;
+    int_return_rodata[fidx_u] = acc_return_rodata;
 
     // Return whether the summary changed.
     if new_kind != prev_kind { return true; }
@@ -2346,10 +2349,10 @@ fn analyze_function(
             k = k + 1;
         }
     }
-    if !linear_vec_eq(prev_se_targets, int_se_targets[fidx as u64]) { return true; }
-    if !linear_vec_eq(prev_se_src_kinds, int_se_src_kinds[fidx as u64]) { return true; }
-    if !linear_vec_eq(prev_se_src_aux, int_se_src_aux[fidx as u64]) { return true; }
-    if !i64_vec_vec_eq(prev_se_src_aliases, int_se_src_aliases[fidx as u64]) { return true; }
+    if !linear_vec_eq(prev_se_targets, int_se_targets[fidx_u]) { return true; }
+    if !linear_vec_eq(prev_se_src_kinds, int_se_src_kinds[fidx_u]) { return true; }
+    if !linear_vec_eq(prev_se_src_aux, int_se_src_aux[fidx_u]) { return true; }
+    if !i64_vec_vec_eq(prev_se_src_aliases, int_se_src_aliases[fidx_u]) { return true; }
     false
 }
 
