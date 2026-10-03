@@ -1,0 +1,10 @@
+// TEST: error-code UnknownMethod
+// TEST: error-count 1
+// TEST: build-json x.get('hints') == ['did you mean `unwrap`?']
+module UnknownMethodOptionDidYouMean
+
+fn main() -> i32 {
+    let o: Option<i64> = Option::Some(1);
+    o.unwrp();
+    0
+}

@@ -661,7 +661,10 @@ fn linear_emit_live_errors(f: IrFunction, live: Vec<i64>, id_to_inst: Vec<IrInst
             msg.push_str(name);
             msg.push_str(String::from("` is not consumed before its region closes"));
             let d: Diagnostic = diag_error(EC_REGION_LINEAR(), msg, f.source_file, inst.ostart, inst.olen);
-            diag_add_hint(d, String::from("consume the linear value before this scope exits, or return it to transfer the obligation to the caller"));
+            let hint: String = String::from("consume `");
+            hint.push_str(name);
+            hint.push_str(String::from("` before this scope exits, or return it to transfer the obligation to the caller"));
+            diag_add_hint(d, hint);
             diag_ctx_emit(dctx, d);
         }
         i = i + 1;

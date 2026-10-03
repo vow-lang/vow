@@ -30,6 +30,8 @@ verify-skip/ -> Skipped); the directives carry the fine-grained ground truth.
 Usage:
     scripts/verify_eval.py [--verifier ./target/release/vow] [--filter NAME]
     scripts/verify_eval.py --discover        # print actual outcomes (authoring aid)
+    scripts/verify_eval.py --check-docs      # docs/verifier-eval.md counts match the corpus
+    scripts/verify_eval.py --write-docs      # regenerate those counts
 
 Exit code is 0 only when every program matches its ground truth; non-zero on
 any soundness, precision, blame, or status regression.
@@ -471,6 +473,79 @@ def collect(filter_name):
             yield sub, exp
 
 
+DOCS_PATH = os.path.join("docs", "verifier-eval.md")
+DOCS_START = "<!-- GENERATE:CORPUS_COUNTS:START -->"
+DOCS_END = "<!-- GENERATE:CORPUS_COUNTS:END -->"
+
+
+def corpus_category_counts():
+    """Return (total, {category: count}) over the non-skipped corpus."""
+    total = 0
+    counts = {}
+    for _sub, exp in collect(None):
+        if exp.skip_reason:
+            continue
+        total += 1
+        counts[exp.category] = counts.get(exp.category, 0) + 1
+    return total, counts
+
+
+def render_corpus_counts(total, counts):
+    """Render the generated docs block for the given corpus counts."""
+    names = sorted(CATEGORIES, key=lambda c: (-counts.get(c, 0), c))
+    empty = [name for name in sorted(CATEGORIES) if not counts.get(name, 0)]
+    if empty:
+        summary = f"{total} programs; no program yet for: {', '.join(empty)}:"
+    else:
+        summary = (
+            f"All {len(CATEGORIES)} categories are represented ({total} programs):"
+        )
+    lines = [
+        DOCS_START,
+        summary,
+        "",
+        "| Category | Count |",
+        "| --- | --- |",
+    ]
+    lines += [f"| {name} | {counts.get(name, 0)} |" for name in names]
+    lines.append(DOCS_END)
+    return "\n".join(lines)
+
+
+def splice_corpus_counts(text, block):
+    """Replace the generated block inside `text`; ValueError without markers."""
+    start = text.find(DOCS_START)
+    end = text.find(DOCS_END)
+    if start < 0 or end < start:
+        raise ValueError(f"{DOCS_PATH}: missing {DOCS_START} / {DOCS_END} markers")
+    return text[:start] + block + text[end + len(DOCS_END) :]
+
+
+def sync_docs(check):
+    """Regenerate (or with `check`, verify) the corpus counts in the docs."""
+    path = os.path.join(REPO_ROOT, DOCS_PATH)
+    with open(path, "r", encoding="utf-8") as fh:
+        current = fh.read()
+    total, counts = corpus_category_counts()
+    unknown = sorted(c for c in counts if c not in CATEGORIES)
+    if unknown:
+        print(f"unknown or missing category in corpus: {unknown}", file=sys.stderr)
+        return 1
+    updated = splice_corpus_counts(current, render_corpus_counts(total, counts))
+    if updated == current:
+        return 0
+    if check:
+        print(
+            f"{DOCS_PATH} corpus counts are stale; run "
+            "`python3 scripts/verify_eval.py --write-docs`",
+            file=sys.stderr,
+        )
+        return 1
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(updated)
+    return 0
+
+
 def discover(verifier, filter_name):
     """Print actual verifier outcomes to aid directive authoring."""
     for sub, exp in collect(filter_name):
@@ -655,7 +730,22 @@ def main():
         default=os.path.join(REPO_ROOT, "verify-eval.out"),
         help="directory for the machine-readable report.json",
     )
+    ap.add_argument(
+        "--check-docs",
+        action="store_true",
+        help="fail if the corpus counts in docs/verifier-eval.md are stale",
+    )
+    ap.add_argument(
+        "--write-docs",
+        action="store_true",
+        help="regenerate the corpus counts in docs/verifier-eval.md",
+    )
     args = ap.parse_args()
+
+    if args.check_docs and args.write_docs:
+        ap.error("--check-docs and --write-docs are mutually exclusive")
+    if args.check_docs or args.write_docs:
+        return sync_docs(check=args.check_docs)
 
     if not os.path.exists(args.verifier):
         print(f"verifier not found: {args.verifier}", file=sys.stderr)

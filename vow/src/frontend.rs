@@ -462,8 +462,9 @@ mod tests {
             offset + len,
             dep_src.len()
         );
-        let slice = std::str::from_utf8(&dep_src.as_bytes()[offset..offset + len])
-            .unwrap_or_else(|_| panic!("span should slice on UTF-8 boundaries in {dep_name}"));
+        let slice = dep_src
+            .get(offset..offset + len)
+            .unwrap_or_else(|| panic!("span should slice on UTF-8 boundaries in {dep_name}"));
         assert!(
             slice.contains(span_contains),
             "span text `{slice}` in {dep_name} should contain `{span_contains}`"

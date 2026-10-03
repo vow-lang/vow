@@ -1368,9 +1368,10 @@ for dir in tests/multi/*/; do
         fi
     fi
 
-    # Validate // TEST: exit directive (the vmod reject fixtures expect 134,
-    # the reserved runtime-abort code: they reject via an index-out-of-bounds
-    # trap, which now exits 134 rather than colliding with a plain 1 — see #877).
+    # Validate // TEST: exit directive (the vmod decode-reject fixtures exit 1
+    # after printing the structured decode error; the encode-side invariant
+    # trap in vmod_rejects_invalid_instdata_encode still exits 134, the
+    # reserved runtime-abort code — see #877).
     expected_exit=$(sed -n 's|^// TEST: exit \([0-9]*\)$|\1|p' "$main_file" | head -1)
     if [ -n "$expected_exit" ]; then
         actual_exit=0

@@ -116,7 +116,7 @@ jobs:
           ./target/debug/vow build --no-verify --no-cache /tmp/compiler_clif.vow -o /tmp/vowc_concat
           test -x /tmp/vowc_concat
       - run: cargo llvm-cov --all --lcov --output-path lcov.info
-      - run: cargo clippy --all -- -D warnings
+      - run: cargo clippy --all --all-targets -- -D warnings
       - run: cargo fmt --all -- --check
       # Phase 3 (issue #199) — non-blocking region-pass surface scan against
       # `compiler/*.vow`. Surfaces RegionConflict diagnostics for the
@@ -172,5 +172,5 @@ jobs:
           ./target/debug/vow build --no-verify --no-cache /tmp/compiler_clif.vow -o /tmp/vowc_concat
           test -x /tmp/vowc_concat
       - run: cargo test --all
-      - run: cargo clippy --all -- -D warnings
+      - run: cargo clippy --all --all-targets -- -D warnings
       - run: cargo fmt --all -- --check

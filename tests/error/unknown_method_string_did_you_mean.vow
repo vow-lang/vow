@@ -1,0 +1,10 @@
+// TEST: error-code UnknownMethod
+// TEST: error-count 1
+// TEST: build-json x.get('hints') == ['did you mean `len`?']
+module UnknownMethodStringDidYouMean
+
+fn main() -> i32 {
+    let s: String = String::from("x");
+    s.lenn();
+    0
+}

@@ -1,0 +1,21 @@
+// TEST: exit 1
+// TEST: stdout "{"error":"ModuleDecodeError","kind":"InvalidKind","label":"IntegerSignedness","value":2,"offset":1}\n"
+// An integer signedness byte past Unsigned is InvalidKind labelled IntegerSignedness.
+module Main
+
+use ir
+use module_io
+
+fn main() -> i32 [io] {
+    let bytes: Vec<i64> = Vec::new();
+    bytes.push(0);
+    bytes.push(2);
+    let r: ModuleReader = reader_new(bytes);
+    let _ty: i64 = read_integer_ty(r);
+    if r.err_kind != DEC_OK() {
+        print_str(decode_error_json(r.err_kind, r.err_label, r.err_value, r.err_offset));
+        print_str(String::from("\n"));
+        return 1;
+    }
+    0
+}

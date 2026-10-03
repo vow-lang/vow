@@ -1,0 +1,40 @@
+// TEST: exit 1
+// TEST: stdout "{"error":"ModuleDecodeError","kind":"NegativeCount","label":"","value":0,"offset":8}\n"
+// A negative module-name length (u64::MAX) is NegativeCount at the name's LEB.
+module Main
+
+use ir
+use module_io
+
+fn push_header(bytes: Vec<i64>) {
+    bytes.push(MODULE_MAGIC_0());
+    bytes.push(MODULE_MAGIC_1());
+    bytes.push(MODULE_MAGIC_2());
+    bytes.push(MODULE_MAGIC_3());
+    bytes.push(MODULE_VERSION());
+    bytes.push(0);
+    bytes.push(0);
+    bytes.push(0);
+}
+
+fn main() -> i32 [io] {
+    let bytes: Vec<i64> = Vec::new();
+    push_header(bytes);
+    let mut i: u64 = 0;
+    while i < 9 {
+        bytes.push(255);
+        i = i + 1;
+    }
+    bytes.push(1);
+    bytes.push(0);
+    bytes.push(0);
+    bytes.push(0);
+    bytes.push(0);
+    let res: ModuleDecode = module_decode(bytes);
+    if module_decode_failed(res) {
+        print_str(module_decode_error_json(res));
+        print_str(String::from("\n"));
+        return 1;
+    }
+    0
+}

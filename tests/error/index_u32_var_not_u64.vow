@@ -1,6 +1,6 @@
 // TEST: error-code TypeMismatch
 // TEST: error-count 1
-// TEST: stderr "u64"
+// TEST: stderr "index has type `u32` but must be `u64`"
 module IndexU32VarNotU64
 
 fn main() -> i32 {

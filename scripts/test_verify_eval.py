@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Behavior tests for scripts/verify_eval.py."""
 
+import io
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import verify_eval
 
@@ -118,6 +121,62 @@ class ParseDirectivesKnownGapTest(unittest.TestCase):
                             verify_eval.parse_directives(str(path), status)
             finally:
                 verify_eval.REPO_ROOT = old_repo_root
+
+
+class CorpusCountsDocsTest(unittest.TestCase):
+    def test_docs_counts_match_the_corpus(self):
+        self.assertEqual(0, verify_eval.sync_docs(check=True))
+
+    def test_render_lists_every_category_by_descending_count(self):
+        block = verify_eval.render_corpus_counts(3, {"bounds": 2, "overflow": 1})
+
+        rows = [line for line in block.splitlines() if line.startswith("| ")][2:]
+        self.assertEqual(len(verify_eval.CATEGORIES), len(rows))
+        self.assertEqual("| bounds | 2 |", rows[0])
+        self.assertEqual("| overflow | 1 |", rows[1])
+        self.assertIn("3 programs", block)
+
+    def test_render_states_full_coverage_only_when_every_category_has_programs(self):
+        full = {name: 1 for name in verify_eval.CATEGORIES}
+        block = verify_eval.render_corpus_counts(len(full), full)
+        self.assertIn(
+            f"All {len(verify_eval.CATEGORIES)} categories are represented", block
+        )
+
+        partial = dict(full)
+        missing = min(verify_eval.CATEGORIES)
+        del partial[missing]
+        block = verify_eval.render_corpus_counts(len(partial), partial)
+        self.assertNotIn("categories are represented", block)
+        self.assertIn(f"no program yet for: {missing}", block)
+        self.assertIn(f"| {missing} | 0 |", block)
+
+    def test_conflicting_docs_flags_are_rejected(self):
+        argv = ["verify_eval.py", "--check-docs", "--write-docs"]
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.object(sys, "stderr", io.StringIO()) as err,
+            self.assertRaises(SystemExit) as ctx,
+        ):
+            verify_eval.main()
+        self.assertEqual(2, ctx.exception.code)
+        self.assertIn("mutually exclusive", err.getvalue())
+
+    def test_splice_replaces_only_the_marked_block(self):
+        block = verify_eval.render_corpus_counts(1, {"bounds": 1})
+        text = (
+            f"before\n{verify_eval.DOCS_START}\nstale\n{verify_eval.DOCS_END}\nafter\n"
+        )
+
+        updated = verify_eval.splice_corpus_counts(text, block)
+
+        self.assertTrue(updated.startswith("before\n"))
+        self.assertTrue(updated.endswith("\nafter\n"))
+        self.assertNotIn("stale", updated)
+
+    def test_splice_without_markers_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "markers"):
+            verify_eval.splice_corpus_counts("no markers here", "x")
 
 
 if __name__ == "__main__":

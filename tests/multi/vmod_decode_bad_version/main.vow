@@ -1,10 +1,12 @@
-// TEST: exit 134
+// TEST: exit 1
+// TEST: stdout "{"error":"ModuleDecodeError","kind":"VersionMismatch","label":"","value":2,"offset":4}\n"
+// A well-formed header with an unsupported version reports the version found.
 module Main
 
 use ir
 use module_io
 
-fn main() -> i32 [panic] {
+fn main() -> i32 [io] {
     let bytes: Vec<i64> = Vec::new();
     bytes.push(MODULE_MAGIC_0());
     bytes.push(MODULE_MAGIC_1());
@@ -14,6 +16,11 @@ fn main() -> i32 [panic] {
     bytes.push(0);
     bytes.push(0);
     bytes.push(0);
-    let _m: IrModule = module_decode(bytes);
+    let res: ModuleDecode = module_decode(bytes);
+    if module_decode_failed(res) {
+        print_str(module_decode_error_json(res));
+        print_str(String::from("\n"));
+        return 1;
+    }
     0
 }

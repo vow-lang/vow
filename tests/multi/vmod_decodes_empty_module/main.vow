@@ -1,0 +1,36 @@
+// TEST: exit 0
+// TEST: stdout "decoded functions=0\n"
+// Control for the vmod_rejects_* fixtures: the minimal well-formed module
+// (header, empty name, four empty sections) decodes cleanly.
+module Main
+
+use ir
+use module_io
+
+fn main() -> i32 [io] {
+    let bytes: Vec<i64> = Vec::new();
+    bytes.push(MODULE_MAGIC_0());
+    bytes.push(MODULE_MAGIC_1());
+    bytes.push(MODULE_MAGIC_2());
+    bytes.push(MODULE_MAGIC_3());
+    bytes.push(MODULE_VERSION());
+    bytes.push(0);
+    bytes.push(0);
+    bytes.push(0);
+    bytes.push(0);
+    bytes.push(0);
+    bytes.push(0);
+    bytes.push(0);
+    bytes.push(0);
+    let res: ModuleDecode = module_decode(bytes);
+    if module_decode_failed(res) {
+        print_str(module_decode_error_json(res));
+        return 1;
+    }
+    let m: IrModule = res.m;
+    if m.functions.len() != 0 {
+        return 1;
+    }
+    print_str(String::from("decoded functions=0\n"));
+    0
+}

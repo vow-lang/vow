@@ -4471,6 +4471,7 @@ mod tests {
         ctx
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn compile_cross_block_float_phi(
         ctx: i64,
         float_ty: i64,
