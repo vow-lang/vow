@@ -1161,7 +1161,7 @@ fn emit_inst(
                 _ => IntegerType::I64,
             };
             out.push_str(&format!(
-                "  __ESBMC_assert(v{b} < {}, \"integer shift count\");\n",
+                "  __ESBMC_assert(v{b} >= 0 && v{b} < {}, \"integer shift count\");\n",
                 int_ty.width.bits()
             ));
             let prefix = match int_ty.signedness {
@@ -4884,6 +4884,36 @@ mod tests {
         assert!(c.contains("v0 ^ v1"), "xor: {c}");
         assert!(c.contains("__vow_shl_i64(v0, v1)"), "shl: {c}");
         assert!(c.contains("__vow_shr_i64(v0, v1)"), "shr: {c}");
+    }
+
+    #[test]
+    fn shift_count_assert_rejects_negative_and_oversized_counts() {
+        for (ty, int_ty, width) in [
+            (Ty::I8, IntegerType::I8, 8),
+            (Ty::U8, IntegerType::U8, 8),
+            (Ty::I16, IntegerType::I16, 16),
+            (Ty::U32, IntegerType::U32, 32),
+            (Ty::I64, IntegerType::I64, 64),
+            (Ty::U64, IntegerType::U64, 64),
+            (Ty::I128, IntegerType::I128, 128),
+            (Ty::U128, IntegerType::U128, 128),
+        ] {
+            let func = make_func(
+                "sh",
+                vec![ty, ty],
+                ty,
+                vec![
+                    inst(0, Opcode::GetArg, ty, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, ty, vec![], InstData::ArgIndex(1)),
+                    inst(2, Opcode::Shl, ty, vec![0, 1], InstData::Integer(int_ty)),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            );
+            let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+            let expected =
+                format!("__ESBMC_assert(v1 >= 0 && v1 < {width}, \"integer shift count\");");
+            assert!(c.contains(&expected), "{ty:?}: {c}");
+        }
     }
 
     #[test]

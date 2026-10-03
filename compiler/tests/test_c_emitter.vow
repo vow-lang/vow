@@ -239,6 +239,11 @@ fn check_narrow_shifts_use_helpers() -> i64 {
     // to the same description on both compilers instead of falling through.
     if !c.contains(String::from(" < 32, \"integer shift count\");")) { return 42; }
     if c.contains(String::from("\"i32 shift count\"")) { return 43; }
+    // A negative signed count must fail the assert too: the masking helpers
+    // would otherwise reduce it modulo the width. Same text as the Rust emitter.
+    if !c.contains(String::from("__ESBMC_assert(v1 >= 0 && v1 < 32, \"integer shift count\");")) { return 44; }
+    if !c.contains(String::from("__ESBMC_assert(v1 >= 0 && v1 < 8, \"integer shift count\");")) { return 45; }
+    if !c.contains(String::from("__ESBMC_assert(v1 >= 0 && v1 < 16, \"integer shift count\");")) { return 46; }
     0
 }
 
@@ -262,6 +267,8 @@ fn check_wide_shifts_use_helpers() -> i64 {
     // i128/u128 go through the dynamic_shift helper family, which emits
     // the assert inline with each helper call rather than once per width.
     if !c.contains(String::from(" < 128, \"integer shift count\");")) { return 57; }
+    if !c.contains(String::from("__ESBMC_assert(v1 >= 0 && v1 < 64, \"integer shift count\");")) { return 58; }
+    if !c.contains(String::from("__ESBMC_assert(v1 >= 0 && v1 < 128, \"integer shift count\");")) { return 59; }
     0
 }
 
