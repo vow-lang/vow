@@ -668,7 +668,7 @@ fn analyze(s: Solver, conflict_cid: i64) -> AnalyzeResult {
     while j < touched.len() vow {
         invariant: j <= touched.len()
     } {
-        seen[touched[j as u64] as u64] = 0;
+        seen[touched[j] as u64] = 0;
         j = j + 1;
     }
 
