@@ -1,0 +1,11 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "i32 shift count must be u32"
+module LiteralLeftShiftI32Count
+
+fn bit(n: i32) -> i32 {
+    1 << n
+}
+
+fn main() -> i32 {
+    bit(3)
+}

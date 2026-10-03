@@ -57,7 +57,8 @@ Decimal / Rational) work are separate subprojects and out of scope here.
    with literal coercion. Right-shift is arithmetic for signed types and
    logical for unsigned. A shift count that is a const expression `>= width`
    is a compile-time error (`ShiftCountOutOfRange`); dynamic shifts get a
-   runtime contract.
+   runtime contract (see the amendment to this decision below for what is
+   actually checked).
 
 7. **128-bit verification.** `i128`/`u128` are first-class for source, IR,
    codegen (Cranelift `I128`), and ESBMC (`__int128`). Predicates over 128-bit
@@ -147,3 +148,10 @@ BigInt subprojects.
   rejection rationale recorded under *Considered options* ("Breaks 64-bit-only
   determinism; cross-compilation would produce different binaries") applies
   only to the former. See epic #1104.
+- **2026-10-03 — Decision 6.** "Dynamic shifts get a runtime contract" described
+  the verifier check, not a runtime trap. The shipped behaviour is: ESBMC proves
+  `0 <= count < width` at every dynamic shift; at runtime only 8-bit shifts
+  (`i8`/`u8`, count `>= 8`) trap with `ArithmeticOverflow`, in every build mode,
+  and wider shifts mask the count to the operand width. Both compilers behave
+  identically. For 64- and 128-bit left operands a count of the left operand's
+  own type is also accepted (`docs/spec/grammar.md`, "Shift count type").

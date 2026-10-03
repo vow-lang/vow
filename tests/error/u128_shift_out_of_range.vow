@@ -1,0 +1,9 @@
+// TEST: error-code ShiftCountOutOfRange
+// TEST: stderr "shift count 200 is out of range for u128"
+module U128ShiftOutOfRange
+
+fn main() -> i32 {
+    let value: u128 = 1;
+    let shifted: u128 = value >> 200;
+    0
+}

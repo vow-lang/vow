@@ -1,0 +1,54 @@
+// TEST: category callee-blame
+module ShiftCountU32AllWidths
+
+fn shl_u8(value: u8, count: u32) -> u8 vow {
+    requires: count < 8
+    ensures: result == value << count
+} {
+    value << count
+}
+
+fn shr_i32(value: i32, count: u32) -> i32 vow {
+    requires: count < 32
+    ensures: result == value >> count
+} {
+    value >> count
+}
+
+fn shl_i64(value: i64, count: u32) -> i64 vow {
+    requires: count < 64
+    ensures: result == value << count
+} {
+    value << count
+}
+
+fn shr_i64(value: i64, count: u32) -> i64 vow {
+    requires: count < 64
+    ensures: result == value >> count
+} {
+    value >> count
+}
+
+fn shl_u64(value: u64, count: u32) -> u64 vow {
+    requires: count < 64
+    ensures: result == value << count
+} {
+    value << count
+}
+
+fn shr_u64(value: u64, count: u32) -> u64 vow {
+    requires: count < 64
+    ensures: result == value >> count
+} {
+    value >> count
+}
+
+fn main() -> i32 {
+    shl_u8(1, 0);
+    shr_i32(1, 0);
+    shl_i64(1, 0);
+    shr_i64(1, 0);
+    shl_u64(1, 0);
+    shr_u64(1, 0);
+    0
+}

@@ -1,0 +1,10 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "u64 shift count must be u32 or u64"
+module U64ShiftCountWrongType
+
+fn main() -> i32 {
+    let value: u64 = 1;
+    let count: i64 = 3;
+    let shifted: u64 = value >> count;
+    0
+}

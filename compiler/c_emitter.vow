@@ -1263,6 +1263,22 @@ fn emit_u8_numeric_intrinsic(out: String, inst: IrInst) {
     out.push_str(line);
 }
 
+// A shift count must be in 0..width. The `>= 0` half rejects a negative
+// signed count, which the masking shift helpers (and Cranelift) would
+// otherwise silently reduce modulo the width. Keep byte-identical with the
+// Rust emitter in vow-verify/src/c_emitter.rs.
+fn cemit_shift_count_assert(count_id: i64, width: i64) -> String {
+    let count: String = i64_to_string(count_id);
+    let out: String = String::from("  __ESBMC_assert(v");
+    out.push_str(count);
+    out.push_str(String::from(" >= 0 && v"));
+    out.push_str(count);
+    out.push_str(String::from(" < "));
+    out.push_str(i64_to_string(width));
+    out.push_str(String::from(", \"integer shift count\");\n"));
+    out
+}
+
 fn emit_i32_numeric_intrinsic(out: String, inst: IrInst) {
     let name: String = inst.ds;
     let id_s: String = i64_to_string(inst.id);
@@ -1539,7 +1555,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, 
              inst.dv == ITY_I128() || inst.dv == ITY_U128());
         if dynamic_shift {
             let width: i64 = if inst.dv == ITY_I8() || inst.dv == ITY_U8() { 8 } else if inst.dv == ITY_I16() || inst.dv == ITY_U16() { 16 } else if inst.dv == ITY_I128() || inst.dv == ITY_U128() { 128 } else { 32 };
-            out.push_str(str5(String::from("  __ESBMC_assert(v"), i64_to_string(iargs[1]), String::from(" < "), i64_to_string(width), String::from(", \"integer shift count\");\n")));
+            out.push_str(cemit_shift_count_assert(iargs[1], width));
             let opname: String = if op == IOP_SHL() { String::from("shl") } else { String::from("shr") };
             let prefix: String = if inst.dv == ITY_I8() || inst.dv == ITY_I16() || inst.dv == ITY_I128() { String::from("i") } else { String::from("u") };
             let expr: String = String::from("  v");
@@ -1556,7 +1572,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, 
             expr.push_str(String::from(");\n"));
             out.push_str(expr);
         } else if inst.dk == IDATA_INTEGER() && inst.dv == ITY_I64() {
-            out.push_str(str3(String::from("  __ESBMC_assert(v"), i64_to_string(iargs[1]), String::from(" < 64, \"integer shift count\");\n")));
+            out.push_str(cemit_shift_count_assert(iargs[1], 64));
             let opname: String = if op == IOP_SHL() { String::from("shl") } else { String::from("shr") };
             out.push_str(str7(
                 String::from("  v"), i64_to_string(id), cemit_str2(String::from(" = __vow_"), cemit_str2(opname, String::from("_i64(v"))),
@@ -1564,7 +1580,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, 
                 String::from(");\n")
             ));
         } else if inst.dk == IDATA_INTEGER() && inst.dv == ITY_U64() {
-            out.push_str(str3(String::from("  __ESBMC_assert(v"), i64_to_string(iargs[1]), String::from(" < 64, \"integer shift count\");\n")));
+            out.push_str(cemit_shift_count_assert(iargs[1], 64));
             let opname: String = if op == IOP_SHL() { String::from("shl") } else { String::from("shr") };
             out.push_str(str7(
                 String::from("  v"), i64_to_string(id), cemit_str2(String::from(" = __vow_"), cemit_str2(opname, String::from("_u64(v"))),
@@ -1572,7 +1588,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, 
                 String::from(");\n")
             ));
         } else if inst.dk == IDATA_INTEGER() && inst.dv == ITY_I32() {
-            out.push_str(str3(String::from("  __ESBMC_assert(v"), i64_to_string(iargs[1]), String::from(" < 32, \"integer shift count\");\n")));
+            out.push_str(cemit_shift_count_assert(iargs[1], 32));
             let opname: String = if op == IOP_SHL() { String::from("shl") } else { String::from("shr") };
             out.push_str(str7(
                 String::from("  v"), i64_to_string(id), cemit_str2(String::from(" = __vow_"), cemit_str2(opname, String::from("_i32(v"))),

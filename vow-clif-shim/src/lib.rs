@@ -2201,7 +2201,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     set_val!(iid, val);
                 }
                 IOP_SHL => {
-                    if dk == IDATA_INTEGER && dv == ITY_U8 {
+                    if dk == IDATA_INTEGER && (dv == ITY_U8 || dv == ITY_I8) {
                         let out_of_range =
                             builder
                                 .ins()
@@ -2212,7 +2212,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     set_val!(iid, val);
                 }
                 IOP_SHR => {
-                    if dk == IDATA_INTEGER && dv == ITY_U8 {
+                    if dk == IDATA_INTEGER && (dv == ITY_U8 || dv == ITY_I8) {
                         let out_of_range =
                             builder
                                 .ins()

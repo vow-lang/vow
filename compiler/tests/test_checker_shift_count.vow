@@ -1,0 +1,210 @@
+module TestCheckerShiftCount
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use checker
+use env
+
+fn checked_diags(source: String) -> DiagCtx [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("shift_count.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < parsed.items.len() {
+        item_files.push(String::from("shift_count.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("shift_count.vow"));
+    check_module(check_env, parsed, item_files);
+    dctx
+}
+
+fn checked_error_count(source: String) -> i64 [io] {
+    let dctx: DiagCtx = checked_diags(source);
+    dctx.error_count
+}
+
+fn first_message(source: String) -> String [io] {
+    let dctx: DiagCtx = checked_diags(source);
+    if dctx.diags.len() == 0 { return String::from(""); }
+    let d: Diagnostic = dctx.diags[0];
+    d.message
+}
+
+fn literal_left_shift_source(count: String, op: String) -> String {
+    let src: String = String::from("module ShiftCount\nfn probe(s: ");
+    src.push_str(count);
+    src.push_str(String::from(") -> "));
+    src.push_str(count);
+    src.push_str(String::from(" { 1 "));
+    src.push_str(op);
+    src.push_str(String::from(" s }"));
+    src
+}
+
+fn literal_left_errors(count: String, op: String) -> i64 [io] {
+    checked_error_count(literal_left_shift_source(count, op))
+}
+
+fn shift_with_count_type(lhs: String, count: String, op: String) -> i64 [io] {
+    let src: String = String::from("module ShiftCount\nfn probe(x: ");
+    src.push_str(lhs);
+    src.push_str(String::from(", s: "));
+    src.push_str(count);
+    src.push_str(String::from(") -> "));
+    src.push_str(lhs);
+    src.push_str(String::from(" { x "));
+    src.push_str(op);
+    src.push_str(String::from(" s }"));
+    checked_error_count(src)
+}
+
+fn shift_with_const_count(lhs: String, count: String, op: String) -> i64 [io] {
+    let src: String = String::from("module ShiftCount\nfn probe(x: ");
+    src.push_str(lhs);
+    src.push_str(String::from(") -> "));
+    src.push_str(lhs);
+    src.push_str(String::from(" { x "));
+    src.push_str(op);
+    src.push_str(String::from(" "));
+    src.push_str(count);
+    src.push_str(String::from(" }"));
+    checked_error_count(src)
+}
+
+fn u32_count_accepted_at(lhs: String) -> bool [io] {
+    shift_with_count_type(lhs, String::from("u32"), String::from("<<")) == 0
+        && shift_with_count_type(lhs, String::from("u32"), String::from(">>")) == 0
+}
+
+fn check_u32_count_every_width() -> i32 [io] {
+    if !u32_count_accepted_at(String::from("i8")) { return 1; }
+    if !u32_count_accepted_at(String::from("u8")) { return 2; }
+    if !u32_count_accepted_at(String::from("i16")) { return 3; }
+    if !u32_count_accepted_at(String::from("u16")) { return 4; }
+    if !u32_count_accepted_at(String::from("i32")) { return 5; }
+    if !u32_count_accepted_at(String::from("u32")) { return 6; }
+    if !u32_count_accepted_at(String::from("i64")) { return 7; }
+    if !u32_count_accepted_at(String::from("u64")) { return 8; }
+    if !u32_count_accepted_at(String::from("i128")) { return 9; }
+    if !u32_count_accepted_at(String::from("u128")) { return 10; }
+    0
+}
+
+fn check_same_type_count() -> i32 [io] {
+    if shift_with_count_type(String::from("i64"), String::from("i64"), String::from("<<")) != 0 { return 11; }
+    if shift_with_count_type(String::from("u64"), String::from("u64"), String::from(">>")) != 0 { return 12; }
+    if shift_with_count_type(String::from("i128"), String::from("i128"), String::from("<<")) != 0 { return 13; }
+    if shift_with_count_type(String::from("u128"), String::from("u128"), String::from(">>")) != 0 { return 14; }
+    if shift_with_count_type(String::from("i32"), String::from("i32"), String::from("<<")) != 1 { return 15; }
+    if shift_with_count_type(String::from("u8"), String::from("u8"), String::from(">>")) != 1 { return 16; }
+    if shift_with_count_type(String::from("i16"), String::from("i16"), String::from("<<")) != 1 { return 17; }
+    0
+}
+
+fn check_other_count_types_rejected() -> i32 [io] {
+    if shift_with_count_type(String::from("i64"), String::from("u64"), String::from("<<")) != 1 { return 21; }
+    if shift_with_count_type(String::from("u64"), String::from("i64"), String::from(">>")) != 1 { return 22; }
+    if shift_with_count_type(String::from("i64"), String::from("i128"), String::from("<<")) != 1 { return 23; }
+    if shift_with_count_type(String::from("u128"), String::from("u64"), String::from(">>")) != 1 { return 24; }
+    if shift_with_count_type(String::from("i128"), String::from("i64"), String::from("<<")) != 1 { return 25; }
+    if shift_with_count_type(String::from("u8"), String::from("u64"), String::from("<<")) != 1 { return 26; }
+    if shift_with_count_type(String::from("u32"), String::from("i64"), String::from(">>")) != 1 { return 27; }
+    0
+}
+
+fn check_const_count_range() -> i32 [io] {
+    if shift_with_const_count(String::from("i64"), String::from("63"), String::from("<<")) != 0 { return 31; }
+    if shift_with_const_count(String::from("i64"), String::from("64"), String::from("<<")) != 1 { return 32; }
+    if shift_with_const_count(String::from("u64"), String::from("0"), String::from(">>")) != 0 { return 33; }
+    if shift_with_const_count(String::from("u64"), String::from("70"), String::from(">>")) != 1 { return 34; }
+    if shift_with_const_count(String::from("i128"), String::from("127"), String::from("<<")) != 0 { return 35; }
+    if shift_with_const_count(String::from("i128"), String::from("128"), String::from("<<")) != 1 { return 36; }
+    if shift_with_const_count(String::from("u128"), String::from("200"), String::from(">>")) != 1 { return 37; }
+    if shift_with_const_count(String::from("i64"), String::from("-1"), String::from("<<")) != 1 { return 38; }
+    if shift_with_const_count(String::from("u8"), String::from("8"), String::from("<<")) != 1 { return 39; }
+    if shift_with_const_count(String::from("u8"), String::from("7"), String::from("<<")) != 0 { return 40; }
+    0
+}
+
+fn check_wide_literal_count_range() -> i32 [io] {
+    if shift_with_const_count(String::from("u128"), String::from("18446744073709551619"), String::from("<<")) != 1 { return 41; }
+    if shift_with_const_count(String::from("i64"), String::from("18446744073709551619"), String::from(">>")) != 1 { return 42; }
+    if shift_with_const_count(String::from("u8"), String::from("18446744073709551619"), String::from("<<")) != 1 { return 43; }
+    if shift_with_const_count(String::from("u64"), String::from("18446744073709551615"), String::from("<<")) != 1 { return 44; }
+    if shift_with_const_count(String::from("i64"), String::from("9223372036854775809"), String::from("<<")) != 1 { return 45; }
+    if shift_with_const_count(String::from("u64"), String::from("9223372036854775809"), String::from(">>")) != 1 { return 46; }
+    if shift_with_const_count(String::from("u128"), String::from("340282366920938463463374607431768211455"), String::from(">>")) != 1 { return 47; }
+    if shift_with_const_count(String::from("i128"), String::from("-1"), String::from("<<")) != 1 { return 48; }
+    let message: String = first_message(literal_shift_probe(String::from("u128"), String::from("18446744073709551619")));
+    if !message.contains(String::from("shift count 18446744073709551619 is out of range for u128")) { return 49; }
+    0
+}
+
+fn literal_shift_probe(lhs: String, count: String) -> String {
+    let src: String = String::from("module ShiftCount\nfn probe(x: ");
+    src.push_str(lhs);
+    src.push_str(String::from(") -> "));
+    src.push_str(lhs);
+    src.push_str(String::from(" { x << "));
+    src.push_str(count);
+    src.push_str(String::from(" }"));
+    src
+}
+
+fn check_wrong_count_message() -> i32 [io] {
+    let wide: String = first_message(literal_shift_probe_with_type(String::from("i64"), String::from("u64")));
+    if !wide.contains(String::from("i64 shift count must be u32 or i64, found `u64`")) { return 51; }
+    let narrow: String = first_message(literal_shift_probe_with_type(String::from("u8"), String::from("i64")));
+    if !narrow.contains(String::from("u8 shift count must be u32, found `i64`")) { return 52; }
+    0
+}
+
+fn literal_shift_probe_with_type(lhs: String, count: String) -> String {
+    let src: String = String::from("module ShiftCount\nfn probe(x: ");
+    src.push_str(lhs);
+    src.push_str(String::from(", s: "));
+    src.push_str(count);
+    src.push_str(String::from(") -> "));
+    src.push_str(lhs);
+    src.push_str(String::from(" { x << s }"));
+    src
+}
+
+fn check_literal_left_counts() -> i32 [io] {
+    if literal_left_errors(String::from("u32"), String::from("<<")) != 0 { return 61; }
+    if literal_left_errors(String::from("i64"), String::from(">>")) != 0 { return 62; }
+    if literal_left_errors(String::from("u64"), String::from("<<")) != 0 { return 63; }
+    if literal_left_errors(String::from("i128"), String::from("<<")) != 0 { return 64; }
+    if literal_left_errors(String::from("u128"), String::from(">>")) != 0 { return 65; }
+    if literal_left_errors(String::from("i32"), String::from("<<")) != 1 { return 66; }
+    if literal_left_errors(String::from("i8"), String::from(">>")) != 1 { return 67; }
+    if literal_left_errors(String::from("u8"), String::from("<<")) != 1 { return 68; }
+    if literal_left_errors(String::from("i16"), String::from("<<")) != 1 { return 69; }
+    if literal_left_errors(String::from("u16"), String::from(">>")) != 1 { return 70; }
+    let message: String = first_message(literal_left_shift_source(String::from("i32"), String::from("<<")));
+    if !message.contains(String::from("i32 shift count must be u32, found `i32`")) { return 71; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let width_result: i32 = check_u32_count_every_width();
+    if width_result != 0 { return width_result; }
+    let same_type_result: i32 = check_same_type_count();
+    if same_type_result != 0 { return same_type_result; }
+    let other_result: i32 = check_other_count_types_rejected();
+    if other_result != 0 { return other_result; }
+    let range_result: i32 = check_const_count_range();
+    if range_result != 0 { return range_result; }
+    let wide_literal_result: i32 = check_wide_literal_count_range();
+    if wide_literal_result != 0 { return wide_literal_result; }
+    let message_result: i32 = check_wrong_count_message();
+    if message_result != 0 { return message_result; }
+    check_literal_left_counts()
+}

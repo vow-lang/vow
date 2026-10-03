@@ -2820,7 +2820,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         } else if expr_is_const_int(a, rhs_eid) && lhs_ty == ITY_U128() {
             operand_ty = ITY_U128();
         } else if is_bitwise && lhs_ty == ITY_I64() {
-            if rhs_ty != ITY_I64() {
+            let concrete_shift: bool = (op == BINOP_SHL() || op == BINOP_SHR()) && !expr_is_coercible_int_marker(a, lhs_eid);
+            if rhs_ty != ITY_I64() && !concrete_shift {
                 operand_ty = rhs_ty;
             }
         }

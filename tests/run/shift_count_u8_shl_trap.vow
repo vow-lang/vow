@@ -1,0 +1,16 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module ShiftCountU8ShlTrap
+
+fn shift(x: u8, count: u32) -> u8 {
+    x << count
+}
+
+fn eight() -> u32 {
+    8
+}
+
+fn main() -> i32 {
+    shift(1 as u8, eight());
+    0
+}

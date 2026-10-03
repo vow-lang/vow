@@ -1,0 +1,19 @@
+// TEST: stdout "8 8 8 1\n"
+module ShiftLiteralLeftCounts
+
+fn bit_u32(n: u32) -> u32 { 1 << n }
+fn bit_i64(n: i64) -> i64 { 1 << n }
+fn bit_u64(n: u64) -> u64 { 1 << n }
+fn bit_u128(n: u128) -> u128 { 1 << n }
+
+fn main() -> i32 [io] {
+    print_u64(bit_u32(3) as u64);
+    print_str(String::from(" "));
+    print_i64(bit_i64(3));
+    print_str(String::from(" "));
+    print_u64(bit_u64(3));
+    print_str(String::from(" "));
+    if bit_u128(3) == (8 as u128) { print_i64(1); } else { print_i64(0); }
+    print_str(String::from("\n"));
+    0
+}

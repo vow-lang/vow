@@ -1765,17 +1765,33 @@ integer widths. `>>` is **arithmetic** (sign-extending) for signed types
 (`i8`..`i128`) and **logical** (zero-extending) for unsigned types
 (`u8`..`u128`).
 
-**Shift count type.** The right operand of `<<` and `>>` is `u32`. Unsuffixed
-integer literals on the right side context-coerce to `u32`: given
-`let x: u8 = ...`, `x << 3` is well-typed (`3` coerces to `u32`). The left
-operand keeps its own integer type; the shift result has the left operand's
-type.
+**Shift count type.** The right operand of `<<` and `>>` is `u32` for every
+left-operand width (`i8`..`i128`, `u8`..`u128`): `let x: i64 = ...; let s: u32 = 3;`
+`x << s` is well-typed and has type `i64`. Unsuffixed integer literals on the
+right side context-coerce to `u32`: given `let x: u8 = ...`, `x << 3` is
+well-typed (`3` coerces to `u32`). The left operand keeps its own integer type;
+the shift result has the left operand's type. Any other count type is a
+`TypeMismatch`. For 64- and 128-bit left operands only, a count of the same
+type as the left operand (`i64 << i64`, `u64 >> u64`, `i128 << i128`,
+`u128 >> u128`) is also accepted, because existing 64-bit bit-manipulation code
+carries its count in the value's own type; narrow left operands accept `u32`
+only.
+An unsuffixed-literal left operand has no type of its own: with a non-literal
+count it takes the count's type, and the pair must satisfy the rule above. So
+`1 << n` is well-typed (and has type `u32`, `i64`, `u64`, ...) for a count `n`
+of type `u32`, `i64`, `u64`, `i128` or `u128`, and a `TypeMismatch` for any
+other count type (`i8`, `u8`, `i16`, `u16`, `i32`, `f64`, ...). Write `1u64 << n`
+to fix the shifted type explicitly. The literal is not range-checked against
+the count's type.
 
-**Shift count range.** A const-expression shift count `>= bit-width(LHS)` is a
-compile-time error (`ShiftCountOutOfRange`). For example, `(x: u8) << 8` does
-not compile. Dynamic shift counts (`x << n` where `n` is not a const
-expression) get a contract on the operation that ESBMC checks: the count must
-be less than the LHS width at the point of the shift.
+**Shift count range.** A const-expression shift count that is negative or
+`>= bit-width(LHS)` is a compile-time error (`ShiftCountOutOfRange`), at every
+width: `(x: u8) << 8` and `(x: i64) << 64` do not compile. Dynamic shift counts
+(`x << n` where `n` is not a const expression) get a check on the operation
+that ESBMC proves: the count must satisfy `0 <= count < width(LHS)` at the point
+of the shift, so a negative signed count is rejected as well. At runtime only
+8-bit shifts trap (`i8`/`u8` with count `>= 8` aborts with `ArithmeticOverflow`);
+wider shifts mask the count to the operand width, like the hardware shift.
 
 Unsuffixed literal coercion still applies for `&`, `|`, `^` operands: with
 `let x: u64 = ...`, `3 & x` and `x | 0xff` type-check because the literal
@@ -4396,7 +4412,7 @@ fn f(big: i64) -> u8 {
 ### ShiftCountOutOfRange
 
 **Phase:** Type Checker
-**Meaning:** A constant-expression shift count is greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) get a Vow contract on the operation and are checked by ESBMC and at runtime in debug mode.
+**Meaning:** A constant-expression shift count is negative or greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) are checked by ESBMC, which requires `0 <= count < width` at the shift (a negative signed count is a violation). At runtime only 8-bit shifts trap: an `i8`/`u8` shift whose count is `>= 8` aborts with `ArithmeticOverflow` in every build mode. Wider shifts are not trapped; the hardware shift masks the count to the operand width (`(x: i64) << 65` is `x << 1`), so only verification excludes them.
 
 ```vow
 fn f(x: u8) -> u8 {
@@ -7108,17 +7124,33 @@ integer widths. `>>` is **arithmetic** (sign-extending) for signed types
 (`i8`..`i128`) and **logical** (zero-extending) for unsigned types
 (`u8`..`u128`).
 
-**Shift count type.** The right operand of `<<` and `>>` is `u32`. Unsuffixed
-integer literals on the right side context-coerce to `u32`: given
-`let x: u8 = ...`, `x << 3` is well-typed (`3` coerces to `u32`). The left
-operand keeps its own integer type; the shift result has the left operand's
-type.
+**Shift count type.** The right operand of `<<` and `>>` is `u32` for every
+left-operand width (`i8`..`i128`, `u8`..`u128`): `let x: i64 = ...; let s: u32 = 3;`
+`x << s` is well-typed and has type `i64`. Unsuffixed integer literals on the
+right side context-coerce to `u32`: given `let x: u8 = ...`, `x << 3` is
+well-typed (`3` coerces to `u32`). The left operand keeps its own integer type;
+the shift result has the left operand's type. Any other count type is a
+`TypeMismatch`. For 64- and 128-bit left operands only, a count of the same
+type as the left operand (`i64 << i64`, `u64 >> u64`, `i128 << i128`,
+`u128 >> u128`) is also accepted, because existing 64-bit bit-manipulation code
+carries its count in the value's own type; narrow left operands accept `u32`
+only.
+An unsuffixed-literal left operand has no type of its own: with a non-literal
+count it takes the count's type, and the pair must satisfy the rule above. So
+`1 << n` is well-typed (and has type `u32`, `i64`, `u64`, ...) for a count `n`
+of type `u32`, `i64`, `u64`, `i128` or `u128`, and a `TypeMismatch` for any
+other count type (`i8`, `u8`, `i16`, `u16`, `i32`, `f64`, ...). Write `1u64 << n`
+to fix the shifted type explicitly. The literal is not range-checked against
+the count's type.
 
-**Shift count range.** A const-expression shift count `>= bit-width(LHS)` is a
-compile-time error (`ShiftCountOutOfRange`). For example, `(x: u8) << 8` does
-not compile. Dynamic shift counts (`x << n` where `n` is not a const
-expression) get a contract on the operation that ESBMC checks: the count must
-be less than the LHS width at the point of the shift.
+**Shift count range.** A const-expression shift count that is negative or
+`>= bit-width(LHS)` is a compile-time error (`ShiftCountOutOfRange`), at every
+width: `(x: u8) << 8` and `(x: i64) << 64` do not compile. Dynamic shift counts
+(`x << n` where `n` is not a const expression) get a check on the operation
+that ESBMC proves: the count must satisfy `0 <= count < width(LHS)` at the point
+of the shift, so a negative signed count is rejected as well. At runtime only
+8-bit shifts trap (`i8`/`u8` with count `>= 8` aborts with `ArithmeticOverflow`);
+wider shifts mask the count to the operand width, like the hardware shift.
 
 Unsuffixed literal coercion still applies for `&`, `|`, `^` operands: with
 `let x: u64 = ...`, `3 & x` and `x | 0xff` type-check because the literal
@@ -9743,7 +9775,7 @@ fn f(big: i64) -> u8 {
 ### ShiftCountOutOfRange
 
 **Phase:** Type Checker
-**Meaning:** A constant-expression shift count is greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) get a Vow contract on the operation and are checked by ESBMC and at runtime in debug mode.
+**Meaning:** A constant-expression shift count is negative or greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) are checked by ESBMC, which requires `0 <= count < width` at the shift (a negative signed count is a violation). At runtime only 8-bit shifts trap: an `i8`/`u8` shift whose count is `>= 8` aborts with `ArithmeticOverflow` in every build mode. Wider shifts are not trapped; the hardware shift masks the count to the operand width (`(x: i64) << 65` is `x << 1`), so only verification excludes them.
 
 ```vow
 fn f(x: u8) -> u8 {
