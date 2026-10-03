@@ -945,23 +945,30 @@ fn check_str_starts_with() -> i64 {
     0
 }
 
-fn check_wide_field_set_is_non_modelable() -> i64 {
+// Shared scaffold for the two check_wide_field_set_is_non_modelable cases below:
+// one arg (id 0, always ITY_PTR) plus a second value instruction stored through
+// IOP_FIELD_SET(). Mirrors the `shift_function` helper's parameterize-the-one-
+// differing-operand pattern used elsewhere in this file.
+fn field_set_test_function(id: i64, name: String, params: Vec<i64>, value_inst: IrInst) -> IrFunction {
     let insts: Vec<IrInst> = Vec::new();
     insts.push(mk_inst_arg(0, ITY_PTR(), 0));
-    insts.push(mk_inst_arg(1, ITY_I128(), 1));
+    insts.push(value_inst);
     let fs_args: Vec<i64> = Vec::new();
     fs_args.push(0);
     fs_args.push(1);
     insts.push(ir_inst_new(2, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), 0, 0, String::from("")));
-    insts.push(mk_inst_const_i64(3, 0));
-    insts.push(mk_inst_return(4, 3));
+    insts.push(mk_inst_return(3, 1));
 
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, insts));
-    let params: Vec<i64> = Vec::new();
-    params.push(ITY_PTR());
-    params.push(ITY_I128());
-    let f: IrFunction = mk_function(410, String::from("store_wide"), params, ITY_I64(), blocks);
+    mk_function(id, name, params, ITY_I64(), blocks)
+}
+
+fn check_wide_field_set_is_non_modelable() -> i64 {
+    let wide_params: Vec<i64> = Vec::new();
+    wide_params.push(ITY_PTR());
+    wide_params.push(ITY_I128());
+    let f: IrFunction = field_set_test_function(410, String::from("store_wide"), wide_params, mk_inst_arg(1, ITY_I128(), 1));
     let funcs: Vec<IrFunction> = Vec::new();
     funcs.push(f);
     let m: IrModule = mk_module(funcs);
@@ -972,19 +979,9 @@ fn check_wide_field_set_is_non_modelable() -> i64 {
     if !reason.contains(String::from("FieldSet at 128-bit width")) { return 411; }
 
     // Companion: the gate must reject only the wide FieldSet, not every FieldSet.
-    let narrow_insts: Vec<IrInst> = Vec::new();
-    narrow_insts.push(mk_inst_arg(0, ITY_PTR(), 0));
-    narrow_insts.push(mk_inst_const_i64(1, 0));
-    let narrow_fs_args: Vec<i64> = Vec::new();
-    narrow_fs_args.push(0);
-    narrow_fs_args.push(1);
-    narrow_insts.push(ir_inst_new(2, IOP_FIELD_SET(), ITY_UNIT(), narrow_fs_args, IDATA_FIELD(), 0, 0, String::from("")));
-    narrow_insts.push(mk_inst_return(3, 1));
-    let narrow_blocks: Vec<IrBlock> = Vec::new();
-    narrow_blocks.push(mk_block(0, narrow_insts));
     let narrow_params: Vec<i64> = Vec::new();
     narrow_params.push(ITY_PTR());
-    let narrow_f: IrFunction = mk_function(411, String::from("store_narrow"), narrow_params, ITY_I64(), narrow_blocks);
+    let narrow_f: IrFunction = field_set_test_function(411, String::from("store_narrow"), narrow_params, mk_inst_const_i64(1, 0));
     let narrow_funcs: Vec<IrFunction> = Vec::new();
     narrow_funcs.push(narrow_f);
     let narrow_m: IrModule = mk_module(narrow_funcs);
@@ -992,11 +989,14 @@ fn check_wide_field_set_is_non_modelable() -> i64 {
     0
 }
 
-fn check_string_matches_literal_at_oob_index_falls_back() -> i64 {
+// Shared scaffold for the two check_string_matches_literal_at_oob_index_falls_back
+// cases below: the only thing that differs between the OOB and in-range cases is
+// which string-pool index the IOP_CONST_STR() literal points at.
+fn matches_literal_test_function(id: i64, name: String, literal_idx: i64) -> IrFunction {
     let insts: Vec<IrInst> = Vec::new();
     insts.push(mk_inst_const_i64(0, 0));
     insts.push(mk_inst_const_i64(1, 0));
-    insts.push(ir_inst_new(2, IOP_CONST_STR(), ITY_PTR(), Vec::new(), IDATA_CONST_STR(), 1, 0, String::from("")));
+    insts.push(ir_inst_new(2, IOP_CONST_STR(), ITY_PTR(), Vec::new(), IDATA_CONST_STR(), literal_idx, 0, String::from("")));
     let call_args: Vec<i64> = Vec::new();
     call_args.push(0);
     call_args.push(1);
@@ -1006,7 +1006,11 @@ fn check_string_matches_literal_at_oob_index_falls_back() -> i64 {
 
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, insts));
-    let f: IrFunction = mk_function(420, String::from("matches_literal_oob"), Vec::new(), ITY_I64(), blocks);
+    mk_function(id, name, Vec::new(), ITY_I64(), blocks)
+}
+
+fn check_string_matches_literal_at_oob_index_falls_back() -> i64 {
+    let f: IrFunction = matches_literal_test_function(420, String::from("matches_literal_oob"), 1);
     let funcs: Vec<IrFunction> = Vec::new();
     funcs.push(f);
     let m: IrModule = mk_module(funcs);
@@ -1019,19 +1023,7 @@ fn check_string_matches_literal_at_oob_index_falls_back() -> i64 {
     if !c.contains(String::from("/* opcode Call not modelled */")) { return 420; }
 
     // Companion: an in-range index on the same shape must NOT fall back.
-    let insts2: Vec<IrInst> = Vec::new();
-    insts2.push(mk_inst_const_i64(0, 0));
-    insts2.push(mk_inst_const_i64(1, 0));
-    insts2.push(ir_inst_new(2, IOP_CONST_STR(), ITY_PTR(), Vec::new(), IDATA_CONST_STR(), 0, 0, String::from("")));
-    let call_args2: Vec<i64> = Vec::new();
-    call_args2.push(0);
-    call_args2.push(1);
-    call_args2.push(2);
-    insts2.push(mk_inst_call_extern(3, ITY_I64(), call_args2, String::from("__vow_string_matches_literal_at")));
-    insts2.push(mk_inst_return(4, 3));
-    let blocks2: Vec<IrBlock> = Vec::new();
-    blocks2.push(mk_block(0, insts2));
-    let f2: IrFunction = mk_function(421, String::from("matches_literal_in_range"), Vec::new(), ITY_I64(), blocks2);
+    let f2: IrFunction = matches_literal_test_function(421, String::from("matches_literal_in_range"), 0);
     let funcs2: Vec<IrFunction> = Vec::new();
     funcs2.push(f2);
     let m2: IrModule = mk_module(funcs2);
