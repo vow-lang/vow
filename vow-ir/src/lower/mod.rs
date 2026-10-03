@@ -1757,7 +1757,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 } else if contextual_narrow_literal_ty(Ty::U128) {
                     Ty::U128
                 } else if is_bitwise && lhs_ty == Ty::I64 {
-                    if rhs_ty != Ty::I64 { rhs_ty } else { lhs_ty }
+                    let concrete_shift =
+                        matches!(op, BinOp::Shl | BinOp::Shr) && !expr_is_integer_literal(lhs);
+                    if rhs_ty != Ty::I64 && !concrete_shift {
+                        rhs_ty
+                    } else {
+                        lhs_ty
+                    }
                 } else {
                     lhs_ty
                 };
@@ -6511,6 +6517,35 @@ fn rem_f64(a: f64, b: f64) -> f64 { a % b }
                 .unwrap_or_else(|| panic!("missing {opcode:?} in {func:#?}"));
             assert_eq!(arithmetic.ty, ty, "{}", func.name);
             assert_eq!(arithmetic.data, InstData::None, "{}", func.name);
+        }
+    }
+
+    #[test]
+    fn u32_shift_count_keeps_left_operand_type_at_every_width() {
+        let cases = [
+            ("i8", Ty::I8, IntegerType::I8),
+            ("u16", Ty::U16, IntegerType::U16),
+            ("i32", Ty::I32, IntegerType::I32),
+            ("i64", Ty::I64, IntegerType::I64),
+            ("u64", Ty::U64, IntegerType::U64),
+            ("i128", Ty::I128, IntegerType::I128),
+            ("u128", Ty::U128, IntegerType::U128),
+        ];
+        for (name, ir_ty, int_ty) in cases {
+            let source = format!(
+                "module ShiftCountLowering\n\n\
+                 fn shl(x: {name}, s: u32) -> {name} {{ x << s }}\n\
+                 fn shr(x: {name}, s: u32) -> {name} {{ x >> s }}\n"
+            );
+            let module = lower_source_to_module(&source, "shift_count_lowering.vow");
+            for (func, opcode) in module.functions.iter().zip([Opcode::Shl, Opcode::Shr]) {
+                let shift = insts_of(func)
+                    .into_iter()
+                    .find(|inst| inst.opcode == opcode)
+                    .unwrap_or_else(|| panic!("missing {opcode:?} for {name}:\n{func:#?}"));
+                assert_eq!(shift.data, InstData::Integer(int_ty), "{name} {opcode:?}");
+                assert_eq!(shift.ty, ir_ty, "{name} {opcode:?} result type");
+            }
         }
     }
 

@@ -1,0 +1,60 @@
+// TEST: stdout "-16\n25\n-1024\n32767\n-8\n536870911\n-128\n1\n1099511627776\n-4611686018427387904\n9223372036854775807\n1\n176\n171\n255\n128\n"
+module ShiftCountU32AllWidths
+
+fn shr_i8(x: i8, s: u32) -> i8 { x >> s }
+fn shr_u8(x: u8, s: u32) -> u8 { x >> s }
+fn shl_i16(x: i16, s: u32) -> i16 { x << s }
+fn shr_u16(x: u16, s: u32) -> u16 { x >> s }
+fn shr_i32(x: i32, s: u32) -> i32 { x >> s }
+fn shr_u32(x: u32, s: u32) -> u32 { x >> s }
+fn shr_i64(x: i64, s: u32) -> i64 { x >> s }
+fn shr_u64(x: u64, s: u32) -> u64 { x >> s }
+fn shl_i64(x: i64, s: u32) -> i64 { x << s }
+fn shl_u64(x: u64, s: u32) -> u64 { x << s }
+fn shl_i128(x: i128, s: u32) -> i128 { x << s }
+fn shr_i128(x: i128, s: u32) -> i128 { x >> s }
+fn shl_u128(x: u128, s: u32) -> u128 { x << s }
+fn shr_u128(x: u128, s: u32) -> u128 { x >> s }
+
+fn mid_byte_i128(v: i128) -> i64 {
+    u128_to_u8_wrap((v as u128) >> 64) as i64
+}
+
+fn mid_byte_u128(v: u128) -> i64 {
+    u128_to_u8_wrap(v >> 64) as i64
+}
+
+fn low_byte_u128(v: u128) -> i64 {
+    u128_to_u8_wrap(v) as i64
+}
+
+fn show(v: i64) [io] {
+    print_i64(v);
+    print_str(String::from("\n"));
+}
+
+fn main() -> i32 [io] {
+    let three: u32 = 3;
+    let thirty: u32 = 30;
+    let forty: u32 = 40;
+    let sixty_three: u32 = 63;
+    let sixty_eight: u32 = 68;
+    let one_twenty: u32 = 120;
+    show(shr_i8(-128, three) as i64);
+    show(shr_u8(200, three) as i64);
+    show(shl_i16(-128, three) as i64);
+    show(shr_u16(65535, 1) as i64);
+    show(shr_i32(-64, three) as i64);
+    show(shr_u32(4294967295, three) as i64);
+    show(shr_i64(-1024, three));
+    show(shr_u64(9223372036854775808, sixty_three) as i64);
+    show(shl_i64(1, forty));
+    show(shl_i64(-1, 62));
+    show(shr_u64(18446744073709551615, 1) as i64);
+    show(shr_u64(shl_u64(1, thirty), thirty) as i64);
+    show(mid_byte_i128(shl_i128(11, sixty_eight)));
+    show(mid_byte_u128(shl_u128(171, 64)));
+    show(mid_byte_i128(shr_i128(-1, sixty_eight)));
+    show(low_byte_u128(shr_u128(shl_u128(1, 127), one_twenty)));
+    0
+}

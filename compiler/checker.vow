@@ -2437,13 +2437,17 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 return CTY_I64();
             }
             let lhs_tag: i64 = ty_tag(e.ts, lhs_tid);
-            if (op == BINOP_SHL() || op == BINOP_SHR()) &&
-               (lhs_tag == CTY_I8() || lhs_tag == CTY_U8() || lhs_tag == CTY_I16() ||
-                lhs_tag == CTY_U16() || lhs_tag == CTY_I32() || lhs_tag == CTY_U32()) {
+            if (op == BINOP_SHL() || op == BINOP_SHR()) && ty_is_integer(e.ts, lhs_tid) {
                 let width: i64 = integer_tag_width(lhs_tag);
-                if ty_tag(e.ts, rhs_tid) != CTY_U32() && !ty_is_lit_int(e.ts, rhs_tid) && !is_opaque(rhs_tid) {
+                let same_type_count_ok: bool = width >= 64 && ty_tag(e.ts, rhs_tid) == lhs_tag;
+                if ty_tag(e.ts, rhs_tid) != CTY_U32() && !ty_is_lit_int(e.ts, rhs_tid) && !is_opaque(rhs_tid) && !same_type_count_ok {
                     let type_msg: String = ty_tag_name(lhs_tag);
-                    type_msg.push_str(String::from(" shift count must be u32"));
+                    if width >= 64 {
+                        type_msg.push_str(String::from(" shift count must be u32 or "));
+                        type_msg.push_str(ty_tag_name(lhs_tag));
+                    } else {
+                        type_msg.push_str(String::from(" shift count must be u32"));
+                    }
                     env_emit_error_code(e, EC_TYPE_MISMATCH(), type_msg, expr_span(a, rhs_eid));
                 }
                 if expr_is_const_int(a, rhs_eid) {

@@ -157,7 +157,7 @@ fn f(big: i64) -> u8 {
 ### ShiftCountOutOfRange
 
 **Phase:** Type Checker
-**Meaning:** A constant-expression shift count is greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) get a Vow contract on the operation and are checked by ESBMC and at runtime in debug mode.
+**Meaning:** A constant-expression shift count is negative or greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) get a Vow contract on the operation and are checked by ESBMC and at runtime in debug mode.
 
 ```vow
 fn f(x: u8) -> u8 {
