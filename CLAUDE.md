@@ -131,6 +131,26 @@ scripts/bootstrap.sh --skip-cargo         # skip cargo build if already built
 
 This builds `./target/release/vow` (stage 0), then uses it to compile and verify the self-hosted compiler, producing `build/vowc`. The Rust compiler (`./target/release/vow`) is only needed for this bootstrap step.
 
+### "Green locally" checklist claims must be pinned to the PR's final head SHA
+
+`.github/workflows/bootstrap.yml` only runs on push to `main` and nightly — it never runs on pull
+requests. No PR-time CI corroborates a "bootstrap is green" checklist claim; the first time a PR's
+actual final tree is verified by CI can be *after* it has already merged.
+
+For migration-epic (#1104/#1116) seam PRs and any other PR whose checklist asserts a green
+`scripts/bootstrap.sh` run, re-run `scripts/bootstrap.sh --skip-cargo --no-cache` against the PR's
+actual final head SHA — after the last push, not an earlier commit you happened to be looking at —
+immediately before ticking that checklist box, and record the checked SHA in the checklist line. A
+checklist claim written against an earlier commit and never re-checked after later commits land is
+not a green run of the tree that actually merges.
+
+`--no-cache` here is cheap defense in depth, not a fix for a confirmed cache bug: `VerifyCache`
+(`vow/src/cache.rs`) only ever persists `FAILED` verdicts, never `PROVEN` — a stale cache entry can
+make a build wrongly red, never wrongly green. Issue #1307 investigated a prior "green locally, red
+in CI" incident (#1291, a `span_len` postcondition violation caught by the first-ever post-merge
+Bootstrap run) and found the actual cause to be a PR description written before the contract-breaking
+commit landed and never revisited, not a cache defect.
+
 ## Canonical Source of Truth
 
 `docs/spec/` contains the authoritative specification for the Vow language and CLI:
