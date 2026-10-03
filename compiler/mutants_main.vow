@@ -426,7 +426,7 @@ fn write_outcomes_json(output_dir: String, sites: Vec<Site>, statuses: Vec<i64>,
         // Outcome.id is the position within THIS shard's mutants.json array,
         // per the schema. Use the local index `i` rather than the global
         // mutant id (which would only be valid for shard 0/1).
-        body.push_str(outcome_record_json(i, sites[i], statuses[i], tiers[i], oracle_mss[i]));
+        body.push_str(outcome_record_json(i, sites[i as u64], statuses[i as u64], tiers[i as u64], oracle_mss[i as u64]));
         i = i + 1;
     }
     body.push_str(String::from("\n]}\n"));
@@ -535,7 +535,7 @@ fn run_mutants_run(argv: Vec<String>) -> i32 [io, read, write] {
     let mut gid: i64 = 0;
     while gid < total_n {
         if (gid % shard_y) == shard_x {
-            shard_sites.push(all_sites[gid]);
+            shard_sites.push(all_sites[gid as u64]);
         }
         gid = gid + 1;
     }
@@ -553,7 +553,7 @@ fn run_mutants_run(argv: Vec<String>) -> i32 [io, read, write] {
     let mut t2_used_ms: i64 = 0;
     let mut i: i64 = 0;
     while i < n {
-        let s: Site = shard_sites[i];
+        let s: Site = shard_sites[i as u64];
         // diff/<id>.diff and logs/<id>.log filenames use the shard-local
         // index so they line up with `Outcome.id` in outcomes.json.
         let abs_path: String = join_workdir(workdir, s.file);
@@ -654,7 +654,7 @@ fn run_mutants_list(argv: Vec<String>) -> i32 [io, read] {
     let mut id: i64 = 0;
     while id < n {
         if (id % shard_y) == shard_x {
-            let line: String = site_to_json(sites[id]);
+            let line: String = site_to_json(sites[id as u64]);
             line.push_byte(10);
             print_str(line);
             emitted = emitted + 1;

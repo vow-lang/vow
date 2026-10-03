@@ -715,7 +715,7 @@ fn check_bounds_assert_signedness() -> i64 {
 
     let mut i: i64 = 0;
     while i < unsigned_tys.len() as i64 {
-        let ty: i64 = unsigned_tys[i];
+        let ty: i64 = unsigned_tys[i as u64];
         let base: i64 = 70 + i * 10;
         let a: i64 = check_bounds_assert_unsigned(vec_len, get, vec_label, ty, base);
         if a != 0 { return a; }
@@ -728,7 +728,7 @@ fn check_bounds_assert_signedness() -> i64 {
 
     let mut j: i64 = 0;
     while j < signed_tys.len() as i64 {
-        let ty: i64 = signed_tys[j];
+        let ty: i64 = signed_tys[j as u64];
         let base: i64 = 110 + j * 10;
         let a: i64 = check_bounds_assert_signed(vec_len, get, vec_label, ty, base);
         if a != 0 { return a; }

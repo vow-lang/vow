@@ -52,9 +52,9 @@ fn max_swap(data: Vec<i64>, i: i64, j: i64) vow {
     requires: i < data.len() as i64,
     requires: j < data.len() as i64
 } {
-    let tmp: i64 = data[i];
-    data[i] = data[j];
-    data[j] = tmp;
+    let tmp: i64 = data[i as u64];
+    data[i as u64] = data[j as u64];
+    data[j as u64] = tmp;
 }
 
 fn max_sift_up(data: Vec<i64>, start: i64) vow {
@@ -190,7 +190,7 @@ pub fn max_heap_pop(h: MaxHeap) -> MaxHeap vow {
 } {
     let d: Vec<i64> = h.data;
     let n: i64 = h.size;
-    let last: i64 = d[n - 1];
+    let last: i64 = d[(n - 1) as u64];
     d[0] = last;
     d.pop();
     if n > 1 {
