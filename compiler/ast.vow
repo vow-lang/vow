@@ -184,6 +184,7 @@ fn expr_int_hi(a: AstArena, eid: i64) -> u64 { expr_b(a, eid) as u64 }
 // `u128::to_string` for `Lit::Int` in vow-syntax/src/printer.rs. Long division
 // over four 32-bit limbs keeps every intermediate inside u64.
 fn u128_limbs_to_text(lo: u64, hi: u64) -> String {
+    if hi == 0u64 { return uint_to_string(lo); }
     let base: u64 = 4294967296u64;
     let limbs: Vec<u64> = Vec::new();
     limbs.push(hi / base);
