@@ -57,7 +57,8 @@ Decimal / Rational) work are separate subprojects and out of scope here.
    with literal coercion. Right-shift is arithmetic for signed types and
    logical for unsigned. A shift count that is a const expression `>= width`
    is a compile-time error (`ShiftCountOutOfRange`); dynamic shifts get a
-   runtime contract.
+   runtime contract (see the amendment to this decision below for what is
+   actually checked).
 
 7. **128-bit verification.** `i128`/`u128` are first-class for source, IR,
    codegen (Cranelift `I128`), and ESBMC (`__int128`). Predicates over 128-bit
