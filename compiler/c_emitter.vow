@@ -1991,9 +1991,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
     if ds == String::from("__vow_string_from_cstr")
         || ds == String::from("__vow_string_from_cstr_in_arena") {
         let ids: String = i64_to_string(id);
-        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
-        out.push_str(str4(String::from("  __ESBMC_assume(v"), ids,
-            String::from(".len < "), cemit_str2(i64_to_string(string_max), String::from(");\n"))));
+        emit_nondet_string_len(out, id, string_max);
         return;
     }
     if ds == String::from("__vow_string_literal") {
@@ -2013,9 +2011,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
                 return;
             }
         }
-        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
-        out.push_str(str4(String::from("  __ESBMC_assume(v"), ids,
-            String::from(".len < "), cemit_str2(i64_to_string(string_max), String::from(");\n"))));
+        emit_nondet_string_len(out, id, string_max);
         return;
     }
     if ds == String::from("__vow_string_from_raw_parts_copy") {
@@ -2037,9 +2033,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
     }
     if ds == String::from("__vow_string_from_i64") || ds == String::from("__vow_string_from_i64_in_arena") || ds == String::from("__vow_string_from_u64") || ds == String::from("__vow_string_from_u64_in_arena") {
         let ids: String = i64_to_string(id);
-        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_unsigned_long();\n")));
-        out.push_str(str4(String::from("  __ESBMC_assume(v"), ids,
-            String::from(".len < "), cemit_str2(i64_to_string(string_max), String::from(");\n"))));
+        emit_nondet_string_len(out, id, string_max);
         return;
     }
     if ds == String::from("__vow_string_parse_i64_opt")

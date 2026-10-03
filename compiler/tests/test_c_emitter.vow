@@ -671,9 +671,11 @@ fn check_bounds_assert_unsigned(len_extern: String, index_extern: String, label:
     let expected: String = str3(String::from("  __ESBMC_assert(v2 < v0.len, \""),
         label, String::from("\");\n"));
     if !c.contains(expected) { return base_code; }
-    if c.contains(String::from("v2 >= 0")) { return base_code + 1; }
-    if c.contains(String::from("(uint64_t)")) { return base_code + 1; }
-    if c.contains(String::from("(int64_t)v0.len")) { return base_code + 1; }
+    if c.contains(String::from("v2 >= 0"))
+        || c.contains(String::from("(uint64_t)"))
+        || c.contains(String::from("(int64_t)v0.len")) {
+        return base_code + 1;
+    }
     0
 }
 
