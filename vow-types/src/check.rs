@@ -6181,6 +6181,25 @@ mod tests {
     }
 
     #[test]
+    fn tuple_expression_in_contract_predicate_is_unsupported() {
+        for elems in [vec![int_lit_n(1), int_lit_n(2)], vec![]] {
+            let mut emitter = TestEmitter(vec![]);
+            let mut checker = new_checker(&mut emitter);
+            checker.check_contract_expr(&tuple_expr(elems));
+            assert_eq!(emitter.0.len(), 1, "{:?}", emitter.0);
+            assert_eq!(emitter.0[0].code, ErrorCode::UnsupportedFeature);
+        }
+    }
+
+    #[test]
+    fn tuple_expression_outside_contract_predicate_is_accepted() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_expr(&tuple_expr(vec![int_lit_n(1), int_lit_n(2)]));
+        assert!(!checker.has_errors(), "{:?}", emitter.0);
+    }
+
+    #[test]
     fn check_stmt_let_bare_literal_pattern_rejected() {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
