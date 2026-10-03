@@ -33,11 +33,11 @@ fn main() -> i32 {
     let mut add_signed: i64 = 0;
     let mut phi_unsigned: i64 = 0;
     let mut const_unsigned: i64 = 0;
-    let mut block_index: i64 = 0;
-    while block_index < function.blocks.len() as i64 {
+    let mut block_index: u64 = 0;
+    while block_index < function.blocks.len() {
         let block: IrBlock = function.blocks[block_index];
-        let mut inst_index: i64 = 0;
-        while inst_index < block.insts.len() as i64 {
+        let mut inst_index: u64 = 0;
+        while inst_index < block.insts.len() {
             let inst: IrInst = block.insts[inst_index];
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == String::from("__vow_vec_len") && inst.ty == ITY_U64() {
                 len_calls = len_calls + 1;
