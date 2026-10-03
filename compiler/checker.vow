@@ -429,7 +429,7 @@ fn check_map_slot_types(e: CheckEnv, name: String, key_tid: i64, val_tid: i64, s
         }
     }
     if val_tid < 0 { return; }
-    if is_linear_ty(e, val_tid) == 1 {
+    if !e.defer_map_linear && is_linear_ty(e, val_tid) == 1 {
         emit_map_linear_value_error(e, name, val_tid, span);
     }
     let vtag: i64 = ty_tag(e.ts, val_tid);
@@ -505,16 +505,18 @@ fn is_vec_raw_parts_copy_expr(a: AstArena, eid: i64) -> bool {
     arena_str(a, first_sid) == String::from("Vec") && arena_str(a, second_sid) == String::from("from_raw_parts_copy")
 }
 
-// Walk a resolved tid; if it is BTreeMap<K, V>, check that V is non-linear.
-// Called from the post-definition re-validation pass.
-fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
+// Walk a resolved tid; if it is HashMap<K, V> or BTreeMap<K, V>, check that V is
+// non-linear. The only linearity check for struct fields, enum payloads and
+// aliases (resolved with defer_map_linear set); runs once every definition is
+// complete. Mirrors the Rust Pass 1b-fixup.
+fn recheck_tid_map_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
     let tag: i64 = ty_tag(e.ts, tid);
     if tag == CTY_APPLIED() {
         let base: i64 = ty_a(e.ts, tid);
         let base_tag: i64 = ty_tag(e.ts, base);
         if base_tag == CTY_STRUCT() {
             let bname: String = ty_struct_name(e.ts, base);
-            if bname == String::from("BTreeMap") {
+            if bname == String::from("BTreeMap") || bname == String::from("HashMap") {
                 let lid: i64 = ty_b(e.ts, tid);
                 let nargs: i64 = ts_arg_len(e.ts, lid);
                 if nargs == 2 {
@@ -529,7 +531,7 @@ fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
         let an: i64 = ts_arg_len(e.ts, alid);
         let mut ai: i64 = 0;
         while ai < an {
-            recheck_tid_btreemap_linearity(e, ts_arg_get(e.ts, alid, ai), span);
+            recheck_tid_map_linearity(e, ts_arg_get(e.ts, alid, ai), span);
             ai = ai + 1;
         }
     }
@@ -538,12 +540,12 @@ fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
         let tn: i64 = ts_arg_len(e.ts, lid);
         let mut ti: i64 = 0;
         while ti < tn {
-            recheck_tid_btreemap_linearity(e, ts_arg_get(e.ts, lid, ti), span);
+            recheck_tid_map_linearity(e, ts_arg_get(e.ts, lid, ti), span);
             ti = ti + 1;
         }
     }
     if tag == CTY_REF() {
-        recheck_tid_btreemap_linearity(e, ty_a(e.ts, tid), span);
+        recheck_tid_map_linearity(e, ty_a(e.ts, tid), span);
     }
 }
 
@@ -586,7 +588,7 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
         i = i + 1;
     }
 
-    // Re-validate BTreeMap value linearity now that all struct/enum
+    // Validate map value linearity now that all struct/enum
     // definitions are complete. During register_struct, forward-referenced
     // structs may not have had their fields or is_linear flag populated.
     i = 0u64;
@@ -607,7 +609,7 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
                 let mut fi: i64 = 0;
                 while fi < nf {
                     let ftid: i64 = ts_arg_get(e.ts, ftid_lid, fi);
-                    recheck_tid_btreemap_linearity(e, ftid, sdef_span(a, id));
+                    recheck_tid_map_linearity(e, ftid, sdef_span(a, id));
                     if is_linear_owner_ty(e, ftid) == 1 {
                         let field_name: String = arena_str(a, list_get(a, fields_lid, fi * 2));
                         let ast_ftid: i64 = list_get(a, fields_lid, fi * 2 + 1);
@@ -634,7 +636,7 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
                     let mut pi: i64 = 0;
                     while pi < pn {
                         let ptid: i64 = ts_arg_get(e.ts, payload_lid, pi);
-                        recheck_tid_btreemap_linearity(e, ptid, edef_span(a, id));
+                        recheck_tid_map_linearity(e, ptid, edef_span(a, id));
                         pi = pi + 1;
                     }
                     vi = vi + 1;
@@ -644,7 +646,7 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
             let a: AstArena = m.arena;
             let alias_tid: i64 = env_lookup_alias(e, arena_str(a, alias_name_sid(a, id)));
             if alias_tid != -1 {
-                recheck_tid_btreemap_linearity(e, alias_tid, alias_span(a, id));
+                recheck_tid_map_linearity(e, alias_tid, alias_span(a, id));
             }
         }
         i = i + 1;
@@ -720,7 +722,9 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
 fn register_alias(e: CheckEnv, m: Module, aid: i64) [io] {
     let a: AstArena = m.arena;
     let name: String = arena_str(a, alias_name_sid(a, aid));
+    e.defer_map_linear = true;
     let tid: i64 = resolve_ast_ty(e, m, alias_type_tid(a, aid));
+    e.defer_map_linear = false;
     if tid != CTY_UNKNOWN() {
         env_define_alias(e, name, tid);
     }
@@ -815,7 +819,9 @@ fn register_struct(e: CheckEnv, m: Module, sid: i64) [io] {
         let fname: String = arena_str(a, fsid);
         let ast_ftid: i64 = list_get(a, fields_lid, i * 2 + 1);
         fnames.push(fname);
+        e.defer_map_linear = true;
         ftids.push(resolve_ast_ty(e, m, ast_ftid));
+        e.defer_map_linear = false;
         i = i + 1;
     }
     let is_linear: i64 = sdef_is_linear(a, sid);
@@ -842,7 +848,9 @@ fn register_enum(e: CheckEnv, m: Module, eid: i64) [io] {
         let mut fi: i64 = 0;
         while fi < n_fields {
             let ast_tid: i64 = list_get(a, payload_lid, fi);
+            e.defer_map_linear = true;
             let resolved: i64 = resolve_ast_ty(e, m, ast_tid);
+            e.defer_map_linear = false;
             resolved_fields.push(resolved);
             fi = fi + 1;
         }

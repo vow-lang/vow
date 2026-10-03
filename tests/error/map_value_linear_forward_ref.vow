@@ -1,0 +1,23 @@
+// TEST: error-code UnsupportedFeature
+// TEST: error-count 3
+// TEST: stderr "value type must be non-linear"
+module MapValueLinearForwardRef
+
+struct Holder {
+    forward_hash: HashMap<i64, Wrap>,
+    forward_btree: BTreeMap<i64, Wrap>,
+    direct_btree: BTreeMap<i64, Token>,
+}
+
+enum Wrap {
+    Has(Token),
+    Nope,
+}
+
+linear struct Token {
+    id: i64,
+}
+
+fn main() -> i32 {
+    0
+}
