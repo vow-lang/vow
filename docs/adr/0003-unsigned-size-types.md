@@ -177,6 +177,11 @@ against an unmodified compiler.
    dynamic shift counts, String offsets, and
    `examples/vec_bounds.vow` (Decision 4's case).
 
+   *Note, 2026-10-03.* The named-const survivor above no longer holds: a
+   module-level `const X: T = literal;` now accepts every integer type in both
+   compilers, so a `u64` const can be a `Vec` index or a `requires` bound
+   directly. The survivor list above is the state when the sweep ran.
+
 **What deliberately remains `i64`.** `String` offsets are `i64` in v1:
 `byte_at`, `substr`, `substring`, and `matches_literal_at`. `push_byte` takes a
 byte value in `0..=255` and is not a size at all, and `byte_at` returns a byte
