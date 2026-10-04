@@ -174,6 +174,34 @@ fn check_diagnostic_text() -> i32 [io] {
     0
 }
 
+fn only_hint(source: String) -> String [io] {
+    let diags: Vec<Diagnostic> = diagnostics_of(source);
+    if diags.len() != 1 { return String::from("<expected exactly one diagnostic>"); }
+    let d: Diagnostic = diags[0];
+    let hints: Vec<String> = d.hints;
+    if hints.len() != 1 { return String::from("<expected exactly one hint>"); }
+    hints[0]
+}
+
+fn check_diagnostic_hints() -> i32 [io] {
+    let key: String = String::from("use an integer type of at most 64 bits or `bool` as the key; hash or intern other keys to `u64` at the call site and keep a side table for the originals");
+    if only_hint(param_probe(String::from("HashMap<String, i64>"))) != key { return 101; }
+    let value: String = String::from("keep a 128-bit value as two `u64` halves under separate keys or in two maps; floats cannot be map values");
+    if only_hint(param_probe(String::from("HashMap<i64, i128>"))) != value { return 102; }
+    let linear_hint: String = String::from("the map copies values bitwise, so a linear value would be duplicated; keep it in a local binding and store an integer handle instead");
+    if only_hint(linear_param(String::from("HashMap<i64, Token>"))) != linear_hint { return 103; }
+    if only_hint(linear_param(String::from("BTreeMap<i64, Token>"))) != linear_hint { return 104; }
+    let infer: String = String::from("`Vec::new()`, `HashMap::new()` and `BTreeMap::new()` take their element types from the annotation, for example `let m: HashMap<i64, i64> = HashMap::new();`");
+    if only_hint(body_probe(String::from("let m = HashMap::new(); m.insert(1, 2); 0"))) != infer { return 105; }
+    let index: String = String::from("indexing is supported on Vec<T> only; read a map entry with `get`, which returns an `Option`");
+    if only_hint(body_probe(String::from("let m: HashMap<i64, i64> = HashMap::new(); let x: i64 = m[1]; x"))) != index { return 106; }
+    let bt_diags: Vec<Diagnostic> = diagnostics_of(param_probe(String::from("BTreeMap<String, i64>")));
+    let bt_first: Diagnostic = bt_diags[0];
+    let bt_hints: Vec<String> = bt_first.hints;
+    if bt_hints.len() != 0 { return 107; }
+    0
+}
+
 fn check_diagnostic_order() -> i32 [io] {
     let src: String = body_probe(String::from("let m: HashMap<(i64, i64), i64> = HashMap::new(); let x: i64 = m[1]; x"));
     let diags: Vec<Diagnostic> = diagnostics_of(src);
@@ -202,5 +230,7 @@ fn main() -> i32 [io] {
     if unannotated != 0 { return unannotated; }
     let text: i32 = check_diagnostic_text();
     if text != 0 { return text; }
+    let hints: i32 = check_diagnostic_hints();
+    if hints != 0 { return hints; }
     check_diagnostic_order()
 }

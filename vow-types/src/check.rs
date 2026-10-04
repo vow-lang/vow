@@ -1074,8 +1074,6 @@ impl<'e> Checker<'e> {
         });
     }
 
-    // Hints are Rust-only: the self-hosted checker emits no hints yet, and
-    // compiler parity compares error codes, not hints.
     fn emit_error_with_hints(
         &mut self,
         code: ErrorCode,

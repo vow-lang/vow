@@ -425,7 +425,10 @@ fn check_map_slot_types(e: CheckEnv, name: String, key_tid: i64, val_tid: i64, s
             let kmsg: String = String::from("HashMap key type `");
             kmsg.push_str(ty_full_display_name(e.ts, key_tid));
             kmsg.push_str(String::from("` is not supported: keys are compared by value as a single machine word"));
-            env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), kmsg, span);
+            env_emit_error_code_hint(
+                e, EC_UNSUPPORTED_FEATURE(), kmsg, span,
+                String::from("use an integer type of at most 64 bits or `bool` as the key; hash or intern other keys to `u64` at the call site and keep a side table for the originals")
+            );
         }
     }
     if val_tid < 0 { return; }
@@ -438,7 +441,10 @@ fn check_map_slot_types(e: CheckEnv, name: String, key_tid: i64, val_tid: i64, s
         vmsg.push_str(String::from(" value type `"));
         vmsg.push_str(ty_full_display_name(e.ts, val_tid));
         vmsg.push_str(String::from("` is not supported: map values occupy a single 64-bit integer slot"));
-        env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), vmsg, span);
+        env_emit_error_code_hint(
+            e, EC_UNSUPPORTED_FEATURE(), vmsg, span,
+            String::from("keep a 128-bit value as two `u64` halves under separate keys or in two maps; floats cannot be map values")
+        );
     }
 }
 
@@ -455,7 +461,10 @@ fn emit_map_linear_value_error(e: CheckEnv, name: String, val_tid: i64, span: i6
     } else {
         EC_UNSUPPORTED_FEATURE()
     };
-    env_emit_error_code(e, code, msg, span);
+    env_emit_error_code_hint(
+        e, code, msg, span,
+        String::from("the map copies values bitwise, so a linear value would be duplicated; keep it in a local binding and store an integer handle instead")
+    );
 }
 
 fn is_opaque(tid: i64) -> bool vow {
@@ -2837,7 +2846,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 let nmsg: String = String::from("cannot infer the collection type of the receiver of `");
                 nmsg.push_str(mname);
                 nmsg.push_str(String::from("`: annotate its binding with a full type"));
-                env_emit_error_code(e, EC_TYPE_MISMATCH(), nmsg, expr_span(a, eid));
+                env_emit_error_code_hint(
+                    e, EC_TYPE_MISMATCH(), nmsg, expr_span(a, eid),
+                    String::from("`Vec::new()`, `HashMap::new()` and `BTreeMap::new()` take their element types from the annotation, for example `let m: HashMap<i64, i64> = HashMap::new();`")
+                );
             }
             return recv_tid;
         }
@@ -3054,7 +3066,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let inmsg: String = String::from("index operation on non-indexable type `");
         inmsg.push_str(ty_full_display_name(e.ts, recv_tid));
         inmsg.push_str(String::from("`"));
-        env_emit_error_code(e, EC_TYPE_MISMATCH(), inmsg, expr_span(a, eid));
+        env_emit_error_code_hint(
+            e, EC_TYPE_MISMATCH(), inmsg, expr_span(a, eid),
+            String::from("indexing is supported on Vec<T> only; read a map entry with `get`, which returns an `Option`")
+        );
         return CTY_NEVER();
     }
 
