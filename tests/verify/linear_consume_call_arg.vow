@@ -1,0 +1,27 @@
+// TEST: category model-drift
+// A consume only discharges an ownership obligation, so a function that consumes
+// a linear value through a call argument is modeled like any other and its
+// contract is decided by the data flow alone.
+module LinearConsumeCallArg
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn finish(h: Handle) -> i64 vow {
+    ensures: result >= 0
+} {
+    let fd: i64 = h.fd;
+    drop(h);
+    if fd < 0 { 0 } else { fd }
+}
+
+fn forward(h: Handle) -> i64 vow {
+    ensures: result >= 0
+} {
+    finish(h)
+}
+
+fn main() -> i32 {
+    0
+}

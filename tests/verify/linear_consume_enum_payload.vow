@@ -1,0 +1,26 @@
+// TEST: category model-drift
+// A consume only discharges an ownership obligation, so a function that consumes
+// a linear value through an Option payload is modeled like any other and its
+// contract is decided by the data flow alone.
+module LinearConsumeEnumPayload
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn unwrap_fd(o: Option<Handle>) -> i64 vow {
+    ensures: result >= 0
+} {
+    match o {
+        Option::Some(h) => {
+            let fd: i64 = h.fd;
+            drop(h);
+            if fd < 0 { 0 } else { fd }
+        },
+        Option::None => 0,
+    }
+}
+
+fn main() -> i32 {
+    0
+}

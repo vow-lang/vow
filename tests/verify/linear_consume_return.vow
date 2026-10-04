@@ -1,0 +1,19 @@
+// TEST: category model-drift
+// A consume only discharges an ownership obligation, so a function that consumes
+// a linear value through the return path is modeled like any other and its
+// contract is decided by the data flow alone.
+module LinearConsumeReturn
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn make(fd: i64) -> Handle vow {
+    ensures: result.fd == fd
+} {
+    Handle { fd: fd }
+}
+
+fn main() -> i32 {
+    0
+}
