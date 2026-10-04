@@ -1,0 +1,17 @@
+// TEST: category callee-blame
+// TEST: counterexample-fn "same_length"
+// TEST: counterexample-blame callee
+// TEST: counterexample-vow-id 0
+// A substring is shorter than its source whenever the range does not cover it;
+// the length-only model must still refute a postcondition that says otherwise.
+module StringSubstringLengthWrong
+
+fn same_length(s: String, a: u64, b: u64) -> String vow {
+  ensures: result.len() == s.len()
+} {
+  s.substring(a, b)
+}
+
+fn main() -> i32 {
+  0
+}

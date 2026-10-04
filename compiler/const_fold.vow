@@ -88,6 +88,33 @@ fn fold_checked_ok(kind: i64, a: i64, b: i64, ty: i64) -> bool {
     exact && fold_normalize(r, ty) == r
 }
 
+fn fold_is_const_fn(const_fn_indices: Vec<i64>, fi: i64) -> bool {
+    let mut i: u64 = 0u64;
+    while i < const_fn_indices.len() {
+        if const_fn_indices[i] == fi { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// The raw 64-bit constant a constant-returning function (one constant
+// instruction then `Return`) yields. Mirrors the `ConstantValue` match in
+// `fold_const_inst` in vow-verify/src/const_fold.rs.
+fn const_fn_raw_bits(m: IrModule, fi: i64) -> i64 {
+    let f: IrFunction = m.functions[fi as u64];
+    let blk: IrBlock = f.blocks[0];
+    let insts: Vec<IrInst> = blk.insts;
+    let mut ii: u64 = 0u64;
+    while ii < insts.len() {
+        let inst: IrInst = insts[ii];
+        if inst.op == IOP_CONST_I32() || inst.op == IOP_CONST_I64() || inst.op == IOP_CONST_U64() {
+            return inst.dv;
+        }
+        ii = ii + 1;
+    }
+    0
+}
+
 fn fold_known(known: Vec<i64>, id: i64) -> bool {
     id >= 0 && id < known.len() as i64 && known[id as u64] == 1
 }
@@ -102,7 +129,7 @@ fn fold_known(known: Vec<i64>, id: i64) -> bool {
 // Result is indexed by instruction id. A pattern >= 2^63 saturates to i64::MAX
 // so every entry that is not -1 compares correctly against a model capacity.
 // -1 marks an instruction that is not a provable integer constant.
-fn build_const_value_by_id(f: IrFunction) -> Vec<i64> {
+fn build_const_value_by_id(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>) -> Vec<i64> {
     let blocks: Vec<IrBlock> = f.blocks;
     let known: Vec<i64> = Vec::new();
     let bits: Vec<i64> = Vec::new();
@@ -150,6 +177,11 @@ fn build_const_value_by_id(f: IrFunction) -> Vec<i64> {
                     let mut folded: bool = false;
                     if fold_is_leaf(inst) {
                         value = fold_normalize(inst.dv, inst.ty);
+                        folded = true;
+                    } else if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET()
+                        && (fold_width(inst.ty) != 0 || fold_is_ptr(inst.ty))
+                        && fold_is_const_fn(const_fn_indices, inst.dv) {
+                        value = fold_normalize(const_fn_raw_bits(m, inst.dv), inst.ty);
                         folded = true;
                     } else if kind >= 0 && fold_width(inst.ty) != 0 && iargs.len() >= 2 {
                         if fold_known(known, iargs[0]) && fold_known(known, iargs[1]) {

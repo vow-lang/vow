@@ -1,9 +1,11 @@
 use std::cell::OnceCell;
 use std::collections::HashMap;
 
-use vow_ir::{Function, Inst, InstData, IntegerSignedness, IntegerType, IntegerWidth, Opcode, Ty};
+use vow_ir::{
+    FuncId, Function, Inst, InstData, IntegerSignedness, IntegerType, IntegerWidth, Opcode, Ty,
+};
 
-use crate::c_emitter::{checked_integer_type, ir_ty_to_integer_type};
+use crate::c_emitter::{ConstantValue, checked_integer_type, ir_ty_to_integer_type};
 
 /// Wrap `bits` into the value range of `int_ty` (sign-extended when signed,
 /// zero-extended when unsigned), keeping a 64-bit pattern.
@@ -65,12 +67,28 @@ fn checked_const_bits(opcode: Opcode, a: u64, b: u64, int_ty: IntegerType) -> Op
     (normalize_const_bits(exact, int_ty) == exact).then_some(exact)
 }
 
-fn fold_const_inst(inst: &Inst, known: &HashMap<u32, u64>) -> Option<u64> {
+fn fold_const_inst(
+    inst: &Inst,
+    known: &HashMap<u32, u64>,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+) -> Option<u64> {
     if let Some(bits) = const_leaf_bits(inst) {
         return Some(bits);
     }
     let arg = |i: usize| inst.args.get(i).and_then(|a| known.get(&a.0)).copied();
     match inst.opcode {
+        Opcode::Call => {
+            let InstData::CallTarget(callee) = &inst.data else {
+                return None;
+            };
+            let raw = match const_fns.get(callee)? {
+                ConstantValue::I32(v) => i64::from(*v) as u64,
+                ConstantValue::I64(v) => *v as u64,
+                ConstantValue::U64(v) => *v,
+                ConstantValue::Bool(_) => return None,
+            };
+            Some(normalize_const_bits(raw, narrow_int_type(inst.ty)?))
+        }
         Opcode::WrappingAdd | Opcode::WrappingSub | Opcode::WrappingMul => {
             let int_ty = checked_integer_type(inst)?;
             let (a, b) = (arg(0)?, arg(1)?);
@@ -100,9 +118,13 @@ fn fold_const_inst(inst: &Inst, known: &HashMap<u32, u64>) -> Option<u64> {
 /// Constant integer value (as a type-normalized 64-bit pattern) of every
 /// instruction in `func` that provably always computes one: literals, wrapping
 /// and checked `+ - *` over constants, integer casts of constants, and a `Phi`
-/// whose every `Upsilon` carries the same constant. Facts only ever grow from
+/// whose every `Upsilon` carries the same constant, and calls of
+/// constant-returning functions (`const_fns`). Facts only ever grow from
 /// known operands, so the fixpoint is sound and cyclic phis stay unknown.
-fn fold_const_bits(func: &Function) -> HashMap<u32, u64> {
+fn fold_const_bits(
+    func: &Function,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+) -> HashMap<u32, u64> {
     let mut phi_sources: HashMap<u32, Vec<u32>> = HashMap::new();
     for block in &func.blocks {
         for inst in &block.insts {
@@ -129,7 +151,7 @@ fn fold_const_bits(func: &Function) -> HashMap<u32, u64> {
                             .then_some(first)
                     })
                 } else {
-                    fold_const_inst(inst, &known)
+                    fold_const_inst(inst, &known, const_fns)
                 };
                 if let Some(bits) = folded {
                     known.insert(inst.id.0, bits);
@@ -148,18 +170,21 @@ fn fold_const_bits(func: &Function) -> HashMap<u32, u64> {
 /// pays for the fixpoint.
 pub(crate) struct LazyConstBits<'a> {
     func: &'a Function,
+    const_fns: &'a HashMap<FuncId, ConstantValue>,
     bits: OnceCell<HashMap<u32, u64>>,
 }
 
 impl<'a> LazyConstBits<'a> {
-    pub(crate) fn new(func: &'a Function) -> Self {
+    pub(crate) fn new(func: &'a Function, const_fns: &'a HashMap<FuncId, ConstantValue>) -> Self {
         Self {
             func,
+            const_fns,
             bits: OnceCell::new(),
         }
     }
 
     pub(crate) fn get(&self) -> &HashMap<u32, u64> {
-        self.bits.get_or_init(|| fold_const_bits(self.func))
+        self.bits
+            .get_or_init(|| fold_const_bits(self.func, self.const_fns))
     }
 }

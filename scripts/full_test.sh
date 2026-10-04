@@ -864,6 +864,33 @@ else
 fi
 echo ""
 
+# ─── Section 2c: Verifier C Parity ────────────────────────────────
+
+# Both compilers must hand ESBMC byte-identical C for the same program: a fake
+# esbmc on PATH records what each one writes, and parity.py c diffs the sets of
+# distinct sources per function (scripts/parity_c.py).
+section_begin "Section 2c: Verifier C Parity"
+for vow_file in tests/verify/*.vow tests/verify-fail/*.vow tests/verify-skip/*.vow tests/verify-stress/*.vow; do
+    [ -f "$vow_file" ] || continue
+    c_parity_log="$TMPDIR/c_parity.log"
+    c_parity_status=0
+    python3 scripts/parity.py c "$RUST" "$SELF" "$vow_file" >"$c_parity_log" 2>&1 || c_parity_status=$?
+    if [ "$c_parity_status" -ne 0 ]; then
+        fail "verifier-c/$(basename "$(dirname "$vow_file")")/$(basename "$vow_file" .vow)" "$(head -40 "$c_parity_log")"
+    elif grep -q '^SKIP' "$c_parity_log"; then
+        # Only verify-skip fixtures may legitimately never reach ESBMC; anywhere
+        # else an empty capture means both compilers broke before verifying.
+        if [ "$(basename "$(dirname "$vow_file")")" = "verify-skip" ]; then
+            skip "verifier-c/verify-skip/$(basename "$vow_file" .vow)" "neither compiler invoked ESBMC"
+        else
+            fail "verifier-c/$(basename "$(dirname "$vow_file")")/$(basename "$vow_file" .vow)" "neither compiler invoked ESBMC"
+        fi
+    else
+        pass "verifier-c/$(basename "$(dirname "$vow_file")")/$(basename "$vow_file" .vow)"
+    fi
+done
+echo ""
+
 # ─── Section 3: Runtime Execution ──────────────────────────────────
 
 section_begin "Section 3: Runtime Execution"
