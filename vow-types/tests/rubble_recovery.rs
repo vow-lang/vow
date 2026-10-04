@@ -150,3 +150,54 @@ fn member_access_on_the_bottom_type_is_rejected_once_each() {
         );
     }
 }
+
+fn one_diagnostic_module(src: &str, label: &str) {
+    let diags = typecheck_source(src);
+    assert_eq!(
+        diags.len(),
+        1,
+        "{label}: expected exactly one diagnostic, got {:?}",
+        messages(&diags)
+    );
+}
+
+#[test]
+fn rubble_is_absorbed_by_operators_and_builtins() {
+    for (label, body) in [
+        ("question on rubble", "    let o: Option<i64> = nope?;"),
+        ("index on rubble", "    let x: i64 = nope[0];"),
+        ("pin_to_root on rubble", "    pin_to_root(nope);"),
+        ("pin_to_root arity", "    pin_to_root(v, v);"),
+        (
+            "unsigned negation then use",
+            "    let u: u64 = 1u64;\n    let n = -u;\n    let y: i64 = n + 1;",
+        ),
+        ("unknown struct literal", "    let b: i64 = Bar { x: 1 };"),
+        (
+            "unknown enum constructor",
+            "    let m: i64 = Missing::A(1);",
+        ),
+    ] {
+        one_diagnostic_module(&program(body), label);
+    }
+}
+
+#[test]
+fn rubble_in_a_postcondition_is_absorbed() {
+    let src = "module Test\n\nfn id(x: i64) -> i64 vow {\n    ensures: nope\n} {\n    x\n}\n\nfn main() -> i32 {\n    0\n}\n";
+    one_diagnostic_module(src, "ensures on rubble");
+}
+
+#[test]
+fn a_call_to_an_extern_function_yields_rubble() {
+    let src = "module Test\n\nextern \"C\" {\n    vow {\n        requires: true\n    }\n    fn external_thing(x: i64) -> i64;\n}\n\nfn main() -> i32 {\n    let y: String = external_thing(1);\n    0\n}\n";
+    let diags = typecheck_source(src);
+    assert_eq!(diags.len(), 1, "got {:?}", messages(&diags));
+    assert_eq!(diags[0].code, ErrorCode::UnsupportedFeature);
+}
+
+#[test]
+fn field_access_on_a_reference_to_a_non_struct_is_one_error() {
+    let src = "module Test\n\nfn f(r: &i64) -> i64 {\n    let x: i64 = r.field;\n    x\n}\n\nfn main() -> i32 {\n    0\n}\n";
+    one_diagnostic_module(src, "reference to non-struct");
+}

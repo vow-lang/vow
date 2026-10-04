@@ -269,6 +269,11 @@ mod tests {
         assert_eq!(Ty::Str.to_string(), "str");
         assert_eq!(Ty::Unit.to_string(), "()");
         assert_eq!(Ty::Never.to_string(), "!");
+        assert_eq!(Ty::Unknown.to_string(), "<error>");
+        assert!(Ty::Unknown.is_unknown());
+        assert!(Ty::Unknown.is_unknown_or_never());
+        assert!(Ty::Never.is_unknown_or_never());
+        assert!(!Ty::Never.is_unknown());
     }
 
     #[test]

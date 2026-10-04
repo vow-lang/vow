@@ -8341,6 +8341,20 @@ mod tests {
     }
 
     #[test]
+    fn field_access_on_an_unregistered_struct_yields_one_unknown() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.env.define("g", Ty::Struct("Ghost".to_string()));
+        let ty = checker.check_expr(&make_expr(ExprKind::FieldAccess {
+            base: Box::new(ident("g")),
+            field: "x".to_string(),
+        }));
+        assert_eq!(ty, Ty::Unknown);
+        let messages: Vec<&str> = emitter.0.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(messages, vec!["unknown struct `Ghost`"]);
+    }
+
+    #[test]
     fn method_call_on_an_unresolved_collection_is_a_clear_type_mismatch() {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
