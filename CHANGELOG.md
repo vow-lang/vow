@@ -1,3 +1,50 @@
+# [0.10.0](https://github.com/vow-lang/vow/compare/v0.9.0...v0.10.0) (2026-10-04)
+
+
+### Bug Fixes
+
+* **checker:** reject non-bool if conditions in self-hosted checker ([#1453](https://github.com/vow-lang/vow/issues/1453)) ([db4d719](https://github.com/vow-lang/vow/commit/db4d719a859758953a6cc78bd5c98b0c652986ea))
+* **compiler:** anchor self-hosted linear/module/string-literal diagnostics on real spans ([#1365](https://github.com/vow-lang/vow/issues/1365)) ([d4e51e3](https://github.com/vow-lang/vow/commit/d4e51e34041508542459b566e5df5854d475b45b))
+* **lower:** anchor self-hosted contract source.offset on the clause keyword ([#1367](https://github.com/vow-lang/vow/issues/1367)) ([d363e9f](https://github.com/vow-lang/vow/commit/d363e9ffbbf77cc072b793c44be53856a387e9ed))
+* **lower:** anchor self-hosted where-refinement source.offset on param name ([#1386](https://github.com/vow-lang/vow/issues/1386)) ([1d2b341](https://github.com/vow-lang/vow/commit/1d2b341813e462e950b0bb0c0fee01c79a0adb41))
+* **lower:** anchor spans on generic enum-constructor allocations ([#1438](https://github.com/vow-lang/vow/issues/1438)) ([791ec7a](https://github.com/vow-lang/vow/commit/791ec7a93912b749f51f40a4f433946b47c4eb2e))
+* **lower:** apply narrow-integer contextual width lowering uniformly ([#1439](https://github.com/vow-lang/vow/issues/1439)) ([63ee6d8](https://github.com/vow-lang/vow/commit/63ee6d884c537ef1dff1c4f938f3da24ac3eccfd))
+* **lower:** print contract text identically in both compilers ([#1482](https://github.com/vow-lang/vow/issues/1482)) ([cf9434c](https://github.com/vow-lang/vow/commit/cf9434cfee342b212e20316323d3db9d1e17da59))
+* **lower:** re-narrow if-expression marker branches to merge width ([#1394](https://github.com/vow-lang/vow/issues/1394)) ([b64bf73](https://github.com/vow-lang/vow/commit/b64bf731e959d6b9b0b04a24a070df5a11c99c4a))
+* **mutants:** stop vowc mutants' Tier-2 oracle from rebuilding the Rust compiler ([#1456](https://github.com/vow-lang/vow/issues/1456)) ([00e18ac](https://github.com/vow-lang/vow/commit/00e18ac0c5d92a11686e8634d981e2372f53622b))
+* **pair-review:** report a one-sided soundness gate failure beside a confirmed finding ([#1442](https://github.com/vow-lang/vow/issues/1442)) ([f1758f9](https://github.com/vow-lang/vow/commit/f1758f95b0a4dd411bc6883ec37b2637e9ee65e7))
+* **parser:** drop span_pack's verifier-bound start<65536 requires ([#1360](https://github.com/vow-lang/vow/issues/1360)) ([db008a1](https://github.com/vow-lang/vow/commit/db008a1d666c37e66ea1627b666a4da6dd3cfb22))
+* **parser:** span every self-hosted expression and type node ([#1355](https://github.com/vow-lang/vow/issues/1355)) ([1fe178f](https://github.com/vow-lang/vow/commit/1fe178f72567dfa034a732af7552a73562c5d9dd))
+* **region:** classify BTreeMap and parse_opt externs as heap-producing ([#1444](https://github.com/vow-lang/vow/issues/1444)) ([7f142ad](https://github.com/vow-lang/vow/commit/7f142ad3884cf6a2fb74c983ab2a8bac166dacce))
+* **runtime:** route map and fresh-aggregate builtins through inferred arenas ([#1481](https://github.com/vow-lang/vow/issues/1481)) ([0a3a4f8](https://github.com/vow-lang/vow/commit/0a3a4f808027730b55ca62314d15ec1e09c548a6))
+* **symphonika:** supply real newlines in impl.md's PR body ([#1441](https://github.com/vow-lang/vow/issues/1441)) ([898a426](https://github.com/vow-lang/vow/commit/898a426aa2b34d534d93c525fb7b89b068203e0a))
+* **syntax:** reject f64 literals that overflow to infinity ([#1354](https://github.com/vow-lang/vow/issues/1354)) ([63b2bea](https://github.com/vow-lang/vow/commit/63b2bea87c857c87090b80c3e84071aa5ef0fa40))
+* **test:** run test binaries directly and report signal deaths as failures ([#1349](https://github.com/vow-lang/vow/issues/1349)) ([636271c](https://github.com/vow-lang/vow/commit/636271c1e11e3242169dd445fc657993e12d61f0))
+* **test:** treat one-sided empty compiler output as FAIL, not SKIP ([#1466](https://github.com/vow-lang/vow/issues/1466)) ([39ca8a4](https://github.com/vow-lang/vow/commit/39ca8a4fcffbf09c4cc168cf550401d55fade137))
+* **types:** accept every integer type for const declarations in both compilers ([#1470](https://github.com/vow-lang/vow/issues/1470)) ([e9215be](https://github.com/vow-lang/vow/commit/e9215bed47a96c72105ca110a24beb76cd987844))
+* **types:** accept u32 shift counts for 64/128-bit values in both compilers ([#1471](https://github.com/vow-lang/vow/issues/1471)) ([8081b01](https://github.com/vow-lang/vow/commit/8081b016597b303d32527f1a7788d65b0b46bccd))
+* **types:** make HashMap::get return Option<V> in both compilers ([#1480](https://github.com/vow-lang/vow/issues/1480)) ([e502ea5](https://github.com/vow-lang/vow/commit/e502ea58a581a5e4148847f1d5ed8ec1eeb42697))
+* **types:** reject checked arithmetic on float operands ([#1377](https://github.com/vow-lang/vow/issues/1377)) ([6addc51](https://github.com/vow-lang/vow/commit/6addc51ebfb30a6568fd6d636e71a16ea9406030))
+* **types:** reject contract clauses that write through a shared argument ([#1455](https://github.com/vow-lang/vow/issues/1455)) ([cf03350](https://github.com/vow-lang/vow/commit/cf03350a675feb06325147a7cd8175aa5b92457c))
+* **types:** reject unsupported map key/value types and map indexing ([#1483](https://github.com/vow-lang/vow/issues/1483)) ([7f35380](https://github.com/vow-lang/vow/commit/7f3538000e95889969f69878112a699357459484))
+* **types:** reject Vec::get in both compilers instead of miscompiling it ([#1469](https://github.com/vow-lang/vow/issues/1469)) ([9b81f9d](https://github.com/vow-lang/vow/commit/9b81f9d6a635d9609d3ecb49b5b0a8de33a8ea8c))
+* **verify:** cover i64/u64/i128/u128 dynamic shift-count asserts ([#1395](https://github.com/vow-lang/vow/issues/1395)) ([82e4a71](https://github.com/vow-lang/vow/commit/82e4a71fe63e8ce02f230c2e3b3cf79725b33404))
+* **verify:** fail closed on non-finite ConstF64 in both C emitters ([#1379](https://github.com/vow-lang/vow/issues/1379)) ([aaa257a](https://github.com/vow-lang/vow/commit/aaa257abc62d8a1d17e660b789c3f49a713c24d5))
+* **verify:** reject a tainted VERIFICATION SUCCESSFUL from ESBMC ([#1362](https://github.com/vow-lang/vow/issues/1362)) ([8b12f0a](https://github.com/vow-lang/vow/commit/8b12f0adb58df40b5c47649e7d24f4a871120cf5))
+* **verify:** report bounded proofs, fold constant lengths, model null source ([#1484](https://github.com/vow-lang/vow/issues/1484)) ([24c16ee](https://github.com/vow-lang/vow/commit/24c16ee80a3cc3272c8a788c60a18f3ca2f44184))
+
+
+### Features
+
+* **catalogue:** harden Operation Catalogue validation and diagnostics ([#1358](https://github.com/vow-lang/vow/issues/1358)) ([b2666c3](https://github.com/vow-lang/vow/commit/b2666c3b82527de6d85b8e3229cd2667ef73ffb3))
+* **catalogue:** migrate fs/stdin/args/stderr builtins to operation catalogue ([#1356](https://github.com/vow-lang/vow/issues/1356)) ([8a3e466](https://github.com/vow-lang/vow/commit/8a3e4669338818d1fa748edc225d5e7a342d3675))
+* **mutants:** add a fast Tier-1.5 checkpoint before the full Tier-2 suite ([#1467](https://github.com/vow-lang/vow/issues/1467)) ([5a1fa3d](https://github.com/vow-lang/vow/commit/5a1fa3d8d737f004235f64fc6045a63c6579fc7e))
+* **types:** flip len() to u64 in both compilers and the C model ([#1443](https://github.com/vow-lang/vow/issues/1443)) ([cfadb52](https://github.com/vow-lang/vow/commit/cfadb523765f929654383712783b4ce2f6b5ea4f))
+* **types:** make from_raw_parts_copy length arguments u64 ([#1448](https://github.com/vow-lang/vow/issues/1448)) ([1857cf2](https://github.com/vow-lang/vow/commit/1857cf235308fe115f7fb89ca3e13babb35eb5ad))
+* **types:** require u64 for vec indices in both compilers ([#1468](https://github.com/vow-lang/vow/issues/1468)) ([623ec62](https://github.com/vow-lang/vow/commit/623ec62ff45c0abbe77beba128c265a7b380f2da))
+* **types:** require u64 String offsets and a u8 push_byte in both compilers ([#1486](https://github.com/vow-lang/vow/issues/1486)) ([f010efe](https://github.com/vow-lang/vow/commit/f010efeaae586c8aa8a10ef504222176ed511922))
+* **vow-perf:** add recommended_grid to mitigate threshold-plateau false fails ([#1396](https://github.com/vow-lang/vow/issues/1396)) ([c0134d3](https://github.com/vow-lang/vow/commit/c0134d36248666579506124b3d5237b9ecd7adeb))
+
 # [0.9.0](https://github.com/vow-lang/vow/compare/v0.8.0...v0.9.0) (2026-09-27)
 
 
