@@ -1,0 +1,49 @@
+// TEST: category model-drift
+// Length contracts on `substring` / `string_substr` results prove. The model
+// computes the result length in closed form (the clamping documented in
+// grammar.md); it elides the byte-copy loop when no instruction reads the
+// result's bytes, so ESBMC is not asked to unwind a 256-iteration loop to
+// prove a pure length property.
+module StringSubstringLength
+
+fn take_substring(s: String, a: u64, b: u64) -> String vow {
+  ensures: result.len() <= s.len()
+} {
+  s.substring(a, b)
+}
+
+fn take_substr(s: String, a: u64, n: u64) -> String vow {
+  ensures: result.len() <= s.len(),
+  ensures: result.len() <= n
+} {
+  string_substr(s, a, n)
+}
+
+fn exact_substring_len(s: String, a: u64, b: u64) -> u64 vow {
+  requires: a <= b,
+  requires: b <= s.len(),
+  ensures: result == b - a
+} {
+  s.substring(a, b).len()
+}
+
+fn exact_substr_len(s: String, a: u64, n: u64) -> u64 vow {
+  requires: a <= s.len(),
+  requires: n <= s.len() - a,
+  ensures: result == n
+} {
+  string_substr(s, a, n).len()
+}
+
+fn empty_when_start_past_end(s: String, a: u64) -> u64 vow {
+  requires: a >= s.len(),
+  ensures: result == 0
+} {
+  s.substring(a, a + 1).len()
+}
+
+fn main() -> i32 [io] {
+  let s: String = String::from("hello");
+  print_i64(exact_substring_len(s, 1, 3) as i64);
+  0
+}

@@ -2113,6 +2113,65 @@ fn emit_narrow_parse_option(out: String, id: i64, min_value: String, max_value: 
     out.push_str(String::from("); }\n"));
 }
 
+// True when `inst` consumes a string operand without ever reading its bytes:
+// the model tracks only `.len` for these (`len`, `eq` through its cached
+// nondeterministic verdict, `push_str`, `push_byte`, `clear`) or discards the
+// value (`Return` models every aggregate as `0`). Twin of
+// `string_use_reads_only_len` in vow-verify/src/c_emitter.rs.
+fn string_use_reads_only_len(inst: IrInst) -> bool {
+    if inst.op == IOP_RETURN() { return true; }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
+        let name: String = inst.ds;
+        return name == String::from("__vow_string_len")
+            || name == String::from("__vow_string_eq")
+            || name == String::from("__vow_string_push_str")
+            || name == String::from("__vow_string_push_str_in_arena")
+            || name == String::from("__vow_string_push_byte")
+            || name == String::from("__vow_string_push_byte_in_arena")
+            || name == String::from("__vow_string_clear");
+    }
+    false
+}
+
+fn string_bytes_observed(f: IrFunction, id: i64) -> bool {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: u64 = 0u64;
+    while bi < blocks.len() {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let mut ii: u64 = 0u64;
+        while ii < insts.len() {
+            let user: IrInst = insts[ii];
+            let uargs: Vec<i64> = user.args;
+            let mut ai: u64 = 0u64;
+            while ai < uargs.len() {
+                if uargs[ai] == id && !string_use_reads_only_len(user) { return true; }
+                ai = ai + 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}
+
+// The byte-copy loop of a `substr`/`substring` result, or a marker comment when
+// no instruction reads the result's bytes. The result length is already exact
+// (min/clamp arithmetic); a bounded copy loop longer than the incremental-BMC
+// step bound makes ESBMC answer `unknown` even for a pure length contract.
+fn emit_substring_copy(out: String, f: IrFunction, id: i64, source: String, start_tmp: String, string_max: i64) {
+    if !string_bytes_observed(f, id) {
+        out.push_str(String::from("  /* length-only substring: bytes never read, copy loop elided */\n"));
+        return;
+    }
+    let ids: String = i64_to_string(id);
+    out.push_str(str5(String::from("  for (uint64_t __i = 0; __i < v"), ids,
+        String::from(".len && __i < "), i64_to_string(string_max), String::from("; __i++) {\n")));
+    out.push_str(str5(String::from("    v"), ids, String::from(".data[__i] = v"), source, String::from(".data[")));
+    out.push_str(cemit_str2(start_tmp, String::from(" + __i];\n")));
+    out.push_str(String::from("  }\n"));
+}
+
 fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, const_value_by_id: Vec<i64>, m: IrModule, vec_max: i64, string_max: i64,
                   const_str_ids: Vec<i64>, const_str_idxs: Vec<i64>,
                   eq_lo: Vec<i64>, eq_hi: Vec<i64>) {
@@ -2356,11 +2415,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
         out.push_str(str5(String::from("  if ("), len_tmp, String::from(" > "), max_tmp, String::from(") { ")));
         out.push_str(str5(len_tmp, String::from(" = "), max_tmp, String::from("; }\n"), String::from("")));
         out.push_str(str5(String::from("  v"), ids, String::from(".len = "), len_tmp, String::from(";\n")));
-        out.push_str(str5(String::from("  for (uint64_t __i = 0; __i < v"), ids,
-            String::from(".len && __i < "), i64_to_string(string_max), String::from("; __i++) {\n")));
-        out.push_str(str5(String::from("    v"), ids, String::from(".data[__i] = v"), ss, String::from(".data[")));
-        out.push_str(cemit_str2(start_tmp, String::from(" + __i];\n")));
-        out.push_str(String::from("  }\n"));
+        emit_substring_copy(out, f, id, ss, start_tmp, string_max);
         return;
     }
     if ds == String::from("__vow_string_substring") || ds == String::from("__vow_string_substring_in_arena") {
@@ -2383,11 +2438,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
         out.push_str(cemit_str2(ss2, String::from(".len; }\n")));
         out.push_str(str5(String::from("  v"), ids2, String::from(".len = "), end_tmp2, String::from(" - ")));
         out.push_str(cemit_str2(start_tmp2, String::from(";\n")));
-        out.push_str(str5(String::from("  for (uint64_t __i = 0; __i < v"), ids2,
-            String::from(".len && __i < "), i64_to_string(string_max), String::from("; __i++) {\n")));
-        out.push_str(str5(String::from("    v"), ids2, String::from(".data[__i] = v"), ss2, String::from(".data[")));
-        out.push_str(cemit_str2(start_tmp2, String::from(" + __i];\n")));
-        out.push_str(String::from("  }\n"));
+        emit_substring_copy(out, f, id, ss2, start_tmp2, string_max);
         return;
     }
     if ds == String::from("__vow_string_print") {
@@ -2665,7 +2716,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
 
     let blocks: Vec<IrBlock> = f.blocks;
     let inst_ty_by_id: Vec<i64> = build_inst_ty_by_id(f);
-    let const_value_by_id: Vec<i64> = build_const_value_by_id(f);
+    let const_value_by_id: Vec<i64> = build_const_value_by_id(f, m, const_fn_indices);
     let n_blocks: u64 = blocks.len();
     let const_str_ids: Vec<i64> = Vec::new();
     let const_str_idxs: Vec<i64> = Vec::new();

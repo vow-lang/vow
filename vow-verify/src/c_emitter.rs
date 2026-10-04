@@ -16,6 +16,7 @@ use vow_ir::{
 pub enum ConstantValue {
     I32(i32),
     I64(i64),
+    U64(u64),
     Bool(bool),
 }
 
@@ -45,6 +46,7 @@ pub fn detect_constant_functions(module: &Module) -> HashMap<FuncId, ConstantVal
         let val = match (&const_inst.opcode, &const_inst.data) {
             (Opcode::ConstI32, InstData::ConstI32(v)) => ConstantValue::I32(*v),
             (Opcode::ConstI64, InstData::ConstI64(v)) => ConstantValue::I64(*v),
+            (Opcode::ConstU64, InstData::ConstU64(v)) => ConstantValue::U64(*v),
             (Opcode::ConstBool, InstData::ConstBool(v)) => ConstantValue::Bool(*v),
             _ => continue,
         };
@@ -1737,11 +1739,16 @@ fn emit_inst(
                              \x20 uint64_t __substr_len_{id} = (uint64_t)v{len};\n\
                              \x20 uint64_t __substr_max_len_{id} = (uint64_t)v{s}.len - __substr_start_{id};\n\
                              \x20 if (__substr_len_{id} > __substr_max_len_{id}) {{ __substr_len_{id} = __substr_max_len_{id}; }}\n\
-                             \x20 v{id}.len = __substr_len_{id};\n\
-                             \x20 for (uint64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
-                             \x20   v{id}.data[__i] = v{s}.data[__substr_start_{id} + __i];\n\
-                             \x20 }}\n",
+                             \x20 v{id}.len = __substr_len_{id};\n",
                         ));
+                        emit_substring_copy(
+                            id,
+                            s,
+                            &format!("__substr_start_{id}"),
+                            string_max,
+                            inst_by_id,
+                            out,
+                        );
                     }
                     "__vow_string_substring" | "__vow_string_substring_in_arena" => {
                         let (s_arg, start_arg, end_arg) =
@@ -1760,11 +1767,16 @@ fn emit_inst(
                              \x20 uint64_t __substring_end_{id} = (uint64_t)v{end};\n\
                              \x20 if (__substring_end_{id} < __substring_start_{id}) {{ __substring_end_{id} = __substring_start_{id}; }}\n\
                              \x20 if (__substring_end_{id} > (uint64_t)v{s}.len) {{ __substring_end_{id} = (uint64_t)v{s}.len; }}\n\
-                             \x20 v{id}.len = __substring_end_{id} - __substring_start_{id};\n\
-                             \x20 for (uint64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
-                             \x20   v{id}.data[__i] = v{s}.data[__substring_start_{id} + __i];\n\
-                             \x20 }}\n",
+                             \x20 v{id}.len = __substring_end_{id} - __substring_start_{id};\n",
                         ));
+                        emit_substring_copy(
+                            id,
+                            s,
+                            &format!("__substring_start_{id}"),
+                            string_max,
+                            inst_by_id,
+                            out,
+                        );
                     }
                     "__vow_string_parse_i64_opt"
                     | "__vow_string_parse_i64_opt_in_arena"
@@ -1991,6 +2003,9 @@ fn emit_inst(
                     ConstantValue::I64(v) => {
                         out.push_str(&format!("  v{} = {}LL;\n", id, v));
                     }
+                    ConstantValue::U64(v) => {
+                        out.push_str(&format!("  v{} = {}ULL;\n", id, v));
+                    }
                     ConstantValue::Bool(v) => {
                         out.push_str(&format!("  v{} = {};\n", id, *v as i32));
                     }
@@ -2117,6 +2132,60 @@ fn emit_unmodelled(inst: &Inst, out: &mut String) {
 /// `__vow_string_eq`, in IR-traversal order with linear deduplication. The
 /// caller emits one shared `_Bool __str_eq_<lo>_<hi>` per pair, and re-samples
 /// it whenever a modeled mutation touches `lo` or `hi`.
+/// True when `inst` consumes a string operand without ever reading its bytes:
+/// the model tracks only `.len` for these (`len`, `eq` through its cached
+/// nondeterministic verdict, `push_str`, `push_byte`, `clear`) or discards the
+/// value (`Return` models every aggregate as `0`).
+fn string_use_reads_only_len(inst: &Inst) -> bool {
+    if inst.opcode == Opcode::Return {
+        return true;
+    }
+    if let (Opcode::Call, InstData::CallExtern(name)) = (inst.opcode, &inst.data) {
+        return matches!(
+            name.as_str(),
+            "__vow_string_len"
+                | "__vow_string_eq"
+                | "__vow_string_push_str"
+                | "__vow_string_push_str_in_arena"
+                | "__vow_string_push_byte"
+                | "__vow_string_push_byte_in_arena"
+                | "__vow_string_clear"
+        );
+    }
+    false
+}
+
+/// Whether any instruction of the function may read the bytes of string `id`.
+fn string_bytes_observed(id: u32, inst_by_id: &HashMap<u32, &Inst>) -> bool {
+    inst_by_id
+        .values()
+        .any(|user| user.args.iter().any(|a| a.0 == id) && !string_use_reads_only_len(user))
+}
+
+/// The byte-copy loop of a `substr`/`substring` result, or a marker comment
+/// when no instruction reads the result's bytes. The result length is already
+/// exact (min/clamp arithmetic) before this point; a bounded copy loop longer
+/// than the incremental-BMC step bound makes ESBMC answer `unknown` even for a
+/// pure length contract, so the loop exists only where the bytes are observable.
+fn emit_substring_copy(
+    id: u32,
+    source: u32,
+    start_var: &str,
+    string_max: usize,
+    inst_by_id: &HashMap<u32, &Inst>,
+    out: &mut String,
+) {
+    if string_bytes_observed(id, inst_by_id) {
+        out.push_str(&format!(
+            "  for (uint64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
+             \x20   v{id}.data[__i] = v{source}.data[{start_var} + __i];\n\
+             \x20 }}\n"
+        ));
+    } else {
+        out.push_str("  /* length-only substring: bytes never read, copy loop elided */\n");
+    }
+}
+
 fn compute_string_eq_pairs(func: &Function) -> Vec<(u32, u32)> {
     let mut eq_pairs: Vec<(u32, u32)> = Vec::new();
     for block in &func.blocks {
@@ -2500,7 +2569,7 @@ pub fn emit_c_function_full(
             inst_by_id.insert(inst.id.0, inst);
         }
     }
-    let const_bits = LazyConstBits::new(func);
+    let const_bits = LazyConstBits::new(func, const_fns);
 
     // Block-visit tracking variables
     for block in &func.blocks {
@@ -5027,6 +5096,167 @@ mod tests {
         );
     }
 
+    /// Shift helpers come out width ascending, signed before unsigned, `shl`
+    /// before `shr` -- the order `compiler/c_emitter.vow` prints them in, so both
+    /// emitters produce the same preamble for the same module.
+    #[test]
+    fn model_helpers_are_emitted_in_canonical_order() {
+        let shift = |name: &str, ty: Ty, opcode: Opcode| {
+            make_func(
+                name,
+                vec![ty, Ty::U32],
+                ty,
+                vec![
+                    inst(0, Opcode::GetArg, ty, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::U32, vec![], InstData::ArgIndex(1)),
+                    inst(
+                        2,
+                        opcode,
+                        ty,
+                        vec![0, 1],
+                        InstData::Integer(ir_ty_to_integer_type(ty).unwrap()),
+                    ),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            )
+        };
+        let mut funcs = [
+            shift("shr_u8", Ty::U8, Opcode::Shr),
+            shift("shl_u16", Ty::U16, Opcode::Shl),
+            shift("shr_i8", Ty::I8, Opcode::Shr),
+            shift("shl_i8", Ty::I8, Opcode::Shl),
+            shift("shl_i64", Ty::I64, Opcode::Shl),
+        ];
+        for (i, f) in funcs.iter_mut().enumerate() {
+            f.id = FuncId(i as u32);
+        }
+        let refs: Vec<&Function> = funcs.iter().collect();
+        let c = emit_c_module(&refs, &HashMap::new(), &VerifyLimits::default());
+        let at = |needle: &str| {
+            c.find(needle)
+                .unwrap_or_else(|| panic!("missing `{needle}` in:\n{c}"))
+        };
+        let order = [
+            at("static inline int8_t __vow_shl_i8("),
+            at("static inline int8_t __vow_shr_i8("),
+            at("static inline uint8_t __vow_shr_u8("),
+            at("static inline uint16_t __vow_shl_u16("),
+            at("static inline int64_t __vow_shl_i64("),
+        ];
+        assert!(
+            order.windows(2).all(|w| w[0] < w[1]),
+            "order {order:?}: {c}"
+        );
+        assert!(!c.contains("& 63ULL"), "masks carry no suffix: {c}");
+    }
+
+    fn substring_fn(read_bytes: bool) -> Function {
+        let mut insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::U64, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::GetArg, Ty::U64, vec![], InstData::ArgIndex(2)),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0, 1, 2],
+                InstData::CallExtern("__vow_string_substring".to_string()),
+            ),
+        ];
+        if read_bytes {
+            insts.extend([
+                inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                inst(
+                    5,
+                    Opcode::Call,
+                    Ty::I64,
+                    vec![3, 4],
+                    InstData::CallExtern("__vow_string_byte_at".to_string()),
+                ),
+                inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
+            ]);
+        } else {
+            insts.extend([
+                inst(
+                    4,
+                    Opcode::Call,
+                    Ty::U64,
+                    vec![3],
+                    InstData::CallExtern("__vow_string_len".to_string()),
+                ),
+                inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+            ]);
+        }
+        let ret = if read_bytes { Ty::I64 } else { Ty::U64 };
+        make_func("sub", vec![Ty::Ptr, Ty::U64, Ty::U64], ret, insts)
+    }
+
+    /// The substring's length is exact before the copy; the byte-copy loop is
+    /// only emitted when an instruction reads the result's bytes.
+    #[test]
+    fn substring_copy_loop_follows_byte_reads() {
+        let limits = VerifyLimits::default();
+        let max = limits.string_max;
+        let len_only = emit_c_function(&substring_fn(false), &HashMap::new(), &limits);
+        assert!(
+            len_only.contains("/* length-only substring: bytes never read, copy loop elided */"),
+            "{len_only}"
+        );
+        assert!(!len_only.contains("v3.data[__i]"), "{len_only}");
+        assert!(
+            len_only.contains("v3.len = __substring_end_3 - __substring_start_3;"),
+            "{len_only}"
+        );
+
+        let observed = emit_c_function(&substring_fn(true), &HashMap::new(), &limits);
+        assert!(
+            observed.contains(&format!(
+                "for (uint64_t __i = 0; __i < v3.len && __i < {max}; __i++) {{"
+            )),
+            "{observed}"
+        );
+        assert!(
+            observed.contains("v3.data[__i] = v0.data[__substring_start_3 + __i];"),
+            "{observed}"
+        );
+        assert!(!observed.contains("copy loop elided"), "{observed}");
+    }
+
+    /// Integer constants print as the value of their IR type, whichever
+    /// representation a lowering stored them in.
+    #[test]
+    fn integer_constants_print_as_their_type() {
+        let func = make_func(
+            "consts",
+            vec![],
+            Ty::U64,
+            vec![
+                inst(
+                    0,
+                    Opcode::ConstU64,
+                    Ty::U64,
+                    vec![],
+                    InstData::ConstU64(u64::MAX),
+                ),
+                inst(
+                    1,
+                    Opcode::ConstU64,
+                    Ty::U64,
+                    vec![],
+                    InstData::ConstU64(10_000_000_000_000_000_000),
+                ),
+                inst(2, Opcode::ConstI32, Ty::U32, vec![], InstData::ConstI32(-1)),
+                inst(3, Opcode::ConstU8, Ty::I8, vec![], InstData::ConstU8(251)),
+                inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(c.contains("v0 = 18446744073709551615ULL;"), "{c}");
+        assert!(c.contains("v1 = 10000000000000000000ULL;"), "{c}");
+        assert!(c.contains("v2 = 4294967295;"), "{c}");
+        assert!(c.contains("v3 = UINT8_C(251);"), "{c}");
+    }
+
     #[test]
     fn emit_control_flow_branch_jump_unreachable() {
         use vow_ir::InstId;
@@ -6027,7 +6257,17 @@ mod tests {
                         origin: sp(),
                         region: RegionId::Root,
                     },
-                    inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+                    inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    Inst {
+                        id: InstId(5),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(3), InstId(4)],
+                        data: InstData::CallExtern("__vow_string_byte_at".to_string()),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
@@ -6090,7 +6330,17 @@ mod tests {
                         origin: sp(),
                         region: RegionId::Root,
                     },
-                    inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+                    inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    Inst {
+                        id: InstId(5),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(3), InstId(4)],
+                        data: InstData::CallExtern("__vow_string_byte_at".to_string()),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
@@ -8438,7 +8688,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &HashMap::new(),
-            &LazyConstBits::new(&dummy),
+            &LazyConstBits::new(&dummy, &const_fns),
             &empty_module,
             &VerifyLimits::default(),
             Ty::I64,
@@ -8482,7 +8732,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &HashMap::new(),
-            &LazyConstBits::new(&dummy),
+            &LazyConstBits::new(&dummy, &HashMap::new()),
             &empty_module,
             &VerifyLimits::default(),
             Ty::I64,
@@ -8893,6 +9143,47 @@ mod tests {
                 let f = raw_parts_fn_with_body(extern_name, body, len_id);
                 assert_fails_closed(&f, kind, what);
             }
+        }
+    }
+
+    /// A length that is the result of calling a constant-returning function
+    /// folds like a literal: a constant beyond the capacity fails closed, one
+    /// inside it stays an exact length.
+    #[test]
+    fn raw_parts_copy_const_fn_len_folds_like_a_literal() {
+        for (extern_name, kind, cap) in RAW_PARTS_CASES {
+            let call = test_inst(
+                1,
+                Opcode::Call,
+                Ty::U64,
+                &[],
+                InstData::CallTarget(FuncId(7)),
+            );
+            let f = raw_parts_fn_with_body(extern_name, vec![call], 1);
+
+            let beyond = HashMap::from([(FuncId(7), ConstantValue::U64(cap as u64 + 200))]);
+            let c = emit_c_function(&f, &beyond, &VerifyLimits::default());
+            let label = format!("{} capacity", kind.to_lowercase());
+            assert!(
+                c.contains(&format!("__ESBMC_assert(v0 == 0, \"{label}\");")),
+                "{kind}: a constant-returning call beyond the capacity fails closed: {c}"
+            );
+            assert!(!c.contains("__ESBMC_assume(v0 == 0 ||"), "{kind}: {c}");
+
+            let inside = HashMap::from([(FuncId(7), ConstantValue::U64(3))]);
+            let c = emit_c_function(&f, &inside, &VerifyLimits::default());
+            assert!(
+                c.contains("__ESBMC_assume(v0 == 0 || (v1 < "),
+                "{kind}: {c}"
+            );
+            assert!(!c.contains("vow:model-bound"), "{kind}: {c}");
+
+            let wide = HashMap::from([(FuncId(7), ConstantValue::I64(-1))]);
+            let c = emit_c_function(&f, &wide, &VerifyLimits::default());
+            assert!(
+                c.contains(&format!("__ESBMC_assert(v0 == 0, \"{label}\");")),
+                "{kind}: a negative i64 constant reinterprets as a huge u64: {c}"
+            );
         }
     }
 

@@ -1477,7 +1477,10 @@ fn choose_match_result_ty(
     arm_results: &[(BlockId, InstId, Ty, Vec<InstId>, Vec<InstId>)],
     arm_result_markers: &[bool],
 ) -> Ty {
-    if arm_results.iter().any(|(_, _, ty, _, _)| *ty == Ty::LinearPtr) {
+    if arm_results
+        .iter()
+        .any(|(_, _, ty, _, _)| *ty == Ty::LinearPtr)
+    {
         // Empty generic variants have no payload value from which lowering can
         // infer ownership. A linear sibling carries the checker-resolved
         // wrapper type for the merge, so the Phi must retain that obligation.
@@ -2082,10 +2085,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // Create a Phi for each mutated variable and wire the Upsilons each
             // branch emitted for it ahead of its result Upsilon and Jump.
             for (i, (name, _)) in mutations.iter().enumerate() {
-                let phi_ty = merge_phi_ty(
-                    ctx.inst_ty(then_mut_vals[i]),
-                    ctx.inst_ty(else_mut_vals[i]),
-                );
+                let phi_ty =
+                    merge_phi_ty(ctx.inst_ty(then_mut_vals[i]), ctx.inst_ty(else_mut_vals[i]));
                 let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
                 if let Some(&up) = then_mut_upsilons.get(i) {
                     backpatch_upsilon(ctx, then_upsilon_block, up, phi_id);
@@ -6598,6 +6599,67 @@ fn unsigned_max() -> u128 {
 
     fn insts_of(func: &Function) -> Vec<&Inst> {
         func.blocks.iter().flat_map(|block| &block.insts).collect()
+    }
+
+    fn lowered_function(source: &str, name: &str) -> Function {
+        lower_source_to_module(source, "lowering_probe.vow")
+            .functions
+            .into_iter()
+            .find(|func| func.name == name)
+            .unwrap_or_else(|| panic!("function `{name}`"))
+    }
+
+    /// A negated literal in a narrow context is one constant of that width, not
+    /// a `0 - literal` subtraction, so both compilers emit the same IR (and C).
+    #[test]
+    fn negated_narrow_literal_lowers_to_one_constant() {
+        let func = lowered_function(
+            "module M\nfn probe(x: i8) -> bool {\n  x == -5\n}\n",
+            "probe",
+        );
+        let insts = insts_of(&func);
+        assert!(
+            insts.iter().any(|i| i.opcode == Opcode::ConstU8
+                && i.ty == Ty::I8
+                && i.data == InstData::ConstU8(251)),
+            "{insts:?}"
+        );
+        assert!(
+            !insts
+                .iter()
+                .any(|i| i.opcode == Opcode::WrappingSub && i.ty == Ty::I8),
+            "{insts:?}"
+        );
+    }
+
+    /// Every branch of an `if` or `match` ends in its terminator: the Upsilons
+    /// feeding the Phis of mutated variables come before it, ahead of the
+    /// branch's own result Upsilon, in the same order as `compiler/lower.vow`.
+    #[test]
+    fn merge_upsilons_precede_the_branch_terminator() {
+        let sources = [
+            "module M\nfn probe(c: bool) -> u64 {\n  let mut n: u64 = 1;\n  if c {\n    n = 2;\n  }\n  n\n}\n",
+            "module M\nfn probe(o: Option<u64>) -> u64 {\n  let mut n: u64 = 1;\n  match o {\n    Option::Some(v) => {\n      n = v;\n    },\n    Option::None => {\n      n = 3;\n    },\n  }\n  n\n}\n",
+        ];
+        for source in sources {
+            let func = lowered_function(source, "probe");
+            let mut mutation_upsilons = 0;
+            for block in &func.blocks {
+                let terminal = block.insts.iter().position(|i| i.opcode.is_terminal());
+                if let Some(at) = terminal {
+                    assert_eq!(at, block.insts.len() - 1, "{source}: {block:?}");
+                }
+                let jump_at = block.insts.iter().position(|i| i.opcode == Opcode::Jump);
+                if let Some(at) = jump_at
+                    && at >= 2
+                    && block.insts[at - 1].opcode == Opcode::Upsilon
+                    && block.insts[at - 2].opcode == Opcode::Upsilon
+                {
+                    mutation_upsilons += 1;
+                }
+            }
+            assert!(mutation_upsilons >= 2, "{source}: {func:?}");
+        }
     }
 
     fn lowered_probe(source: &str) -> Function {

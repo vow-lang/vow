@@ -1145,7 +1145,7 @@ fn check_const_value_by_id_table() -> i64 {
     blocks.push(mk_block(0, insts));
     let f: IrFunction = mk_function(30, String::from("const_lens"), Vec::new(), ITY_UNIT(), blocks);
 
-    let table: Vec<i64> = build_const_value_by_id(f);
+    let table: Vec<i64> = build_const_value_by_id(f, mk_module(Vec::new()), Vec::new());
     if table.len() != 6 { return 260; }
     if raw_parts_const_len_exceeds_model(table, 0, 16) { return 261; }
     if raw_parts_const_len_exceeds_model(table, 1, 16) { return 262; }
@@ -1159,7 +1159,7 @@ fn check_const_value_by_id_table() -> i64 {
     if raw_parts_const_len_exceeds_model(table, 0 - 1, 16) { return 270; }
 
     let empty: IrFunction = mk_function(31, String::from("empty_lens"), Vec::new(), ITY_UNIT(), Vec::new());
-    if build_const_value_by_id(empty).len() != 0 { return 271; }
+    if build_const_value_by_id(empty, mk_module(Vec::new()), Vec::new()).len() != 0 { return 271; }
     0
 }
 
@@ -1351,6 +1351,154 @@ fn check_string_matches_literal_at_oob_index_falls_back() -> i64 {
     0
 }
 
+fn first_index(hay: String, needle: String) -> i64 {
+    let n: u64 = needle.len();
+    let h: u64 = hay.len();
+    if n > h { return 0 - 1; }
+    let mut i: u64 = 0u64;
+    while i + n <= h {
+        if hay.substring(i, i + n) == needle { return i as i64; }
+        i = i + 1u64;
+    }
+    0 - 1
+}
+
+// Shift and checked-arithmetic helpers are emitted width ascending, signed
+// before unsigned, `shl` before `shr` -- the order `ModelHelpers` in
+// vow-verify/src/c_emitter.rs keys its sets by -- so both emitters print the
+// same preamble for the same module.
+fn check_model_helpers_use_canonical_order() -> i64 {
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(shift_function(60, String::from("shr_u8"), ITY_U8(), IOP_SHR()));
+    funcs.push(shift_function(61, String::from("shl_u16"), ITY_U16(), IOP_SHL()));
+    funcs.push(shift_function(62, String::from("shr_i8"), ITY_I8(), IOP_SHR()));
+    funcs.push(shift_function(63, String::from("shl_i8"), ITY_I8(), IOP_SHL()));
+    funcs.push(shift_function(64, String::from("shl_i64"), ITY_I64(), IOP_SHL()));
+    let c: String = emit_c_module(mk_module(funcs), 16, 16, 16, 16);
+    let a: i64 = first_index(c, String::from("static inline int8_t __vow_shl_i8("));
+    let b: i64 = first_index(c, String::from("static inline int8_t __vow_shr_i8("));
+    let d: i64 = first_index(c, String::from("static inline uint8_t __vow_shr_u8("));
+    let e: i64 = first_index(c, String::from("static inline uint16_t __vow_shl_u16("));
+    let g: i64 = first_index(c, String::from("static inline int64_t __vow_shl_i64("));
+    if a < 0 || b < 0 || d < 0 || e < 0 || g < 0 { return 600; }
+    if !(a < b) { return 601; }
+    if !(b < d) { return 602; }
+    if !(d < e) { return 603; }
+    if !(e < g) { return 604; }
+    if c.contains(String::from("& 63ULL")) { return 605; }
+    0
+}
+
+fn substring_function(id: i64, read_bytes: bool) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_U64(), 1));
+    insts.push(mk_inst_arg(2, ITY_U64(), 2));
+    let sub_args: Vec<i64> = Vec::new();
+    sub_args.push(0);
+    sub_args.push(1);
+    sub_args.push(2);
+    insts.push(mk_inst_call_extern(3, ITY_PTR(), sub_args, String::from("__vow_string_substring")));
+    let use_args: Vec<i64> = Vec::new();
+    use_args.push(3);
+    if read_bytes {
+        insts.push(mk_inst_const_i64(4, 0));
+        use_args.push(4);
+        insts.push(mk_inst_call_extern(5, ITY_I64(), use_args, String::from("__vow_string_byte_at")));
+        insts.push(mk_inst_return(6, 5));
+    } else {
+        insts.push(mk_inst_call_extern(4, ITY_U64(), use_args, String::from("__vow_string_len")));
+        insts.push(mk_inst_return(5, 4));
+    }
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    params.push(ITY_U64());
+    params.push(ITY_U64());
+    mk_function(id, String::from("sub"), params, { if read_bytes { ITY_I64() } else { ITY_U64() } }, blocks)
+}
+
+// The substring's length is exact before the copy; the byte-copy loop is only
+// emitted when an instruction reads the result's bytes. Mirrors
+// substring_copy_loop_follows_byte_reads in vow-verify/src/c_emitter.rs.
+fn check_substring_copy_loop_follows_byte_reads() -> i64 {
+    let len_funcs: Vec<IrFunction> = Vec::new();
+    len_funcs.push(substring_function(0, false));
+    let len_c: String = emit_c_module(mk_module(len_funcs), 16, 16, 16, 16);
+    if !len_c.contains(String::from("/* length-only substring: bytes never read, copy loop elided */")) { return 610; }
+    if len_c.contains(String::from("for (uint64_t __i = 0; __i < v3.len")) { return 611; }
+    if !len_c.contains(String::from("v3.len = __substring_end_3 - __substring_start_3;")) { return 612; }
+
+    let byte_funcs: Vec<IrFunction> = Vec::new();
+    byte_funcs.push(substring_function(0, true));
+    let byte_c: String = emit_c_module(mk_module(byte_funcs), 16, 16, 16, 16);
+    if !byte_c.contains(String::from("for (uint64_t __i = 0; __i < v3.len && __i < 16; __i++) {")) { return 613; }
+    if !byte_c.contains(String::from("v3.data[__i] = v0.data[__substring_start_3 + __i];")) { return 614; }
+    if byte_c.contains(String::from("copy loop elided")) { return 615; }
+    0
+}
+
+// A length that is the result of calling a constant-returning function is
+// folded like a literal: a constant beyond the capacity fails closed, one
+// inside it stays an exact length. Mirrors
+// raw_parts_copy_const_fn_len_folds_like_a_literal in
+// vow-verify/src/c_emitter.rs.
+fn const_fn_len_module(value: i64, extern_name: String) -> String {
+    let cap_insts: Vec<IrInst> = Vec::new();
+    cap_insts.push(fold_const_u64(0, value));
+    cap_insts.push(mk_inst_return(1, 0));
+    let cap_blocks: Vec<IrBlock> = Vec::new();
+    cap_blocks.push(mk_block(0, cap_insts));
+
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    insts.push(mk_inst_call_target(1, ITY_U64(), Vec::new(), 0));
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(0);
+    call_args.push(1);
+    insts.push(mk_inst_call_extern(100, ITY_PTR(), call_args, extern_name));
+    insts.push(mk_inst_return(101, 100));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_I64());
+
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(0, String::from("capacity"), Vec::new(), ITY_U64(), cap_blocks));
+    funcs.push(mk_function(1, String::from("raw_parts"), params, ITY_PTR(), blocks));
+    emit_c_module(mk_module(funcs), 16, 16, 16, 16)
+}
+
+fn check_const_fn_len_folds_like_a_literal(extern_name: String, label: String, base_code: i64) -> i64 {
+    let beyond: String = const_fn_len_module(500, extern_name);
+    if !beyond.contains(String::from("v1 = 500ULL;")) { return base_code; }
+    if !fails_closed(beyond, label) { return base_code + 1; }
+    let inside: String = const_fn_len_module(3, extern_name);
+    if !keeps_assumption(inside) { return base_code + 2; }
+    if inside.contains(String::from("vow:model-bound")) { return base_code + 3; }
+    0
+}
+
+fn check_u64_literals_print_as_unsigned() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(fold_const_u64(0, 0 - 1));
+    insts.push(fold_const_u64(1, 0 - 8446744073709551616));
+    insts.push(ir_inst_new(2, IOP_CONST_I32(), ITY_U32(), Vec::new(), IDATA_CONST_I32(), 0 - 1, 0, String::from("")));
+    insts.push(ir_inst_new(3, IOP_CONST_U8(), ITY_I8(), Vec::new(), IDATA_CONST_U8(), 0 - 5, 0, String::from("")));
+    insts.push(mk_inst_return(4, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(0, String::from("consts"), Vec::new(), ITY_U64(), blocks));
+    let c: String = emit_c_module(mk_module(funcs), 16, 16, 16, 16);
+    if !c.contains(String::from("v0 = 18446744073709551615ULL;")) { return 620; }
+    if !c.contains(String::from("v1 = 10000000000000000000ULL;")) { return 621; }
+    if !c.contains(String::from("v2 = 4294967295;")) { return 622; }
+    if !c.contains(String::from("v3 = UINT8_C(251);")) { return 623; }
+    0
+}
+
 fn main() -> i32 {
     let r1: i64 = check_name_modelable_and_mangled(String::from("abs"), 7, 1);
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -1442,5 +1590,15 @@ fn main() -> i32 {
     if r43 != 0 { return i64_to_i32_wrap(r43); }
     let r44: i64 = check_collection_length_markers(String::from("__vow_btreemap_len"), String::from("BTreeMap"), String::from("btreemap"), 530);
     if r44 != 0 { return i64_to_i32_wrap(r44); }
+    let r45: i64 = check_model_helpers_use_canonical_order();
+    if r45 != 0 { return i64_to_i32_wrap(r45); }
+    let r46: i64 = check_substring_copy_loop_follows_byte_reads();
+    if r46 != 0 { return i64_to_i32_wrap(r46); }
+    let r47: i64 = check_const_fn_len_folds_like_a_literal(String::from("__vow_vec_from_raw_parts_copy_val"), String::from("vec capacity"), 630);
+    if r47 != 0 { return i64_to_i32_wrap(r47); }
+    let r48: i64 = check_const_fn_len_folds_like_a_literal(String::from("__vow_string_from_raw_parts_copy"), String::from("string capacity"), 640);
+    if r48 != 0 { return i64_to_i32_wrap(r48); }
+    let r49: i64 = check_u64_literals_print_as_unsigned();
+    if r49 != 0 { return i64_to_i32_wrap(r49); }
     0
 }
