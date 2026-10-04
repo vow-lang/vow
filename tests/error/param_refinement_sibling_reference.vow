@@ -1,0 +1,11 @@
+// TEST: stderr "undefined variable `a`"
+module ParamRefinementSiblingReference
+
+fn clamp_low(a: i64, b: i64 where a >= 0) -> i64 {
+  if b < a { a } else { b }
+}
+
+fn main() -> i32 {
+  clamp_low(1, 2);
+  0
+}

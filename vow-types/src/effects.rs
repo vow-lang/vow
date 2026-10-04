@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use vow_diag::{Blame, Diagnostic, DiagnosticEmitter, ErrorCode, Severity, SourceLocation};
-use vow_syntax::ast::{Block, Effect, Expr, ExprKind, FnDef, Stmt, VowBlock, VowClause};
+use vow_syntax::ast::{Block, Effect, Expr, ExprKind, FnDef, Param, Stmt, VowBlock, VowClause};
 
 use crate::env::TypeEnv;
 
@@ -568,6 +568,65 @@ pub fn check_fn_effects(
     for vow_block in loop_vows {
         check_vow_purity(vow_block, env, file, emitter);
     }
+
+    check_param_refinement_purity(&fn_def.params, env, file, emitter);
+}
+
+/// Checks a single predicate expression (a `requires`/`ensures`/`invariant`
+/// clause, or a parameter `where` refinement) for purity: no effectful calls,
+/// no writes through a shared argument. Shared by `check_vow_purity` (one call
+/// per clause) and `check_param_refinement_purity` (one call per refinement).
+fn check_expr_purity(expr: &Expr, env: &TypeEnv, file: &str, emitter: &mut dyn DiagnosticEmitter) {
+    let mut calls = Vec::new();
+    let mut panic_exprs = Vec::new();
+    collect_calls_in_expr(expr, &mut calls, &mut panic_exprs);
+
+    for (callee_expr, callee_name) in &calls {
+        if let Some(sig) = env.lookup_fn(callee_name)
+            && !sig.effects.is_empty()
+        {
+            emitter.emit(&Diagnostic {
+                severity: Severity::Error,
+                code: ErrorCode::EffectViolation,
+                message: format!(
+                    "vow predicate must be pure but calls effectful function `{}`",
+                    callee_name,
+                ),
+                primary: SourceLocation {
+                    file: file.to_string(),
+                    byte_offset: callee_expr.span.start,
+                    byte_len: callee_expr.span.len,
+                },
+                secondary: vec![],
+                blame: Blame::Callee,
+                hints: vec![
+                    "vow predicates must be pure — move effectful code outside the vow block"
+                        .to_string(),
+                ],
+            });
+        }
+    }
+
+    let mut write_sites = Vec::new();
+    collect_may_write_sites(expr, env, &mut write_sites);
+    for site in write_sites {
+        emitter.emit(&Diagnostic {
+            severity: Severity::Error,
+            code: ErrorCode::EffectViolation,
+            message: "vow predicate must be pure but this expression may write through a shared argument".to_string(),
+            primary: SourceLocation {
+                file: file.to_string(),
+                byte_offset: site.span.start,
+                byte_len: site.span.len,
+            },
+            secondary: vec![],
+            blame: Blame::Callee,
+            hints: vec![
+                "vow predicates must not write to a struct field, a Vec/map element, or call a mutating builtin method — move the write outside the vow block"
+                    .to_string(),
+            ],
+        });
+    }
 }
 
 pub fn check_vow_purity(
@@ -582,56 +641,22 @@ pub fn check_vow_purity(
             VowClause::Ensures { expr, .. } => expr,
             VowClause::Invariant { expr, .. } => expr,
         };
+        check_expr_purity(expr, env, file, emitter);
+    }
+}
 
-        let mut calls = Vec::new();
-        let mut panic_exprs = Vec::new();
-        collect_calls_in_expr(expr, &mut calls, &mut panic_exprs);
-
-        for (callee_expr, callee_name) in &calls {
-            if let Some(sig) = env.lookup_fn(callee_name)
-                && !sig.effects.is_empty()
-            {
-                emitter.emit(&Diagnostic {
-                    severity: Severity::Error,
-                    code: ErrorCode::EffectViolation,
-                    message: format!(
-                        "vow predicate must be pure but calls effectful function `{}`",
-                        callee_name,
-                    ),
-                    primary: SourceLocation {
-                        file: file.to_string(),
-                        byte_offset: callee_expr.span.start,
-                        byte_len: callee_expr.span.len,
-                    },
-                    secondary: vec![],
-                    blame: Blame::Callee,
-                    hints: vec![
-                        "vow predicates must be pure — move effectful code outside the vow block"
-                            .to_string(),
-                    ],
-                });
-            }
-        }
-
-        let mut write_sites = Vec::new();
-        collect_may_write_sites(expr, env, &mut write_sites);
-        for site in write_sites {
-            emitter.emit(&Diagnostic {
-                severity: Severity::Error,
-                code: ErrorCode::EffectViolation,
-                message: "vow predicate must be pure but this expression may write through a shared argument".to_string(),
-                primary: SourceLocation {
-                    file: file.to_string(),
-                    byte_offset: site.span.start,
-                    byte_len: site.span.len,
-                },
-                secondary: vec![],
-                blame: Blame::Callee,
-                hints: vec![
-                    "vow predicates must not write to a struct field, a Vec/map element, or call a mutating builtin method — move the write outside the vow block"
-                        .to_string(),
-                ],
-            });
+/// Parameter `where` refinements must be pure, like `requires`/`ensures`:
+/// they are lowered unconditionally into an `__ESBMC_assume`, so an effectful
+/// refinement would let a side effect run as a verifier-trusted assumption.
+pub fn check_param_refinement_purity(
+    params: &[Param],
+    env: &TypeEnv,
+    file: &str,
+    emitter: &mut dyn DiagnosticEmitter,
+) {
+    for param in params {
+        if let Some(refinement) = &param.refinement {
+            check_expr_purity(refinement, env, file, emitter);
         }
     }
 }
@@ -643,8 +668,8 @@ mod tests {
     use super::*;
     use vow_diag::Diagnostic;
     use vow_syntax::ast::{
-        BinOp, Block, Effect, Expr, ExprKind, FnDef, Lit, Stmt, Type, UnOp, Visibility, VowBlock,
-        VowClause,
+        BinOp, Block, Effect, Expr, ExprKind, FnDef, Lit, Param, Stmt, Type, UnOp, Visibility,
+        VowBlock, VowClause,
     };
     use vow_syntax::span::Span;
 
@@ -797,6 +822,25 @@ mod tests {
         };
         let mut emitter = TestEmitter(vec![]);
         check_vow_purity(&vow, &env, "test.vow", &mut emitter);
+        assert_eq!(emitter.0.len(), 1);
+        assert_eq!(emitter.0[0].code, ErrorCode::EffectViolation);
+        assert_eq!(emitter.0[0].blame, Blame::Callee);
+    }
+
+    #[test]
+    fn param_refinement_impure_predicate_emits_violation() {
+        let env = env_with_read_file();
+        let params = vec![Param {
+            name: "a".to_string(),
+            ty: Type::Named {
+                name: "i64".to_string(),
+                span: dummy_span(),
+            },
+            refinement: Some(Box::new(call_expr("read_file"))),
+            span: dummy_span(),
+        }];
+        let mut emitter = TestEmitter(vec![]);
+        check_param_refinement_purity(&params, &env, "test.vow", &mut emitter);
         assert_eq!(emitter.0.len(), 1);
         assert_eq!(emitter.0[0].code, ErrorCode::EffectViolation);
         assert_eq!(emitter.0[0].blame, Blame::Callee);

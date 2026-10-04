@@ -1,0 +1,11 @@
+// TEST: stderr "`where` clause"
+module ParamRefinementNonBool
+
+fn add_one(a: i64 where a + 1) -> i64 {
+  a + 1
+}
+
+fn main() -> i32 {
+  add_one(1);
+  0
+}

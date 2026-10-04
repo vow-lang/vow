@@ -1,0 +1,16 @@
+// TEST: error-code EffectViolation
+// TEST: stderr "vow predicate must be pure"
+module ParamRefinementImpure
+
+fn side_effect() -> bool [io] {
+    print_i64(0);
+    true
+}
+
+fn f(a: i64 where side_effect()) -> i64 {
+    a
+}
+
+fn main() -> () [io] {
+    print_i64(f(1));
+}

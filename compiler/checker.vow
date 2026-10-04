@@ -1058,6 +1058,25 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
             resolve_ast_ty(e, m, ast_ptid)
         };
         env_define_var(e, pname, ptid);
+
+        let refinement_eid: i64 = list_get(a, params_lid, i * 4 + 2);
+        if refinement_eid != -1 {
+            let save_scope: String = e.refinement_own_name;
+            e.refinement_own_name = pname;
+            e.contract_depth = e.contract_depth + 1;
+            let refinement_tid: i64 = check_expr(e, m, refinement_eid);
+            e.contract_depth = e.contract_depth - 1;
+            e.refinement_own_name = save_scope;
+            if refinement_tid != CTY_BOOL() && !is_opaque(refinement_tid) {
+                env_emit_error_code_hint(
+                    e, EC_CONTRACT_TYPE_MISMATCH(),
+                    String::from("`where` clause must be `bool`"),
+                    expr_span(a, refinement_eid),
+                    String::from("parameter `where` clauses must evaluate to `bool`")
+                );
+            }
+            check_clause_purity(e, m, refinement_eid);
+        }
         i = i + 1;
     }
 
@@ -2515,14 +2534,23 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     if tag == EXPR_IDENT() {
         let name_sid: i64 = expr_a(a, eid);
         let name: String = arena_str(a, name_sid);
-        let ncnst: u64 = e.const_names.len();
-        let mut ci: u64 = 0u64;
-        while ci < ncnst {
-            let cn: String = e.const_names[ci];
-            if cn.eq(name) {
-                return e.const_tids[ci];
-            }
-            ci = ci + 1;
+        let const_idx: i64 = env_const_index(e, name);
+        if e.refinement_own_name.len() > 0 && name != e.refinement_own_name
+            && const_idx == -1 {
+            let msg: String = String::from("undefined variable `");
+            msg.push_str(name);
+            msg.push_str(String::from("`"));
+            env_emit_error_code_hint(
+                e, EC_TYPE_MISMATCH(), msg, expr_span(a, eid),
+                String::from("a parameter `where` clause may only reference its own parameter")
+            );
+            // CTY_UNKNOWN() (not CTY_UNIT()) so this failure doesn't cascade a
+            // second diagnostic: is_opaque() and the bool-shaped contract check
+            // both already treat it as "already errored, don't recheck".
+            return CTY_UNKNOWN();
+        }
+        if const_idx != -1 {
+            return e.const_tids[const_idx as u64];
         }
         return env_lookup_var(e, name);
     }

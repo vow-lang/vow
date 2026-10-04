@@ -7089,7 +7089,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("### ContractTypeMismatch\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Type Checker\n"));
-    r.push_str(String::from("**Meaning:** A `requires`, `ensures`, or `invariant` clause expression does not have type `bool`.\n"));
+    r.push_str(String::from("**Meaning:** A `requires`, `ensures`, or `invariant` clause expression, or a parameter's `where` refinement, does not have type `bool`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn add(a: i64, b: i64) -> i64 vow {\n"));
@@ -12663,7 +12663,7 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("### ContractTypeMismatch\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Type Checker\n"));
-    r.push_str(String::from("**Meaning:** A `requires`, `ensures`, or `invariant` clause expression does not have type `bool`.\n"));
+    r.push_str(String::from("**Meaning:** A `requires`, `ensures`, or `invariant` clause expression, or a parameter's `where` refinement, does not have type `bool`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn add(a: i64, b: i64) -> i64 vow {\n"));

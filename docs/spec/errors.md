@@ -534,7 +534,7 @@ extern "C" {
 ### ContractTypeMismatch
 
 **Phase:** Type Checker
-**Meaning:** A `requires`, `ensures`, or `invariant` clause expression does not have type `bool`.
+**Meaning:** A `requires`, `ensures`, or `invariant` clause expression, or a parameter's `where` refinement, does not have type `bool`.
 
 ```vow
 fn add(a: i64, b: i64) -> i64 vow {

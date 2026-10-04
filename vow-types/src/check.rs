@@ -998,6 +998,12 @@ pub struct Checker<'e> {
     /// representation, so a tuple expression inside a predicate is rejected
     /// while this is non-zero rather than reaching lowering.
     contract_depth: u32,
+    /// Set to a parameter's name while checking that parameter's `where`
+    /// refinement. A `where` clause may reference only its own parameter
+    /// (plus consts); `ExprKind::Ident` checks this and fails closed with
+    /// `TypeMismatch` for any other identifier, independent of whatever the
+    /// scope stack happens to make visible.
+    refinement_scope: Option<String>,
     /// Stack of break-value type collectors. `Some(vec)` for `loop` (collects
     /// break types), `None` for `while` (break-with-value is an error).
     break_types_stack: Vec<Option<Vec<Ty>>>,
@@ -1044,6 +1050,7 @@ impl<'e> Checker<'e> {
             nonneg_casts: HashMap::new(),
             in_loop: 0,
             contract_depth: 0,
+            refinement_scope: None,
             break_types_stack: Vec::new(),
             const_types: HashMap::new(),
         }
@@ -1534,6 +1541,20 @@ impl<'e> Checker<'e> {
                 .and_then(|s| s.params.get(i).cloned())
                 .unwrap_or(Ty::Unit);
             self.env.define(&param.name, ty);
+
+            if let Some(refinement) = &param.refinement {
+                let outer_scope = self.refinement_scope.replace(param.name.clone());
+                let ty = self.check_contract_expr(refinement);
+                self.refinement_scope = outer_scope;
+                if ty != Ty::Bool && ty != Ty::Never {
+                    self.emit_error_with_hints(
+                        ErrorCode::ContractTypeMismatch,
+                        format!("`where` clause has type `{ty}` but must be `bool`"),
+                        refinement.span,
+                        vec!["parameter `where` clauses must evaluate to `bool`".to_string()],
+                    );
+                }
+            }
         }
 
         if let Some(ref vow) = fn_def.vow {
@@ -2058,6 +2079,24 @@ impl<'e> Checker<'e> {
             ExprKind::Ident(name) => {
                 if let Some(ty) = self.const_types.get(name.as_str()) {
                     return ty.clone();
+                }
+                if let Some(owner) = &self.refinement_scope
+                    && name != owner
+                {
+                    self.emit_error_with_hints(
+                        ErrorCode::TypeMismatch,
+                        format!("undefined variable `{name}`"),
+                        expr.span,
+                        vec![
+                            "a parameter `where` clause may only reference its own parameter"
+                                .to_string(),
+                        ],
+                    );
+                    // `Ty::Never` (not `Ty::Unit`) so this failure doesn't cascade a
+                    // second diagnostic: comparison/arithmetic operators and the
+                    // contract bool check all already treat `Never` as "already
+                    // errored, don't recheck" and accept it unconditionally.
+                    return Ty::Never;
                 }
                 match self.env.lookup(name) {
                     Some(ty) => ty.clone(),
@@ -4378,6 +4417,109 @@ mod tests {
 
         check_single_file(&mut checker, &module);
         assert!(!checker.has_errors());
+    }
+
+    fn fn_with_params(params: Vec<Param>) -> FnDef {
+        FnDef {
+            vis: Visibility::Public,
+            name: "f".to_string(),
+            params,
+            return_ty: Type::Named {
+                name: "i64".to_string(),
+                span: dummy_span(),
+            },
+            effects: vec![],
+            vow: None,
+            is_declaration: false,
+            body: Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(make_expr(ExprKind::Lit(Lit::Int(0))))),
+                span: dummy_span(),
+            },
+            span: dummy_span(),
+        }
+    }
+
+    #[test]
+    fn param_refinement_rejects_non_bool_type() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        let fn_def = fn_with_params(vec![Param {
+            name: "a".to_string(),
+            ty: Type::Named {
+                name: "i64".to_string(),
+                span: dummy_span(),
+            },
+            refinement: Some(Box::new(make_expr(ExprKind::Lit(Lit::Int(1))))),
+            span: dummy_span(),
+        }]);
+        let module = Module {
+            name: "test".to_string(),
+            uses: vec![],
+            items: vec![Item::Fn(fn_def)],
+            span: dummy_span(),
+        };
+        check_single_file(&mut checker, &module);
+        assert!(checker.has_errors());
+        assert!(
+            emitter
+                .0
+                .iter()
+                .any(|d| d.code == ErrorCode::ContractTypeMismatch),
+            "expected a ContractTypeMismatch diagnostic, got {:?}",
+            emitter.0
+        );
+    }
+
+    #[test]
+    fn param_refinement_rejects_sibling_reference() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        // `b: i64 where a >= 0` — bool-shaped, so slice 1's bool check alone
+        // must not catch this; it references the *other* parameter.
+        let fn_def = fn_with_params(vec![
+            Param {
+                name: "a".to_string(),
+                ty: Type::Named {
+                    name: "i64".to_string(),
+                    span: dummy_span(),
+                },
+                refinement: None,
+                span: dummy_span(),
+            },
+            Param {
+                name: "b".to_string(),
+                ty: Type::Named {
+                    name: "i64".to_string(),
+                    span: dummy_span(),
+                },
+                refinement: Some(Box::new(make_expr(ExprKind::BinaryOp {
+                    op: BinOp::Ge,
+                    lhs: Box::new(make_expr(ExprKind::Ident("a".to_string()))),
+                    rhs: Box::new(make_expr(ExprKind::Lit(Lit::Int(0)))),
+                }))),
+                span: dummy_span(),
+            },
+        ]);
+        let module = Module {
+            name: "test".to_string(),
+            uses: vec![],
+            items: vec![Item::Fn(fn_def)],
+            span: dummy_span(),
+        };
+        check_single_file(&mut checker, &module);
+        assert!(checker.has_errors());
+        // Exactly one diagnostic: the poisoned `Ty::Never` returned for the
+        // sibling reference must not cascade a second error out of the `>=`
+        // comparison's operand-type check.
+        assert_eq!(
+            emitter.0.len(),
+            1,
+            "expected exactly one diagnostic, got {:?}",
+            emitter.0
+        );
+        assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
+        assert!(emitter.0[0].message.contains("undefined variable"));
     }
 
     // --- helpers for the extended tests ---
