@@ -115,6 +115,8 @@ jobs:
           bash scripts/concat_vow.sh clif > /tmp/compiler_clif.vow
           ./target/debug/vow build --no-verify --no-cache /tmp/compiler_clif.vow -o /tmp/vowc_concat
           test -x /tmp/vowc_concat
+      - name: Test-runner end-to-end tests (Rust and self-hosted)
+        run: VOWC_BIN=/tmp/vowc_concat python3 scripts/test_vow_test_harness.py
       - run: cargo llvm-cov --all --lcov --output-path lcov.info
       - run: cargo clippy --all --all-targets -- -D warnings
       - run: cargo fmt --all -- --check

@@ -2283,6 +2283,9 @@ fn analyze_function(
     // Block(_) arena; see the Upsilon arm of `direct_markers_collect_regions`.
     let loop_be: BackEdges = detect_loop_back_edges(f);
     let loop_headers: Vec<i64> = loop_be.headers;
+    let use_index: UseIndex = build_use_index(f);
+    let use_off: Vec<i64> = use_index.off;
+    let use_pos: Vec<i64> = use_index.pos;
     let mut rbi: u64 = 0;
     while rbi < n_bks {
         let rb: IrBlock = bks[rbi];
@@ -2298,6 +2301,7 @@ fn analyze_function(
                     int_kinds, int_auxs, int_aliases_list,
                     int_se_targets, int_se_src_kinds, int_se_src_aux,
                     widened_flag,
+                    use_off, use_pos,
                 );
                 // Issue #366: record multi-slot widen-to-Root allocs so the
                 // note pass surfaces the leak (mirrors vow-ir/src/region.rs).
@@ -2563,7 +2567,8 @@ fn value_lub_region(
     return_is_scalar: bool,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
-    widened_out: Vec<i64>
+    widened_out: Vec<i64>,
+    use_off: Vec<i64>, use_pos: Vec<i64>
 ) -> i64 {
     let work: Vec<i64> = Vec::new();
     let seen: Vec<i64> = Vec::new();
@@ -2594,7 +2599,9 @@ fn value_lub_region(
             int_se_src_kinds,
             int_se_src_aux,
             work,
-            seen
+            seen,
+            use_off,
+            use_pos
         );
     }
     let own_return_kind: i64 = if fi >= 0 && fi < int_kinds.len() as i64 {
@@ -2708,6 +2715,104 @@ fn region_lub_from_markers(
     region_caller0()
 }
 
+// Per-function index of every instruction-argument use, built once so
+// `direct_markers_collect_regions` visits only the uses of one value instead of
+// rescanning every instruction (which made region inference quadratic in
+// function size). `off` is CSR-style: the uses of value `id` are the entries
+// `off[id] .. off[id + 1]` of `pos`, each stored as three i64s
+// (block index, instruction index, argument index) in program order, i.e. the
+// order the rescan used to visit them.
+struct UseIndex {
+    off: Vec<i64>,
+    pos: Vec<i64>,
+}
+
+fn build_use_index(f: IrFunction) -> UseIndex {
+    let bks: Vec<IrBlock> = f.blocks;
+    let mut max_id: i64 = -1;
+    let mut bi: u64 = 0;
+    while bi < bks.len() {
+        let insts: Vec<IrInst> = bks[bi].insts;
+        let mut ii: u64 = 0;
+        while ii < insts.len() {
+            let args: Vec<i64> = insts[ii].args;
+            let mut ai: u64 = 0;
+            while ai < args.len() {
+                if args[ai] > max_id { max_id = args[ai]; }
+                ai = ai + 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    // off[id + 1] first holds the use count of `id`, then is prefix-summed.
+    let off: Vec<i64> = Vec::new();
+    let mut k: i64 = 0;
+    while k < max_id + 2 {
+        off.push(0);
+        k = k + 1;
+    }
+    let mut bi2: u64 = 0;
+    while bi2 < bks.len() {
+        let insts: Vec<IrInst> = bks[bi2].insts;
+        let mut ii: u64 = 0;
+        while ii < insts.len() {
+            let args: Vec<i64> = insts[ii].args;
+            let mut ai: u64 = 0;
+            while ai < args.len() {
+                if args[ai] >= 0 {
+                    let slot: u64 = (args[ai] + 1) as u64;
+                    off[slot] = off[slot] + 1;
+                }
+                ai = ai + 1;
+            }
+            ii = ii + 1;
+        }
+        bi2 = bi2 + 1;
+    }
+    let mut p: u64 = 1;
+    while p < off.len() {
+        off[p] = off[p] + off[p - 1];
+        p = p + 1;
+    }
+    let pos: Vec<i64> = Vec::new();
+    let total: i64 = off[off.len() - 1];
+    let mut z: i64 = 0;
+    while z < total * 3 {
+        pos.push(0);
+        z = z + 1;
+    }
+    let fill: Vec<i64> = Vec::new();
+    let mut q: u64 = 0;
+    while q < off.len() {
+        fill.push(off[q]);
+        q = q + 1;
+    }
+    let mut bi3: u64 = 0;
+    while bi3 < bks.len() {
+        let insts: Vec<IrInst> = bks[bi3].insts;
+        let mut ii: u64 = 0;
+        while ii < insts.len() {
+            let args: Vec<i64> = insts[ii].args;
+            let mut ai: u64 = 0;
+            while ai < args.len() {
+                if args[ai] >= 0 {
+                    let id_u: u64 = args[ai] as u64;
+                    let at: i64 = fill[id_u];
+                    fill[id_u] = at + 1;
+                    pos[(at * 3) as u64] = bi3 as i64;
+                    pos[(at * 3 + 1) as u64] = ii as i64;
+                    pos[(at * 3 + 2) as u64] = ai as i64;
+                }
+                ai = ai + 1;
+            }
+            ii = ii + 1;
+        }
+        bi3 = bi3 + 1;
+    }
+    UseIndex { off: off, pos: pos }
+}
+
 fn direct_markers_collect_regions(
     f: IrFunction, id: i64,
     id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>,
@@ -2716,115 +2821,113 @@ fn direct_markers_collect_regions(
     return_is_scalar: bool,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
-    work: Vec<i64>, seen: Vec<i64>
+    work: Vec<i64>, seen: Vec<i64>,
+    use_off: Vec<i64>, use_pos: Vec<i64>
 ) {
     let bks: Vec<IrBlock> = f.blocks;
-    let mut bi: u64 = 0;
-    while bi < bks.len() {
-        let blk: IrBlock = bks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            let mut ai: i64 = 0;
-            while ai < inst.args.len() as i64 {
-                if inst.args[ai as u64] == id {
-                    // Every argument use contributes the use-block marker.
-                    linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), blk.id));
-                    if inst.op == IOP_RETURN() && !return_is_scalar {
-                        linear_insert_i64(markers, region_caller0());
-                    }
-                    if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET()) && ai == 1 {
-                        add_store_target_markers_vow(
-                            id_to_inst, id_to_block, phi_arms,
-                            inst.args[0], int_kinds,
-                            markers, work, seen, Vec::new(), false
-                        );
-                    }
-                    if inst.op == IOP_UPSILON() && ai == 0 && inst.dk == IDATA_PHI_TARGET() {
-                        let phi_block: i64 = lookup_inst_block(id_to_block, inst.dv);
-                        if phi_block >= 0 {
-                            // Issue #400: a source carried into a loop-header
-                            // Phi is live across the back-edge; Block(header)
-                            // would be freed by the loop-region refresh. Lift it
-                            // to the loop's enclosing block region (Root if the
-                            // loop has no enclosing block). A non-loop Phi keeps
-                            // Block(header).
-                            if region_vec_contains_i64(loop_headers, phi_block) {
-                                let lifted_parent: i64 = block_parent_at(block_parent, phi_block);
-                                if lifted_parent >= 0 {
-                                    linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), lifted_parent));
-                                } else {
-                                    linear_insert_i64(markers, region_root());
-                                }
-                            } else {
-                                linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), phi_block));
-                            }
-                            push_region_work(work, seen, inst.dv);
+    if id < 0 || id + 1 >= use_off.len() as i64 {
+        return;
+    }
+    let mut ui: i64 = use_off[id as u64];
+    let ui_end: i64 = use_off[(id + 1) as u64];
+    while ui < ui_end {
+        let blk: IrBlock = bks[use_pos[(3 * ui) as u64] as u64];
+        let inst: IrInst = blk.insts[use_pos[(3 * ui + 1) as u64] as u64];
+        let ai: i64 = use_pos[(3 * ui + 2) as u64];
+        if inst.args[ai as u64] == id {
+            // Every argument use contributes the use-block marker.
+            linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), blk.id));
+            if inst.op == IOP_RETURN() && !return_is_scalar {
+                linear_insert_i64(markers, region_caller0());
+            }
+            if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET()) && ai == 1 {
+                add_store_target_markers_vow(
+                    id_to_inst, id_to_block, phi_arms,
+                    inst.args[0], int_kinds,
+                    markers, work, seen, Vec::new(), false
+                );
+            }
+            if inst.op == IOP_UPSILON() && ai == 0 && inst.dk == IDATA_PHI_TARGET() {
+                let phi_block: i64 = lookup_inst_block(id_to_block, inst.dv);
+                if phi_block >= 0 {
+                    // Issue #400: a source carried into a loop-header
+                    // Phi is live across the back-edge; Block(header)
+                    // would be freed by the loop-region refresh. Lift it
+                    // to the loop's enclosing block region (Root if the
+                    // loop has no enclosing block). A non-loop Phi keeps
+                    // Block(header).
+                    if region_vec_contains_i64(loop_headers, phi_block) {
+                        let lifted_parent: i64 = block_parent_at(block_parent, phi_block);
+                        if lifted_parent >= 0 {
+                            linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), lifted_parent));
                         } else {
                             linear_insert_i64(markers, region_root());
                         }
+                    } else {
+                        linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), phi_block));
                     }
-                    if inst.op == IOP_FIELD_GET() && ai == 0 {
-                        push_region_work(work, seen, inst.id);
-                    }
-                    if inst.op == IOP_LOAD() && ai == 0 && !is_scalar_ity(inst.ty) {
-                        push_region_work(work, seen, inst.id);
-                    }
-                    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
-                        let callee_idx: i64 = inst.dv;
-                        call_store_effects_collect_regions(
-                            inst,
-                            ai,
-                            id_to_inst,
-                            id_to_block,
-                            phi_arms,
-                            int_kinds,
-                            markers,
-                            int_se_targets,
-                            int_se_src_kinds,
-                            int_se_src_aux,
-                            work,
-                            seen
-                        );
-                        if callee_idx >= 0 && callee_idx < int_kinds.len() as i64
-                            && int_kinds[callee_idx as u64] == RSUM_KIND_FRESH_IN_CALLER()
-                        {
-                            // Fresh aggregate results may embed heap descriptors
-                            // passed as constructor arguments. Let later widening
-                            // of the call result flow back to this argument.
-                            push_region_work(work, seen, inst.id);
-                        }
-                        if callee_return_aliases_arg(
-                            callee_idx,
-                            ai,
-                            int_kinds,
-                            int_auxs,
-                            int_aliases_list
-                        ) {
-                            push_region_work(work, seen, inst.id);
-                        }
-                    }
-                    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
-                        let target_pos2: i64 = extern_store_target_for_source(inst.ds, ai);
-                        if target_pos2 >= 0 && target_pos2 < inst.args.len() as i64 {
-                            add_store_target_markers_vow(
-                                id_to_inst, id_to_block, phi_arms,
-                                inst.args[target_pos2 as u64], int_kinds,
-                                markers, work, seen, Vec::new(), false
-                            );
-                        }
-                        if (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
-                            && ai == 0
-                        {
-                            push_region_work(work, seen, inst.id);
-                        }
-                    }
+                    push_region_work(work, seen, inst.dv);
+                } else {
+                    linear_insert_i64(markers, region_root());
                 }
-                ai = ai + 1;
             }
-            ii = ii + 1;
+            if inst.op == IOP_FIELD_GET() && ai == 0 {
+                push_region_work(work, seen, inst.id);
+            }
+            if inst.op == IOP_LOAD() && ai == 0 && !is_scalar_ity(inst.ty) {
+                push_region_work(work, seen, inst.id);
+            }
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+                let callee_idx: i64 = inst.dv;
+                call_store_effects_collect_regions(
+                    inst,
+                    ai,
+                    id_to_inst,
+                    id_to_block,
+                    phi_arms,
+                    int_kinds,
+                    markers,
+                    int_se_targets,
+                    int_se_src_kinds,
+                    int_se_src_aux,
+                    work,
+                    seen
+                );
+                if callee_idx >= 0 && callee_idx < int_kinds.len() as i64
+                    && int_kinds[callee_idx as u64] == RSUM_KIND_FRESH_IN_CALLER()
+                {
+                    // Fresh aggregate results may embed heap descriptors
+                    // passed as constructor arguments. Let later widening
+                    // of the call result flow back to this argument.
+                    push_region_work(work, seen, inst.id);
+                }
+                if callee_return_aliases_arg(
+                    callee_idx,
+                    ai,
+                    int_kinds,
+                    int_auxs,
+                    int_aliases_list
+                ) {
+                    push_region_work(work, seen, inst.id);
+                }
+            }
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
+                let target_pos2: i64 = extern_store_target_for_source(inst.ds, ai);
+                if target_pos2 >= 0 && target_pos2 < inst.args.len() as i64 {
+                    add_store_target_markers_vow(
+                        id_to_inst, id_to_block, phi_arms,
+                        inst.args[target_pos2 as u64], int_kinds,
+                        markers, work, seen, Vec::new(), false
+                    );
+                }
+                if (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+                    && ai == 0
+                {
+                    push_region_work(work, seen, inst.id);
+                }
+            }
         }
-        bi = bi + 1;
+        ui = ui + 1;
     }
 }
 

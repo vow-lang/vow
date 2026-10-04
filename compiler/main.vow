@@ -72,7 +72,7 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 2 {
                 let prev: String = argv[(i - 1) as u64];
-                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--verify-jobs" || prev == "--module-root" || prev == "--max-score" || prev == "--max-cognitive" || prev == "--max-cyclomatic" || prev == "--cog-anchor" || prev == "--nloc-anchor" || prev == "--perfetto" {
+                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--verify-jobs" || prev == "--jobs" || prev == "--worker-entry" || prev == "--module-root" || prev == "--max-score" || prev == "--max-cognitive" || prev == "--max-cyclomatic" || prev == "--cog-anchor" || prev == "--nloc-anchor" || prev == "--perfetto" {
                     i = i - 1;
                 } else {
                     return a;
@@ -1181,6 +1181,49 @@ fn resolve_verify_jobs(argv: Vec<String>) -> i64 [io] {
     }
 }
 
+// Concurrent test files for `vowc test`. An explicit --jobs wins; otherwise
+// half the CPUs capped at 8, or 1 under --verify (ESBMC already parallelizes).
+fn resolve_test_jobs(argv: Vec<String>, do_verify: bool) -> i64 [io] {
+    let raw: String = get_flag_arg(argv, "--jobs");
+    if raw.len() == 0 {
+        if do_verify { return 1; }
+        let n: i64 = num_cpus() / 2;
+        if n < 1 { return 1; }
+        if n > 8 { return 8; }
+        return n;
+    }
+    let n: i64 = match parse_i64(raw) {
+        Option::Some(value) => { value },
+        Option::None => { 0 },
+    };
+    if n < 1 {
+        eprintln_str(String::from("error: --jobs must be >= 1"));
+        process_exit(1);
+    }
+    n
+}
+
+fn push_test_flag_value(a: Vec<String>, argv: Vec<String>, flag: String) {
+    let v: String = get_flag_arg(argv, flag);
+    if v.len() > 0 {
+        a.push(flag);
+        a.push(v);
+    }
+}
+
+// Flags a parallel `vowc test` worker inherits from its parent invocation.
+fn test_worker_common_flags(argv: Vec<String>) -> Vec<String> {
+    let a: Vec<String> = Vec::new();
+    push_test_flag_value(a, argv, String::from("--mode"));
+    push_test_flag_value(a, argv, String::from("--timeout"));
+    push_test_flag_value(a, argv, String::from("--max-k-step"));
+    push_test_flag_value(a, argv, String::from("--verify-jobs"));
+    if has_flag(argv, String::from("--verify")) {
+        a.push(String::from("--verify"));
+    }
+    a
+}
+
 fn vec_i64_remove_front(v: Vec<i64>) {
     // Caller-enforced invariant: v.len() > 0 (drain loops guard this).
     // Guard defensively so an empty Vec becomes a no-op rather than popping below zero.
@@ -1993,7 +2036,11 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
     let module_root_flag: String = get_flag_arg(argv, "--module-root");
     let selection: TestSelection = select_tests(path, filter, module_root_flag);
     let test_files: Vec<String> = selection.files;
-    let module_root: String = selection.module_root;
+    let mut module_root: String = selection.module_root;
+    if module_root.len() == 0 && test_files.len() == 1 && fs_is_dir(path) == 0 {
+        module_root = frontend_infer_module_root(path);
+    }
+    let worker_mode: bool = has_flag(argv, "--worker-entry");
 
     let entries_json: Vec<String> = Vec::new();
     let mut passed: i64 = 0;
@@ -2001,6 +2048,26 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
     let mut total_fns: i64 = 0;
     let mut fns_with_vows: i64 = 0;
     let mut ti: u64 = 0;
+    let test_jobs: i64 = resolve_test_jobs(argv, do_verify);
+    if !worker_mode && test_jobs > 1 && test_files.len() > 1 {
+        let replies: Vec<String> = run_tests_parallel(argv[0], test_files, module_root, test_worker_common_flags(argv), test_jobs);
+        let mut ri: u64 = 0;
+        while ri < replies.len() {
+            let one: TestOne = worker_reply_parse(replies[ri]);
+            if one.status.len() == 0 {
+                let crashed: String = emit_test_entry_json(test_files[ri], file_stem_from_path(test_files[ri]), String::from("compile_error"), -1, String::from(""), String::from(""), 0, String::from("[{\"error_code\":\"CompileError\",\"message\":\"test worker exited without a result\",\"severity\":\"error\"}]"));
+                entries_json.push(crashed);
+                failed = failed + 1;
+            } else {
+                entries_json.push(one.entry);
+                if one.status == String::from("passed") { passed = passed + 1; } else { failed = failed + 1; }
+                total_fns = total_fns + one.fns;
+                fns_with_vows = fns_with_vows + one.vow_fns;
+            }
+            ri = ri + 1;
+        }
+        ti = test_files.len();
+    }
     while ti < test_files.len() {
         let test_path: String = test_files[ti];
         let short_name: String = file_stem_from_path(test_path);
@@ -2011,7 +2078,8 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         let checked: CheckedFrontend = fr.checked;
         if checked.n_errors > 0 {
             let duration: i64 = time_unix_ms() - start_time;
-            let diag_json: String = String::from("[{\"error_code\":\"CompileError\",\"message\":\"compilation failed\",\"severity\":\"error\"}]");
+            diag_ctx_print_all(checked.dctx);
+            let diag_json: String = diag_ctx_to_json(checked.dctx);
             let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration, diag_json);
             entries_json.push(entry);
             failed = failed + 1;
@@ -2152,7 +2220,8 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
 
             if !skip_exec {
                 // Compile to binary
-                let tmp_out: String = str2(str3(String::from("build/vow_test_"), short_name, String::from("_")), i64_to_string(time_unix_ms()));
+                let worker_tag: String = { if worker_mode { str2(get_flag_arg(argv, "--worker-entry"), String::from("_")) } else { String::from("") } };
+                let tmp_out: String = str2(str3(String::from("build/vow_test_"), short_name, String::from("_")), str2(worker_tag, i64_to_string(time_unix_ms())));
                 let result: i64 = clif_emit_module(ir_mod, tmp_out, mode, 0);
                 if result != 0 {
                     let duration: i64 = time_unix_ms() - start_time;
@@ -2183,6 +2252,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                         }
                     };
                     fs_remove(tmp_out);
+                    process_kill(handle);
                     let duration: i64 = time_unix_ms() - start_time;
                     let status: String = {
                         if exit_code == 0 { String::from("passed") }
@@ -2200,6 +2270,13 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
             }
             ti = ti + 1;
         }
+    }
+
+    if worker_mode {
+        let wstatus: String = { if passed == 1 { String::from("passed") } else { String::from("failed") } };
+        if entries_json.len() == 0 { return 1; }
+        print_str(worker_reply_line(TestOne { status: wstatus, entry: entries_json[0], fns: total_fns, vow_fns: fns_with_vows }));
+        return 0;
     }
 
     // Emit JSON result
@@ -2686,11 +2763,19 @@ fn skill_json() -> String {
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--module-root <path>\",\n"));
-    r.push_str(String::from("          \"description\": \"Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. (default: (auto))\",\n"));
+    r.push_str(String::from("          \"description\": \"Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its use declarations. (default: (auto))\",\n"));
     r.push_str(String::from("          \"long\": \"--module-root\",\n"));
     r.push_str(String::from("          \"value_name\": \"path\",\n"));
     r.push_str(String::from("          \"value_kind\": \"string\",\n"));
     r.push_str(String::from("          \"default\": \"(auto)\"\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--jobs <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max test files compiled and run concurrently (default: min(num_cpus/2, 8) (1 with --verify))\",\n"));
+    r.push_str(String::from("          \"long\": \"--jobs\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": \"min(num_cpus/2, 8) (1 with --verify)\"\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--mode <debug|release>\",\n"));
@@ -2939,7 +3024,8 @@ fn skill_json() -> String {
     r.push_str(String::from("  \"test_options\": {\n"));
     r.push_str(String::from("    \"--verify\": \"Run ESBMC verification on test files\",\n"));
     r.push_str(String::from("    \"--filter <pat>\": \"Only run tests whose file stem contains pat (default: (none))\",\n"));
-    r.push_str(String::from("    \"--module-root <path>\": \"Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. (default: (auto))\",\n"));
+    r.push_str(String::from("    \"--module-root <path>\": \"Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its use declarations. (default: (auto))\",\n"));
+    r.push_str(String::from("    \"--jobs <N>\": \"Max test files compiled and run concurrently (default: min(num_cpus/2, 8) (1 with --verify))\",\n"));
     r.push_str(String::from("    \"--mode <debug|release>\": \"Build mode; debug inserts runtime vow checks (default: (default))\",\n"));
     r.push_str(String::from("    \"--timeout <ms>\": \"Per-test execution timeout in milliseconds (default: 30000)\",\n"));
     r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC incremental BMC max iterations (with --verify)\",\n"));
@@ -3350,7 +3436,8 @@ fn skill_human() -> String {
     r.push_str(String::from("TEST OPTIONS\n"));
     r.push_str(String::from("  --verify                Run ESBMC verification on test files\n"));
     r.push_str(String::from("  --filter <pat>          Only run tests whose file stem contains pat (default: (none))\n"));
-    r.push_str(String::from("  --module-root <path>    Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. (default: (auto))\n"));
+    r.push_str(String::from("  --module-root <path>    Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its use declarations. (default: (auto))\n"));
+    r.push_str(String::from("  --jobs <N>              Max test files compiled and run concurrently (default: min(num_cpus/2, 8) (1 with --verify))\n"));
     r.push_str(String::from("  --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))\n"));
     r.push_str(String::from("  --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)\n"));
     r.push_str(String::from("  --max-k-step <N>        ESBMC incremental BMC max iterations (with --verify)\n"));
@@ -5062,7 +5149,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `<path>`          | `.`         | Directory to scan or single `.vow` file    |\n"));
     r.push_str(String::from("| `--verify`        | (off)       | Run ESBMC verification on test files       |\n"));
     r.push_str(String::from("| `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |\n"));
-    r.push_str(String::from("| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. |\n"));
+    r.push_str(String::from("| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its `use` declarations. |\n"));
+    r.push_str(String::from("| `--jobs <N>`      | `min(num_cpus/2, 8)` (`1` with `--verify`) | Max test files compiled and run concurrently |\n"));
     r.push_str(String::from("| `--mode debug`    | (default)   | Insert runtime vow checks                 |\n"));
     r.push_str(String::from("| `--mode release`  | `debug`     | Omit all vow checks for performance       |\n"));
     r.push_str(String::from("| `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |\n"));
@@ -5071,7 +5159,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). Single-file invocations (`vow test path/to/test_foo.vow`) keep the default behaviour of resolving `use` against the file's parent directory.\n"));
+    r.push_str(String::from("**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). A single-file invocation without `--module-root` (`vow test compiler/tests/test_region.vow`) infers the module root the same way: starting at the file's own directory and walking up through its ancestors, it picks the nearest directory against which every `use` declaration of the file resolves (to `<path>.vow`, or `<path>.vow.d`). The walk stops after the first directory that contains `.git` (the repository root), at a `..` path component, or at `.` / `/`. If the file's own directory already resolves every `use`, if the file has no `use` declarations, or if no directory resolves them all, the file's parent directory is used and any unresolved module is reported as an ordinary `IoError`. When the file's own directory does not shadow a module of the tree, the inferred root is the one the directory form would use, so the test gives the same result in both forms; a module in the file's own directory takes precedence over one in an ancestor. This rule applies to `vow test` only; `vow build` and `vow verify` keep resolving `use` against the entry file's parent directory.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Concurrency.** Test files in a scan run concurrently, at most `--jobs` at a time, and the `tests` array is always in sorted-path order regardless of completion order. A test's `duration_ms` covers its own compile, verification, and execution. Beyond the first, a worker starts a new file only while the machine is not under memory or IO stall pressure (Linux PSI `/proc/pressure/memory` `some avg10` and `/proc/pressure/io` `full avg10`, both below 20), so a loaded machine degrades to fewer workers rather than thrashing; with no PSI available the limit is just `--jobs`. `--jobs 1` runs files strictly one after another. The self-hosted compiler runs each file of a concurrent scan in a worker subprocess of itself, using an internal `--worker-entry` flag whose output is not part of the CLI contract; a worker that dies without a result is reported as a `compile_error` entry so the suite stays fail-closed.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Test Output JSON:**\n"));
     r.push_str(String::from("\n"));
@@ -10630,7 +10720,8 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `<path>`          | `.`         | Directory to scan or single `.vow` file    |\n"));
     r.push_str(String::from("| `--verify`        | (off)       | Run ESBMC verification on test files       |\n"));
     r.push_str(String::from("| `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |\n"));
-    r.push_str(String::from("| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. |\n"));
+    r.push_str(String::from("| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its `use` declarations. |\n"));
+    r.push_str(String::from("| `--jobs <N>`      | `min(num_cpus/2, 8)` (`1` with `--verify`) | Max test files compiled and run concurrently |\n"));
     r.push_str(String::from("| `--mode debug`    | (default)   | Insert runtime vow checks                 |\n"));
     r.push_str(String::from("| `--mode release`  | `debug`     | Omit all vow checks for performance       |\n"));
     r.push_str(String::from("| `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |\n"));
@@ -10639,7 +10730,9 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). Single-file invocations (`vow test path/to/test_foo.vow`) keep the default behaviour of resolving `use` against the file's parent directory.\n"));
+    r.push_str(String::from("**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). A single-file invocation without `--module-root` (`vow test compiler/tests/test_region.vow`) infers the module root the same way: starting at the file's own directory and walking up through its ancestors, it picks the nearest directory against which every `use` declaration of the file resolves (to `<path>.vow`, or `<path>.vow.d`). The walk stops after the first directory that contains `.git` (the repository root), at a `..` path component, or at `.` / `/`. If the file's own directory already resolves every `use`, if the file has no `use` declarations, or if no directory resolves them all, the file's parent directory is used and any unresolved module is reported as an ordinary `IoError`. When the file's own directory does not shadow a module of the tree, the inferred root is the one the directory form would use, so the test gives the same result in both forms; a module in the file's own directory takes precedence over one in an ancestor. This rule applies to `vow test` only; `vow build` and `vow verify` keep resolving `use` against the entry file's parent directory.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Concurrency.** Test files in a scan run concurrently, at most `--jobs` at a time, and the `tests` array is always in sorted-path order regardless of completion order. A test's `duration_ms` covers its own compile, verification, and execution. Beyond the first, a worker starts a new file only while the machine is not under memory or IO stall pressure (Linux PSI `/proc/pressure/memory` `some avg10` and `/proc/pressure/io` `full avg10`, both below 20), so a loaded machine degrades to fewer workers rather than thrashing; with no PSI available the limit is just `--jobs`. `--jobs 1` runs files strictly one after another. The self-hosted compiler runs each file of a concurrent scan in a worker subprocess of itself, using an internal `--worker-entry` flag whose output is not part of the CLI contract; a worker that dies without a result is reported as a `compile_error` entry so the suite stays fail-closed.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Test Output JSON:**\n"));
     r.push_str(String::from("\n"));

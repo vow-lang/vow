@@ -490,11 +490,19 @@ fn skill_json() -> String {
         },
         {
           "form": "--module-root <path>",
-          "description": "Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. (default: (auto))",
+          "description": "Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its use declarations. (default: (auto))",
           "long": "--module-root",
           "value_name": "path",
           "value_kind": "string",
           "default": "(auto)"
+        },
+        {
+          "form": "--jobs <N>",
+          "description": "Max test files compiled and run concurrently (default: min(num_cpus/2, 8) (1 with --verify))",
+          "long": "--jobs",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": "min(num_cpus/2, 8) (1 with --verify)"
         },
         {
           "form": "--mode <debug|release>",
@@ -743,7 +751,8 @@ fn skill_json() -> String {
   "test_options": {
     "--verify": "Run ESBMC verification on test files",
     "--filter <pat>": "Only run tests whose file stem contains pat (default: (none))",
-    "--module-root <path>": "Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. (default: (auto))",
+    "--module-root <path>": "Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its use declarations. (default: (auto))",
+    "--jobs <N>": "Max test files compiled and run concurrently (default: min(num_cpus/2, 8) (1 with --verify))",
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: (default))",
     "--timeout <ms>": "Per-test execution timeout in milliseconds (default: 30000)",
     "--max-k-step <N>": "ESBMC incremental BMC max iterations (with --verify)",
@@ -1154,7 +1163,8 @@ VERIFY OPTIONS
 TEST OPTIONS
   --verify                Run ESBMC verification on test files
   --filter <pat>          Only run tests whose file stem contains pat (default: (none))
-  --module-root <path>    Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. (default: (auto))
+  --module-root <path>    Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its use declarations. (default: (auto))
+  --jobs <N>              Max test files compiled and run concurrently (default: min(num_cpus/2, 8) (1 with --verify))
   --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))
   --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)
   --max-k-step <N>        ESBMC incremental BMC max iterations (with --verify)
@@ -2866,7 +2876,8 @@ vow test [OPTIONS] [<path>]
 | `<path>`          | `.`         | Directory to scan or single `.vow` file    |
 | `--verify`        | (off)       | Run ESBMC verification on test files       |
 | `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |
-| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. |
+| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its `use` declarations. |
+| `--jobs <N>`      | `min(num_cpus/2, 8)` (`1` with `--verify`) | Max test files compiled and run concurrently |
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
@@ -2875,7 +2886,9 @@ vow test [OPTIONS] [<path>]
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 
-**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). Single-file invocations (`vow test path/to/test_foo.vow`) keep the default behaviour of resolving `use` against the file's parent directory.
+**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). A single-file invocation without `--module-root` (`vow test compiler/tests/test_region.vow`) infers the module root the same way: starting at the file's own directory and walking up through its ancestors, it picks the nearest directory against which every `use` declaration of the file resolves (to `<path>.vow`, or `<path>.vow.d`). The walk stops after the first directory that contains `.git` (the repository root), at a `..` path component, or at `.` / `/`. If the file's own directory already resolves every `use`, if the file has no `use` declarations, or if no directory resolves them all, the file's parent directory is used and any unresolved module is reported as an ordinary `IoError`. When the file's own directory does not shadow a module of the tree, the inferred root is the one the directory form would use, so the test gives the same result in both forms; a module in the file's own directory takes precedence over one in an ancestor. This rule applies to `vow test` only; `vow build` and `vow verify` keep resolving `use` against the entry file's parent directory.
+
+**Concurrency.** Test files in a scan run concurrently, at most `--jobs` at a time, and the `tests` array is always in sorted-path order regardless of completion order. A test's `duration_ms` covers its own compile, verification, and execution. Beyond the first, a worker starts a new file only while the machine is not under memory or IO stall pressure (Linux PSI `/proc/pressure/memory` `some avg10` and `/proc/pressure/io` `full avg10`, both below 20), so a loaded machine degrades to fewer workers rather than thrashing; with no PSI available the limit is just `--jobs`. `--jobs 1` runs files strictly one after another. The self-hosted compiler runs each file of a concurrent scan in a worker subprocess of itself, using an internal `--worker-entry` flag whose output is not part of the CLI contract; a worker that dies without a result is reported as a `compile_error` entry so the suite stays fail-closed.
 
 **Test Output JSON:**
 
@@ -8411,7 +8424,8 @@ vow test [OPTIONS] [<path>]
 | `<path>`          | `.`         | Directory to scan or single `.vow` file    |
 | `--verify`        | (off)       | Run ESBMC verification on test files       |
 | `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |
-| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. |
+| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its `use` declarations. |
+| `--jobs <N>`      | `min(num_cpus/2, 8)` (`1` with `--verify`) | Max test files compiled and run concurrently |
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
@@ -8420,7 +8434,9 @@ vow test [OPTIONS] [<path>]
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 
-**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). Single-file invocations (`vow test path/to/test_foo.vow`) keep the default behaviour of resolving `use` against the file's parent directory.
+**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). A single-file invocation without `--module-root` (`vow test compiler/tests/test_region.vow`) infers the module root the same way: starting at the file's own directory and walking up through its ancestors, it picks the nearest directory against which every `use` declaration of the file resolves (to `<path>.vow`, or `<path>.vow.d`). The walk stops after the first directory that contains `.git` (the repository root), at a `..` path component, or at `.` / `/`. If the file's own directory already resolves every `use`, if the file has no `use` declarations, or if no directory resolves them all, the file's parent directory is used and any unresolved module is reported as an ordinary `IoError`. When the file's own directory does not shadow a module of the tree, the inferred root is the one the directory form would use, so the test gives the same result in both forms; a module in the file's own directory takes precedence over one in an ancestor. This rule applies to `vow test` only; `vow build` and `vow verify` keep resolving `use` against the entry file's parent directory.
+
+**Concurrency.** Test files in a scan run concurrently, at most `--jobs` at a time, and the `tests` array is always in sorted-path order regardless of completion order. A test's `duration_ms` covers its own compile, verification, and execution. Beyond the first, a worker starts a new file only while the machine is not under memory or IO stall pressure (Linux PSI `/proc/pressure/memory` `some avg10` and `/proc/pressure/io` `full avg10`, both below 20), so a loaded machine degrades to fewer workers rather than thrashing; with no PSI available the limit is just `--jobs`. `--jobs 1` runs files strictly one after another. The self-hosted compiler runs each file of a concurrent scan in a worker subprocess of itself, using an internal `--worker-entry` flag whose output is not part of the CLI contract; a worker that dies without a result is reported as a `compile_error` entry so the suite stays fail-closed.
 
 **Test Output JSON:**
 
