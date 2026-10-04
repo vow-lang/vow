@@ -52,12 +52,45 @@ fn check_argument_values_follow_the_rust_evaluator() -> i64 {
     insts.push(binary(7, IOP_WADD(), 4, 1));
     let f: IrFunction = single_block_function(insts);
     if ce_arg_value_string(f, 2) != String::from("-5") { return 200; }
-    if ce_arg_value_string(f, 3) != String::from("") { return 201; }
+    if ce_arg_value_string(f, 3) != String::from("5") { return 201; }
     if ce_arg_value_string(f, 4) != String::from("8") { return 202; }
     if ce_arg_value_string(f, 5) != String::from("18446744073709551615") { return 203; }
     if ce_arg_value_string(f, 6) != String::from("true") { return 204; }
     if ce_arg_value_string(f, 7) != String::from("") { return 205; }
     if ce_arg_value_string(f, 99) != String::from("") { return 206; }
+    0
+}
+
+fn check_checked_arithmetic_folds_only_without_overflow() -> i64 {
+    let max: i64 = 9223372036854775807;
+    let min: i64 = -9223372036854775807 - 1;
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, max));
+    insts.push(mk_inst_const_i64(1, 1));
+    insts.push(mk_inst_const_i64(2, min));
+    insts.push(mk_inst_const_i64(3, 2));
+    insts.push(mk_inst_const_i64(4, -1));
+    insts.push(binary(5, IOP_WADD(), 0, 1));
+    insts.push(binary(6, IOP_CADD(), 0, 1));
+    insts.push(binary(7, IOP_CSUB(), 2, 1));
+    insts.push(binary(8, IOP_CMUL(), 0, 3));
+    insts.push(binary(9, IOP_CMUL(), 4, 2));
+    insts.push(binary(10, IOP_CMUL(), 2, 4));
+    insts.push(binary(11, IOP_CMUL(), 3, 3));
+    insts.push(binary(12, IOP_CSUB(), 0, 4));
+    insts.push(binary(13, IOP_CADD(), 2, 4));
+    insts.push(binary(14, IOP_CMUL(), 4, 1));
+    let f: IrFunction = single_block_function(insts);
+    if ce_arg_value_string(f, 5) != i64_to_string(min) { return 220; }
+    if ce_arg_value_string(f, 6) != String::from("") { return 221; }
+    if ce_arg_value_string(f, 7) != String::from("") { return 222; }
+    if ce_arg_value_string(f, 8) != String::from("") { return 223; }
+    if ce_arg_value_string(f, 9) != String::from("") { return 224; }
+    if ce_arg_value_string(f, 10) != String::from("") { return 225; }
+    if ce_arg_value_string(f, 11) != String::from("4") { return 226; }
+    if ce_arg_value_string(f, 12) != String::from("") { return 227; }
+    if ce_arg_value_string(f, 13) != String::from("") { return 228; }
+    if ce_arg_value_string(f, 14) != String::from("-1") { return 229; }
     0
 }
 
@@ -223,6 +256,8 @@ fn main() -> i32 {
     if r1 != 0 { return i64_to_i32_wrap(r1); }
     let r2: i64 = check_argument_values_follow_the_rust_evaluator();
     if r2 != 0 { return i64_to_i32_wrap(r2); }
+    let r2b: i64 = check_checked_arithmetic_folds_only_without_overflow();
+    if r2b != 0 { return i64_to_i32_wrap(r2b); }
     let r3: i64 = check_clause_source_is_the_vow_instruction_origin();
     if r3 != 0 { return i64_to_i32_wrap(r3); }
     let r4: i64 = check_clause_file_falls_back_to_the_function_then_the_path();

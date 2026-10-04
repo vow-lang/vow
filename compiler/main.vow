@@ -212,46 +212,6 @@ fn ce_value_for_param(names: Vec<String>, vals: Vec<String>, param: String, para
     String::from("")
 }
 
-fn inst_const_i64_string_by_id(f: IrFunction, inst_id: i64) -> String {
-    let blocks: Vec<IrBlock> = f.blocks;
-    let mut bi: u64 = 0;
-    while bi < blocks.len() {
-        let insts: Vec<IrInst> = blocks[bi].insts;
-        let mut ii: u64 = 0;
-        while ii < insts.len() {
-            let inst: IrInst = insts[ii];
-            if inst.id == inst_id {
-                if inst.op == IOP_CONST_I32() || inst.op == IOP_CONST_I64() {
-                    return i64_to_string(inst.dv);
-                }
-                if inst.args.len() >= 2 {
-                    let lhs_s: String = inst_const_i64_string_by_id(f, inst.args[0]);
-                    let rhs_s: String = inst_const_i64_string_by_id(f, inst.args[1]);
-                    if lhs_s.len() > 0 && rhs_s.len() > 0 {
-                        let lhs: i64 = str_to_i64(lhs_s);
-                        let rhs: i64 = str_to_i64(rhs_s);
-                        if lhs_s == i64_to_string(lhs) && rhs_s == i64_to_string(rhs) {
-                            if inst.op == IOP_WADD() || inst.op == IOP_CADD() {
-                                return i64_to_string(lhs + rhs);
-                            }
-                            if inst.op == IOP_WSUB() || inst.op == IOP_CSUB() {
-                                return i64_to_string(lhs - rhs);
-                            }
-                            if inst.op == IOP_WMUL() || inst.op == IOP_CMUL() {
-                                return i64_to_string(lhs * rhs);
-                            }
-                        }
-                    }
-                }
-                return String::from("");
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    String::from("")
-}
-
 fn string_is_i64_literal(s: String) -> bool {
     if s.len() == 0 {
         return false;
@@ -278,7 +238,7 @@ fn callee_i64_string_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, c
                 if inst.op == IOP_GET_ARG() && inst.dk == IDATA_ARG_INDEX() {
                     let pidx: i64 = inst.dv;
                     if pidx >= 0 && pidx < call_inst.args.len() as i64 {
-                        return inst_const_i64_string_by_id(f, call_inst.args[pidx as u64]);
+                        return ce_fold_i64_string(f, call_inst.args[pidx as u64]);
                     }
                     return String::from("");
                 }
@@ -430,7 +390,7 @@ fn call_matches_callee_precondition_values(f: IrFunction, callee: IrFunction, ve
         if ce_val.len() == 0 {
             return false;
         }
-        let arg_val: String = inst_const_i64_string_by_id(f, inst.args[pidx as u64]);
+        let arg_val: String = ce_fold_i64_string(f, inst.args[pidx as u64]);
         if arg_val.len() == 0 {
             return false;
         }
@@ -2174,7 +2134,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                     let duration: i64 = time_unix_ms() - start_time;
                     let codegen_diag: Diagnostic = codegen_failure_diagnostic(result, test_path, str2(tmp_out, String::from(".o")));
                     eprintln_str(diag_to_human(codegen_diag, checked.dctx));
-                    let diag_json2: String = str3(String::from("["), diag_to_json(codegen_diag, checked.dctx), String::from("]"));
+                    let diag_json2: String = str3(String::from("["), diag_to_json(codegen_diag), String::from("]"));
                     let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration, diag_json2);
                     entries_json.push(entry);
                     failed = failed + 1;

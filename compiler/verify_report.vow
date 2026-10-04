@@ -78,50 +78,9 @@ struct CeFold {
     value: i64,
 }
 
-// Folds an argument subtree to an i64, or reports that it does not fold.
-// Mirrors `eval_const_i64_for_counterexample` in vow/src/cex_eval.rs: only
-// ConstI32/ConstI64 leaves, and only the wrapping operators fold (a checked
-// operator aborts on overflow, so there is no value to invent for it).
-fn ce_fold_i64(f: IrFunction, inst_id: i64) -> CeFold {
-    let blocks: Vec<IrBlock> = f.blocks;
-    let mut bi: u64 = 0;
-    while bi < blocks.len() {
-        let insts: Vec<IrInst> = blocks[bi].insts;
-        let mut ii: u64 = 0;
-        while ii < insts.len() {
-            let inst: IrInst = insts[ii];
-            if inst.id == inst_id {
-                if inst.op == IOP_CONST_I32() || inst.op == IOP_CONST_I64() {
-                    return CeFold { ok: true, value: inst.dv };
-                }
-                let wrapping: bool = inst.op == IOP_WADD() || inst.op == IOP_WSUB() || inst.op == IOP_WMUL();
-                if wrapping && inst.args.len() >= 2 {
-                    let lhs: CeFold = ce_fold_i64(f, inst.args[0]);
-                    let rhs: CeFold = ce_fold_i64(f, inst.args[1]);
-                    if lhs.ok && rhs.ok {
-                        if inst.op == IOP_WADD() {
-                            return CeFold { ok: true, value: lhs.value + rhs.value };
-                        }
-                        if inst.op == IOP_WSUB() {
-                            return CeFold { ok: true, value: lhs.value - rhs.value };
-                        }
-                        return CeFold { ok: true, value: lhs.value * rhs.value };
-                    }
-                }
-                return CeFold { ok: false, value: 0 };
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    CeFold { ok: false, value: 0 }
-}
-
-fn ce_arg_value_string(f: IrFunction, inst_id: i64) -> String {
-    let folded: CeFold = ce_fold_i64(f, inst_id);
-    if folded.ok {
-        return i64_to_string(folded.value);
-    }
+// The instruction with id `inst_id`, as a zero- or one-element vector.
+fn ce_find_inst(f: IrFunction, inst_id: i64) -> Vec<IrInst> {
+    let found: Vec<IrInst> = Vec::new();
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: u64 = 0;
     while bi < blocks.len() {
@@ -129,13 +88,123 @@ fn ce_arg_value_string(f: IrFunction, inst_id: i64) -> String {
         let mut ii: u64 = 0;
         while ii < insts.len() {
             if insts[ii].id == inst_id {
-                return ce_leaf_const_string(insts[ii]);
+                found.push(insts[ii]);
+                return found;
             }
             ii = ii + 1;
         }
         bi = bi + 1;
     }
+    found
+}
+
+fn ce_i64_min() -> i64 { 0 - 9223372036854775807 - 1 }
+
+fn ce_fold_ok(v: i64) -> CeFold {
+    CeFold { ok: true, value: v }
+}
+
+fn ce_fold_none() -> CeFold {
+    CeFold { ok: false, value: 0 }
+}
+
+// Wrapping result `r` of `a + b`, or no fold when `a + b` overflows i64.
+fn ce_checked_add(a: i64, b: i64) -> CeFold {
+    let r: i64 = a + b;
+    if (b > 0 && r < a) || (b < 0 && r > a) {
+        return ce_fold_none();
+    }
+    ce_fold_ok(r)
+}
+
+fn ce_checked_sub(a: i64, b: i64) -> CeFold {
+    let r: i64 = a - b;
+    if (b > 0 && r > a) || (b < 0 && r < a) {
+        return ce_fold_none();
+    }
+    ce_fold_ok(r)
+}
+
+fn ce_checked_mul(a: i64, b: i64) -> CeFold {
+    let r: i64 = a * b;
+    if a == 0 {
+        return ce_fold_ok(0);
+    }
+    if a == 0 - 1 {
+        if b == ce_i64_min() {
+            return ce_fold_none();
+        }
+        return ce_fold_ok(r);
+    }
+    if r / a != b {
+        return ce_fold_none();
+    }
+    ce_fold_ok(r)
+}
+
+// Folds an argument subtree to an i64, or reports that it does not fold.
+// Mirrors `eval_const_i64_for_counterexample` in vow/src/cex_eval.rs: only
+// ConstI32/ConstI64 leaves; wrapping operators wrap and checked operators fold
+// only when they do not overflow (an overflowing one aborts, so there is no
+// value to report).
+fn ce_fold_i64(f: IrFunction, inst_id: i64) -> CeFold {
+    let found: Vec<IrInst> = ce_find_inst(f, inst_id);
+    if found.len() == 0 {
+        return ce_fold_none();
+    }
+    let inst: IrInst = found[0];
+    if inst.op == IOP_CONST_I32() || inst.op == IOP_CONST_I64() {
+        return ce_fold_ok(inst.dv);
+    }
+    let is_add: bool = inst.op == IOP_WADD() || inst.op == IOP_CADD();
+    let is_sub: bool = inst.op == IOP_WSUB() || inst.op == IOP_CSUB();
+    let is_mul: bool = inst.op == IOP_WMUL() || inst.op == IOP_CMUL();
+    if !(is_add || is_sub || is_mul) || inst.args.len() < 2 {
+        return ce_fold_none();
+    }
+    let lhs: CeFold = ce_fold_i64(f, inst.args[0]);
+    let rhs: CeFold = ce_fold_i64(f, inst.args[1]);
+    if !(lhs.ok && rhs.ok) {
+        return ce_fold_none();
+    }
+    let checked: bool = inst.op == IOP_CADD() || inst.op == IOP_CSUB() || inst.op == IOP_CMUL();
+    if is_add {
+        if checked {
+            return ce_checked_add(lhs.value, rhs.value);
+        }
+        return ce_fold_ok(lhs.value + rhs.value);
+    }
+    if is_sub {
+        if checked {
+            return ce_checked_sub(lhs.value, rhs.value);
+        }
+        return ce_fold_ok(lhs.value - rhs.value);
+    }
+    if checked {
+        return ce_checked_mul(lhs.value, rhs.value);
+    }
+    ce_fold_ok(lhs.value * rhs.value)
+}
+
+// The folded i64 as a decimal string, or "" when the subtree does not fold.
+fn ce_fold_i64_string(f: IrFunction, inst_id: i64) -> String {
+    let folded: CeFold = ce_fold_i64(f, inst_id);
+    if folded.ok {
+        return i64_to_string(folded.value);
+    }
     String::from("")
+}
+
+fn ce_arg_value_string(f: IrFunction, inst_id: i64) -> String {
+    let folded: String = ce_fold_i64_string(f, inst_id);
+    if folded.len() > 0 {
+        return folded;
+    }
+    let found: Vec<IrInst> = ce_find_inst(f, inst_id);
+    if found.len() == 0 {
+        return String::from("");
+    }
+    ce_leaf_const_string(found[0])
 }
 
 // One error diagnostic per counterexample, mirroring `to_output_with_warnings`
