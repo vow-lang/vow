@@ -1,0 +1,10 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 1
+// TEST: stderr "drop requires a linear value, found `i64`"
+module DropNonLinear
+
+fn main() -> i32 {
+    let n: i64 = 1;
+    drop(n);
+    0
+}

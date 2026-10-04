@@ -1,0 +1,14 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 1
+module DropArity
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn main() -> i32 {
+    let a: Handle = Handle { fd: 1 };
+    let b: Handle = Handle { fd: 2 };
+    drop(a, b);
+    0
+}

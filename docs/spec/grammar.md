@@ -146,7 +146,7 @@ pub fn api_function(x: i64) -> i64 {
 | `f32`  | 32-bit float (limited support — avoid in contracts) |
 | `f64`  | 64-bit float (limited support — avoid in contracts) |
 | `bool` | Boolean                  |
-| `()`   | Unit type                |
+| `()`   | Unit type; its only value is also written `()` (not allowed as a parameter type) |
 | `!`    | Never type (diverges)    |
 
 Vow targets 64-bit only and has no `isize`/`usize`. Excluding pointer-width
@@ -180,7 +180,7 @@ extern wrappers.
 
 | Type               | Description                     |
 |--------------------|---------------------------------|
-| `Vec<T>`           | Growable array                  |
+| `Vec<T>`           | Growable array. `T` must be non-linear (see [Linear Structs](#linear-structs)) |
 | `Option<T>`        | Optional value (Some/None)      |
 | `Result<T, E>`     | Success or error                |
 | `String`           | UTF-8 string (backed by Vec<u8>)|
@@ -852,7 +852,20 @@ Owned enum wrappers inherit that obligation transitively. A user enum,
 linear; matching such a value consumes the wrapper exactly once and transfers
 the obligation to the selected bound payload. A reference type (`&T`) is never a
 linear owner. Collection types do not acquire linear ownership from
-their element type; their separate non-linear-element restrictions still apply.
+their element type, and they cannot hold linear values: a `Vec<T>` element, a
+`HashMap<K, V>` value, or a `BTreeMap<K, V>` value that is or transitively
+contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user
+enum wrapping one) is rejected where the collection type is written. The
+containers copy and shift entries bitwise, so storing a linear value would
+duplicate its obligation or let it escape the checker. `Vec` and `HashMap` use
+`UnsupportedFeature`; `BTreeMap` uses `BTreeMapValueMustBeNonLinear`. A nested
+collection (`Vec<Vec<Token>>`) is reported once, at the innermost collection that
+holds the linear value.
+A linear value that is no longer needed is discharged with the intrinsic
+`drop(value)` (see [Linear Intrinsics](#linear-intrinsics)). Passing it to a
+function that consumes it, returning it, or matching it are the other ways to
+satisfy the obligation; there is no implicit end-of-scope discharge, so a live
+obligation at scope exit is `RegionLinear`.
 An unbound `_` match catchall cannot discard a still-reachable linear payload:
 every variant that owns a linear payload must first have an explicit arm that
 binds and consumes or transfers that payload.
@@ -1040,6 +1053,8 @@ m.contains_key(k)
 
 **Key and value types.** The runtime stores each key and each value in one 64-bit slot and compares keys by value. A `HashMap` key must therefore be `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, or `bool`; every other key type is an `UnsupportedFeature` error in both compilers. `String`, `Vec`, struct, enum, `Option`, and tuple keys are heap-backed handles that would compare by pointer, so a lookup with an equal-but-distinct `String` would silently miss (and a mutable `String` mutated after insertion would corrupt the map). `i128`/`u128` keys would be truncated, and `f32`/`f64` have no total equality. Hash or intern such keys to a `u64` at the call site and keep a side table for the originals. A `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64` is likewise an `UnsupportedFeature` error: map values occupy a single 64-bit integer slot, so a 128-bit value would lose its high word and a float has no slot encoding. A `HashMap` value that is or transitively contains a `linear struct` is an `UnsupportedFeature` error for the same reason `BTreeMap` rejects it (`BTreeMapValueMustBeNonLinear`): the map copies values bitwise and `get` would hand out a second copy of the linear obligation. Narrow integer values (`i8` … `u32`) are stored widened and read back at their declared width. The check applies wherever the map type is written (annotations, parameters, returns, fields, aliases, constants), including nested inside `Vec`, `Option`, tuples, and other maps. A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
 
+**Set idiom.** The unit type `()` is a valid map value, so `HashMap<K, ()>` and `BTreeMap<K, ()>` are sets: `s.insert(k, ());` adds a member, `s.contains_key(k)` (`s.contains(k)` for `BTreeMap`) tests membership, `s.remove(k)` deletes it, and `s.get(k)` returns `Option<()>`. The value `()` has type `()` (it checks against a `()` annotation or return type), and the runtime stores it in the usual 64-bit slot as `0`. A function cannot take a `()` parameter (`UnsupportedFeature`: the argument carries no information and has no ABI slot), so pass the set itself or a key instead.
+
 `HashMap::get` returns `Option<V>`, exactly like `BTreeMap::get`: a missing key is `None`, never a default value, so `let a: i64 = m.get(k);` is a `TypeMismatch` in both compilers. Handle both cases with `match` (or `?`), or call `.unwrap()` to assert the key is present: it aborts with `UnwrapOnNone` on a missing key and requires the `[panic]` effect. A contract can state a binding as `result.get(k).unwrap() == v`; guard it with an earlier `result.contains_key(k)` clause (as in the examples), because the verifier reports a missing key there as a failed `unwrap()` on `None`, which carries no contract blame.
 
 ### BTreeMap<K, V> Methods
@@ -1221,6 +1236,14 @@ vow {
 | `pin_to_root`    | `fn(value: String) -> String` and `fn<T>(value: Vec<T>) -> Vec<T>` for flat scalar `T` | `[]` |
 
 `pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a flat scalar slot type (`i*`, `u*`, `f32`, `f64`, `bool`). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.
+
+#### Linear Intrinsics
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `drop`           | `fn(value: L) -> ()` for a linear owner `L` | `[]`       |
+
+`drop` is a compiler intrinsic, not a user-defined generic. `L` must be a linear owner: a `linear struct`, or an owned enum wrapper (`Option`, `Result`, or a user enum) that contains one. Any other argument type, or an argument count other than one, is a `TypeMismatch`. `drop` consumes the value exactly once (a second use is `LinearTypeViolation`) and discharges its obligation. It has no runtime effect beyond that: it runs no destructor, frees nothing, and lowers to no instruction other than the consume marker the type and region passes already track. It is verifier-neutral: the consume marker is a no-op in the C model, so a function that drops a linear value is verified exactly as if the call were absent. A user-defined function named `drop` takes precedence over the intrinsic.
 
 `String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.
 

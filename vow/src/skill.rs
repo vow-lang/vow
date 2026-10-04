@@ -891,6 +891,7 @@ fn skill_json() -> String {
     ],
     "builtins": {
       "pin_to_root": "fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []",
+      "drop": "fn(value: L) -> () for a linear owner L []",
       "print_str": "fn(s: String) -> () [io]",
       "print_i64": "fn(v: i64) -> () [io]",
       "print_u64": "fn(v: u64) -> () [io]",
@@ -1229,8 +1230,8 @@ LANGUAGE SUMMARY
 
 TYPES     : i8  i16  i32  i64  i128  u8  u16  u32  u64  u128  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>  BTreeMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
-BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []   print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]
-            print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: u64, len: u64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: u64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_poll_wait: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
+BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []   drop: fn(value: L) -> () for a linear owner L []   print_str: fn(s: String) -> () [io]
+            print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: u64, len: u64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: u64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_poll_wait: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
 METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/String::from_raw_parts_copy/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   BTreeMap: BTreeMap::new/insert/get/contains/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! ?
@@ -1513,7 +1514,7 @@ pub fn api_function(x: i64) -> i64 {
 | `f32`  | 32-bit float (limited support — avoid in contracts) |
 | `f64`  | 64-bit float (limited support — avoid in contracts) |
 | `bool` | Boolean                  |
-| `()`   | Unit type                |
+| `()`   | Unit type; its only value is also written `()` (not allowed as a parameter type) |
 | `!`    | Never type (diverges)    |
 
 Vow targets 64-bit only and has no `isize`/`usize`. Excluding pointer-width
@@ -1547,7 +1548,7 @@ extern wrappers.
 
 | Type               | Description                     |
 |--------------------|---------------------------------|
-| `Vec<T>`           | Growable array                  |
+| `Vec<T>`           | Growable array. `T` must be non-linear (see [Linear Structs](#linear-structs)) |
 | `Option<T>`        | Optional value (Some/None)      |
 | `Result<T, E>`     | Success or error                |
 | `String`           | UTF-8 string (backed by Vec<u8>)|
@@ -2219,7 +2220,20 @@ Owned enum wrappers inherit that obligation transitively. A user enum,
 linear; matching such a value consumes the wrapper exactly once and transfers
 the obligation to the selected bound payload. A reference type (`&T`) is never a
 linear owner. Collection types do not acquire linear ownership from
-their element type; their separate non-linear-element restrictions still apply.
+their element type, and they cannot hold linear values: a `Vec<T>` element, a
+`HashMap<K, V>` value, or a `BTreeMap<K, V>` value that is or transitively
+contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user
+enum wrapping one) is rejected where the collection type is written. The
+containers copy and shift entries bitwise, so storing a linear value would
+duplicate its obligation or let it escape the checker. `Vec` and `HashMap` use
+`UnsupportedFeature`; `BTreeMap` uses `BTreeMapValueMustBeNonLinear`. A nested
+collection (`Vec<Vec<Token>>`) is reported once, at the innermost collection that
+holds the linear value.
+A linear value that is no longer needed is discharged with the intrinsic
+`drop(value)` (see [Linear Intrinsics](#linear-intrinsics)). Passing it to a
+function that consumes it, returning it, or matching it are the other ways to
+satisfy the obligation; there is no implicit end-of-scope discharge, so a live
+obligation at scope exit is `RegionLinear`.
 An unbound `_` match catchall cannot discard a still-reachable linear payload:
 every variant that owns a linear payload must first have an explicit arm that
 binds and consumes or transfers that payload.
@@ -2407,6 +2421,8 @@ m.contains_key(k)
 
 **Key and value types.** The runtime stores each key and each value in one 64-bit slot and compares keys by value. A `HashMap` key must therefore be `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, or `bool`; every other key type is an `UnsupportedFeature` error in both compilers. `String`, `Vec`, struct, enum, `Option`, and tuple keys are heap-backed handles that would compare by pointer, so a lookup with an equal-but-distinct `String` would silently miss (and a mutable `String` mutated after insertion would corrupt the map). `i128`/`u128` keys would be truncated, and `f32`/`f64` have no total equality. Hash or intern such keys to a `u64` at the call site and keep a side table for the originals. A `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64` is likewise an `UnsupportedFeature` error: map values occupy a single 64-bit integer slot, so a 128-bit value would lose its high word and a float has no slot encoding. A `HashMap` value that is or transitively contains a `linear struct` is an `UnsupportedFeature` error for the same reason `BTreeMap` rejects it (`BTreeMapValueMustBeNonLinear`): the map copies values bitwise and `get` would hand out a second copy of the linear obligation. Narrow integer values (`i8` … `u32`) are stored widened and read back at their declared width. The check applies wherever the map type is written (annotations, parameters, returns, fields, aliases, constants), including nested inside `Vec`, `Option`, tuples, and other maps. A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
 
+**Set idiom.** The unit type `()` is a valid map value, so `HashMap<K, ()>` and `BTreeMap<K, ()>` are sets: `s.insert(k, ());` adds a member, `s.contains_key(k)` (`s.contains(k)` for `BTreeMap`) tests membership, `s.remove(k)` deletes it, and `s.get(k)` returns `Option<()>`. The value `()` has type `()` (it checks against a `()` annotation or return type), and the runtime stores it in the usual 64-bit slot as `0`. A function cannot take a `()` parameter (`UnsupportedFeature`: the argument carries no information and has no ABI slot), so pass the set itself or a key instead.
+
 `HashMap::get` returns `Option<V>`, exactly like `BTreeMap::get`: a missing key is `None`, never a default value, so `let a: i64 = m.get(k);` is a `TypeMismatch` in both compilers. Handle both cases with `match` (or `?`), or call `.unwrap()` to assert the key is present: it aborts with `UnwrapOnNone` on a missing key and requires the `[panic]` effect. A contract can state a binding as `result.get(k).unwrap() == v`; guard it with an earlier `result.contains_key(k)` clause (as in the examples), because the verifier reports a missing key there as a failed `unwrap()` on `None`, which carries no contract blame.
 
 ### BTreeMap<K, V> Methods
@@ -2588,6 +2604,14 @@ vow {
 | `pin_to_root`    | `fn(value: String) -> String` and `fn<T>(value: Vec<T>) -> Vec<T>` for flat scalar `T` | `[]` |
 
 `pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a flat scalar slot type (`i*`, `u*`, `f32`, `f64`, `bool`). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.
+
+#### Linear Intrinsics
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `drop`           | `fn(value: L) -> ()` for a linear owner `L` | `[]`       |
+
+`drop` is a compiler intrinsic, not a user-defined generic. `L` must be a linear owner: a `linear struct`, or an owned enum wrapper (`Option`, `Result`, or a user enum) that contains one. Any other argument type, or an argument count other than one, is a `TypeMismatch`. `drop` consumes the value exactly once (a second use is `LinearTypeViolation`) and discharges its obligation. It has no runtime effect beyond that: it runs no destructor, frees nothing, and lowers to no instruction other than the consume marker the type and region passes already track. It is verifier-neutral: the consume marker is a no-op in the C model, so a function that drops a linear value is verified exactly as if the call were absent. A user-defined function named `drop` takes precedence over the intrinsic.
 
 `String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.
 
@@ -3102,7 +3126,7 @@ rationale.
 |-----------------|---------------------------------------------|
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
-| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
+| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `LinearBorrow`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
@@ -3343,7 +3367,7 @@ compilers anchor on the byte offset of the parameter name instead.
 | `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
-| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `Linear*` consume/borrow, `RemF*`) or the function has effects. (Struct construction and field ops are modelled — see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
+| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `LinearBorrow`, `RemF*`) or the function has effects. (Struct construction and field ops are modelled — see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
 | `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
 
 The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g. the BV→IR fallback) may never report a weakened check as `proven` are the verifier's soundness discipline — the safe-vs-unsafe retry rules are specified in `docs/verifier-discipline.md`.
@@ -4559,6 +4583,11 @@ fn f() -> i32 {
 **Fix:** Change the expression or declared type to match. For an enum pattern,
 qualify the variant with the scrutinee's enum name.
 
+The `drop` intrinsic also reports `TypeMismatch` when it is called with an argument
+count other than one or with a value that is not a linear owner
+(``drop requires a linear value, found `i64` ``); see
+[Linear Intrinsics](grammar.md#linear-intrinsics).
+
 A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::truncate`
 argument must have exactly the type `u64`. An index of any other integer type
 (for example an `i64` counter) or of a non-integer type is a `TypeMismatch`
@@ -4758,7 +4787,7 @@ fn f(h: Handle) -> Handle {
 ```
 
 **Fix:** Restructure ownership so each path uses a consumed linear value at most
-once. Keep linear owners out of struct fields until move-out field access is
+once. Discharge a value that is no longer needed with `drop(value)`. Keep linear owners out of struct fields until move-out field access is
 supported. In a match, add explicit arms that bind and consume or transfer every
 linear payload before using `_`. Obligations that are simply left live at scope
 exit are reported later as `RegionLinear`.
@@ -4964,6 +4993,34 @@ fn f() -> () {
 **Output:** ``HashMap key type `String` is not supported: keys are compared by value as a single machine word``
 
 **Fix:** Hash or intern the key to a `u64` at the call site and keep a side table for the originals. For a 128-bit value, store the two `u64` halves separately. For a linear value, keep it in a local binding and store only an integer handle in the map.
+
+#### Linear collection elements
+
+The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking.
+
+```vow
+linear struct Token { id: i64 }
+
+fn f() -> () {
+    let v: Vec<Token> = Vec::new();
+}
+```
+
+**Output:** `Vec element type must be non-linear; found 'Token'`
+
+**Fix:** Keep the linear value in a local binding and store an integer handle in the `Vec`. Consume a linear value that is no longer needed with `drop(value)`.
+
+#### Unit parameters
+
+The same code reports a parameter of type `()` (directly or through a type alias). The unit value carries no information and has no ABI slot, so such a parameter is rejected at the declaration.
+
+```vow
+fn f(u: ()) -> i64 { 0 }
+```
+
+**Output:** ``parameter `u` has type `()`: unit parameters are not supported``
+
+**Fix:** Remove the parameter.
 
 A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
 
@@ -5192,7 +5249,7 @@ changing the source will not help.
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `Linear*` family. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `LinearBorrow`. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
 
 ```json
 {
@@ -7203,7 +7260,7 @@ pub fn api_function(x: i64) -> i64 {
 | `f32`  | 32-bit float (limited support — avoid in contracts) |
 | `f64`  | 64-bit float (limited support — avoid in contracts) |
 | `bool` | Boolean                  |
-| `()`   | Unit type                |
+| `()`   | Unit type; its only value is also written `()` (not allowed as a parameter type) |
 | `!`    | Never type (diverges)    |
 
 Vow targets 64-bit only and has no `isize`/`usize`. Excluding pointer-width
@@ -7237,7 +7294,7 @@ extern wrappers.
 
 | Type               | Description                     |
 |--------------------|---------------------------------|
-| `Vec<T>`           | Growable array                  |
+| `Vec<T>`           | Growable array. `T` must be non-linear (see [Linear Structs](#linear-structs)) |
 | `Option<T>`        | Optional value (Some/None)      |
 | `Result<T, E>`     | Success or error                |
 | `String`           | UTF-8 string (backed by Vec<u8>)|
@@ -7909,7 +7966,20 @@ Owned enum wrappers inherit that obligation transitively. A user enum,
 linear; matching such a value consumes the wrapper exactly once and transfers
 the obligation to the selected bound payload. A reference type (`&T`) is never a
 linear owner. Collection types do not acquire linear ownership from
-their element type; their separate non-linear-element restrictions still apply.
+their element type, and they cannot hold linear values: a `Vec<T>` element, a
+`HashMap<K, V>` value, or a `BTreeMap<K, V>` value that is or transitively
+contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user
+enum wrapping one) is rejected where the collection type is written. The
+containers copy and shift entries bitwise, so storing a linear value would
+duplicate its obligation or let it escape the checker. `Vec` and `HashMap` use
+`UnsupportedFeature`; `BTreeMap` uses `BTreeMapValueMustBeNonLinear`. A nested
+collection (`Vec<Vec<Token>>`) is reported once, at the innermost collection that
+holds the linear value.
+A linear value that is no longer needed is discharged with the intrinsic
+`drop(value)` (see [Linear Intrinsics](#linear-intrinsics)). Passing it to a
+function that consumes it, returning it, or matching it are the other ways to
+satisfy the obligation; there is no implicit end-of-scope discharge, so a live
+obligation at scope exit is `RegionLinear`.
 An unbound `_` match catchall cannot discard a still-reachable linear payload:
 every variant that owns a linear payload must first have an explicit arm that
 binds and consumes or transfers that payload.
@@ -8097,6 +8167,8 @@ m.contains_key(k)
 
 **Key and value types.** The runtime stores each key and each value in one 64-bit slot and compares keys by value. A `HashMap` key must therefore be `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, or `bool`; every other key type is an `UnsupportedFeature` error in both compilers. `String`, `Vec`, struct, enum, `Option`, and tuple keys are heap-backed handles that would compare by pointer, so a lookup with an equal-but-distinct `String` would silently miss (and a mutable `String` mutated after insertion would corrupt the map). `i128`/`u128` keys would be truncated, and `f32`/`f64` have no total equality. Hash or intern such keys to a `u64` at the call site and keep a side table for the originals. A `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64` is likewise an `UnsupportedFeature` error: map values occupy a single 64-bit integer slot, so a 128-bit value would lose its high word and a float has no slot encoding. A `HashMap` value that is or transitively contains a `linear struct` is an `UnsupportedFeature` error for the same reason `BTreeMap` rejects it (`BTreeMapValueMustBeNonLinear`): the map copies values bitwise and `get` would hand out a second copy of the linear obligation. Narrow integer values (`i8` … `u32`) are stored widened and read back at their declared width. The check applies wherever the map type is written (annotations, parameters, returns, fields, aliases, constants), including nested inside `Vec`, `Option`, tuples, and other maps. A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
 
+**Set idiom.** The unit type `()` is a valid map value, so `HashMap<K, ()>` and `BTreeMap<K, ()>` are sets: `s.insert(k, ());` adds a member, `s.contains_key(k)` (`s.contains(k)` for `BTreeMap`) tests membership, `s.remove(k)` deletes it, and `s.get(k)` returns `Option<()>`. The value `()` has type `()` (it checks against a `()` annotation or return type), and the runtime stores it in the usual 64-bit slot as `0`. A function cannot take a `()` parameter (`UnsupportedFeature`: the argument carries no information and has no ABI slot), so pass the set itself or a key instead.
+
 `HashMap::get` returns `Option<V>`, exactly like `BTreeMap::get`: a missing key is `None`, never a default value, so `let a: i64 = m.get(k);` is a `TypeMismatch` in both compilers. Handle both cases with `match` (or `?`), or call `.unwrap()` to assert the key is present: it aborts with `UnwrapOnNone` on a missing key and requires the `[panic]` effect. A contract can state a binding as `result.get(k).unwrap() == v`; guard it with an earlier `result.contains_key(k)` clause (as in the examples), because the verifier reports a missing key there as a failed `unwrap()` on `None`, which carries no contract blame.
 
 ### BTreeMap<K, V> Methods
@@ -8278,6 +8350,14 @@ vow {
 | `pin_to_root`    | `fn(value: String) -> String` and `fn<T>(value: Vec<T>) -> Vec<T>` for flat scalar `T` | `[]` |
 
 `pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a flat scalar slot type (`i*`, `u*`, `f32`, `f64`, `bool`). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.
+
+#### Linear Intrinsics
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `drop`           | `fn(value: L) -> ()` for a linear owner `L` | `[]`       |
+
+`drop` is a compiler intrinsic, not a user-defined generic. `L` must be a linear owner: a `linear struct`, or an owned enum wrapper (`Option`, `Result`, or a user enum) that contains one. Any other argument type, or an argument count other than one, is a `TypeMismatch`. `drop` consumes the value exactly once (a second use is `LinearTypeViolation`) and discharges its obligation. It has no runtime effect beyond that: it runs no destructor, frees nothing, and lowers to no instruction other than the consume marker the type and region passes already track. It is verifier-neutral: the consume marker is a no-op in the C model, so a function that drops a linear value is verified exactly as if the call were absent. A user-defined function named `drop` takes precedence over the intrinsic.
 
 `String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.
 
@@ -8793,7 +8873,7 @@ rationale.
 |-----------------|---------------------------------------------|
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
-| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
+| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `LinearBorrow`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
@@ -9034,7 +9114,7 @@ compilers anchor on the byte offset of the parameter name instead.
 | `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
-| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `Linear*` consume/borrow, `RemF*`) or the function has effects. (Struct construction and field ops are modelled — see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
+| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `LinearBorrow`, `RemF*`) or the function has effects. (Struct construction and field ops are modelled — see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
 | `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
 
 The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g. the BV→IR fallback) may never report a weakened check as `proven` are the verifier's soundness discipline — the safe-vs-unsafe retry rules are specified in `docs/verifier-discipline.md`.
@@ -10253,6 +10333,11 @@ fn f() -> i32 {
 **Fix:** Change the expression or declared type to match. For an enum pattern,
 qualify the variant with the scrutinee's enum name.
 
+The `drop` intrinsic also reports `TypeMismatch` when it is called with an argument
+count other than one or with a value that is not a linear owner
+(``drop requires a linear value, found `i64` ``); see
+[Linear Intrinsics](grammar.md#linear-intrinsics).
+
 A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::truncate`
 argument must have exactly the type `u64`. An index of any other integer type
 (for example an `i64` counter) or of a non-integer type is a `TypeMismatch`
@@ -10452,7 +10537,7 @@ fn f(h: Handle) -> Handle {
 ```
 
 **Fix:** Restructure ownership so each path uses a consumed linear value at most
-once. Keep linear owners out of struct fields until move-out field access is
+once. Discharge a value that is no longer needed with `drop(value)`. Keep linear owners out of struct fields until move-out field access is
 supported. In a match, add explicit arms that bind and consume or transfer every
 linear payload before using `_`. Obligations that are simply left live at scope
 exit are reported later as `RegionLinear`.
@@ -10658,6 +10743,34 @@ fn f() -> () {
 **Output:** ``HashMap key type `String` is not supported: keys are compared by value as a single machine word``
 
 **Fix:** Hash or intern the key to a `u64` at the call site and keep a side table for the originals. For a 128-bit value, store the two `u64` halves separately. For a linear value, keep it in a local binding and store only an integer handle in the map.
+
+#### Linear collection elements
+
+The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking.
+
+```vow
+linear struct Token { id: i64 }
+
+fn f() -> () {
+    let v: Vec<Token> = Vec::new();
+}
+```
+
+**Output:** `Vec element type must be non-linear; found 'Token'`
+
+**Fix:** Keep the linear value in a local binding and store an integer handle in the `Vec`. Consume a linear value that is no longer needed with `drop(value)`.
+
+#### Unit parameters
+
+The same code reports a parameter of type `()` (directly or through a type alias). The unit value carries no information and has no ABI slot, so such a parameter is rejected at the declaration.
+
+```vow
+fn f(u: ()) -> i64 { 0 }
+```
+
+**Output:** ``parameter `u` has type `()`: unit parameters are not supported``
+
+**Fix:** Remove the parameter.
 
 A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
 
@@ -10886,7 +10999,7 @@ changing the source will not help.
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `Linear*` family. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `LinearBorrow`. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
 
 ```json
 {

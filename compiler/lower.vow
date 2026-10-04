@@ -2962,6 +2962,16 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let name_sid: i64 = expr_a(a, callee_eid);
             fn_name = arena_str(a, name_sid);
         }
+        if fn_name == String::from("drop") && lctx_find_func(ctx, fn_name) == -1 {
+            let nd: i64 = list_len(a, args_lid);
+            let mut di: i64 = 0;
+            while di < nd {
+                lower_consumed_expr(ctx, list_get(a, args_lid, di));
+                di = di + 1;
+            }
+            let drop_args: Vec<i64> = Vec::new();
+            return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), drop_args, IDATA_NONE(), 0, 0, String::from(""));
+        }
         if fn_name == String::from("pin_to_root") {
             let nargs: i64 = list_len(a, args_lid);
             if nargs > 0 {

@@ -1374,7 +1374,7 @@ impl<'e> Checker<'e> {
                         .iter()
                         .map(|p| match self.env.resolve(&p.ty) {
                             Ok(ty) => {
-                                self.check_map_types_in_ty(&ty, p.span);
+                                self.check_param_ty(&ty, &p.name, p.span);
                                 ty
                             }
                             Err(msg) => {
@@ -1420,7 +1420,7 @@ impl<'e> Checker<'e> {
                             .iter()
                             .map(|p| match self.env.resolve(&p.ty) {
                                 Ok(ty) => {
-                                    self.check_map_types_in_ty(&ty, p.span);
+                                    self.check_param_ty(&ty, &p.name, p.span);
                                     ty
                                 }
                                 Err(msg) => {
@@ -2384,6 +2384,33 @@ impl<'e> Checker<'e> {
                         return Ty::Unit;
                     }
                 };
+                if name == "drop" && self.env.lookup_fn("drop").is_none() {
+                    if args.len() != 1 {
+                        self.emit_error_with_hints(
+                            ErrorCode::TypeMismatch,
+                            format!("function `drop` expects 1 argument but got {}", args.len()),
+                            expr.span,
+                            vec!["expected signature: (linear_value)".to_string()],
+                        );
+                        for arg in args {
+                            self.check_expr(arg);
+                        }
+                        return Ty::Unit;
+                    }
+                    let arg_ty = self.check_expr(&args[0]);
+                    if arg_ty != Ty::Never && !crate::linear::is_linear_owner_ty(&arg_ty, &self.env)
+                    {
+                        self.emit_error_with_hints(
+                            ErrorCode::TypeMismatch,
+                            format!("drop requires a linear value, found `{arg_ty}`"),
+                            args[0].span,
+                            vec![
+                                "only a `linear struct` or an owned enum wrapper that contains one can be dropped; other values need no explicit discharge".to_string(),
+                            ],
+                        );
+                    }
+                    return Ty::Unit;
+                }
                 if name == "pin_to_root" {
                     if args.len() != 1 {
                         self.emit_error_with_hints(
@@ -3077,8 +3104,12 @@ impl<'e> Checker<'e> {
                         expr.span,
                     );
                 }
-                let elem_tys: Vec<Ty> = elems.iter().map(|e| self.check_expr(e)).collect();
-                Ty::Tuple(elem_tys)
+                if elems.is_empty() {
+                    Ty::Unit
+                } else {
+                    let elem_tys: Vec<Ty> = elems.iter().map(|e| self.check_expr(e)).collect();
+                    Ty::Tuple(elem_tys)
+                }
             }
             ExprKind::Result => self.current_return_ty.clone(),
             ExprKind::StructLiteral { name, fields } => {
@@ -3649,8 +3680,12 @@ impl<'e> Checker<'e> {
         }
     }
 
-    // The one place every per-map rule lives, for a single `HashMap`/`BTreeMap`
-    // type. Diagnostics are emitted in this order: key, linear value, wide value.
+    // The one place every per-collection rule lives, for a single `Vec`, `HashMap`
+    // or `BTreeMap` type. A `Vec` element that is or contains a linear owner is an
+    // UnsupportedFeature (the vector copies and shifts elements bitwise). Collection
+    // types never count as linear themselves (the rule is enforced at the
+    // collection that holds the linear value), so one written site reports once.
+    // For maps, diagnostics are emitted in this order: key, linear value, wide value.
     // BTreeMap keys must be `i64` and linear values use the dedicated BTreeMap
     // codes; the runtime stores every other key and value in one 64-bit slot, so a
     // HashMap key that is not a by-value scalar, a linear HashMap value, and a
@@ -3664,6 +3699,22 @@ impl<'e> Checker<'e> {
         let Ty::Struct(map_name) = base.as_ref() else {
             return;
         };
+        if map_name == "Vec" {
+            if let Some(elem_ty) = args.first().filter(|t| self.is_linear_ty(t)) {
+                self.emit_error_with_hints(
+                    ErrorCode::UnsupportedFeature,
+                    format!(
+                        "Vec element type must be non-linear; found '{}'",
+                        elem_ty.user_name()
+                    ),
+                    span,
+                    vec![
+                        "a Vec copies and shifts elements bitwise, so a linear element would be duplicated; keep the value in a local binding and store an integer handle instead".to_string(),
+                    ],
+                );
+            }
+            return;
+        }
         let is_btree = map_name == "BTreeMap";
         if map_name != "HashMap" && !is_btree {
             return;
@@ -3724,6 +3775,21 @@ impl<'e> Checker<'e> {
                 vec![
                     "keep a 128-bit value as two `u64` halves under separate keys or in two maps; floats cannot be map values".to_string(),
                 ],
+            );
+        }
+    }
+
+    // A `()` parameter carries no information and has no ABI slot, so a call would
+    // pass an argument the callee signature does not declare. Rejected at the
+    // declaration instead of miscompiling.
+    fn check_param_ty(&mut self, ty: &Ty, name: &str, span: vow_syntax::span::Span) {
+        self.check_map_types_in_ty(ty, span);
+        if *ty == Ty::Unit {
+            self.emit_error_with_hints(
+                ErrorCode::UnsupportedFeature,
+                format!("parameter `{name}` has type `()`: unit parameters are not supported"),
+                span,
+                vec!["remove the parameter; a `()` argument carries no information".to_string()],
             );
         }
     }
@@ -3792,6 +3858,9 @@ impl<'e> Checker<'e> {
                         VariantKind::Unit => false,
                     })
                 })
+            }
+            Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Struct(n) if matches!(n.as_str(), "Vec" | "HashMap" | "BTreeMap")) => {
+                false
             }
             Ty::Applied(base, args) => {
                 self.is_linear_ty_rec(base, visited)
@@ -7469,6 +7538,142 @@ mod tests {
             "did not expect BTreeMapValueMustBeNonLinear; got {:?}",
             emitter.0.iter().map(|d| d.code).collect::<Vec<_>>()
         );
+    }
+
+    fn define_linear_token(checker: &mut Checker) {
+        use crate::env::StructInfo;
+        checker.env.define_struct(
+            "Token",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+    }
+
+    fn applied(name: &str, args: Vec<Ty>) -> Ty {
+        Ty::Applied(Box::new(Ty::Struct(name.to_string())), args)
+    }
+
+    fn unsupported_feature_count(emitter: &TestEmitter) -> usize {
+        emitter
+            .0
+            .iter()
+            .filter(|d| d.code == ErrorCode::UnsupportedFeature)
+            .count()
+    }
+
+    #[test]
+    fn vec_element_linear_struct_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        define_linear_token(&mut checker);
+        let ty = applied("Vec", vec![Ty::Struct("Token".to_string())]);
+        checker.check_map_types_in_ty(&ty, dummy_span());
+        assert_eq!(unsupported_feature_count(&emitter), 1);
+        let diag = &emitter.0[0];
+        assert!(
+            diag.message
+                .contains("Vec element type must be non-linear; found 'Token'")
+        );
+        assert!(!diag.hints.is_empty());
+    }
+
+    #[test]
+    fn vec_element_non_linear_accepted() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        define_linear_token(&mut checker);
+        checker.check_map_types_in_ty(&applied("Vec", vec![Ty::I64]), dummy_span());
+        assert!(emitter.0.is_empty(), "got {:?}", emitter.0);
+    }
+
+    #[test]
+    fn vec_of_option_of_linear_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        define_linear_token(&mut checker);
+        let opt = Ty::Applied(
+            Box::new(Ty::Enum("Option".to_string())),
+            vec![Ty::Struct("Token".to_string())],
+        );
+        checker.check_map_types_in_ty(&applied("Vec", vec![opt]), dummy_span());
+        assert_eq!(unsupported_feature_count(&emitter), 1);
+    }
+
+    #[test]
+    fn nested_collections_of_linear_report_once() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        define_linear_token(&mut checker);
+        let inner = applied("Vec", vec![Ty::Struct("Token".to_string())]);
+        checker.check_map_types_in_ty(&applied("Vec", vec![inner.clone()]), dummy_span());
+        checker.check_map_types_in_ty(&applied("HashMap", vec![Ty::I64, inner]), dummy_span());
+        assert_eq!(unsupported_feature_count(&emitter), 2);
+    }
+
+    #[test]
+    fn unit_parameter_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.check_param_ty(&Ty::Unit, "u", dummy_span());
+        checker.check_param_ty(&Ty::I64, "n", dummy_span());
+        assert_eq!(unsupported_feature_count(&emitter), 1);
+        assert_eq!(emitter.0.len(), 1);
+        assert!(
+            emitter.0[0]
+                .message
+                .contains("unit parameters are not supported")
+        );
+    }
+
+    fn drop_call(args: Vec<Expr>) -> Expr {
+        make_expr(ExprKind::Call {
+            callee: Box::new(ident("drop")),
+            args,
+        })
+    }
+
+    #[test]
+    fn drop_accepts_linear_owner_and_returns_unit() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        define_linear_token(&mut checker);
+        checker.env.push_scope();
+        checker.env.define("t", Ty::Struct("Token".to_string()));
+        let ty = checker.check_expr(&drop_call(vec![ident("t")]));
+        assert_eq!(ty, Ty::Unit);
+        assert!(emitter.0.is_empty(), "{:?}", emitter.0);
+    }
+
+    #[test]
+    fn drop_rejects_non_linear_and_wrong_arity() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        define_linear_token(&mut checker);
+        checker.env.push_scope();
+        checker.env.define("n", Ty::I64);
+        checker.env.define("t", Ty::Struct("Token".to_string()));
+        checker.check_expr(&drop_call(vec![ident("n")]));
+        checker.check_expr(&drop_call(vec![ident("t"), ident("t")]));
+        checker.check_expr(&drop_call(vec![]));
+        let codes: Vec<_> = emitter.0.iter().map(|d| d.code).collect();
+        assert_eq!(codes, vec![ErrorCode::TypeMismatch; 3]);
+        assert!(
+            emitter.0[0]
+                .message
+                .contains("drop requires a linear value, found `i64`")
+        );
+        assert!(!emitter.0[0].hints.is_empty());
+    }
+
+    #[test]
+    fn unit_literal_has_unit_type() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        let ty = checker.check_expr(&make_expr(ExprKind::Tuple(vec![])));
+        assert_eq!(ty, Ty::Unit);
+        assert!(emitter.0.is_empty());
     }
 
     #[test]

@@ -7,8 +7,7 @@ linear struct Token {
 
 fn consume_id(token: Token) -> i64 {
     let id: i64 = token.id;
-    let sink: Vec<Token> = Vec::new();
-    sink.push(token);
+    drop(token);
     id
 }
 

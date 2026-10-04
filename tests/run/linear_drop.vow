@@ -1,0 +1,59 @@
+// TEST: stdout "1 2 3 4 5\n"
+// `drop(x)` is the terminal discharge of a linear obligation: it consumes the
+// value and has no runtime effect. It accepts a linear struct or an owned enum
+// wrapper (Option, Result, user enum) that contains one.
+module LinearDrop
+
+linear struct Handle {
+    fd: i64,
+}
+
+enum Wrap {
+    Has(Handle),
+    Nope,
+}
+
+fn drop_struct(h: Handle) -> i64 {
+    let fd: i64 = h.fd;
+    drop(h);
+    fd
+}
+
+fn drop_option(o: Option<Handle>) -> i64 {
+    drop(o);
+    2
+}
+
+fn drop_wrap(w: Wrap) -> i64 {
+    drop(w);
+    3
+}
+
+fn drop_on_both_branches(h: Handle, c: bool) -> i64 {
+    if c {
+        drop(h);
+        4
+    } else {
+        drop(h);
+        0
+    }
+}
+
+fn drop_fresh() -> i64 {
+    drop(Handle { fd: 9 });
+    5
+}
+
+fn main() -> i32 [io] {
+    print_i64(drop_struct(Handle { fd: 1 }));
+    print_str(" ");
+    print_i64(drop_option(Option::Some(Handle { fd: 2 })));
+    print_str(" ");
+    print_i64(drop_wrap(Wrap::Has(Handle { fd: 3 })));
+    print_str(" ");
+    print_i64(drop_on_both_branches(Handle { fd: 4 }, true));
+    print_str(" ");
+    print_i64(drop_fresh());
+    print_str("\n");
+    0
+}
