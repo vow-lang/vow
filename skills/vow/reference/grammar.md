@@ -465,8 +465,9 @@ still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is
 `UnsupportedFeature` error at the `&` token, identically in both compilers (see
 [errors.md](errors.md#unsupportedfeature)). Pass the value itself. The type
 syntax `&T` is still accepted in signatures and annotations, but no expression
-produces a value of that type, so a reference-typed parameter can never be
-supplied.
+creates a value of that type: a `&T` parameter can only be passed on from
+another `&T` parameter, so a program has no way to introduce one. Do not
+declare reference-typed parameters.
 
 ### Unary Operators
 

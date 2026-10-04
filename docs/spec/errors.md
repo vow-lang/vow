@@ -454,8 +454,8 @@ trait Foo {
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
 
 A prefix `&expr` borrow expression is rejected by the parser, at the `&` token, with
-the hint `Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise
-AND operator`; the operand is still parsed, so the diagnostic is reported once:
+the hint ``Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise
+AND operator``; the operand is still parsed, so the diagnostic is reported once:
 
 ```vow
 fn f(x: i64) -> i64 {

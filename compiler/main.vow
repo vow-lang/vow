@@ -4018,8 +4018,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("`UnsupportedFeature` error at the `&` token, identically in both compilers (see\n"));
     r.push_str(String::from("[errors.md](errors.md#unsupportedfeature)). Pass the value itself. The type\n"));
     r.push_str(String::from("syntax `&T` is still accepted in signatures and annotations, but no expression\n"));
-    r.push_str(String::from("produces a value of that type, so a reference-typed parameter can never be\n"));
-    r.push_str(String::from("supplied.\n"));
+    r.push_str(String::from("creates a value of that type: a `&T` parameter can only be passed on from\n"));
+    r.push_str(String::from("another `&T` parameter, so a program has no way to introduce one. Do not\n"));
+    r.push_str(String::from("declare reference-typed parameters.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Unary Operators\n"));
     r.push_str(String::from("\n"));
@@ -7051,8 +7052,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("**Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("A prefix `&expr` borrow expression is rejected by the parser, at the `&` token, with\n"));
-    r.push_str(String::from("the hint `Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise\n"));
-    r.push_str(String::from("AND operator`; the operand is still parsed, so the diagnostic is reported once:\n"));
+    r.push_str(String::from("the hint ``Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise\n"));
+    r.push_str(String::from("AND operator``; the operand is still parsed, so the diagnostic is reported once:\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn f(x: i64) -> i64 {\n"));
@@ -9642,8 +9643,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("`UnsupportedFeature` error at the `&` token, identically in both compilers (see\n"));
     r.push_str(String::from("[errors.md](errors.md#unsupportedfeature)). Pass the value itself. The type\n"));
     r.push_str(String::from("syntax `&T` is still accepted in signatures and annotations, but no expression\n"));
-    r.push_str(String::from("produces a value of that type, so a reference-typed parameter can never be\n"));
-    r.push_str(String::from("supplied.\n"));
+    r.push_str(String::from("creates a value of that type: a `&T` parameter can only be passed on from\n"));
+    r.push_str(String::from("another `&T` parameter, so a program has no way to introduce one. Do not\n"));
+    r.push_str(String::from("declare reference-typed parameters.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Unary Operators\n"));
     r.push_str(String::from("\n"));
@@ -12683,8 +12685,8 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("**Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("A prefix `&expr` borrow expression is rejected by the parser, at the `&` token, with\n"));
-    r.push_str(String::from("the hint `Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise\n"));
-    r.push_str(String::from("AND operator`; the operand is still parsed, so the diagnostic is reported once:\n"));
+    r.push_str(String::from("the hint ``Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise\n"));
+    r.push_str(String::from("AND operator``; the operand is still parsed, so the diagnostic is reported once:\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn f(x: i64) -> i64 {\n"));

@@ -1,0 +1,8 @@
+// TEST: error-code UnsupportedFeature
+// TEST: error-count 2
+module BorrowExprThenMissingSemicolon
+
+fn f(x: i64, y: i64) -> i64 {
+    &x
+    y
+}

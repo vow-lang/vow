@@ -110,7 +110,9 @@ fn parse_errors(src: String) -> DiagCtx {
 }
 
 fn check_borrow_rejected(src: String, offset: i64, code: i64) -> i64 {
-    let dctx: DiagCtx = parse_errors(src);
+    let arena: AstArena = arena_new();
+    let dctx: DiagCtx = diag_ctx_new();
+    let _parsed: Module = parse_module_into(lex(src), arena, dctx, String::from("bad.vow"));
     if dctx.error_count != 1 { return code; }
     let ds: Vec<Diagnostic> = dctx.diags;
     let d: Diagnostic = ds[0];
@@ -159,7 +161,9 @@ fn check_statement_terminators() -> i64 {
 
 fn check_recovery_terminates() -> i64 {
     let a: DiagCtx = parse_errors(String::from("module T\nfn f(v: Vec<5>) -> i64 { 0 }\n"));
-    if a.error_count == 0 { return 500; }
+    if a.error_count != 3 { return 500; }
+    let c: DiagCtx = parse_errors(String::from("module T\nfn f(a: i64 b: i64) -> i64 { a }\n"));
+    if c.error_count != 1 { return 520; }
     let b: DiagCtx = parse_errors(String::from("module T\nfn f(x: i64) -> i64 { let y: Vec<i64 = x; y }\n"));
     if b.error_count == 0 { return 510; }
     0

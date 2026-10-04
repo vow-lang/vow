@@ -1,0 +1,7 @@
+// TEST: error-code UnexpectedToken
+// TEST: error-count 1
+module ParamMissingComma
+
+fn f(a: i64 b: i64) -> i64 {
+    a
+}

@@ -1822,8 +1822,9 @@ still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is
 `UnsupportedFeature` error at the `&` token, identically in both compilers (see
 [errors.md](errors.md#unsupportedfeature)). Pass the value itself. The type
 syntax `&T` is still accepted in signatures and annotations, but no expression
-produces a value of that type, so a reference-typed parameter can never be
-supplied.
+creates a value of that type: a `&T` parameter can only be passed on from
+another `&T` parameter, so a program has no way to introduce one. Do not
+declare reference-typed parameters.
 
 ### Unary Operators
 
@@ -4855,8 +4856,8 @@ trait Foo {
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
 
 A prefix `&expr` borrow expression is rejected by the parser, at the `&` token, with
-the hint `Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise
-AND operator`; the operand is still parsed, so the diagnostic is reported once:
+the hint ``Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise
+AND operator``; the operand is still parsed, so the diagnostic is reported once:
 
 ```vow
 fn f(x: i64) -> i64 {
@@ -7424,8 +7425,9 @@ still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is
 `UnsupportedFeature` error at the `&` token, identically in both compilers (see
 [errors.md](errors.md#unsupportedfeature)). Pass the value itself. The type
 syntax `&T` is still accepted in signatures and annotations, but no expression
-produces a value of that type, so a reference-typed parameter can never be
-supplied.
+creates a value of that type: a `&T` parameter can only be passed on from
+another `&T` parameter, so a program has no way to introduce one. Do not
+declare reference-typed parameters.
 
 ### Unary Operators
 
@@ -10461,8 +10463,8 @@ trait Foo {
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
 
 A prefix `&expr` borrow expression is rejected by the parser, at the `&` token, with
-the hint `Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise
-AND operator`; the operand is still parsed, so the diagnostic is reported once:
+the hint ``Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise
+AND operator``; the operand is still parsed, so the diagnostic is reported once:
 
 ```vow
 fn f(x: i64) -> i64 {

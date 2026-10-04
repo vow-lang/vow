@@ -12,6 +12,7 @@ struct Parser {
     in_ensures: i64,
     file: String,
     aborted: i64,
+    recovered: i64,
 }
 
 fn parser_new(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx, file: String) -> Parser {
@@ -23,6 +24,7 @@ fn parser_new(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx, file: String) 
         in_ensures: 0,
         file: file,
         aborted: 0,
+        recovered: 0,
     }
 }
 
@@ -140,9 +142,19 @@ fn push_error_code(p: Parser, code: i64, msg: String) {
     diag_ctx_emit(dctx, d);
 }
 
+fn parser_abort(p: Parser) {
+    p.aborted = 1;
+    while !at_end(p) {
+        let _skip: Token = advance(p);
+    }
+}
+
+// Errors after which the Rust parser still returns an expression (so the
+// statement loop goes on to report a missing `;`) are counted as recovered and
+// do not count here.
 fn parser_error_count(p: Parser) -> i64 {
     let dctx: DiagCtx = p.dctx;
-    dctx.error_count
+    dctx.error_count - p.recovered
 }
 
 fn push_error_code_hint(p: Parser, code: i64, msg: String, hint: String) {
@@ -154,6 +166,7 @@ fn push_error_code_hint(p: Parser, code: i64, msg: String, hint: String) {
     diag_add_hint(d, owned_hint);
     let dctx: DiagCtx = p.dctx;
     diag_ctx_emit(dctx, d);
+    p.recovered = p.recovered + 1;
 }
 
 fn parse_module(tokens: Vec<Token>) -> Module {
@@ -314,7 +327,7 @@ fn parse_extern(p: Parser) -> i64 {
         if name_sid == -1 {
             name_sid = arena_intern_str(p.arena, String::from("<error>"));
         }
-        let params_lid: i64 = parse_params(p);
+        let params_lid: i64 = parse_params(p, false);
         let mut ret_tid: i64 = -1;
         if at(p, tok_thin_arrow()) {
             let _arr: Token = advance(p);
@@ -362,7 +375,7 @@ fn parse_fn_def(p: Parser) -> i64 {
     };
     let _kw: bool = expect(p, tok_kw_fn());
     let name_sid: i64 = expect_ident(p);
-    let params_lid: i64 = parse_params(p);
+    let params_lid: i64 = parse_params(p, true);
     let mut ret_tid: i64 = -1;
     if at(p, tok_thin_arrow()) {
         let _arr: Token = advance(p);
@@ -488,7 +501,9 @@ fn parse_effects(p: Parser) -> i64 {
     eff
 }
 
-fn parse_params(p: Parser) -> i64 {
+// A function definition gives up on the module when its parameter list is
+// malformed, like the Rust parser; an extern declaration stays lenient.
+fn parse_params(p: Parser, strict: bool) -> i64 {
     let lp_ok: bool = expect(p, tok_lparen());
     let items: Vec<i64> = Vec::new();
     if !lp_ok {
@@ -514,9 +529,14 @@ fn parse_params(p: Parser) -> i64 {
         items.push(name_span);
         if at(p, tok_comma()) {
             let _c: Token = advance(p);
+        } else {
+            break;
         }
     }
-    let _rp: bool = expect(p, tok_rparen());
+    let rp_ok: bool = expect(p, tok_rparen());
+    if strict && !rp_ok {
+        parser_abort(p);
+    }
     arena_add_list(p.arena, items)
 }
 
@@ -657,10 +677,7 @@ fn parse_block(p: Parser) -> i64 {
                 if parser_error_count(p) == errors_before {
                     push_error(p, String::from("expected `;` or `}` after expression statement"));
                 }
-                p.aborted = 1;
-                while !at_end(p) {
-                    let _skip: Token = advance(p);
-                }
+                parser_abort(p);
             }
         }
     }
