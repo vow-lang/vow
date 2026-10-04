@@ -2405,14 +2405,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
             ctx.switch_to_block(cond_block);
 
-            // Upsilons for natural exit (condition false → exit_block):
-            // pass header Phi values into exit-block Phis.
+            // Upsilons for natural exit (condition false → exit_block): pass each
+            // variable's value after the condition ran into its exit-block Phi, so
+            // an assignment inside the condition survives the final evaluation.
             for (name, exit_phi) in &exit_phi_ids {
                 let header_phi = phi_ids.iter().find(|(n, _)| n == name).unwrap().1;
+                let exit_val = ctx.lookup(name).unwrap_or(header_phi);
                 ctx.emit(
                     Opcode::Upsilon,
-                    ctx.inst_ty(header_phi),
-                    vec![header_phi],
+                    ctx.inst_ty(exit_val),
+                    vec![exit_val],
                     InstData::PhiTarget(*exit_phi),
                     span,
                 );

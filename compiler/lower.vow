@@ -3165,14 +3165,15 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
         let mutations: Vec<String> = collect_if_mutations(ctx, then_bid, else_eid);
 
         let nmut: u64 = mutations.len();
+
+        let cond_id: i64 = lower_expr(ctx, cond_eid);
+
         let saved_mut_vals: Vec<i64> = Vec::new();
         let mut smi: u64 = 0;
         while smi < nmut {
             saved_mut_vals.push(lctx_lookup(ctx, mutations[smi]));
             smi = smi + 1;
         }
-
-        let cond_id: i64 = lower_expr(ctx, cond_eid);
 
         let then_block: i64 = lctx_new_block(ctx);
         let else_block: i64 = lctx_new_block(ctx);
@@ -3415,12 +3416,15 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
         }
         lctx_switch_to_block(ctx, cond_block);
 
-        // Upsilons for natural exit (condition false): header Phi values → exit Phis.
+        // Upsilons for natural exit (condition false): each variable's value after
+        // the condition ran -> exit Phis, so an assignment inside the condition
+        // survives the final evaluation.
         let mut eui: u64 = 0;
         while eui < nassigned {
+            let exit_val: i64 = lctx_lookup(ctx, assigned[eui]);
             let up_args: Vec<i64> = Vec::new();
-            up_args.push(phi_ids[eui]);
-            let up_ty: i64 = lctx_inst_ty(ctx, phi_ids[eui]);
+            up_args.push(exit_val);
+            let up_ty: i64 = lctx_inst_ty(ctx, exit_val);
             let exit_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), up_ty, up_args, IDATA_PHI_TARGET(), exit_phi_ids[eui], 0, String::from(""));
             lctx_set_inst_span(ctx, exit_up_id, expr_span(a, eid));
             eui = eui + 1;
