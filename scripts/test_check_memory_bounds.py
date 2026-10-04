@@ -73,7 +73,8 @@ class CheckProgramTests(unittest.TestCase):
         self.source.write_text("// BENCH: max-rss-kb 100\nmodule Prog\n")
 
     def test_a_program_within_its_bound_passes(self):
-        result = cmb.check_program(self.compiler, self.source, self.tmp)
+        with mock.patch.object(cmb, "run_and_measure", return_value=(0, 50)):
+            result = cmb.check_program(self.compiler, self.source, self.tmp)
         self.assertEqual(result["status"], "pass", result)
         self.assertEqual(result["bound_kb"], 100)
 
@@ -87,6 +88,11 @@ class CheckProgramTests(unittest.TestCase):
         with mock.patch.object(cmb, "run_and_measure", return_value=(0, 100)):
             result = cmb.check_program(self.compiler, self.source, self.tmp)
         self.assertEqual(result["status"], "pass")
+
+    def test_a_program_that_was_never_sampled_does_not_pass(self):
+        with mock.patch.object(cmb, "run_and_measure", return_value=(0, 0)):
+            result = cmb.check_program(self.compiler, self.source, self.tmp)
+        self.assertEqual(result["status"], "unsampled")
 
     def test_a_failing_program_is_reported_before_its_memory(self):
         with mock.patch.object(cmb, "run_and_measure", return_value=(3, 1)):

@@ -129,6 +129,8 @@ def check_program(compiler: Path, source: Path, work: Path) -> dict:
     }
     if exit_code != 0:
         result["status"] = "run_failed"
+    elif peak == 0:
+        result["status"] = "unsampled"
     elif peak > bound:
         result["status"] = "rss_exceeded"
     else:
