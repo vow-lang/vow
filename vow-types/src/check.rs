@@ -1013,14 +1013,17 @@ pub struct Checker<'e> {
     pub const_types: HashMap<String, Ty>,
 }
 
-/// Wraps an emitter and tallies error-severity diagnostics. The effect and
-/// linear-usage passes (`effects::check_fn_effects`, `linear::check_linear_usage`)
-/// emit directly to the emitter and never touch the checker's `error_count`, so
+/// Wraps an emitter and tallies error-severity diagnostics. Side-pass checkers
+/// (`effects::check_fn_effects`, `linear::check_linear_usage`,
+/// `effects::check_predicate_purity`, `exhaustiveness::check_exhaustive`) emit
+/// directly to the emitter and never touch the checker's `error_count`, so
 /// without this their errors are reported yet the build still exits 0 — an
-/// effectful call from a pure context, an impure contract clause, or a linear
-/// value consumed twice would compile to a binary. Routing those passes through
-/// this counter folds their errors into `error_count` so `has_errors()` (the
-/// build gate) sees them.
+/// effectful call from a pure context, an impure contract clause, a linear
+/// value consumed twice, or a non-exhaustive `match` would compile to a
+/// binary. Routing those passes through this counter folds their errors into
+/// `error_count` so `has_errors()` (the build gate) sees them. Any future
+/// pass that takes a raw `&mut dyn DiagnosticEmitter` instead of `&mut Self`
+/// needs the same wrapping — it is not automatic.
 struct ErrorCounter<'a> {
     inner: &'a mut dyn DiagnosticEmitter,
     errors: usize,
