@@ -1,0 +1,44 @@
+requires x != 18446744073709551615
+requires x != 9223372036854775808
+requires x != 9223372036854775807
+requires x != 18446744073709551615 as u64
+requires x != 0
+ensures result == 18446744073709551614
+ensures result >= 9223372036854775808
+requires x != 340282366920938463463374607431768211455
+requires x != 340282366920938463463374607431768211455 as u128
+requires x != 18446744073709551616
+requires x != 18446744073709551615 as u128
+ensures result == 170141183460469231731687303715884105728
+requires x != -170141183460469231731687303715884105728
+requires x != -170141183460469231731687303715884105727 as i128
+requires x != -18446744073709551616
+requires x != 170141183460469231731687303715884105727
+ensures result != -9223372036854775809
+requires x != -9223372036854775807 - 1
+requires x != -1
+requires x != -0
+requires x != 0
+requires x as i128 != -170141183460469231731687303715884105728
+requires x as u64 != 18446744073709551615
+requires (x + 1) as u128 != 5
+requires x as i128 as u128 != 7
+requires 0 as i64 != x
+ensures result as i128 == x as i128
+requires (a + b) * c != 3
+requires a + b * c != 3
+requires a - (b - c) != 3
+requires a - b - c != 3
+requires a / (b * c) != 3
+requires !(a == 0 || b == 1)
+requires !(a == 0) && b != 1
+requires -(a + b) != 3
+requires (a == 0 || b == 1) && c != 2
+requires a & b | c != 3
+requires a & (b | c) != 3
+requires a ^ b ^ c != 3
+requires (a << 1) + b != 3
+requires a << 1 + 2 != 3
+requires a +! b != 3
+requires a *! (b +! c) != 3
+ensures result == (a + b) * c

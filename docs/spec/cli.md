@@ -461,6 +461,19 @@ the structured diagnostics documented under [Runtime Errors](errors.md#runtime-e
 | `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
 | `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
+`description` is the clause kind followed by the predicate rendered by the canonical
+printer, and the two compilers produce byte-identical text. The same text is carried
+into `VowViolation.description` and the counterexample `violation` field. Integer
+literals print in unsigned decimal at full 128-bit width (a `u64` literal above
+`i64::MAX` such as `18446744073709551614` is never shown as `-2`), a negated literal is
+`-` followed by its magnitude, a suffixed literal prints as the cast it denotes
+(`5u64` is `5 as u64`), a cast prints its real target type, and a nested binary
+operator is parenthesized exactly when its precedence requires it. Block, `if`/`else`,
+`match` and loop expressions print multi-line (so `description` may contain newlines):
+4-space indentation for statements and match arms, `let` statements with their pattern and
+type annotation, and a nested block restarts at column 0 exactly as the canonical printer
+renders it.
+
 `source.offset` anchors differently depending on where the clause comes from: for a
 clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte
 offset of the clause keyword, not the predicate expression, in both compilers. For a

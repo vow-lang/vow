@@ -432,6 +432,21 @@ trait Foo {
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
 
+A tuple expression, including the empty tuple `()`, inside a contract clause is also
+`UnsupportedFeature`, because tuples have no runtime or verifier representation:
+
+```vow
+fn f(a: i64, b: i64) -> i64 vow {
+    requires: (a, b) != (1, 2)
+} {
+    a
+}
+```
+
+**Output:** `tuple expressions are not supported in contract predicates`
+
+**Fix:** Compare the elements individually, e.g. `requires: a != 1 || b != 2`.
+
 ### BTreeMapKeyTypeMustBeI64
 
 **Phase:** Type Checker

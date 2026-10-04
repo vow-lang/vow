@@ -1,0 +1,74 @@
+// Contract-text parity fixture for compound expression forms: if/else, match,
+// blocks with statements, loops (with and without clauses), enum constructors,
+// struct literals and every type form a `let` annotation can carry. The expected
+// text lives in contract_text_blocks.expected, one escaped line per clause
+// (backslash as `\\`, newline as `\n`); the Rust integration test
+// (vow-ir/tests/contract_text_forms.rs) and the `contract-text/parity` block of
+// scripts/full_test.sh (both compilers) compare against it. Nested blocks
+// restart at column 0, exactly as the canonical printer renders them.
+module ContractTextBlocks
+
+enum Shape { Empty, Circle(i64), Rect(i64, i64) }
+
+struct Point { x: i64, y: i64 }
+
+fn branches(x: i64) -> i64 vow {
+  requires: if x > 0 { true } else { false }
+  requires: if x > 0 { x > 1 } else if x < -5 { false } else { true }
+  requires: { let c: i64 = if x > 0 { 1 } else { 2 }; c > 0 }
+  requires: { { x > 0 } }
+  ensures: result == if x > 0 { 1 } else { 2 }
+} {
+  x
+}
+
+fn matches(x: i64, s: Shape) -> i64 vow {
+  requires: match s { Shape::Empty => true, Shape::Circle(r) => r > 0, Shape::Rect(w, _) => w > 0 }
+  requires: match s { Shape::Empty => false, other => x > 1 }
+  requires: match s { Shape::Circle(r) => { r > 0 }, _ => true }
+  requires: match s { Shape::Empty => true, Shape::Circle(_) => { let q: i64 = 1; q > 0 }, _ => true }
+  requires: match s { Shape::Empty => true, Shape::Circle(r) => if r > 0 { true } else { false }, _ => true }
+  requires: x != 1 || match s { Shape::Rect(w, h) => w == h, _ => false }
+} {
+  x
+}
+
+fn statements(x: i64) -> i64 vow {
+  requires: { let y: i64 = x + 1; y > 0 }
+  requires: { let y = x; let z: i64 = y + 1; z; y < z }
+  requires: { let mut y: i64 = x + 1; y = y + 1; y > 0 }
+  requires: { if x > 0 { return x; } true }
+} {
+  x
+}
+
+fn loops(x: i64, v: Vec<i64>) -> i64 vow {
+  requires: { let mut i: i64 = 0; while i < 3 { i = i + 1; } i == 3 }
+  requires: { let mut i: i64 = 0; while i < 3 vow { invariant: i >= 0 } { i = i + 1; } i == 3 }
+  requires: { let mut i: i64 = 0; loop { if i > 3 { break; } i = i + 1; } i == 3 }
+  requires: { let mut i: i64 = 0; let r: i64 = loop vow { invariant: i >= 0 } { if i > 3 { break i; } i = i + 1; }; r == 4 }
+  requires: { let mut t: i64 = 0; for e in v { t = t + e; } t >= 0 }
+  requires: { let mut t: i64 = 0; for e in v vow { invariant: t >= 0 } { if e > 3 { continue; } t = t + e; } t >= 0 }
+} {
+  x
+}
+
+fn constructors(x: i64, p: Point) -> i64 vow {
+  requires: p.x == 1 && Point { x: 1, y: 2 }.y == 2
+  requires: { let q: Shape = Shape::Circle(3); true }
+  requires: { let q: Shape = Shape::Rect(3, 4); true }
+  requires: { let q: Shape = Shape::Empty; true }
+  requires: { let o: Option<i64> = Option::Some(3); true }
+  requires: { let o: Option<i64> = Option::None; true }
+} {
+  x
+}
+
+fn types(r: &i64, sl: [i64], t: (i64, i64), v: Vec<i64>) -> i64 vow {
+  requires: { let q: &i64 = r; true }
+  requires: { let q: [i64] = sl; true }
+  requires: { let q: (i64, i64) = t; true }
+  requires: { let q: Vec<i64> = v; true }
+} {
+  0
+}

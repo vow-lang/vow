@@ -132,12 +132,6 @@ fn classify(kind: ClauseKind, predicate: &str) -> ContractQuality {
 /// integer literal — the weak postcondition shape. Compound predicates,
 /// equalities, and calls are excluded (they are potentially substantive).
 fn is_weak_result_bound(pred: &str) -> bool {
-    // Casts come out before any operator scanning, not after the split. The
-    // self-hosted printer renders a cast as ` as <type>` (`compiler/lower.vow`),
-    // and those angle brackets would otherwise be picked up as the `<` / `>`
-    // comparison operator — splitting `result > 0 as <type>` at the wrong place
-    // and classifying it `substantive` where the Rust printer's ` as i64` reads
-    // `weak`. Stripping first makes the two compilers agree by construction.
     let pred = &without_casts(pred);
     if pred.contains("&&")
         || pred.contains("||")
@@ -176,21 +170,18 @@ fn has_ordering_op(s: &str) -> bool {
     s.contains('<') || s.contains('>')
 }
 
-/// The text with every ` as <type>` cast removed, trimmed.
+/// The text with every cast to a primitive numeric type (` as i64`) removed, trimmed.
 ///
 /// A cast is transparent to shape classification: `0 as u64` bounds a value
 /// exactly as `0` does, and `result as i64` names the same value as `result`.
 /// Only a primitive numeric type name is stripped, so `x as Foo` is left alone.
-/// The self-hosted printer emits the placeholder `as <type>` rather than the
-/// type name (`compiler/lower.vow`), so that form is accepted too and both
-/// compilers classify the same clause identically.
 fn without_casts(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(pos) = rest.find(" as ") {
         let after = &rest[pos + 4..];
         let end = after
-            .find(|c: char| !c.is_ascii_alphanumeric() && c != '<' && c != '>')
+            .find(|c: char| !c.is_ascii_alphanumeric())
             .unwrap_or(after.len());
         if is_cast_target(&after[..end]) {
             out.push_str(&rest[..pos]);
@@ -218,7 +209,6 @@ fn is_cast_target(name: &str) -> bool {
             | "u128"
             | "f32"
             | "f64"
-            | "<type>"
     )
 }
 
@@ -321,30 +311,17 @@ mod tests {
             quality_of("ensures result >= 0 as i32 as i64"),
             ContractQuality::Weak
         );
-        // The self-hosted printer emits a placeholder instead of the type name,
-        // so both compilers must reach the same verdict on the same clause.
-        assert_eq!(
-            quality_of("ensures result >= 0 as <type>"),
-            ContractQuality::Weak
-        );
-        // The strict operators are the regression case: the `<` and `>` inside
-        // the `<type>` placeholder must not be read as the comparison operator.
-        // Splitting before the cast came out classified these `substantive`
-        // self-hosted while the Rust printer's ` as i64` read `weak`.
+        // Strict operators must not be misread around the cast.
         assert_eq!(
             quality_of("ensures result > 0 as i64"),
             ContractQuality::Weak
         );
         assert_eq!(
-            quality_of("ensures result > 0 as <type>"),
+            quality_of("ensures result < 100 as i64"),
             ContractQuality::Weak
         );
         assert_eq!(
-            quality_of("ensures result < 100 as <type>"),
-            ContractQuality::Weak
-        );
-        assert_eq!(
-            quality_of("ensures result as <type> > 0"),
+            quality_of("ensures result as i64 > 0"),
             ContractQuality::Weak
         );
     }
@@ -375,7 +352,7 @@ mod tests {
             ContractQuality::Tautological
         );
         assert_eq!(
-            quality_of("ensures 0 as <type> >= 0 as <type>"),
+            quality_of("ensures 0 as i32 >= 0 as i64"),
             ContractQuality::Tautological
         );
     }

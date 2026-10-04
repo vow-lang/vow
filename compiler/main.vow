@@ -5347,6 +5347,19 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `quality`     | string  | Static clause-shape classification (no ESBMC): `\"weak\"`, `\"tautological\"`, or `\"substantive\"` |\n"));
     r.push_str(String::from("| `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational -- never affects the exit code. See `docs/spec/contracts-methodology.md`. |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("`description` is the clause kind followed by the predicate rendered by the canonical\n"));
+    r.push_str(String::from("printer, and the two compilers produce byte-identical text. The same text is carried\n"));
+    r.push_str(String::from("into `VowViolation.description` and the counterexample `violation` field. Integer\n"));
+    r.push_str(String::from("literals print in unsigned decimal at full 128-bit width (a `u64` literal above\n"));
+    r.push_str(String::from("`i64::MAX` such as `18446744073709551614` is never shown as `-2`), a negated literal is\n"));
+    r.push_str(String::from("`-` followed by its magnitude, a suffixed literal prints as the cast it denotes\n"));
+    r.push_str(String::from("(`5u64` is `5 as u64`), a cast prints its real target type, and a nested binary\n"));
+    r.push_str(String::from("operator is parenthesized exactly when its precedence requires it. Block, `if`/`else`,\n"));
+    r.push_str(String::from("`match` and loop expressions print multi-line (so `description` may contain newlines):\n"));
+    r.push_str(String::from("4-space indentation for statements and match arms, `let` statements with their pattern and\n"));
+    r.push_str(String::from("type annotation, and a nested block restarts at column 0 exactly as the canonical printer\n"));
+    r.push_str(String::from("renders it.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("`source.offset` anchors differently depending on where the clause comes from: for a\n"));
     r.push_str(String::from("clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte\n"));
     r.push_str(String::from("offset of the clause keyword, not the predicate expression, in both compilers. For a\n"));
@@ -5608,6 +5621,15 @@ fn skill_bundle() -> String {
     r.push_str(String::from("## Clause Purity and Heap Writes\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("A clause must not write through any argument while it is being evaluated -- not just avoid declared effects. Vow passes structs, `Vec`, `String`, and maps by pointer, so a plain helper with no declared effect can still perform a real heap write (a field assignment, a `Vec`/map element write, a mutating builtin method) through a parameter. If such a write were allowed in a contract clause, it would happen every time the clause is evaluated -- under `vow verify`, under `--mode debug`, and (today, since nothing elides a predicate's side effects at codegen time) in release too -- making the clause's own evaluation an unaccounted-for part of the program's real behavior rather than a side-effect-free check of it. Rejecting this at type-check time (`EffectViolation`, `Blame::Callee`) keeps the predicate a predicate: see `docs/spec/grammar.md` → \"Contract Purity\" for the exact rule and the `mark(p)` example, and `docs/adr/2026-10-02-2348-contract-heap-write-purity.md` (ADR-2026-10-02-2348) for why this is checked for every clause rather than deferred to a write-footprint mechanism.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## Tuples in Clauses\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Tuples are not first-class values (see the `let` tuple-pattern rules in `grammar.md`), so a\n"));
+    r.push_str(String::from("tuple expression, including the empty tuple `()`, cannot appear anywhere inside a `requires`,\n"));
+    r.push_str(String::from("`ensures` or `invariant` clause -- not as a comparison operand (`requires: t != (1, 2)`) and not as\n"));
+    r.push_str(String::from("the initializer of a `let` inside a clause block. Both compilers reject it at type-check time with\n"));
+    r.push_str(String::from("`UnsupportedFeature` (\"tuple expressions are not supported in contract predicates\") at the\n"));
+    r.push_str(String::from("tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Counterexample Replay (Differential Test)\n"));
     r.push_str(String::from("\n"));
@@ -6851,6 +6873,21 @@ fn skill_bundle() -> String {
     r.push_str(String::from("**Output:** `trait blocks are not supported in Vow`\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A tuple expression, including the empty tuple `()`, inside a contract clause is also\n"));
+    r.push_str(String::from("`UnsupportedFeature`, because tuples have no runtime or verifier representation:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn f(a: i64, b: i64) -> i64 vow {\n"));
+    r.push_str(String::from("    requires: (a, b) != (1, 2)\n"));
+    r.push_str(String::from("} {\n"));
+    r.push_str(String::from("    a\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** `tuple expressions are not supported in contract predicates`\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Compare the elements individually, e.g. `requires: a != 1 || b != 2`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### BTreeMapKeyTypeMustBeI64\n"));
     r.push_str(String::from("\n"));
@@ -10758,6 +10795,19 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `quality`     | string  | Static clause-shape classification (no ESBMC): `\"weak\"`, `\"tautological\"`, or `\"substantive\"` |\n"));
     r.push_str(String::from("| `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational -- never affects the exit code. See `docs/spec/contracts-methodology.md`. |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("`description` is the clause kind followed by the predicate rendered by the canonical\n"));
+    r.push_str(String::from("printer, and the two compilers produce byte-identical text. The same text is carried\n"));
+    r.push_str(String::from("into `VowViolation.description` and the counterexample `violation` field. Integer\n"));
+    r.push_str(String::from("literals print in unsigned decimal at full 128-bit width (a `u64` literal above\n"));
+    r.push_str(String::from("`i64::MAX` such as `18446744073709551614` is never shown as `-2`), a negated literal is\n"));
+    r.push_str(String::from("`-` followed by its magnitude, a suffixed literal prints as the cast it denotes\n"));
+    r.push_str(String::from("(`5u64` is `5 as u64`), a cast prints its real target type, and a nested binary\n"));
+    r.push_str(String::from("operator is parenthesized exactly when its precedence requires it. Block, `if`/`else`,\n"));
+    r.push_str(String::from("`match` and loop expressions print multi-line (so `description` may contain newlines):\n"));
+    r.push_str(String::from("4-space indentation for statements and match arms, `let` statements with their pattern and\n"));
+    r.push_str(String::from("type annotation, and a nested block restarts at column 0 exactly as the canonical printer\n"));
+    r.push_str(String::from("renders it.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("`source.offset` anchors differently depending on where the clause comes from: for a\n"));
     r.push_str(String::from("clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte\n"));
     r.push_str(String::from("offset of the clause keyword, not the predicate expression, in both compilers. For a\n"));
@@ -11021,6 +11071,15 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("## Clause Purity and Heap Writes\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("A clause must not write through any argument while it is being evaluated -- not just avoid declared effects. Vow passes structs, `Vec`, `String`, and maps by pointer, so a plain helper with no declared effect can still perform a real heap write (a field assignment, a `Vec`/map element write, a mutating builtin method) through a parameter. If such a write were allowed in a contract clause, it would happen every time the clause is evaluated -- under `vow verify`, under `--mode debug`, and (today, since nothing elides a predicate's side effects at codegen time) in release too -- making the clause's own evaluation an unaccounted-for part of the program's real behavior rather than a side-effect-free check of it. Rejecting this at type-check time (`EffectViolation`, `Blame::Callee`) keeps the predicate a predicate: see `docs/spec/grammar.md` → \"Contract Purity\" for the exact rule and the `mark(p)` example, and `docs/adr/2026-10-02-2348-contract-heap-write-purity.md` (ADR-2026-10-02-2348) for why this is checked for every clause rather than deferred to a write-footprint mechanism.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## Tuples in Clauses\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Tuples are not first-class values (see the `let` tuple-pattern rules in `grammar.md`), so a\n"));
+    r.push_str(String::from("tuple expression, including the empty tuple `()`, cannot appear anywhere inside a `requires`,\n"));
+    r.push_str(String::from("`ensures` or `invariant` clause -- not as a comparison operand (`requires: t != (1, 2)`) and not as\n"));
+    r.push_str(String::from("the initializer of a `let` inside a clause block. Both compilers reject it at type-check time with\n"));
+    r.push_str(String::from("`UnsupportedFeature` (\"tuple expressions are not supported in contract predicates\") at the\n"));
+    r.push_str(String::from("tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Counterexample Replay (Differential Test)\n"));
     r.push_str(String::from("\n"));
@@ -12268,6 +12327,21 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("**Output:** `trait blocks are not supported in Vow`\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A tuple expression, including the empty tuple `()`, inside a contract clause is also\n"));
+    r.push_str(String::from("`UnsupportedFeature`, because tuples have no runtime or verifier representation:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn f(a: i64, b: i64) -> i64 vow {\n"));
+    r.push_str(String::from("    requires: (a, b) != (1, 2)\n"));
+    r.push_str(String::from("} {\n"));
+    r.push_str(String::from("    a\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** `tuple expressions are not supported in contract predicates`\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Compare the elements individually, e.g. `requires: a != 1 || b != 2`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### BTreeMapKeyTypeMustBeI64\n"));
     r.push_str(String::from("\n"));
@@ -14514,7 +14588,6 @@ fn cq_has_alpha(s: String) -> bool {
 }
 
 fn cq_is_cast_target(name: String) -> bool {
-    name == String::from("<type>") ||
     name == String::from("i8") || name == String::from("i16") ||
     name == String::from("i32") || name == String::from("i64") ||
     name == String::from("i128") ||
@@ -14524,14 +14597,12 @@ fn cq_is_cast_target(name: String) -> bool {
     name == String::from("f32") || name == String::from("f64")
 }
 
-// The text with every ` as <type>` cast removed, trimmed. Mirrors
-// `without_casts` in vow/src/contract_quality.rs.
+// The text with every cast to a primitive numeric type (` as i64`) removed,
+// trimmed. Mirrors `without_casts` in vow/src/contract_quality.rs.
 //
 // A cast is transparent to shape classification: `0 as u64` bounds a value
 // exactly as `0` does, and `result as i64` names the same value as `result`.
 // Only a primitive numeric type name is stripped, so `x as Foo` is left alone.
-// The self-hosted printer emits the placeholder `as <type>` rather than the
-// type name (compiler/lower.vow), so that form is accepted too.
 fn cq_without_casts(s: String) -> String {
     let out: String = String::from("");
     let mut rest: String = clone_string(s);
@@ -14545,7 +14616,7 @@ fn cq_without_casts(s: String) -> String {
         while end < an {
             let b: i64 = after.byte_at(end);
             let is_word: bool = (b >= 48 && b <= 57) || (b >= 65 && b <= 90) ||
-                                (b >= 97 && b <= 122) || b == 60 || b == 62;
+                                (b >= 97 && b <= 122);
             if !is_word {
                 break;
             }
@@ -14602,7 +14673,7 @@ fn cq_side_has_ordering(s: String) -> bool {
 }
 
 // Both sides arrive already cast-stripped by cq_is_weak_result_bound, so
-// `result >= 0 as <type>` reads exactly as `result >= 0` does here.
+// `result >= 0 as i64` reads exactly as `result >= 0` does here.
 fn cq_weak_sides(lhs: String, rhs: String) -> bool {
     let l: String = str_trim(lhs);
     let r: String = str_trim(rhs);
@@ -14615,12 +14686,6 @@ fn cq_weak_sides(lhs: String, rhs: String) -> bool {
 
 // True for a single ordering comparison between `result` and an integer literal.
 fn cq_is_weak_result_bound(raw_pred: String) -> bool {
-    // Casts come out before any operator scanning, not after the split. This
-    // printer renders a cast as ` as <type>` (compiler/lower.vow), and those
-    // angle brackets would otherwise be picked up as the `<` / `>` comparison
-    // operator — splitting `result > 0 as <type>` at the wrong place and
-    // classifying it `substantive` where the Rust printer's ` as i64` reads
-    // `weak`. Stripping first makes the two compilers agree by construction.
     let pred: String = cq_without_casts(raw_pred);
     if str_find_str(pred, String::from("&&")) >= 0 {
         return false;

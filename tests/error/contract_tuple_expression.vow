@@ -1,0 +1,30 @@
+// TEST: error-code UnsupportedFeature
+// TEST: stderr "tuple expressions are not supported in contract predicates"
+// Tuples have no runtime or verifier representation, so a tuple expression is
+// rejected anywhere inside a contract clause (a comparison operand, a loop
+// invariant, or the initializer of a `let` in a clause block) instead of reaching
+// IR lowering.
+module ContractTupleExpression
+
+fn compare(a: i64, b: i64) -> i64 vow {
+    requires: (a, b) != (1, 2)
+    ensures: (result, a) != (0, 0)
+} {
+    let mut i: i64 = 0;
+    while i < 3 vow {
+        invariant: (i, a) != (9, 9)
+    } {
+        i = i + 1;
+    }
+    a + b
+}
+
+fn destructure(a: i64) -> i64 vow {
+    requires: { let (x, y) = (a, 1); x != y }
+} {
+    a
+}
+
+fn main() -> i32 {
+    0
+}

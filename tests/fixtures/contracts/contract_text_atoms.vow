@@ -1,0 +1,81 @@
+// Contract-text parity fixture for the leaf forms and the remaining type and
+// statement shapes: bool/float/string literals (with every escape), calls,
+// method calls, field and index access, `?`, wildcard and unit/never bindings,
+// empty struct literals, nested casts, and loop clauses of every kind. Tuple
+// expressions and patterns are absent on purpose: a contract rejects them (see
+// tests/error/contract_tuple_expression.vow). The expected text lives in
+// contract_text_atoms.expected (backslash as `\\`, newline as `\n`); the Rust
+// integration test (vow-ir/tests/contract_text_forms.rs) and the
+// `contract-text/parity` block of scripts/full_test.sh compare both compilers
+// against it.
+module ContractTextAtoms
+
+struct Point { x: i64, y: i64 }
+
+struct Unit {}
+
+fn nop() { }
+
+fn add(a: i64, b: i64) -> i64 { a + b }
+
+fn literals(x: i64, f: f64, s: String) -> i64 vow {
+  requires: true
+  requires: false || x > 0
+  requires: f != 0.5
+  requires: f != 2.0
+  requires: f != 0.0
+  requires: f != 123456.789
+  requires: s != "plain"
+  requires: s != "tab\there"
+  requires: s != "line\nbreak"
+  requires: s != "quote\"s and \\ back"
+  requires: s != "cr\rnul\0"
+  requires: s != ""
+} {
+  x
+}
+
+fn accessors(x: i64, v: Vec<i64>, p: Point, o: Option<i64>) -> Option<i64> vow {
+  requires: v.len() > 0u64
+  requires: v[0u64] == x
+  requires: v[(x + 1) as u64] + v[x as u64] > 0
+  requires: p.x == p.y
+  requires: add(x, 1) > 0
+  requires: add(add(x, 1), x + 1) > 0
+  requires: v.len() as i64 + x > 0
+  requires: { let z: i64 = o?; z > 0 }
+  ensures: result == o
+} {
+  o
+}
+
+fn bindings(x: i64, o: Option<i64>) -> Option<i64> vow {
+  requires: { let _ = x; true }
+  requires: { let u: () = nop(); true }
+  requires: { nop(); true }
+  requires: { let z: ! = return o; true }
+  requires: { let e: Unit = Unit {}; true }
+  requires: { let z: i64 = if x > 0 { 1 } else { return o }; z > 0 }
+} {
+  o
+}
+
+fn casts(x: i64, y: u32) -> i64 vow {
+  requires: (-x) as i128 != 0
+  requires: x as u64 as i128 != 3
+  requires: y as i64 != x
+  ensures: (result + 1) as i128 != 0
+} {
+  x
+}
+
+fn loops(x: i64) -> i64 vow {
+  requires: { let mut i: i64 = 0; while i < 3 vow { requires: i >= 0 ensures: i >= 0 invariant: i >= 0 } { i = i + 1; } i == 3 }
+} {
+  x
+}
+
+fn early_return(x: i64) vow {
+  requires: { if x > 0 { return; } true }
+} {
+}
