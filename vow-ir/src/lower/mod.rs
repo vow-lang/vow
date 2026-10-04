@@ -2409,8 +2409,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // variable's value after the condition ran into its exit-block Phi, so
             // an assignment inside the condition survives the final evaluation.
             for (name, exit_phi) in &exit_phi_ids {
-                let header_phi = phi_ids.iter().find(|(n, _)| n == name).unwrap().1;
-                let exit_val = ctx.lookup(name).unwrap_or(header_phi);
+                let exit_val = ctx
+                    .lookup(name)
+                    .expect("loop variable is rebound to its header Phi");
                 ctx.emit(
                     Opcode::Upsilon,
                     ctx.inst_ty(exit_val),

@@ -2014,18 +2014,17 @@ fn builtin_ret_ty(name: String) -> i64 {
 // `eid` (condition and body for `while`, body for `loop` and for-each), in
 // first-assignment source order and regardless of scope. Callers keep only the
 // names in scope at loop entry via `lctx_in_scope_vars`. Same contract and
-// traversal as `collect_loop_assigned_vars` in vow-ir/src/lower/mod.rs.
+// traversal as `collect_loop_assigned_vars` in vow-ir/src/lower/mod.rs. A
+// for-each iterable runs once before the loop, so only its body is scanned; for
+// `while` and `loop` the full-expression scan is exactly the per-iteration code.
 fn collect_loop_assigned_vars(ctx: LowerCtx, eid: i64) -> Vec<String> {
     let a: AstArena = ctx.arena;
     let tag: i64 = expr_tag(a, eid);
     let result: Vec<String> = Vec::new();
-    if tag == EXPR_WHILE() {
-        collect_assigned_in_expr(ctx, expr_a(a, eid), result);
+    if tag == EXPR_FOR() {
         collect_assigned_in_block(ctx, expr_b(a, eid), result);
-    } else if tag == EXPR_LOOP() {
-        collect_assigned_in_block(ctx, expr_a(a, eid), result);
     } else {
-        collect_assigned_in_block(ctx, expr_b(a, eid), result);
+        collect_assigned_in_expr(ctx, eid, result);
     }
     result
 }
@@ -2078,18 +2077,13 @@ fn collect_assigned_in_expr(ctx: LowerCtx, eid: i64, out: Vec<String>) {
     } else if tag == EXPR_FIELD() || tag == EXPR_QUESTION() || tag == EXPR_CAST() ||
               tag == EXPR_RETURN() || tag == EXPR_BREAK() {
         collect_assigned_in_expr(ctx, expr_a(a, eid), out);
-    } else if tag == EXPR_BLOCK() {
+    } else if tag == EXPR_BLOCK() || tag == EXPR_LOOP() {
         collect_assigned_in_block(ctx, expr_a(a, eid), out);
     } else if tag == EXPR_IF() {
         collect_assigned_in_expr(ctx, expr_a(a, eid), out);
         collect_assigned_in_block(ctx, expr_b(a, eid), out);
         collect_assigned_in_expr(ctx, expr_c(a, eid), out);
-    } else if tag == EXPR_WHILE() {
-        collect_assigned_in_expr(ctx, expr_a(a, eid), out);
-        collect_assigned_in_block(ctx, expr_b(a, eid), out);
-    } else if tag == EXPR_LOOP() {
-        collect_assigned_in_block(ctx, expr_a(a, eid), out);
-    } else if tag == EXPR_FOR() {
+    } else if tag == EXPR_WHILE() || tag == EXPR_FOR() {
         collect_assigned_in_expr(ctx, expr_a(a, eid), out);
         collect_assigned_in_block(ctx, expr_b(a, eid), out);
     } else if tag == EXPR_MATCH() {
