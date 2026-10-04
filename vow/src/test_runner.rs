@@ -166,6 +166,60 @@ pub(crate) fn run_test_command(
         std::process::exit(1);
     }
 
+    let test_result = run_selected(
+        path,
+        filter,
+        module_root_override,
+        &RunSettings::new(verify, mode, timeout_ms, limits, jobs),
+        test_workers,
+        &machine_under_pressure,
+    );
+
+    let json = serde_json::to_string(&test_result).expect("TestResult must be serializable");
+    println!("{json}");
+
+    if test_result.failed > 0 {
+        std::process::exit(1);
+    }
+}
+
+struct RunSettings<'a> {
+    verify: bool,
+    mode: BuildMode,
+    timeout_ms: u64,
+    limits: &'a VerifyLimits,
+    verify_jobs: usize,
+}
+
+impl<'a> RunSettings<'a> {
+    fn new(
+        verify: bool,
+        mode: BuildMode,
+        timeout_ms: u64,
+        limits: &'a VerifyLimits,
+        verify_jobs: usize,
+    ) -> Self {
+        RunSettings {
+            verify,
+            mode,
+            timeout_ms,
+            limits,
+            verify_jobs,
+        }
+    }
+}
+
+/// Select, run and aggregate the tests under `path` into one [`TestResult`].
+/// Pure with respect to the process: printing and the exit code are the
+/// caller's job.
+fn run_selected(
+    path: &Path,
+    filter: Option<&str>,
+    module_root_override: Option<&Path>,
+    settings: &RunSettings,
+    test_workers: usize,
+    under_pressure: &(dyn Fn() -> bool + Sync),
+) -> TestResult {
     let selection = select_tests(path, filter, module_root_override);
     let module_root = selection.module_root.as_deref();
 
@@ -177,14 +231,14 @@ pub(crate) fn run_test_command(
 
     let cfg = RunConfig {
         module_root,
-        verify,
-        mode,
-        timeout_ms,
-        limits,
-        verify_jobs: jobs,
+        verify: settings.verify,
+        mode: settings.mode,
+        timeout_ms: settings.timeout_ms,
+        limits: settings.limits,
+        verify_jobs: settings.verify_jobs,
     };
     let workers = test_workers.max(1).min(selection.files.len().max(1));
-    let results = run_all(&selection.files, &cfg, workers);
+    let results = run_all(&selection.files, &cfg, workers, under_pressure);
     let mut entries = Vec::with_capacity(results.len());
     for (entry, density) in results {
         total_density.functions_total += density.functions_total;
@@ -192,14 +246,7 @@ pub(crate) fn run_test_command(
         entries.push(entry);
     }
 
-    let test_result = build_test_result(entries, total_density);
-
-    let json = serde_json::to_string(&test_result).expect("TestResult must be serializable");
-    println!("{json}");
-
-    if test_result.failed > 0 {
-        std::process::exit(1);
-    }
+    build_test_result(entries, total_density)
 }
 
 struct RunConfig<'a> {
@@ -219,6 +266,7 @@ fn run_all(
     files: &[PathBuf],
     cfg: &RunConfig,
     workers: usize,
+    under_pressure: &(dyn Fn() -> bool + Sync),
 ) -> Vec<(TestEntry, ContractDensity)> {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -228,7 +276,7 @@ fn run_all(
         files.iter().map(|_| Mutex::new(None)).collect();
     let work = |worker: usize| loop {
         if worker > 0 {
-            while machine_under_pressure() && next.load(Ordering::SeqCst) < files.len() {
+            while under_pressure() && next.load(Ordering::SeqCst) < files.len() {
                 std::thread::sleep(std::time::Duration::from_millis(250));
             }
         }
@@ -263,11 +311,40 @@ fn psi_avg10(text: &str, kind: &str) -> Option<f64> {
         .ok()
 }
 
+/// Whether memory (`some`) or IO (`full`) stall pressure is high enough that
+/// another concurrent worker would make things worse.
+fn pressure_is_high(memory_psi: &str, io_psi: &str) -> bool {
+    let mem = psi_avg10(memory_psi, "some").unwrap_or(0.0);
+    let io = psi_avg10(io_psi, "full").unwrap_or(0.0);
+    mem >= 20.0 || io >= 20.0
+}
+
 fn machine_under_pressure() -> bool {
     let read = |p: &str| std::fs::read_to_string(p).unwrap_or_default();
-    let mem = psi_avg10(&read("/proc/pressure/memory"), "some").unwrap_or(0.0);
-    let io = psi_avg10(&read("/proc/pressure/io"), "full").unwrap_or(0.0);
-    mem >= 20.0 || io >= 20.0
+    pressure_is_high(&read("/proc/pressure/memory"), &read("/proc/pressure/io"))
+}
+
+/// The entry for a file whose binary never ran (it failed to compile, verify,
+/// or produce an executable): no exit code and no captured output.
+fn unexecuted_entry(
+    file: String,
+    name: String,
+    status: &str,
+    start: std::time::Instant,
+    diagnostics: Vec<DiagnosticJson>,
+    counterexamples: Vec<CounterexampleJson>,
+) -> TestEntry {
+    TestEntry {
+        file,
+        name,
+        status: status.to_string(),
+        exit_code: None,
+        stdout: String::new(),
+        stderr: String::new(),
+        duration_ms: start.elapsed().as_millis() as u64,
+        diagnostics,
+        counterexamples,
+    }
 }
 
 fn run_one_test(test_file: &Path, index: usize, cfg: &RunConfig) -> (TestEntry, ContractDensity) {
@@ -301,17 +378,8 @@ fn run_one_test(test_file: &Path, index: usize, cfg: &RunConfig) -> (TestEntry, 
                 .iter()
                 .map(DiagnosticJson::from_diagnostic)
                 .collect();
-            let entry = TestEntry {
-                file: file_str,
-                name,
-                status: "compile_error".to_string(),
-                exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
-                duration_ms: start.elapsed().as_millis() as u64,
-                diagnostics,
-                counterexamples: vec![],
-            };
+            let entry =
+                unexecuted_entry(file_str, name, "compile_error", start, diagnostics, vec![]);
             return (entry, no_density);
         }
     };
@@ -354,35 +422,13 @@ fn run_one_test(test_file: &Path, index: usize, cfg: &RunConfig) -> (TestEntry, 
     // contract_skipped) never produce a runnable binary — record and skip
     // execution. A `None` classification means the pipeline succeeded and the
     // per-file status is decided by the process exit code below.
-    if let Some(status) = classify_pipeline_status(&result.status) {
-        let entry = TestEntry {
-            file: file_str,
-            name,
-            status: status.to_string(),
-            exit_code: None,
-            stdout: String::new(),
-            stderr: String::new(),
-            duration_ms: start.elapsed().as_millis() as u64,
-            diagnostics,
-            counterexamples,
-        };
-        return (entry, density);
-    }
-
-    let exe_path = match &result.executable {
-        Some(p) => p.clone(),
-        None => {
-            let entry = TestEntry {
-                file: file_str,
-                name,
-                status: "compile_error".to_string(),
-                exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
-                duration_ms: start.elapsed().as_millis() as u64,
-                diagnostics,
-                counterexamples,
-            };
+    // A successful pipeline without an executable cannot be run either.
+    let exe_path = match (classify_pipeline_status(&result.status), &result.executable) {
+        (None, Some(exe)) => exe.clone(),
+        (terminal, _) => {
+            let status = terminal.unwrap_or("compile_error");
+            let entry =
+                unexecuted_entry(file_str, name, status, start, diagnostics, counterexamples);
             return (entry, density);
         }
     };
@@ -595,11 +641,127 @@ mod tests {
             verify_jobs: 1,
         };
         for workers in [1, 3] {
-            let results = run_all(&files, &cfg, workers);
+            let results = run_all(&files, &cfg, workers, &|| false);
             let names: Vec<&str> = results.iter().map(|(e, _)| e.name.as_str()).collect();
             assert_eq!(names, ["test_c", "test_a", "test_b"], "workers={workers}");
             assert!(results.iter().all(|(e, _)| e.status == "passed"));
         }
+    }
+
+    fn run_single(path: &Path, verify: bool, timeout_ms: u64) -> (TestEntry, ContractDensity) {
+        let limits = VerifyLimits::default();
+        let cfg = RunConfig {
+            module_root: None,
+            verify,
+            mode: BuildMode::Debug,
+            timeout_ms,
+            limits: &limits,
+            verify_jobs: 1,
+        };
+        run_one_test(path, 0, &cfg)
+    }
+
+    #[test]
+    fn run_one_test_reports_every_execution_outcome() {
+        let dir = TempDir::new().unwrap();
+        let broken = write_source(&dir, "test_broken.vow", "module B use nothing");
+        let (entry, density) = run_single(&broken, false, 30_000);
+        assert_eq!(entry.status, "compile_error");
+        assert!(!entry.diagnostics.is_empty());
+        assert_eq!(density.functions_total, 0);
+
+        let failing = write_source(&dir, "test_failing.vow", "module F fn main() -> i32 { 3 }");
+        let (entry, _) = run_single(&failing, false, 30_000);
+        assert_eq!(entry.status, "failed");
+        assert_eq!(entry.exit_code, Some(3));
+
+        let hanging = write_source(
+            &dir,
+            "test_hanging.vow",
+            "module H fn main() -> i32 { let mut i: i64 = 0; while true { i = i + 1; } 0 }",
+        );
+        let (entry, _) = run_single(&hanging, false, 300);
+        assert_eq!(entry.status, "timeout");
+        assert_eq!(entry.exit_code, None);
+        assert_eq!(entry.stderr, "timeout");
+    }
+
+    #[test]
+    fn run_one_test_with_verify_stops_on_a_proved_violation() {
+        if vow_verify::find_esbmc().is_none() {
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        let wrong = write_source(
+            &dir,
+            "test_wrong.vow",
+            "module W fn f(x: i64) -> i64 vow { ensures: result > x } { x } \
+             fn main() -> i32 { 0 }",
+        );
+        let (entry, density) = run_single(&wrong, true, 30_000);
+        assert_eq!(entry.status, "verify_failed");
+        assert_eq!(entry.exit_code, None);
+        assert_eq!(density.functions_with_vows, 1);
+    }
+
+    #[test]
+    fn pressure_is_high_reads_memory_some_and_io_full() {
+        let low =
+            "some avg10=1.00 avg60=0 avg300=0 total=0\nfull avg10=0.00 avg60=0 avg300=0 total=0";
+        let high_mem =
+            "some avg10=20.00 avg60=0 avg300=0 total=0\nfull avg10=0.00 avg60=0 avg300=0 total=0";
+        let high_io =
+            "some avg10=0.00 avg60=0 avg300=0 total=0\nfull avg10=35.5 avg60=0 avg300=0 total=0";
+        assert!(!pressure_is_high(low, low));
+        assert!(pressure_is_high(high_mem, low));
+        assert!(pressure_is_high(low, high_io));
+        assert!(!pressure_is_high("", ""));
+        // Smoke: reading the real /proc/pressure files never panics.
+        let _ = machine_under_pressure();
+    }
+
+    #[test]
+    fn run_selected_aggregates_a_directory_scan() {
+        let dir = TempDir::new().unwrap();
+        write_source(&dir, "test_ok.vow", "module O fn main() -> i32 { 0 }");
+        write_source(&dir, "test_bad.vow", "module B fn main() -> i32 { 1 }");
+        let limits = VerifyLimits::default();
+        let settings = RunSettings::new(false, BuildMode::Debug, 30_000, &limits, 1);
+        let result = run_selected(dir.path(), None, None, &settings, 4, &|| false);
+        assert_eq!(result.status, "TestsFailed");
+        assert_eq!((result.total, result.passed, result.failed), (2, 1, 1));
+        let names: Vec<&str> = result.tests.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["test_bad", "test_ok"]);
+
+        let filtered = run_selected(dir.path(), Some("ok"), None, &settings, 1, &|| false);
+        assert_eq!(filtered.status, "TestsPassed");
+        assert_eq!(filtered.total, 1);
+    }
+
+    #[test]
+    fn run_all_backs_off_while_the_machine_is_under_pressure() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let dir = TempDir::new().unwrap();
+        let files: Vec<PathBuf> = ["test_a", "test_b", "test_c"]
+            .iter()
+            .map(|n| write_source(&dir, &format!("{n}.vow"), "module M fn main() -> i32 { 0 }"))
+            .collect();
+        let limits = VerifyLimits::default();
+        let cfg = RunConfig {
+            module_root: None,
+            verify: false,
+            mode: BuildMode::Debug,
+            timeout_ms: 30_000,
+            limits: &limits,
+            verify_jobs: 1,
+        };
+        let polls = AtomicUsize::new(0);
+        let pressure = || polls.fetch_add(1, Ordering::SeqCst) < 2;
+        let results = run_all(&files, &cfg, 2, &pressure);
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|(e, _)| e.status == "passed"));
+        assert!(polls.load(Ordering::SeqCst) >= 1);
     }
 
     #[test]

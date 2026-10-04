@@ -49,13 +49,13 @@ fn main() -> i32 [io] {
     let common: Vec<String> = Vec::new();
     common.push(String::from("--timeout"));
     common.push(String::from("500"));
-    let wa: Vec<String> = test_worker_argv(String::from("compiler/tests/test_a.vow"), String::from("compiler"), common);
-    if wa.len() != 7 { return 21; }
+    let wa: Vec<String> = test_worker_argv(String::from("compiler/tests/test_a.vow"), String::from("compiler"), common, String::from("3_99"));
+    if wa.len() != 8 { return 21; }
     if wa[0] != String::from("test") || wa[1] != String::from("compiler/tests/test_a.vow") { return 22; }
     if wa[2] != String::from("--module-root") || wa[3] != String::from("compiler") { return 23; }
     if wa[4] != String::from("--timeout") || wa[5] != String::from("500") { return 24; }
-    if wa[6] != String::from("--worker-entry") { return 25; }
-    let wb: Vec<String> = test_worker_argv(String::from("t.vow"), String::from(""), Vec::new());
-    if wb.len() != 3 { return 26; }
+    if wa[6] != String::from("--worker-entry") || wa[7] != String::from("3_99") { return 25; }
+    let wb: Vec<String> = test_worker_argv(String::from("t.vow"), String::from(""), Vec::new(), String::from("0_1"));
+    if wb.len() != 4 { return 26; }
     0
 }

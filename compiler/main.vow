@@ -72,7 +72,7 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 2 {
                 let prev: String = argv[(i - 1) as u64];
-                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--verify-jobs" || prev == "--jobs" || prev == "--module-root" || prev == "--max-score" || prev == "--max-cognitive" || prev == "--max-cyclomatic" || prev == "--cog-anchor" || prev == "--nloc-anchor" || prev == "--perfetto" {
+                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--verify-jobs" || prev == "--jobs" || prev == "--worker-entry" || prev == "--module-root" || prev == "--max-score" || prev == "--max-cognitive" || prev == "--max-cyclomatic" || prev == "--cog-anchor" || prev == "--nloc-anchor" || prev == "--perfetto" {
                     i = i - 1;
                 } else {
                     return a;
@@ -2220,7 +2220,8 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
 
             if !skip_exec {
                 // Compile to binary
-                let tmp_out: String = str2(str3(String::from("build/vow_test_"), short_name, String::from("_")), i64_to_string(time_unix_ms()));
+                let worker_tag: String = { if worker_mode { str2(get_flag_arg(argv, "--worker-entry"), String::from("_")) } else { String::from("") } };
+                let tmp_out: String = str2(str3(String::from("build/vow_test_"), short_name, String::from("_")), str2(worker_tag, i64_to_string(time_unix_ms())));
                 let result: i64 = clif_emit_module(ir_mod, tmp_out, mode, 0);
                 if result != 0 {
                     let duration: i64 = time_unix_ms() - start_time;
@@ -2251,6 +2252,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                         }
                     };
                     fs_remove(tmp_out);
+                    process_kill(handle);
                     let duration: i64 = time_unix_ms() - start_time;
                     let status: String = {
                         if exit_code == 0 { String::from("passed") }

@@ -236,7 +236,9 @@ fn machine_under_pressure() -> bool [io] {
 
 // `common` carries the flags every worker inherits (mode, timeout, verify
 // settings), already rendered by the caller.
-fn test_worker_argv(test_path: String, module_root: String, common: Vec<String>) -> Vec<String> {
+// `tag` is unique to this worker within the parent run; the worker folds it
+// into its scratch executable name so concurrent workers never share a path.
+fn test_worker_argv(test_path: String, module_root: String, common: Vec<String>, tag: String) -> Vec<String> {
     let a: Vec<String> = Vec::new();
     a.push(String::from("test"));
     a.push(test_path);
@@ -250,6 +252,7 @@ fn test_worker_argv(test_path: String, module_root: String, common: Vec<String>)
         i = i + 1;
     }
     a.push(String::from("--worker-entry"));
+    a.push(tag);
     a
 }
 
@@ -269,9 +272,14 @@ fn run_tests_parallel(exe: String, files: Vec<String>, module_root: String, comm
     let mut next: u64 = 0;
     let mut done: u64 = 0;
     let still: i64 = 0 - 999999;
+    let nonce: String = i64_to_string(time_unix_ms());
     while done < n {
         while next < n && (handles.len() as i64) < jobs && (handles.len() == 0 || !machine_under_pressure()) {
-            let h: i64 = process_start(exe, test_worker_argv(files[next], module_root, common));
+            let tag: String = String::from("");
+            tag.push_str(i64_to_string(next as i64));
+            tag.push_str(String::from("_"));
+            tag.push_str(nonce);
+            let h: i64 = process_start(exe, test_worker_argv(files[next], module_root, common, tag));
             if h < 0 {
                 done = done + 1;
             } else {
@@ -289,6 +297,9 @@ fn run_tests_parallel(exe: String, files: Vec<String>, module_root: String, comm
                 let diag: String = process_stderr_for(handles[hi]);
                 if diag.len() > 0 { eprintln_str(diag); }
                 replies[slots[hi]] = process_stdout_for(handles[hi]);
+                // Releases the finished worker's process-table entry and its
+                // captured output.
+                process_kill(handles[hi]);
                 let last: u64 = handles.len() - 1;
                 handles[hi] = handles[last];
                 slots[hi] = slots[last];

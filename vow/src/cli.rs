@@ -406,6 +406,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn resolve_test_jobs_rejects_zero_and_honours_an_explicit_count() {
+        assert_eq!(
+            resolve_test_jobs(Some(0), false),
+            Err("--jobs must be >= 1".to_string())
+        );
+        assert_eq!(resolve_test_jobs(Some(3), false), Ok(3));
+        assert_eq!(resolve_test_jobs(Some(3), true), Ok(3));
+    }
+
+    #[test]
+    fn resolve_test_jobs_defaults_to_one_under_verify_and_is_capped_otherwise() {
+        assert_eq!(resolve_test_jobs(None, true), Ok(1));
+        let jobs = resolve_test_jobs(None, false).unwrap();
+        assert!((1..=8).contains(&jobs), "default jobs {jobs} outside 1..=8");
+    }
+
+    #[test]
     fn resolve_verify_jobs_rejects_zero() {
         assert_eq!(
             resolve_verify_jobs(Some(0)),
