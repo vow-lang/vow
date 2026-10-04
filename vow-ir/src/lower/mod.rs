@@ -7214,6 +7214,71 @@ fn sum(v: Vec<i64>) -> i64 {
         );
     }
 
+    /// Only variables already in scope at loop entry are loop-carried; a
+    /// `let mut` declared inside the body gets no Phi. The self-hosted lowerer
+    /// once carried body-local names too (as `%-1` Upsilons), shifting every
+    /// later instruction id and breaking cross-compiler IR placement parity.
+    /// Counts are mirrored by `compiler/tests/test_lower_loop_carried_scope.vow`.
+    #[test]
+    fn loops_carry_only_variables_in_scope_at_entry() {
+        let module = lower_source_to_module(
+            r#"
+module LoopCarriedScope
+
+fn w(n: i64) -> i64 {
+    let mut i: i64 = 0;
+    while i < n {
+        let mut j: i64 = 0;
+        let mut k: i64 = 0;
+        while j < 3 {
+            j = j + 1;
+            k = k + j;
+        }
+        i = i + k;
+    }
+    i
+}
+
+fn l(n: i64) -> i64 {
+    let mut i: i64 = 0;
+    loop {
+        let mut t: i64 = 0;
+        t = t + 1;
+        i = i + t;
+        if i > n { break; }
+    }
+    i
+}
+
+fn f(v: Vec<i64>) -> i64 {
+    let mut s: i64 = 0;
+    for x in v {
+        let mut t: i64 = 0;
+        t = t + x;
+        s = s + t;
+    }
+    s
+}
+"#,
+            "loop_carried_scope.vow",
+        );
+
+        let phis = |name: &str| {
+            let func = module
+                .functions
+                .iter()
+                .find(|f| f.name == name)
+                .expect("function lowered");
+            insts_of(func)
+                .iter()
+                .filter(|i| i.opcode == Opcode::Phi)
+                .count()
+        };
+        assert_eq!(phis("w"), 6, "outer carries i; inner carries j and k");
+        assert_eq!(phis("l"), 3, "loop carries only i");
+        assert_eq!(phis("f"), 3, "for-each carries the index and s");
+    }
+
     /// A `from_raw_parts_copy` length literal is lowered in its `u64` context.
     /// A wrapped negative `ConstI64` here made the C model's `>= 0` guard
     /// unsatisfiable and so proved everything after the call.

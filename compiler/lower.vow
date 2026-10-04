@@ -1984,9 +1984,21 @@ fn builtin_ret_ty(name: String) -> i64 {
     ITY_UNIT()
 }
 
+// Loop-carried variables: names assigned in the loop that are already in scope
+// at the loop entry. Names declared inside the body are not carried. Twin of
+// the `filter_map(|name| ctx.lookup(&name)...)` after `collect_assigned_vars`
+// in vow-ir/src/lower/mod.rs.
 fn collect_assigned_vars(ctx: LowerCtx, eid: i64) -> Vec<String> {
+    let all: Vec<String> = Vec::new();
+    collect_assigned_in_expr(ctx, eid, all);
     let result: Vec<String> = Vec::new();
-    collect_assigned_in_expr(ctx, eid, result);
+    let mut i: u64 = 0;
+    while i < all.len() {
+        if lctx_lookup(ctx, all[i]) >= 0 {
+            result.push(all[i]);
+        }
+        i = i + 1;
+    }
     result
 }
 

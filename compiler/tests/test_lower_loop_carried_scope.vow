@@ -1,0 +1,85 @@
+module TestLowerLoopCarriedScope
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+
+fn lower_fixture(source: String, file: String) -> IrModule {
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(lex(source), arena, diag_ctx_new(), file);
+    let item_files: Vec<String> = Vec::new();
+    let mut fi: u64 = 0;
+    while fi < parsed.items.len() {
+        item_files.push(file);
+        fi = fi + 1;
+    }
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), item_files
+    )
+}
+
+fn count_op(f: IrFunction, op: i64) -> i64 {
+    let mut n: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let block: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        let insts: Vec<IrInst> = block.insts;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.op == op {
+                n = n + 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    n
+}
+
+fn undefined_upsilon_sources(f: IrFunction) -> i64 {
+    let mut n: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let block: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        let insts: Vec<IrInst> = block.insts;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            let args: Vec<i64> = inst.args;
+            if inst.op == IOP_UPSILON() && args.len() == 1 && args[0] < 0 {
+                n = n + 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    n
+}
+
+fn main() -> i32 {
+    let src: String = String::from(
+        "module LoopCarriedScope\nfn w(n: i64) -> i64 {\n    let mut i: i64 = 0;\n    while i < n {\n        let mut j: i64 = 0;\n        let mut k: i64 = 0;\n        while j < 3 {\n            j = j + 1;\n            k = k + j;\n        }\n        i = i + k;\n    }\n    i\n}\nfn l(n: i64) -> i64 {\n    let mut i: i64 = 0;\n    loop {\n        let mut t: i64 = 0;\n        t = t + 1;\n        i = i + t;\n        if i > n { break; }\n    }\n    i\n}\nfn f(v: Vec<i64>) -> i64 {\n    let mut s: i64 = 0;\n    for x in v {\n        let mut t: i64 = 0;\n        t = t + x;\n        s = s + t;\n    }\n    s\n}"
+    );
+    let lowered: IrModule = lower_fixture(src, String::from("loop_carried_scope.vow"));
+    if lowered.functions.len() != 3 { return 1; }
+    let w: IrFunction = lowered.functions[0];
+    let l: IrFunction = lowered.functions[1];
+    let fe: IrFunction = lowered.functions[2];
+    // Header and exit Phis per carried variable, matching the Rust lowerer:
+    // `i` is carried by the outer loop; `j` and `k` only by the inner loop.
+    if count_op(w, IOP_PHI()) != 6 { return 10; }
+    if undefined_upsilon_sources(w) != 0 { return 11; }
+    // `t` is declared in the loop body, so only `i` is carried.
+    if count_op(l, IOP_PHI()) != 3 { return 20; }
+    if undefined_upsilon_sources(l) != 0 { return 21; }
+    // The for-each index and `s` are carried; `t` is body-local.
+    if count_op(fe, IOP_PHI()) != 3 { return 30; }
+    if undefined_upsilon_sources(fe) != 0 { return 31; }
+    0
+}
