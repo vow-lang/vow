@@ -461,8 +461,8 @@ still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is
 `(a.len() as i64) + 1`.
 
 `&` is only the infix bitwise AND operator (`lhs & rhs`). There is no prefix
-`&expr`: Vow has no borrow expressions, so `&x` (and `x & &y`) is an
-`UnsupportedFeature` error at the `&` token, identically in both compilers (see
+`&expr`: Vow has no borrow expressions, so `&x`, `&mut x`, `&&x` (and `x & &y`)
+are `UnsupportedFeature` errors at the `&` (or `&&`) token, identically in both compilers (see
 [errors.md](errors.md#unsupportedfeature)). Pass the value itself. The type
 syntax `&T` is still accepted in signatures and annotations, but no expression
 creates a value of that type: a `&T` parameter can only be passed on from
@@ -484,7 +484,8 @@ An unparenthesised block-like expression ends the expression it starts: no
 postfix operator (`.`, `[`, `(`, `?`, `as`) and no binary operator may follow it
 directly, so `if c { 1 } else { 2 } as u64` and `if c { 1 } else { 2 } + 1` are
 parse errors. As the right operand of a binary operator or the operand of a
-unary operator it is fine (`3 * if c { 1 } else { 2 }`). A parenthesised
+unary operator it is fine (`3 * if c { 1 } else { 2 }`), but it still ends the
+whole expression, so `3 * if c { 1 } else { 2 } as u64` is a parse error too. A parenthesised
 expression is a primary expression whatever it contains, so every operator may
 follow it:
 

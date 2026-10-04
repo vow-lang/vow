@@ -4014,8 +4014,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("`(a.len() as i64) + 1`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`&` is only the infix bitwise AND operator (`lhs & rhs`). There is no prefix\n"));
-    r.push_str(String::from("`&expr`: Vow has no borrow expressions, so `&x` (and `x & &y`) is an\n"));
-    r.push_str(String::from("`UnsupportedFeature` error at the `&` token, identically in both compilers (see\n"));
+    r.push_str(String::from("`&expr`: Vow has no borrow expressions, so `&x`, `&mut x`, `&&x` (and `x & &y`)\n"));
+    r.push_str(String::from("are `UnsupportedFeature` errors at the `&` (or `&&`) token, identically in both compilers (see\n"));
     r.push_str(String::from("[errors.md](errors.md#unsupportedfeature)). Pass the value itself. The type\n"));
     r.push_str(String::from("syntax `&T` is still accepted in signatures and annotations, but no expression\n"));
     r.push_str(String::from("creates a value of that type: a `&T` parameter can only be passed on from\n"));
@@ -4037,7 +4037,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("postfix operator (`.`, `[`, `(`, `?`, `as`) and no binary operator may follow it\n"));
     r.push_str(String::from("directly, so `if c { 1 } else { 2 } as u64` and `if c { 1 } else { 2 } + 1` are\n"));
     r.push_str(String::from("parse errors. As the right operand of a binary operator or the operand of a\n"));
-    r.push_str(String::from("unary operator it is fine (`3 * if c { 1 } else { 2 }`). A parenthesised\n"));
+    r.push_str(String::from("unary operator it is fine (`3 * if c { 1 } else { 2 }`), but it still ends the\n"));
+    r.push_str(String::from("whole expression, so `3 * if c { 1 } else { 2 } as u64` is a parse error too. A parenthesised\n"));
     r.push_str(String::from("expression is a primary expression whatever it contains, so every operator may\n"));
     r.push_str(String::from("follow it:\n"));
     r.push_str(String::from("\n"));
@@ -7051,7 +7052,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("A prefix `&expr` borrow expression is rejected by the parser, at the `&` token, with\n"));
+    r.push_str(String::from("A prefix `&expr` (or `&mut expr`, `&&expr`) borrow expression is rejected by the parser, at the `&` or `&&` token, with\n"));
     r.push_str(String::from("the hint ``Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise\n"));
     r.push_str(String::from("AND operator``; the operand is still parsed, so the diagnostic is reported once:\n"));
     r.push_str(String::from("\n"));
@@ -9639,8 +9640,8 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("`(a.len() as i64) + 1`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`&` is only the infix bitwise AND operator (`lhs & rhs`). There is no prefix\n"));
-    r.push_str(String::from("`&expr`: Vow has no borrow expressions, so `&x` (and `x & &y`) is an\n"));
-    r.push_str(String::from("`UnsupportedFeature` error at the `&` token, identically in both compilers (see\n"));
+    r.push_str(String::from("`&expr`: Vow has no borrow expressions, so `&x`, `&mut x`, `&&x` (and `x & &y`)\n"));
+    r.push_str(String::from("are `UnsupportedFeature` errors at the `&` (or `&&`) token, identically in both compilers (see\n"));
     r.push_str(String::from("[errors.md](errors.md#unsupportedfeature)). Pass the value itself. The type\n"));
     r.push_str(String::from("syntax `&T` is still accepted in signatures and annotations, but no expression\n"));
     r.push_str(String::from("creates a value of that type: a `&T` parameter can only be passed on from\n"));
@@ -9662,7 +9663,8 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("postfix operator (`.`, `[`, `(`, `?`, `as`) and no binary operator may follow it\n"));
     r.push_str(String::from("directly, so `if c { 1 } else { 2 } as u64` and `if c { 1 } else { 2 } + 1` are\n"));
     r.push_str(String::from("parse errors. As the right operand of a binary operator or the operand of a\n"));
-    r.push_str(String::from("unary operator it is fine (`3 * if c { 1 } else { 2 }`). A parenthesised\n"));
+    r.push_str(String::from("unary operator it is fine (`3 * if c { 1 } else { 2 }`), but it still ends the\n"));
+    r.push_str(String::from("whole expression, so `3 * if c { 1 } else { 2 } as u64` is a parse error too. A parenthesised\n"));
     r.push_str(String::from("expression is a primary expression whatever it contains, so every operator may\n"));
     r.push_str(String::from("follow it:\n"));
     r.push_str(String::from("\n"));
@@ -12684,7 +12686,7 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("A prefix `&expr` borrow expression is rejected by the parser, at the `&` token, with\n"));
+    r.push_str(String::from("A prefix `&expr` (or `&mut expr`, `&&expr`) borrow expression is rejected by the parser, at the `&` or `&&` token, with\n"));
     r.push_str(String::from("the hint ``Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise\n"));
     r.push_str(String::from("AND operator``; the operand is still parsed, so the diagnostic is reported once:\n"));
     r.push_str(String::from("\n"));
