@@ -1,0 +1,23 @@
+// TEST: category callee-blame
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-fn "bad_fd"
+// TEST: counterexample-blame callee
+// `drop` does not weaken verification: a false postcondition on a function that
+// drops a linear value is still refuted.
+module LinearDropStillFails
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn bad_fd(h: Handle) -> i64 vow {
+    ensures: result >= 0
+} {
+    let fd: i64 = h.fd;
+    drop(h);
+    fd
+}
+
+fn main() -> i32 {
+    0
+}

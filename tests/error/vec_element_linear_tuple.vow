@@ -1,0 +1,13 @@
+// TEST: error-code UnsupportedFeature
+// TEST: error-count 1
+// TEST: stderr "Vec element type must be non-linear"
+module VecElementLinearTuple
+
+linear struct Token {
+    id: i64,
+}
+
+fn main() -> i32 {
+    let v: Vec<(i64, Token)> = Vec::new();
+    0
+}

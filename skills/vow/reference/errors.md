@@ -103,6 +103,11 @@ fn f() -> i32 {
 **Fix:** Change the expression or declared type to match. For an enum pattern,
 qualify the variant with the scrutinee's enum name.
 
+The `drop` intrinsic also reports `TypeMismatch` when it is called with an argument
+count other than one or with a value that is not a linear owner
+(``drop requires a linear value, found `i64` ``); see
+[Linear Intrinsics](grammar.md#linear-intrinsics).
+
 A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::truncate`
 argument must have exactly the type `u64`. An index of any other integer type
 (for example an `i64` counter) or of a non-integer type is a `TypeMismatch`
@@ -302,7 +307,7 @@ fn f(h: Handle) -> Handle {
 ```
 
 **Fix:** Restructure ownership so each path uses a consumed linear value at most
-once. Keep linear owners out of struct fields until move-out field access is
+once. Discharge a value that is no longer needed with `drop(value)`. Keep linear owners out of struct fields until move-out field access is
 supported. In a match, add explicit arms that bind and consume or transfer every
 linear payload before using `_`. Obligations that are simply left live at scope
 exit are reported later as `RegionLinear`.
@@ -508,6 +513,34 @@ fn f() -> () {
 **Output:** ``HashMap key type `String` is not supported: keys are compared by value as a single machine word``
 
 **Fix:** Hash or intern the key to a `u64` at the call site and keep a side table for the originals. For a 128-bit value, store the two `u64` halves separately. For a linear value, keep it in a local binding and store only an integer handle in the map.
+
+#### Linear collection elements
+
+The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking. A reference element (`Vec<&Token>`) borrows rather than owns and is accepted; a nested collection is reported once, where the innermost `Vec` is written, and a type alias once, at its definition.
+
+```vow
+linear struct Token { id: i64 }
+
+fn f() -> () {
+    let v: Vec<Token> = Vec::new();
+}
+```
+
+**Output:** `Vec element type must be non-linear; found 'Token'`
+
+**Fix:** Keep the linear value in a local binding and store an integer handle in the `Vec`. Consume a linear value that is no longer needed with `drop(value)`.
+
+#### Unit parameters
+
+The same code reports a parameter of type `()` (directly or through a type alias). The unit value carries no information and has no ABI slot, so such a parameter is rejected at the declaration.
+
+```vow
+fn f(u: ()) -> i64 { 0 }
+```
+
+**Output:** ``parameter `u` has type `()`: unit parameters are not supported``
+
+**Fix:** Remove the parameter.
 
 A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
 
@@ -736,7 +769,7 @@ changing the source will not help.
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `Linear*` family. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
 
 ```json
 {

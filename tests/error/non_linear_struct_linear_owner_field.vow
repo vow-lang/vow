@@ -15,8 +15,7 @@ struct Holder {
 }
 
 fn consume(token: Token) -> () {
-    let sink: Vec<Token> = Vec::new();
-    sink.push(token);
+    drop(token);
 }
 
 fn duplicate(holder: Holder) -> () {

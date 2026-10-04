@@ -1,0 +1,22 @@
+// TEST: category model-drift
+// `drop` is verifier-neutral: a function that drops a linear value is still
+// modeled (the consume marker is a no-op) and its contract is proven exactly as
+// if the drop were absent.
+module LinearDropNeutral
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn clamp_fd(h: Handle) -> i64 vow {
+    ensures: result >= 0,
+    ensures: result == 0 || result == h.fd
+} {
+    let fd: i64 = h.fd;
+    drop(h);
+    if fd < 0 { 0 } else { fd }
+}
+
+fn main() -> i32 {
+    0
+}

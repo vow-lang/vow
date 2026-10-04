@@ -355,6 +355,7 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                    || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_RETURN() || op == IOP_UNREACHABLE()
                    || op == IOP_PHI() || op == IOP_UPSILON()
                    || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
+                   || op == IOP_LINEAR_CONSUME()
                    || op == IOP_DEBUG_CALL() {
                     true
                 } else if op == IOP_CALL() {
@@ -388,7 +389,7 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                     true
                 } else if op == IOP_REM_F32() || op == IOP_REM_F64()
                    || op == IOP_LOAD() || op == IOP_STORE()
-                   || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW() {
+                   || op == IOP_LINEAR_BORROW() {
                     false
                 } else {
                     false
@@ -1899,6 +1900,12 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, 
         return;
     }
 
+    // A consume only discharges an ownership obligation; it neither reads nor writes data.
+    if op == IOP_LINEAR_CONSUME() {
+        out.push_str(String::from("  /* verifier no-op: linear consume marker */\n"));
+        return;
+    }
+
     if op == IOP_REGION_ALLOC() {
         // User-struct heap model: bump-allocate `size/8` int64 slots.
         let ids: String = i64_to_string(id);
@@ -1926,7 +1933,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, 
     }
 
     if op == IOP_LOAD() || op == IOP_STORE()
-       || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW() {
+       || op == IOP_LINEAR_BORROW() {
         emit_unsupported_for_verification(out, inst);
         return;
     }

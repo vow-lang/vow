@@ -1,0 +1,27 @@
+// TEST: error-code UnsupportedFeature
+// TEST: error-count 4
+// TEST: stderr "Vec element type must be non-linear"
+module VecElementLinearForwardRef
+
+struct Holder {
+    items: Vec<Token>,
+}
+
+enum Bag {
+    Items(Vec<Token>),
+    Empty,
+}
+
+type Tokens = Vec<Token>;
+
+fn take(v: Vec<Token>) -> i64 {
+    0
+}
+
+linear struct Token {
+    id: i64,
+}
+
+fn main() -> i32 {
+    0
+}

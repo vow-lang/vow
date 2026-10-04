@@ -1,0 +1,23 @@
+// TEST: category callee-blame
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-fn "make"
+// TEST: counterexample-blame callee
+// A consume only discharges an ownership obligation, so a function that consumes
+// a linear value through the return path is modeled like any other and its
+// contract is decided by the data flow alone.
+// A false postcondition on such a function is still refuted.
+module LinearConsumeReturnFails
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn make(fd: i64) -> Handle vow {
+    ensures: result.fd == fd + 1
+} {
+    Handle { fd: fd }
+}
+
+fn main() -> i32 {
+    0
+}

@@ -896,10 +896,9 @@ pub fn is_modelable(
                 | Opcode::ConstU128
                 | Opcode::Load
                 | Opcode::Store
-                | Opcode::LinearConsume
                 | Opcode::LinearBorrow => false,
 
-                Opcode::DebugCall => true,
+                Opcode::LinearConsume | Opcode::DebugCall => true,
             };
             if !ok {
                 return false;
@@ -964,7 +963,6 @@ fn first_unsupported_opcode(
                 | Opcode::ConstU128
                 | Opcode::Load
                 | Opcode::Store
-                | Opcode::LinearConsume
                 | Opcode::LinearBorrow => return Some(format!("{:?}", inst.opcode)),
                 Opcode::CheckedAdd
                 | Opcode::CheckedSub
@@ -2048,12 +2046,13 @@ fn emit_inst(
             out.push_str("  /* verifier no-op: region scope marker */\n");
         }
 
+        // A consume only discharges an ownership obligation; it neither reads nor writes data.
+        Opcode::LinearConsume => {
+            out.push_str("  /* verifier no-op: linear consume marker */\n");
+        }
+
         // Other calls, memory, linear ops — not yet supported for verification
-        Opcode::Call
-        | Opcode::Load
-        | Opcode::Store
-        | Opcode::LinearConsume
-        | Opcode::LinearBorrow => {
+        Opcode::Call | Opcode::Load | Opcode::Store | Opcode::LinearBorrow => {
             emit_unsupported_for_verification(inst, out);
         }
 

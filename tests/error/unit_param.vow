@@ -1,0 +1,18 @@
+// TEST: error-code UnsupportedFeature
+// TEST: error-count 2
+// TEST: stderr "unit parameters are not supported"
+module UnitParam
+
+type Nothing = ();
+
+fn direct(u: ()) -> i64 {
+    0
+}
+
+fn aliased(n: Nothing) -> i64 {
+    0
+}
+
+fn main() -> i32 {
+    0
+}

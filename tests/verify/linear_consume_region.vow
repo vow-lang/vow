@@ -1,0 +1,22 @@
+// TEST: category model-drift
+// A consume only discharges an ownership obligation, so a function that consumes
+// a linear value through a region-allocated value is modeled like any other and its
+// contract is decided by the data flow alone.
+module LinearConsumeRegion
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn roundtrip(fd: i64) -> i64 vow {
+    ensures: result == fd
+} {
+    let h: Handle = Handle { fd: fd };
+    let got: i64 = h.fd;
+    drop(h);
+    got
+}
+
+fn main() -> i32 {
+    0
+}

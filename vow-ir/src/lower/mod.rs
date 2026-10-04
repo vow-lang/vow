@@ -1836,6 +1836,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 _ => todo!("non-ident callee in Call lowering"),
             };
             let call_info = ctx.func_index.get(&callee_name).cloned();
+            if callee_name == "drop" && call_info.is_none() {
+                for a in args {
+                    lower_consumed_expr(ctx, a);
+                }
+                return ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
+            }
             if callee_name == "string_matches_literal_at" {
                 let string_id = args
                     .first()
@@ -4091,6 +4097,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             } else {
                 val
             }
+        }
+        ExprKind::Tuple(elems) if elems.is_empty() => {
+            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
         }
         _ => todo!("IR lowering not implemented for {:?}", expr.kind),
     }
@@ -8410,6 +8419,35 @@ fn parse_or_default(s: String) -> i64 {
             .find(|i| i.opcode == Opcode::WrappingAdd)
             .expect("expected addition of the two bound elements");
         assert_eq!(add.args, vec![const_insts[0].id, const_insts[1].id]);
+    }
+
+    #[test]
+    fn lower_unit_literal_emits_const_unit() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(tuple_expr(vec![]))),
+            span: sp(),
+        };
+        let fn_def = make_fn("unit_value", vec![], unit_ty(), body, vec![]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        let entry = &func.blocks[0];
+        let unit = entry
+            .insts
+            .iter()
+            .find(|i| i.opcode == Opcode::ConstUnit)
+            .expect("`()` lowers to ConstUnit");
+        assert_eq!(unit.ty, Ty::Unit);
     }
 
     #[test]

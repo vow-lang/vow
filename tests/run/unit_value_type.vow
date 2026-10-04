@@ -1,0 +1,57 @@
+// TEST: stdout "unit ok\nset 2 has1 no3\nafter remove 1\nsorted 2 has3 has5\nsome none\n"
+// The unit literal `()` has the unit type `()`: it checks against a `()`
+// annotation and a `()` return type, and a `()` value can be stored as a
+// HashMap/BTreeMap value (the set idiom).
+module UnitValueType
+
+fn make_unit() -> () {
+    ()
+}
+
+fn hash_set() -> HashMap<i64, ()> {
+    let s: HashMap<i64, ()> = HashMap::new();
+    s.insert(1, ());
+    s.insert(2, ());
+    s.insert(1, ());
+    s
+}
+
+fn main() -> i32 [io] {
+    let u: () = ();
+    let v: () = make_unit();
+    print_str("unit ok\n");
+
+    let s: HashMap<i64, ()> = hash_set();
+    print_str("set ");
+    print_u64(s.len());
+    if s.contains_key(1) { print_str(" has1"); }
+    if !s.contains_key(3) { print_str(" no3"); }
+    print_str("\n");
+    s.remove(1);
+    print_str("after remove ");
+    print_u64(s.len() + 0u64);
+    print_str("\n");
+
+    let b: BTreeMap<i64, ()> = BTreeMap::new();
+    b.insert(5, ());
+    b.insert(3, ());
+    b.insert(5, ());
+    print_str("sorted ");
+    print_u64(b.len());
+    if b.contains(3) { print_str(" has3"); }
+    if b.contains(5) { print_str(" has5"); }
+    print_str("\n");
+
+    let hit: Option<()> = s.get(2);
+    let miss: Option<()> = s.get(9);
+    match hit {
+        Option::Some(x) => { print_str("some"); },
+        Option::None => { print_str("none"); },
+    }
+    match miss {
+        Option::Some(x) => { print_str(" some"); },
+        Option::None => { print_str(" none"); },
+    }
+    print_str("\n");
+    0
+}
