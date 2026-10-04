@@ -1818,9 +1818,12 @@ still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is
 `(a.len() as i64) + 1`.
 
 `&` is only the infix bitwise AND operator (`lhs & rhs`). There is no prefix
-`&expr`: Vow has no reference or borrow expressions, so `&x` (and `x & &y`) is
-an `UnsupportedFeature` error at the `&` token, identically in both compilers
-(see [errors.md](errors.md#unsupportedfeature)). Pass the value itself.
+`&expr`: Vow has no borrow expressions, so `&x` (and `x & &y`) is an
+`UnsupportedFeature` error at the `&` token, identically in both compilers (see
+[errors.md](errors.md#unsupportedfeature)). Pass the value itself. The type
+syntax `&T` is still accepted in signatures and annotations, but no expression
+produces a value of that type, so a reference-typed parameter can never be
+supplied.
 
 ### Unary Operators
 
@@ -2194,8 +2197,8 @@ Linear struct values carry a linear obligation. The obligation must either be co
 Owned enum wrappers inherit that obligation transitively. A user enum,
 `Option<T>`, or `Result<T, E>` is linear when one of its owned payload paths is
 linear; matching such a value consumes the wrapper exactly once and transfers
-the obligation to the selected bound payload. References remain borrows and do
-not become linear owners. Collection types do not acquire linear ownership from
+the obligation to the selected bound payload. A reference type (`&T`) is never a
+linear owner. Collection types do not acquire linear ownership from
 their element type; their separate non-linear-element restrictions still apply.
 An unbound `_` match catchall cannot discard a still-reachable linear payload:
 every variant that owns a linear payload must first have an explicit arm that
@@ -2204,7 +2207,7 @@ binds and consumes or transfers that payload.
 Struct fields cannot own linear values, even when the containing struct is
 `linear`, because field access does not provide move-out semantics. Allowing an
 owned field would let repeated reads transfer the same obligation more than
-once. Borrowed references and collection fields do not become linear owners
+once. Reference-typed (`&T`) and collection fields do not become linear owners
 under this rule.
 
 ### Struct Literals
@@ -4852,8 +4855,8 @@ trait Foo {
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
 
 A prefix `&expr` borrow expression is rejected by the parser, at the `&` token, with
-the hint `Vow has no references: pass the value itself; `&` is only the binary bitwise AND
-operator`; the operand is still parsed, so the diagnostic is reported once:
+the hint `Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise
+AND operator`; the operand is still parsed, so the diagnostic is reported once:
 
 ```vow
 fn f(x: i64) -> i64 {
@@ -7417,9 +7420,12 @@ still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is
 `(a.len() as i64) + 1`.
 
 `&` is only the infix bitwise AND operator (`lhs & rhs`). There is no prefix
-`&expr`: Vow has no reference or borrow expressions, so `&x` (and `x & &y`) is
-an `UnsupportedFeature` error at the `&` token, identically in both compilers
-(see [errors.md](errors.md#unsupportedfeature)). Pass the value itself.
+`&expr`: Vow has no borrow expressions, so `&x` (and `x & &y`) is an
+`UnsupportedFeature` error at the `&` token, identically in both compilers (see
+[errors.md](errors.md#unsupportedfeature)). Pass the value itself. The type
+syntax `&T` is still accepted in signatures and annotations, but no expression
+produces a value of that type, so a reference-typed parameter can never be
+supplied.
 
 ### Unary Operators
 
@@ -7793,8 +7799,8 @@ Linear struct values carry a linear obligation. The obligation must either be co
 Owned enum wrappers inherit that obligation transitively. A user enum,
 `Option<T>`, or `Result<T, E>` is linear when one of its owned payload paths is
 linear; matching such a value consumes the wrapper exactly once and transfers
-the obligation to the selected bound payload. References remain borrows and do
-not become linear owners. Collection types do not acquire linear ownership from
+the obligation to the selected bound payload. A reference type (`&T`) is never a
+linear owner. Collection types do not acquire linear ownership from
 their element type; their separate non-linear-element restrictions still apply.
 An unbound `_` match catchall cannot discard a still-reachable linear payload:
 every variant that owns a linear payload must first have an explicit arm that
@@ -7803,7 +7809,7 @@ binds and consumes or transfers that payload.
 Struct fields cannot own linear values, even when the containing struct is
 `linear`, because field access does not provide move-out semantics. Allowing an
 owned field would let repeated reads transfer the same obligation more than
-once. Borrowed references and collection fields do not become linear owners
+once. Reference-typed (`&T`) and collection fields do not become linear owners
 under this rule.
 
 ### Struct Literals
@@ -10455,8 +10461,8 @@ trait Foo {
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
 
 A prefix `&expr` borrow expression is rejected by the parser, at the `&` token, with
-the hint `Vow has no references: pass the value itself; `&` is only the binary bitwise AND
-operator`; the operand is still parsed, so the diagnostic is reported once:
+the hint `Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise
+AND operator`; the operand is still parsed, so the diagnostic is reported once:
 
 ```vow
 fn f(x: i64) -> i64 {

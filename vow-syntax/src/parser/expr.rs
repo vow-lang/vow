@@ -5,8 +5,7 @@ use crate::token::TokenKind;
 use super::Parser;
 
 const PREFIX_BINDING_POWER: u8 = 19;
-const BORROW_HINT: &str =
-    "Vow has no references: pass the value itself; `&` is only the binary bitwise AND operator";
+const BORROW_HINT: &str = "Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise AND operator";
 
 fn is_scalar_type_name(name: &str) -> bool {
     matches!(

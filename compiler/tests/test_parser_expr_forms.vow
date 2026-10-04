@@ -119,7 +119,7 @@ fn check_borrow_rejected(src: String, offset: i64, code: i64) -> i64 {
     if d.span_len != 1 { return code + 3; }
     let hints: Vec<String> = d.hints;
     if hints.len() != 1 { return code + 4; }
-    let want: String = String::from("Vow has no references: pass the value itself; `&` is only the binary bitwise AND operator");
+    let want: String = String::from("Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise AND operator");
     if hints[0] != want { return code + 5; }
     0
 }

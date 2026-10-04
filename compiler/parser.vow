@@ -826,7 +826,7 @@ fn parse_unary(p: Parser) -> i64 {
             p,
             EC_UNSUPPORTED_FEATURE(),
             String::from("borrow expressions (`&expr`) are not supported in Vow"),
-            String::from("Vow has no references: pass the value itself; `&` is only the binary bitwise AND operator")
+            String::from("Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise AND operator")
         );
         let _t: Token = advance(p);
         parse_unary(p)
