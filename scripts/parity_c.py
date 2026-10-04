@@ -27,8 +27,9 @@ SHIM = """#!/usr/bin/env bash
 set -eu
 for arg in "$@"; do
     if [ -f "$arg" ] && [ "${arg##*.}" = "c" ]; then
-        dest=$(mktemp "$VOW_ESBMC_CAPTURE_DIR/esbmc.XXXXXX.c")
+        dest=$(mktemp "$VOW_ESBMC_CAPTURE_DIR/esbmc.XXXXXX")
         cp "$arg" "$dest"
+        mv "$dest" "$dest.c"
         break
     fi
 done

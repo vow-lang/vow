@@ -134,6 +134,24 @@ none of them is a pruning assume and must not be added.
 A result whose proof leaned on a model-bound assume is reported as bounded; the
 other classes need no qualification.
 
+## String copy models
+
+`substring` and `string_substr` compute the result's length in closed form from
+the clamping documented in `grammar.md` (min/clamp arithmetic on unsigned
+values), then copy bytes in a loop bounded by the string capacity. A loop longer
+than the incremental-BMC step bound (`--max-k-step`) makes ESBMC answer
+`unknown`, even when the property under proof mentions only the length. The
+emitters therefore emit the copy loop only when some instruction can read the
+result's bytes (`byte_at`, `contains`, `string_matches_literal_at`, a clone, a
+phi, a call argument). A result that is only measured (`len`), compared with
+`eq` (a cached nondeterministic verdict over the lengths), appended with
+`push_str` (the model tracks only `.len`), or returned carries no loop and is
+marked `/* length-only substring: bytes never read, copy loop elided */`. Both
+forms agree on every observable property, so this removes no behaviour from the
+proof; it only avoids asking the solver to unwind bytes nobody reads. A contract
+that reads the result's bytes keeps the loop and stays bounded by the
+incremental-BMC step bound.
+
 ## Status taxonomy
 
 The status vocabulary already distinguishes a clean proof from every weaker or

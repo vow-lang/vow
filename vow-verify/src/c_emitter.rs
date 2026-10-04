@@ -1997,6 +1997,9 @@ fn emit_inst(
             if let InstData::CallTarget(fid) = &inst.data {
                 let val = &const_fns[fid];
                 match val {
+                    ConstantValue::I32(v) if inst.ty == Ty::U32 => {
+                        out.push_str(&format!("  v{} = {};\n", id, *v as u32));
+                    }
                     ConstantValue::I32(v) => {
                         out.push_str(&format!("  v{} = {};\n", id, v));
                     }
