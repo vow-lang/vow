@@ -2234,6 +2234,71 @@ fn is_enum_match_tid(ts: TyStore, tid: i64) -> bool {
     false
 }
 
+fn check_exhaustive(e: CheckEnv, m: Module, scrutinee_tid: i64, arms_lid: i64, n_arms: i64, span: i64) {
+    let a: AstArena = m.arena;
+    let mut i: i64 = 0;
+    while i < n_arms {
+        let pid: i64 = list_get(a, arms_lid, i * 2);
+        let tag: i64 = pat_tag(a, pid);
+        if tag == PAT_WILD() {
+            return;
+        }
+        if tag == PAT_IDENT() && pat_b(a, pid) == 0 {
+            return;
+        }
+        i = i + 1;
+    }
+    if !is_enum_match_tid(e.ts, scrutinee_tid) {
+        return;
+    }
+    let enum_name: String = enum_name_from_tid(e.ts, scrutinee_tid);
+    let enum_idx: i64 = env_lookup_enum(e, enum_name);
+    if enum_idx == -1 {
+        return;
+    }
+    let covered: Vec<String> = Vec::new();
+    let mut j: i64 = 0;
+    while j < n_arms {
+        let pid: i64 = list_get(a, arms_lid, j * 2);
+        if pat_tag(a, pid) == PAT_ENUM() {
+            let path_lid: i64 = pat_a(a, pid);
+            let path_len: i64 = list_len(a, path_lid);
+            if path_len > 0 {
+                let variant_name: String = arena_str(a, list_get(a, path_lid, path_len - 1));
+                if !handled_variant_contains(covered, variant_name) {
+                    covered.push(variant_name);
+                }
+            }
+        }
+        j = j + 1;
+    }
+    let vname_lid: i64 = e.edef_vname_lids[enum_idx as u64];
+    let nv: i64 = e.edef_variant_count[enum_idx as u64];
+    let missing: Vec<String> = Vec::new();
+    let mut k: i64 = 0;
+    while k < nv {
+        let vsid: i64 = ts_arg_get(e.ts, vname_lid, k);
+        let ts: TyStore = e.ts;
+        let vname: String = ts.strs[vsid as u64];
+        if !handled_variant_contains(covered, vname) {
+            missing.push(vname);
+        }
+        k = k + 1;
+    }
+    if missing.len() > 0u64 {
+        let joined: String = string_join(missing, String::from(", "));
+        let msg: String = String::from("non-exhaustive match: missing patterns: ");
+        msg.push_str(joined);
+        let d: Diagnostic = env_error_diag(e, EC_NON_EXHAUSTIVE_MATCH(), msg, span);
+        let hint1: String = String::from("add arms for: ");
+        hint1.push_str(joined);
+        diag_add_hint(d, hint1);
+        diag_add_hint(d, String::from("or add a wildcard '_' arm to match remaining patterns"));
+        let dctx: DiagCtx = e.dctx;
+        diag_ctx_emit(dctx, d);
+    }
+}
+
 fn pattern_aggregate_name(ts: TyStore, tid: i64) -> String {
     let tag: i64 = ty_tag(ts, tid);
     if tag == CTY_STR() {
@@ -3477,6 +3542,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let scrutinee_supported: bool = is_enum_match_tid(e.ts, scrutinee_tid);
         if all_arms_supported && !scrutinee_supported {
             env_emit_error_code_hint(e, EC_UNSUPPORTED_PATTERN(), String::from("match scrutinee must be an enum"), expr_span(a, scrutinee_eid), String::from("use `if`/`else` comparisons for scalar values"));
+        }
+        if all_arms_supported && scrutinee_supported {
+            check_exhaustive(e, m, scrutinee_tid, arms_lid, n_arms, expr_span(a, eid));
         }
         let mut result_tid: i64 = CTY_NEVER();
         let handled_variants: Vec<String> = Vec::new();
