@@ -2784,14 +2784,19 @@ impl<'e> Checker<'e> {
                     );
                 }
                 if all_arms_supported && scrutinee_supported {
+                    let mut counter = ErrorCounter {
+                        inner: &mut *self.emitter,
+                        errors: 0,
+                    };
                     crate::exhaustiveness::check_exhaustive(
                         &scrutinee_ty,
                         arms,
                         &self.env,
                         expr.span,
                         &self.file,
-                        self.emitter,
+                        &mut counter,
                     );
+                    self.error_count += counter.errors;
                 }
                 let mut result_ty = Ty::Unit;
                 let mut handled_variants = HashSet::new();
