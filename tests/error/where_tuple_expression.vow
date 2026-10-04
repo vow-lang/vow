@@ -1,0 +1,14 @@
+// TEST: error-code UnsupportedFeature
+// TEST: stderr "tuple expressions are not supported in contract predicates"
+// Tuples have no IR representation, so a tuple expression is rejected in a
+// `where` clause like in `requires`/`ensures`/`invariant` instead of panicking
+// IR lowering.
+module WhereTupleExpression
+
+fn f(x: i64 where (x, 1) != (2, 3)) -> i64 {
+    x
+}
+
+fn main() -> i32 {
+    0
+}

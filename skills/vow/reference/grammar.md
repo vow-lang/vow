@@ -109,7 +109,15 @@ fn safe_sub(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
 }
 ```
 
-`where` constraints on parameters become additional `requires` in verification. Each `where` clause can only reference its own parameter — it cannot reference other parameters.
+`where` constraints on parameters become additional `requires` in verification (and Caller-blame runtime checks under `--mode debug`). A `where` clause is checked exactly like a `requires` clause, in a scope holding **only its own parameter** plus module constants and functions:
+
+- It can only reference its own parameter. A sibling parameter or `result` is an undefined name (`TypeMismatch`, "undefined variable"), with a hint pointing at `requires`/`ensures` for conditions that span several parameters or the return value. Any other undefined name is the same error with the usual "did you mean" hint. This is a type error in both compilers; it never reaches IR lowering.
+- It must evaluate to `bool` (`ContractTypeMismatch`, hint "parameter `where` clauses must evaluate to `bool`").
+- It must be pure: no call to an effectful function and no heap write through an argument (`EffectViolation`, see "Contract Purity").
+- It cannot contain a tuple expression (`UnsupportedFeature`, "tuple expressions are not supported in contract predicates").
+- Integer literals are range-checked against the compared type, and the unsigned-comparison rules apply as in any other expression (`LiteralOutOfRange`, `TautologicalComparison`).
+
+On a declaration-only function (`fn f(x: i64 where x > 0) -> i64;`) and on the parameters of an `extern` function the clause is checked by the same rules but has no body to enforce it in: state the foreign function's real preconditions in its `vow` contract.
 
 ### Public Functions
 

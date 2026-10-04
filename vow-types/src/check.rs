@@ -2,8 +2,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use vow_diag::{Blame, Diagnostic, DiagnosticEmitter, ErrorCode, Severity, SourceLocation};
 use vow_syntax::ast::{
-    BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module, Pat, PatKind, Stmt, Type, UnOp,
-    VowBlock, VowClause, loop_break_values,
+    BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module, Param, Pat, PatKind, Stmt,
+    Type, UnOp, VowBlock, VowClause, loop_break_values,
 };
 use vow_syntax::span::Span;
 
@@ -967,6 +967,11 @@ fn builtin_constructor(enum_name: &str, variant_name: &str) -> Option<BuiltinCon
     })
 }
 
+struct WhereCtx {
+    own: String,
+    siblings: Vec<String>,
+}
+
 pub struct Checker<'e> {
     pub(crate) env: TypeEnv,
     pub(crate) current_return_ty: Ty,
@@ -998,6 +1003,10 @@ pub struct Checker<'e> {
     /// representation, so a tuple expression inside a predicate is rejected
     /// while this is non-zero rather than reaching lowering.
     contract_depth: u32,
+    /// Set while a parameter's `where` refinement is being checked: only that
+    /// parameter is in scope, so a name that is a sibling parameter (or
+    /// `result`) gets a pointed hint instead of a spelling suggestion.
+    where_ctx: Option<WhereCtx>,
     /// Stack of break-value type collectors. `Some(vec)` for `loop` (collects
     /// break types), `None` for `while` (break-with-value is an error).
     break_types_stack: Vec<Option<Vec<Ty>>>,
@@ -1044,6 +1053,7 @@ impl<'e> Checker<'e> {
             nonneg_casts: HashMap::new(),
             in_loop: 0,
             contract_depth: 0,
+            where_ctx: None,
             break_types_stack: Vec::new(),
             const_types: HashMap::new(),
         }
@@ -1468,6 +1478,12 @@ impl<'e> Checker<'e> {
             Item::Fn(fn_def) if !fn_def.is_declaration => {
                 self.check_fn(fn_def);
             }
+            Item::Fn(fn_def) => self.check_param_refinements(&fn_def.name, &fn_def.params),
+            Item::Extern(block) => {
+                for f in &block.fns {
+                    self.check_param_refinements(&f.name, &f.params);
+                }
+            }
             Item::Trait(t) => {
                 self.emit_error(
                     ErrorCode::UnsupportedFeature,
@@ -1491,6 +1507,70 @@ impl<'e> Checker<'e> {
         let ty = self.check_expr(expr);
         self.contract_depth -= 1;
         ty
+    }
+
+    fn where_scope_hint(&self, name: &str) -> Option<String> {
+        let ctx = self.where_ctx.as_ref()?;
+        if ctx.siblings.iter().any(|s| s == name) {
+            Some(format!(
+                "a `where` clause can only reference its own parameter `{}`; put a condition on several parameters in `requires`",
+                ctx.own
+            ))
+        } else if name == "result" {
+            Some(
+                "a `where` clause is checked before the function runs, so `result` does not exist yet; constrain the return value with `ensures`"
+                    .to_string(),
+            )
+        } else {
+            None
+        }
+    }
+
+    /// Checks each parameter's `where` refinement like a `requires` clause, in
+    /// a scope holding only that parameter: it must be a pure `bool`
+    /// predicate with no tuple expressions.
+    fn check_param_refinements(&mut self, fn_name: &str, params: &[Param]) {
+        if params.iter().all(|p| p.refinement.is_none()) {
+            return;
+        }
+        let Some(sig) = self.env.lookup_fn(fn_name).cloned() else {
+            return;
+        };
+        for (i, param) in params.iter().enumerate() {
+            let Some(refinement) = &param.refinement else {
+                continue;
+            };
+            let ty = sig.params.get(i).cloned().unwrap_or(Ty::Unit);
+            let siblings = params
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, p)| p.name.clone())
+                .collect();
+            self.env.push_scope();
+            self.env.define(&param.name, ty);
+            let outer = self.where_ctx.replace(WhereCtx {
+                own: param.name.clone(),
+                siblings,
+            });
+            let pred_ty = self.check_contract_expr(refinement);
+            self.where_ctx = outer;
+            self.exit_scope();
+            if pred_ty != Ty::Bool && pred_ty != Ty::Never {
+                self.emit_error_with_hints(
+                    ErrorCode::ContractTypeMismatch,
+                    format!("`where` clause has type `{pred_ty}` but must be `bool`"),
+                    refinement.span,
+                    vec!["parameter `where` clauses must evaluate to `bool`".to_string()],
+                );
+            }
+            let mut counter = ErrorCounter {
+                inner: &mut *self.emitter,
+                errors: 0,
+            };
+            crate::effects::check_predicate_purity(refinement, &self.env, &self.file, &mut counter);
+            self.error_count += counter.errors;
+        }
     }
 
     fn check_vow_clauses(&mut self, vow: &VowBlock, context: &str) {
@@ -1526,6 +1606,8 @@ impl<'e> Checker<'e> {
             .as_ref()
             .map(|s| s.return_ty.clone())
             .unwrap_or(Ty::Unit);
+
+        self.check_param_refinements(&fn_def.name, &fn_def.params);
 
         self.env.push_scope();
         for (i, param) in fn_def.params.iter().enumerate() {
@@ -2063,11 +2145,15 @@ impl<'e> Checker<'e> {
                     Some(ty) => ty.clone(),
                     None => {
                         let mut hints = Vec::new();
-                        let candidates = self
-                            .env
-                            .all_var_names(MAX_HINT_CANDIDATES, MAX_HINT_IDENTIFIER_BYTES);
-                        if let Some(suggestion) = suggest_similar(name, &candidates, 3) {
-                            hints.push(format!("did you mean `{suggestion}`?"));
+                        if let Some(hint) = self.where_scope_hint(name) {
+                            hints.push(hint);
+                        } else {
+                            let candidates = self
+                                .env
+                                .all_var_names(MAX_HINT_CANDIDATES, MAX_HINT_IDENTIFIER_BYTES);
+                            if let Some(suggestion) = suggest_similar(name, &candidates, 3) {
+                                hints.push(format!("did you mean `{suggestion}`?"));
+                            }
                         }
                         self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
@@ -2075,7 +2161,7 @@ impl<'e> Checker<'e> {
                             expr.span,
                             hints,
                         );
-                        Ty::Unit
+                        Ty::Never
                     }
                 }
             }
@@ -4263,7 +4349,7 @@ mod tests {
         let mut checker = Checker::new("test.vow", &mut emitter);
         checker.env.push_scope();
         let ty = checker.check_expr(&make_expr(ExprKind::Ident("x".to_string())));
-        assert_eq!(ty, Ty::Unit);
+        assert_eq!(ty, Ty::Never, "error type must not cascade");
         assert!(checker.has_errors());
         assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
         assert!(emitter.0[0].message.contains("undefined variable"));

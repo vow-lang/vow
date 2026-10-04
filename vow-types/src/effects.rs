@@ -582,41 +582,52 @@ pub fn check_vow_purity(
             VowClause::Ensures { expr, .. } => expr,
             VowClause::Invariant { expr, .. } => expr,
         };
+        check_predicate_purity(expr, env, file, emitter);
+    }
+}
 
-        let mut calls = Vec::new();
-        let mut panic_exprs = Vec::new();
-        collect_calls_in_expr(expr, &mut calls, &mut panic_exprs);
+/// Purity check for one predicate expression: a contract clause or a
+/// parameter `where` refinement, which obey the same rule.
+pub fn check_predicate_purity(
+    expr: &Expr,
+    env: &TypeEnv,
+    file: &str,
+    emitter: &mut dyn DiagnosticEmitter,
+) {
+    let mut calls = Vec::new();
+    let mut panic_exprs = Vec::new();
+    collect_calls_in_expr(expr, &mut calls, &mut panic_exprs);
 
-        for (callee_expr, callee_name) in &calls {
-            if let Some(sig) = env.lookup_fn(callee_name)
-                && !sig.effects.is_empty()
-            {
-                emitter.emit(&Diagnostic {
-                    severity: Severity::Error,
-                    code: ErrorCode::EffectViolation,
-                    message: format!(
-                        "vow predicate must be pure but calls effectful function `{}`",
-                        callee_name,
-                    ),
-                    primary: SourceLocation {
-                        file: file.to_string(),
-                        byte_offset: callee_expr.span.start,
-                        byte_len: callee_expr.span.len,
-                    },
-                    secondary: vec![],
-                    blame: Blame::Callee,
-                    hints: vec![
-                        "vow predicates must be pure — move effectful code outside the vow block"
-                            .to_string(),
-                    ],
-                });
-            }
-        }
-
-        let mut write_sites = Vec::new();
-        collect_may_write_sites(expr, env, &mut write_sites);
-        for site in write_sites {
+    for (callee_expr, callee_name) in &calls {
+        if let Some(sig) = env.lookup_fn(callee_name)
+            && !sig.effects.is_empty()
+        {
             emitter.emit(&Diagnostic {
+                severity: Severity::Error,
+                code: ErrorCode::EffectViolation,
+                message: format!(
+                    "vow predicate must be pure but calls effectful function `{}`",
+                    callee_name,
+                ),
+                primary: SourceLocation {
+                    file: file.to_string(),
+                    byte_offset: callee_expr.span.start,
+                    byte_len: callee_expr.span.len,
+                },
+                secondary: vec![],
+                blame: Blame::Callee,
+                hints: vec![
+                    "vow predicates must be pure — move effectful code outside the vow block"
+                        .to_string(),
+                ],
+            });
+        }
+    }
+
+    let mut write_sites = Vec::new();
+    collect_may_write_sites(expr, env, &mut write_sites);
+    for site in write_sites {
+        emitter.emit(&Diagnostic {
                 severity: Severity::Error,
                 code: ErrorCode::EffectViolation,
                 message: "vow predicate must be pure but this expression may write through a shared argument".to_string(),
@@ -632,7 +643,6 @@ pub fn check_vow_purity(
                         .to_string(),
                 ],
             });
-        }
     }
 }
 

@@ -144,6 +144,18 @@ fn f() -> () {
 
 **Fix:** Annotate the binding: `let m: HashMap<i64, i64> = HashMap::new();`.
 
+An undefined name is a `TypeMismatch` whose message begins `undefined variable`, in both compilers, and the expression then has an error type so it does not cascade into further type errors. A parameter `where` clause is name-resolved in a scope holding only its own parameter, so a sibling parameter or `result` is an undefined name there; the hint says to move such a condition to `requires`/`ensures`.
+
+```vow
+fn ordered(a: i64, b: i64 where b > a) -> i64 {
+    b
+}
+```
+
+**Output:** ``undefined variable `a` ``, hint ``a `where` clause can only reference its own parameter `b`; put a condition on several parameters in `requires` ``
+
+**Fix:** State the condition in `requires: b > a`.
+
 ### LiteralOutOfRange
 
 **Phase:** Type Checker
@@ -240,7 +252,7 @@ fn f(s: String, key: String) -> i64 {
 ### EffectViolation
 
 **Phase:** Type Checker
-**Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write — not the caller.
+**Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause or parameter `where` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write — not the caller.
 
 ```vow
 fn f() -> () {
@@ -534,7 +546,7 @@ extern "C" {
 ### ContractTypeMismatch
 
 **Phase:** Type Checker
-**Meaning:** A `requires`, `ensures`, or `invariant` clause expression does not have type `bool`.
+**Meaning:** A `requires`, `ensures`, or `invariant` clause expression, or a parameter `where` clause, does not have type `bool`.
 
 ```vow
 fn add(a: i64, b: i64) -> i64 vow {

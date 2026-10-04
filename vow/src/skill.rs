@@ -1467,7 +1467,15 @@ fn safe_sub(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
 }
 ```
 
-`where` constraints on parameters become additional `requires` in verification. Each `where` clause can only reference its own parameter — it cannot reference other parameters.
+`where` constraints on parameters become additional `requires` in verification (and Caller-blame runtime checks under `--mode debug`). A `where` clause is checked exactly like a `requires` clause, in a scope holding **only its own parameter** plus module constants and functions:
+
+- It can only reference its own parameter. A sibling parameter or `result` is an undefined name (`TypeMismatch`, "undefined variable"), with a hint pointing at `requires`/`ensures` for conditions that span several parameters or the return value. Any other undefined name is the same error with the usual "did you mean" hint. This is a type error in both compilers; it never reaches IR lowering.
+- It must evaluate to `bool` (`ContractTypeMismatch`, hint "parameter `where` clauses must evaluate to `bool`").
+- It must be pure: no call to an effectful function and no heap write through an argument (`EffectViolation`, see "Contract Purity").
+- It cannot contain a tuple expression (`UnsupportedFeature`, "tuple expressions are not supported in contract predicates").
+- Integer literals are range-checked against the compared type, and the unsigned-comparison rules apply as in any other expression (`LiteralOutOfRange`, `TautologicalComparison`).
+
+On a declaration-only function (`fn f(x: i64 where x > 0) -> i64;`) and on the parameters of an `extern` function the clause is checked by the same rules but has no body to enforce it in: state the foreign function's real preconditions in its `vow` contract.
 
 ### Public Functions
 
@@ -3543,7 +3551,7 @@ A clause must not write through any argument while it is being evaluated — not
 
 Tuples are not first-class values (see the `let` tuple-pattern rules in `grammar.md`), so a
 tuple expression, including the empty tuple `()`, cannot appear anywhere inside a `requires`,
-`ensures` or `invariant` clause — not as a comparison operand (`requires: t != (1, 2)`) and not as
+`ensures` or `invariant` clause, or in a parameter `where` clause — not as a comparison operand (`requires: t != (1, 2)`) and not as
 the initializer of a `let` inside a clause block. Both compilers reject it at type-check time with
 `UnsupportedFeature` ("tuple expressions are not supported in contract predicates") at the
 tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.
@@ -3712,7 +3720,7 @@ fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
 }
 ```
 
-Each `where` clause can only reference its own parameter.
+Each `where` clause can only reference its own parameter (a sibling parameter or `result` is an undefined-variable `TypeMismatch`), and it obeys the same rules as a `requires` clause: it must be a pure `bool` predicate with no tuple expression. See `grammar.md` → "Where Clauses" for the full list.
 
 ## Anti-Patterns
 
@@ -4503,6 +4511,18 @@ fn f() -> () {
 
 **Fix:** Annotate the binding: `let m: HashMap<i64, i64> = HashMap::new();`.
 
+An undefined name is a `TypeMismatch` whose message begins `undefined variable`, in both compilers, and the expression then has an error type so it does not cascade into further type errors. A parameter `where` clause is name-resolved in a scope holding only its own parameter, so a sibling parameter or `result` is an undefined name there; the hint says to move such a condition to `requires`/`ensures`.
+
+```vow
+fn ordered(a: i64, b: i64 where b > a) -> i64 {
+    b
+}
+```
+
+**Output:** ``undefined variable `a` ``, hint ``a `where` clause can only reference its own parameter `b`; put a condition on several parameters in `requires` ``
+
+**Fix:** State the condition in `requires: b > a`.
+
 ### LiteralOutOfRange
 
 **Phase:** Type Checker
@@ -4599,7 +4619,7 @@ fn f(s: String, key: String) -> i64 {
 ### EffectViolation
 
 **Phase:** Type Checker
-**Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write — not the caller.
+**Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause or parameter `where` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write — not the caller.
 
 ```vow
 fn f() -> () {
@@ -4893,7 +4913,7 @@ extern "C" {
 ### ContractTypeMismatch
 
 **Phase:** Type Checker
-**Meaning:** A `requires`, `ensures`, or `invariant` clause expression does not have type `bool`.
+**Meaning:** A `requires`, `ensures`, or `invariant` clause expression, or a parameter `where` clause, does not have type `bool`.
 
 ```vow
 fn add(a: i64, b: i64) -> i64 vow {
@@ -7011,7 +7031,15 @@ fn safe_sub(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
 }
 ```
 
-`where` constraints on parameters become additional `requires` in verification. Each `where` clause can only reference its own parameter — it cannot reference other parameters.
+`where` constraints on parameters become additional `requires` in verification (and Caller-blame runtime checks under `--mode debug`). A `where` clause is checked exactly like a `requires` clause, in a scope holding **only its own parameter** plus module constants and functions:
+
+- It can only reference its own parameter. A sibling parameter or `result` is an undefined name (`TypeMismatch`, "undefined variable"), with a hint pointing at `requires`/`ensures` for conditions that span several parameters or the return value. Any other undefined name is the same error with the usual "did you mean" hint. This is a type error in both compilers; it never reaches IR lowering.
+- It must evaluate to `bool` (`ContractTypeMismatch`, hint "parameter `where` clauses must evaluate to `bool`").
+- It must be pure: no call to an effectful function and no heap write through an argument (`EffectViolation`, see "Contract Purity").
+- It cannot contain a tuple expression (`UnsupportedFeature`, "tuple expressions are not supported in contract predicates").
+- Integer literals are range-checked against the compared type, and the unsigned-comparison rules apply as in any other expression (`LiteralOutOfRange`, `TautologicalComparison`).
+
+On a declaration-only function (`fn f(x: i64 where x > 0) -> i64;`) and on the parameters of an `extern` function the clause is checked by the same rules but has no body to enforce it in: state the foreign function's real preconditions in its `vow` contract.
 
 ### Public Functions
 
@@ -9089,7 +9117,7 @@ A clause must not write through any argument while it is being evaluated — not
 
 Tuples are not first-class values (see the `let` tuple-pattern rules in `grammar.md`), so a
 tuple expression, including the empty tuple `()`, cannot appear anywhere inside a `requires`,
-`ensures` or `invariant` clause — not as a comparison operand (`requires: t != (1, 2)`) and not as
+`ensures` or `invariant` clause, or in a parameter `where` clause — not as a comparison operand (`requires: t != (1, 2)`) and not as
 the initializer of a `let` inside a clause block. Both compilers reject it at type-check time with
 `UnsupportedFeature` ("tuple expressions are not supported in contract predicates") at the
 tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.
@@ -9258,7 +9286,7 @@ fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
 }
 ```
 
-Each `where` clause can only reference its own parameter.
+Each `where` clause can only reference its own parameter (a sibling parameter or `result` is an undefined-variable `TypeMismatch`), and it obeys the same rules as a `requires` clause: it must be a pure `bool` predicate with no tuple expression. See `grammar.md` → "Where Clauses" for the full list.
 
 ## Anti-Patterns
 
@@ -10051,6 +10079,18 @@ fn f() -> () {
 
 **Fix:** Annotate the binding: `let m: HashMap<i64, i64> = HashMap::new();`.
 
+An undefined name is a `TypeMismatch` whose message begins `undefined variable`, in both compilers, and the expression then has an error type so it does not cascade into further type errors. A parameter `where` clause is name-resolved in a scope holding only its own parameter, so a sibling parameter or `result` is an undefined name there; the hint says to move such a condition to `requires`/`ensures`.
+
+```vow
+fn ordered(a: i64, b: i64 where b > a) -> i64 {
+    b
+}
+```
+
+**Output:** ``undefined variable `a` ``, hint ``a `where` clause can only reference its own parameter `b`; put a condition on several parameters in `requires` ``
+
+**Fix:** State the condition in `requires: b > a`.
+
 ### LiteralOutOfRange
 
 **Phase:** Type Checker
@@ -10147,7 +10187,7 @@ fn f(s: String, key: String) -> i64 {
 ### EffectViolation
 
 **Phase:** Type Checker
-**Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write — not the caller.
+**Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause or parameter `where` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write — not the caller.
 
 ```vow
 fn f() -> () {
@@ -10441,7 +10481,7 @@ extern "C" {
 ### ContractTypeMismatch
 
 **Phase:** Type Checker
-**Meaning:** A `requires`, `ensures`, or `invariant` clause expression does not have type `bool`.
+**Meaning:** A `requires`, `ensures`, or `invariant` clause expression, or a parameter `where` clause, does not have type `bool`.
 
 ```vow
 fn add(a: i64, b: i64) -> i64 vow {

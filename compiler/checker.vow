@@ -726,6 +726,17 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
         let id: i64 = item_id(item);
         if kind == ITEM_FN() && !fn_is_declaration(m.arena, id) {
             check_fn(e, m, id);
+        } else if kind == ITEM_FN() {
+            check_param_refinements(e, m, id);
+        } else if kind == ITEM_EXTERN() {
+            let a: AstArena = m.arena;
+            let fns_lid: i64 = ext_fns_lid(a, id);
+            let nf: i64 = list_len(a, fns_lid);
+            let mut fi: i64 = 0;
+            while fi < nf {
+                check_param_refinements(e, m, list_get(a, fns_lid, fi));
+                fi = fi + 1;
+            }
         }
         i = i + 1;
     }
@@ -931,6 +942,103 @@ fn check_clause_purity(e: CheckEnv, m: Module, clause_eid: i64) [io] {
     }
 }
 
+fn where_scope_hint(e: CheckEnv, name: String) -> String {
+    if e.where_active == 0 {
+        return String::new();
+    }
+    if name_list_contains(e.where_sibs, name) {
+        let hint: String = String::from("a `where` clause can only reference its own parameter `");
+        hint.push_str(e.where_own);
+        hint.push_str(String::from("`; put a condition on several parameters in `requires`"));
+        return hint;
+    }
+    if name == String::from("result") {
+        return String::from("a `where` clause is checked before the function runs, so `result` does not exist yet; constrain the return value with `ensures`");
+    }
+    String::new()
+}
+
+fn emit_undefined_variable(e: CheckEnv, name: String, span: i64) {
+    let msg: String = String::from("undefined variable `");
+    msg.push_str(name);
+    msg.push_str(String::from("`"));
+    let mut hint: String = where_scope_hint(e, name);
+    if hint.len() == 0 {
+        let suggestion: String = diag_suggest_similar(name, env_visible_var_names(e));
+        if suggestion.len() > 0 {
+            hint = String::from("did you mean `");
+            hint.push_str(suggestion);
+            hint.push_str(String::from("`?"));
+        }
+    }
+    if hint.len() == 0 {
+        env_emit_error(e, msg, span);
+    } else {
+        env_emit_error_code_hint(e, EC_TYPE_MISMATCH(), msg, span, hint);
+    }
+}
+
+// Checks each parameter's `where` refinement like a `requires` clause, in a
+// scope holding only that parameter: a pure `bool` predicate with no tuple
+// expressions. Mirrors `check_param_refinements` in vow-types/src/check.rs.
+fn check_param_refinements(e: CheckEnv, m: Module, fid: i64) [io] {
+    let a: AstArena = m.arena;
+    let params_lid: i64 = fn_params_lid(a, fid);
+    let n_params: i64 = list_len(a, params_lid) / 4;
+    let mut any: bool = false;
+    let mut i: i64 = 0;
+    while i < n_params {
+        if list_get(a, params_lid, i * 4 + 2) != -1 {
+            any = true;
+        }
+        i = i + 1;
+    }
+    if !any {
+        return;
+    }
+    e.cur_fn_name = arena_str(a, fn_name_sid(a, fid));
+    let fidx: i64 = env_lookup_fn(e, e.cur_fn_name);
+    i = 0;
+    while i < n_params {
+        let ref_eid: i64 = list_get(a, params_lid, i * 4 + 2);
+        if ref_eid != -1 {
+            let pname: String = arena_str(a, list_get(a, params_lid, i * 4));
+            let ptid: i64 = if fidx != -1 && i < e.fn_param_count[fidx as u64] {
+                ts_arg_get(e.ts, e.fn_param_lids[fidx as u64], i)
+            } else {
+                resolve_ast_ty(e, m, list_get(a, params_lid, i * 4 + 1))
+            };
+            let sibs: Vec<String> = Vec::new();
+            let mut j: i64 = 0;
+            while j < n_params {
+                if j != i {
+                    sibs.push(arena_str(a, list_get(a, params_lid, j * 4)));
+                }
+                j = j + 1;
+            }
+            env_push_scope(e);
+            env_define_var(e, pname, ptid);
+            e.where_active = 1;
+            e.where_own = pname;
+            e.where_sibs = sibs;
+            e.contract_depth = e.contract_depth + 1;
+            let pred_tid: i64 = check_expr(e, m, ref_eid);
+            e.contract_depth = e.contract_depth - 1;
+            e.where_active = 0;
+            env_pop_scope(e);
+            if pred_tid != CTY_BOOL() && !is_opaque(pred_tid) {
+                env_emit_error_code_hint(
+                    e, EC_CONTRACT_TYPE_MISMATCH(), String::from("`where` clause must be `bool`"),
+                    expr_span(a, ref_eid),
+                    String::from("parameter `where` clauses must evaluate to `bool`")
+                );
+            }
+            check_clause_purity(e, m, ref_eid);
+        }
+        i = i + 1;
+    }
+}
+
 fn check_vow_clause(e: CheckEnv, m: Module, vow_lid: i64, kind: i64, context: String) [io] {
     let a: AstArena = m.arena;
     let n: i64 = list_len(a, vow_lid);
@@ -1040,6 +1148,8 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     };
     e.cur_ret_tid = ret_tid;
     e.cur_effects = fn_eff(a, fid);
+
+    check_param_refinements(e, m, fid);
 
     let mut_base: u64 = e.var_names.len();
     env_push_scope(e);
@@ -2524,7 +2634,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             }
             ci = ci + 1;
         }
-        return env_lookup_var(e, name);
+        let vidx: i64 = env_find_var(e, name);
+        if vidx < 0 {
+            emit_undefined_variable(e, name, expr_span(a, eid));
+            return CTY_NEVER();
+        }
+        return e.var_tids[vidx as u64];
     }
 
     if tag == EXPR_BINOP() {
