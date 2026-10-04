@@ -339,8 +339,8 @@ fn method_argument_expectations(receiver: &Ty, method: &str) -> Vec<Ty> {
 
 /// `HashMap` keys are stored and compared as one machine word, so only types
 /// whose equality is value equality of a single canonical word qualify:
-/// integers of at most 64 bits and `bool`. `Never` is the already-diagnosed
-/// unresolved marker. Heap-backed keys (`String`, `Vec`, structs, enums,
+/// integers of at most 64 bits and `bool`. `Never` and `Unknown` are the
+/// already-diagnosed unresolved markers. Heap-backed keys (`String`, `Vec`, structs, enums,
 /// tuples, `Option`) would compare by pointer, `i128`/`u128` would truncate,
 /// and floats have no total equality.
 fn hashmap_key_supported(key: &Ty) -> bool {
@@ -356,6 +356,7 @@ fn hashmap_key_supported(key: &Ty) -> bool {
             | Ty::U64
             | Ty::Bool
             | Ty::Never
+            | Ty::Unknown
     )
 }
 
@@ -2016,7 +2017,13 @@ impl<'e> Checker<'e> {
     fn never_is_not_a_value(&self, arg: &Expr, from: &Ty, to: &Ty) -> bool {
         *from == Ty::Never
             && !matches!(to, Ty::Applied(..) | Ty::Never | Ty::Unknown)
-            && !self.expr_diverges(arg)
+            && !self.is_diverging_never(arg, from)
+    }
+
+    /// A `Never`-typed expression that really diverges, as opposed to
+    /// `Option::None` / `Vec::new()` which share the bottom type.
+    fn is_diverging_never(&self, expr: &Expr, ty: &Ty) -> bool {
+        *ty == Ty::Never && self.expr_diverges(expr)
     }
 
     fn call_returns_never(&self, callee: &Expr) -> bool {
@@ -2708,7 +2715,10 @@ impl<'e> Checker<'e> {
                         _ => {
                             self.emit_error(
                                 ErrorCode::TypeMismatch,
-                                "field access on non-struct type",
+                                format!(
+                                    "field access on non-struct type `{}`",
+                                    base_ty.user_name()
+                                ),
                                 expr.span,
                             );
                             return Ty::Unknown;
@@ -2717,7 +2727,7 @@ impl<'e> Checker<'e> {
                     _ => {
                         self.emit_error(
                             ErrorCode::TypeMismatch,
-                            format!("field access on non-struct type `{base_ty}`"),
+                            format!("field access on non-struct type `{}`", base_ty.user_name()),
                             expr.span,
                         );
                         return Ty::Unknown;
@@ -2783,7 +2793,7 @@ impl<'e> Checker<'e> {
                         args.first().cloned().unwrap_or(Ty::Unit)
                     }
                     Ty::Unknown => Ty::Unknown,
-                    Ty::Never if self.expr_diverges(base) => Ty::Never,
+                    Ty::Never if self.is_diverging_never(base, &base_ty) => Ty::Never,
                     _ => {
                         self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
@@ -2975,7 +2985,9 @@ impl<'e> Checker<'e> {
                 if let Some(tys) = break_tys {
                     let mut result_ty = Ty::Unit;
                     let mut found = false;
+                    let mut saw_unknown = false;
                     for ty in &tys {
+                        saw_unknown |= ty.is_unknown();
                         if ty.is_unknown_or_never() {
                             continue;
                         }
@@ -2995,7 +3007,11 @@ impl<'e> Checker<'e> {
                             break;
                         }
                     }
-                    result_ty
+                    if !found && saw_unknown {
+                        Ty::Unknown
+                    } else {
+                        result_ty
+                    }
                 } else {
                     Ty::Unit
                 }
@@ -3282,7 +3298,7 @@ impl<'e> Checker<'e> {
                             let arg_ty = self.check_expr(arg);
                             if arg_ty != Ty::Str
                                 && !arg_ty.is_unknown()
-                                && !(arg_ty == Ty::Never && self.expr_diverges(arg))
+                                && !self.is_diverging_never(arg, &arg_ty)
                             {
                                 self.emit_error_with_hints(
                                     ErrorCode::TypeMismatch,

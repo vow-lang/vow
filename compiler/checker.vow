@@ -568,6 +568,10 @@ fn is_unknown(tid: i64) -> bool vow {
 // `Vec::new()` stand in for a scalar. Where an index or builtin argument
 // expects a non-aggregate type, a Never-typed expression is accepted only if it
 // really diverges (mirrors Rust `never_is_not_a_value`).
+fn is_diverging_never(e: CheckEnv, m: Module, eid: i64, tid: i64) -> bool {
+    tid == CTY_NEVER() && expr_diverges(e, m, eid)
+}
+
 fn never_is_not_a_value(e: CheckEnv, m: Module, eid: i64, from_tid: i64, to_tid: i64) -> bool {
     if from_tid != CTY_NEVER() {
         return false;
@@ -576,7 +580,7 @@ fn never_is_not_a_value(e: CheckEnv, m: Module, eid: i64, from_tid: i64, to_tid:
     if to_tag == CTY_APPLIED() || to_tag == CTY_NEVER() || to_tag == CTY_UNKNOWN() {
         return false;
     }
-    !expr_diverges(e, m, eid)
+    !is_diverging_never(e, m, eid, from_tid)
 }
 
 fn is_flat_slot_tid(ts: TyStore, tid: i64) -> bool {
@@ -3384,9 +3388,6 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if is_unknown(recv_tid) {
             return recv_tid;
         }
-        if recv_tid == CTY_NEVER() && expr_diverges(e, m, recv_eid) {
-            return recv_tid;
-        }
         let fname: String = arena_str(a, fname_sid);
         let mut base_tid: i64 = recv_tid;
         if ty_tag(e.ts, recv_tid) == CTY_REF() {
@@ -3447,7 +3448,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if is_unknown(recv_tid) {
             return recv_tid;
         }
-        if recv_tid == CTY_NEVER() && expr_diverges(e, m, recv_eid) {
+        if is_diverging_never(e, m, recv_eid, recv_tid) {
             return recv_tid;
         }
         if ty_tag(e.ts, recv_tid) == CTY_APPLIED() {
@@ -3538,9 +3539,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let bc_idx: u64 = e.break_counts.len() - 1u64;
         let bc: u64 = e.break_counts[bc_idx] as u64;
         let mut loop_tid: i64 = CTY_NEVER();
+        let mut saw_unknown: bool = false;
         let mut bi: u64 = 0u64;
         while bi < bc {
             let btid: i64 = e.break_tids[break_start + bi];
+            if is_unknown(btid) {
+                saw_unknown = true;
+            }
             if !is_opaque(btid) {
                 if is_opaque(loop_tid) {
                     loop_tid = btid;
@@ -3559,7 +3564,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             bi = bi + 1;
         }
         if is_opaque(loop_tid) {
-            loop_tid = CTY_UNIT();
+            loop_tid = if saw_unknown { CTY_UNKNOWN() } else { CTY_UNIT() };
         }
         let mut ti: u64 = 0u64;
         while ti < bc {
@@ -3942,7 +3947,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         return CTY_STR();
                     }
                     if first_arg_tid != CTY_STR() && !is_unknown(first_arg_tid)
-                        && !(first_arg_tid == CTY_NEVER() && expr_diverges(e, m, list_get(a, args_lid, 0))) {
+                        && !is_diverging_never(e, m, list_get(a, args_lid, 0), first_arg_tid) {
                         env_emit_error(e, String::from("String::from argument must be String"), expr_span(a, eid));
                     }
                     return CTY_STR();

@@ -201,3 +201,39 @@ fn field_access_on_a_reference_to_a_non_struct_is_one_error() {
     let src = "module Test\n\nfn f(r: &i64) -> i64 {\n    let x: i64 = r.field;\n    x\n}\n\nfn main() -> i32 {\n    0\n}\n";
     one_diagnostic_module(src, "reference to non-struct");
 }
+
+#[test]
+fn a_loop_whose_break_value_is_rubble_is_rubble() {
+    one_diagnostic_module(
+        &program("    let x: i64 = loop { break nope; };"),
+        "loop break on rubble",
+    );
+}
+
+#[test]
+fn field_access_on_a_diverging_expression_is_rejected_once() {
+    let src = "module Test\n\nfn f() -> i64 {\n    let y: i64 = (return 1).foo;\n    y\n}\n\nfn main() -> i32 {\n    0\n}\n";
+    one_diagnostic_module(src, "field of diverging expression");
+}
+
+#[test]
+fn field_access_on_a_non_struct_names_the_type_in_user_spelling() {
+    let diags = typecheck_source(&program("    let x: i64 = s.nofield;"));
+    assert_eq!(diags.len(), 1);
+    assert_eq!(diags[0].message, "field access on non-struct type `String`");
+}
+
+#[test]
+fn field_access_through_a_reference_to_a_struct_is_accepted() {
+    let src = "module Test\n\nstruct P {\n    x: i64,\n}\n\nfn f(p: &P) -> i64 {\n    p.x\n}\n\nfn main() -> i32 {\n    0\n}\n";
+    let diags = typecheck_source(src);
+    assert!(diags.is_empty(), "got {:?}", messages(&diags));
+}
+
+#[test]
+fn a_non_identifier_callee_with_arguments_is_one_error() {
+    one_diagnostic_module(
+        &program("    let x: i64 = (1)(2);"),
+        "non-identifier callee",
+    );
+}
