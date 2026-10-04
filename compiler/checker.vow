@@ -421,6 +421,13 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         return ty_add(e.ts, CTY_REF(), inner, 0);
     }
     if tag == TY_SLICE() {
+        // `[T]` has no constructor, no indexing and no iteration, so no value of
+        // that type can exist. The error is the point; the Slice<T> shape only
+        // keeps the cascade identical to the Rust resolver.
+        env_emit_error_code_hint(e, EC_UNSUPPORTED_FEATURE(),
+            String::from("slice types (`[T]`) are not supported in Vow"),
+            type_span(a, ast_tid),
+            String::from("use `Vec<T>` to hold a sequence of values"));
         let elem_tids: Vec<i64> = Vec::new();
         elem_tids.push(resolve_ast_ty(e, m, type_a(a, ast_tid)));
         return ts_make_applied(e.ts, ts_make_struct(e.ts, String::from("Slice")), elem_tids);
@@ -437,7 +444,14 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         let lid: i64 = ts_add_args(e.ts, elem_tids);
         return ty_add(e.ts, CTY_TUPLE(), lid, 0);
     }
-    CTY_UNIT()
+    // Every parser-built tag is handled above. An unhandled tag must never
+    // degrade to the unit type: that silently turns an unresolved annotation
+    // into `()` and surfaces later as an unrelated error (or none at all).
+    let tag_msg: String = String::from("unsupported type form (internal AST type tag ");
+    tag_msg.push_str(i64_to_string(tag));
+    tag_msg.push_str(String::from(")"));
+    env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), tag_msg, type_span(a, ast_tid));
+    CTY_UNKNOWN()
 }
 
 fn hashmap_key_tag_supported(tag: i64) -> bool {
@@ -656,6 +670,8 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
             register_struct_name(e, m, id);
         } else if kind == ITEM_ENUM() {
             register_enum_name(e, m, id);
+        } else if kind == ITEM_TYPE_ALIAS() {
+            register_alias_name(e, m, id);
         }
         i = i + 1;
     }
@@ -921,10 +937,31 @@ fn register_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     env_define_fn(e, name, param_tids, ret_tid, eff);
 }
 
+// The resolver binds primitive names and the builtin generic names before any
+// user type, so a user type of the same name would silently alias the builtin in
+// some positions (`Vec`) and shadow it in others. Mirrors Rust
+// `check_reserved_type_name`.
+fn check_reserved_type_name(e: CheckEnv, name: String, span: i64) {
+    let reserved: bool = primitive_tid(e.ts, name) != -1
+        || name == String::from("Vec")
+        || name == String::from("Option")
+        || name == String::from("Result")
+        || name == String::from("HashMap")
+        || name == String::from("BTreeMap");
+    if reserved {
+        let msg: String = String::from("`");
+        msg.push_str(name);
+        msg.push_str(String::from("` is a builtin type name and cannot be declared as a user type"));
+        env_emit_error_code_hint(e, EC_UNSUPPORTED_FEATURE(), msg, span,
+            String::from("choose a different name for this type"));
+    }
+}
+
 fn register_struct_name(e: CheckEnv, m: Module, sid: i64) [io] {
     let a: AstArena = m.arena;
     let name_s: i64 = sdef_name_sid(a, sid);
     let name: String = arena_str(a, name_s);
+    check_reserved_type_name(e, name, sdef_span(a, sid));
     env_define_struct_name(e, name);
 }
 
@@ -932,7 +969,14 @@ fn register_enum_name(e: CheckEnv, m: Module, eid: i64) [io] {
     let a: AstArena = m.arena;
     let name_s: i64 = edef_name_sid(a, eid);
     let name: String = arena_str(a, name_s);
+    check_reserved_type_name(e, name, edef_span(a, eid));
     env_define_enum_name(e, name);
+}
+
+fn register_alias_name(e: CheckEnv, m: Module, aid: i64) [io] {
+    let a: AstArena = m.arena;
+    let name: String = arena_str(a, alias_name_sid(a, aid));
+    check_reserved_type_name(e, name, alias_span(a, aid));
 }
 
 fn register_struct(e: CheckEnv, m: Module, sid: i64) [io] {

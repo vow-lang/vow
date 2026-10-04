@@ -530,6 +530,30 @@ fn f() -> () {
 
 **Fix:** Keep the linear value in a local binding and store an integer handle in the `Vec`. Consume a linear value that is no longer needed with `drop(value)`.
 
+#### Slice types
+
+The same code reports a slice type `[T]` wherever a type is written: a parameter, return, struct field, enum payload, `let` annotation, type alias or constant. The type has no constructor, no indexing and no iteration, so it can never hold a value. Each bracket pair is reported once (`[[i64]]` gives two diagnostics, an alias once at its definition), with the hint ``use `Vec<T>` to hold a sequence of values``, identically in both compilers.
+
+```vow
+fn probe(sl: [i64]) -> i64 { 0 }
+```
+
+**Output:** ``slice types (`[T]`) are not supported in Vow``
+
+**Fix:** Take a `Vec<T>` instead.
+
+#### Reserved type names
+
+The same code reports a `struct`, `enum` or `type` alias named after a primitive type (`i8`, `i16`, `i32`, `i64`, `i128`, `u8`, `u16`, `u32`, `u64`, `u128`, `f32`, `f64`, `bool`, `String`, `str`) or after `Vec`, `Option`, `Result`, `HashMap` or `BTreeMap`. The resolver binds those names before any user type, so the declaration would alias the builtin in some positions and shadow it in others. It is reported once per declaration, at the declaration, with the hint `choose a different name for this type`, identically in both compilers.
+
+```vow
+struct Vec { x: i64 }
+```
+
+**Output:** `` `Vec` is a builtin type name and cannot be declared as a user type ``
+
+**Fix:** Rename the type.
+
 #### Unit parameters
 
 The same code reports a parameter of type `()` (directly or through a type alias). The unit value carries no information and has no ABI slot, so such a parameter is rejected at the declaration.

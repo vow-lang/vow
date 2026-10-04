@@ -1,0 +1,112 @@
+module TestCheckerResolveAstTy
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use checker
+use env
+
+// resolve_ast_ty must account for every AST type tag the parser builds: each one
+// resolves to a real type or reports a diagnostic, and an unhandled tag fails
+// closed instead of degrading to the unit type. TY_COUNT bounds the tags the
+// loop enumerates; the table in form_source must grow with it.
+
+fn form_source(tag: i64) -> String {
+    if tag == TY_NAMED() { return String::from("i64"); }
+    if tag == TY_GENERIC() { return String::from("Vec<i64>"); }
+    if tag == TY_UNIT() { return String::from("()"); }
+    if tag == TY_NEVER() { return String::from("!"); }
+    if tag == TY_REF() { return String::from("&i64"); }
+    if tag == TY_SLICE() { return String::from("[i64]"); }
+    if tag == TY_TUPLE() { return String::from("(i64, i64)"); }
+    String::from("<no source for this tag>")
+}
+
+struct Resolved {
+    tid: i64,
+    diags: Vec<Diagnostic>,
+}
+
+fn resolve_node(arena: AstArena, dctx: DiagCtx, tid: i64) -> i64 [io] {
+    let parsed: Module = parse_module_into(
+        lex(String::from("module T\n")), arena, dctx, String::from("t.vow")
+    );
+    let check_env: CheckEnv = env_new(dctx, String::from("t.vow"));
+    resolve_ast_ty(check_env, parsed, tid)
+}
+
+fn resolve_source(src: String) -> Resolved [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let p: Parser = parser_new(lex(src), arena, dctx, String::from("t.vow"));
+    let tid: i64 = parse_type(p);
+    Resolved { tid: resolve_node(arena, dctx, tid), diags: dctx.diags }
+}
+
+fn first_tag_of(src: String) -> i64 [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let p: Parser = parser_new(lex(src), arena, dctx, String::from("t.vow"));
+    type_tag(arena, parse_type(p))
+}
+
+fn check_every_parser_tag() -> i32 [io] {
+    let mut tag: i64 = 0;
+    while tag < TY_COUNT() {
+        let src: String = form_source(tag);
+        if first_tag_of(src) != tag { return 11; }
+        let r: Resolved = resolve_source(form_source(tag));
+        let ds: Vec<Diagnostic> = r.diags;
+        if tag == TY_SLICE() {
+            if ds.len() != 1u64 { return 12; }
+            let d: Diagnostic = ds[0u64];
+            if d.code != EC_UNSUPPORTED_FEATURE() { return 13; }
+        } else {
+            if ds.len() != 0u64 { return 14; }
+            if r.tid == CTY_UNKNOWN() { return 15; }
+            if tag == TY_UNIT() {
+                if r.tid != CTY_UNIT() { return 16; }
+            } else if r.tid == CTY_UNIT() {
+                return 17;
+            }
+        }
+        tag = tag + 1;
+    }
+    0
+}
+
+fn check_unhandled_tag_fails_closed() -> i32 [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let node: i64 = arena_add_type(arena, TY_COUNT(), 0, 0, 0);
+    let tid: i64 = resolve_node(arena, dctx, node);
+    if tid == CTY_UNIT() { return 1; }
+    if tid != CTY_UNKNOWN() { return 2; }
+    let ds: Vec<Diagnostic> = dctx.diags;
+    if ds.len() != 1u64 { return 3; }
+    let d: Diagnostic = ds[0u64];
+    if d.code != EC_UNSUPPORTED_FEATURE() { return 4; }
+    if !d.message.contains(String::from("internal AST type tag 7")) { return 5; }
+    0
+}
+
+fn check_missing_annotation_is_unit() -> i32 [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    if resolve_node(arena, dctx, -1) != CTY_UNIT() { return 1; }
+    let ds: Vec<Diagnostic> = dctx.diags;
+    if ds.len() != 0u64 { return 2; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let r1: i32 = check_every_parser_tag();
+    if r1 != 0 { return 100 + r1; }
+    let r2: i32 = check_unhandled_tag_fails_closed();
+    if r2 != 0 { return 200 + r2; }
+    let r3: i32 = check_missing_annotation_is_unit();
+    if r3 != 0 { return 300 + r3; }
+    0
+}

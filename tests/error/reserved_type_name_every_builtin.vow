@@ -1,0 +1,28 @@
+// TEST: error-code UnsupportedFeature
+// TEST: stderr "`String` is a builtin type name and cannot be declared as a user type"
+// Each declaration of a builtin type name, whether a struct, an enum or an alias,
+// is rejected once with the same hint in both compilers.
+module ReservedTypeNameEveryBuiltin
+
+struct String {
+    x: i64,
+}
+
+struct BTreeMap {
+    x: i64,
+}
+
+enum Result {
+    Ok,
+    Err,
+}
+
+struct u8 {
+    x: i64,
+}
+
+type bool = i64;
+
+fn main() -> i32 {
+    0
+}

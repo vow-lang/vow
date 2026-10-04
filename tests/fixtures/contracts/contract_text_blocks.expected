@@ -29,6 +29,5 @@ requires {\n    let q: Shape = Shape::Empty;\n    true\n}
 requires {\n    let o: Option<i64> = Option::Some(3);\n    true\n}
 requires {\n    let o: Option<i64> = Option::None;\n    true\n}
 requires {\n    let q: &i64 = r;\n    true\n}
-requires {\n    let q: [i64] = sl;\n    true\n}
 requires {\n    let q: (i64, i64) = t;\n    true\n}
 requires {\n    let q: Vec<i64> = v;\n    true\n}
