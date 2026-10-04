@@ -349,13 +349,6 @@ fn unexecuted_entry(
 
 fn run_one_test(test_file: &Path, index: usize, cfg: &RunConfig) -> (TestEntry, ContractDensity) {
     let module_root = cfg.module_root;
-    let (verify, mode, timeout_ms, limits, jobs) = (
-        cfg.verify,
-        cfg.mode,
-        cfg.timeout_ms,
-        cfg.limits,
-        cfg.verify_jobs,
-    );
     let no_density = ContractDensity {
         functions_total: 0,
         functions_with_vows: 0,
@@ -396,13 +389,13 @@ fn run_one_test(test_file: &Path, index: usize, cfg: &RunConfig) -> (TestEntry, 
         frontend,
         test_file,
         Some(&tmp_out),
-        mode,
-        !verify,
+        cfg.mode,
+        !cfg.verify,
         false,
         TraceMode::Off,
         true,
-        limits,
-        jobs,
+        cfg.limits,
+        cfg.verify_jobs,
         &SolverConfig::default_config(),
         None,
     );
@@ -462,7 +455,7 @@ fn run_one_test(test_file: &Path, index: usize, cfg: &RunConfig) -> (TestEntry, 
                 buf
             });
 
-            let timeout = std::time::Duration::from_millis(timeout_ms);
+            let timeout = std::time::Duration::from_millis(cfg.timeout_ms);
             let deadline = std::time::Instant::now() + timeout;
             let exit = loop {
                 match child.try_wait() {

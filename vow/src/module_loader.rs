@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use vow_diag::{Blame, Diagnostic, ErrorCode, Severity, SourceLocation};
 use vow_syntax::ast::Module;
@@ -109,7 +109,8 @@ fn module_file_for_use(
 /// `use` of the entry resolves (to a `.vow` or `.vow.d` file).
 ///
 /// The walk stops after the first directory containing `.git` (the repository
-/// root) or when the path runs out; a relative entry path ends at `.`. Returns
+/// root), at a `..` component (whose parent is unknown without canonicalizing),
+/// or when the path runs out; a relative entry path ends at `.`. Returns
 /// `None` when the entry's own directory already works, when the entry has no
 /// `use` declarations, or when no directory resolves them all — in each case the
 /// default resolution (the entry's parent directory) applies unchanged.
@@ -123,10 +124,8 @@ pub(crate) fn infer_module_root(
         return None;
     }
     let resolves = |dir: &Path| {
-        uses.iter().all(|u| {
-            let vow = resolve_use(dir, u);
-            exists(&vow) || exists(&vow.with_extension("vow.d"))
-        })
+        uses.iter()
+            .all(|u| exists(&module_file_for_use(dir, u, &exists)))
     };
     let mut first = true;
     for dir in entry.parent()?.ancestors() {
@@ -138,7 +137,7 @@ pub(crate) fn infer_module_root(
         if resolves(dir) {
             return if first { None } else { Some(dir.to_path_buf()) };
         }
-        if exists(&dir.join(".git")) {
+        if exists(&dir.join(".git")) || dir.components().next_back() == Some(Component::ParentDir) {
             return None;
         }
         first = false;
@@ -271,6 +270,21 @@ mod tests {
         assert_eq!(
             infer_module_root(Path::new("tests/test_x.vow"), &uses, exists),
             Some(PathBuf::from("."))
+        );
+    }
+
+    #[test]
+    fn infer_root_never_walks_past_a_parent_component_into_the_current_directory() {
+        let uses = vec![comps(&["dep"])];
+        let cwd_only = |p: &Path| p == Path::new("./dep.vow");
+        assert_eq!(
+            infer_module_root(Path::new("../other/tests/test_x.vow"), &uses, cwd_only),
+            None
+        );
+        let sibling = |p: &Path| p == Path::new("../other/dep.vow");
+        assert_eq!(
+            infer_module_root(Path::new("../other/tests/test_x.vow"), &uses, sibling),
+            Some(PathBuf::from("../other"))
         );
     }
 

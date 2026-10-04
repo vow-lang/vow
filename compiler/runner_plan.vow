@@ -213,6 +213,7 @@ fn psi_avg10_int(text: String, kind: String) -> i64 {
                 let f: String = fields[j];
                 if string_starts_with(f, String::from("avg10=")) != 0 {
                     let num: Vec<String> = string_split(string_substr(f, 6, f.len() - 6), String::from("."));
+                    if num.len() == 0 { return -1; }
                     return match parse_i64(num[0]) {
                         Option::Some(v) => { v },
                         Option::None => { -1 },

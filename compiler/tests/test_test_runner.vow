@@ -45,6 +45,7 @@ fn main() -> i32 [io] {
     if psi_avg10_int(psi, String::from("full")) != 0 { return 18; }
     if psi_avg10_int(String::from(""), String::from("some")) != 0 - 1 { return 19; }
     if psi_avg10_int(String::from("some avg60=1.00\n"), String::from("some")) != 0 - 1 { return 20; }
+    if psi_avg10_int(String::from("some avg10=\n"), String::from("some")) != 0 - 1 { return 27; }
 
     let common: Vec<String> = Vec::new();
     common.push(String::from("--timeout"));

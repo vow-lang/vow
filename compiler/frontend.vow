@@ -114,7 +114,8 @@ fn frontend_uses_resolve_in(arena: AstArena, dir: String, uses: Vec<i64>) -> boo
 // Infer the module root for a single entry file given without an explicit root:
 // the nearest directory, starting at the entry's own directory and walking up
 // its ancestors, against which every direct `use` of the entry resolves. The
-// walk stops after the first directory containing `.git`, or at `.` / `/`.
+// walk stops after the first directory containing `.git`, at `.` / `/`, or at
+// a `..` component (whose parent is unknown without canonicalizing).
 // Returns "" (default resolution against the entry's parent directory) when the
 // entry's own directory already works, the entry has no `use`, or nothing
 // resolves them all. Mirrors `module_loader::infer_module_root` in the Rust
@@ -140,7 +141,7 @@ fn frontend_infer_module_root(path: String) -> String [io] {
         if fs_exists(str2(dir, String::from("/.git"))) == 1 {
             return String::from("");
         }
-        if dir == String::from(".") || dir == String::from("/") {
+        if dir == String::from(".") || dir == String::from("/") || dir == String::from("..") || string_ends_with(dir, String::from("/..")) != 0 {
             return String::from("");
         }
         dir = frontend_parent_dir(dir);
