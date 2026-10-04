@@ -1,0 +1,42 @@
+// BENCH: max-rss-kb 7500
+module AllocEscapeFreshBuiltins
+
+struct Sink {
+    names: Vec<String>,
+    sorted: Vec<Vec<i64>>,
+}
+
+fn push_name(s: Sink, k: i64) {
+    s.names.push(i64_to_string(k));
+}
+
+fn push_sorted(s: Sink, v: Vec<i64>) {
+    s.sorted.push(vec_sort(v));
+}
+
+fn round(v: Vec<i64>) -> u64 {
+    let s: Sink = Sink { names: Vec::new(), sorted: Vec::new() };
+    let mut i: i64 = 0;
+    while i < 16 {
+        push_name(s, i);
+        push_sorted(s, v);
+        i = i + 1;
+    }
+    s.names.len() + s.sorted.len()
+}
+
+fn main() -> i32 [io] {
+    let nums: Vec<i64> = Vec::new();
+    nums.push(5);
+    nums.push(1);
+    nums.push(3);
+    let mut i: i64 = 0;
+    let mut total: u64 = 0;
+    while i < 100000 {
+        total = total + round(nums);
+        i = i + 1;
+    }
+    print_u64(total);
+    print_str("\n");
+    0
+}

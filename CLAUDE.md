@@ -389,6 +389,16 @@ Before claiming a directive is "never parsed by any harness," grep `tests/*.sh` 
 
 `vow-verify/src/c_emitter.rs` and `compiler/c_emitter.vow` must hand ESBMC **byte-identical C** for the same program. `python3 scripts/parity.py c RUST_BIN SELF_BIN FIXTURE...` proves it: it puts a fake `esbmc` first on `PATH`, runs `verify` with each compiler, and diffs the set of distinct C sources recorded per function (`scripts/parity_c.py`; no real solver needed). `scripts/full_test.sh` Section 2c runs it over every `tests/verify*/` fixture, so any change to either emitter, to the lowering feeding it, or to a model helper that is not mirrored in the other compiler fails CI. To see the C itself, call `parity_c.capture(binary, fixture, shim_dir, capture_dir)` (see `scripts/parity_c.py`), or set `VOW_VERIFY_DEBUG=1` on the Rust compiler (it writes `/tmp/vow-verify-debug/<fn>.c`).
 
+### Memory bounds
+
+`bench/memory/programs/*.vow` carry a `// BENCH: max-rss-kb N` bound on their first line.
+`scripts/check_memory_bounds.py --compiler <vow|vowc>` builds and runs them against either compiler
+and fails when a peak resident set exceeds its bound; `full_test.sh` Section 8a runs it for both
+compilers (Linux only), so an allocation fix is pinned in the Rust and the self-hosted compiler alike.
+`bench/memory/run.sh` is the developer harness (needs GNU `time`, Rust compiler only). Do not run
+`run.sh --record` to add a program: it rewrites every bound; add the program, its annotation and its
+`expected.toml` entry by hand (measured peak + 4096 KiB).
+
 ## Mutation Testing (`vowc mutants`)
 
 Mutation testing is integrated into the self-hosted compiler as the `vowc mutants` subcommand. It mutates `compiler/*.vow` (or any `--root` directory), runs a tiered oracle (`scripts/bootstrap.sh --skip-cargo`, then a fast `VOW_FULL_TEST_SKIP_CARGO=1 VOW_FULL_TEST_TIER15_ONLY=1 scripts/full_test.sh` checkpoint, then the full `VOW_FULL_TEST_SKIP_CARGO=1 scripts/full_test.sh` suite), and writes structured JSON output to `mutants.out/` (`mutants.json`, `outcomes.json`, per-status `.txt` lists, plus `diff/<id>.diff` and `logs/<id>.log` per mutant). Stdout carries only a one-line summary.

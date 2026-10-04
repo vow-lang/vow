@@ -570,11 +570,26 @@ fresh allocation, and codegen routes accordingly:
 |---|---|---|
 | `Block(_)` (non-escaping, e.g. a lookup inside a loop) | `<name>_in_arena` with the block arena | freed when the block region closes |
 | `Caller(_)` (returned to the caller) | `<name>_in_arena` with the hidden caller arena | owned by the caller's region |
-| `Root` (published through a parameter container, stored in a struct that escapes, or a `main` result) | root wrapper | program lifetime, with a `RegionRootEscape` note on the allocation site |
+| `Root` (stored into two or more distinct parameter containers, into a container reached through a Phi merge, or pinned) | root wrapper | program lifetime, with a `RegionRootEscape` note on the allocation site |
 
-The root case is the defined owner for escaping lookups: the cell is retained
-in the root arena for the life of the process because the value genuinely
-outlives every region, and the compiler says so with the note. It is 16 bytes
+**An escaping result is owned by the container it is stored into.** The
+analysis places the cell in that container's region whenever it can prove which
+container receives it (§4.6 gives the rule and its soundness argument):
+
+- stored into a parameter container, directly or through a field, a `Vec`
+  element or an accessor that returns an alias of the argument
+  (`items(s).push(m.get(k))`): the parameter's hidden caller arena, so the cell
+  lives exactly as long as the caller's container;
+- stored into a container reached through a local aggregate
+  (`s.items.push(m.get(k))`, `rows[0].push(...)`): the aggregate's region,
+  widened to the region of every container stored in it;
+- returned to the caller: the caller's region.
+
+Only the cases that have no single owning region keep the root variant: a value
+stored into two or more distinct parameter containers (one hidden arena cannot
+be shorter-lived than both), a container reached through a Phi merge, and a
+pinned value. Those are retained in the root arena for the life of the process,
+and the compiler says so with the `RegionRootEscape` note. The cell is 16 bytes
 (it was a 32-byte descriptor), and it no longer takes the process-wide root
 arena lock unless it really is root-owned.
 
@@ -583,7 +598,28 @@ A loop of 10^6 non-escaping `BTreeMap::get`, `BTreeMap::insert`,
 memory. The `bench/memory` programs `alloc_loop_btreemap_get`,
 `alloc_loop_btreemap_insert`, `alloc_loop_btreemap_new`,
 `alloc_loop_hashmap_get`, `alloc_loop_option_conv` and
-`alloc_loop_fresh_builtins` pin this.
+`alloc_loop_fresh_builtins` pin this. A loop whose iterations build a container,
+store lookup results and fresh `String`/`Vec` builtin results into it through a
+callee, a struct field, a `Vec` element or an accessor, and drop it, is flat
+too: `alloc_escape_param_vec`, `alloc_escape_struct_field`,
+`alloc_escape_vec_elem`, `alloc_escape_accessor`, `alloc_escape_fresh_builtins`
+and `alloc_loop_field_vec_growth` pin it, and so do `alloc_loop_struct_map` and
+`alloc_loop_vec_map` for maps held in a struct field or a `Vec` element. Only
+escaping results that are live (the `alloc_escape_btreemap_get` and
+`alloc_escape_hashmap_get` programs keep 10^6 of them in one container) grow,
+and only by the live set. `scripts/check_memory_bounds.py` runs the whole
+directory against both compilers in `scripts/full_test.sh`. `--mode sanitize`
+adds nothing region-specific for these routes (the shadow table tracks `Vec`
+descriptors by address and the owner-arena entry points call the same sanitizer
+hooks as the root wrappers), and the same programs stay flat under it; Section
+5c of `full_test.sh` builds the container-growth and effect-outlives fixtures in
+sanitize mode with both compilers and checks their output.
+
+`HashMap` and `BTreeMap` receivers need no region at all: a map grows in the
+arena recorded in its own header, so the receiver of `insert` is never the
+analysis's problem, and the root wrapper `__vow_map_insert` hands the entry
+point that owner instead of taking the root-arena lock. The arena argument of
+`__vow_map_insert_in_arena` only supplies a non-null arena to trap on.
 
 The I/O builtins in the table gather their data before allocating: file reads,
 stdin and `args` are collected, and the file and process handle tables are
@@ -1127,6 +1163,70 @@ ESBMC C model.
 The linear-region interaction check (§9) runs between region
 inference and lowering.
 
+### 4.6. Stores through nested containers
+
+A store marks the stored value as outliving its target container (§4.1), and a
+callee that stores into a parameter container allocates the stored value in the
+hidden arena of the region the caller passes for that argument (§5.1). Both are
+only sound if the region of the argument is at least the region of every
+container the callee can reach through it: `s.items.push(f())` stores into
+whatever container `s.items` holds, which was stored into `s` and therefore
+outlives `s`, but may outlive it by far.
+
+```vow
+fn make(m: HashMap<i64, i64>) -> Vec<Option<i64>> {
+    let x: Vec<Option<i64>> = Vec::new();        // returned: caller region
+    let mut i: i64 = 0;
+    while i < 1000 {
+        let s: Sink = Sink { items: x, n: 0 };   // loop-body block
+        push_result(s, m, i % 3);                // stores m.get(k) into s.items
+        i = i + 1;
+    }
+    x
+}
+```
+
+If `s` stays in the loop body, the `Option` cells `push_result` allocates in
+`s`'s arena are freed with the iteration while `x` still points at them. The
+rule that prevents this, implemented identically in `vow-ir/src/region.rs`
+(`ContainmentFacts`) and `compiler/region.vow` (`containment_*`):
+
+1. A local container is **widened** when a callee stores a new heap value into
+   it (a non-growth store effect on an argument that resolves to it) or when a
+   store reaches it through a projection (`FieldGet`, `Load`, a `Vec` element or
+   an internal call that returns an alias of an argument).
+2. Everything stored into a widened container, transitively (field and element
+   stores, `push`/`insert` sources, the sources of callee `AliasOf` effects and
+   the embedded arguments of a `FreshInCaller` result), flows into it: the
+   container takes the markers of the contained value and its defining block,
+   so its region is at least the region of everything it holds.
+3. A value stored through a projection of a local aggregate takes the
+   aggregate's block marker and follows its later widening, instead of being
+   pinned to the root arena; a store through an accessor that returns an alias
+   of its argument is a store into that argument (it publishes the store effect
+   and the `CallerStoreTarget` marker for a parameter).
+4. A local container that directly stores a *parameter's* container
+   (`let s = Sink { items: param }`) holds a region the function cannot name: the
+   caller's. If such a holder is otherwise block-local, it goes to the root arena
+   (a widen-to-root, flagged by `RegionRootEscape`), so a callee that stores
+   through it allocates in an arena that outlives the caller's container. A
+   holder that already escapes to the caller (it is returned or stored into a
+   parameter) keeps its caller region: its arena is caller-owned, and relating
+   the regions of two caller-provided arguments needs a summary that this
+   section does not add. Only pairs the function stores itself count; the
+   store effects a callee summary reports over-approximate (a scalar read from a
+   `Vec` parameter is recorded as an alias of that parameter), and following
+   them moved most `Env`/context structs of `compiler/main.vow` to root and
+   raised its peak resident size by a third.
+
+A container that nothing stores through keeps its block-local region, so a
+struct that merely holds an outer container does not widen.
+
+The same bookkeeping is why `HashMap`/`BTreeMap` growth is routed by the owner
+recorded in the map header and why `Vec`/`String` growth through the root
+wrappers follows the descriptor's recorded owner (§7.1): neither depends on the
+analysis proving a receiver's region.
+
 ## 5. ABI and return convention
 
 ### 5.1. Hidden target_region parameter
@@ -1368,6 +1468,19 @@ root placement (`pin_to_root`) is a visible source operation.
 `Vec<T>`, `HashMap<K, V>`, and `String` grow by allocating a new
 larger backing in the same arena as the current backing and copying.
 
+**A container grows in the arena that owns it.** A mutable runtime descriptor
+records its owning arena in a private word (`VOW_CAP_RUNTIME_OWNED`, §7.2.1);
+maps record theirs in the header. The root wrappers (`__vow_vec_push`,
+`__vow_vec_push_val`, `__vow_string_push_str`, `__vow_string_push_byte`,
+`__vow_map_insert`, ...) therefore grow an owned container in its owner and take
+the root-arena lock only when the owner is the root arena (and this thread does
+not already hold it). Rodata and foreign descriptors have no owner: they keep
+the root fallback, and the rodata mutation trap still fires first. A receiver
+read through a struct field or a `Vec` element, whose region the analysis cannot
+prove, thus no longer grows its backing into the root arena for the life of the
+process: `alloc_loop_field_vec_growth` pushes 32 elements per iteration into a
+`Vec` held by a struct passed to a callee, 2 * 10^5 times, in flat memory.
+
 The old backing is reclaimed in two ways:
 
 1. **Oversized abandoned backings are returned to libc immediately.**
@@ -1440,9 +1553,12 @@ incoming route is projection-derived.
 Candidate routing MUST NOT be used for Vec or HashMap mutation unless
 an equivalent checked runtime entry exists. Nor may a candidate be
 passed as a function's hidden receiver-region argument. Both cases
-fall back to the projected value's conservative recorded region. This
+fall back to the projected value's conservative recorded region, which for a
+projection is the root wrapper. The root wrappers do not simply use the root
+arena: they read the same owner word under the same marker test and grow the
+container in its recorded owner (§7.1), so the fallback costs no leak. This
 separation makes runtime provenance, rather than a local IR
-approximation, the safety proof for projection-derived String routing.
+approximation, the safety proof for projection-derived routing.
 
 ### 7.3. Mutation of literal-backed containers
 
@@ -1833,9 +1949,9 @@ and String growth calls use the receiver's defining route: root-owned
 receivers keep the wrapper symbol, and direct block/caller-owned
 receivers route to the matching `_in_arena` symbol.
 Projection-derived String receivers use the checked candidate routing
-in §7.2.1. Projection-derived Vec receivers remain on their
-conservative recorded region because Vec has no checked candidate
-mutation ABI.
+in §7.2.1. Projection-derived Vec receivers stay on the root wrapper because Vec has no
+checked candidate mutation ABI; the wrapper grows an owned `Vec` in its
+recorded owner arena (§7.1).
 
 ### 12.3. Block region opcodes
 

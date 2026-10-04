@@ -1,0 +1,274 @@
+// TEST: stdout "option=9990 1000\nalias=190\nfresh=1000\nproj=9990\nloop=9990\nparam=4500\nlocal=90\naccessor=90 9990\nnest=9990\n"
+// A callee that stores into a container reached through its parameter must put
+// the stored value in a region that outlives every container the parameter can
+// reach, not just the parameter itself. Each scenario builds a short-lived
+// holder (declared in a loop body) around an outer container that survives the
+// loop; the stored values must still read back after the loop body arenas
+// closed and were reused.
+module RegionContainerEffectOutlives
+
+struct Sink {
+    items: Vec<Option<i64>>,
+    n: i64,
+}
+
+struct StrSink {
+    items: Vec<String>,
+    n: i64,
+}
+
+struct Holder {
+    sink: Sink,
+    tag: i64,
+}
+
+struct Rows {
+    rows: Vec<Vec<Option<i64>>>,
+    n: i64,
+}
+
+fn push_result(s: Sink, m: HashMap<i64, i64>, k: i64) {
+    s.items.push(m.get(k));
+}
+
+fn put_str(s: StrSink, v: String) {
+    s.items.push(v);
+}
+
+fn push_digits(s: StrSink, k: i64) {
+    s.items.push(i64_to_string(k));
+}
+
+fn push_row(r: Rows, m: HashMap<i64, i64>, k: i64) {
+    let row: Vec<Option<i64>> = r.rows[0];
+    row.push(m.get(k));
+}
+
+fn items(s: Sink) -> Vec<Option<i64>> {
+    s.items
+}
+
+fn put_via(s: Sink, m: HashMap<i64, i64>, k: i64) {
+    items(s).push(m.get(k));
+}
+
+fn opt_val(o: Option<i64>) -> i64 {
+    match o {
+        Option::Some(v) => v,
+        Option::None => 0,
+    }
+}
+
+fn sum_opts(x: Vec<Option<i64>>) -> i64 {
+    let mut j: u64 = 0;
+    let mut sum: i64 = 0;
+    while j < x.len() {
+        sum = sum + opt_val(x[j]);
+        j = j + 1;
+    }
+    sum
+}
+
+fn make_option(m: HashMap<i64, i64>) -> Vec<Option<i64>> {
+    let x: Vec<Option<i64>> = Vec::new();
+    let mut i: i64 = 0;
+    while i < 1000 {
+        let s: Sink = Sink { items: x, n: 0 };
+        push_result(s, m, i % 3);
+        i = i + 1;
+    }
+    x
+}
+
+fn make_alias() -> Vec<String> {
+    let x: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < 100 {
+        let s: StrSink = StrSink { items: x, n: 0 };
+        put_str(s, i64_to_string(i));
+        i = i + 1;
+    }
+    x
+}
+
+fn make_fresh() -> Vec<String> {
+    let x: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < 1000 {
+        let s: StrSink = StrSink { items: x, n: 0 };
+        push_digits(s, i % 10);
+        i = i + 1;
+    }
+    x
+}
+
+fn make_proj(m: HashMap<i64, i64>) -> Vec<Option<i64>> {
+    let x: Vec<Option<i64>> = Vec::new();
+    let mut i: i64 = 0;
+    while i < 1000 {
+        let h: Holder = Holder { sink: Sink { items: x, n: 0 }, tag: 1 };
+        push_result(h.sink, m, i % 3);
+        i = i + 1;
+    }
+    x
+}
+
+// The holder lives in the loop body, the container outlives the loop and is
+// read in the same function afterwards.
+fn loop_outer(m: HashMap<i64, i64>) -> i64 {
+    let x: Vec<Option<i64>> = Vec::new();
+    let mut i: i64 = 0;
+    while i < 1000 {
+        let s: Sink = Sink { items: x, n: 0 };
+        push_result(s, m, i % 3);
+        i = i + 1;
+    }
+    sum_opts(x)
+}
+
+// The wrapped container is itself a parameter: its region belongs to the
+// caller, so the block-local holder cannot hand its own arena to the callee.
+fn wrap(x: Vec<Option<i64>>, m: HashMap<i64, i64>, k: i64) {
+    let s: Sink = Sink { items: x, n: 0 };
+    push_result(s, m, k);
+}
+
+fn param_wrapped(m: HashMap<i64, i64>) -> i64 {
+    let x: Vec<Option<i64>> = Vec::new();
+    let mut i: i64 = 0;
+    while i < 300 {
+        wrap(x, m, 1 + i % 2);
+        i = i + 1;
+    }
+    let y: Vec<Option<i64>> = Vec::new();
+    let mut j: i64 = 0;
+    while j < 40 {
+        wrap(y, m, 1);
+        j = j + 1;
+    }
+    sum_opts(x)
+}
+
+// A container stored into a local holder and filled in the same function:
+// the pushed values follow the holder's container, not the loop body.
+fn local_store(m: HashMap<i64, i64>) -> i64 {
+    let x: Vec<Option<i64>> = Vec::new();
+    let s: Sink = Sink { items: x, n: 0 };
+    let mut i: i64 = 0;
+    while i < 6 {
+        s.items.push(m.get(1 + i % 2));
+        i = i + 1;
+    }
+    sum_opts(x)
+}
+
+// A store through an accessor that returns an alias of its argument is a store
+// into that argument: into the holder's own container here, and through the
+// parameter in `put_via` for the nested holder.
+fn accessor_local(m: HashMap<i64, i64>) -> i64 {
+    let x: Vec<Option<i64>> = Vec::new();
+    let s: Sink = Sink { items: x, n: 0 };
+    let mut i: i64 = 0;
+    while i < 6 {
+        items(s).push(m.get(1 + i % 2));
+        i = i + 1;
+    }
+    sum_opts(x)
+}
+
+fn make_accessor(m: HashMap<i64, i64>) -> Vec<Option<i64>> {
+    let x: Vec<Option<i64>> = Vec::new();
+    let mut i: i64 = 0;
+    while i < 1000 {
+        let s: Sink = Sink { items: x, n: 0 };
+        put_via(s, m, i % 3);
+        i = i + 1;
+    }
+    x
+}
+
+fn make_nest(m: HashMap<i64, i64>) -> Vec<Vec<Option<i64>>> {
+    let outer: Vec<Vec<Option<i64>>> = Vec::new();
+    let inner: Vec<Option<i64>> = Vec::new();
+    outer.push(inner);
+    let mut i: i64 = 0;
+    while i < 1000 {
+        let r: Rows = Rows { rows: outer, n: 0 };
+        push_row(r, m, i % 3);
+        i = i + 1;
+    }
+    outer
+}
+
+fn total_len(v: Vec<String>) -> i64 {
+    let mut t: i64 = 0;
+    let mut j: u64 = 0;
+    while j < v.len() {
+        t = t + (v[j].len() as i64);
+        j = j + 1;
+    }
+    t
+}
+
+// Each scenario is built twice so the second build reuses whatever the first
+// build's loop-body arenas released; a dangling value then reads as garbage.
+fn main() -> i32 [io] {
+    let m: HashMap<i64, i64> = HashMap::new();
+    m.insert(1, 10);
+    m.insert(2, 20);
+
+    let a: Vec<Option<i64>> = make_option(m);
+    let a2: Vec<Option<i64>> = make_option(m);
+    print_str("option=");
+    print_i64(sum_opts(a));
+    print_str(" ");
+    print_u64(a2.len());
+    print_str("\n");
+
+    let b: Vec<String> = make_alias();
+    let b2: Vec<String> = make_alias();
+    print_str("alias=");
+    print_i64(total_len(b) + total_len(b2) - total_len(b2));
+    print_str("\n");
+
+    let c: Vec<String> = make_fresh();
+    let c2: Vec<String> = make_fresh();
+    print_str("fresh=");
+    print_i64(total_len(c) + total_len(c2) - total_len(c2));
+    print_str("\n");
+
+    let d: Vec<Option<i64>> = make_proj(m);
+    let d2: Vec<Option<i64>> = make_proj(m);
+    print_str("proj=");
+    print_i64(sum_opts(d) + sum_opts(d2) - sum_opts(d2));
+    print_str("\n");
+
+    print_str("loop=");
+    print_i64(loop_outer(m));
+    print_str("\n");
+
+    print_str("param=");
+    print_i64(param_wrapped(m));
+    print_str("\n");
+
+    print_str("local=");
+    print_i64(local_store(m));
+    print_str("\n");
+
+    let g: Vec<Option<i64>> = make_accessor(m);
+    let g2: Vec<Option<i64>> = make_accessor(m);
+    print_str("accessor=");
+    print_i64(accessor_local(m));
+    print_str(" ");
+    print_i64(sum_opts(g) + sum_opts(g2) - sum_opts(g2));
+    print_str("\n");
+
+    let e: Vec<Vec<Option<i64>>> = make_nest(m);
+    let e2: Vec<Vec<Option<i64>>> = make_nest(m);
+    let first: Vec<Option<i64>> = e[0];
+    let second: Vec<Option<i64>> = e2[0];
+    print_str("nest=");
+    print_i64(sum_opts(first) + sum_opts(second) - sum_opts(second));
+    print_str("\n");
+    0
+}

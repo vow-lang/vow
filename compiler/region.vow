@@ -2133,6 +2133,7 @@ fn analyze_function(
     let f: IrFunction = m.functions[fidx_u];
     let bks: Vec<IrBlock> = f.blocks;
     let n_bks: u64 = bks.len();
+    let alias_to: Vec<i64> = build_alias_call_table(id_to_inst, int_kinds, int_auxs);
 
     let prev_kind: i64 = int_kinds[fidx_u];
     let prev_aux: i64 = int_auxs[fidx_u];
@@ -2193,7 +2194,7 @@ fn analyze_function(
             if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET()) && inst.args.len() >= 2 {
                 let target_id: i64 = inst.args[0];
                 let source_id: i64 = inst.args[1];
-                let target_param: i64 = trace_param(id_to_inst, target_id);
+                let target_param: i64 = trace_target_param(id_to_inst, alias_to, target_id);
                 if target_param >= 0 {
                     add_store_effect_source_constraints(
                         id_to_inst,
@@ -2218,7 +2219,7 @@ fn analyze_function(
                     {
                         let target_id2: i64 = inst.args[target_pos as u64];
                         let source_id2: i64 = inst.args[source_pos as u64];
-                        let target_param2: i64 = trace_param(id_to_inst, target_id2);
+                        let target_param2: i64 = trace_target_param(id_to_inst, alias_to, target_id2);
                         if target_param2 >= 0 {
                             add_store_effect_source_constraints(
                                 id_to_inst,
@@ -2236,7 +2237,7 @@ fn analyze_function(
                 }
                 let growth_target_pos: i64 = extern_growth_target_pos(inst.ds);
                 if growth_target_pos >= 0 && growth_target_pos < inst.args.len() as i64 {
-                    let growth_target_param: i64 = trace_param(id_to_inst, inst.args[growth_target_pos as u64]);
+                    let growth_target_param: i64 = trace_target_param(id_to_inst, alias_to, inst.args[growth_target_pos as u64]);
                     if growth_target_param >= 0 {
                         add_store_effect(
                             int_se_targets[fidx_u],
@@ -2255,6 +2256,7 @@ fn analyze_function(
                 publish_transitive_store_effects(
                     inst,
                     id_to_inst,
+                    alias_to,
                     int_kinds,
                     int_se_targets,
                     int_se_src_kinds,
@@ -2286,6 +2288,36 @@ fn analyze_function(
     let use_index: UseIndex = build_use_index(f);
     let use_off: Vec<i64> = use_index.off;
     let use_pos: Vec<i64> = use_index.pos;
+    let rev_edges: Vec<i64> = containment_collect_edges(
+        f, id_to_inst, alias_to, phi_arms, int_kinds, int_auxs, int_aliases_list,
+        int_se_targets, int_se_src_kinds, int_se_src_aux, int_se_src_aliases
+    );
+    // Holders of a parameter's container whose region, absent the root rule, is a
+    // block of this function: those go to the root arena.
+    let root_holders: Vec<i64> = Vec::new();
+    let no_roots: Vec<i64> = Vec::new();
+    let mut hk: u64 = 0;
+    while hk + 1 < rev_edges.len() {
+        let holder: i64 = rev_edges[hk + 1];
+        if rev_edges[hk] < 0 && !region_vec_contains_i64(root_holders, holder) {
+            let holder_block: i64 = lookup_inst_block(id_to_block, holder);
+            let holder_probe: Vec<i64> = Vec::new();
+            let holder_rgn: i64 = value_lub_region(
+                f, holder, holder_block, fidx, id_to_inst, id_to_block, phi_arms,
+                block_parent, block_depth, loop_headers,
+                is_scalar_ity(f.return_ty),
+                int_kinds, int_auxs, int_aliases_list,
+                int_se_targets, int_se_src_kinds, int_se_src_aux,
+                alias_to, rev_edges, no_roots,
+                holder_probe,
+                use_off, use_pos,
+            );
+            if region_kind(holder_rgn) == REGION_KIND_BLOCK() {
+                root_holders.push(holder);
+            }
+        }
+        hk = hk + 2;
+    }
     let mut rbi: u64 = 0;
     while rbi < n_bks {
         let rb: IrBlock = bks[rbi];
@@ -2300,6 +2332,7 @@ fn analyze_function(
                     is_scalar_ity(f.return_ty),
                     int_kinds, int_auxs, int_aliases_list,
                     int_se_targets, int_se_src_kinds, int_se_src_aux,
+                    alias_to, rev_edges, root_holders,
                     widened_flag,
                     use_off, use_pos,
                 );
@@ -2464,7 +2497,7 @@ fn publish_embedded_param_aliases(
 }
 
 fn publish_transitive_store_effects(
-    call_inst: IrInst, id_to_inst: Vec<IrInst>, int_kinds: Vec<i64>,
+    call_inst: IrInst, id_to_inst: Vec<IrInst>, alias_to: Vec<i64>, int_kinds: Vec<i64>,
     all_targets: Vec<Vec<i64>>, all_kinds: Vec<Vec<i64>>,
     all_auxs: Vec<Vec<i64>>, all_aliases: Vec<Vec<Vec<i64>>>,
     targets: Vec<i64>, kinds: Vec<i64>, auxs: Vec<i64>, aliases_list: Vec<Vec<i64>>
@@ -2481,7 +2514,7 @@ fn publish_transitive_store_effects(
     while i < callee_targets.len() && i < callee_kinds.len() && i < callee_auxs.len() {
         let target_pos: i64 = callee_targets[i];
         if target_pos >= 0 && target_pos < call_inst.args.len() as i64 {
-            let current_target_param: i64 = trace_param(id_to_inst, call_inst.args[target_pos as u64]);
+            let current_target_param: i64 = trace_target_param(id_to_inst, alias_to, call_inst.args[target_pos as u64]);
             if current_target_param >= 0 {
                 let kind: i64 = callee_kinds[i];
                 if kind == RSUM_KIND_ALIAS_OF() {
@@ -2567,6 +2600,7 @@ fn value_lub_region(
     return_is_scalar: bool,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
+    alias_to: Vec<i64>, rev_edges: Vec<i64>, root_holders: Vec<i64>,
     widened_out: Vec<i64>,
     use_off: Vec<i64>, use_pos: Vec<i64>
 ) -> i64 {
@@ -2598,6 +2632,9 @@ fn value_lub_region(
             int_se_targets,
             int_se_src_kinds,
             int_se_src_aux,
+            alias_to,
+            rev_edges,
+            root_holders,
             work,
             seen,
             use_off,
@@ -2821,9 +2858,38 @@ fn direct_markers_collect_regions(
     return_is_scalar: bool,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
+    alias_to: Vec<i64>, rev_edges: Vec<i64>, root_holders: Vec<i64>,
     work: Vec<i64>, seen: Vec<i64>,
     use_off: Vec<i64>, use_pos: Vec<i64>
 ) {
+    // A block-local container that holds a parameter's container hands its own
+    // arena to a callee that stores through it, but the stored value must outlive
+    // the caller's container: the holder goes to the root arena (the ROOT/1 widen
+    // sentinel, so the note pass flags it).
+    if region_vec_contains_i64(root_holders, id) {
+        linear_insert_i64(markers, region_pack(REGION_KIND_ROOT(), 1));
+    }
+    // Containment closure: whatever is held by `id` (a widened container) widens
+    // it. A held container's own defining block is not a marker (the LUB adds
+    // it), so state it explicitly when `id` is held.
+    let mut re: u64 = 0;
+    let mut is_held: bool = false;
+    while re + 1 < rev_edges.len() {
+        if rev_edges[re] == id {
+            is_held = true;
+        }
+        if rev_edges[re + 1] == id {
+            push_region_work(work, seen, rev_edges[re]);
+        }
+        re = re + 2;
+    }
+    if is_held {
+        let held_inst: IrInst = lookup_inst_or_default(id_to_inst, id);
+        let held_block: i64 = lookup_inst_block(id_to_block, id);
+        if held_block >= 0 && is_heap_producing_for_region(held_inst, int_kinds) {
+            linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), held_block));
+        }
+    }
     let bks: Vec<IrBlock> = f.blocks;
     if id < 0 || id + 1 >= use_off.len() as i64 {
         return;
@@ -2842,7 +2908,7 @@ fn direct_markers_collect_regions(
             }
             if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET()) && ai == 1 {
                 add_store_target_markers_vow(
-                    id_to_inst, id_to_block, phi_arms,
+                    id_to_inst, id_to_block, phi_arms, alias_to,
                     inst.args[0], int_kinds,
                     markers, work, seen, Vec::new(), false
                 );
@@ -2885,6 +2951,7 @@ fn direct_markers_collect_regions(
                     id_to_inst,
                     id_to_block,
                     phi_arms,
+                    alias_to,
                     int_kinds,
                     markers,
                     int_se_targets,
@@ -2915,7 +2982,7 @@ fn direct_markers_collect_regions(
                 let target_pos2: i64 = extern_store_target_for_source(inst.ds, ai);
                 if target_pos2 >= 0 && target_pos2 < inst.args.len() as i64 {
                     add_store_target_markers_vow(
-                        id_to_inst, id_to_block, phi_arms,
+                        id_to_inst, id_to_block, phi_arms, alias_to,
                         inst.args[target_pos2 as u64], int_kinds,
                         markers, work, seen, Vec::new(), false
                     );
@@ -3155,7 +3222,7 @@ fn target_marker_region(
 // that parameter's hidden caller arena (`marker_caller_store`) rather than Root.
 // Mirrors `add_store_target_markers` in vow-ir/src/region.rs (issues #871/#875).
 fn add_store_target_markers_vow(
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>, alias_to: Vec<i64>,
     target_id: i64, int_kinds: Vec<i64>,
     markers: Vec<i64>, work: Vec<i64>, seen: Vec<i64>, trace_seen: Vec<i64>,
     via_phi: bool
@@ -3170,7 +3237,7 @@ fn add_store_target_markers_vow(
             let mut ai: u64 = 0;
             while ai < arms.len() {
                 add_store_target_markers_vow(
-                    id_to_inst, id_to_block, phi_arms, arms[ai], int_kinds,
+                    id_to_inst, id_to_block, phi_arms, alias_to, arms[ai], int_kinds,
                     markers, work, seen, trace_seen, true
                 );
                 ai = ai + 1;
@@ -3178,11 +3245,18 @@ fn add_store_target_markers_vow(
             return;
         }
     }
-    let tp: i64 = trace_param(id_to_inst, target_id);
+    let tp: i64 = trace_target_param(id_to_inst, alias_to, target_id);
+    // A container reached through a projection of a local aggregate is owned by
+    // that aggregate's region: place the stored value there instead of Root, and
+    // let later widening of the aggregate flow to the stored value.
+    let store_base: i64 = projection_base_id(id_to_inst, alias_to, target_id);
+    if tp < 0 && store_base != target_id {
+        push_region_work(work, seen, store_base);
+    }
     let base_marker: i64 = if tp >= 0 {
         marker_caller_store(tp)
     } else {
-        target_marker_region(id_to_inst, id_to_block, target_id, int_kinds)
+        target_marker_region(id_to_inst, id_to_block, store_base, int_kinds)
     };
     // A container reached through a Phi merge cannot commit to a single hidden
     // caller slot: distinct arms may bind distinct slots, which the LUB rejects
@@ -3203,7 +3277,8 @@ fn add_store_target_markers_vow(
 
 fn call_store_effects_collect_regions(
     call_inst: IrInst, source_arg_pos: i64,
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>, int_kinds: Vec<i64>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>, alias_to: Vec<i64>,
+    int_kinds: Vec<i64>,
     markers: Vec<i64>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
     work: Vec<i64>, seen: Vec<i64>
@@ -3221,7 +3296,7 @@ fn call_store_effects_collect_regions(
             let target_param: i64 = targets[i];
             if target_param >= 0 && target_param < call_inst.args.len() as i64 {
                 add_store_target_markers_vow(
-                    id_to_inst, id_to_block, phi_arms,
+                    id_to_inst, id_to_block, phi_arms, alias_to,
                     call_inst.args[target_param as u64], int_kinds,
                     markers, work, seen, Vec::new(), false
                 );
@@ -3287,6 +3362,426 @@ fn callee_return_aliases_arg(
         return region_vec_contains_i64(aliases, arg_pos);
     }
     false
+}
+
+// ---- Containment closure ----
+//
+// A value stored through a container must outlive it, and everything reachable
+// from the container outlives it too. A callee that stores into a parameter
+// container writes into the hidden arena of the region the caller passes for
+// that argument, and may reach any container nested in it; a store through a
+// projection (`s.items.push(v)`) lands in whichever container `s.items` holds.
+// Both are sound only if the region of the outermost local container (the
+// base) is at least the region of everything stored into it. `widened` holds
+// those bases; the pair lists hold the (container base, contained value) facts
+// the closure walks. Mirrors `ContainmentFacts` in vow-ir/src/region.rs.
+
+struct ContainmentFacts {
+    widened: Vec<i64>,
+    pair_container: Vec<i64>,
+    pair_held: Vec<i64>,
+    // 1 when this function itself stores the value; 0 for pairs derived from a
+    // callee summary or from the arguments embedded in a fresh result, which are
+    // over-approximations.
+    pair_direct: Vec<i64>,
+}
+
+// Follow field, load and Vec element reads back to the value the projection
+// was read from. Mirrors `projection_base` in vow-ir/src/region.rs.
+fn projection_base_id(id_to_inst: Vec<IrInst>, alias_to: Vec<i64>, id: i64) -> i64 {
+    let seen: Vec<i64> = Vec::new();
+    let mut current: i64 = id;
+    while !region_vec_contains_i64(seen, current) {
+        seen.push(current);
+        let inst: IrInst = lookup_inst_or_default(id_to_inst, current);
+        if inst.id < 0 {
+            return current;
+        }
+        let aliased: i64 = if current < alias_to.len() as i64 { alias_to[current as u64] } else { -1 };
+        if aliased >= 0 {
+            current = aliased;
+            continue;
+        }
+        if inst.args.len() == 0 {
+            return current;
+        }
+        let projects: bool = inst.op == IOP_FIELD_GET() || inst.op == IOP_LOAD()
+            || (inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+                && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get")));
+        if !projects {
+            return current;
+        }
+        current = inst.args[0];
+    }
+    current
+}
+
+// For each instruction id: the argument instruction an internal call result is
+// the same object as (callee returns AliasOf(j)), or -1. Mirrors
+// `alias_call_arg` in vow-ir/src/region.rs.
+fn build_alias_call_table(id_to_inst: Vec<IrInst>, int_kinds: Vec<i64>, int_auxs: Vec<i64>) -> Vec<i64> {
+    let table: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < id_to_inst.len() {
+        let inst: IrInst = id_to_inst[i];
+        let mut aliased: i64 = -1;
+        if inst.id >= 0 && inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET()
+            && inst.dv >= 0 && inst.dv < int_kinds.len() as i64
+            && int_kinds[inst.dv as u64] == RSUM_KIND_ALIAS_OF()
+        {
+            let pos: i64 = int_auxs[inst.dv as u64];
+            if pos >= 0 && pos < inst.args.len() as i64 {
+                aliased = inst.args[pos as u64];
+            }
+        }
+        table.push(aliased);
+        i = i + 1;
+    }
+    table
+}
+
+// `trace_param` for a store target: also follows an internal call whose callee
+// returns AliasOf(j) back to its j-th argument, so a store through an accessor
+// (`items(s).push(v)`) is a store into `s`.
+fn trace_target_param(id_to_inst: Vec<IrInst>, alias_to: Vec<i64>, id: i64) -> i64 {
+    let visiting: Vec<i64> = Vec::new();
+    trace_target_param_inner(id_to_inst, alias_to, id, visiting)
+}
+
+fn trace_target_param_inner(id_to_inst: Vec<IrInst>, alias_to: Vec<i64>, id: i64, visiting: Vec<i64>) -> i64 {
+    if region_vec_contains_i64(visiting, id) {
+        return -1;
+    }
+    let inst: IrInst = lookup_inst_or_default(id_to_inst, id);
+    if inst.id >= 0 && inst.op == IOP_GET_ARG() {
+        return inst.dv;
+    }
+    let aliased: i64 = if id >= 0 && id < alias_to.len() as i64 { alias_to[id as u64] } else { -1 };
+    if aliased >= 0 {
+        visiting.push(id);
+        let ra: i64 = trace_target_param_inner(id_to_inst, alias_to, aliased, visiting);
+        visiting.pop();
+        return ra;
+    }
+    if inst.id >= 0 && (inst.op == IOP_FIELD_GET() || inst.op == IOP_LOAD()) && inst.args.len() > 0 {
+        visiting.push(id);
+        let r: i64 = trace_target_param_inner(id_to_inst, alias_to, inst.args[0], visiting);
+        visiting.pop();
+        return r;
+    }
+    if inst.id >= 0 && inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+        && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+        && inst.args.len() > 0
+    {
+        visiting.push(id);
+        let r2: i64 = trace_target_param_inner(id_to_inst, alias_to, inst.args[0], visiting);
+        visiting.pop();
+        return r2;
+    }
+    -1
+}
+
+fn containment_is_param(id_to_inst: Vec<IrInst>, id: i64) -> bool {
+    let inst: IrInst = lookup_inst_or_default(id_to_inst, id);
+    inst.id >= 0 && inst.op == IOP_GET_ARG()
+}
+
+// The concrete containers a store through `id` may reach: its Phi arms
+// (recursively), each followed back to its projection base. `projected[i]` is 1
+// when the container was reached through a projection.
+fn container_leaves_vow(
+    id_to_inst: Vec<IrInst>, alias_to: Vec<i64>, phi_arms: Vec<Vec<i64>>, id: i64,
+    bases: Vec<i64>, projected: Vec<i64>
+) {
+    let work: Vec<i64> = Vec::new();
+    let seen: Vec<i64> = Vec::new();
+    work.push(id);
+    while work.len() > 0 {
+        let cur: i64 = work[work.len() - 1];
+        work.pop();
+        if region_vec_contains_i64(seen, cur) {
+            continue;
+        }
+        seen.push(cur);
+        if cur >= 0 && cur < phi_arms.len() as i64 {
+            let arms: Vec<i64> = phi_arms[cur as u64];
+            if arms.len() > 0 {
+                let mut ai: u64 = 0;
+                while ai < arms.len() {
+                    work.push(arms[ai]);
+                    ai = ai + 1;
+                }
+                continue;
+            }
+        }
+        let base: i64 = projection_base_id(id_to_inst, alias_to, cur);
+        bases.push(base);
+        projected.push(if base != cur { 1 } else { 0 });
+    }
+}
+
+// `source` is stored through `target`. `widen` marks the containers as needing
+// the closure even when `target` is the container itself (a call whose callee
+// stores into that argument); a store through a projection always does.
+fn containment_record_store(
+    facts: ContainmentFacts, id_to_inst: Vec<IrInst>, alias_to: Vec<i64>, phi_arms: Vec<Vec<i64>>,
+    target: i64, source: i64, widen: bool
+) {
+    let widened: Vec<i64> = facts.widened;
+    let pair_container: Vec<i64> = facts.pair_container;
+    let pair_held: Vec<i64> = facts.pair_held;
+    let pair_direct: Vec<i64> = facts.pair_direct;
+    let bases: Vec<i64> = Vec::new();
+    let projected: Vec<i64> = Vec::new();
+    container_leaves_vow(id_to_inst, alias_to, phi_arms, target, bases, projected);
+    let mut i: u64 = 0;
+    while i < bases.len() {
+        let base: i64 = bases[i];
+        if !containment_is_param(id_to_inst, base) {
+            pair_container.push(base);
+            pair_held.push(source);
+            pair_direct.push(if widen { 0 } else { 1 });
+            if widen || projected[i] == 1 {
+                linear_insert_i64(widened, base);
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn containment_record_widened(
+    facts: ContainmentFacts, id_to_inst: Vec<IrInst>, alias_to: Vec<i64>, phi_arms: Vec<Vec<i64>>, target: i64
+) {
+    let widened: Vec<i64> = facts.widened;
+    let bases: Vec<i64> = Vec::new();
+    let projected: Vec<i64> = Vec::new();
+    container_leaves_vow(id_to_inst, alias_to, phi_arms, target, bases, projected);
+    let mut i: u64 = 0;
+    while i < bases.len() {
+        if !containment_is_param(id_to_inst, bases[i]) {
+            linear_insert_i64(widened, bases[i]);
+        }
+        i = i + 1;
+    }
+}
+
+// Flattened `[held, container, ...]` edges: the held value's markers flow into
+// every widened container that holds it, transitively.
+fn containment_closure_edges(
+    facts: ContainmentFacts, id_to_inst: Vec<IrInst>, alias_to: Vec<i64>, phi_arms: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>
+) -> Vec<i64> {
+    let edges: Vec<i64> = Vec::new();
+    let widened: Vec<i64> = facts.widened;
+    if widened.len() == 0 {
+        return edges;
+    }
+    let pair_container: Vec<i64> = facts.pair_container;
+    let pair_held: Vec<i64> = facts.pair_held;
+    let pair_direct: Vec<i64> = facts.pair_direct;
+    let reached: Vec<bool> = Vec::new();
+    let mut ri: i64 = 0;
+    while ri < id_to_inst.len() as i64 {
+        reached.push(false);
+        ri = ri + 1;
+    }
+    let queue: Vec<i64> = Vec::new();
+    let mut wi: u64 = 0;
+    while wi < widened.len() {
+        let w: i64 = widened[wi];
+        if w >= 0 && w < reached.len() as i64 && !reached[w as u64] {
+            reached[w as u64] = true;
+            queue.push(w);
+        }
+        wi = wi + 1;
+    }
+    let mut qi: u64 = 0;
+    while qi < queue.len() {
+        let container: i64 = queue[qi];
+        qi = qi + 1;
+        let mut p: u64 = 0;
+        while p < pair_container.len() {
+            if pair_container[p] == container {
+                let values: Vec<i64> = Vec::new();
+                let seen: Vec<i64> = Vec::new();
+                values.push(pair_held[p]);
+                while values.len() > 0 {
+                    let v: i64 = values[values.len() - 1];
+                    values.pop();
+                    if region_vec_contains_i64(seen, v) {
+                        continue;
+                    }
+                    seen.push(v);
+                    let arms: Vec<i64> = if v >= 0 && v < phi_arms.len() as i64 {
+                        phi_arms[v as u64]
+                    } else {
+                        Vec::new()
+                    };
+                    if arms.len() > 0 {
+                        let mut ai: u64 = 0;
+                        while ai < arms.len() {
+                            values.push(arms[ai]);
+                            ai = ai + 1;
+                        }
+                        continue;
+                    }
+                    let call_inst: IrInst = lookup_inst_or_default(id_to_inst, v);
+                    if call_inst.id >= 0 && call_inst.op == IOP_CALL() && call_inst.dk == IDATA_CALL_TARGET()
+                        && call_inst.dv >= 0 && call_inst.dv < int_kinds.len() as i64
+                        && (int_kinds[call_inst.dv as u64] == RSUM_KIND_ALIAS_OF()
+                            || int_kinds[call_inst.dv as u64] == RSUM_KIND_ALIAS_OF_ANY())
+                    {
+                        let mut pos: i64 = 0;
+                        while pos < call_inst.args.len() as i64 {
+                            if callee_return_aliases_arg(call_inst.dv, pos, int_kinds, int_auxs, int_aliases_list) {
+                                values.push(call_inst.args[pos as u64]);
+                            }
+                            pos = pos + 1;
+                        }
+                        continue;
+                    }
+                    let base: i64 = projection_base_id(id_to_inst, alias_to, v);
+                    // A projection read is typed `i64` whether the field is a
+                    // scalar or a heap pointer, so a local projection holds
+                    // through its base; only a pointer-typed value or a
+                    // parameter itself is evidence of a held caller container.
+                    let v_inst: IrInst = lookup_inst_or_default(id_to_inst, v);
+                    let value_is_pointer: bool = v_inst.id >= 0
+                        && (v_inst.ty == ITY_PTR() || v_inst.ty == ITY_LPTR());
+                    let mut hi: i64 = 0;
+                    while hi < 2 {
+                        let held: i64 = if hi == 0 { v } else { base };
+                        hi = hi + 1;
+                        let held_inst: IrInst = lookup_inst_or_default(id_to_inst, held);
+                        if held_inst.id < 0 || (held_inst.ty != ITY_PTR() && held_inst.ty != ITY_LPTR()) {
+                            continue;
+                        }
+                        if held_inst.op == IOP_GET_ARG() {
+                            // The container holds a caller-owned container whose
+                            // region this function cannot name: sentinel -1.
+                            if pair_direct[p] == 1 && (held == v || value_is_pointer) {
+                                edges.push(-1);
+                                edges.push(container);
+                            }
+                            continue;
+                        }
+                        if held == container {
+                            continue;
+                        }
+                        edges.push(held);
+                        edges.push(container);
+                        if held >= 0 && held < reached.len() as i64 && !reached[held as u64] {
+                            reached[held as u64] = true;
+                            queue.push(held);
+                        }
+                    }
+                }
+            }
+            p = p + 1;
+        }
+    }
+    edges
+}
+
+// Collect the containment facts of `f` and return the closure edges.
+fn containment_collect_edges(
+    f: IrFunction, id_to_inst: Vec<IrInst>, alias_to: Vec<i64>, phi_arms: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>,
+    int_se_src_aux: Vec<Vec<i64>>, int_se_src_aliases: Vec<Vec<Vec<i64>>>
+) -> Vec<i64> {
+    let facts: ContainmentFacts = ContainmentFacts {
+        widened: Vec::new(),
+        pair_container: Vec::new(),
+        pair_held: Vec::new(),
+        pair_direct: Vec::new(),
+    };
+    let bks: Vec<IrBlock> = f.blocks;
+    let mut bi: u64 = 0;
+    while bi < bks.len() {
+        let blk: IrBlock = bks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET()) && inst.args.len() >= 2 {
+                containment_record_store(facts, id_to_inst, alias_to, phi_arms, inst.args[0], inst.args[1], false);
+            }
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
+                let edge_count: i64 = extern_store_edge_count(inst.ds);
+                let mut edge_idx: i64 = 0;
+                while edge_idx < edge_count {
+                    let target_pos: i64 = extern_store_target_pos(inst.ds, edge_idx);
+                    let source_pos: i64 = extern_store_source_pos(inst.ds, edge_idx);
+                    if target_pos >= 0 && target_pos < inst.args.len() as i64
+                        && source_pos >= 0 && source_pos < inst.args.len() as i64
+                    {
+                        containment_record_store(
+                            facts, id_to_inst, alias_to, phi_arms,
+                            inst.args[target_pos as u64], inst.args[source_pos as u64], false
+                        );
+                    }
+                    edge_idx = edge_idx + 1;
+                }
+            }
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET()
+                && inst.dv >= 0 && inst.dv < int_se_targets.len() as i64
+            {
+                let callee_idx: u64 = inst.dv as u64;
+                let targets: Vec<i64> = int_se_targets[callee_idx];
+                let kinds: Vec<i64> = int_se_src_kinds[callee_idx];
+                let auxs: Vec<i64> = int_se_src_aux[callee_idx];
+                let aliases_list: Vec<Vec<i64>> = int_se_src_aliases[callee_idx];
+                let mut ei: u64 = 0;
+                while ei < targets.len() && ei < kinds.len() && ei < auxs.len() {
+                    let target_param: i64 = targets[ei];
+                    if target_param >= 0 && target_param < inst.args.len() as i64
+                        && kinds[ei] != RSUM_KIND_CONSTANT_GLOBAL()
+                    {
+                        let target_arg: i64 = inst.args[target_param as u64];
+                        containment_record_widened(facts, id_to_inst, alias_to, phi_arms, target_arg);
+                        if kinds[ei] == RSUM_KIND_ALIAS_OF() {
+                            if auxs[ei] >= 0 && auxs[ei] < inst.args.len() as i64 {
+                                containment_record_store(
+                                    facts, id_to_inst, alias_to, phi_arms,
+                                    target_arg, inst.args[auxs[ei] as u64], true
+                                );
+                            }
+                        } else if kinds[ei] == RSUM_KIND_ALIAS_OF_ANY() && ei < aliases_list.len() {
+                            let als: Vec<i64> = aliases_list[ei];
+                            let mut ai: u64 = 0;
+                            while ai < als.len() {
+                                if als[ai] >= 0 && als[ai] < inst.args.len() as i64 {
+                                    containment_record_store(
+                                        facts, id_to_inst, alias_to, phi_arms,
+                                        target_arg, inst.args[als[ai] as u64], true
+                                    );
+                                }
+                                ai = ai + 1;
+                            }
+                        }
+                    }
+                    ei = ei + 1;
+                }
+                if inst.dv < int_kinds.len() as i64
+                    && int_kinds[callee_idx] == RSUM_KIND_FRESH_IN_CALLER()
+                {
+                    let pair_container: Vec<i64> = facts.pair_container;
+                    let pair_held: Vec<i64> = facts.pair_held;
+                    let pair_direct: Vec<i64> = facts.pair_direct;
+                    let mut ai2: u64 = 0;
+                    while ai2 < inst.args.len() {
+                        pair_container.push(inst.id);
+                        pair_held.push(inst.args[ai2]);
+                        pair_direct.push(0);
+                        ai2 = ai2 + 1;
+                    }
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    containment_closure_edges(facts, id_to_inst, alias_to, phi_arms, int_kinds, int_auxs, int_aliases_list)
 }
 
 fn region_caller0() -> i64 {

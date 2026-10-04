@@ -1,0 +1,33 @@
+// BENCH: max-rss-kb 7500
+module AllocEscapeVecElem
+
+fn push_result(rows: Vec<Vec<Option<i64>>>, m: HashMap<i64, i64>, k: i64) {
+    let row: Vec<Option<i64>> = rows[0];
+    row.push(m.get(k));
+}
+
+fn round(m: HashMap<i64, i64>) -> u64 {
+    let rows: Vec<Vec<Option<i64>>> = Vec::new();
+    rows.push(Vec::new());
+    let mut i: i64 = 0;
+    while i < 32 {
+        push_result(rows, m, i % 4);
+        i = i + 1;
+    }
+    let r: Vec<Option<i64>> = rows[0];
+    r.len()
+}
+
+fn main() -> i32 [io] {
+    let m: HashMap<i64, i64> = HashMap::new();
+    m.insert(1, 10);
+    let mut i: i64 = 0;
+    let mut t: u64 = 0;
+    while i < 200000 {
+        t = t + round(m);
+        i = i + 1;
+    }
+    print_u64(t);
+    print_str("\n");
+    0
+}
