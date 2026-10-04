@@ -66,6 +66,7 @@ fn TY_NEVER() -> i64 { 3 }
 fn TY_REF() -> i64 { 4 }
 fn TY_SLICE() -> i64 { 5 }
 fn TY_TUPLE() -> i64 { 6 }
+fn TY_COUNT() -> i64 { 7 }
 
 fn STMT_LET() -> i64 { 0 }
 fn STMT_EXPR() -> i64 { 1 }

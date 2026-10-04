@@ -1013,14 +1013,17 @@ pub struct Checker<'e> {
     pub const_types: HashMap<String, Ty>,
 }
 
-/// Wraps an emitter and tallies error-severity diagnostics. The effect and
-/// linear-usage passes (`effects::check_fn_effects`, `linear::check_linear_usage`)
-/// emit directly to the emitter and never touch the checker's `error_count`, so
+/// Wraps an emitter and tallies error-severity diagnostics. Side-pass checkers
+/// (`effects::check_fn_effects`, `linear::check_linear_usage`,
+/// `effects::check_predicate_purity`, `exhaustiveness::check_exhaustive`) emit
+/// directly to the emitter and never touch the checker's `error_count`, so
 /// without this their errors are reported yet the build still exits 0 — an
-/// effectful call from a pure context, an impure contract clause, or a linear
-/// value consumed twice would compile to a binary. Routing those passes through
-/// this counter folds their errors into `error_count` so `has_errors()` (the
-/// build gate) sees them.
+/// effectful call from a pure context, an impure contract clause, a linear
+/// value consumed twice, or a non-exhaustive `match` would compile to a
+/// binary. Routing those passes through this counter folds their errors into
+/// `error_count` so `has_errors()` (the build gate) sees them. Any future
+/// pass that takes a raw `&mut dyn DiagnosticEmitter` instead of `&mut Self`
+/// needs the same wrapping — it is not automatic.
 struct ErrorCounter<'a> {
     inner: &'a mut dyn DiagnosticEmitter,
     errors: usize,
@@ -1124,7 +1127,9 @@ impl<'e> Checker<'e> {
         for (i, item) in module.items.iter().enumerate() {
             self.set_item_file(item_files, i);
             match item {
+                Item::TypeAlias(a) => self.check_reserved_type_name(&a.name, a.span),
                 Item::Struct(s) => {
+                    self.check_reserved_type_name(&s.name, s.span);
                     self.env.define_struct(
                         &s.name,
                         StructInfo {
@@ -1134,6 +1139,7 @@ impl<'e> Checker<'e> {
                     );
                 }
                 Item::Enum(e) => {
+                    self.check_reserved_type_name(&e.name, e.span);
                     self.env.define_enum(&e.name, EnumInfo { variants: vec![] });
                 }
                 _ => {}
@@ -2784,14 +2790,19 @@ impl<'e> Checker<'e> {
                     );
                 }
                 if all_arms_supported && scrutinee_supported {
+                    let mut counter = ErrorCounter {
+                        inner: &mut *self.emitter,
+                        errors: 0,
+                    };
                     crate::exhaustiveness::check_exhaustive(
                         &scrutinee_ty,
                         arms,
                         &self.env,
                         expr.span,
                         &self.file,
-                        self.emitter,
+                        &mut counter,
                     );
+                    self.error_count += counter.errors;
                 }
                 let mut result_ty = Ty::Unit;
                 let mut handled_variants = HashSet::new();
@@ -3164,6 +3175,7 @@ impl<'e> Checker<'e> {
                 target_ty,
             } => {
                 let src_ty = self.check_expr(operand);
+                self.check_written_ty(target_ty, target_ty.span());
                 let tgt_ty = match target_ty.as_ref() {
                     vow_syntax::ast::Type::Named { name, .. } => {
                         Ty::from_primitive_name(name).unwrap_or(Ty::Unit)
@@ -3809,6 +3821,23 @@ impl<'e> Checker<'e> {
         }
     }
 
+    // The resolver binds primitive names and the builtin generic names before
+    // any user type, so a user type of the same name would silently alias the
+    // builtin in some positions (`Vec`) and shadow it in others. Mirrors the
+    // self-hosted `check_reserved_type_name`.
+    fn check_reserved_type_name(&mut self, name: &str, span: vow_syntax::span::Span) {
+        let reserved = Ty::from_primitive_name(name).is_some()
+            || matches!(name, "Vec" | "Option" | "Result" | "HashMap" | "BTreeMap");
+        if reserved {
+            self.emit_error_with_hints(
+                ErrorCode::UnsupportedFeature,
+                format!("`{name}` is a builtin type name and cannot be declared as a user type"),
+                span,
+                vec!["choose a different name for this type".to_string()],
+            );
+        }
+    }
+
     // Checks every collection type written in `ast`, recursing through composite
     // types so nested collections (e.g. `Vec<BTreeMap<bool, i64>>`) are also
     // caught. It walks the written type rather than the resolved one so a type
@@ -3831,7 +3860,17 @@ impl<'e> Checker<'e> {
                     self.check_written_ty(t, span);
                 }
             }
-            Type::Reference { inner, .. } | Type::Slice { inner, .. } => {
+            Type::Reference { inner, .. } => self.check_written_ty(inner, span),
+            Type::Slice {
+                inner,
+                span: slice_span,
+            } => {
+                self.emit_error_with_hints(
+                    ErrorCode::UnsupportedFeature,
+                    "slice types (`[T]`) are not supported in Vow".to_string(),
+                    *slice_span,
+                    vec!["use `Vec<T>` to hold a sequence of values".to_string()],
+                );
                 self.check_written_ty(inner, span);
             }
             Type::Refinement { base, .. } => self.check_written_ty(base, span),
@@ -7714,6 +7753,51 @@ mod tests {
             }],
         );
         checker.check_written_ty(&ast, dummy_span());
+        assert!(emitter.0.is_empty(), "got {:?}", emitter.0);
+    }
+
+    #[test]
+    fn written_slice_type_is_rejected_once_per_bracket_pair() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        let slice_of = |inner: Type| Type::Slice {
+            inner: Box::new(inner),
+            span: dummy_span(),
+        };
+        checker.check_written_ty(&slice_of(named("i64")), dummy_span());
+        checker.check_written_ty(&slice_of(slice_of(named("u8"))), dummy_span());
+        assert_eq!(unsupported_feature_count(&emitter), 3);
+        assert!(
+            emitter.0[0]
+                .message
+                .contains("slice types (`[T]`) are not supported in Vow")
+        );
+        assert_eq!(
+            emitter.0[0].hints,
+            vec!["use `Vec<T>` to hold a sequence of values".to_string()]
+        );
+    }
+
+    #[test]
+    fn reserved_type_names_are_rejected_for_every_declaration_kind() {
+        for name in [
+            "Vec", "Option", "Result", "HashMap", "BTreeMap", "String", "str", "i64", "u8", "bool",
+            "f32",
+        ] {
+            let mut emitter = TestEmitter(vec![]);
+            let mut checker = Checker::new("test.vow", &mut emitter);
+            checker.check_reserved_type_name(name, dummy_span());
+            assert_eq!(unsupported_feature_count(&emitter), 1, "{name}");
+            assert_eq!(
+                emitter.0[0].message,
+                format!("`{name}` is a builtin type name and cannot be declared as a user type")
+            );
+        }
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        for name in ["Slice", "Point", "Token", "vec", "Strings"] {
+            checker.check_reserved_type_name(name, dummy_span());
+        }
         assert!(emitter.0.is_empty(), "got {:?}", emitter.0);
     }
 

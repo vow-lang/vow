@@ -187,9 +187,26 @@ extern wrappers.
 | `HashMap<K, V>`    | Key-value map (linear scan). `K` must be an integer type of at most 64 bits or `bool`; `V` may be any non-linear type except `i128`/`u128`/`f32`/`f64` |
 | `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). `K` must be `i64`; `V` may be any non-linear type except `i128`/`u128`/`f32`/`f64` |
 
+### Slice Types
+
+The syntax `[T]` is not a type in Vow. It parses, but the type checker rejects it
+wherever a type is written (parameter, return, field, enum payload, `let`
+annotation, cast target, alias or constant) with `UnsupportedFeature` ("slice types
+(`[T]`) are not supported in Vow"), once per bracket pair. No expression creates,
+indexes, iterates or measures a slice, so no value of that type could exist. Use
+`Vec<T>` to hold a sequence of values. See
+[Slice types](errors.md#slice-types) for the diagnostic.
+
 ### User-Defined Types
 
-Structs and enums (see below).
+Structs and enums (see below). A struct, enum or type alias may not be named after
+a type the language already binds: a primitive type (`i64`, `bool`, `String`, ...)
+or one of `Vec`, `Option`, `Result`, `HashMap`, `BTreeMap`. The declaration is
+rejected with `UnsupportedFeature` ("`Vec` is a builtin type name and cannot be
+declared as a user type"), because the resolver binds those names
+before any user type and the user type would otherwise alias the builtin in some
+positions and shadow it in others. See
+[Reserved type names](errors.md#reserved-type-names) for the diagnostic.
 
 ## Literals
 

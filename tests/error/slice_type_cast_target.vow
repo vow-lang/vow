@@ -1,0 +1,10 @@
+// TEST: error-code UnsupportedFeature
+// TEST: stderr "slice types (`[T]`) are not supported in Vow"
+// A slice type written as a cast target is reported once per bracket pair.
+module SliceTypeCastTarget
+
+fn main() -> i32 {
+    1 as [i64];
+    2 as [[u8]];
+    0
+}

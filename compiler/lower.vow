@@ -1334,7 +1334,6 @@ fn lower_ast_ty_linear(a: AstArena, tid: i64, linear_names: Vec<String>, alias_n
         return ITY_PTR();
     }
     if tag == TY_REF() { return ITY_PTR(); }
-    if tag == TY_SLICE() { return ITY_PTR(); }
     if tag == TY_TUPLE() { return ITY_PTR(); }
     -1
 }
