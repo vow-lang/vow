@@ -1702,6 +1702,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     // Create vow description data sections (debug/sanitize mode)
     let mut vow_desc_gvs: HashMap<i64, GlobalValue> = HashMap::new();
     let mut vow_locations: HashMap<i64, VowLocation> = HashMap::new();
+    let mut file_gvs: HashMap<&str, GlobalValue> = HashMap::new();
     if ctx.mode == 1 || ctx.mode == 3 {
         for (vi, &vow_id) in vow_ids.iter().enumerate() {
             let desc_str = unsafe { read_vow_string(vow_desc_ptrs[vi]) };
@@ -1713,15 +1714,23 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             } else {
                 unsafe { read_vow_string(vow_file_ptrs[vi]) }
             };
-            vow_locations.insert(
-                vow_id,
-                VowLocation {
-                    file_gv: define_cstring_global(
+            let file_gv = match file_gvs.get(file_str) {
+                Some(&gv) => gv,
+                None => {
+                    let gv = define_cstring_global(
                         &mut ctx.obj_module,
                         &mut builder,
                         file_str,
                         "vow file",
-                    ),
+                    );
+                    file_gvs.insert(file_str, gv);
+                    gv
+                }
+            };
+            vow_locations.insert(
+                vow_id,
+                VowLocation {
+                    file_gv,
                     offset: vow_offsets[vi],
                 },
             );
