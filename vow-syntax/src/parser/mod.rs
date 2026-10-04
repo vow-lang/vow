@@ -187,6 +187,13 @@ impl Parser {
         });
     }
 
+    fn push_error_with_hint(&mut self, code: ErrorCode, message: String, span: Span, hint: &str) {
+        self.push_error(code, message, span);
+        if let Some(last) = self.diagnostics.last_mut() {
+            last.hints.push(hint.to_string());
+        }
+    }
+
     fn current_span(&self) -> Span {
         self.peek().span
     }
@@ -526,6 +533,7 @@ impl Parser {
                 }
             } else {
                 let expr_start = self.current_span();
+                let starts_with_paren = self.at(&TokenKind::LParen);
                 if let Some(expr) = self.parse_expr() {
                     if self.at(&TokenKind::Semicolon) {
                         let semi_span = self.current_span();
@@ -539,15 +547,7 @@ impl Parser {
                         trailing_expr = Some(Box::new(expr));
                         break;
                     } else {
-                        let is_block_like = matches!(
-                            expr.kind,
-                            ExprKind::If { .. }
-                                | ExprKind::While { .. }
-                                | ExprKind::ForEach { .. }
-                                | ExprKind::Loop { .. }
-                                | ExprKind::Block(_)
-                                | ExprKind::Match { .. }
-                        );
+                        let is_block_like = !starts_with_paren && expr.kind.is_block_like();
                         stmts.push(Stmt::Expr {
                             span: expr_start,
                             expr,

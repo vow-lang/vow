@@ -1841,9 +1841,13 @@ echo ""
 # the same expected file, one escaped description per clause in declaration
 # order (`\` as `\\`, newline as `\n`); the Rust integration test
 # vow-ir/tests/contract_text_forms.rs reads the same files.
-for text_name in contract_text_forms contract_text_blocks contract_text_atoms; do
+# contract_text_postfix is the parse-parity table for parenthesised block-like
+# expressions, cast chains and postfix operators; contract_text_postfix_canonical
+# is its already-canonical twin sharing one expected file, so parse -> print ->
+# parse is checked idempotent in both compilers.
+for text_name in contract_text_forms contract_text_blocks contract_text_atoms contract_text_postfix contract_text_postfix_canonical; do
     text_fixture="tests/fixtures/contracts/${text_name}.vow"
-    text_expected="tests/fixtures/contracts/${text_name}.expected"
+    text_expected="tests/fixtures/contracts/${text_name%_canonical}.expected"
     for text_compiler in rust self; do
         text_json="$TMPDIR/${text_name}_${text_compiler}.json"
         text_ok=0

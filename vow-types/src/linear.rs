@@ -193,9 +193,6 @@ fn check_expr(
                 consume_var(name, expr.span, tracker, file, emitter);
             }
         }
-        ExprKind::Borrow { expr: inner } => {
-            check_expr(inner, tracker, env, file, emitter, false);
-        }
         ExprKind::Call { callee, args } => {
             check_expr(callee, tracker, env, file, emitter, false);
             for arg in args {
@@ -575,15 +572,6 @@ mod tests {
         }
     }
 
-    fn borrow_expr(name: &str) -> Expr {
-        Expr {
-            kind: ExprKind::Borrow {
-                expr: Box::new(ident_expr(name)),
-            },
-            span: dummy_span(),
-        }
-    }
-
     fn make_env_with_linear_struct(name: &str) -> TypeEnv {
         let mut env = TypeEnv::new();
         env.define_struct(
@@ -808,25 +796,22 @@ mod tests {
     }
 
     #[test]
-    fn test_borrow_does_not_consume() {
+    fn test_reference_parameter_passed_on_does_not_consume() {
         let env = make_env_with_linear_struct("FileHandle");
-        let params = vec![make_param("h", named_type("FileHandle"))];
-
-        let borrow = borrow_expr("h");
-        let call_borrow = Expr {
-            kind: ExprKind::Call {
-                callee: Box::new(ident_expr("inspect")),
-                args: vec![borrow],
+        let params = vec![make_param(
+            "h",
+            Type::Reference {
+                inner: Box::new(named_type("FileHandle")),
+                span: dummy_span(),
             },
-            span: dummy_span(),
-        };
+        )];
         let body = Block {
             stmts: vec![Stmt::Expr {
-                expr: call_borrow,
+                expr: call_with("inspect", "h"),
                 has_semicolon: true,
                 span: dummy_span(),
             }],
-            trailing_expr: Some(Box::new(call_with("close", "h"))),
+            trailing_expr: Some(Box::new(call_with("inspect", "h"))),
             span: dummy_span(),
         };
         let fn_def = make_fn_def(params, body);

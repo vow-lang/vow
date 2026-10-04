@@ -1,0 +1,7 @@
+// TEST: error-code UnexpectedToken
+// TEST: error-count 3
+module ParamTypeNotAType
+
+fn f(v: Vec<5>) -> i64 {
+    0
+}

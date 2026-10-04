@@ -1969,7 +1969,6 @@ impl<'e> Checker<'e> {
                     || (!matches!(op, BinOp::And | BinOp::Or) && self.expr_diverges(rhs))
             }
             ExprKind::UnaryOp { operand, .. }
-            | ExprKind::Borrow { expr: operand }
             | ExprKind::Question { expr: operand }
             | ExprKind::Cast { expr: operand, .. } => self.expr_diverges(operand),
             ExprKind::Call { callee, args } => {
@@ -3001,10 +3000,6 @@ impl<'e> Checker<'e> {
                 Ty::Never
             }
             ExprKind::Block(block) => self.check_block(block),
-            ExprKind::Borrow { expr: inner } => {
-                let inner_ty = self.check_expr(inner);
-                Ty::Reference(Box::new(inner_ty))
-            }
             ExprKind::Question { expr: inner } => {
                 let inner_ty = self.check_expr(inner);
                 let payload_ty = match question_verdict(&inner_ty, &self.current_return_ty) {
@@ -5503,19 +5498,6 @@ mod tests {
         }));
         assert!(checker.has_errors());
         assert!(emitter.0[0].message.contains("non-indexable"));
-    }
-
-    // --- Borrow ---
-
-    #[test]
-    fn borrow_produces_reference_type() {
-        let mut emitter = TestEmitter(vec![]);
-        let mut checker = new_checker(&mut emitter);
-        let ty = checker.check_expr(&make_expr(ExprKind::Borrow {
-            expr: Box::new(int_lit()),
-        }));
-        assert_eq!(ty, Ty::Reference(Box::new(Ty::LitInt)));
-        assert!(!checker.has_errors());
     }
 
     // --- Assign ---

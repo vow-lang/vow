@@ -463,9 +463,19 @@ From loosest to tightest, Vow follows the usual C/Rust precedence for logical an
 
 `||`, `&&`, comparisons (`== != < <= > >=`), `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`
 
-Unary `-`, `!`, `&`, and `?` bind tighter than every binary operator.
+Unary `-` and `!` bind tighter than every binary operator. The postfix forms
+(`.field`, `.method()`, `[index]`, `(args)`, `?`, and `as Type`) bind tighter
+still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is
+`(a.len() as i64) + 1`.
 
-Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs & rhs` is bitwise AND.
+`&` is only the infix bitwise AND operator (`lhs & rhs`). There is no prefix
+`&expr`: Vow has no borrow expressions, so `&x`, `&mut x`, `&&x` (and `x & &y`)
+are `UnsupportedFeature` errors at the `&` (or `&&`) token, identically in both compilers (see
+[errors.md](errors.md#unsupportedfeature)). Pass the value itself. The type
+syntax `&T` is still accepted in signatures and annotations, but no expression
+creates a value of that type: a `&T` parameter can only be passed on from
+another `&T` parameter, so a program has no way to introduce one. Do not
+declare reference-typed parameters.
 
 ### Unary Operators
 
@@ -473,8 +483,40 @@ Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs
 |----------|------------|
 | `-`      | Negation (not allowed on unsigned types) |
 | `!`      | Logical NOT|
-| `&`      | Borrow     |
-| `?`      | Unwrap (propagate error) |
+| `?`      | Unwrap (propagate error), postfix |
+
+### Block-like Expressions and Parentheses
+
+`if`, `match`, `while`, `for`, `loop`, and a `{ ... }` block are *block-like*.
+An unparenthesised block-like expression ends the expression it starts: no
+postfix operator (`.`, `[`, `(`, `?`, `as`) and no binary operator may follow it
+directly, so `if c { 1 } else { 2 } as u64` and `if c { 1 } else { 2 } + 1` are
+parse errors. As the right operand of a binary operator or the operand of a
+unary operator it is fine (`3 * if c { 1 } else { 2 }`), but it still ends the
+whole expression, so `3 * if c { 1 } else { 2 } as u64` is a parse error too. A parenthesised
+expression is a primary expression whatever it contains, so every operator may
+follow it:
+
+```vow
+let a: u64 = (if c { 1 } else { 2 }) as u64;
+let b: i64 = (if c { 1 } else { 2 }) + 1;
+let n: u64 = (if c { v } else { w }).len();
+```
+
+Parentheses are not an AST node: the canonical printer re-inserts them exactly
+where a block-like expression, a binary or unary expression, an assignment, or
+`break`/`return` is the left operand of a binary operator or the receiver of a
+postfix operator, so `parse -> print -> parse` is idempotent.
+
+An expression statement ends with `;`. Only two forms may omit it: the last
+expression of a block (its value) and an unparenthesised block-like expression
+(`if c { f(); } g();`). Any other statement without `;` is a parse error
+(`UnexpectedToken`) at the next token, in both compilers, and parsing stops
+there. A `let` statement's trailing `;` is optional.
+
+A scalar type name after `as` (`i8` through `u128`, `f32`, `f64`, `bool`) never
+takes generic arguments, so a following `<` is a comparison or shift:
+`x as u64 < y` and `x as u64 << 1` mean `(x as u64) < y` and `(x as u64) << 1`.
 
 ### Type Cast
 
@@ -808,8 +850,8 @@ Linear struct values carry a linear obligation. The obligation must either be co
 Owned enum wrappers inherit that obligation transitively. A user enum,
 `Option<T>`, or `Result<T, E>` is linear when one of its owned payload paths is
 linear; matching such a value consumes the wrapper exactly once and transfers
-the obligation to the selected bound payload. References remain borrows and do
-not become linear owners. Collection types do not acquire linear ownership from
+the obligation to the selected bound payload. A reference type (`&T`) is never a
+linear owner. Collection types do not acquire linear ownership from
 their element type; their separate non-linear-element restrictions still apply.
 An unbound `_` match catchall cannot discard a still-reachable linear payload:
 every variant that owns a linear payload must first have an explicit arm that
@@ -818,7 +860,7 @@ binds and consumes or transfers that payload.
 Struct fields cannot own linear values, even when the containing struct is
 `linear`, because field access does not provide move-out semantics. Allowing an
 owned field would let repeated reads transfer the same obligation more than
-once. Borrowed references and collection fields do not become linear owners
+once. Reference-typed (`&T`) and collection fields do not become linear owners
 under this rule.
 
 ### Struct Literals
@@ -828,6 +870,9 @@ Struct literal names must be PascalCase:
 ```vow
 let p: Point = Point { x: 1, y: 2 };
 ```
+
+Because of that, an identifier that does not start with an upper-case letter is
+never a struct literal: in `while c { }` and `if c { }` the `{` opens the body.
 
 ### Field Access
 

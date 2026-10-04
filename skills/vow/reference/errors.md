@@ -452,7 +452,7 @@ fn f() -> () {
 
 ### UnsupportedFeature
 
-**Phase:** Type Checker
+**Phase:** Parser (`&expr`), Type Checker (everything else)
 **Meaning:** A language feature that is not supported in Vow was used, or a `HashMap`/`BTreeMap` was written with a key or value type the runtime cannot store (see [Map key and value types](#map-key-and-value-types)).
 
 ```vow
@@ -464,6 +464,21 @@ trait Foo {
 **Output:** `trait blocks are not supported in Vow`
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
+
+A prefix `&expr` (or `&mut expr`, `&&expr`) borrow expression is rejected by the parser, at the `&` or `&&` token, with
+the hint ``Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise
+AND operator``; the operand is still parsed, so the diagnostic is reported once:
+
+```vow
+fn f(x: i64) -> i64 {
+    let r: i64 = &x;
+    r
+}
+```
+
+**Output:** ``borrow expressions (`&expr`) are not supported in Vow``
+
+**Fix:** Use the value directly. `&` is the bitwise AND operator between two operands (`x & 1`).
 
 A tuple expression, including the empty tuple `()`, inside a contract clause is also
 `UnsupportedFeature`, because tuples have no runtime or verifier representation:

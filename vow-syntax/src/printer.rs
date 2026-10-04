@@ -487,6 +487,25 @@ fn expr_precedence(expr: &Expr) -> u8 {
     }
 }
 
+// An unparenthesised block-like expression ends the expression, so it needs
+// parentheses before any postfix operator and as a left binary operand.
+fn print_postfix_base(expr: &Expr) -> String {
+    if expr.kind.is_block_like()
+        || matches!(
+            expr.kind,
+            ExprKind::BinaryOp { .. }
+                | ExprKind::UnaryOp { .. }
+                | ExprKind::Assign { .. }
+                | ExprKind::Break { .. }
+                | ExprKind::Return { .. }
+        )
+    {
+        format!("({})", print_expr(expr))
+    } else {
+        print_expr(expr)
+    }
+}
+
 fn print_expr_with_parens(expr: &Expr, parent_prec: u8, is_right: bool) -> String {
     let child_prec = expr_precedence(expr);
     let needs_parens = match &expr.kind {
@@ -497,7 +516,7 @@ fn print_expr_with_parens(expr: &Expr, parent_prec: u8, is_right: bool) -> Strin
                 child_prec < parent_prec
             }
         }
-        _ => false,
+        _ => !is_right && expr.kind.is_block_like(),
     };
     if needs_parens {
         format!("({})", print_expr(expr))
@@ -529,7 +548,7 @@ pub fn print_expr(expr: &Expr) -> String {
         }
         ExprKind::Call { callee, args } => {
             let args_str: Vec<String> = args.iter().map(print_expr).collect();
-            format!("{}({})", print_expr(callee), args_str.join(", "))
+            format!("{}({})", print_postfix_base(callee), args_str.join(", "))
         }
         ExprKind::MethodCall {
             receiver,
@@ -539,16 +558,16 @@ pub fn print_expr(expr: &Expr) -> String {
             let args_str: Vec<String> = args.iter().map(print_expr).collect();
             format!(
                 "{}.{}({})",
-                print_expr(receiver),
+                print_postfix_base(receiver),
                 method,
                 args_str.join(", ")
             )
         }
         ExprKind::FieldAccess { base, field } => {
-            format!("{}.{}", print_expr(base), field)
+            format!("{}.{}", print_postfix_base(base), field)
         }
         ExprKind::Index { base, index } => {
-            format!("{}[{}]", print_expr(base), print_expr(index))
+            format!("{}[{}]", print_postfix_base(base), print_expr(index))
         }
         ExprKind::Match { scrutinee, arms } => {
             let mut out = format!("match {} {{\n", print_expr(scrutinee));
@@ -686,8 +705,7 @@ pub fn print_expr(expr: &Expr) -> String {
             None => "return".to_string(),
         },
         ExprKind::Block(b) => print_block(b, 0),
-        ExprKind::Borrow { expr } => format!("&{}", print_expr(expr)),
-        ExprKind::Question { expr } => format!("{}?", print_expr(expr)),
+        ExprKind::Question { expr } => format!("{}?", print_postfix_base(expr)),
         ExprKind::Cast { expr, target_ty } => {
             let inner = match &expr.kind {
                 ExprKind::Lit(_)

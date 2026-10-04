@@ -1,0 +1,45 @@
+requires (if c {\n    1\n} else {\n    2\n}) as u64 == 1
+requires (if c {\n    1\n} else {\n    2\n}) as u64 as i64 == 1
+requires (if c {\n    1\n} else {\n    2\n}) as u64 as i64 == 1
+requires (if c {\n    if c {\n    1\n} else {\n    2\n}\n} else {\n    3\n}) as u64 == 1
+requires ({\n    x\n}) as u64 == 1
+requires (loop {\n    break x;\n}) as u64 == 1
+requires x as u64 as i64 == 1
+requires x as u64 as i64 == 1
+requires x as u64 as i64 == 1
+requires x as u64 == 1
+requires (-x) as u64 == 1
+requires (x + 1) as i64 == 2
+requires x as i64 + 1 == 2
+requires x + 1 as i64 == 2
+requires x as u64 + 1 == 2
+requires x as u64 < 5
+requires x as u64 < 5
+requires x as u64 << 1 == 2
+requires x as u64 >> 1 == 0
+requires x as u64 < 5 && c
+requires x as u64 < 5 == c
+requires x & 1 == 1
+requires x & 1 == 1
+requires (if c {\n    1\n} else {\n    2\n}) + 1 == 2
+requires (if c {\n    1\n} else {\n    2\n}) * 3 == 3
+requires 3 * if c {\n    1\n} else {\n    2\n} == 3
+requires 3 * if c {\n    1\n} else {\n    2\n} == 3
+requires (if c {\n    1\n} else {\n    2\n}) == if c {\n    2\n} else {\n    1\n}
+requires (match s {\n    Shape::Empty => 1,\n    Shape::Circle(r) => r,\n}) as u64 == 1
+requires (match s {\n    Shape::Empty => 1,\n    Shape::Circle(r) => r,\n}) + 1 == 2
+requires (if c {\n    true\n} else {\n    false\n}) && c
+requires c || if c {\n    true\n} else {\n    false\n}
+requires -if c {\n    1\n} else {\n    2\n} == 1
+requires !if c {\n    true\n} else {\n    false\n}
+requires -if c {\n    1\n} else {\n    2\n} == 1
+requires (if c {\n    1\n} else {\n    2\n}) as u64 < 5
+requires (if c {\n    1\n} else {\n    2\n}) as u64 << 1 == 2
+requires (if c {\n    v\n} else {\n    w\n}).len() == 1
+requires (if c {\n    v\n} else {\n    w\n}).len() as i64 + 1 == 2
+requires (if c {\n    v\n} else {\n    w\n})[0] == 1
+requires v.len() as i64 == 1
+requires v.len() as i64 + 1 == 2
+requires v[0] as u64 == 1
+requires v[0] as u64 == 1
+requires v.len() as i64 + x == 1
