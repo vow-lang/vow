@@ -1,0 +1,23 @@
+// TEST: exit 134
+// TEST: stderr "VowViolation"
+// TEST: stderr "\"result.c\":5"
+// TEST: stderr "\"c\":5"
+module StructFieldViolation
+
+// A violated clause that names a field of a struct-valued result reports that
+// field's runtime value (`result.c`), on both compilers, not the struct address.
+struct Thing { a: i64, b: i64, c: i64 }
+
+fn set_c(t: Thing, c: i64) -> Thing vow {
+  requires: c >= 0,
+  ensures: result.c == c + 1
+} {
+  Thing { a: t.a, b: t.b, c: c }
+}
+
+fn main() -> i32 [io] {
+  let t: Thing = Thing { a: 1, b: 2, c: 3 };
+  let t2: Thing = set_c(t, 5);
+  print_i64(t2.c);
+  0
+}

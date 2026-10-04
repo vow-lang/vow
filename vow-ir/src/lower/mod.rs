@@ -1473,10 +1473,11 @@ fn block_result_is_coercible_int_marker(block: &Block) -> bool {
     false
 }
 
-fn choose_match_result_ty(
-    arm_results: &[(BlockId, InstId, Ty, Vec<InstId>, Vec<InstId>)],
-    arm_result_markers: &[bool],
-) -> Ty {
+/// A match arm that reaches the merge block: `(exit_block, result_upsilon,
+/// result_ty, mutated_variable_values, mutated_variable_upsilons)`.
+type MatchArmExit = (BlockId, InstId, Ty, Vec<InstId>, Vec<InstId>);
+
+fn choose_match_result_ty(arm_results: &[MatchArmExit], arm_result_markers: &[bool]) -> Ty {
     if arm_results
         .iter()
         .any(|(_, _, ty, _, _)| *ty == Ty::LinearPtr)
@@ -3356,7 +3357,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let scope_snap = ctx.snapshot_scope();
 
             // Merge-reaching arm tracking: (exit_block, result_upsilon, result_ty, mut_vals, mut_upsilons)
-            let mut arm_results: Vec<(BlockId, InstId, Ty, Vec<InstId>, Vec<InstId>)> = Vec::new();
+            let mut arm_results: Vec<MatchArmExit> = Vec::new();
             let mut arm_result_markers: Vec<bool> = Vec::new();
             let mut arm_result_values: Vec<InstId> = Vec::new();
             // Parallel to arm_results/arm_result_markers: the arm body expr, so a marker
