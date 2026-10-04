@@ -1,0 +1,11 @@
+// TEST: error-code LiteralOutOfRange
+// A literal in a `where` clause is range-checked against the parameter's type.
+module WhereLiteralOutOfRange
+
+fn small(x: u8 where x < 300) -> u8 {
+    x
+}
+
+fn main() -> i32 {
+    0
+}

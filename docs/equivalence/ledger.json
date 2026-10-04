@@ -88,15 +88,6 @@
       "rust_error_codes": ["LinearTypeViolation"],
       "self_hosted_error_codes": ["RegionLinear"]
     },
-    "tests/error/linear_match_wrong_enum_qualifier.vow": {
-      "first_seen": "2026-08-25",
-      "observable": "error_code",
-      "status": "expected",
-      "note": "Both reject during linear checking, but Rust emits one additional cascading TypeMismatch diagnostic.",
-      "issue": 588,
-      "rust_error_codes": ["LinearTypeViolation", "TypeMismatch", "TypeMismatch", "TypeMismatch", "TypeMismatch"],
-      "self_hosted_error_codes": ["LinearTypeViolation", "TypeMismatch", "TypeMismatch", "TypeMismatch"]
-    },
     "tests/error/linear_region_branch_partial.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",

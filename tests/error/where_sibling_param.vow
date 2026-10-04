@@ -1,0 +1,14 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "undefined variable `a`"
+// TEST: stderr "can only reference its own parameter `b`"
+// Each `where` clause sees only its own parameter: a sibling parameter is out
+// of scope, and a condition on several parameters belongs in `requires`.
+module WhereSiblingParam
+
+fn ordered(a: i64, b: i64 where b > a) -> i64 {
+    b
+}
+
+fn main() -> i32 {
+    0
+}

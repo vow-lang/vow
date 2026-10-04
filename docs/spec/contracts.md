@@ -141,7 +141,7 @@ A clause must not write through any argument while it is being evaluated — not
 
 Tuples are not first-class values (see the `let` tuple-pattern rules in `grammar.md`), so a
 tuple expression, including the empty tuple `()`, cannot appear anywhere inside a `requires`,
-`ensures` or `invariant` clause — not as a comparison operand (`requires: t != (1, 2)`) and not as
+`ensures` or `invariant` clause, or in a parameter `where` clause — not as a comparison operand (`requires: t != (1, 2)`) and not as
 the initializer of a `let` inside a clause block. Both compilers reject it at type-check time with
 `UnsupportedFeature` ("tuple expressions are not supported in contract predicates") at the
 tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.
@@ -310,7 +310,7 @@ fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
 }
 ```
 
-Each `where` clause can only reference its own parameter.
+Each `where` clause can only reference its own parameter (a sibling parameter or `result` is an undefined-variable `TypeMismatch`), and it obeys the same rules as a `requires` clause: it must be a pure `bool` predicate with no tuple expression. See `grammar.md` → "Where Clauses" for the full list.
 
 ## Anti-Patterns
 

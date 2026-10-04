@@ -1,0 +1,13 @@
+// TEST: error-code ContractTypeMismatch
+// TEST: stderr "`where` clause"
+// A `where` clause is a predicate, exactly like `requires`: an integer-valued
+// expression is rejected instead of silently becoming `__ESBMC_assume(x + 1)`.
+module WhereNotBool
+
+fn f(x: i64 where x + 1) -> i64 {
+    x
+}
+
+fn main() -> i32 {
+    0
+}

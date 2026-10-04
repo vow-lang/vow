@@ -1,0 +1,17 @@
+// TEST: exit 134
+// TEST: stderr "VowViolation"
+// TEST: stderr "blame=Caller"
+// A parameter `where` clause is a precondition: under --mode debug a call that
+// breaks it aborts with a Caller-blame VowViolation naming the predicate.
+module WhereRefinementViolation
+
+fn positive(x: i64 where x > 0) -> i64 {
+    x
+}
+
+fn main() -> i32 [io] {
+    print_i64(positive(1));
+    print_str("\n");
+    print_i64(positive(0));
+    0
+}

@@ -1,0 +1,44 @@
+// TEST: stdout "6 7 2 5 3"
+// Valid `where` refinements: comparisons on the own parameter, a module
+// constant, a pure helper call, a block with its own local binding, and an
+// unsigned parameter. All of them must still type-check and lower.
+module WhereRefinementValid
+
+const LIMIT: i64 = 100;
+
+fn is_small(n: i64) -> bool {
+    n < 10
+}
+
+fn bounded(x: i64 where x >= 0 && x <= LIMIT) -> i64 {
+    x + 1
+}
+
+fn small(x: i64 where is_small(x)) -> i64 {
+    x * 2
+}
+
+fn shadowed(x: i64 where { let t: i64 = x + 1; t > 0 }) -> i64 {
+    x
+}
+
+fn by_len(s: String where s.len() > 0) -> u64 {
+    s.len()
+}
+
+fn unsigned(n: u64 where n > 2u64) -> u64 {
+    n
+}
+
+fn main() -> i32 [io] {
+    print_i64(bounded(5));
+    print_str(" ");
+    print_i64(small(3) + 1);
+    print_str(" ");
+    print_i64(shadowed(2));
+    print_str(" ");
+    print_u64(by_len(String::from("hello")));
+    print_str(" ");
+    print_u64(unsigned(3u64));
+    0
+}

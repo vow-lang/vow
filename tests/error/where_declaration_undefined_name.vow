@@ -1,0 +1,11 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "undefined variable `n`"
+// A declaration-only function has no body to check, but its parameter
+// refinements are still name-resolved.
+module WhereDeclarationUndefinedName
+
+fn external(x: i64 where n > 0) -> i64;
+
+fn main() -> i32 {
+    0
+}
