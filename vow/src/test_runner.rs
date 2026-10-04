@@ -65,10 +65,21 @@ fn select_tests(
                 .is_some_and(|stem| stem.contains(pattern))
         });
     }
-    let module_root = module_root_override
-        .map(Path::to_path_buf)
-        .or_else(|| scan_path.is_dir().then(|| scan_path.to_path_buf()));
+    let module_root = module_root_override.map(Path::to_path_buf).or_else(|| {
+        if scan_path.is_dir() {
+            Some(scan_path.to_path_buf())
+        } else {
+            infer_single_file_root(scan_path)
+        }
+    });
     TestSelection { files, module_root }
+}
+
+fn infer_single_file_root(file: &Path) -> Option<PathBuf> {
+    let src = std::fs::read_to_string(file).ok()?;
+    let (module, _) = vow_syntax::parser::parse_module(&src, &file.to_string_lossy());
+    let uses: Vec<Vec<String>> = module.uses.into_iter().map(|u| u.path).collect();
+    crate::module_loader::infer_module_root(file, &uses, |p| p.exists())
 }
 
 fn discover_test_files(path: &Path) -> Vec<PathBuf> {
@@ -134,6 +145,7 @@ pub(crate) fn run_test_command(
     timeout_ms: u64,
     limits: &VerifyLimits,
     jobs: usize,
+    test_workers: usize,
 ) {
     if !path.exists() {
         let result = TestResult {
@@ -157,191 +169,27 @@ pub(crate) fn run_test_command(
     let selection = select_tests(path, filter, module_root_override);
     let module_root = selection.module_root.as_deref();
 
-    let mut entries = Vec::new();
     let mut total_density = ContractDensity {
         functions_total: 0,
         functions_with_vows: 0,
         density_pct: 0.0,
     };
 
-    let _ = std::fs::create_dir_all("build");
-
-    for test_file in &selection.files {
-        let start = std::time::Instant::now();
-        let file_str = test_file.to_string_lossy().to_string();
-        let name = test_file
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-
-        // Compile frontend once — extract density before codegen
-        let frontend = match compile_frontend_with_root(test_file, module_root, None) {
-            Ok(f) => f,
-            Err(output) => {
-                let diagnostics: Vec<DiagnosticJson> = output
-                    .diagnostics
-                    .iter()
-                    .map(DiagnosticJson::from_diagnostic)
-                    .collect();
-                entries.push(TestEntry {
-                    file: file_str,
-                    name,
-                    status: "compile_error".to_string(),
-                    exit_code: None,
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    duration_ms: start.elapsed().as_millis() as u64,
-                    diagnostics,
-                    counterexamples: vec![],
-                });
-                continue;
-            }
-        };
-
-        let density = count_contract_density(
-            frontend
-                .ir()
-                .expect("LoweredIr goal must produce IR for test density"),
-        );
+    let cfg = RunConfig {
+        module_root,
+        verify,
+        mode,
+        timeout_ms,
+        limits,
+        verify_jobs: jobs,
+    };
+    let workers = test_workers.max(1).min(selection.files.len().max(1));
+    let results = run_all(&selection.files, &cfg, workers);
+    let mut entries = Vec::with_capacity(results.len());
+    for (entry, density) in results {
         total_density.functions_total += density.functions_total;
         total_density.functions_with_vows += density.functions_with_vows;
-
-        let tmp_out = Path::new("build").join(format!("vow_test_{name}_{}", std::process::id()));
-        let result = run_pipeline_from_frontend(
-            frontend,
-            test_file,
-            Some(&tmp_out),
-            mode,
-            !verify,
-            false,
-            TraceMode::Off,
-            true,
-            limits,
-            jobs,
-            &SolverConfig::default_config(),
-            None,
-        );
-
-        let diagnostics: Vec<DiagnosticJson> = result
-            .diagnostics
-            .iter()
-            .map(DiagnosticJson::from_diagnostic)
-            .collect();
-        let counterexamples: Vec<CounterexampleJson> = result
-            .counterexamples
-            .iter()
-            .map(CounterexampleJson::from_structured)
-            .collect();
-
-        // Terminal pipeline outcomes (compile_error / verify_failed /
-        // contract_skipped) never produce a runnable binary — record and skip
-        // execution. A `None` classification means the pipeline succeeded and the
-        // per-file status is decided by the process exit code below.
-        if let Some(status) = classify_pipeline_status(&result.status) {
-            entries.push(TestEntry {
-                file: file_str,
-                name,
-                status: status.to_string(),
-                exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
-                duration_ms: start.elapsed().as_millis() as u64,
-                diagnostics,
-                counterexamples,
-            });
-            continue;
-        }
-
-        let exe_path = match &result.executable {
-            Some(p) => p.clone(),
-            None => {
-                entries.push(TestEntry {
-                    file: file_str,
-                    name,
-                    status: "compile_error".to_string(),
-                    exit_code: None,
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    duration_ms: start.elapsed().as_millis() as u64,
-                    diagnostics,
-                    counterexamples,
-                });
-                continue;
-            }
-        };
-
-        // Execute with a timeout
-        let exe_abs = std::fs::canonicalize(&exe_path).unwrap_or(exe_path.clone());
-        let child = std::process::Command::new(&exe_abs)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn();
-
-        let (exit_code, timed_out, stdout_str, stderr_str) = match child {
-            Ok(mut child) => {
-                // Take stdout/stderr handles and drain in background threads to
-                // prevent pipe buffer deadlock when tests produce >64KB output.
-                use std::io::Read;
-                let stdout_handle = child.stdout.take();
-                let stderr_handle = child.stderr.take();
-                let stdout_thread = std::thread::spawn(move || {
-                    let mut buf = String::new();
-                    if let Some(mut r) = stdout_handle {
-                        let _ = r.read_to_string(&mut buf);
-                    }
-                    buf
-                });
-                let stderr_thread = std::thread::spawn(move || {
-                    let mut buf = String::new();
-                    if let Some(mut r) = stderr_handle {
-                        let _ = r.read_to_string(&mut buf);
-                    }
-                    buf
-                });
-
-                let timeout = std::time::Duration::from_millis(timeout_ms);
-                let deadline = std::time::Instant::now() + timeout;
-                let exit = loop {
-                    match child.try_wait() {
-                        Ok(Some(status)) => break Some(status.code()),
-                        Ok(None) => {
-                            if std::time::Instant::now() >= deadline {
-                                let _ = child.kill();
-                                let _ = child.wait();
-                                break None;
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(10));
-                        }
-                        Err(_) => break Some(Some(-1)),
-                    }
-                };
-
-                let stdout = stdout_thread.join().unwrap_or_default();
-                let stderr = stderr_thread.join().unwrap_or_default();
-                match exit {
-                    Some(code) => (code, false, stdout, stderr),
-                    None => (None, true, String::new(), "timeout".to_string()),
-                }
-            }
-            Err(e) => (Some(-1), false, String::new(), e.to_string()),
-        };
-
-        // Clean up the produced binary
-        let _ = std::fs::remove_file(&exe_path);
-
-        let status = classify_execution_outcome(exit_code, timed_out);
-
-        entries.push(TestEntry {
-            file: file_str,
-            name,
-            status: status.to_string(),
-            exit_code,
-            stdout: stdout_str,
-            stderr: stderr_str,
-            duration_ms: start.elapsed().as_millis() as u64,
-            diagnostics,
-            counterexamples,
-        });
+        entries.push(entry);
     }
 
     let test_result = build_test_result(entries, total_density);
@@ -352,6 +200,266 @@ pub(crate) fn run_test_command(
     if test_result.failed > 0 {
         std::process::exit(1);
     }
+}
+
+struct RunConfig<'a> {
+    module_root: Option<&'a Path>,
+    verify: bool,
+    mode: BuildMode,
+    timeout_ms: u64,
+    limits: &'a VerifyLimits,
+    verify_jobs: usize,
+}
+
+/// Run `files` with up to `workers` concurrent workers, returning the per-file
+/// results in `files` order whatever the completion order. Extra workers
+/// (beyond the first) only claim a file while the machine is not under memory
+/// or IO stall pressure; worker 0 always makes progress.
+fn run_all(
+    files: &[PathBuf],
+    cfg: &RunConfig,
+    workers: usize,
+) -> Vec<(TestEntry, ContractDensity)> {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let next = AtomicUsize::new(0);
+    let slots: Vec<Mutex<Option<(TestEntry, ContractDensity)>>> =
+        files.iter().map(|_| Mutex::new(None)).collect();
+    let work = |worker: usize| loop {
+        if worker > 0 {
+            while machine_under_pressure() && next.load(Ordering::SeqCst) < files.len() {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        }
+        let i = next.fetch_add(1, Ordering::SeqCst);
+        let Some(file) = files.get(i) else { break };
+        let result = run_one_test(file, i, cfg);
+        *slots[i].lock().unwrap() = Some(result);
+    };
+    if workers <= 1 {
+        work(0);
+    } else {
+        std::thread::scope(|scope| {
+            for worker in 0..workers {
+                let work = &work;
+                scope.spawn(move || work(worker));
+            }
+        });
+    }
+    slots
+        .into_iter()
+        .map(|slot| slot.into_inner().unwrap().expect("every file was run"))
+        .collect()
+}
+
+/// The `avg10` figure on the PSI line starting with `kind` (`some` or `full`)
+/// in `text`; `None` when absent (no `/proc/pressure`).
+fn psi_avg10(text: &str, kind: &str) -> Option<f64> {
+    let line = text.lines().find(|l| l.split(' ').next() == Some(kind))?;
+    line.split(' ')
+        .find_map(|f| f.strip_prefix("avg10="))?
+        .parse()
+        .ok()
+}
+
+fn machine_under_pressure() -> bool {
+    let read = |p: &str| std::fs::read_to_string(p).unwrap_or_default();
+    let mem = psi_avg10(&read("/proc/pressure/memory"), "some").unwrap_or(0.0);
+    let io = psi_avg10(&read("/proc/pressure/io"), "full").unwrap_or(0.0);
+    mem >= 20.0 || io >= 20.0
+}
+
+fn run_one_test(test_file: &Path, index: usize, cfg: &RunConfig) -> (TestEntry, ContractDensity) {
+    let module_root = cfg.module_root;
+    let (verify, mode, timeout_ms, limits, jobs) = (
+        cfg.verify,
+        cfg.mode,
+        cfg.timeout_ms,
+        cfg.limits,
+        cfg.verify_jobs,
+    );
+    let no_density = ContractDensity {
+        functions_total: 0,
+        functions_with_vows: 0,
+        density_pct: 0.0,
+    };
+    let start = std::time::Instant::now();
+    let _ = std::fs::create_dir_all("build");
+    let file_str = test_file.to_string_lossy().to_string();
+    let name = test_file
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    // Compile frontend once — extract density before codegen
+    let frontend = match compile_frontend_with_root(test_file, module_root, None) {
+        Ok(f) => f,
+        Err(output) => {
+            let diagnostics: Vec<DiagnosticJson> = output
+                .diagnostics
+                .iter()
+                .map(DiagnosticJson::from_diagnostic)
+                .collect();
+            let entry = TestEntry {
+                file: file_str,
+                name,
+                status: "compile_error".to_string(),
+                exit_code: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                duration_ms: start.elapsed().as_millis() as u64,
+                diagnostics,
+                counterexamples: vec![],
+            };
+            return (entry, no_density);
+        }
+    };
+
+    let density = count_contract_density(
+        frontend
+            .ir()
+            .expect("LoweredIr goal must produce IR for test density"),
+    );
+
+    let tmp_out =
+        Path::new("build").join(format!("vow_test_{name}_{}_{index}", std::process::id()));
+    let result = run_pipeline_from_frontend(
+        frontend,
+        test_file,
+        Some(&tmp_out),
+        mode,
+        !verify,
+        false,
+        TraceMode::Off,
+        true,
+        limits,
+        jobs,
+        &SolverConfig::default_config(),
+        None,
+    );
+
+    let diagnostics: Vec<DiagnosticJson> = result
+        .diagnostics
+        .iter()
+        .map(DiagnosticJson::from_diagnostic)
+        .collect();
+    let counterexamples: Vec<CounterexampleJson> = result
+        .counterexamples
+        .iter()
+        .map(CounterexampleJson::from_structured)
+        .collect();
+
+    // Terminal pipeline outcomes (compile_error / verify_failed /
+    // contract_skipped) never produce a runnable binary — record and skip
+    // execution. A `None` classification means the pipeline succeeded and the
+    // per-file status is decided by the process exit code below.
+    if let Some(status) = classify_pipeline_status(&result.status) {
+        let entry = TestEntry {
+            file: file_str,
+            name,
+            status: status.to_string(),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: start.elapsed().as_millis() as u64,
+            diagnostics,
+            counterexamples,
+        };
+        return (entry, density);
+    }
+
+    let exe_path = match &result.executable {
+        Some(p) => p.clone(),
+        None => {
+            let entry = TestEntry {
+                file: file_str,
+                name,
+                status: "compile_error".to_string(),
+                exit_code: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                duration_ms: start.elapsed().as_millis() as u64,
+                diagnostics,
+                counterexamples,
+            };
+            return (entry, density);
+        }
+    };
+
+    // Execute with a timeout
+    let exe_abs = std::fs::canonicalize(&exe_path).unwrap_or(exe_path.clone());
+    let child = std::process::Command::new(&exe_abs)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+
+    let (exit_code, timed_out, stdout_str, stderr_str) = match child {
+        Ok(mut child) => {
+            // Take stdout/stderr handles and drain in background threads to
+            // prevent pipe buffer deadlock when tests produce >64KB output.
+            use std::io::Read;
+            let stdout_handle = child.stdout.take();
+            let stderr_handle = child.stderr.take();
+            let stdout_thread = std::thread::spawn(move || {
+                let mut buf = String::new();
+                if let Some(mut r) = stdout_handle {
+                    let _ = r.read_to_string(&mut buf);
+                }
+                buf
+            });
+            let stderr_thread = std::thread::spawn(move || {
+                let mut buf = String::new();
+                if let Some(mut r) = stderr_handle {
+                    let _ = r.read_to_string(&mut buf);
+                }
+                buf
+            });
+
+            let timeout = std::time::Duration::from_millis(timeout_ms);
+            let deadline = std::time::Instant::now() + timeout;
+            let exit = loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break Some(status.code()),
+                    Ok(None) => {
+                        if std::time::Instant::now() >= deadline {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            break None;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(_) => break Some(Some(-1)),
+                }
+            };
+
+            let stdout = stdout_thread.join().unwrap_or_default();
+            let stderr = stderr_thread.join().unwrap_or_default();
+            match exit {
+                Some(code) => (code, false, stdout, stderr),
+                None => (None, true, String::new(), "timeout".to_string()),
+            }
+        }
+        Err(e) => (Some(-1), false, String::new(), e.to_string()),
+    };
+
+    // Clean up the produced binary
+    let _ = std::fs::remove_file(&exe_path);
+
+    let status = classify_execution_outcome(exit_code, timed_out);
+
+    let entry = TestEntry {
+        file: file_str,
+        name,
+        status: status.to_string(),
+        exit_code,
+        stdout: stdout_str,
+        stderr: stderr_str,
+        duration_ms: start.elapsed().as_millis() as u64,
+        diagnostics,
+        counterexamples,
+    };
+    (entry, density)
 }
 
 /// Assemble the final [`TestResult`] from the collected per-file `entries` and
@@ -433,6 +541,65 @@ mod tests {
         let unmatched = select_tests(&single, Some("missing"), None);
         assert!(unmatched.files.is_empty());
         assert_eq!(unmatched.module_root, None);
+    }
+
+    #[test]
+    fn single_file_selection_infers_the_ancestor_module_root() {
+        let dir = TempDir::new().unwrap();
+        write_source(&dir, "dep.vow", "module Dep fn d() -> i64 { 1 }");
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir(&tests_dir).unwrap();
+        let file = tests_dir.join("test_a.vow");
+        std::fs::write(&file, "module A use dep fn main() -> i32 { 0 }").unwrap();
+
+        assert_eq!(
+            select_tests(&file, None, None).module_root,
+            Some(dir.path().to_path_buf())
+        );
+
+        let explicit = dir.path().join("elsewhere");
+        assert_eq!(
+            select_tests(&file, None, Some(&explicit)).module_root,
+            Some(explicit)
+        );
+
+        let local = tests_dir.join("test_b.vow");
+        std::fs::write(&local, "module B fn main() -> i32 { 0 }").unwrap();
+        assert_eq!(select_tests(&local, None, None).module_root, None);
+    }
+
+    #[test]
+    fn psi_avg10_reads_the_requested_line() {
+        let psi = "some avg10=12.50 avg60=3.00 avg300=1.00 total=42\n\
+                   full avg10=0.75 avg60=0.00 avg300=0.00 total=7\n";
+        assert_eq!(psi_avg10(psi, "some"), Some(12.5));
+        assert_eq!(psi_avg10(psi, "full"), Some(0.75));
+        assert_eq!(psi_avg10("", "some"), None);
+        assert_eq!(psi_avg10("some avg60=1.00\n", "some"), None);
+    }
+
+    #[test]
+    fn run_all_preserves_file_order_for_any_worker_count() {
+        let dir = TempDir::new().unwrap();
+        let files: Vec<PathBuf> = ["test_c", "test_a", "test_b"]
+            .iter()
+            .map(|n| write_source(&dir, &format!("{n}.vow"), "module M fn main() -> i32 { 0 }"))
+            .collect();
+        let limits = VerifyLimits::default();
+        let cfg = RunConfig {
+            module_root: None,
+            verify: false,
+            mode: BuildMode::Debug,
+            timeout_ms: 30_000,
+            limits: &limits,
+            verify_jobs: 1,
+        };
+        for workers in [1, 3] {
+            let results = run_all(&files, &cfg, workers);
+            let names: Vec<&str> = results.iter().map(|(e, _)| e.name.as_str()).collect();
+            assert_eq!(names, ["test_c", "test_a", "test_b"], "workers={workers}");
+            assert!(results.iter().all(|(e, _)| e.status == "passed"));
+        }
     }
 
     #[test]

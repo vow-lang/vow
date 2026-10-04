@@ -150,3 +150,153 @@ fn select_tests(scan_path: String, filter: String, module_root_override: String)
         module_root: module_root,
     }
 }
+
+// One executed test file: `status` is the per-test status string, `entry` the
+// finished JSON object for the `tests` array, and `fns`/`vow_fns` the
+// contract-density contribution (0/0 when the frontend rejected the file).
+struct TestOne {
+    status: String,
+    entry: String,
+    fns: i64,
+    vow_fns: i64,
+}
+
+// Worker handshake: a worker prints "<status> <fns> <vow_fns>\n<entry json>\n"
+// instead of the suite document.
+fn worker_reply_line(one: TestOne) -> String {
+    let r: String = String::from("");
+    r.push_str(one.status);
+    r.push_str(String::from(" "));
+    r.push_str(i64_to_string(one.fns));
+    r.push_str(String::from(" "));
+    r.push_str(i64_to_string(one.vow_fns));
+    r.push_str(String::from("\n"));
+    r.push_str(one.entry);
+    r.push_str(String::from("\n"));
+    r
+}
+
+// Inverse of `worker_reply_line`. A malformed or empty reply (the worker
+// crashed) yields an empty `status`, which the caller turns into a
+// fail-closed entry.
+fn worker_reply_parse(reply: String) -> TestOne {
+    let bad: TestOne = TestOne { status: String::from(""), entry: String::from(""), fns: 0, vow_fns: 0 };
+    let lines: Vec<String> = string_split(reply, String::from("\n"));
+    if lines.len() < 2 || lines[1].len() == 0 { return bad; }
+    let head: Vec<String> = string_split(lines[0], String::from(" "));
+    if head.len() != 3 { return bad; }
+    let fns: i64 = match parse_i64(head[1]) {
+        Option::Some(v) => { v },
+        Option::None => { return bad; },
+    };
+    let vow_fns: i64 = match parse_i64(head[2]) {
+        Option::Some(v) => { v },
+        Option::None => { return bad; },
+    };
+    TestOne { status: head[0], entry: lines[1], fns: fns, vow_fns: vow_fns }
+}
+
+// Integer part of the `avg10` figure on the PSI line starting with `kind`
+// ("some" or "full"); -1 when absent (no /proc/pressure, e.g. macOS).
+fn psi_avg10_int(text: String, kind: String) -> i64 {
+    let prefix: String = String::from("");
+    prefix.push_str(kind);
+    prefix.push_str(String::from(" "));
+    let lines: Vec<String> = string_split(text, String::from("\n"));
+    let mut i: u64 = 0;
+    while i < lines.len() {
+        let line: String = lines[i];
+        if string_starts_with(line, prefix) != 0 {
+            let fields: Vec<String> = string_split(line, String::from(" "));
+            let mut j: u64 = 0;
+            while j < fields.len() {
+                let f: String = fields[j];
+                if string_starts_with(f, String::from("avg10=")) != 0 {
+                    let num: Vec<String> = string_split(string_substr(f, 6, f.len() - 6), String::from("."));
+                    return match parse_i64(num[0]) {
+                        Option::Some(v) => { v },
+                        Option::None => { -1 },
+                    };
+                }
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+// Extra workers are only started while the machine is not under memory or IO
+// stall pressure; the first worker is always allowed so progress is guaranteed.
+fn machine_under_pressure() -> bool [io] {
+    let mem: i64 = psi_avg10_int(fs_read(String::from("/proc/pressure/memory")), String::from("some"));
+    let stall: i64 = psi_avg10_int(fs_read(String::from("/proc/pressure/io")), String::from("full"));
+    mem >= 20 || stall >= 20
+}
+
+// `common` carries the flags every worker inherits (mode, timeout, verify
+// settings), already rendered by the caller.
+fn test_worker_argv(test_path: String, module_root: String, common: Vec<String>) -> Vec<String> {
+    let a: Vec<String> = Vec::new();
+    a.push(String::from("test"));
+    a.push(test_path);
+    if module_root.len() > 0 {
+        a.push(String::from("--module-root"));
+        a.push(module_root);
+    }
+    let mut i: u64 = 0;
+    while i < common.len() {
+        a.push(common[i]);
+        i = i + 1;
+    }
+    a.push(String::from("--worker-entry"));
+    a
+}
+
+// Run every file in a worker subprocess of `exe`, at most `jobs` at a time.
+// Returns the raw worker replies in file order regardless of completion order;
+// a worker that could not start or died without a reply yields "".
+fn run_tests_parallel(exe: String, files: Vec<String>, module_root: String, common: Vec<String>, jobs: i64) -> Vec<String> [io] {
+    let n: u64 = files.len();
+    let replies: Vec<String> = Vec::new();
+    let mut k: u64 = 0;
+    while k < n {
+        replies.push(String::from(""));
+        k = k + 1;
+    }
+    let handles: Vec<i64> = Vec::new();
+    let slots: Vec<u64> = Vec::new();
+    let mut next: u64 = 0;
+    let mut done: u64 = 0;
+    let still: i64 = 0 - 999999;
+    while done < n {
+        while next < n && (handles.len() as i64) < jobs && (handles.len() == 0 || !machine_under_pressure()) {
+            let h: i64 = process_start(exe, test_worker_argv(files[next], module_root, common));
+            if h < 0 {
+                done = done + 1;
+            } else {
+                handles.push(h);
+                slots.push(next);
+            }
+            next = next + 1;
+        }
+        let mut hi: u64 = 0;
+        while hi < handles.len() {
+            let rc: i64 = process_poll_wait(handles[hi], 20);
+            if rc == still {
+                hi = hi + 1;
+            } else {
+                let diag: String = process_stderr_for(handles[hi]);
+                if diag.len() > 0 { eprintln_str(diag); }
+                replies[slots[hi]] = process_stdout_for(handles[hi]);
+                let last: u64 = handles.len() - 1;
+                handles[hi] = handles[last];
+                slots[hi] = slots[last];
+                handles.pop();
+                slots.pop();
+                done = done + 1;
+            }
+        }
+    }
+    replies
+}

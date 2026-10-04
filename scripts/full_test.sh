@@ -1931,6 +1931,39 @@ if ! check_empty_output "test/subcommand" "$rust_test_json" "$self_test_json" "$
         fail "test/filter" "expected 1 test with --filter arith, got $filter_total"
     fi
 
+    # A single test file under compiler/tests/ resolves its `use` declarations
+    # against the inferred module root (compiler/), in both compilers.
+    rust_single=$($RUST test compiler/tests/test_region.vow 2>/dev/null) || true
+    self_single=$(run_self test compiler/tests/test_region.vow 2>/dev/null) || true
+    rust_single_status=$(echo "$rust_single" | uv run python -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || rust_single_status=""
+    self_single_status=$(echo "$self_single" | uv run python -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || self_single_status=""
+    if [ "$rust_single_status" = "TestsPassed" ] && [ "$self_single_status" = "TestsPassed" ]; then
+        pass "test/single-file-module-root"
+    else
+        fail "test/single-file-module-root" "rust=$rust_single_status self=$self_single_status"
+    fi
+
+    # --jobs 1 (strictly sequential) must report the same suite as the
+    # concurrent default: same per-file statuses in the same order.
+    rust_seq=$($RUST test compiler/ --filter test_lexer --jobs 1 2>/dev/null) || true
+    rust_par=$($RUST test compiler/ --filter test_lexer --jobs 4 2>/dev/null) || true
+    self_seq=$(run_self test compiler/ --filter test_lexer --jobs 1 2>/dev/null) || true
+    self_par=$(run_self test compiler/ --filter test_lexer --jobs 4 2>/dev/null) || true
+    for who in rust self; do
+        printf '%s' "$([ $who = rust ] && echo "$rust_par" || echo "$self_par")" >"$TMPDIR/jobs_par_$who.json"
+        printf '%s' "$([ $who = rust ] && echo "$rust_seq" || echo "$self_seq")" >"$TMPDIR/jobs_seq_$who.json"
+        seq_same=$(uv run python -c "
+import json,sys
+a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2]))
+f=lambda d:[(t['file'],t['status']) for t in d['tests']]
+print('ok' if f(a)==f(b) and f(a) and a['status']==b['status'] else 'differ')" "$TMPDIR/jobs_par_$who.json" "$TMPDIR/jobs_seq_$who.json" 2>/dev/null) || seq_same=""
+        if [ "$seq_same" = "ok" ]; then
+            pass "test/jobs-order-independent-$who"
+        else
+            fail "test/jobs-order-independent-$who" "concurrent and --jobs 1 runs disagree ($seq_same)"
+        fi
+    done
+
     # test_complexity_io must not depend on the caller's working directory.
     repo_root=$(pwd -P)
     temp_cwd="$TMPDIR/test_complexity_io_cwd"

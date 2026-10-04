@@ -925,6 +925,7 @@ fn main() {
                 ..VerifyLimits::default()
             };
             let jobs = unwrap_or_exit(cli::resolve_verify_jobs(t.verify_jobs));
+            let test_workers = unwrap_or_exit(cli::resolve_test_jobs(t.jobs, t.verify));
             test_runner::run_test_command(
                 &path,
                 t.verify,
@@ -934,6 +935,7 @@ fn main() {
                 t.timeout,
                 &limits,
                 jobs,
+                test_workers,
             );
         }
         Some(Command::Decl(d)) => {

@@ -28,5 +28,34 @@ fn main() -> i32 [io] {
     );
     if unmatched.files.len() != 0 { return 7; }
     if unmatched.module_root != String::from("") { return 8; }
+
+    let one: TestOne = TestOne { status: String::from("passed"), entry: String::from("{\"file\":\"x\"}"), fns: 12, vow_fns: 3 };
+    let back: TestOne = worker_reply_parse(worker_reply_line(one));
+    if back.status != String::from("passed") { return 9; }
+    if back.entry != String::from("{\"file\":\"x\"}") { return 10; }
+    if back.fns != 12 { return 11; }
+    if back.vow_fns != 3 { return 12; }
+    if worker_reply_parse(String::from("")).status.len() != 0 { return 13; }
+    if worker_reply_parse(String::from("passed 1\n{}\n")).status.len() != 0 { return 14; }
+    if worker_reply_parse(String::from("passed x 2\n{}\n")).status.len() != 0 { return 15; }
+    if worker_reply_parse(String::from("passed 1 2\n")).status.len() != 0 { return 16; }
+
+    let psi: String = String::from("some avg10=12.50 avg60=3.00 avg300=1.00 total=42\nfull avg10=0.75 avg60=0.00 avg300=0.00 total=7\n");
+    if psi_avg10_int(psi, String::from("some")) != 12 { return 17; }
+    if psi_avg10_int(psi, String::from("full")) != 0 { return 18; }
+    if psi_avg10_int(String::from(""), String::from("some")) != 0 - 1 { return 19; }
+    if psi_avg10_int(String::from("some avg60=1.00\n"), String::from("some")) != 0 - 1 { return 20; }
+
+    let common: Vec<String> = Vec::new();
+    common.push(String::from("--timeout"));
+    common.push(String::from("500"));
+    let wa: Vec<String> = test_worker_argv(String::from("compiler/tests/test_a.vow"), String::from("compiler"), common);
+    if wa.len() != 7 { return 21; }
+    if wa[0] != String::from("test") || wa[1] != String::from("compiler/tests/test_a.vow") { return 22; }
+    if wa[2] != String::from("--module-root") || wa[3] != String::from("compiler") { return 23; }
+    if wa[4] != String::from("--timeout") || wa[5] != String::from("500") { return 24; }
+    if wa[6] != String::from("--worker-entry") { return 25; }
+    let wb: Vec<String> = test_worker_argv(String::from("t.vow"), String::from(""), Vec::new());
+    if wb.len() != 3 { return 26; }
     0
 }

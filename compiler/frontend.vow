@@ -91,6 +91,64 @@ fn resolve_use_path(arena: AstArena, root_dir: String, use_lid: i64) -> String [
     if fs_exists(decl_path) == 1 { decl_path } else { r }
 }
 
+fn frontend_parent_dir(dir: String) -> String {
+    match str_rfind_byte(dir, 47) {
+        Option::None => String::from("."),
+        Option::Some(k) => {
+            if k == 0 { String::from("/") } else { dir.substring(0, k) }
+        },
+    }
+}
+
+fn frontend_uses_resolve_in(arena: AstArena, dir: String, uses: Vec<i64>) -> bool [io] {
+    let mut i: u64 = 0u64;
+    while i < uses.len() {
+        if fs_exists(resolve_use_path(arena, dir, uses[i])) != 1 {
+            return false;
+        }
+        i = i + 1u64;
+    }
+    true
+}
+
+// Infer the module root for a single entry file given without an explicit root:
+// the nearest directory, starting at the entry's own directory and walking up
+// its ancestors, against which every direct `use` of the entry resolves. The
+// walk stops after the first directory containing `.git`, or at `.` / `/`.
+// Returns "" (default resolution against the entry's parent directory) when the
+// entry's own directory already works, the entry has no `use`, or nothing
+// resolves them all. Mirrors `module_loader::infer_module_root` in the Rust
+// driver.
+fn frontend_infer_module_root(path: String) -> String [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let m: Module = parse_module_into(lex(fs_read(path)), arena, dctx, path);
+    let uses: Vec<i64> = m.uses;
+    if uses.len() == 0u64 {
+        return String::from("");
+    }
+    let mut dir: String = frontend_dir_path(path);
+    if dir.len() == 0u64 {
+        dir = String::from("/");
+    }
+    let mut first: bool = true;
+    while true {
+        if frontend_uses_resolve_in(arena, dir, uses) {
+            if first { return String::from(""); }
+            return dir;
+        }
+        if fs_exists(str2(dir, String::from("/.git"))) == 1 {
+            return String::from("");
+        }
+        if dir == String::from(".") || dir == String::from("/") {
+            return String::from("");
+        }
+        dir = frontend_parent_dir(dir);
+        first = false;
+    }
+    String::from("")
+}
+
 fn load_frontend_deps(root_dir: String, m: Module, arena: AstArena, all_items: Vec<i64>, item_files: Vec<String>, visited: Vec<String>, dctx: DiagCtx, importing_file: String) [io] {
     let uses: Vec<i64> = m.uses;
     let uses_spans: Vec<i64> = m.uses_spans;

@@ -97,6 +97,23 @@ pub fn solver_config(
     Ok(config)
 }
 
+/// Resolve `vow test --jobs` into the number of test files run concurrently.
+/// An explicit `0` is rejected. Without the flag: half the available
+/// parallelism capped at 8, or 1 under `--verify` (ESBMC already parallelizes).
+pub fn resolve_test_jobs(opt: Option<u32>, verify: bool) -> Result<usize, String> {
+    match opt {
+        Some(0) => Err("--jobs must be >= 1".to_string()),
+        Some(n) => Ok(n as usize),
+        None if verify => Ok(1),
+        None => {
+            let n = std::thread::available_parallelism()
+                .map(|p| p.get())
+                .unwrap_or(1);
+            Ok((n / 2).clamp(1, 8))
+        }
+    }
+}
+
 /// Resolve the `--verify-jobs` flag into a worker count. An explicit `0` is
 /// rejected; `None` defaults to half the available parallelism, clamped to at
 /// least 1. Returns the error message for the caller to report and exit on.
@@ -269,6 +286,9 @@ pub struct TestArgs {
     pub max_k_step: u32,
     #[arg(long)]
     pub verify_jobs: Option<u32>,
+    /// Run up to this many test files concurrently
+    #[arg(long)]
+    pub jobs: Option<u32>,
     #[arg(long)]
     pub help: bool,
     #[arg(long)]

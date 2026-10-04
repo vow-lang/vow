@@ -103,6 +103,49 @@ fn module_file_for_use(
     }
 }
 
+/// Infer the module root for a single entry file that was given without an
+/// explicit `--module-root`: the nearest directory, starting at the entry's own
+/// directory and walking up through its ancestors, against which every direct
+/// `use` of the entry resolves (to a `.vow` or `.vow.d` file).
+///
+/// The walk stops after the first directory containing `.git` (the repository
+/// root) or when the path runs out; a relative entry path ends at `.`. Returns
+/// `None` when the entry's own directory already works, when the entry has no
+/// `use` declarations, or when no directory resolves them all — in each case the
+/// default resolution (the entry's parent directory) applies unchanged.
+/// `exists` is injected so the rule is testable without touching the filesystem.
+pub(crate) fn infer_module_root(
+    entry: &Path,
+    uses: &[Vec<String>],
+    exists: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    if uses.is_empty() {
+        return None;
+    }
+    let resolves = |dir: &Path| {
+        uses.iter().all(|u| {
+            let vow = resolve_use(dir, u);
+            exists(&vow) || exists(&vow.with_extension("vow.d"))
+        })
+    };
+    let mut first = true;
+    for dir in entry.parent()?.ancestors() {
+        let dir = if dir.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            dir
+        };
+        if resolves(dir) {
+            return if first { None } else { Some(dir.to_path_buf()) };
+        }
+        if exists(&dir.join(".git")) {
+            return None;
+        }
+        first = false;
+    }
+    None
+}
+
 fn resolve_use(root_dir: &Path, path: &[String]) -> PathBuf {
     let mut result = root_dir.to_path_buf();
     for component in path {
@@ -186,6 +229,59 @@ mod tests {
             false
         });
         assert_eq!(seen.into_inner(), Some(PathBuf::from("/proj/region.vow.d")));
+    }
+
+    #[test]
+    fn infer_root_climbs_to_the_ancestor_that_resolves_every_use() {
+        let exists = |p: &Path| {
+            p == Path::new("proj/compiler/region.vow")
+                || p == Path::new("proj/compiler/tests/builders.vow")
+        };
+        let uses = vec![comps(&["region"]), comps(&["tests", "builders"])];
+        let root = infer_module_root(Path::new("proj/compiler/tests/test_x.vow"), &uses, exists);
+        assert_eq!(root, Some(PathBuf::from("proj/compiler")));
+    }
+
+    #[test]
+    fn infer_root_is_none_when_the_entry_directory_already_resolves() {
+        let exists = |p: &Path| p == Path::new("proj/sub/dep.vow");
+        let uses = vec![comps(&["dep"])];
+        assert_eq!(
+            infer_module_root(Path::new("proj/sub/test_x.vow"), &uses, exists),
+            None
+        );
+    }
+
+    #[test]
+    fn infer_root_is_none_without_uses_or_without_a_match() {
+        assert_eq!(
+            infer_module_root(Path::new("a/b/test_x.vow"), &[], |_| true),
+            None
+        );
+        assert_eq!(
+            infer_module_root(Path::new("a/b/test_x.vow"), &[comps(&["nope"])], |_| false),
+            None
+        );
+    }
+
+    #[test]
+    fn infer_root_accepts_decl_stubs_and_ends_at_the_current_directory() {
+        let exists = |p: &Path| p == Path::new("./dep.vow.d");
+        let uses = vec![comps(&["dep"])];
+        assert_eq!(
+            infer_module_root(Path::new("tests/test_x.vow"), &uses, exists),
+            Some(PathBuf::from("."))
+        );
+    }
+
+    #[test]
+    fn infer_root_stops_at_the_repository_root() {
+        let exists = |p: &Path| p == Path::new("/repo/.git") || p == Path::new("/dep.vow");
+        let uses = vec![comps(&["dep"])];
+        assert_eq!(
+            infer_module_root(Path::new("/repo/tests/test_x.vow"), &uses, exists),
+            None
+        );
     }
 
     fn parse(src: &str, file: &str) -> Module {

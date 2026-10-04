@@ -292,6 +292,13 @@ build/vowc build --no-verify compiler/main.vow -o /tmp/vow_main  # compile self-
 
 The self-hosted compiler supports DFS module loading via `use` declarations.
 
+Compiler unit tests live in `compiler/tests/` and run through the test runner. Run one with
+`build/vowc test compiler/tests/test_region.vow` (the module root is inferred: the nearest ancestor
+of the file that resolves all its `use` declarations, here `compiler/`), or all of them with
+`build/vowc test compiler/`, which runs files concurrently (`--jobs N`, default `min(cpus/2, 8)`,
+backing off under memory/IO pressure) and reports them in sorted order. Use `--filter <stem>` to
+select by file stem.
+
 ### Bootstrap triple test
 
 `scripts/concat_vow.sh` merges all compiler modules into a single file (stripping `module`/`use` headers), avoiding the need for module loading.
