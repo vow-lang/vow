@@ -1,0 +1,85 @@
+// TEST: stdout "103\n103\n105\n102\n103\n"
+module LoopShadowedLocalExits
+
+fn loop_break() -> i64 {
+    let mut i: i64 = 1;
+    let mut n: i64 = 0;
+    loop {
+        let mut i: i64 = 50;
+        i = i + 1;
+        n = n + 1;
+        if n > 2 { break; }
+    }
+    i = i + 0;
+    i * 100 + n
+}
+
+fn while_break() -> i64 {
+    let mut i: i64 = 1;
+    let mut n: i64 = 0;
+    while n < 10 {
+        let mut i: i64 = 50;
+        i = i + 1;
+        n = n + 1;
+        if n > 2 { break; }
+    }
+    i = i + 0;
+    i * 100 + n
+}
+
+fn while_continue() -> i64 {
+    let mut i: i64 = 1;
+    let mut n: i64 = 0;
+    while n < 5 {
+        let mut i: i64 = 50;
+        i = i + 1;
+        n = n + 1;
+        if n < 3 { continue; }
+    }
+    i = i + 0;
+    i * 100 + n
+}
+
+fn for_break(v: Vec<i64>) -> i64 {
+    let mut i: i64 = 1;
+    let mut n: i64 = 0;
+    for x in v {
+        let mut i: i64 = 50;
+        i = i + x;
+        n = n + 1;
+        if n > 1 { break; }
+    }
+    i = i + 0;
+    i * 100 + n
+}
+
+fn for_continue(v: Vec<i64>) -> i64 {
+    let mut i: i64 = 1;
+    let mut n: i64 = 0;
+    for x in v {
+        let mut i: i64 = 50;
+        i = i + x;
+        n = n + 1;
+        if n < 2 { continue; }
+    }
+    i = i + 0;
+    i * 100 + n
+}
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    print_i64(loop_break());
+    print_str("\n");
+    print_i64(while_break());
+    print_str("\n");
+    print_i64(while_continue());
+    print_str("\n");
+    print_i64(for_break(v));
+    print_str("\n");
+    print_i64(for_continue(v));
+    print_str("\n");
+    0
+}

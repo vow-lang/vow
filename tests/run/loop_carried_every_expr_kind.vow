@@ -1,0 +1,166 @@
+// TEST: stdout "cl 5\nci 5\ncond_var 5\ncb 10\ncu 5\ncc 5\ncm 5\ncx 5\ncs 5\nca 44\ncw 15\nck 5\ncf 5\ncp 5\nce 5\nsum 120\nz 10\nr 14\nk 5\ntotal 66\nct 7\nctp 5\ncen 5\ncenv 15\ncz 5\nfirst_over 104\nquestion_sum 1004\n"
+module LoopCarriedEveryExprKind
+
+enum Pick {
+    Low,
+    High(i64),
+}
+
+struct Pair {
+    a: i64,
+    b: i64,
+}
+
+fn bump(x: i64) -> i64 { x + 1 }
+
+fn pick(n: i64) -> Pick {
+    if n > 2 { Pick::High(n) } else { Pick::Low {} }
+}
+
+fn first_over(limit: i64) -> i64 {
+    let mut r: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 10 {
+        i = i + 1;
+        if i > limit {
+            return { r = r + 100; r + i };
+        }
+    }
+    r
+}
+
+fn wrap(x: i64) -> Option<i64> {
+    if x > 100 { Option::None {} } else { Option::Some(x) }
+}
+
+fn question_sum(n: i64) -> Option<i64> {
+    let mut cq: i64 = 0;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n {
+        let v: i64 = ({ cq = cq + 1; wrap(cq) })?;
+        acc = acc + v;
+        i = i + 1;
+    }
+    Option::Some(acc * 100 + cq)
+}
+
+fn show(label: String, v: i64) [io] {
+    print_str(label);
+    print_i64(v);
+    print_str("\n");
+}
+
+fn main() -> i32 [io] {
+    let mut i: i64 = 0;
+    let mut cl: i64 = 0;
+    let mut ci: i64 = 0;
+    let mut cb: i64 = 0;
+    let mut cu: i64 = 0;
+    let mut cc: i64 = 0;
+    let mut cm: i64 = 0;
+    let mut cx: i64 = 0;
+    let mut cs: i64 = 0;
+    let mut cw: i64 = 0;
+    let mut ck: i64 = 0;
+    let mut ct: i64 = 0;
+    let mut cf: i64 = 0;
+    let mut cp: i64 = 0;
+    let mut ce: i64 = 0;
+    let mut ca: i64 = 0;
+    let mut ctp: i64 = 0;
+    let mut cen: i64 = 0;
+    let mut cz: i64 = 0;
+    let mut cenv: i64 = 0;
+    let mut sum: i64 = 0;
+    let mut cond_var: i64 = 0;
+    let v: Vec<i64> = Vec::new();
+    v.push(7);
+    v.push(8);
+    while i < 5 {
+        let t: i64 = { cl = cl + 1; cl };
+        if { ci = ci + 1; ci > 2 } {
+            sum = sum + 1;
+        }
+        if { cond_var = cond_var + 1; cond_var > 100 } {
+            cond_var = 0;
+        }
+        let b: i64 = 1 + { cb = cb + 2; cb };
+        let u: i64 = -{ cu = cu + 1; cu };
+        let c: i64 = bump({ cc = cc + 1; cc });
+        v.push({ cm = cm + 1; cm });
+        let x: i64 = v[{ cx = cx + 1; 0 }];
+        match pick({ cs = cs + 1; cs }) {
+            Pick::Low => { ca = ca + 1; },
+            Pick::High(h) => { ca = ca + 10 + h; },
+        }
+        let mut w: i64 = 0;
+        while { cw = cw + 1; w = w + 1; w < 3 } {
+            sum = sum + 0;
+        }
+        { ck = ck + 1; }
+        let p: Pair = Pair { a: { cf = cf + 1; cf }, b: 1 };
+        let pp: Pair = { cp = cp + 1; p };
+        let q: i64 = pp.a;
+        v[{ ce = ce + 1; 0 }] = q;
+        let (tx, ty): (i64, i64) = ({ ctp = ctp + 1; ctp }, 2);
+        let en: Pick = Pick::High({ cen = cen + 1; cen });
+        match en {
+            Pick::Low => { cenv = cenv + 1000; },
+            Pick::High(h) => { cenv = cenv + h; },
+        }
+        let zu: u64 = ({ cz = cz + 1; cz }) as u64;
+        sum = sum + tx + ty + (zu as i64);
+        sum = sum + t + b + u + c + x + p.b;
+        i = i + 1;
+    }
+    let mut z: i64 = 0;
+    let mut n: i64 = 0;
+    let r: i64 = loop {
+        n = n + 1;
+        if n > 3 {
+            break { z = z + 10; z + n };
+        }
+    };
+    let mut k: i64 = 0;
+    let mut total: i64 = 0;
+    while { k = k + 1; k < 5 } {
+        total = total + k;
+    }
+    let mut ctt: i64 = 0;
+    for e in v {
+        total = total + { ct = ct + 1; ct } + e;
+        ctt = ctt + 1;
+    }
+    show(String::from("cl "), cl);
+    show(String::from("ci "), ci);
+    show(String::from("cond_var "), cond_var);
+    show(String::from("cb "), cb);
+    show(String::from("cu "), cu);
+    show(String::from("cc "), cc);
+    show(String::from("cm "), cm);
+    show(String::from("cx "), cx);
+    show(String::from("cs "), cs);
+    show(String::from("ca "), ca);
+    show(String::from("cw "), cw);
+    show(String::from("ck "), ck);
+    show(String::from("cf "), cf);
+    show(String::from("cp "), cp);
+    show(String::from("ce "), ce);
+    show(String::from("sum "), sum);
+    show(String::from("z "), z);
+    show(String::from("r "), r);
+    show(String::from("k "), k);
+    show(String::from("total "), total);
+    show(String::from("ct "), ct);
+    show(String::from("ctp "), ctp);
+    show(String::from("cen "), cen);
+    show(String::from("cenv "), cenv);
+    show(String::from("cz "), cz);
+    show(String::from("first_over "), first_over(3));
+    match question_sum(4) {
+        Option::Some(q) => { show(String::from("question_sum "), q); },
+        Option::None => { show(String::from("question_sum none "), 0); },
+    }
+    0
+}
