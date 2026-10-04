@@ -54,6 +54,9 @@ struct EsbmcRun {
 struct EsbmcStart {
     handle: i64,
     tmp_path: String,
+    // The model-bound text (`Vec<T>: 128, String: 256`) of the model that was
+    // sent to ESBMC; "" when it restricts no collection length.
+    bounds: String,
 }
 
 // Per-clause verdicts from an ESBMC `--multi-property` run: `status` is the
@@ -84,12 +87,13 @@ fn str_contains_byte(s: String, b: i64) -> bool {
     false
 }
 
-fn str_find_str(haystack: String, needle: String) -> i64 {
+// Index of the first occurrence of `needle` at or after `from`, or -1.
+fn str_find_from(haystack: String, from: i64, needle: String) -> i64 {
     let hlen: u64 = haystack.len();
     let nlen: u64 = needle.len();
-    if nlen == 0 { return 0; }
+    if nlen == 0 { return from; }
     if nlen > hlen { return -1; }
-    let mut i: u64 = 0;
+    let mut i: u64 = from as u64;
     while i <= hlen - nlen {
         let mut j: u64 = 0;
         let mut matched: bool = true;
@@ -104,6 +108,10 @@ fn str_find_str(haystack: String, needle: String) -> i64 {
         i = i + 1;
     }
     -1
+}
+
+fn str_find_str(haystack: String, needle: String) -> i64 {
+    str_find_from(haystack, 0, needle)
 }
 
 fn ascii_lower_byte(b: u8) -> u8 {
@@ -239,6 +247,102 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
         }
     };
     out.push_str(emit_harness(f));
+    out
+}
+
+// The name of a model-bound kind in the user-facing bounded-proof note. The
+// kind constants and wire names live in c_emitter.vow, next to the writer.
+fn model_bound_kind_display(k: i64) -> String {
+    if k == MB_VEC() { return String::from("Vec<T>"); }
+    if k == MB_HASHMAP() { return String::from("HashMap<K, V>"); }
+    if k == MB_BTREEMAP() { return String::from("BTreeMap<K, V>"); }
+    model_bound_kind_name(k)
+}
+
+// Index of the kind named by `c_src[from, to)`, or -1 when it names none.
+fn model_bound_kind_in(c_src: String, from: i64, to: i64) -> i64 {
+    let name: String = str_substring(c_src, from, to);
+    let mut k: i64 = 0;
+    while k < MB_KIND_COUNT() {
+        if name == model_bound_kind_name(k) { return k; }
+        k = k + 1;
+    }
+    -1
+}
+
+// Value of the run of 1..=18 ASCII digits that spans exactly `c_src[from, to)`,
+// or -1 for anything else (empty, a sign, a stray character, too long).
+fn model_bound_digits_value(c_src: String, from: i64, to: i64) -> i64 {
+    let n: i64 = to - from;
+    if n < 1 || n > 18 { return -1; }
+    let mut q: i64 = from;
+    while q < to {
+        let b: i64 = c_src.byte_at(q as u64);
+        if b < 48 || b > 57 { return -1; }
+        q = q + 1;
+    }
+    str_to_i64(str_substring(c_src, from, to))
+}
+
+// Fold one marker body `c_src[body, end)` (`<Kind> <digits>`) into `caps`,
+// keeping the smallest capacity per kind. A malformed body is ignored.
+fn record_model_bound(c_src: String, body: i64, end: i64, caps: Vec<i64>) {
+    let mut sp: i64 = body;
+    while sp < end && c_src.byte_at(sp as u64) != 32 { sp = sp + 1; }
+    if sp >= end { return; }
+    let kind: i64 = model_bound_kind_in(c_src, body, sp);
+    if kind < 0 { return; }
+    let cap: i64 = model_bound_digits_value(c_src, sp + 1, end);
+    if cap < 0 { return; }
+    let seen: i64 = caps[kind as u64];
+    if seen < 0 || cap < seen { caps[kind as u64] = cap; }
+}
+
+// The smallest capacity per kind among the `/* vow:model-bound <Kind> <digits> */`
+// markers in an emitted model, -1 for a kind with none. A malformed marker is
+// ignored, and scanning stops at a marker with no terminator. The smallest
+// capacity is reported because the proof is only claimed for executions within
+// every bound the model applied. Mirrors `model_capacity_bounds` in
+// vow-verify/src/model_bounds.rs.
+fn model_bound_caps(c_src: String) -> Vec<i64> {
+    let caps: Vec<i64> = Vec::new();
+    let mut k: i64 = 0;
+    while k < MB_KIND_COUNT() {
+        caps.push(-1);
+        k = k + 1;
+    }
+    let prefix: String = model_bound_prefix();
+    let terminator: String = model_bound_suffix();
+    let plen: i64 = prefix.len() as i64;
+    let mut at: i64 = str_find_from(c_src, 0, prefix);
+    while at >= 0 {
+        let body: i64 = at + plen;
+        let end: i64 = str_find_from(c_src, body, terminator);
+        if end < 0 {
+            at = -1;
+        } else {
+            record_model_bound(c_src, body, end, caps);
+            at = str_find_from(c_src, body, prefix);
+        }
+    }
+    caps
+}
+
+// The capacities the emitted model restricts executions to, rendered
+// `Vec<T>: 128, String: 256, Heap: 1024` in the fixed kind order, or "" when it
+// restricts none.
+fn model_bounds_text(c_src: String) -> String {
+    let caps: Vec<i64> = model_bound_caps(c_src);
+    let out: String = String::from("");
+    let mut k: i64 = 0;
+    while k < MB_KIND_COUNT() {
+        let cap: i64 = caps[k as u64];
+        if cap >= 0 {
+            if out.len() > 0 { out.push_str(String::from(", ")); }
+            out.push_str(str3(model_bound_kind_display(k), String::from(": "), i64_to_string(cap)));
+        }
+        k = k + 1;
+    }
     out
 }
 
@@ -1552,7 +1656,7 @@ fn verify_start(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: Strin
                 vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> EsbmcStart [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
-        return EsbmcStart { handle: -1, tmp_path: String::from("") };
+        return EsbmcStart { handle: -1, tmp_path: String::from(""), bounds: String::from("") };
     }
     let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, false);
     // No cache lookup or write — see the note above resolve_auto_bv_solver.
@@ -1564,8 +1668,9 @@ fn verify_start(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: Strin
     let tmp_path: String = verify_tmp_path();
     let fn_name: String = f.name;
     let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
+    let bounds: String = model_bounds_text(c_source);
     let handle: i64 = start_esbmc(esbmc_bin, c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout);
-    EsbmcStart { handle: handle, tmp_path: tmp_path }
+    EsbmcStart { handle: handle, tmp_path: tmp_path, bounds: bounds }
 }
 
 // STILL_RUNNING sentinel returned by process_poll_wait — must match

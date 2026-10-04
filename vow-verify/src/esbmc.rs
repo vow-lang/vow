@@ -524,9 +524,27 @@ impl<'a> VerifyRequest<'a> {
     }
 }
 
-/// Verify one function against its contracts, modeling its module callees. This
-/// is the single public entry point for module-context verification; all
-/// override defaulting lives here (see [`VerifyRequest`]).
+/// Locate ESBMC and run it over an already-emitted model, returning the verdict
+/// with the solver config that produced it (a fallback may change it). `None`
+/// when ESBMC cannot be located. The one place the real invocation happens, for
+/// [`verify`] and for the CLI driver, which interposes its failure cache.
+pub fn run_c_source(
+    c_src: &str,
+    func_name: &str,
+    max_k_step: u32,
+    config: &SolverConfig,
+) -> Option<(VerificationResult, SolverConfig)> {
+    let esbmc = find_esbmc()?;
+    Some(run_with_fallback(
+        &esbmc, c_src, max_k_step, func_name, config,
+    ))
+}
+
+/// Verify one function against its contracts, modeling its module callees, with
+/// no failure cache and the caller's solver config unchanged. A library entry
+/// point and the harness for this crate's tests; the CLI driver
+/// (`vow::verification`) runs its own per-function pipeline around
+/// [`run_c_source`]. All override defaulting lives here (see [`VerifyRequest`]).
 pub fn verify(req: &VerifyRequest) -> VerificationResult {
     let detected;
     let const_fns = match req.const_fns {
@@ -550,14 +568,11 @@ pub fn verify(req: &VerifyRequest) -> VerificationResult {
         return VerificationResult::Skipped { reason };
     }
 
-    let esbmc = match find_esbmc() {
-        Some(p) => p,
-        None => return VerificationResult::ToolNotFound,
-    };
-
     let c_src = emit_verify_c_source(req.func, req.module, const_fns, req.limits);
-    let (result, _resolved) = run_with_fallback(&esbmc, &c_src, max_k_step, &req.func.name, config);
-    result
+    match run_c_source(&c_src, &req.func.name, max_k_step, config) {
+        Some((result, _resolved)) => result,
+        None => VerificationResult::ToolNotFound,
+    }
 }
 
 // Single-function verification without module context (no callee modeling, no

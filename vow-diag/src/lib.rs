@@ -106,6 +106,11 @@ pub enum ErrorCode {
     // to a user-authored vow. The failure remains fail-closed, but must not be
     // presented as a fabricated contract violation.
     VerifierAssertionUnattributed,
+    // Emitted as a Note when a function is proved by a bounded model that
+    // restricts collection lengths to the verifier's model capacity. The proof
+    // is genuine but covers only executions within that bound. Does not change
+    // the build status.
+    ModelCapacityAssumed,
 }
 
 pub trait DiagnosticEmitter {
@@ -430,5 +435,10 @@ mod tests {
     #[test]
     fn diagnostic_schema_lists_verifier_assertion_unattributed() {
         assert_schema_lists([ErrorCode::VerifierAssertionUnattributed]);
+    }
+
+    #[test]
+    fn diagnostic_schema_lists_model_capacity_assumed() {
+        assert_schema_lists([ErrorCode::ModelCapacityAssumed]);
     }
 }

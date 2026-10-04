@@ -1,0 +1,27 @@
+// TEST: category bounds
+// from_raw_parts_copy of a null pointer is empty whatever the length is, and the
+// verifier models exactly that: the capacity restriction applies to a non-null
+// source only, so a null source with any length (even one far beyond the model
+// capacity) yields len 0 and the postcondition holds for every length.
+module RawPartsCopyNullPointerEmpty
+
+fn null_is_empty(n: u64) -> u64 vow {
+    ensures: result == 0
+} {
+    let s: String = String::from_raw_parts_copy(0, n);
+    s.len()
+}
+
+fn null_vec_is_empty() -> u64 vow {
+    ensures: result == 0
+} {
+    let v: Vec<u8> = Vec::from_raw_parts_copy(0, 10000000000000000000);
+    v.len()
+}
+
+fn null_or_copied(p: i64, n: u64) -> u64 vow {
+    ensures: p != 0 || result == 0
+} {
+    let s: String = String::from_raw_parts_copy(p, n);
+    s.len()
+}
