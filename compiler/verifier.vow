@@ -277,7 +277,7 @@ fn model_bound_digits_value(c_src: String, from: i64, to: i64) -> i64 {
     if n < 1 || n > 18 { return -1; }
     let mut q: i64 = from;
     while q < to {
-        let b: i64 = c_src.byte_at(q);
+        let b: i64 = c_src.byte_at(q as u64);
         if b < 48 || b > 57 { return -1; }
         q = q + 1;
     }
@@ -288,7 +288,7 @@ fn model_bound_digits_value(c_src: String, from: i64, to: i64) -> i64 {
 // keeping the smallest capacity per kind. A malformed body is ignored.
 fn record_model_bound(c_src: String, body: i64, end: i64, caps: Vec<i64>) {
     let mut sp: i64 = body;
-    while sp < end && c_src.byte_at(sp) != 32 { sp = sp + 1; }
+    while sp < end && c_src.byte_at(sp as u64) != 32 { sp = sp + 1; }
     if sp >= end { return; }
     let kind: i64 = model_bound_kind_in(c_src, body, sp);
     if kind < 0 { return; }
