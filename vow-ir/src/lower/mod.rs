@@ -6654,6 +6654,20 @@ fn unsigned_max() -> u128 {
         ];
         for (expected, source) in sources {
             let func = lowered_function(source, "probe");
+            let phis: std::collections::HashSet<InstId> = insts_of(&func)
+                .iter()
+                .filter(|i| i.opcode == Opcode::Phi)
+                .map(|i| i.id)
+                .collect();
+            for upsilon in insts_of(&func)
+                .iter()
+                .filter(|i| i.opcode == Opcode::Upsilon)
+            {
+                let InstData::PhiTarget(target) = upsilon.data else {
+                    panic!("{source}: upsilon without a phi target: {upsilon:?}");
+                };
+                assert!(phis.contains(&target), "{source}: dangling {upsilon:?}");
+            }
             let mut mutation_upsilons = 0;
             for block in &func.blocks {
                 let terminal = block.insts.iter().position(|i| i.opcode.is_terminal());

@@ -2131,10 +2131,6 @@ fn emit_unmodelled(inst: &Inst, out: &mut String) {
     }
 }
 
-/// Collect every unordered (lo, hi) operand pair appearing as arguments to
-/// `__vow_string_eq`, in IR-traversal order with linear deduplication. The
-/// caller emits one shared `_Bool __str_eq_<lo>_<hi>` per pair, and re-samples
-/// it whenever a modeled mutation touches `lo` or `hi`.
 /// True when `inst` consumes a string operand without ever reading its bytes:
 /// the model tracks only `.len` for these (`len`, `eq` through its cached
 /// nondeterministic verdict, `push_str`, `push_byte`, `clear`) or discards the
@@ -2189,6 +2185,10 @@ fn emit_substring_copy(
     }
 }
 
+/// Collect every unordered (lo, hi) operand pair appearing as arguments to
+/// `__vow_string_eq`, in IR-traversal order with linear deduplication. The
+/// caller emits one shared `_Bool __str_eq_<lo>_<hi>` per pair, and re-samples
+/// it whenever a modeled mutation touches `lo` or `hi`.
 fn compute_string_eq_pairs(func: &Function) -> Vec<(u32, u32)> {
     let mut eq_pairs: Vec<(u32, u32)> = Vec::new();
     for block in &func.blocks {

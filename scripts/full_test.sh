@@ -859,7 +859,13 @@ for vow_file in tests/verify/*.vow tests/verify-fail/*.vow tests/verify-skip/*.v
     if [ "$c_parity_status" -ne 0 ]; then
         fail "verifier-c/$(basename "$(dirname "$vow_file")")/$(basename "$vow_file" .vow)" "$(head -40 "$c_parity_log")"
     elif grep -q '^SKIP' "$c_parity_log"; then
-        skip "verifier-c/$(basename "$(dirname "$vow_file")")/$(basename "$vow_file" .vow)" "neither compiler invoked ESBMC"
+        # Only verify-skip fixtures may legitimately never reach ESBMC; anywhere
+        # else an empty capture means both compilers broke before verifying.
+        if [ "$(basename "$(dirname "$vow_file")")" = "verify-skip" ]; then
+            skip "verifier-c/verify-skip/$(basename "$vow_file" .vow)" "neither compiler invoked ESBMC"
+        else
+            fail "verifier-c/$(basename "$(dirname "$vow_file")")/$(basename "$vow_file" .vow)" "neither compiler invoked ESBMC"
+        fi
     else
         pass "verifier-c/$(basename "$(dirname "$vow_file")")/$(basename "$vow_file" .vow)"
     fi
