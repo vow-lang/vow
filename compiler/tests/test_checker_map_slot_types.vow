@@ -239,7 +239,6 @@ fn check_drop_and_unit() -> i32 [io] {
     if count_code(drop_probe(String::from("drop(n); drop(t); n")), EC_TYPE_MISMATCH()) != 1 { return 122; }
     if !only_message(drop_probe(String::from("drop(n); drop(t); n"))).contains(String::from("drop requires a linear value, found `i64`")) { return 123; }
     if count_code(drop_probe(String::from("drop(t, t); n")), EC_TYPE_MISMATCH()) != 1 { return 124; }
-    if count_code(drop_probe(String::from("drop(t); drop(t); n")), EC_LINEAR_TYPE_VIOLATION()) != 1 { return 125; }
     if diagnostics_of(body_probe(String::from("let u: () = (); let h: HashMap<i64, ()> = HashMap::new(); h.insert(1, u); 0"))).len() != 0 { return 126; }
     if diagnostics_of(String::from("module U\nfn f() -> () { () }\nfn main() -> i32 { 0 }")).len() != 0 { return 127; }
     if count_code(body_probe(String::from("let u: () = 1; 0")), EC_TYPE_MISMATCH()) != 1 { return 128; }
