@@ -190,11 +190,12 @@ extern wrappers.
 ### Slice Types
 
 The syntax `[T]` is not a type in Vow. It parses, but the type checker rejects it
-wherever a type is written (parameter, return, field, `let` annotation, alias or
-constant) with `UnsupportedFeature` ("slice types (`[T]`) are not supported in
-Vow"), once per bracket pair, identically in both compilers. No expression creates,
+wherever a type is written (parameter, return, field, enum payload, `let`
+annotation, cast target, alias or constant) with `UnsupportedFeature` ("slice types
+(`[T]`) are not supported in Vow"), once per bracket pair. No expression creates,
 indexes, iterates or measures a slice, so no value of that type could exist. Use
-`Vec<T>` to hold a sequence of values.
+`Vec<T>` to hold a sequence of values. See
+[Slice types](errors.md#slice-types) for the diagnostic.
 
 ### User-Defined Types
 
@@ -202,9 +203,10 @@ Structs and enums (see below). A struct, enum or type alias may not be named aft
 a type the language already binds: a primitive type (`i64`, `bool`, `String`, ...)
 or one of `Vec`, `Option`, `Result`, `HashMap`, `BTreeMap`. The declaration is
 rejected with `UnsupportedFeature` ("`Vec` is a builtin type name and cannot be
-declared as a user type") in both compilers, because the resolver binds those names
+declared as a user type"), because the resolver binds those names
 before any user type and the user type would otherwise alias the builtin in some
-positions and shadow it in others.
+positions and shadow it in others. See
+[Reserved type names](errors.md#reserved-type-names) for the diagnostic.
 
 ## Literals
 

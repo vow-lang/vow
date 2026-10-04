@@ -1,14 +1,27 @@
 // TEST: error-code UnsupportedFeature
 // TEST: stderr "slice types (`[T]`) are not supported in Vow"
 // One diagnostic per written slice type, in every position a type can be
-// written, identically in both compilers (a type alias is reported once, at its
-// definition, and a nested slice is reported for each bracket pair).
+// written (a type alias is reported once, at its definition, and a nested slice
+// is reported for each bracket pair).
 module SliceTypeEveryPosition
 
 type Row = [i64];
 
 struct Grid {
     cells: [u8],
+    rows: Vec<[i64]>,
+}
+
+enum Cell {
+    Pair(([i64], i64)),
+}
+
+fn borrowed(r: &[i64]) -> i64;
+
+fn first(a: [i64], b: [i64]) -> i64 {
+    let n: i64 = 0;
+    let m: i64 = n + 1;
+    m
 }
 
 fn rows(a: [[i64]]) -> [i64];
@@ -17,5 +30,6 @@ fn make() -> Row;
 
 fn main() -> i32 {
     let r: Row = make();
+    let s: [i64] = make();
     0
 }

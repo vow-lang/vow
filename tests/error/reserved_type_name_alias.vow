@@ -1,9 +1,0 @@
-// TEST: error-code UnsupportedFeature
-// TEST: stderr "`HashMap` is a builtin type name and cannot be declared as a user type"
-module ReservedTypeNameAlias
-
-type HashMap = i64;
-
-fn main() -> i32 {
-    0
-}

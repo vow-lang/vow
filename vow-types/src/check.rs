@@ -3167,6 +3167,7 @@ impl<'e> Checker<'e> {
                 target_ty,
             } => {
                 let src_ty = self.check_expr(operand);
+                self.check_written_ty(target_ty, target_ty.span());
                 let tgt_ty = match target_ty.as_ref() {
                     vow_syntax::ast::Type::Named { name, .. } => {
                         Ty::from_primitive_name(name).unwrap_or(Ty::Unit)

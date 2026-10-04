@@ -61,12 +61,7 @@ STRICT_SPAN_FIXTURES = frozenset(
         "int_suffix_usize.vow",
         "i128_match_literal_out_of_range.vow",
         "let_tuple_arity_mismatch.vow",
-        "slice_type_param.vow",
-        "slice_type_let.vow",
         "slice_type_every_position.vow",
-        "reserved_type_name_struct.vow",
-        "reserved_type_name_enum.vow",
-        "reserved_type_name_alias.vow",
         "reserved_type_name_every_builtin.vow",
     }
 )

@@ -79,16 +79,20 @@ fn assert_reserved_diagnostics(name: &str, reserved: &[&str]) {
 
 #[test]
 fn slice_types_are_rejected_once_per_written_slice() {
-    assert_all_slice_diagnostics("slice_type_param.vow", 1);
-    assert_all_slice_diagnostics("slice_type_let.vow", 2);
-    assert_all_slice_diagnostics("slice_type_every_position.vow", 5);
+    assert_all_slice_diagnostics("slice_type_every_position.vow", 11);
+}
+
+#[test]
+fn slice_cast_targets_are_rejected_once_per_bracket_pair() {
+    let slices = error_messages("slice_type_cast_target.vow")
+        .into_iter()
+        .filter(|(_, message, _)| message == SLICE_MESSAGE)
+        .count();
+    assert_eq!(slices, 3);
 }
 
 #[test]
 fn builtin_type_names_cannot_be_declared() {
-    assert_reserved_diagnostics("reserved_type_name_struct.vow", &["Vec"]);
-    assert_reserved_diagnostics("reserved_type_name_enum.vow", &["Option"]);
-    assert_reserved_diagnostics("reserved_type_name_alias.vow", &["HashMap"]);
     assert_reserved_diagnostics(
         "reserved_type_name_every_builtin.vow",
         &["String", "BTreeMap", "Result", "u8", "bool"],

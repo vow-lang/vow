@@ -1558,11 +1558,12 @@ extern wrappers.
 ### Slice Types
 
 The syntax `[T]` is not a type in Vow. It parses, but the type checker rejects it
-wherever a type is written (parameter, return, field, `let` annotation, alias or
-constant) with `UnsupportedFeature` ("slice types (`[T]`) are not supported in
-Vow"), once per bracket pair, identically in both compilers. No expression creates,
+wherever a type is written (parameter, return, field, enum payload, `let`
+annotation, cast target, alias or constant) with `UnsupportedFeature` ("slice types
+(`[T]`) are not supported in Vow"), once per bracket pair. No expression creates,
 indexes, iterates or measures a slice, so no value of that type could exist. Use
-`Vec<T>` to hold a sequence of values.
+`Vec<T>` to hold a sequence of values. See
+[Slice types](errors.md#slice-types) for the diagnostic.
 
 ### User-Defined Types
 
@@ -1570,9 +1571,10 @@ Structs and enums (see below). A struct, enum or type alias may not be named aft
 a type the language already binds: a primitive type (`i64`, `bool`, `String`, ...)
 or one of `Vec`, `Option`, `Result`, `HashMap`, `BTreeMap`. The declaration is
 rejected with `UnsupportedFeature` ("`Vec` is a builtin type name and cannot be
-declared as a user type") in both compilers, because the resolver binds those names
+declared as a user type"), because the resolver binds those names
 before any user type and the user type would otherwise alias the builtin in some
-positions and shadow it in others.
+positions and shadow it in others. See
+[Reserved type names](errors.md#reserved-type-names) for the diagnostic.
 
 ## Literals
 
@@ -5029,7 +5031,7 @@ fn f() -> () {
 
 #### Slice types
 
-The same code reports a slice type `[T]` wherever a type is written: a parameter, return, struct field, enum payload, `let` annotation, type alias or constant. The type has no constructor, no indexing and no iteration, so it can never hold a value. Each bracket pair is reported once (`[[i64]]` gives two diagnostics, an alias once at its definition), with the hint ``use `Vec<T>` to hold a sequence of values``, identically in both compilers.
+The same code reports a slice type `[T]` (see [Slice Types](grammar.md#slice-types)). Each bracket pair is reported once (`[[i64]]` gives two diagnostics, an alias once at its definition), with the hint ``use `Vec<T>` to hold a sequence of values``.
 
 ```vow
 fn probe(sl: [i64]) -> i64 { 0 }
@@ -5041,7 +5043,7 @@ fn probe(sl: [i64]) -> i64 { 0 }
 
 #### Reserved type names
 
-The same code reports a `struct`, `enum` or `type` alias named after a primitive type (`i8`, `i16`, `i32`, `i64`, `i128`, `u8`, `u16`, `u32`, `u64`, `u128`, `f32`, `f64`, `bool`, `String`, `str`) or after `Vec`, `Option`, `Result`, `HashMap` or `BTreeMap`. The resolver binds those names before any user type, so the declaration would alias the builtin in some positions and shadow it in others. It is reported once per declaration, at the declaration, with the hint `choose a different name for this type`, identically in both compilers.
+The same code reports a `struct`, `enum` or `type` alias named after a builtin type (see [User-Defined Types](grammar.md#user-defined-types)). It is reported once per declaration, at the declaration, with the hint `choose a different name for this type`.
 
 ```vow
 struct Vec { x: i64 }
@@ -7345,11 +7347,12 @@ extern wrappers.
 ### Slice Types
 
 The syntax `[T]` is not a type in Vow. It parses, but the type checker rejects it
-wherever a type is written (parameter, return, field, `let` annotation, alias or
-constant) with `UnsupportedFeature` ("slice types (`[T]`) are not supported in
-Vow"), once per bracket pair, identically in both compilers. No expression creates,
+wherever a type is written (parameter, return, field, enum payload, `let`
+annotation, cast target, alias or constant) with `UnsupportedFeature` ("slice types
+(`[T]`) are not supported in Vow"), once per bracket pair. No expression creates,
 indexes, iterates or measures a slice, so no value of that type could exist. Use
-`Vec<T>` to hold a sequence of values.
+`Vec<T>` to hold a sequence of values. See
+[Slice types](errors.md#slice-types) for the diagnostic.
 
 ### User-Defined Types
 
@@ -7357,9 +7360,10 @@ Structs and enums (see below). A struct, enum or type alias may not be named aft
 a type the language already binds: a primitive type (`i64`, `bool`, `String`, ...)
 or one of `Vec`, `Option`, `Result`, `HashMap`, `BTreeMap`. The declaration is
 rejected with `UnsupportedFeature` ("`Vec` is a builtin type name and cannot be
-declared as a user type") in both compilers, because the resolver binds those names
+declared as a user type"), because the resolver binds those names
 before any user type and the user type would otherwise alias the builtin in some
-positions and shadow it in others.
+positions and shadow it in others. See
+[Reserved type names](errors.md#reserved-type-names) for the diagnostic.
 
 ## Literals
 
@@ -10820,7 +10824,7 @@ fn f() -> () {
 
 #### Slice types
 
-The same code reports a slice type `[T]` wherever a type is written: a parameter, return, struct field, enum payload, `let` annotation, type alias or constant. The type has no constructor, no indexing and no iteration, so it can never hold a value. Each bracket pair is reported once (`[[i64]]` gives two diagnostics, an alias once at its definition), with the hint ``use `Vec<T>` to hold a sequence of values``, identically in both compilers.
+The same code reports a slice type `[T]` (see [Slice Types](grammar.md#slice-types)). Each bracket pair is reported once (`[[i64]]` gives two diagnostics, an alias once at its definition), with the hint ``use `Vec<T>` to hold a sequence of values``.
 
 ```vow
 fn probe(sl: [i64]) -> i64 { 0 }
@@ -10832,7 +10836,7 @@ fn probe(sl: [i64]) -> i64 { 0 }
 
 #### Reserved type names
 
-The same code reports a `struct`, `enum` or `type` alias named after a primitive type (`i8`, `i16`, `i32`, `i64`, `i128`, `u8`, `u16`, `u32`, `u64`, `u128`, `f32`, `f64`, `bool`, `String`, `str`) or after `Vec`, `Option`, `Result`, `HashMap` or `BTreeMap`. The resolver binds those names before any user type, so the declaration would alias the builtin in some positions and shadow it in others. It is reported once per declaration, at the declaration, with the hint `choose a different name for this type`, identically in both compilers.
+The same code reports a `struct`, `enum` or `type` alias named after a builtin type (see [User-Defined Types](grammar.md#user-defined-types)). It is reported once per declaration, at the declaration, with the hint `choose a different name for this type`.
 
 ```vow
 struct Vec { x: i64 }

@@ -2956,7 +2956,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     if tag == EXPR_UNOP() {
         let op: i64 = expr_a(a, eid);
         let operand_eid: i64 = expr_b(a, eid);
-        if op == UNOP_NEG() && expr_tag(a, operand_eid) == EXPR_CAST() {
+        if op == UNOP_NEG() && expr_tag(a, operand_eid) == EXPR_CAST() &&
+            type_tag(a, expr_b(a, operand_eid)) == TY_NAMED() {
             let inner_eid: i64 = expr_a(a, operand_eid);
             let target_ast_tid: i64 = expr_b(a, operand_eid);
             let target_tid: i64 = resolve_ast_ty(e, m, target_ast_tid);
