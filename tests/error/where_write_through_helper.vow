@@ -1,0 +1,24 @@
+// TEST: error-code EffectViolation
+// TEST: stderr "may write through a shared argument"
+// A helper with no declared effect can still write through its argument; a
+// `where` clause may not call it, for the same reason `requires` may not.
+module WhereWriteThroughHelper
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn mark(p: Point) -> bool {
+    p.x = 1;
+    true
+}
+
+fn read_x(p: Point where mark(p)) -> i64 {
+    p.x
+}
+
+fn main() -> () [io] {
+    let p: Point = Point { x: 0, y: 0 };
+    print_i64(read_x(p));
+}

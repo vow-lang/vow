@@ -1,0 +1,18 @@
+// TEST: error-code EffectViolation
+// TEST: stderr "vow predicate must be pure"
+// A `where` clause is evaluated as a precondition, so it obeys the contract
+// purity rule: no call to an effectful function.
+module WhereImpurePredicate
+
+fn side_effect(x: i64) -> bool [io] {
+    print_i64(x);
+    true
+}
+
+fn f(x: i64 where side_effect(x)) -> i64 {
+    x
+}
+
+fn main() -> () [io] {
+    print_i64(f(1));
+}

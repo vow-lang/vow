@@ -1,0 +1,14 @@
+// TEST: error-code UnsupportedFeature
+// TEST: error-count 2
+module BorrowExprMutAndDoubleAmp
+
+fn id(x: i64) -> i64 {
+    x
+}
+
+fn main() -> i64 {
+    let x: i64 = 5;
+    let a: i64 = id(&mut x);
+    let b: i64 = id(&&x);
+    a + b
+}

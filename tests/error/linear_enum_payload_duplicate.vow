@@ -21,14 +21,12 @@ fn take(value: Payload) -> Token {
 fn duplicate(value: Payload) -> Token {
     let first: Token = take(value);
     let second: Token = take(value);
-    let sink: Vec<Token> = Vec::new();
-    sink.push(first);
+    drop(first);
     second
 }
 
 fn main() -> i32 {
     let token: Token = duplicate(Payload::Token(Token { id: 1 }));
-    let sink: Vec<Token> = Vec::new();
-    sink.push(token);
+    drop(token);
     0
 }

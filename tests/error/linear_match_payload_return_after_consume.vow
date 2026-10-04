@@ -11,8 +11,7 @@ enum Payload {
 }
 
 fn consume(token: Token) -> () {
-    let sink: Vec<Token> = Vec::new();
-    sink.push(token);
+    drop(token);
 }
 
 fn consume_then_return(value: Payload) -> Token {

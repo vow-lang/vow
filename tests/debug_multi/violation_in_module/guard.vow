@@ -1,0 +1,7 @@
+module Guard
+
+fn guard_bounded(n: u64) -> u64 vow {
+    requires: n < 10 as u64
+} {
+    n
+}

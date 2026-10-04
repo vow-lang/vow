@@ -1,0 +1,14 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "undefined variable `result`"
+// TEST: stderr "constrain the return value with `ensures`"
+// `result` does not exist before the function runs, so it is not in scope in a
+// `where` clause.
+module WhereResult
+
+fn positive(x: i64 where result > 0) -> i64 {
+    x
+}
+
+fn main() -> i32 {
+    0
+}

@@ -1,0 +1,8 @@
+// TEST: error-code UnexpectedToken
+// TEST: error-count 1
+module ParenthesisedBlockStatementNeedsSemicolon
+
+fn f(c: bool, x: i64) -> i64 {
+    (if c { 1 } else { 2 })
+    x
+}

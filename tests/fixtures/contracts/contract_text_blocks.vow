@@ -1,6 +1,7 @@
 // Contract-text parity fixture for compound expression forms: if/else, match,
 // blocks with statements, loops (with and without clauses), enum constructors,
-// struct literals and every type form a `let` annotation can carry. The expected
+// struct literals and every type form a `let` annotation can carry except
+// slices `[T]`, which the checker rejects. The expected
 // text lives in contract_text_blocks.expected, one escaped line per clause
 // (backslash as `\\`, newline as `\n`); the Rust integration test
 // (vow-ir/tests/contract_text_forms.rs) and the `contract-text/parity` block of
@@ -64,9 +65,8 @@ fn constructors(x: i64, p: Point) -> i64 vow {
   x
 }
 
-fn types(r: &i64, sl: [i64], t: (i64, i64), v: Vec<i64>) -> i64 vow {
+fn types(r: &i64, t: (i64, i64), v: Vec<i64>) -> i64 vow {
   requires: { let q: &i64 = r; true }
-  requires: { let q: [i64] = sl; true }
   requires: { let q: (i64, i64) = t; true }
   requires: { let q: Vec<i64> = v; true }
 } {

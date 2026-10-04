@@ -7,6 +7,7 @@ use runner_plan
 use clif
 use c_emitter
 use verifier
+use verify_report
 use diag
 use perfetto
 use mutants_sites
@@ -72,7 +73,7 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 2 {
                 let prev: String = argv[(i - 1) as u64];
-                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--verify-jobs" || prev == "--module-root" || prev == "--max-score" || prev == "--max-cognitive" || prev == "--max-cyclomatic" || prev == "--cog-anchor" || prev == "--nloc-anchor" || prev == "--perfetto" {
+                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--verify-jobs" || prev == "--jobs" || prev == "--worker-entry" || prev == "--module-root" || prev == "--max-score" || prev == "--max-cognitive" || prev == "--max-cyclomatic" || prev == "--cog-anchor" || prev == "--nloc-anchor" || prev == "--perfetto" {
                     i = i - 1;
                 } else {
                     return a;
@@ -211,46 +212,6 @@ fn ce_value_for_param(names: Vec<String>, vals: Vec<String>, param: String, para
     String::from("")
 }
 
-fn inst_const_i64_string_by_id(f: IrFunction, inst_id: i64) -> String {
-    let blocks: Vec<IrBlock> = f.blocks;
-    let mut bi: u64 = 0;
-    while bi < blocks.len() {
-        let insts: Vec<IrInst> = blocks[bi].insts;
-        let mut ii: u64 = 0;
-        while ii < insts.len() {
-            let inst: IrInst = insts[ii];
-            if inst.id == inst_id {
-                if inst.op == IOP_CONST_I32() || inst.op == IOP_CONST_I64() {
-                    return i64_to_string(inst.dv);
-                }
-                if inst.args.len() >= 2 {
-                    let lhs_s: String = inst_const_i64_string_by_id(f, inst.args[0]);
-                    let rhs_s: String = inst_const_i64_string_by_id(f, inst.args[1]);
-                    if lhs_s.len() > 0 && rhs_s.len() > 0 {
-                        let lhs: i64 = str_to_i64(lhs_s);
-                        let rhs: i64 = str_to_i64(rhs_s);
-                        if lhs_s == i64_to_string(lhs) && rhs_s == i64_to_string(rhs) {
-                            if inst.op == IOP_WADD() || inst.op == IOP_CADD() {
-                                return i64_to_string(lhs + rhs);
-                            }
-                            if inst.op == IOP_WSUB() || inst.op == IOP_CSUB() {
-                                return i64_to_string(lhs - rhs);
-                            }
-                            if inst.op == IOP_WMUL() || inst.op == IOP_CMUL() {
-                                return i64_to_string(lhs * rhs);
-                            }
-                        }
-                    }
-                }
-                return String::from("");
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    String::from("")
-}
-
 fn string_is_i64_literal(s: String) -> bool {
     if s.len() == 0 {
         return false;
@@ -277,7 +238,7 @@ fn callee_i64_string_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, c
                 if inst.op == IOP_GET_ARG() && inst.dk == IDATA_ARG_INDEX() {
                     let pidx: i64 = inst.dv;
                     if pidx >= 0 && pidx < call_inst.args.len() as i64 {
-                        return inst_const_i64_string_by_id(f, call_inst.args[pidx as u64]);
+                        return ce_fold_i64_string(f, call_inst.args[pidx as u64]);
                     }
                     return String::from("");
                 }
@@ -429,7 +390,7 @@ fn call_matches_callee_precondition_values(f: IrFunction, callee: IrFunction, ve
         if ce_val.len() == 0 {
             return false;
         }
-        let arg_val: String = inst_const_i64_string_by_id(f, inst.args[pidx as u64]);
+        let arg_val: String = ce_fold_i64_string(f, inst.args[pidx as u64]);
         if arg_val.len() == 0 {
             return false;
         }
@@ -524,6 +485,9 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
     let violating_arg_values: Vec<String> = Vec::new();
     let violating_arg_offsets: Vec<i64> = Vec::new();
     let violating_arg_lengths: Vec<i64> = Vec::new();
+    let mut ce_source_file: String = String::from("");
+    let mut ce_source_start: i64 = 0;
+    let mut ce_source_len: i64 = 0;
     if vow_id == unsupported_op_vow_id() {
         // Fail-closed assertion from emit_unsupported_for_verification: no
         // user-authored vow has this id, so synthesize an actionable message
@@ -539,6 +503,10 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
                 let ve: IrVowEntry = vows[vi as u64];
                 ce_violation = ve.description;
                 ce_blame = DIAG_BLAME_CALLER();
+                let callee_src: CeSource = ce_source_for_vow(callee, ve, path);
+                ce_source_file = callee_src.file;
+                ce_source_start = callee_src.start;
+                ce_source_len = callee_src.len;
 
                 let exact_call_matches: i64 = count_exact_callee_precondition_calls(f, callee, ve, vr);
                 let blocks: Vec<IrBlock> = f.blocks;
@@ -566,7 +534,7 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
                                         if ce_val.len() > 0 {
                                             violating_arg_values.push(ce_val);
                                         } else {
-                                            violating_arg_values.push(inst_const_i64_string_by_id(f, arg_inst_id));
+                                            violating_arg_values.push(ce_arg_value_string(f, arg_inst_id));
                                         }
                                         violating_arg_offsets.push(inst_offset_by_id(f, arg_inst_id));
                                         violating_arg_lengths.push(inst_len_by_id(f, arg_inst_id));
@@ -600,6 +568,10 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
             if ve.id == vow_id {
                 ce_violation = ve.description;
                 ce_blame = ve.blame;
+                let own_src: CeSource = ce_source_for_vow(f, ve, path);
+                ce_source_file = own_src.file;
+                ce_source_start = own_src.start;
+                ce_source_len = own_src.len;
             }
             vi = vi + 1;
         }
@@ -618,7 +590,9 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
         var_values: vr.var_values,
         violation: ce_violation,
         vow_id: public_vow_id,
-        source: path,
+        source: ce_source_file,
+        source_start: ce_source_start,
+        source_len: ce_source_len,
         blame: ce_blame,
         call_site_functions: call_site_functions,
         call_site_files: call_site_files,
@@ -1020,6 +994,8 @@ fn replay_all(ces: Vec<VerifyCE>, fns: Vec<IrFunction>, path: String, argv0: Str
             violation: ce.violation,
             vow_id: ce.vow_id,
             source: ce.source,
+            source_start: ce.source_start,
+            source_len: ce.source_len,
             blame: ce.blame,
             call_site_functions: ce.call_site_functions,
             call_site_files: ce.call_site_files,
@@ -1181,6 +1157,49 @@ fn resolve_verify_jobs(argv: Vec<String>) -> i64 [io] {
     }
 }
 
+// Concurrent test files for `vowc test`. An explicit --jobs wins; otherwise
+// half the CPUs capped at 8, or 1 under --verify (ESBMC already parallelizes).
+fn resolve_test_jobs(argv: Vec<String>, do_verify: bool) -> i64 [io] {
+    let raw: String = get_flag_arg(argv, "--jobs");
+    if raw.len() == 0 {
+        if do_verify { return 1; }
+        let n: i64 = num_cpus() / 2;
+        if n < 1 { return 1; }
+        if n > 8 { return 8; }
+        return n;
+    }
+    let n: i64 = match parse_i64(raw) {
+        Option::Some(value) => { value },
+        Option::None => { 0 },
+    };
+    if n < 1 {
+        eprintln_str(String::from("error: --jobs must be >= 1"));
+        process_exit(1);
+    }
+    n
+}
+
+fn push_test_flag_value(a: Vec<String>, argv: Vec<String>, flag: String) {
+    let v: String = get_flag_arg(argv, flag);
+    if v.len() > 0 {
+        a.push(flag);
+        a.push(v);
+    }
+}
+
+// Flags a parallel `vowc test` worker inherits from its parent invocation.
+fn test_worker_common_flags(argv: Vec<String>) -> Vec<String> {
+    let a: Vec<String> = Vec::new();
+    push_test_flag_value(a, argv, String::from("--mode"));
+    push_test_flag_value(a, argv, String::from("--timeout"));
+    push_test_flag_value(a, argv, String::from("--max-k-step"));
+    push_test_flag_value(a, argv, String::from("--verify-jobs"));
+    if has_flag(argv, String::from("--verify")) {
+        a.push(String::from("--verify"));
+    }
+    a
+}
+
 fn vec_i64_remove_front(v: Vec<i64>) {
     // Caller-enforced invariant: v.len() > 0 (drain loops guard this).
     // Guard defensively so an empty Vec becomes a no-op rather than popping below zero.
@@ -1250,9 +1269,7 @@ fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunct
     if vf_prefers_counterexample(ces, soft_meta, fns) {
         let ce: VerifyCE = ces[0];
         result.push(ce.function);
-        let desc: String = String::from("VerifyFailed: ");
-        desc.push_str(ce.violation);
-        result.push(desc);
+        result.push(String::from("[Counterexample]"));
         return result;
     }
     if soft_meta.len() >= 3 {
@@ -1630,6 +1647,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         vf_ce = legacy[1];
     }
     trace_write(tctx);
+    vf_add_ce_diagnostics(dctx, ces_final);
     diag_emit_verify_json_full(status_str, dctx, ces_final, vstatus, vmsg, vf_func, vf_ce);
     if outcome != 0 {
         return 1;
@@ -1911,6 +1929,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         vf_ce = legacy[1];
     }
     trace_write(tctx);
+    vf_add_ce_diagnostics(dctx, ces_final);
     diag_emit_build_verify_json_full(status_str, out, dctx, ces_final, vstatus, vmsg, vf_func, vf_ce);
     if all_proven == 0 || any_skipped == 1 {
         return 1;
@@ -1993,7 +2012,11 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
     let module_root_flag: String = get_flag_arg(argv, "--module-root");
     let selection: TestSelection = select_tests(path, filter, module_root_flag);
     let test_files: Vec<String> = selection.files;
-    let module_root: String = selection.module_root;
+    let mut module_root: String = selection.module_root;
+    if module_root.len() == 0 && test_files.len() == 1 && fs_is_dir(path) == 0 {
+        module_root = frontend_infer_module_root(path);
+    }
+    let worker_mode: bool = has_flag(argv, "--worker-entry");
 
     let entries_json: Vec<String> = Vec::new();
     let mut passed: i64 = 0;
@@ -2001,6 +2024,26 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
     let mut total_fns: i64 = 0;
     let mut fns_with_vows: i64 = 0;
     let mut ti: u64 = 0;
+    let test_jobs: i64 = resolve_test_jobs(argv, do_verify);
+    if !worker_mode && test_jobs > 1 && test_files.len() > 1 {
+        let replies: Vec<String> = run_tests_parallel(argv[0], test_files, module_root, test_worker_common_flags(argv), test_jobs);
+        let mut ri: u64 = 0;
+        while ri < replies.len() {
+            let one: TestOne = worker_reply_parse(replies[ri]);
+            if one.status.len() == 0 {
+                let crashed: String = emit_test_entry_json(test_files[ri], file_stem_from_path(test_files[ri]), String::from("compile_error"), -1, String::from(""), String::from(""), 0, String::from("[{\"error_code\":\"CompileError\",\"message\":\"test worker exited without a result\",\"severity\":\"error\"}]"));
+                entries_json.push(crashed);
+                failed = failed + 1;
+            } else {
+                entries_json.push(one.entry);
+                if one.status == String::from("passed") { passed = passed + 1; } else { failed = failed + 1; }
+                total_fns = total_fns + one.fns;
+                fns_with_vows = fns_with_vows + one.vow_fns;
+            }
+            ri = ri + 1;
+        }
+        ti = test_files.len();
+    }
     while ti < test_files.len() {
         let test_path: String = test_files[ti];
         let short_name: String = file_stem_from_path(test_path);
@@ -2011,7 +2054,8 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         let checked: CheckedFrontend = fr.checked;
         if checked.n_errors > 0 {
             let duration: i64 = time_unix_ms() - start_time;
-            let diag_json: String = String::from("[{\"error_code\":\"CompileError\",\"message\":\"compilation failed\",\"severity\":\"error\"}]");
+            diag_ctx_print_all(checked.dctx);
+            let diag_json: String = diag_ctx_to_json(checked.dctx);
             let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration, diag_json);
             entries_json.push(entry);
             failed = failed + 1;
@@ -2152,13 +2196,14 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
 
             if !skip_exec {
                 // Compile to binary
-                let tmp_out: String = str2(str3(String::from("build/vow_test_"), short_name, String::from("_")), i64_to_string(time_unix_ms()));
+                let worker_tag: String = { if worker_mode { str2(get_flag_arg(argv, "--worker-entry"), String::from("_")) } else { String::from("") } };
+                let tmp_out: String = str2(str3(String::from("build/vow_test_"), short_name, String::from("_")), str2(worker_tag, i64_to_string(time_unix_ms())));
                 let result: i64 = clif_emit_module(ir_mod, tmp_out, mode, 0);
                 if result != 0 {
                     let duration: i64 = time_unix_ms() - start_time;
                     let codegen_diag: Diagnostic = codegen_failure_diagnostic(result, test_path, str2(tmp_out, String::from(".o")));
                     eprintln_str(diag_to_human(codegen_diag, checked.dctx));
-                    let diag_json2: String = str3(String::from("["), diag_to_json(codegen_diag, checked.dctx), String::from("]"));
+                    let diag_json2: String = str3(String::from("["), diag_to_json(codegen_diag), String::from("]"));
                     let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration, diag_json2);
                     entries_json.push(entry);
                     failed = failed + 1;
@@ -2183,6 +2228,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                         }
                     };
                     fs_remove(tmp_out);
+                    process_kill(handle);
                     let duration: i64 = time_unix_ms() - start_time;
                     let status: String = {
                         if exit_code == 0 { String::from("passed") }
@@ -2200,6 +2246,13 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
             }
             ti = ti + 1;
         }
+    }
+
+    if worker_mode {
+        let wstatus: String = { if passed == 1 { String::from("passed") } else { String::from("failed") } };
+        if entries_json.len() == 0 { return 1; }
+        print_str(worker_reply_line(TestOne { status: wstatus, entry: entries_json[0], fns: total_fns, vow_fns: fns_with_vows }));
+        return 0;
     }
 
     // Emit JSON result
@@ -2322,6 +2375,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 vf_func_leg = legacy_leg[0];
                 vf_ce_leg = legacy_leg[1];
             }
+            vf_add_ce_diagnostics(dctx, ces_final_leg);
             diag_emit_verify_json_full(status_str, dctx, ces_final_leg, vstatus_leg, vmsg_leg, vf_func_leg, vf_ce_leg);
             if outcome != 0 {
                 return 1;
@@ -2686,11 +2740,19 @@ fn skill_json() -> String {
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--module-root <path>\",\n"));
-    r.push_str(String::from("          \"description\": \"Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. (default: (auto))\",\n"));
+    r.push_str(String::from("          \"description\": \"Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its use declarations. (default: (auto))\",\n"));
     r.push_str(String::from("          \"long\": \"--module-root\",\n"));
     r.push_str(String::from("          \"value_name\": \"path\",\n"));
     r.push_str(String::from("          \"value_kind\": \"string\",\n"));
     r.push_str(String::from("          \"default\": \"(auto)\"\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--jobs <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max test files compiled and run concurrently (default: min(num_cpus/2, 8) (1 with --verify))\",\n"));
+    r.push_str(String::from("          \"long\": \"--jobs\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": \"min(num_cpus/2, 8) (1 with --verify)\"\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--mode <debug|release>\",\n"));
@@ -2939,7 +3001,8 @@ fn skill_json() -> String {
     r.push_str(String::from("  \"test_options\": {\n"));
     r.push_str(String::from("    \"--verify\": \"Run ESBMC verification on test files\",\n"));
     r.push_str(String::from("    \"--filter <pat>\": \"Only run tests whose file stem contains pat (default: (none))\",\n"));
-    r.push_str(String::from("    \"--module-root <path>\": \"Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. (default: (auto))\",\n"));
+    r.push_str(String::from("    \"--module-root <path>\": \"Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its use declarations. (default: (auto))\",\n"));
+    r.push_str(String::from("    \"--jobs <N>\": \"Max test files compiled and run concurrently (default: min(num_cpus/2, 8) (1 with --verify))\",\n"));
     r.push_str(String::from("    \"--mode <debug|release>\": \"Build mode; debug inserts runtime vow checks (default: (default))\",\n"));
     r.push_str(String::from("    \"--timeout <ms>\": \"Per-test execution timeout in milliseconds (default: 30000)\",\n"));
     r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC incremental BMC max iterations (with --verify)\",\n"));
@@ -3078,6 +3141,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    ],\n"));
     r.push_str(String::from("    \"builtins\": {\n"));
     r.push_str(String::from("      \"pin_to_root\": \"fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []\",\n"));
+    r.push_str(String::from("      \"drop\": \"fn(value: L) -> () for a linear owner L []\",\n"));
     r.push_str(String::from("      \"print_str\": \"fn(s: String) -> () [io]\",\n"));
     r.push_str(String::from("      \"print_i64\": \"fn(v: i64) -> () [io]\",\n"));
     r.push_str(String::from("      \"print_u64\": \"fn(v: u64) -> () [io]\",\n"));
@@ -3175,7 +3239,6 @@ fn skill_json() -> String {
     r.push_str(String::from("      \"unary\": [\n"));
     r.push_str(String::from("        \"-\",\n"));
     r.push_str(String::from("        \"!\",\n"));
-    r.push_str(String::from("        \"&\",\n"));
     r.push_str(String::from("        \"?\"\n"));
     r.push_str(String::from("      ]\n"));
     r.push_str(String::from("    },\n"));
@@ -3350,7 +3413,8 @@ fn skill_human() -> String {
     r.push_str(String::from("TEST OPTIONS\n"));
     r.push_str(String::from("  --verify                Run ESBMC verification on test files\n"));
     r.push_str(String::from("  --filter <pat>          Only run tests whose file stem contains pat (default: (none))\n"));
-    r.push_str(String::from("  --module-root <path>    Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. (default: (auto))\n"));
+    r.push_str(String::from("  --module-root <path>    Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its use declarations. (default: (auto))\n"));
+    r.push_str(String::from("  --jobs <N>              Max test files compiled and run concurrently (default: min(num_cpus/2, 8) (1 with --verify))\n"));
     r.push_str(String::from("  --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))\n"));
     r.push_str(String::from("  --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)\n"));
     r.push_str(String::from("  --max-k-step <N>        ESBMC incremental BMC max iterations (with --verify)\n"));
@@ -3416,11 +3480,11 @@ fn skill_human() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("TYPES     : i8  i16  i32  i64  i128  u8  u16  u32  u64  u128  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>  BTreeMap<K, V>\n"));
     r.push_str(String::from("EFFECTS   : io  read  write  panic  unsafe\n"));
-    r.push_str(String::from("BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []   print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]\n"));
-    r.push_str(String::from("            print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: u64, len: u64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: u64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_poll_wait: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]\n"));
+    r.push_str(String::from("BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []   drop: fn(value: L) -> () for a linear owner L []   print_str: fn(s: String) -> () [io]\n"));
+    r.push_str(String::from("            print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: u64, len: u64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: u64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_poll_wait: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]\n"));
     r.push_str(String::from("METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/String::from_raw_parts_copy/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64\n"));
     r.push_str(String::from("            HashMap: HashMap::new/insert/get/contains_key/remove/len   BTreeMap: BTreeMap::new/insert/get/contains/len   Option: unwrap\n"));
-    r.push_str(String::from("OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?\n"));
+    r.push_str(String::from("OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! ?\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("VERIFICATION DEFAULTS (--max-k-step)\n"));
     r.push_str(String::from("  Strategy        : incremental-bmc (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)\n"));
@@ -3578,7 +3642,17 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("This resolves relative to the main source file. The module loader first uses\n"));
     r.push_str(String::from("`<rootdir>/foo/bar.vow.d` when that declaration stub exists, and otherwise\n"));
-    r.push_str(String::from("falls back to `<rootdir>/foo/bar.vow`.\n"));
+    r.push_str(String::from("falls back to `<rootdir>/foo/bar.vow`. If the stub's declarations carry a\n"));
+    r.push_str(String::from("`vow` block, the stub cannot be relied on: a bodyless declaration has no\n"));
+    r.push_str(String::from("implementation for the verifier to check a call site against, so a contract\n"));
+    r.push_str(String::from("there would otherwise be silently dropped from verification. In that case the\n"));
+    r.push_str(String::from("loader loads the sibling `<rootdir>/foo/bar.vow` source instead, where the\n"));
+    r.push_str(String::from("usual intra-module `requires`-as-assert/Caller-blame mechanism applies\n"));
+    r.push_str(String::from("unchanged. A stub whose declarations carry no `vow` block is unaffected and\n"));
+    r.push_str(String::from("is still preferred over source. A stub shipped with no sibling `.vow` source\n"));
+    r.push_str(String::from("at all (e.g. a library distributing only its interface) is also unaffected --\n"));
+    r.push_str(String::from("a call through it remains non-modelable in the verifier (`Skipped`, never\n"));
+    r.push_str(String::from("falsely `Verified`).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Const Declarations\n"));
     r.push_str(String::from("\n"));
@@ -3663,7 +3737,15 @@ fn skill_bundle() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`where` constraints on parameters become additional `requires` in verification. Each `where` clause can only reference its own parameter -- it cannot reference other parameters.\n"));
+    r.push_str(String::from("`where` constraints on parameters become additional `requires` in verification (and Caller-blame runtime checks under `--mode debug`). A `where` clause is checked exactly like a `requires` clause, in a scope holding **only its own parameter** plus module constants and functions:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("- It can only reference its own parameter. A sibling parameter or `result` is an undefined name (`TypeMismatch`, \"undefined variable\"), with a hint pointing at `requires`/`ensures` for conditions that span several parameters or the return value. Any other undefined name is the same error with the usual \"did you mean\" hint. This is a type error in both compilers; it never reaches IR lowering.\n"));
+    r.push_str(String::from("- It must evaluate to `bool` (`ContractTypeMismatch`, hint \"parameter `where` clauses must evaluate to `bool`\").\n"));
+    r.push_str(String::from("- It must be pure: no call to an effectful function and no heap write through an argument (`EffectViolation`, see \"Contract Purity\").\n"));
+    r.push_str(String::from("- It cannot contain a tuple expression (`UnsupportedFeature`, \"tuple expressions are not supported in contract predicates\").\n"));
+    r.push_str(String::from("- Integer literals are range-checked against the compared type, and the unsigned-comparison rules apply as in any other expression (`LiteralOutOfRange`, `TautologicalComparison`).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("On a declaration-only function (`fn f(x: i64 where x > 0) -> i64;`) and on the parameters of an `extern` function the clause is checked by the same rules but has no body to enforce it in: state the foreign function's real preconditions in its `vow` contract.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Public Functions\n"));
     r.push_str(String::from("\n"));
@@ -3692,7 +3774,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `f32`  | 32-bit float (limited support -- avoid in contracts) |\n"));
     r.push_str(String::from("| `f64`  | 64-bit float (limited support -- avoid in contracts) |\n"));
     r.push_str(String::from("| `bool` | Boolean                  |\n"));
-    r.push_str(String::from("| `()`   | Unit type                |\n"));
+    r.push_str(String::from("| `()`   | Unit type; its only value is also written `()` (not allowed as a parameter type) |\n"));
     r.push_str(String::from("| `!`    | Never type (diverges)    |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Vow targets 64-bit only and has no `isize`/`usize`. Excluding pointer-width\n"));
@@ -3726,16 +3808,33 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Type               | Description                     |\n"));
     r.push_str(String::from("|--------------------|---------------------------------|\n"));
-    r.push_str(String::from("| `Vec<T>`           | Growable array                  |\n"));
+    r.push_str(String::from("| `Vec<T>`           | Growable array. `T` must be non-linear (see [Linear Structs](#linear-structs)) |\n"));
     r.push_str(String::from("| `Option<T>`        | Optional value (Some/None)      |\n"));
     r.push_str(String::from("| `Result<T, E>`     | Success or error                |\n"));
     r.push_str(String::from("| `String`           | UTF-8 string (backed by Vec<u8>)|\n"));
     r.push_str(String::from("| `HashMap<K, V>`    | Key-value map (linear scan). `K` must be an integer type of at most 64 bits or `bool`; `V` may be any non-linear type except `i128`/`u128`/`f32`/`f64` |\n"));
     r.push_str(String::from("| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). `K` must be `i64`; `V` may be any non-linear type except `i128`/`u128`/`f32`/`f64` |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("### Slice Types\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The syntax `[T]` is not a type in Vow. It parses, but the type checker rejects it\n"));
+    r.push_str(String::from("wherever a type is written (parameter, return, field, enum payload, `let`\n"));
+    r.push_str(String::from("annotation, cast target, alias or constant) with `UnsupportedFeature` (\"slice types\n"));
+    r.push_str(String::from("(`[T]`) are not supported in Vow\"), once per bracket pair. No expression creates,\n"));
+    r.push_str(String::from("indexes, iterates or measures a slice, so no value of that type could exist. Use\n"));
+    r.push_str(String::from("`Vec<T>` to hold a sequence of values. See\n"));
+    r.push_str(String::from("[Slice types](errors.md#slice-types) for the diagnostic.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### User-Defined Types\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Structs and enums (see below).\n"));
+    r.push_str(String::from("Structs and enums (see below). A struct, enum or type alias may not be named after\n"));
+    r.push_str(String::from("a type the language already binds: a primitive type (`i64`, `bool`, `String`, ...)\n"));
+    r.push_str(String::from("or one of `Vec`, `Option`, `Result`, `HashMap`, `BTreeMap`. The declaration is\n"));
+    r.push_str(String::from("rejected with `UnsupportedFeature` (\"`Vec` is a builtin type name and cannot be\n"));
+    r.push_str(String::from("declared as a user type\"), because the resolver binds those names\n"));
+    r.push_str(String::from("before any user type and the user type would otherwise alias the builtin in some\n"));
+    r.push_str(String::from("positions and shadow it in others. See\n"));
+    r.push_str(String::from("[Reserved type names](errors.md#reserved-type-names) for the diagnostic.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Literals\n"));
     r.push_str(String::from("\n"));
@@ -4009,9 +4108,19 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("`||`, `&&`, comparisons (`== != < <= > >=`), `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Unary `-`, `!`, `&`, and `?` bind tighter than every binary operator.\n"));
+    r.push_str(String::from("Unary `-` and `!` bind tighter than every binary operator. The postfix forms\n"));
+    r.push_str(String::from("(`.field`, `.method()`, `[index]`, `(args)`, `?`, and `as Type`) bind tighter\n"));
+    r.push_str(String::from("still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is\n"));
+    r.push_str(String::from("`(a.len() as i64) + 1`.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs & rhs` is bitwise AND.\n"));
+    r.push_str(String::from("`&` is only the infix bitwise AND operator (`lhs & rhs`). There is no prefix\n"));
+    r.push_str(String::from("`&expr`: Vow has no borrow expressions, so `&x`, `&mut x`, `&&x` (and `x & &y`)\n"));
+    r.push_str(String::from("are `UnsupportedFeature` errors at the `&` (or `&&`) token, identically in both compilers (see\n"));
+    r.push_str(String::from("[errors.md](errors.md#unsupportedfeature)). Pass the value itself. The type\n"));
+    r.push_str(String::from("syntax `&T` is still accepted in signatures and annotations, but no expression\n"));
+    r.push_str(String::from("creates a value of that type: a `&T` parameter can only be passed on from\n"));
+    r.push_str(String::from("another `&T` parameter, so a program has no way to introduce one. Do not\n"));
+    r.push_str(String::from("declare reference-typed parameters.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Unary Operators\n"));
     r.push_str(String::from("\n"));
@@ -4019,8 +4128,40 @@ fn skill_bundle() -> String {
     r.push_str(String::from("|----------|------------|\n"));
     r.push_str(String::from("| `-`      | Negation (not allowed on unsigned types) |\n"));
     r.push_str(String::from("| `!`      | Logical NOT|\n"));
-    r.push_str(String::from("| `&`      | Borrow     |\n"));
-    r.push_str(String::from("| `?`      | Unwrap (propagate error) |\n"));
+    r.push_str(String::from("| `?`      | Unwrap (propagate error), postfix |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### Block-like Expressions and Parentheses\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`if`, `match`, `while`, `for`, `loop`, and a `{ ... }` block are *block-like*.\n"));
+    r.push_str(String::from("An unparenthesised block-like expression ends the expression it starts: no\n"));
+    r.push_str(String::from("postfix operator (`.`, `[`, `(`, `?`, `as`) and no binary operator may follow it\n"));
+    r.push_str(String::from("directly, so `if c { 1 } else { 2 } as u64` and `if c { 1 } else { 2 } + 1` are\n"));
+    r.push_str(String::from("parse errors. As the right operand of a binary operator or the operand of a\n"));
+    r.push_str(String::from("unary operator it is fine (`3 * if c { 1 } else { 2 }`), but it still ends the\n"));
+    r.push_str(String::from("whole expression, so `3 * if c { 1 } else { 2 } as u64` is a parse error too. A parenthesised\n"));
+    r.push_str(String::from("expression is a primary expression whatever it contains, so every operator may\n"));
+    r.push_str(String::from("follow it:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("let a: u64 = (if c { 1 } else { 2 }) as u64;\n"));
+    r.push_str(String::from("let b: i64 = (if c { 1 } else { 2 }) + 1;\n"));
+    r.push_str(String::from("let n: u64 = (if c { v } else { w }).len();\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Parentheses are not an AST node: the canonical printer re-inserts them exactly\n"));
+    r.push_str(String::from("where a block-like expression, a binary or unary expression, an assignment, or\n"));
+    r.push_str(String::from("`break`/`return` is the left operand of a binary operator or the receiver of a\n"));
+    r.push_str(String::from("postfix operator, so `parse -> print -> parse` is idempotent.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("An expression statement ends with `;`. Only two forms may omit it: the last\n"));
+    r.push_str(String::from("expression of a block (its value) and an unparenthesised block-like expression\n"));
+    r.push_str(String::from("(`if c { f(); } g();`). Any other statement without `;` is a parse error\n"));
+    r.push_str(String::from("(`UnexpectedToken`) at the next token, in both compilers, and parsing stops\n"));
+    r.push_str(String::from("there. A `let` statement's trailing `;` is optional.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A scalar type name after `as` (`i8` through `u128`, `f32`, `f64`, `bool`) never\n"));
+    r.push_str(String::from("takes generic arguments, so a following `<` is a comparison or shift:\n"));
+    r.push_str(String::from("`x as u64 < y` and `x as u64 << 1` mean `(x as u64) < y` and `(x as u64) << 1`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Type Cast\n"));
     r.push_str(String::from("\n"));
@@ -4354,9 +4495,24 @@ fn skill_bundle() -> String {
     r.push_str(String::from("Owned enum wrappers inherit that obligation transitively. A user enum,\n"));
     r.push_str(String::from("`Option<T>`, or `Result<T, E>` is linear when one of its owned payload paths is\n"));
     r.push_str(String::from("linear; matching such a value consumes the wrapper exactly once and transfers\n"));
-    r.push_str(String::from("the obligation to the selected bound payload. References remain borrows and do\n"));
-    r.push_str(String::from("not become linear owners. Collection types do not acquire linear ownership from\n"));
-    r.push_str(String::from("their element type; their separate non-linear-element restrictions still apply.\n"));
+    r.push_str(String::from("the obligation to the selected bound payload. A reference type (`&T`) is never a\n"));
+    r.push_str(String::from("linear owner. Collection types do not acquire linear ownership from\n"));
+    r.push_str(String::from("their element type, and they cannot hold linear values: a `Vec<T>` element, a\n"));
+    r.push_str(String::from("`HashMap<K, V>` value, or a `BTreeMap<K, V>` value that is or transitively\n"));
+    r.push_str(String::from("contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user\n"));
+    r.push_str(String::from("enum wrapping one) is rejected where the collection type is written. The\n"));
+    r.push_str(String::from("containers copy and shift entries bitwise, so storing a linear value would\n"));
+    r.push_str(String::from("duplicate its obligation or let it escape the checker. `Vec` and `HashMap` use\n"));
+    r.push_str(String::from("`UnsupportedFeature`; `BTreeMap` uses `BTreeMapValueMustBeNonLinear`. A nested\n"));
+    r.push_str(String::from("collection (`Vec<Vec<Token>>`) is reported once, at the innermost collection that\n"));
+    r.push_str(String::from("holds the linear value, and a type alias is reported once, at its definition. A\n"));
+    r.push_str(String::from("`Vec` element test is about ownership: `Vec<&Token>` borrows and is accepted,\n"));
+    r.push_str(String::from("while a tuple that holds a linear owner is rejected.\n"));
+    r.push_str(String::from("A linear value that is no longer needed is discharged with the intrinsic\n"));
+    r.push_str(String::from("`drop(value)` (see [Linear Intrinsics](#linear-intrinsics)). Passing it to a\n"));
+    r.push_str(String::from("function that consumes it, returning it, or matching it are the other ways to\n"));
+    r.push_str(String::from("satisfy the obligation; there is no implicit end-of-scope discharge, so a live\n"));
+    r.push_str(String::from("obligation at scope exit is `RegionLinear`.\n"));
     r.push_str(String::from("An unbound `_` match catchall cannot discard a still-reachable linear payload:\n"));
     r.push_str(String::from("every variant that owns a linear payload must first have an explicit arm that\n"));
     r.push_str(String::from("binds and consumes or transfers that payload.\n"));
@@ -4364,7 +4520,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("Struct fields cannot own linear values, even when the containing struct is\n"));
     r.push_str(String::from("`linear`, because field access does not provide move-out semantics. Allowing an\n"));
     r.push_str(String::from("owned field would let repeated reads transfer the same obligation more than\n"));
-    r.push_str(String::from("once. Borrowed references and collection fields do not become linear owners\n"));
+    r.push_str(String::from("once. Reference-typed (`&T`) and collection fields do not become linear owners\n"));
     r.push_str(String::from("under this rule.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Struct Literals\n"));
@@ -4374,6 +4530,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("let p: Point = Point { x: 1, y: 2 };\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Because of that, an identifier that does not start with an upper-case letter is\n"));
+    r.push_str(String::from("never a struct literal: in `while c { }` and `if c { }` the `{` opens the body.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Field Access\n"));
     r.push_str(String::from("\n"));
@@ -4541,6 +4700,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Key and value types.** The runtime stores each key and each value in one 64-bit slot and compares keys by value. A `HashMap` key must therefore be `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, or `bool`; every other key type is an `UnsupportedFeature` error in both compilers. `String`, `Vec`, struct, enum, `Option`, and tuple keys are heap-backed handles that would compare by pointer, so a lookup with an equal-but-distinct `String` would silently miss (and a mutable `String` mutated after insertion would corrupt the map). `i128`/`u128` keys would be truncated, and `f32`/`f64` have no total equality. Hash or intern such keys to a `u64` at the call site and keep a side table for the originals. A `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64` is likewise an `UnsupportedFeature` error: map values occupy a single 64-bit integer slot, so a 128-bit value would lose its high word and a float has no slot encoding. A `HashMap` value that is or transitively contains a `linear struct` is an `UnsupportedFeature` error for the same reason `BTreeMap` rejects it (`BTreeMapValueMustBeNonLinear`): the map copies values bitwise and `get` would hand out a second copy of the linear obligation. Narrow integer values (`i8` … `u32`) are stored widened and read back at their declared width. The check applies wherever the map type is written (annotations, parameters, returns, fields, aliases, constants), including nested inside `Vec`, `Option`, tuples, and other maps. A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("**Set idiom.** The unit type `()` is a valid map value, so `HashMap<K, ()>` and `BTreeMap<K, ()>` are sets: `s.insert(k, ());` adds a member, `s.contains_key(k)` (`s.contains(k)` for `BTreeMap`) tests membership, `s.remove(k)` deletes it, and `s.get(k)` returns `Option<()>`. The value `()` has type `()` (it checks against a `()` annotation or return type), and the runtime stores it in the usual 64-bit slot as `0`. A function cannot take a `()` parameter (`UnsupportedFeature`: the argument carries no information and has no ABI slot), so pass the set itself or a key instead.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("`HashMap::get` returns `Option<V>`, exactly like `BTreeMap::get`: a missing key is `None`, never a default value, so `let a: i64 = m.get(k);` is a `TypeMismatch` in both compilers. Handle both cases with `match` (or `?`), or call `.unwrap()` to assert the key is present: it aborts with `UnwrapOnNone` on a missing key and requires the `[panic]` effect. A contract can state a binding as `result.get(k).unwrap() == v`; guard it with an earlier `result.contains_key(k)` clause (as in the examples), because the verifier reports a missing key there as a failed `unwrap()` on `None`, which carries no contract blame.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### BTreeMap<K, V> Methods\n"));
@@ -4619,7 +4780,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("- `string_substr(s, start, len)` clamps `start` to `len()` and `len` to the bytes remaining after `start`.\n"));
     r.push_str(String::from("- `string_matches_literal_at` returns `0` when `pos` plus the literal's byte length exceeds `len()` (including when that sum overflows `u64`).\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` fails verification as `index out of bounds`, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values.\n"));
+    r.push_str(String::from("The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` fails verification as `index out of bounds`, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values. A length contract on the result, such as `ensures: result.len() <= s.len()`, proves.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64`. `push_byte` takes a byte *value*, not an offset, and is `u8` (see the String method table).\n"));
     r.push_str(String::from("\n"));
@@ -4722,6 +4883,14 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `pin_to_root`    | `fn(value: String) -> String` and `fn<T>(value: Vec<T>) -> Vec<T>` for flat scalar `T` | `[]` |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a flat scalar slot type (`i*`, `u*`, `f32`, `f64`, `bool`). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("#### Linear Intrinsics\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function         | Signature                                  | Effects    |\n"));
+    r.push_str(String::from("|------------------|--------------------------------------------|------------|\n"));
+    r.push_str(String::from("| `drop`           | `fn(value: L) -> ()` for a linear owner `L` | `[]`       |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`drop` is a compiler intrinsic, not a user-defined generic. `L` must be a linear owner: a `linear struct`, or an owned enum wrapper (`Option`, `Result`, or a user enum) that contains one. Any other argument type, or an argument count other than one, is a `TypeMismatch`. `drop` consumes the value exactly once (a second use is `LinearTypeViolation`) and discharges its obligation. It has no runtime effect beyond that: it runs no destructor, frees nothing, and lowers to no instruction other than the consume marker the type and region passes already track. It is verifier-neutral: the consume marker is a no-op in the C model, so a function that drops a linear value is verified exactly as if the call were absent. A user-defined function named `drop` takes precedence over the intrinsic.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.\n"));
     r.push_str(String::from("\n"));
@@ -5062,7 +5231,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `<path>`          | `.`         | Directory to scan or single `.vow` file    |\n"));
     r.push_str(String::from("| `--verify`        | (off)       | Run ESBMC verification on test files       |\n"));
     r.push_str(String::from("| `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |\n"));
-    r.push_str(String::from("| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. |\n"));
+    r.push_str(String::from("| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its `use` declarations. |\n"));
+    r.push_str(String::from("| `--jobs <N>`      | `min(num_cpus/2, 8)` (`1` with `--verify`) | Max test files compiled and run concurrently |\n"));
     r.push_str(String::from("| `--mode debug`    | (default)   | Insert runtime vow checks                 |\n"));
     r.push_str(String::from("| `--mode release`  | `debug`     | Omit all vow checks for performance       |\n"));
     r.push_str(String::from("| `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |\n"));
@@ -5071,7 +5241,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). Single-file invocations (`vow test path/to/test_foo.vow`) keep the default behaviour of resolving `use` against the file's parent directory.\n"));
+    r.push_str(String::from("**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). A single-file invocation without `--module-root` (`vow test compiler/tests/test_region.vow`) infers the module root the same way: starting at the file's own directory and walking up through its ancestors, it picks the nearest directory against which every `use` declaration of the file resolves (to `<path>.vow`, or `<path>.vow.d`). The walk stops after the first directory that contains `.git` (the repository root), at a `..` path component, or at `.` / `/`. If the file's own directory already resolves every `use`, if the file has no `use` declarations, or if no directory resolves them all, the file's parent directory is used and any unresolved module is reported as an ordinary `IoError`. When the file's own directory does not shadow a module of the tree, the inferred root is the one the directory form would use, so the test gives the same result in both forms; a module in the file's own directory takes precedence over one in an ancestor. This rule applies to `vow test` only; `vow build` and `vow verify` keep resolving `use` against the entry file's parent directory. This existence-only walk never inspects file contents, so it is unaffected by the `.vow.d` stub-vs-source contract fallback described under [Use Declarations](grammar.md#use-declarations): that check only runs once a concrete `use` is actually loaded for a build/verify/test run, not during root inference's probing of candidate directories.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Concurrency.** Test files in a scan run concurrently, at most `--jobs` at a time, and the `tests` array is always in sorted-path order regardless of completion order. A test's `duration_ms` covers its own compile, verification, and execution. Beyond the first, a worker starts a new file only while the machine is not under memory or IO stall pressure (Linux PSI `/proc/pressure/memory` `some avg10` and `/proc/pressure/io` `full avg10`, both below 20), so a loaded machine degrades to fewer workers rather than thrashing; with no PSI available the limit is just `--jobs`. `--jobs 1` runs files strictly one after another. The self-hosted compiler runs each file of a concurrent scan in a worker subprocess of itself, using an internal `--worker-entry` flag whose output is not part of the CLI contract; a worker that dies without a result is reported as a `compile_error` entry so the suite stays fail-closed.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Test Output JSON:**\n"));
     r.push_str(String::from("\n"));
@@ -5233,7 +5405,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("|-----------------|---------------------------------------------|\n"));
     r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
-    r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
+    r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `LinearBorrow`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
     r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
@@ -5285,7 +5457,20 @@ fn skill_bundle() -> String {
     r.push_str(String::from("{\n"));
     r.push_str(String::from("  \"status\": \"VerifyFailed\",\n"));
     r.push_str(String::from("  \"executable\": \"examples/cegis_broken\",\n"));
-    r.push_str(String::from("  \"diagnostics\": [],\n"));
+    r.push_str(String::from("  \"diagnostics\": [\n"));
+    r.push_str(String::from("    {\n"));
+    r.push_str(String::from("      \"error_code\": \"VowEnsuresViolated\",\n"));
+    r.push_str(String::from("      \"message\": \"contract violation in `safe_sub`: ensures result >= 0\",\n"));
+    r.push_str(String::from("      \"severity\": \"error\",\n"));
+    r.push_str(String::from("      \"span\": {\n"));
+    r.push_str(String::from("        \"file\": \"examples/cegis_broken.vow\",\n"));
+    r.push_str(String::from("        \"offset\": 76,\n"));
+    r.push_str(String::from("        \"length\": 20\n"));
+    r.push_str(String::from("      },\n"));
+    r.push_str(String::from("      \"hints\": [\"function `safe_sub` failed to establish its postcondition\"],\n"));
+    r.push_str(String::from("      \"blame\": \"callee\"\n"));
+    r.push_str(String::from("    }\n"));
+    r.push_str(String::from("  ],\n"));
     r.push_str(String::from("  \"function\": \"safe_sub\",\n"));
     r.push_str(String::from("  \"counterexample\": \"[Counterexample]\",\n"));
     r.push_str(String::from("  \"counterexamples\": [\n"));
@@ -5304,6 +5489,25 @@ fn skill_bundle() -> String {
     r.push_str(String::from("  ]\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Every counterexample also yields one `error` diagnostic, appended after any\n"));
+    r.push_str(String::from("warnings. Its code follows the counterexample's `blame` (`caller` →\n"));
+    r.push_str(String::from("`VowRequiresViolated`, `callee` → `VowEnsuresViolated`; a failed `invariant` is\n"));
+    r.push_str(String::from("callee-blamed, so it reports `VowEnsuresViolated`), or is\n"));
+    r.push_str(String::from("`VerifierAssertionUnattributed` when the failure is not attributed to a vow\n"));
+    r.push_str(String::from("clause. The `message` is ``contract violation in `<function>`: <violation>`` (or\n"));
+    r.push_str(String::from("``verification failed in `<function>` on an unattributed property: <violation>``),\n"));
+    r.push_str(String::from("`span` is the counterexample's `source` (an empty file and zero offset/length\n"));
+    r.push_str(String::from("when `source` is `null`), `secondary` lists the counterexample's `call_sites`,\n"));
+    r.push_str(String::from("and `hints` name the failing function and, for caller blame, each violating\n"));
+    r.push_str(String::from("argument. A `timeout`, `unknown`, `error` or `panicked` outcome has no\n"));
+    r.push_str(String::from("counterexample and adds no such diagnostic. Both compilers emit the same\n"));
+    r.push_str(String::from("`diagnostics[]`, `counterexample` and `counterexamples[]` for the same source;\n"));
+    r.push_str(String::from("the only fields that are not specified byte for byte are `verify_message`\n"));
+    r.push_str(String::from("(ESBMC's free text) and `values` entries named `$esbmc$...` (solver temporaries).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A diagnostic's `span` is exactly `{file, offset, length}`: positions are byte\n"));
+    r.push_str(String::from("offsets, and neither compiler adds line or column fields.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("For caller-blame failures where a verified function violates a callee's\n"));
     r.push_str(String::from("`requires` clause, the counterexample reports the callee clause in `violation`\n"));
@@ -5327,7 +5531,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |\n"));
     r.push_str(String::from("| `message`          | string              | CompileFailed     | Compatibility error category/detail (for example \"parse error\", \"type error\", \"module load error\", backend/link detail, or \"failed to emit frontend diagnostics: {io_error}\"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |\n"));
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
-    r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
+    r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string: `\"[Counterexample]\"` when ESBMC produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>`, ...) |\n"));
     r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |\n"));
     r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"unknown\"`, `\"error\"`, `\"tool_not_found\"`, or `\"panicked\"` (verifier worker thread crashed -- no counterexample available) |\n"));
     r.push_str(String::from("| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |\n"));
@@ -5442,7 +5646,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |\n"));
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
-    r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `Linear*` consume/borrow, `RemF*`) or the function has effects. (Struct construction and field ops are modelled -- see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
+    r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `LinearBorrow`, `RemF*`) or the function has effects. (Struct construction and field ops are modelled -- see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
     r.push_str(String::from("| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously -- ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g. the BV→IR fallback) may never report a weakened check as `proven` are the verifier's soundness discipline -- the safe-vs-unsafe retry rules are specified in `docs/verifier-discipline.md`.\n"));
@@ -5739,7 +5943,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Tuples are not first-class values (see the `let` tuple-pattern rules in `grammar.md`), so a\n"));
     r.push_str(String::from("tuple expression, including the empty tuple `()`, cannot appear anywhere inside a `requires`,\n"));
-    r.push_str(String::from("`ensures` or `invariant` clause -- not as a comparison operand (`requires: t != (1, 2)`) and not as\n"));
+    r.push_str(String::from("`ensures` or `invariant` clause, or in a parameter `where` clause -- not as a comparison operand (`requires: t != (1, 2)`) and not as\n"));
     r.push_str(String::from("the initializer of a `let` inside a clause block. Both compilers reject it at type-check time with\n"));
     r.push_str(String::from("`UnsupportedFeature` (\"tuple expressions are not supported in contract predicates\") at the\n"));
     r.push_str(String::from("tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.\n"));
@@ -5908,7 +6112,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Each `where` clause can only reference its own parameter.\n"));
+    r.push_str(String::from("Each `where` clause can only reference its own parameter (a sibling parameter or `result` is an undefined-variable `TypeMismatch`), and it obeys the same rules as a `requires` clause: it must be a pure `bool` predicate with no tuple expression. See `grammar.md` → \"Where Clauses\" for the full list.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Anti-Patterns\n"));
     r.push_str(String::from("\n"));
@@ -6658,6 +6862,11 @@ fn skill_bundle() -> String {
     r.push_str(String::from("**Fix:** Change the expression or declared type to match. For an enum pattern,\n"));
     r.push_str(String::from("qualify the variant with the scrutinee's enum name.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("The `drop` intrinsic also reports `TypeMismatch` when it is called with an argument\n"));
+    r.push_str(String::from("count other than one or with a value that is not a linear owner\n"));
+    r.push_str(String::from("(``drop requires a linear value, found `i64` ``); see\n"));
+    r.push_str(String::from("[Linear Intrinsics](grammar.md#linear-intrinsics).\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::truncate`\n"));
     r.push_str(String::from("argument must have exactly the type `u64`. An index of any other integer type\n"));
     r.push_str(String::from("(for example an `i64` counter) or of a non-integer type is a `TypeMismatch`\n"));
@@ -6698,6 +6907,18 @@ fn skill_bundle() -> String {
     r.push_str(String::from("**Output:** `cannot infer the collection type of the receiver of `insert`: annotate its binding with a full type`\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Annotate the binding: `let m: HashMap<i64, i64> = HashMap::new();`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("An undefined name is a `TypeMismatch` whose message begins `undefined variable`, in both compilers, and the expression then has an error type so it does not cascade into further type errors. A parameter `where` clause is name-resolved in a scope holding only its own parameter, so a sibling parameter or `result` is an undefined name there; the hint says to move such a condition to `requires`/`ensures`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn ordered(a: i64, b: i64 where b > a) -> i64 {\n"));
+    r.push_str(String::from("    b\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** ``undefined variable `a` ``, hint ``a `where` clause can only reference its own parameter `b`; put a condition on several parameters in `requires` ``\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** State the condition in `requires: b > a`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### LiteralOutOfRange\n"));
     r.push_str(String::from("\n"));
@@ -6795,7 +7016,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("### EffectViolation\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Type Checker\n"));
-    r.push_str(String::from("**Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write -- not the caller.\n"));
+    r.push_str(String::from("**Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause or parameter `where` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write -- not the caller.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn f() -> () {\n"));
@@ -6845,7 +7066,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Restructure ownership so each path uses a consumed linear value at most\n"));
-    r.push_str(String::from("once. Keep linear owners out of struct fields until move-out field access is\n"));
+    r.push_str(String::from("once. Discharge a value that is no longer needed with `drop(value)`. Keep linear owners out of struct fields until move-out field access is\n"));
     r.push_str(String::from("supported. In a match, add explicit arms that bind and consume or transfer every\n"));
     r.push_str(String::from("linear payload before using `_`. Obligations that are simply left live at scope\n"));
     r.push_str(String::from("exit are reported later as `RegionLinear`.\n"));
@@ -6995,7 +7216,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### UnsupportedFeature\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Phase:** Type Checker\n"));
+    r.push_str(String::from("**Phase:** Parser (`&expr`), Type Checker (everything else)\n"));
     r.push_str(String::from("**Meaning:** A language feature that is not supported in Vow was used, or a `HashMap`/`BTreeMap` was written with a key or value type the runtime cannot store (see [Map key and value types](#map-key-and-value-types)).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
@@ -7007,6 +7228,21 @@ fn skill_bundle() -> String {
     r.push_str(String::from("**Output:** `trait blocks are not supported in Vow`\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A prefix `&expr` (or `&mut expr`, `&&expr`) borrow expression is rejected by the parser, at the `&` or `&&` token, with\n"));
+    r.push_str(String::from("the hint ``Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise\n"));
+    r.push_str(String::from("AND operator``; the operand is still parsed, so the diagnostic is reported once:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn f(x: i64) -> i64 {\n"));
+    r.push_str(String::from("    let r: i64 = &x;\n"));
+    r.push_str(String::from("    r\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** ``borrow expressions (`&expr`) are not supported in Vow``\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Use the value directly. `&` is the bitwise AND operator between two operands (`x & 1`).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("A tuple expression, including the empty tuple `()`, inside a contract clause is also\n"));
     r.push_str(String::from("`UnsupportedFeature`, because tuples have no runtime or verifier representation:\n"));
@@ -7036,6 +7272,58 @@ fn skill_bundle() -> String {
     r.push_str(String::from("**Output:** ``HashMap key type `String` is not supported: keys are compared by value as a single machine word``\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Hash or intern the key to a `u64` at the call site and keep a side table for the originals. For a 128-bit value, store the two `u64` halves separately. For a linear value, keep it in a local binding and store only an integer handle in the map.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("#### Linear collection elements\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking. A reference element (`Vec<&Token>`) borrows rather than owns and is accepted; a nested collection is reported once, where the innermost `Vec` is written, and a type alias once, at its definition.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("linear struct Token { id: i64 }\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("fn f() -> () {\n"));
+    r.push_str(String::from("    let v: Vec<Token> = Vec::new();\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** `Vec element type must be non-linear; found 'Token'`\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Keep the linear value in a local binding and store an integer handle in the `Vec`. Consume a linear value that is no longer needed with `drop(value)`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("#### Slice types\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The same code reports a slice type `[T]` (see [Slice Types](grammar.md#slice-types)). Each bracket pair is reported once (`[[i64]]` gives two diagnostics, an alias once at its definition), with the hint ``use `Vec<T>` to hold a sequence of values``.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn probe(sl: [i64]) -> i64 { 0 }\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** ``slice types (`[T]`) are not supported in Vow``\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Take a `Vec<T>` instead.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("#### Reserved type names\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The same code reports a `struct`, `enum` or `type` alias named after a builtin type (see [User-Defined Types](grammar.md#user-defined-types)). It is reported once per declaration, at the declaration, with the hint `choose a different name for this type`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("struct Vec { x: i64 }\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** `` `Vec` is a builtin type name and cannot be declared as a user type ``\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Rename the type.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("#### Unit parameters\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The same code reports a parameter of type `()` (directly or through a type alias). The unit value carries no information and has no ABI slot, so such a parameter is rejected at the declaration.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn f(u: ()) -> i64 { 0 }\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** ``parameter `u` has type `()`: unit parameters are not supported``\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Remove the parameter.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.\n"));
     r.push_str(String::from("\n"));
@@ -7089,7 +7377,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("### ContractTypeMismatch\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Type Checker\n"));
-    r.push_str(String::from("**Meaning:** A `requires`, `ensures`, or `invariant` clause expression does not have type `bool`.\n"));
+    r.push_str(String::from("**Meaning:** A `requires`, `ensures`, or `invariant` clause expression, or a parameter `where` clause, does not have type `bool`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn add(a: i64, b: i64) -> i64 vow {\n"));
@@ -7264,7 +7552,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("### VerificationSkipped\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)\n"));
-    r.push_str(String::from("**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent -- most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `Linear*` family. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.\n"));
+    r.push_str(String::from("**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent -- most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```json\n"));
     r.push_str(String::from("{\n"));
@@ -7364,6 +7652,11 @@ fn skill_bundle() -> String {
     r.push_str(String::from("```json\n"));
     r.push_str(String::from("{\"error\":\"VowViolation\",\"vow_id\":0,\"blame\":\"Caller\",\"description\":\"y != 0\",\"file\":\"divide.vow\",\"offset\":42,\"values\":{\"y\":0}}\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`file` is the source file that defines the violated clause (the module file for a\n"));
+    r.push_str(String::from("clause in an imported module, not the entry file) and `offset` is the byte offset\n"));
+    r.push_str(String::from("at which that clause starts. Both compilers report the same `file` and `offset`\n"));
+    r.push_str(String::from("for the same program, never an empty placeholder.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("The `blame` field indicates who is at fault:\n"));
     r.push_str(String::from("- `Caller` -- a `requires` was violated (the caller passed bad arguments)\n"));
@@ -7520,7 +7813,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("`use` declarations resolve to a single directory: `use foo` loads\n"));
     r.push_str(String::from("`<dir>/foo.vow.d` when that declaration stub exists, and otherwise loads\n"));
     r.push_str(String::from("`<dir>/foo.vow`, where `<dir>` is the directory of the **entry file** passed to\n"));
-    r.push_str(String::from("`vow build`/`vow verify`.\n"));
+    r.push_str(String::from("`vow build`/`vow verify`. A stub is used only when none of its declarations\n"));
+    r.push_str(String::from("carry a `vow` block -- otherwise the sibling `<dir>/foo.vow` source is loaded\n"));
+    r.push_str(String::from("instead, so a declaration's contract is never silently dropped from\n"));
+    r.push_str(String::from("verification (a bodyless declaration cannot be checked at a call site).\n"));
     r.push_str(String::from("All transitive `use`s in dependency modules resolve against that **same** directory.\n"));
     r.push_str(String::from("There is no search path, and `--module-root` is only available on `vow test` -- not\n"));
     r.push_str(String::from("`vow build` or `vow verify`.\n"));
@@ -8714,10 +9010,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("          },\n"));
     r.push_str(String::from("          \"additionalProperties\": false\n"));
     r.push_str(String::from("        },\n"));
-    r.push_str(String::from("        { \"type\": \"string\" },\n"));
     r.push_str(String::from("        { \"type\": \"null\" }\n"));
     r.push_str(String::from("      ],\n"));
-    r.push_str(String::from("      \"description\": \"Source location of the violated vow clause; Rust emits a span object, self-hosted emits the source path string\"\n"));
+    r.push_str(String::from("      \"description\": \"Source location of the violated vow clause, identical in both compilers; null when the failure cannot be attributed to a vow clause\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"blame\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
@@ -8822,6 +9117,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"LinearTypeViolation\",\n"));
     r.push_str(String::from("        \"NonExhaustiveMatch\",\n"));
     r.push_str(String::from("        \"UnsupportedPattern\",\n"));
+    r.push_str(String::from("        \"LiteralOutOfRange\",\n"));
+    r.push_str(String::from("        \"NarrowingCastNotAllowed\",\n"));
+    r.push_str(String::from("        \"ShiftCountOutOfRange\",\n"));
+    r.push_str(String::from("        \"TautologicalComparison\",\n"));
     r.push_str(String::from("        \"ImmutableAssignment\",\n"));
     r.push_str(String::from("        \"UnusedMut\",\n"));
     r.push_str(String::from("        \"VowRequiresViolated\",\n"));
@@ -8829,6 +9128,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"VowInvariantViolated\",\n"));
     r.push_str(String::from("        \"UnknownMethod\",\n"));
     r.push_str(String::from("        \"UnsupportedFeature\",\n"));
+    r.push_str(String::from("        \"BTreeMapKeyTypeMustBeI64\",\n"));
+    r.push_str(String::from("        \"BTreeMapValueMustBeNonLinear\",\n"));
     r.push_str(String::from("        \"LoweringWarning\",\n"));
     r.push_str(String::from("        \"MissingContract\",\n"));
     r.push_str(String::from("        \"ContractTypeMismatch\",\n"));
@@ -8838,8 +9139,11 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"CodegenFailed\",\n"));
     r.push_str(String::from("        \"LinkFailed\",\n"));
     r.push_str(String::from("        \"RegionConflict\",\n"));
+    r.push_str(String::from("        \"RegionLiteralMutation\",\n"));
     r.push_str(String::from("        \"RegionLinear\",\n"));
     r.push_str(String::from("        \"RegionRootEscape\",\n"));
+    r.push_str(String::from("        \"VerificationSkipped\",\n"));
+    r.push_str(String::from("        \"ArithOverflowReachable\",\n"));
     r.push_str(String::from("        \"VerifierAssertionUnattributed\",\n"));
     r.push_str(String::from("        \"ModelCapacityAssumed\"\n"));
     r.push_str(String::from("      ],\n"));
@@ -8854,7 +9158,25 @@ fn skill_bundle() -> String {
     r.push_str(String::from("      \"enum\": [\"error\", \"warning\", \"note\"],\n"));
     r.push_str(String::from("      \"description\": \"Diagnostic severity\"\n"));
     r.push_str(String::from("    },\n"));
-    r.push_str(String::from("    \"span\": {\n"));
+    r.push_str(String::from("    \"span\": { \"$ref\": \"#/$defs/Span\" },\n"));
+    r.push_str(String::from("    \"hints\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"items\": { \"type\": \"string\" },\n"));
+    r.push_str(String::from("      \"description\": \"Actionable suggestions for fixing the diagnostic; omitted when there are none\"\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"secondary\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"items\": { \"$ref\": \"#/$defs/Span\" },\n"));
+    r.push_str(String::from("      \"description\": \"Related source locations (for a caller-blame contract violation, the call sites); omitted when there are none\"\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"blame\": {\n"));
+    r.push_str(String::from("      \"type\": \"string\",\n"));
+    r.push_str(String::from("      \"enum\": [\"caller\", \"callee\"],\n"));
+    r.push_str(String::from("      \"description\": \"Who is responsible for a contract violation; omitted when no party is at fault\"\n"));
+    r.push_str(String::from("    }\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"$defs\": {\n"));
+    r.push_str(String::from("    \"Span\": {\n"));
     r.push_str(String::from("      \"type\": \"object\",\n"));
     r.push_str(String::from("      \"required\": [\"file\", \"offset\", \"length\"],\n"));
     r.push_str(String::from("      \"properties\": {\n"));
@@ -9144,7 +9466,17 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("This resolves relative to the main source file. The module loader first uses\n"));
     r.push_str(String::from("`<rootdir>/foo/bar.vow.d` when that declaration stub exists, and otherwise\n"));
-    r.push_str(String::from("falls back to `<rootdir>/foo/bar.vow`.\n"));
+    r.push_str(String::from("falls back to `<rootdir>/foo/bar.vow`. If the stub's declarations carry a\n"));
+    r.push_str(String::from("`vow` block, the stub cannot be relied on: a bodyless declaration has no\n"));
+    r.push_str(String::from("implementation for the verifier to check a call site against, so a contract\n"));
+    r.push_str(String::from("there would otherwise be silently dropped from verification. In that case the\n"));
+    r.push_str(String::from("loader loads the sibling `<rootdir>/foo/bar.vow` source instead, where the\n"));
+    r.push_str(String::from("usual intra-module `requires`-as-assert/Caller-blame mechanism applies\n"));
+    r.push_str(String::from("unchanged. A stub whose declarations carry no `vow` block is unaffected and\n"));
+    r.push_str(String::from("is still preferred over source. A stub shipped with no sibling `.vow` source\n"));
+    r.push_str(String::from("at all (e.g. a library distributing only its interface) is also unaffected --\n"));
+    r.push_str(String::from("a call through it remains non-modelable in the verifier (`Skipped`, never\n"));
+    r.push_str(String::from("falsely `Verified`).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Const Declarations\n"));
     r.push_str(String::from("\n"));
@@ -9229,7 +9561,15 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`where` constraints on parameters become additional `requires` in verification. Each `where` clause can only reference its own parameter -- it cannot reference other parameters.\n"));
+    r.push_str(String::from("`where` constraints on parameters become additional `requires` in verification (and Caller-blame runtime checks under `--mode debug`). A `where` clause is checked exactly like a `requires` clause, in a scope holding **only its own parameter** plus module constants and functions:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("- It can only reference its own parameter. A sibling parameter or `result` is an undefined name (`TypeMismatch`, \"undefined variable\"), with a hint pointing at `requires`/`ensures` for conditions that span several parameters or the return value. Any other undefined name is the same error with the usual \"did you mean\" hint. This is a type error in both compilers; it never reaches IR lowering.\n"));
+    r.push_str(String::from("- It must evaluate to `bool` (`ContractTypeMismatch`, hint \"parameter `where` clauses must evaluate to `bool`\").\n"));
+    r.push_str(String::from("- It must be pure: no call to an effectful function and no heap write through an argument (`EffectViolation`, see \"Contract Purity\").\n"));
+    r.push_str(String::from("- It cannot contain a tuple expression (`UnsupportedFeature`, \"tuple expressions are not supported in contract predicates\").\n"));
+    r.push_str(String::from("- Integer literals are range-checked against the compared type, and the unsigned-comparison rules apply as in any other expression (`LiteralOutOfRange`, `TautologicalComparison`).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("On a declaration-only function (`fn f(x: i64 where x > 0) -> i64;`) and on the parameters of an `extern` function the clause is checked by the same rules but has no body to enforce it in: state the foreign function's real preconditions in its `vow` contract.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Public Functions\n"));
     r.push_str(String::from("\n"));
@@ -9258,7 +9598,7 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("| `f32`  | 32-bit float (limited support -- avoid in contracts) |\n"));
     r.push_str(String::from("| `f64`  | 64-bit float (limited support -- avoid in contracts) |\n"));
     r.push_str(String::from("| `bool` | Boolean                  |\n"));
-    r.push_str(String::from("| `()`   | Unit type                |\n"));
+    r.push_str(String::from("| `()`   | Unit type; its only value is also written `()` (not allowed as a parameter type) |\n"));
     r.push_str(String::from("| `!`    | Never type (diverges)    |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Vow targets 64-bit only and has no `isize`/`usize`. Excluding pointer-width\n"));
@@ -9292,16 +9632,33 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Type               | Description                     |\n"));
     r.push_str(String::from("|--------------------|---------------------------------|\n"));
-    r.push_str(String::from("| `Vec<T>`           | Growable array                  |\n"));
+    r.push_str(String::from("| `Vec<T>`           | Growable array. `T` must be non-linear (see [Linear Structs](#linear-structs)) |\n"));
     r.push_str(String::from("| `Option<T>`        | Optional value (Some/None)      |\n"));
     r.push_str(String::from("| `Result<T, E>`     | Success or error                |\n"));
     r.push_str(String::from("| `String`           | UTF-8 string (backed by Vec<u8>)|\n"));
     r.push_str(String::from("| `HashMap<K, V>`    | Key-value map (linear scan). `K` must be an integer type of at most 64 bits or `bool`; `V` may be any non-linear type except `i128`/`u128`/`f32`/`f64` |\n"));
     r.push_str(String::from("| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). `K` must be `i64`; `V` may be any non-linear type except `i128`/`u128`/`f32`/`f64` |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("### Slice Types\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The syntax `[T]` is not a type in Vow. It parses, but the type checker rejects it\n"));
+    r.push_str(String::from("wherever a type is written (parameter, return, field, enum payload, `let`\n"));
+    r.push_str(String::from("annotation, cast target, alias or constant) with `UnsupportedFeature` (\"slice types\n"));
+    r.push_str(String::from("(`[T]`) are not supported in Vow\"), once per bracket pair. No expression creates,\n"));
+    r.push_str(String::from("indexes, iterates or measures a slice, so no value of that type could exist. Use\n"));
+    r.push_str(String::from("`Vec<T>` to hold a sequence of values. See\n"));
+    r.push_str(String::from("[Slice types](errors.md#slice-types) for the diagnostic.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### User-Defined Types\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Structs and enums (see below).\n"));
+    r.push_str(String::from("Structs and enums (see below). A struct, enum or type alias may not be named after\n"));
+    r.push_str(String::from("a type the language already binds: a primitive type (`i64`, `bool`, `String`, ...)\n"));
+    r.push_str(String::from("or one of `Vec`, `Option`, `Result`, `HashMap`, `BTreeMap`. The declaration is\n"));
+    r.push_str(String::from("rejected with `UnsupportedFeature` (\"`Vec` is a builtin type name and cannot be\n"));
+    r.push_str(String::from("declared as a user type\"), because the resolver binds those names\n"));
+    r.push_str(String::from("before any user type and the user type would otherwise alias the builtin in some\n"));
+    r.push_str(String::from("positions and shadow it in others. See\n"));
+    r.push_str(String::from("[Reserved type names](errors.md#reserved-type-names) for the diagnostic.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Literals\n"));
     r.push_str(String::from("\n"));
@@ -9575,9 +9932,19 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("`||`, `&&`, comparisons (`== != < <= > >=`), `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Unary `-`, `!`, `&`, and `?` bind tighter than every binary operator.\n"));
+    r.push_str(String::from("Unary `-` and `!` bind tighter than every binary operator. The postfix forms\n"));
+    r.push_str(String::from("(`.field`, `.method()`, `[index]`, `(args)`, `?`, and `as Type`) bind tighter\n"));
+    r.push_str(String::from("still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is\n"));
+    r.push_str(String::from("`(a.len() as i64) + 1`.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs & rhs` is bitwise AND.\n"));
+    r.push_str(String::from("`&` is only the infix bitwise AND operator (`lhs & rhs`). There is no prefix\n"));
+    r.push_str(String::from("`&expr`: Vow has no borrow expressions, so `&x`, `&mut x`, `&&x` (and `x & &y`)\n"));
+    r.push_str(String::from("are `UnsupportedFeature` errors at the `&` (or `&&`) token, identically in both compilers (see\n"));
+    r.push_str(String::from("[errors.md](errors.md#unsupportedfeature)). Pass the value itself. The type\n"));
+    r.push_str(String::from("syntax `&T` is still accepted in signatures and annotations, but no expression\n"));
+    r.push_str(String::from("creates a value of that type: a `&T` parameter can only be passed on from\n"));
+    r.push_str(String::from("another `&T` parameter, so a program has no way to introduce one. Do not\n"));
+    r.push_str(String::from("declare reference-typed parameters.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Unary Operators\n"));
     r.push_str(String::from("\n"));
@@ -9585,8 +9952,40 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("|----------|------------|\n"));
     r.push_str(String::from("| `-`      | Negation (not allowed on unsigned types) |\n"));
     r.push_str(String::from("| `!`      | Logical NOT|\n"));
-    r.push_str(String::from("| `&`      | Borrow     |\n"));
-    r.push_str(String::from("| `?`      | Unwrap (propagate error) |\n"));
+    r.push_str(String::from("| `?`      | Unwrap (propagate error), postfix |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### Block-like Expressions and Parentheses\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`if`, `match`, `while`, `for`, `loop`, and a `{ ... }` block are *block-like*.\n"));
+    r.push_str(String::from("An unparenthesised block-like expression ends the expression it starts: no\n"));
+    r.push_str(String::from("postfix operator (`.`, `[`, `(`, `?`, `as`) and no binary operator may follow it\n"));
+    r.push_str(String::from("directly, so `if c { 1 } else { 2 } as u64` and `if c { 1 } else { 2 } + 1` are\n"));
+    r.push_str(String::from("parse errors. As the right operand of a binary operator or the operand of a\n"));
+    r.push_str(String::from("unary operator it is fine (`3 * if c { 1 } else { 2 }`), but it still ends the\n"));
+    r.push_str(String::from("whole expression, so `3 * if c { 1 } else { 2 } as u64` is a parse error too. A parenthesised\n"));
+    r.push_str(String::from("expression is a primary expression whatever it contains, so every operator may\n"));
+    r.push_str(String::from("follow it:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("let a: u64 = (if c { 1 } else { 2 }) as u64;\n"));
+    r.push_str(String::from("let b: i64 = (if c { 1 } else { 2 }) + 1;\n"));
+    r.push_str(String::from("let n: u64 = (if c { v } else { w }).len();\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Parentheses are not an AST node: the canonical printer re-inserts them exactly\n"));
+    r.push_str(String::from("where a block-like expression, a binary or unary expression, an assignment, or\n"));
+    r.push_str(String::from("`break`/`return` is the left operand of a binary operator or the receiver of a\n"));
+    r.push_str(String::from("postfix operator, so `parse -> print -> parse` is idempotent.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("An expression statement ends with `;`. Only two forms may omit it: the last\n"));
+    r.push_str(String::from("expression of a block (its value) and an unparenthesised block-like expression\n"));
+    r.push_str(String::from("(`if c { f(); } g();`). Any other statement without `;` is a parse error\n"));
+    r.push_str(String::from("(`UnexpectedToken`) at the next token, in both compilers, and parsing stops\n"));
+    r.push_str(String::from("there. A `let` statement's trailing `;` is optional.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A scalar type name after `as` (`i8` through `u128`, `f32`, `f64`, `bool`) never\n"));
+    r.push_str(String::from("takes generic arguments, so a following `<` is a comparison or shift:\n"));
+    r.push_str(String::from("`x as u64 < y` and `x as u64 << 1` mean `(x as u64) < y` and `(x as u64) << 1`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Type Cast\n"));
     r.push_str(String::from("\n"));
@@ -9920,9 +10319,24 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("Owned enum wrappers inherit that obligation transitively. A user enum,\n"));
     r.push_str(String::from("`Option<T>`, or `Result<T, E>` is linear when one of its owned payload paths is\n"));
     r.push_str(String::from("linear; matching such a value consumes the wrapper exactly once and transfers\n"));
-    r.push_str(String::from("the obligation to the selected bound payload. References remain borrows and do\n"));
-    r.push_str(String::from("not become linear owners. Collection types do not acquire linear ownership from\n"));
-    r.push_str(String::from("their element type; their separate non-linear-element restrictions still apply.\n"));
+    r.push_str(String::from("the obligation to the selected bound payload. A reference type (`&T`) is never a\n"));
+    r.push_str(String::from("linear owner. Collection types do not acquire linear ownership from\n"));
+    r.push_str(String::from("their element type, and they cannot hold linear values: a `Vec<T>` element, a\n"));
+    r.push_str(String::from("`HashMap<K, V>` value, or a `BTreeMap<K, V>` value that is or transitively\n"));
+    r.push_str(String::from("contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user\n"));
+    r.push_str(String::from("enum wrapping one) is rejected where the collection type is written. The\n"));
+    r.push_str(String::from("containers copy and shift entries bitwise, so storing a linear value would\n"));
+    r.push_str(String::from("duplicate its obligation or let it escape the checker. `Vec` and `HashMap` use\n"));
+    r.push_str(String::from("`UnsupportedFeature`; `BTreeMap` uses `BTreeMapValueMustBeNonLinear`. A nested\n"));
+    r.push_str(String::from("collection (`Vec<Vec<Token>>`) is reported once, at the innermost collection that\n"));
+    r.push_str(String::from("holds the linear value, and a type alias is reported once, at its definition. A\n"));
+    r.push_str(String::from("`Vec` element test is about ownership: `Vec<&Token>` borrows and is accepted,\n"));
+    r.push_str(String::from("while a tuple that holds a linear owner is rejected.\n"));
+    r.push_str(String::from("A linear value that is no longer needed is discharged with the intrinsic\n"));
+    r.push_str(String::from("`drop(value)` (see [Linear Intrinsics](#linear-intrinsics)). Passing it to a\n"));
+    r.push_str(String::from("function that consumes it, returning it, or matching it are the other ways to\n"));
+    r.push_str(String::from("satisfy the obligation; there is no implicit end-of-scope discharge, so a live\n"));
+    r.push_str(String::from("obligation at scope exit is `RegionLinear`.\n"));
     r.push_str(String::from("An unbound `_` match catchall cannot discard a still-reachable linear payload:\n"));
     r.push_str(String::from("every variant that owns a linear payload must first have an explicit arm that\n"));
     r.push_str(String::from("binds and consumes or transfers that payload.\n"));
@@ -9930,7 +10344,7 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("Struct fields cannot own linear values, even when the containing struct is\n"));
     r.push_str(String::from("`linear`, because field access does not provide move-out semantics. Allowing an\n"));
     r.push_str(String::from("owned field would let repeated reads transfer the same obligation more than\n"));
-    r.push_str(String::from("once. Borrowed references and collection fields do not become linear owners\n"));
+    r.push_str(String::from("once. Reference-typed (`&T`) and collection fields do not become linear owners\n"));
     r.push_str(String::from("under this rule.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Struct Literals\n"));
@@ -9940,6 +10354,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("let p: Point = Point { x: 1, y: 2 };\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Because of that, an identifier that does not start with an upper-case letter is\n"));
+    r.push_str(String::from("never a struct literal: in `while c { }` and `if c { }` the `{` opens the body.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Field Access\n"));
     r.push_str(String::from("\n"));
@@ -10107,6 +10524,8 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Key and value types.** The runtime stores each key and each value in one 64-bit slot and compares keys by value. A `HashMap` key must therefore be `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, or `bool`; every other key type is an `UnsupportedFeature` error in both compilers. `String`, `Vec`, struct, enum, `Option`, and tuple keys are heap-backed handles that would compare by pointer, so a lookup with an equal-but-distinct `String` would silently miss (and a mutable `String` mutated after insertion would corrupt the map). `i128`/`u128` keys would be truncated, and `f32`/`f64` have no total equality. Hash or intern such keys to a `u64` at the call site and keep a side table for the originals. A `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64` is likewise an `UnsupportedFeature` error: map values occupy a single 64-bit integer slot, so a 128-bit value would lose its high word and a float has no slot encoding. A `HashMap` value that is or transitively contains a `linear struct` is an `UnsupportedFeature` error for the same reason `BTreeMap` rejects it (`BTreeMapValueMustBeNonLinear`): the map copies values bitwise and `get` would hand out a second copy of the linear obligation. Narrow integer values (`i8` … `u32`) are stored widened and read back at their declared width. The check applies wherever the map type is written (annotations, parameters, returns, fields, aliases, constants), including nested inside `Vec`, `Option`, tuples, and other maps. A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("**Set idiom.** The unit type `()` is a valid map value, so `HashMap<K, ()>` and `BTreeMap<K, ()>` are sets: `s.insert(k, ());` adds a member, `s.contains_key(k)` (`s.contains(k)` for `BTreeMap`) tests membership, `s.remove(k)` deletes it, and `s.get(k)` returns `Option<()>`. The value `()` has type `()` (it checks against a `()` annotation or return type), and the runtime stores it in the usual 64-bit slot as `0`. A function cannot take a `()` parameter (`UnsupportedFeature`: the argument carries no information and has no ABI slot), so pass the set itself or a key instead.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("`HashMap::get` returns `Option<V>`, exactly like `BTreeMap::get`: a missing key is `None`, never a default value, so `let a: i64 = m.get(k);` is a `TypeMismatch` in both compilers. Handle both cases with `match` (or `?`), or call `.unwrap()` to assert the key is present: it aborts with `UnwrapOnNone` on a missing key and requires the `[panic]` effect. A contract can state a binding as `result.get(k).unwrap() == v`; guard it with an earlier `result.contains_key(k)` clause (as in the examples), because the verifier reports a missing key there as a failed `unwrap()` on `None`, which carries no contract blame.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### BTreeMap<K, V> Methods\n"));
@@ -10185,7 +10604,7 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("- `string_substr(s, start, len)` clamps `start` to `len()` and `len` to the bytes remaining after `start`.\n"));
     r.push_str(String::from("- `string_matches_literal_at` returns `0` when `pos` plus the literal's byte length exceeds `len()` (including when that sum overflows `u64`).\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` fails verification as `index out of bounds`, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values.\n"));
+    r.push_str(String::from("The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` fails verification as `index out of bounds`, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values. A length contract on the result, such as `ensures: result.len() <= s.len()`, proves.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64`. `push_byte` takes a byte *value*, not an offset, and is `u8` (see the String method table).\n"));
     r.push_str(String::from("\n"));
@@ -10288,6 +10707,14 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("| `pin_to_root`    | `fn(value: String) -> String` and `fn<T>(value: Vec<T>) -> Vec<T>` for flat scalar `T` | `[]` |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a flat scalar slot type (`i*`, `u*`, `f32`, `f64`, `bool`). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("#### Linear Intrinsics\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function         | Signature                                  | Effects    |\n"));
+    r.push_str(String::from("|------------------|--------------------------------------------|------------|\n"));
+    r.push_str(String::from("| `drop`           | `fn(value: L) -> ()` for a linear owner `L` | `[]`       |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`drop` is a compiler intrinsic, not a user-defined generic. `L` must be a linear owner: a `linear struct`, or an owned enum wrapper (`Option`, `Result`, or a user enum) that contains one. Any other argument type, or an argument count other than one, is a `TypeMismatch`. `drop` consumes the value exactly once (a second use is `LinearTypeViolation`) and discharges its obligation. It has no runtime effect beyond that: it runs no destructor, frees nothing, and lowers to no instruction other than the consume marker the type and region passes already track. It is verifier-neutral: the consume marker is a no-op in the C model, so a function that drops a linear value is verified exactly as if the call were absent. A user-defined function named `drop` takes precedence over the intrinsic.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.\n"));
     r.push_str(String::from("\n"));
@@ -10630,7 +11057,8 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `<path>`          | `.`         | Directory to scan or single `.vow` file    |\n"));
     r.push_str(String::from("| `--verify`        | (off)       | Run ESBMC verification on test files       |\n"));
     r.push_str(String::from("| `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |\n"));
-    r.push_str(String::from("| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. |\n"));
+    r.push_str(String::from("| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its `use` declarations. |\n"));
+    r.push_str(String::from("| `--jobs <N>`      | `min(num_cpus/2, 8)` (`1` with `--verify`) | Max test files compiled and run concurrently |\n"));
     r.push_str(String::from("| `--mode debug`    | (default)   | Insert runtime vow checks                 |\n"));
     r.push_str(String::from("| `--mode release`  | `debug`     | Omit all vow checks for performance       |\n"));
     r.push_str(String::from("| `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |\n"));
@@ -10639,7 +11067,9 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). Single-file invocations (`vow test path/to/test_foo.vow`) keep the default behaviour of resolving `use` against the file's parent directory.\n"));
+    r.push_str(String::from("**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). A single-file invocation without `--module-root` (`vow test compiler/tests/test_region.vow`) infers the module root the same way: starting at the file's own directory and walking up through its ancestors, it picks the nearest directory against which every `use` declaration of the file resolves (to `<path>.vow`, or `<path>.vow.d`). The walk stops after the first directory that contains `.git` (the repository root), at a `..` path component, or at `.` / `/`. If the file's own directory already resolves every `use`, if the file has no `use` declarations, or if no directory resolves them all, the file's parent directory is used and any unresolved module is reported as an ordinary `IoError`. When the file's own directory does not shadow a module of the tree, the inferred root is the one the directory form would use, so the test gives the same result in both forms; a module in the file's own directory takes precedence over one in an ancestor. This rule applies to `vow test` only; `vow build` and `vow verify` keep resolving `use` against the entry file's parent directory. This existence-only walk never inspects file contents, so it is unaffected by the `.vow.d` stub-vs-source contract fallback described under [Use Declarations](grammar.md#use-declarations): that check only runs once a concrete `use` is actually loaded for a build/verify/test run, not during root inference's probing of candidate directories.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Concurrency.** Test files in a scan run concurrently, at most `--jobs` at a time, and the `tests` array is always in sorted-path order regardless of completion order. A test's `duration_ms` covers its own compile, verification, and execution. Beyond the first, a worker starts a new file only while the machine is not under memory or IO stall pressure (Linux PSI `/proc/pressure/memory` `some avg10` and `/proc/pressure/io` `full avg10`, both below 20), so a loaded machine degrades to fewer workers rather than thrashing; with no PSI available the limit is just `--jobs`. `--jobs 1` runs files strictly one after another. The self-hosted compiler runs each file of a concurrent scan in a worker subprocess of itself, using an internal `--worker-entry` flag whose output is not part of the CLI contract; a worker that dies without a result is reported as a `compile_error` entry so the suite stays fail-closed.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Test Output JSON:**\n"));
     r.push_str(String::from("\n"));
@@ -10801,7 +11231,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("|-----------------|---------------------------------------------|\n"));
     r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
-    r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
+    r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `LinearBorrow`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
     r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
@@ -10853,7 +11283,20 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("{\n"));
     r.push_str(String::from("  \"status\": \"VerifyFailed\",\n"));
     r.push_str(String::from("  \"executable\": \"examples/cegis_broken\",\n"));
-    r.push_str(String::from("  \"diagnostics\": [],\n"));
+    r.push_str(String::from("  \"diagnostics\": [\n"));
+    r.push_str(String::from("    {\n"));
+    r.push_str(String::from("      \"error_code\": \"VowEnsuresViolated\",\n"));
+    r.push_str(String::from("      \"message\": \"contract violation in `safe_sub`: ensures result >= 0\",\n"));
+    r.push_str(String::from("      \"severity\": \"error\",\n"));
+    r.push_str(String::from("      \"span\": {\n"));
+    r.push_str(String::from("        \"file\": \"examples/cegis_broken.vow\",\n"));
+    r.push_str(String::from("        \"offset\": 76,\n"));
+    r.push_str(String::from("        \"length\": 20\n"));
+    r.push_str(String::from("      },\n"));
+    r.push_str(String::from("      \"hints\": [\"function `safe_sub` failed to establish its postcondition\"],\n"));
+    r.push_str(String::from("      \"blame\": \"callee\"\n"));
+    r.push_str(String::from("    }\n"));
+    r.push_str(String::from("  ],\n"));
     r.push_str(String::from("  \"function\": \"safe_sub\",\n"));
     r.push_str(String::from("  \"counterexample\": \"[Counterexample]\",\n"));
     r.push_str(String::from("  \"counterexamples\": [\n"));
@@ -10872,6 +11315,25 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("  ]\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Every counterexample also yields one `error` diagnostic, appended after any\n"));
+    r.push_str(String::from("warnings. Its code follows the counterexample's `blame` (`caller` →\n"));
+    r.push_str(String::from("`VowRequiresViolated`, `callee` → `VowEnsuresViolated`; a failed `invariant` is\n"));
+    r.push_str(String::from("callee-blamed, so it reports `VowEnsuresViolated`), or is\n"));
+    r.push_str(String::from("`VerifierAssertionUnattributed` when the failure is not attributed to a vow\n"));
+    r.push_str(String::from("clause. The `message` is ``contract violation in `<function>`: <violation>`` (or\n"));
+    r.push_str(String::from("``verification failed in `<function>` on an unattributed property: <violation>``),\n"));
+    r.push_str(String::from("`span` is the counterexample's `source` (an empty file and zero offset/length\n"));
+    r.push_str(String::from("when `source` is `null`), `secondary` lists the counterexample's `call_sites`,\n"));
+    r.push_str(String::from("and `hints` name the failing function and, for caller blame, each violating\n"));
+    r.push_str(String::from("argument. A `timeout`, `unknown`, `error` or `panicked` outcome has no\n"));
+    r.push_str(String::from("counterexample and adds no such diagnostic. Both compilers emit the same\n"));
+    r.push_str(String::from("`diagnostics[]`, `counterexample` and `counterexamples[]` for the same source;\n"));
+    r.push_str(String::from("the only fields that are not specified byte for byte are `verify_message`\n"));
+    r.push_str(String::from("(ESBMC's free text) and `values` entries named `$esbmc$...` (solver temporaries).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A diagnostic's `span` is exactly `{file, offset, length}`: positions are byte\n"));
+    r.push_str(String::from("offsets, and neither compiler adds line or column fields.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("For caller-blame failures where a verified function violates a callee's\n"));
     r.push_str(String::from("`requires` clause, the counterexample reports the callee clause in `violation`\n"));
@@ -10895,7 +11357,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |\n"));
     r.push_str(String::from("| `message`          | string              | CompileFailed     | Compatibility error category/detail (for example \"parse error\", \"type error\", \"module load error\", backend/link detail, or \"failed to emit frontend diagnostics: {io_error}\"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |\n"));
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
-    r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
+    r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string: `\"[Counterexample]\"` when ESBMC produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>`, ...) |\n"));
     r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |\n"));
     r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"unknown\"`, `\"error\"`, `\"tool_not_found\"`, or `\"panicked\"` (verifier worker thread crashed -- no counterexample available) |\n"));
     r.push_str(String::from("| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |\n"));
@@ -11010,7 +11472,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |\n"));
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
-    r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `Linear*` consume/borrow, `RemF*`) or the function has effects. (Struct construction and field ops are modelled -- see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
+    r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `LinearBorrow`, `RemF*`) or the function has effects. (Struct construction and field ops are modelled -- see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
     r.push_str(String::from("| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously -- ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g. the BV→IR fallback) may never report a weakened check as `proven` are the verifier's soundness discipline -- the safe-vs-unsafe retry rules are specified in `docs/verifier-discipline.md`.\n"));
@@ -11309,7 +11771,7 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Tuples are not first-class values (see the `let` tuple-pattern rules in `grammar.md`), so a\n"));
     r.push_str(String::from("tuple expression, including the empty tuple `()`, cannot appear anywhere inside a `requires`,\n"));
-    r.push_str(String::from("`ensures` or `invariant` clause -- not as a comparison operand (`requires: t != (1, 2)`) and not as\n"));
+    r.push_str(String::from("`ensures` or `invariant` clause, or in a parameter `where` clause -- not as a comparison operand (`requires: t != (1, 2)`) and not as\n"));
     r.push_str(String::from("the initializer of a `let` inside a clause block. Both compilers reject it at type-check time with\n"));
     r.push_str(String::from("`UnsupportedFeature` (\"tuple expressions are not supported in contract predicates\") at the\n"));
     r.push_str(String::from("tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.\n"));
@@ -11478,7 +11940,7 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Each `where` clause can only reference its own parameter.\n"));
+    r.push_str(String::from("Each `where` clause can only reference its own parameter (a sibling parameter or `result` is an undefined-variable `TypeMismatch`), and it obeys the same rules as a `requires` clause: it must be a pure `bool` predicate with no tuple expression. See `grammar.md` → \"Where Clauses\" for the full list.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Anti-Patterns\n"));
     r.push_str(String::from("\n"));
@@ -12232,6 +12694,11 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("**Fix:** Change the expression or declared type to match. For an enum pattern,\n"));
     r.push_str(String::from("qualify the variant with the scrutinee's enum name.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("The `drop` intrinsic also reports `TypeMismatch` when it is called with an argument\n"));
+    r.push_str(String::from("count other than one or with a value that is not a linear owner\n"));
+    r.push_str(String::from("(``drop requires a linear value, found `i64` ``); see\n"));
+    r.push_str(String::from("[Linear Intrinsics](grammar.md#linear-intrinsics).\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::truncate`\n"));
     r.push_str(String::from("argument must have exactly the type `u64`. An index of any other integer type\n"));
     r.push_str(String::from("(for example an `i64` counter) or of a non-integer type is a `TypeMismatch`\n"));
@@ -12272,6 +12739,18 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("**Output:** `cannot infer the collection type of the receiver of `insert`: annotate its binding with a full type`\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Annotate the binding: `let m: HashMap<i64, i64> = HashMap::new();`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("An undefined name is a `TypeMismatch` whose message begins `undefined variable`, in both compilers, and the expression then has an error type so it does not cascade into further type errors. A parameter `where` clause is name-resolved in a scope holding only its own parameter, so a sibling parameter or `result` is an undefined name there; the hint says to move such a condition to `requires`/`ensures`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn ordered(a: i64, b: i64 where b > a) -> i64 {\n"));
+    r.push_str(String::from("    b\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** ``undefined variable `a` ``, hint ``a `where` clause can only reference its own parameter `b`; put a condition on several parameters in `requires` ``\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** State the condition in `requires: b > a`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### LiteralOutOfRange\n"));
     r.push_str(String::from("\n"));
@@ -12369,7 +12848,7 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("### EffectViolation\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Type Checker\n"));
-    r.push_str(String::from("**Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write -- not the caller.\n"));
+    r.push_str(String::from("**Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause or parameter `where` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write -- not the caller.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn f() -> () {\n"));
@@ -12419,7 +12898,7 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Restructure ownership so each path uses a consumed linear value at most\n"));
-    r.push_str(String::from("once. Keep linear owners out of struct fields until move-out field access is\n"));
+    r.push_str(String::from("once. Discharge a value that is no longer needed with `drop(value)`. Keep linear owners out of struct fields until move-out field access is\n"));
     r.push_str(String::from("supported. In a match, add explicit arms that bind and consume or transfer every\n"));
     r.push_str(String::from("linear payload before using `_`. Obligations that are simply left live at scope\n"));
     r.push_str(String::from("exit are reported later as `RegionLinear`.\n"));
@@ -12569,7 +13048,7 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### UnsupportedFeature\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Phase:** Type Checker\n"));
+    r.push_str(String::from("**Phase:** Parser (`&expr`), Type Checker (everything else)\n"));
     r.push_str(String::from("**Meaning:** A language feature that is not supported in Vow was used, or a `HashMap`/`BTreeMap` was written with a key or value type the runtime cannot store (see [Map key and value types](#map-key-and-value-types)).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
@@ -12581,6 +13060,21 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("**Output:** `trait blocks are not supported in Vow`\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A prefix `&expr` (or `&mut expr`, `&&expr`) borrow expression is rejected by the parser, at the `&` or `&&` token, with\n"));
+    r.push_str(String::from("the hint ``Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise\n"));
+    r.push_str(String::from("AND operator``; the operand is still parsed, so the diagnostic is reported once:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn f(x: i64) -> i64 {\n"));
+    r.push_str(String::from("    let r: i64 = &x;\n"));
+    r.push_str(String::from("    r\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** ``borrow expressions (`&expr`) are not supported in Vow``\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Use the value directly. `&` is the bitwise AND operator between two operands (`x & 1`).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("A tuple expression, including the empty tuple `()`, inside a contract clause is also\n"));
     r.push_str(String::from("`UnsupportedFeature`, because tuples have no runtime or verifier representation:\n"));
@@ -12610,6 +13104,58 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("**Output:** ``HashMap key type `String` is not supported: keys are compared by value as a single machine word``\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Hash or intern the key to a `u64` at the call site and keep a side table for the originals. For a 128-bit value, store the two `u64` halves separately. For a linear value, keep it in a local binding and store only an integer handle in the map.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("#### Linear collection elements\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking. A reference element (`Vec<&Token>`) borrows rather than owns and is accepted; a nested collection is reported once, where the innermost `Vec` is written, and a type alias once, at its definition.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("linear struct Token { id: i64 }\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("fn f() -> () {\n"));
+    r.push_str(String::from("    let v: Vec<Token> = Vec::new();\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** `Vec element type must be non-linear; found 'Token'`\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Keep the linear value in a local binding and store an integer handle in the `Vec`. Consume a linear value that is no longer needed with `drop(value)`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("#### Slice types\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The same code reports a slice type `[T]` (see [Slice Types](grammar.md#slice-types)). Each bracket pair is reported once (`[[i64]]` gives two diagnostics, an alias once at its definition), with the hint ``use `Vec<T>` to hold a sequence of values``.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn probe(sl: [i64]) -> i64 { 0 }\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** ``slice types (`[T]`) are not supported in Vow``\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Take a `Vec<T>` instead.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("#### Reserved type names\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The same code reports a `struct`, `enum` or `type` alias named after a builtin type (see [User-Defined Types](grammar.md#user-defined-types)). It is reported once per declaration, at the declaration, with the hint `choose a different name for this type`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("struct Vec { x: i64 }\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** `` `Vec` is a builtin type name and cannot be declared as a user type ``\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Rename the type.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("#### Unit parameters\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The same code reports a parameter of type `()` (directly or through a type alias). The unit value carries no information and has no ABI slot, so such a parameter is rejected at the declaration.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn f(u: ()) -> i64 { 0 }\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** ``parameter `u` has type `()`: unit parameters are not supported``\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Remove the parameter.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.\n"));
     r.push_str(String::from("\n"));
@@ -12663,7 +13209,7 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("### ContractTypeMismatch\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Type Checker\n"));
-    r.push_str(String::from("**Meaning:** A `requires`, `ensures`, or `invariant` clause expression does not have type `bool`.\n"));
+    r.push_str(String::from("**Meaning:** A `requires`, `ensures`, or `invariant` clause expression, or a parameter `where` clause, does not have type `bool`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn add(a: i64, b: i64) -> i64 vow {\n"));
@@ -12838,7 +13384,7 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("### VerificationSkipped\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)\n"));
-    r.push_str(String::from("**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent -- most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `Linear*` family. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.\n"));
+    r.push_str(String::from("**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent -- most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```json\n"));
     r.push_str(String::from("{\n"));
@@ -12938,6 +13484,11 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("```json\n"));
     r.push_str(String::from("{\"error\":\"VowViolation\",\"vow_id\":0,\"blame\":\"Caller\",\"description\":\"y != 0\",\"file\":\"divide.vow\",\"offset\":42,\"values\":{\"y\":0}}\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`file` is the source file that defines the violated clause (the module file for a\n"));
+    r.push_str(String::from("clause in an imported module, not the entry file) and `offset` is the byte offset\n"));
+    r.push_str(String::from("at which that clause starts. Both compilers report the same `file` and `offset`\n"));
+    r.push_str(String::from("for the same program, never an empty placeholder.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("The `blame` field indicates who is at fault:\n"));
     r.push_str(String::from("- `Caller` -- a `requires` was violated (the caller passed bad arguments)\n"));
@@ -13096,7 +13647,10 @@ fn skill_support_content_reference_stdlib_md_347c6c47() -> String {
     r.push_str(String::from("`use` declarations resolve to a single directory: `use foo` loads\n"));
     r.push_str(String::from("`<dir>/foo.vow.d` when that declaration stub exists, and otherwise loads\n"));
     r.push_str(String::from("`<dir>/foo.vow`, where `<dir>` is the directory of the **entry file** passed to\n"));
-    r.push_str(String::from("`vow build`/`vow verify`.\n"));
+    r.push_str(String::from("`vow build`/`vow verify`. A stub is used only when none of its declarations\n"));
+    r.push_str(String::from("carry a `vow` block -- otherwise the sibling `<dir>/foo.vow` source is loaded\n"));
+    r.push_str(String::from("instead, so a declaration's contract is never silently dropped from\n"));
+    r.push_str(String::from("verification (a bodyless declaration cannot be checked at a call site).\n"));
     r.push_str(String::from("All transitive `use`s in dependency modules resolve against that **same** directory.\n"));
     r.push_str(String::from("There is no search path, and `--module-root` is only available on `vow test` -- not\n"));
     r.push_str(String::from("`vow build` or `vow verify`.\n"));
@@ -14289,10 +14843,9 @@ fn skill_support_content_schemas_counterexample_schema_json_4a456c17() -> String
     r.push_str(String::from("          },\n"));
     r.push_str(String::from("          \"additionalProperties\": false\n"));
     r.push_str(String::from("        },\n"));
-    r.push_str(String::from("        { \"type\": \"string\" },\n"));
     r.push_str(String::from("        { \"type\": \"null\" }\n"));
     r.push_str(String::from("      ],\n"));
-    r.push_str(String::from("      \"description\": \"Source location of the violated vow clause; Rust emits a span object, self-hosted emits the source path string\"\n"));
+    r.push_str(String::from("      \"description\": \"Source location of the violated vow clause, identical in both compilers; null when the failure cannot be attributed to a vow clause\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"blame\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
@@ -14397,6 +14950,10 @@ fn skill_support_content_schemas_diagnostic_schema_json_a46eae68() -> String {
     r.push_str(String::from("        \"LinearTypeViolation\",\n"));
     r.push_str(String::from("        \"NonExhaustiveMatch\",\n"));
     r.push_str(String::from("        \"UnsupportedPattern\",\n"));
+    r.push_str(String::from("        \"LiteralOutOfRange\",\n"));
+    r.push_str(String::from("        \"NarrowingCastNotAllowed\",\n"));
+    r.push_str(String::from("        \"ShiftCountOutOfRange\",\n"));
+    r.push_str(String::from("        \"TautologicalComparison\",\n"));
     r.push_str(String::from("        \"ImmutableAssignment\",\n"));
     r.push_str(String::from("        \"UnusedMut\",\n"));
     r.push_str(String::from("        \"VowRequiresViolated\",\n"));
@@ -14404,6 +14961,8 @@ fn skill_support_content_schemas_diagnostic_schema_json_a46eae68() -> String {
     r.push_str(String::from("        \"VowInvariantViolated\",\n"));
     r.push_str(String::from("        \"UnknownMethod\",\n"));
     r.push_str(String::from("        \"UnsupportedFeature\",\n"));
+    r.push_str(String::from("        \"BTreeMapKeyTypeMustBeI64\",\n"));
+    r.push_str(String::from("        \"BTreeMapValueMustBeNonLinear\",\n"));
     r.push_str(String::from("        \"LoweringWarning\",\n"));
     r.push_str(String::from("        \"MissingContract\",\n"));
     r.push_str(String::from("        \"ContractTypeMismatch\",\n"));
@@ -14413,8 +14972,11 @@ fn skill_support_content_schemas_diagnostic_schema_json_a46eae68() -> String {
     r.push_str(String::from("        \"CodegenFailed\",\n"));
     r.push_str(String::from("        \"LinkFailed\",\n"));
     r.push_str(String::from("        \"RegionConflict\",\n"));
+    r.push_str(String::from("        \"RegionLiteralMutation\",\n"));
     r.push_str(String::from("        \"RegionLinear\",\n"));
     r.push_str(String::from("        \"RegionRootEscape\",\n"));
+    r.push_str(String::from("        \"VerificationSkipped\",\n"));
+    r.push_str(String::from("        \"ArithOverflowReachable\",\n"));
     r.push_str(String::from("        \"VerifierAssertionUnattributed\",\n"));
     r.push_str(String::from("        \"ModelCapacityAssumed\"\n"));
     r.push_str(String::from("      ],\n"));
@@ -14429,7 +14991,25 @@ fn skill_support_content_schemas_diagnostic_schema_json_a46eae68() -> String {
     r.push_str(String::from("      \"enum\": [\"error\", \"warning\", \"note\"],\n"));
     r.push_str(String::from("      \"description\": \"Diagnostic severity\"\n"));
     r.push_str(String::from("    },\n"));
-    r.push_str(String::from("    \"span\": {\n"));
+    r.push_str(String::from("    \"span\": { \"$ref\": \"#/$defs/Span\" },\n"));
+    r.push_str(String::from("    \"hints\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"items\": { \"type\": \"string\" },\n"));
+    r.push_str(String::from("      \"description\": \"Actionable suggestions for fixing the diagnostic; omitted when there are none\"\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"secondary\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"items\": { \"$ref\": \"#/$defs/Span\" },\n"));
+    r.push_str(String::from("      \"description\": \"Related source locations (for a caller-blame contract violation, the call sites); omitted when there are none\"\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"blame\": {\n"));
+    r.push_str(String::from("      \"type\": \"string\",\n"));
+    r.push_str(String::from("      \"enum\": [\"caller\", \"callee\"],\n"));
+    r.push_str(String::from("      \"description\": \"Who is responsible for a contract violation; omitted when no party is at fault\"\n"));
+    r.push_str(String::from("    }\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"$defs\": {\n"));
+    r.push_str(String::from("    \"Span\": {\n"));
     r.push_str(String::from("      \"type\": \"object\",\n"));
     r.push_str(String::from("      \"required\": [\"file\", \"offset\", \"length\"],\n"));
     r.push_str(String::from("      \"properties\": {\n"));

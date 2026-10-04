@@ -24,7 +24,17 @@ use foo.bar
 
 This resolves relative to the main source file. The module loader first uses
 `<rootdir>/foo/bar.vow.d` when that declaration stub exists, and otherwise
-falls back to `<rootdir>/foo/bar.vow`.
+falls back to `<rootdir>/foo/bar.vow`. If the stub's declarations carry a
+`vow` block, the stub cannot be relied on: a bodyless declaration has no
+implementation for the verifier to check a call site against, so a contract
+there would otherwise be silently dropped from verification. In that case the
+loader loads the sibling `<rootdir>/foo/bar.vow` source instead, where the
+usual intra-module `requires`-as-assert/Caller-blame mechanism applies
+unchanged. A stub whose declarations carry no `vow` block is unaffected and
+is still preferred over source. A stub shipped with no sibling `.vow` source
+at all (e.g. a library distributing only its interface) is also unaffected —
+a call through it remains non-modelable in the verifier (`Skipped`, never
+falsely `Verified`).
 
 ## Const Declarations
 
@@ -109,7 +119,15 @@ fn safe_sub(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
 }
 ```
 
-`where` constraints on parameters become additional `requires` in verification. Each `where` clause can only reference its own parameter — it cannot reference other parameters.
+`where` constraints on parameters become additional `requires` in verification (and Caller-blame runtime checks under `--mode debug`). A `where` clause is checked exactly like a `requires` clause, in a scope holding **only its own parameter** plus module constants and functions:
+
+- It can only reference its own parameter. A sibling parameter or `result` is an undefined name (`TypeMismatch`, "undefined variable"), with a hint pointing at `requires`/`ensures` for conditions that span several parameters or the return value. Any other undefined name is the same error with the usual "did you mean" hint. This is a type error in both compilers; it never reaches IR lowering.
+- It must evaluate to `bool` (`ContractTypeMismatch`, hint "parameter `where` clauses must evaluate to `bool`").
+- It must be pure: no call to an effectful function and no heap write through an argument (`EffectViolation`, see "Contract Purity").
+- It cannot contain a tuple expression (`UnsupportedFeature`, "tuple expressions are not supported in contract predicates").
+- Integer literals are range-checked against the compared type, and the unsigned-comparison rules apply as in any other expression (`LiteralOutOfRange`, `TautologicalComparison`).
+
+On a declaration-only function (`fn f(x: i64 where x > 0) -> i64;`) and on the parameters of an `extern` function the clause is checked by the same rules but has no body to enforce it in: state the foreign function's real preconditions in its `vow` contract.
 
 ### Public Functions
 
@@ -138,7 +156,7 @@ pub fn api_function(x: i64) -> i64 {
 | `f32`  | 32-bit float (limited support — avoid in contracts) |
 | `f64`  | 64-bit float (limited support — avoid in contracts) |
 | `bool` | Boolean                  |
-| `()`   | Unit type                |
+| `()`   | Unit type; its only value is also written `()` (not allowed as a parameter type) |
 | `!`    | Never type (diverges)    |
 
 Vow targets 64-bit only and has no `isize`/`usize`. Excluding pointer-width
@@ -172,16 +190,33 @@ extern wrappers.
 
 | Type               | Description                     |
 |--------------------|---------------------------------|
-| `Vec<T>`           | Growable array                  |
+| `Vec<T>`           | Growable array. `T` must be non-linear (see [Linear Structs](#linear-structs)) |
 | `Option<T>`        | Optional value (Some/None)      |
 | `Result<T, E>`     | Success or error                |
 | `String`           | UTF-8 string (backed by Vec<u8>)|
 | `HashMap<K, V>`    | Key-value map (linear scan). `K` must be an integer type of at most 64 bits or `bool`; `V` may be any non-linear type except `i128`/`u128`/`f32`/`f64` |
 | `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). `K` must be `i64`; `V` may be any non-linear type except `i128`/`u128`/`f32`/`f64` |
 
+### Slice Types
+
+The syntax `[T]` is not a type in Vow. It parses, but the type checker rejects it
+wherever a type is written (parameter, return, field, enum payload, `let`
+annotation, cast target, alias or constant) with `UnsupportedFeature` ("slice types
+(`[T]`) are not supported in Vow"), once per bracket pair. No expression creates,
+indexes, iterates or measures a slice, so no value of that type could exist. Use
+`Vec<T>` to hold a sequence of values. See
+[Slice types](errors.md#slice-types) for the diagnostic.
+
 ### User-Defined Types
 
-Structs and enums (see below).
+Structs and enums (see below). A struct, enum or type alias may not be named after
+a type the language already binds: a primitive type (`i64`, `bool`, `String`, ...)
+or one of `Vec`, `Option`, `Result`, `HashMap`, `BTreeMap`. The declaration is
+rejected with `UnsupportedFeature` ("`Vec` is a builtin type name and cannot be
+declared as a user type"), because the resolver binds those names
+before any user type and the user type would otherwise alias the builtin in some
+positions and shadow it in others. See
+[Reserved type names](errors.md#reserved-type-names) for the diagnostic.
 
 ## Literals
 
@@ -455,9 +490,19 @@ From loosest to tightest, Vow follows the usual C/Rust precedence for logical an
 
 `||`, `&&`, comparisons (`== != < <= > >=`), `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`
 
-Unary `-`, `!`, `&`, and `?` bind tighter than every binary operator.
+Unary `-` and `!` bind tighter than every binary operator. The postfix forms
+(`.field`, `.method()`, `[index]`, `(args)`, `?`, and `as Type`) bind tighter
+still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is
+`(a.len() as i64) + 1`.
 
-Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs & rhs` is bitwise AND.
+`&` is only the infix bitwise AND operator (`lhs & rhs`). There is no prefix
+`&expr`: Vow has no borrow expressions, so `&x`, `&mut x`, `&&x` (and `x & &y`)
+are `UnsupportedFeature` errors at the `&` (or `&&`) token, identically in both compilers (see
+[errors.md](errors.md#unsupportedfeature)). Pass the value itself. The type
+syntax `&T` is still accepted in signatures and annotations, but no expression
+creates a value of that type: a `&T` parameter can only be passed on from
+another `&T` parameter, so a program has no way to introduce one. Do not
+declare reference-typed parameters.
 
 ### Unary Operators
 
@@ -465,8 +510,40 @@ Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs
 |----------|------------|
 | `-`      | Negation (not allowed on unsigned types) |
 | `!`      | Logical NOT|
-| `&`      | Borrow     |
-| `?`      | Unwrap (propagate error) |
+| `?`      | Unwrap (propagate error), postfix |
+
+### Block-like Expressions and Parentheses
+
+`if`, `match`, `while`, `for`, `loop`, and a `{ ... }` block are *block-like*.
+An unparenthesised block-like expression ends the expression it starts: no
+postfix operator (`.`, `[`, `(`, `?`, `as`) and no binary operator may follow it
+directly, so `if c { 1 } else { 2 } as u64` and `if c { 1 } else { 2 } + 1` are
+parse errors. As the right operand of a binary operator or the operand of a
+unary operator it is fine (`3 * if c { 1 } else { 2 }`), but it still ends the
+whole expression, so `3 * if c { 1 } else { 2 } as u64` is a parse error too. A parenthesised
+expression is a primary expression whatever it contains, so every operator may
+follow it:
+
+```vow
+let a: u64 = (if c { 1 } else { 2 }) as u64;
+let b: i64 = (if c { 1 } else { 2 }) + 1;
+let n: u64 = (if c { v } else { w }).len();
+```
+
+Parentheses are not an AST node: the canonical printer re-inserts them exactly
+where a block-like expression, a binary or unary expression, an assignment, or
+`break`/`return` is the left operand of a binary operator or the receiver of a
+postfix operator, so `parse -> print -> parse` is idempotent.
+
+An expression statement ends with `;`. Only two forms may omit it: the last
+expression of a block (its value) and an unparenthesised block-like expression
+(`if c { f(); } g();`). Any other statement without `;` is a parse error
+(`UnexpectedToken`) at the next token, in both compilers, and parsing stops
+there. A `let` statement's trailing `;` is optional.
+
+A scalar type name after `as` (`i8` through `u128`, `f32`, `f64`, `bool`) never
+takes generic arguments, so a following `<` is a comparison or shift:
+`x as u64 < y` and `x as u64 << 1` mean `(x as u64) < y` and `(x as u64) << 1`.
 
 ### Type Cast
 
@@ -800,9 +877,24 @@ Linear struct values carry a linear obligation. The obligation must either be co
 Owned enum wrappers inherit that obligation transitively. A user enum,
 `Option<T>`, or `Result<T, E>` is linear when one of its owned payload paths is
 linear; matching such a value consumes the wrapper exactly once and transfers
-the obligation to the selected bound payload. References remain borrows and do
-not become linear owners. Collection types do not acquire linear ownership from
-their element type; their separate non-linear-element restrictions still apply.
+the obligation to the selected bound payload. A reference type (`&T`) is never a
+linear owner. Collection types do not acquire linear ownership from
+their element type, and they cannot hold linear values: a `Vec<T>` element, a
+`HashMap<K, V>` value, or a `BTreeMap<K, V>` value that is or transitively
+contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user
+enum wrapping one) is rejected where the collection type is written. The
+containers copy and shift entries bitwise, so storing a linear value would
+duplicate its obligation or let it escape the checker. `Vec` and `HashMap` use
+`UnsupportedFeature`; `BTreeMap` uses `BTreeMapValueMustBeNonLinear`. A nested
+collection (`Vec<Vec<Token>>`) is reported once, at the innermost collection that
+holds the linear value, and a type alias is reported once, at its definition. A
+`Vec` element test is about ownership: `Vec<&Token>` borrows and is accepted,
+while a tuple that holds a linear owner is rejected.
+A linear value that is no longer needed is discharged with the intrinsic
+`drop(value)` (see [Linear Intrinsics](#linear-intrinsics)). Passing it to a
+function that consumes it, returning it, or matching it are the other ways to
+satisfy the obligation; there is no implicit end-of-scope discharge, so a live
+obligation at scope exit is `RegionLinear`.
 An unbound `_` match catchall cannot discard a still-reachable linear payload:
 every variant that owns a linear payload must first have an explicit arm that
 binds and consumes or transfers that payload.
@@ -810,7 +902,7 @@ binds and consumes or transfers that payload.
 Struct fields cannot own linear values, even when the containing struct is
 `linear`, because field access does not provide move-out semantics. Allowing an
 owned field would let repeated reads transfer the same obligation more than
-once. Borrowed references and collection fields do not become linear owners
+once. Reference-typed (`&T`) and collection fields do not become linear owners
 under this rule.
 
 ### Struct Literals
@@ -820,6 +912,9 @@ Struct literal names must be PascalCase:
 ```vow
 let p: Point = Point { x: 1, y: 2 };
 ```
+
+Because of that, an identifier that does not start with an upper-case letter is
+never a struct literal: in `while c { }` and `if c { }` the `{` opens the body.
 
 ### Field Access
 
@@ -987,6 +1082,8 @@ m.contains_key(k)
 
 **Key and value types.** The runtime stores each key and each value in one 64-bit slot and compares keys by value. A `HashMap` key must therefore be `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, or `bool`; every other key type is an `UnsupportedFeature` error in both compilers. `String`, `Vec`, struct, enum, `Option`, and tuple keys are heap-backed handles that would compare by pointer, so a lookup with an equal-but-distinct `String` would silently miss (and a mutable `String` mutated after insertion would corrupt the map). `i128`/`u128` keys would be truncated, and `f32`/`f64` have no total equality. Hash or intern such keys to a `u64` at the call site and keep a side table for the originals. A `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64` is likewise an `UnsupportedFeature` error: map values occupy a single 64-bit integer slot, so a 128-bit value would lose its high word and a float has no slot encoding. A `HashMap` value that is or transitively contains a `linear struct` is an `UnsupportedFeature` error for the same reason `BTreeMap` rejects it (`BTreeMapValueMustBeNonLinear`): the map copies values bitwise and `get` would hand out a second copy of the linear obligation. Narrow integer values (`i8` … `u32`) are stored widened and read back at their declared width. The check applies wherever the map type is written (annotations, parameters, returns, fields, aliases, constants), including nested inside `Vec`, `Option`, tuples, and other maps. A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
 
+**Set idiom.** The unit type `()` is a valid map value, so `HashMap<K, ()>` and `BTreeMap<K, ()>` are sets: `s.insert(k, ());` adds a member, `s.contains_key(k)` (`s.contains(k)` for `BTreeMap`) tests membership, `s.remove(k)` deletes it, and `s.get(k)` returns `Option<()>`. The value `()` has type `()` (it checks against a `()` annotation or return type), and the runtime stores it in the usual 64-bit slot as `0`. A function cannot take a `()` parameter (`UnsupportedFeature`: the argument carries no information and has no ABI slot), so pass the set itself or a key instead.
+
 `HashMap::get` returns `Option<V>`, exactly like `BTreeMap::get`: a missing key is `None`, never a default value, so `let a: i64 = m.get(k);` is a `TypeMismatch` in both compilers. Handle both cases with `match` (or `?`), or call `.unwrap()` to assert the key is present: it aborts with `UnwrapOnNone` on a missing key and requires the `[panic]` effect. A contract can state a binding as `result.get(k).unwrap() == v`; guard it with an earlier `result.contains_key(k)` clause (as in the examples), because the verifier reports a missing key there as a failed `unwrap()` on `None`, which carries no contract blame.
 
 ### BTreeMap<K, V> Methods
@@ -1065,7 +1162,7 @@ Because an offset cannot be negative, the runtime has no negative-offset behavio
 - `string_substr(s, start, len)` clamps `start` to `len()` and `len` to the bytes remaining after `start`.
 - `string_matches_literal_at` returns `0` when `pos` plus the literal's byte length exceeds `len()` (including when that sum overflows `u64`).
 
-The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` fails verification as `index out of bounds`, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values.
+The verifier is stricter than the runtime for `byte_at`: an index that is not provably `< len()` fails verification as `index out of bounds`, because reaching the `-1` sentinel is almost always an agent bug. `substring`, `string_substr` and `string_matches_literal_at` are modelled with exactly the clamping above on unsigned values. A length contract on the result, such as `ensures: result.len() <= s.len()`, proves.
 
 `byte_at` returns a byte *value* in `-1..=255`, not a position, so it stays `i64`. `push_byte` takes a byte *value*, not an offset, and is `u8` (see the String method table).
 
@@ -1168,6 +1265,14 @@ vow {
 | `pin_to_root`    | `fn(value: String) -> String` and `fn<T>(value: Vec<T>) -> Vec<T>` for flat scalar `T` | `[]` |
 
 `pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a flat scalar slot type (`i*`, `u*`, `f32`, `f64`, `bool`). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.
+
+#### Linear Intrinsics
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `drop`           | `fn(value: L) -> ()` for a linear owner `L` | `[]`       |
+
+`drop` is a compiler intrinsic, not a user-defined generic. `L` must be a linear owner: a `linear struct`, or an owned enum wrapper (`Option`, `Result`, or a user enum) that contains one. Any other argument type, or an argument count other than one, is a `TypeMismatch`. `drop` consumes the value exactly once (a second use is `LinearTypeViolation`) and discharges its obligation. It has no runtime effect beyond that: it runs no destructor, frees nothing, and lowers to no instruction other than the consume marker the type and region passes already track. It is verifier-neutral: the consume marker is a no-op in the C model, so a function that drops a linear value is verified exactly as if the call were absent. A user-defined function named `drop` takes precedence over the intrinsic.
 
 `String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.
 

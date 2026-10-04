@@ -408,6 +408,33 @@ fn lctx_lookup(ctx: LowerCtx, name: String) -> i64 {
     -1
 }
 
+// Parallel name/value vectors: the in-scope subset of a candidate name list.
+struct ScopedVars {
+    names: Vec<String>,
+    vals: Vec<i64>,
+}
+
+// Keeps the `names` that are in scope now, paired with their current values,
+// in order. A name declared inside the construct being lowered is not yet in
+// scope and drops out, so it is never carried through a loop or branch. Twin of
+// `LowerCtx::in_scope_vars` in vow-ir/src/lower/mod.rs.
+fn lctx_in_scope_vars(ctx: LowerCtx, names: Vec<String>) -> ScopedVars {
+    let kept_names: Vec<String> = Vec::new();
+    let kept_vals: Vec<i64> = Vec::new();
+    let n: u64 = names.len();
+    let mut i: u64 = 0;
+    while i < n {
+        let name: String = names[i];
+        let val: i64 = lctx_lookup(ctx, name);
+        if val != -1 {
+            kept_names.push(name);
+            kept_vals.push(val);
+        }
+        i = i + 1;
+    }
+    ScopedVars { names: kept_names, vals: kept_vals }
+}
+
 fn lctx_lookup_at_depth(ctx: LowerCtx, name: String, depth: u64) -> i64 {
     let mut i: u64 = depth;
     while i > 0 {
@@ -1307,7 +1334,6 @@ fn lower_ast_ty_linear(a: AstArena, tid: i64, linear_names: Vec<String>, alias_n
         return ITY_PTR();
     }
     if tag == TY_REF() { return ITY_PTR(); }
-    if tag == TY_SLICE() { return ITY_PTR(); }
     if tag == TY_TUPLE() { return ITY_PTR(); }
     -1
 }
@@ -1984,54 +2010,91 @@ fn builtin_ret_ty(name: String) -> i64 {
     ITY_UNIT()
 }
 
-fn collect_assigned_vars(ctx: LowerCtx, eid: i64) -> Vec<String> {
+// Names assigned anywhere in the per-iteration code of the loop expression
+// `eid` (condition and body for `while`, body for `loop` and for-each), in
+// first-assignment source order and regardless of scope. Callers keep only the
+// names in scope at loop entry via `lctx_in_scope_vars`. Same contract and
+// traversal as `collect_loop_assigned_vars` in vow-ir/src/lower/mod.rs. A
+// for-each iterable runs once before the loop, so only its body is scanned; for
+// `while` and `loop` the full-expression scan is exactly the per-iteration code.
+fn collect_loop_assigned_vars(ctx: LowerCtx, eid: i64) -> Vec<String> {
+    let a: AstArena = ctx.arena;
+    let tag: i64 = expr_tag(a, eid);
     let result: Vec<String> = Vec::new();
-    collect_assigned_in_expr(ctx, eid, result);
+    if tag == EXPR_FOR() {
+        collect_assigned_in_block(ctx, expr_b(a, eid), result);
+    } else {
+        collect_assigned_in_expr(ctx, eid, result);
+    }
     result
 }
 
+fn collect_assigned_in_list(ctx: LowerCtx, lid: i64, first: i64, stride: i64, out: Vec<String>) {
+    let a: AstArena = ctx.arena;
+    let n: i64 = list_len(a, lid);
+    let mut i: i64 = first;
+    while i < n {
+        collect_assigned_in_expr(ctx, list_get(a, lid, i), out);
+        i = i + stride;
+    }
+}
+
+// Visits every sub-expression in evaluation order, mirroring the exhaustive
+// `collect_assigned_in_expr` in vow-ir/src/lower/mod.rs. An assignment hidden
+// in any operand position must be carried by the enclosing loop.
 fn collect_assigned_in_expr(ctx: LowerCtx, eid: i64, out: Vec<String>) {
+    if eid == -1 {
+        return;
+    }
     let a: AstArena = ctx.arena;
     let tag: i64 = expr_tag(a, eid);
     if tag == EXPR_ASSIGN() {
         let lhs_eid: i64 = expr_a(a, eid);
-        let lhs_tag: i64 = expr_tag(a, lhs_eid);
-        if lhs_tag == EXPR_IDENT() {
-            let name_sid: i64 = expr_a(a, lhs_eid);
-            let name: String = arena_str(a, name_sid);
+        if expr_tag(a, lhs_eid) == EXPR_IDENT() {
+            let name: String = arena_str(a, expr_a(a, lhs_eid));
             let already: bool = vec_contains_str(out, name);
             if !already {
                 out.push(name);
             }
+        } else {
+            collect_assigned_in_expr(ctx, lhs_eid, out);
         }
-    } else if tag == EXPR_BLOCK() {
-        let bid: i64 = expr_a(a, eid);
-        collect_assigned_in_block(ctx, bid, out);
+        collect_assigned_in_expr(ctx, expr_b(a, eid), out);
+    } else if tag == EXPR_BINOP() {
+        collect_assigned_in_expr(ctx, expr_b(a, eid), out);
+        collect_assigned_in_expr(ctx, expr_c(a, eid), out);
+    } else if tag == EXPR_UNOP() {
+        collect_assigned_in_expr(ctx, expr_b(a, eid), out);
+    } else if tag == EXPR_CALL() {
+        collect_assigned_in_expr(ctx, expr_a(a, eid), out);
+        collect_assigned_in_list(ctx, expr_b(a, eid), 0, 1, out);
+    } else if tag == EXPR_METHOD() {
+        collect_assigned_in_expr(ctx, expr_a(a, eid), out);
+        collect_assigned_in_list(ctx, expr_c(a, eid), 0, 1, out);
+    } else if tag == EXPR_INDEX() {
+        collect_assigned_in_expr(ctx, expr_a(a, eid), out);
+        collect_assigned_in_expr(ctx, expr_b(a, eid), out);
+    } else if tag == EXPR_FIELD() || tag == EXPR_QUESTION() || tag == EXPR_CAST() ||
+              tag == EXPR_RETURN() || tag == EXPR_BREAK() {
+        collect_assigned_in_expr(ctx, expr_a(a, eid), out);
+    } else if tag == EXPR_BLOCK() || tag == EXPR_LOOP() {
+        collect_assigned_in_block(ctx, expr_a(a, eid), out);
     } else if tag == EXPR_IF() {
-        let then_bid: i64 = expr_b(a, eid);
-        let else_eid: i64 = expr_c(a, eid);
-        collect_assigned_in_block(ctx, then_bid, out);
-        if else_eid != -1 {
-            collect_assigned_in_expr(ctx, else_eid, out);
-        }
-    } else if tag == EXPR_WHILE() {
-        let body_bid: i64 = expr_b(a, eid);
-        collect_assigned_in_block(ctx, body_bid, out);
-    } else if tag == EXPR_LOOP() {
-        let body_bid: i64 = expr_a(a, eid);
-        collect_assigned_in_block(ctx, body_bid, out);
-    } else if tag == EXPR_FOR() {
-        let body_bid: i64 = expr_b(a, eid);
-        collect_assigned_in_block(ctx, body_bid, out);
+        collect_assigned_in_expr(ctx, expr_a(a, eid), out);
+        collect_assigned_in_block(ctx, expr_b(a, eid), out);
+        collect_assigned_in_expr(ctx, expr_c(a, eid), out);
+    } else if tag == EXPR_WHILE() || tag == EXPR_FOR() {
+        collect_assigned_in_expr(ctx, expr_a(a, eid), out);
+        collect_assigned_in_block(ctx, expr_b(a, eid), out);
     } else if tag == EXPR_MATCH() {
-        let arms_lid: i64 = expr_b(a, eid);
-        let n_arms: i64 = list_len(a, arms_lid) / 2;
-        let mut mai: i64 = 0;
-        while mai < n_arms {
-            let body_eid: i64 = list_get(a, arms_lid, mai * 2 + 1);
-            collect_assigned_in_expr(ctx, body_eid, out);
-            mai = mai + 1;
-        }
+        collect_assigned_in_expr(ctx, expr_a(a, eid), out);
+        collect_assigned_in_list(ctx, expr_b(a, eid), 1, 2, out);
+    } else if tag == EXPR_TUPLE() {
+        collect_assigned_in_list(ctx, expr_a(a, eid), 0, 1, out);
+    } else if tag == EXPR_SLIT() {
+        collect_assigned_in_list(ctx, expr_b(a, eid), 1, 2, out);
+    } else if tag == EXPR_ECTOR() {
+        collect_assigned_in_list(ctx, expr_b(a, eid), 0, 1, out);
     }
 }
 
@@ -2042,13 +2105,14 @@ fn collect_assigned_in_block(ctx: LowerCtx, bid: i64, out: Vec<String>) {
     let mut i: i64 = 0;
     while i < n {
         let sid: i64 = list_get(a, stmts_lid, i);
-        let stag: i64 = stmt_tag(a, sid);
-        if stag == STMT_EXPR() {
-            let se_eid: i64 = stmt_a(a, sid);
-            collect_assigned_in_expr(ctx, se_eid, out);
+        if stmt_tag(a, sid) == STMT_LET() {
+            collect_assigned_in_expr(ctx, stmt_c(a, sid), out);
+        } else {
+            collect_assigned_in_expr(ctx, stmt_a(a, sid), out);
         }
         i = i + 1;
     }
+    collect_assigned_in_expr(ctx, blk_trail(a, bid), out);
 }
 
 fn vec_contains_str(v: Vec<String>, s: String) -> bool {
@@ -2488,6 +2552,9 @@ fn lower_integer_marker_as(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) -> i64
         return emit_narrow_integer_constant(ctx, expr_a(a, eid), ty);
     }
     if tag == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
+        if expr_tag(a, expr_b(a, eid)) == EXPR_LIT_INT() && ty != ITY_I128() && ty != ITY_U128() {
+            return emit_narrow_integer_constant(ctx, 0 - expr_a(a, expr_b(a, eid)), ty);
+        }
         let zero: i64 = emit_integer_zero(ctx, ty);
         let value: i64 = lower_integer_marker_as(ctx, a, expr_b(a, eid), ty);
         let neg_args: Vec<i64> = Vec::new();
@@ -2587,9 +2654,8 @@ fn backpatch_upsilon(ctx: LowerCtx, block_id: i64, upsilon_id: i64, phi_id: i64)
 // Re-lower an if-expression branch's own result Upsilon at target_ty. The
 // branch's Upsilon still carries its speculative default-width value (see
 // expr_is_coercible_int_marker) from before the merge's real result type
-// was known. Locates the Upsilon by id, not block-tail position, since the
-// mutated-variable Phi loop earlier in the same EXPR_IF() arm may already
-// have appended extra Upsilons after it. Returns up_id unchanged if it
+// was known. Locates the Upsilon by id, not block position, since the
+// branch's mutation Upsilons precede it in the block. Returns up_id unchanged if it
 // can't be found. Twin of renarrow_if_branch_result in
 // vow-ir/src/lower/mod.rs.
 fn renarrow_if_branch_result(ctx: LowerCtx, a: AstArena, block_id: i64, up_id: i64, result_eid: i64, target_ty: i64, span: i64) -> i64 {
@@ -2632,26 +2698,40 @@ fn renarrow_if_branch_result(ctx: LowerCtx, a: AstArena, block_id: i64, up_id: i
 }
 
 fn collect_if_mutations(ctx: LowerCtx, then_bid: i64, else_eid: i64) -> Vec<String> {
-    let result: Vec<String> = Vec::new();
-    collect_assigned_in_block(ctx, then_bid, result);
-    if else_eid != -1 {
-        collect_assigned_in_expr(ctx, else_eid, result);
+    let names: Vec<String> = Vec::new();
+    collect_assigned_in_block(ctx, then_bid, names);
+    collect_assigned_in_expr(ctx, else_eid, names);
+    let kept: ScopedVars = lctx_in_scope_vars(ctx, names);
+    kept.names
+}
+
+// Anchors an instruction created while lowering one expression to that
+// expression's span, unless it already carries a more specific one. Mirrors the
+// Rust lowerer, which gives every emitted instruction its expression's origin,
+// so a literal argument or a folded `0 - 5` reports its own source range.
+fn lctx_stamp_fresh_unspanned(ctx: LowerCtx, inst_id: i64, first_new_id: i64, span: i64) {
+    if inst_id < first_new_id || inst_id >= ctx.next_inst_id {
+        return;
     }
-    let filtered: Vec<String> = Vec::new();
-    let n: u64 = result.len();
-    let mut i: u64 = 0;
-    while i < n {
-        let name: String = result[i];
-        let val: i64 = lctx_lookup(ctx, name);
-        if val != -1 {
-            filtered.push(name);
-        }
-        i = i + 1;
+    let iid: u64 = inst_id as u64;
+    let inst_index: u64 = ctx.inst_index_by_id[iid] as u64;
+    let blk: IrBlock = ctx.func.blocks[ctx.inst_block_by_id[iid] as u64];
+    let inst: IrInst = blk.insts[inst_index];
+    if inst.olen == 0 {
+        inst.ostart = span_unpack_start(span);
+        inst.olen = span_unpack_len(span);
+        blk.insts[inst_index] = inst;
     }
-    filtered
 }
 
 fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
+    let first_new_id: i64 = ctx.next_inst_id;
+    let val: i64 = lower_expr_inner(ctx, eid);
+    lctx_stamp_fresh_unspanned(ctx, val, first_new_id, expr_span(ctx.arena, eid));
+    val
+}
+
+fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
     let a: AstArena = ctx.arena;
     let tag: i64 = expr_tag(a, eid);
 
@@ -2865,22 +2945,18 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         // of the default i64, so it shares a register width with a genuinely
         // `operand_ty`-typed sibling operand in the same binary op.
         if narrow_int_width(operand_ty) != 0 {
-            let narrow_op: i64 = if operand_ty == ITY_I8() || operand_ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
-            let narrow_data: i64 = if operand_ty == ITY_I8() || operand_ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
             if expr_is_const_int(a, lhs_eid) {
                 if operand_ty == ITY_I128() || operand_ty == ITY_U128() {
                     lhs_id = lower_integer_marker_as(ctx, a, lhs_eid, operand_ty);
                 } else {
-                    let const_args: Vec<i64> = Vec::new();
-                    lhs_id = lctx_emit(ctx, narrow_op, operand_ty, const_args, narrow_data, expr_const_int_value(a, lhs_eid), 0, String::from(""));
+                    lhs_id = emit_narrow_integer_constant(ctx, expr_const_int_value(a, lhs_eid), operand_ty);
                 }
             }
             if op != BINOP_SHL() && op != BINOP_SHR() && expr_is_const_int(a, rhs_eid) {
                 if operand_ty == ITY_I128() || operand_ty == ITY_U128() {
                     rhs_id = lower_integer_marker_as(ctx, a, rhs_eid, operand_ty);
                 } else {
-                    let const_args: Vec<i64> = Vec::new();
-                    rhs_id = lctx_emit(ctx, narrow_op, operand_ty, const_args, narrow_data, expr_const_int_value(a, rhs_eid), 0, String::from(""));
+                    rhs_id = emit_narrow_integer_constant(ctx, expr_const_int_value(a, rhs_eid), operand_ty);
                 }
             }
         }
@@ -2937,6 +3013,16 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if callee_tag == EXPR_IDENT() {
             let name_sid: i64 = expr_a(a, callee_eid);
             fn_name = arena_str(a, name_sid);
+        }
+        if fn_name == String::from("drop") && lctx_find_func(ctx, fn_name) == -1 {
+            let nd: i64 = list_len(a, args_lid);
+            let mut di: i64 = 0;
+            while di < nd {
+                lower_consumed_expr(ctx, list_get(a, args_lid, di));
+                di = di + 1;
+            }
+            let drop_args: Vec<i64> = Vec::new();
+            return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), drop_args, IDATA_NONE(), 0, 0, String::from(""));
         }
         if fn_name == String::from("pin_to_root") {
             let nargs: i64 = list_len(a, args_lid);
@@ -3072,14 +3158,15 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mutations: Vec<String> = collect_if_mutations(ctx, then_bid, else_eid);
 
         let nmut: u64 = mutations.len();
+
+        let cond_id: i64 = lower_expr(ctx, cond_eid);
+
         let saved_mut_vals: Vec<i64> = Vec::new();
         let mut smi: u64 = 0;
         while smi < nmut {
             saved_mut_vals.push(lctx_lookup(ctx, mutations[smi]));
             smi = smi + 1;
         }
-
-        let cond_id: i64 = lower_expr(ctx, cond_eid);
 
         let then_block: i64 = lctx_new_block(ctx);
         let else_block: i64 = lctx_new_block(ctx);
@@ -3255,7 +3342,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let body_bid: i64 = expr_b(a, eid);
         let vow_lid: i64 = expr_c(a, eid);
 
-        let assigned: Vec<String> = collect_assigned_vars(ctx, eid);
+        let carried: ScopedVars = lctx_in_scope_vars(ctx, collect_loop_assigned_vars(ctx, eid));
+        let assigned: Vec<String> = carried.names;
+        let assigned_vals: Vec<i64> = carried.vals;
 
         let header_block: i64 = lctx_new_block(ctx);
         let body_block: i64 = lctx_new_block(ctx);
@@ -3269,7 +3358,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut ai: u64 = 0;
         while ai < nassigned {
             let vname: String = assigned[ai];
-            let cur_val: i64 = lctx_lookup(ctx, vname);
+            let cur_val: i64 = assigned_vals[ai];
             let val_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let up_args: Vec<i64> = Vec::new();
             up_args.push(cur_val);
@@ -3287,7 +3376,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut ai2: u64 = 0;
         while ai2 < nassigned {
             let vname: String = assigned[ai2];
-            let cur_val: i64 = lctx_lookup(ctx, vname);
+            let cur_val: i64 = assigned_vals[ai2];
             let phi_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let phi_args: Vec<i64> = Vec::new();
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), phi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
@@ -3320,12 +3409,15 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
         lctx_switch_to_block(ctx, cond_block);
 
-        // Upsilons for natural exit (condition false): header Phi values → exit Phis.
+        // Upsilons for natural exit (condition false): each variable's value after
+        // the condition ran -> exit Phis, so an assignment inside the condition
+        // survives the final evaluation.
         let mut eui: u64 = 0;
         while eui < nassigned {
+            let exit_val: i64 = lctx_lookup(ctx, assigned[eui]);
             let up_args: Vec<i64> = Vec::new();
-            up_args.push(phi_ids[eui]);
-            let up_ty: i64 = lctx_inst_ty(ctx, phi_ids[eui]);
+            up_args.push(exit_val);
+            let up_ty: i64 = lctx_inst_ty(ctx, exit_val);
             let exit_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), up_ty, up_args, IDATA_PHI_TARGET(), exit_phi_ids[eui], 0, String::from(""));
             lctx_set_inst_span(ctx, exit_up_id, expr_span(a, eid));
             eui = eui + 1;
@@ -3414,7 +3506,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let body_bid: i64 = expr_a(a, eid);
         let vow_lid: i64 = expr_b(a, eid);
 
-        let assigned: Vec<String> = collect_assigned_vars(ctx, eid);
+        let carried: ScopedVars = lctx_in_scope_vars(ctx, collect_loop_assigned_vars(ctx, eid));
+        let assigned: Vec<String> = carried.names;
+        let assigned_vals: Vec<i64> = carried.vals;
 
         let header_block: i64 = lctx_new_block(ctx);
         let exit_block: i64 = lctx_new_block(ctx);
@@ -3427,7 +3521,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut ai: u64 = 0;
         while ai < nassigned {
             let vname: String = assigned[ai];
-            let cur_val: i64 = lctx_lookup(ctx, vname);
+            let cur_val: i64 = assigned_vals[ai];
             let val_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let up_args: Vec<i64> = Vec::new();
             up_args.push(cur_val);
@@ -3445,7 +3539,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut ai2: u64 = 0;
         while ai2 < nassigned {
             let vname: String = assigned[ai2];
-            let cur_val: i64 = lctx_lookup(ctx, vname);
+            let cur_val: i64 = assigned_vals[ai2];
             let phi_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let phi_args: Vec<i64> = Vec::new();
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), phi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
@@ -3590,7 +3684,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let idx_init_args: Vec<i64> = Vec::new();
         let idx_init: i64 = lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), idx_init_args, IDATA_CONST_U64(), 0, 0, String::from(""));
 
-        let assigned: Vec<String> = collect_assigned_vars(ctx, eid);
+        let carried: ScopedVars = lctx_in_scope_vars(ctx, collect_loop_assigned_vars(ctx, eid));
+        let assigned: Vec<String> = carried.names;
+        let assigned_vals: Vec<i64> = carried.vals;
 
         let header_block: i64 = lctx_new_block(ctx);
         let body_block: i64 = lctx_new_block(ctx);
@@ -3609,7 +3705,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut ai: u64 = 0;
         while ai < nassigned {
             let vname: String = assigned[ai];
-            let cur_val: i64 = lctx_lookup(ctx, vname);
+            let cur_val: i64 = assigned_vals[ai];
             let val_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let up_args: Vec<i64> = Vec::new();
             up_args.push(cur_val);
@@ -3630,7 +3726,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut ai2: u64 = 0;
         while ai2 < nassigned {
             let vname: String = assigned[ai2];
-            let cur_val: i64 = lctx_lookup(ctx, vname);
+            let cur_val: i64 = assigned_vals[ai2];
             let phi_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let phi_args: Vec<i64> = Vec::new();
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), phi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
@@ -4440,28 +4536,11 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let n_arms: i64 = list_len(a, arms_lid) / 2;
 
         let match_mut_names: Vec<String> = Vec::new();
-        let mut cmi: i64 = 0;
-        while cmi < n_arms {
-            let cb_eid: i64 = list_get(a, arms_lid, cmi * 2 + 1);
-            collect_assigned_in_expr(ctx, cb_eid, match_mut_names);
-            cmi = cmi + 1;
-        }
-        let match_muts: Vec<String> = Vec::new();
-        let mut cmj: u64 = 0;
-        while cmj < match_mut_names.len() {
-            let mname: String = match_mut_names[cmj];
-            if lctx_lookup(ctx, mname) != -1 {
-                match_muts.push(mname);
-            }
-            cmj = cmj + 1;
-        }
+        collect_assigned_in_list(ctx, arms_lid, 1, 2, match_mut_names);
+        let match_kept: ScopedVars = lctx_in_scope_vars(ctx, match_mut_names);
+        let match_muts: Vec<String> = match_kept.names;
         let nmut: u64 = match_muts.len();
-        let saved_mut_vals: Vec<i64> = Vec::new();
-        let mut smi: u64 = 0;
-        while smi < nmut {
-            saved_mut_vals.push(lctx_lookup(ctx, match_muts[smi]));
-            smi = smi + 1;
-        }
+        let saved_mut_vals: Vec<i64> = match_kept.vals;
         let snap: ScopeSnap = lctx_snapshot(ctx);
 
         let arm_exit_blocks: Vec<i64> = Vec::new();
@@ -4751,9 +4830,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let blk: IrBlock = ctx.func.blocks[arm_block as u64];
                     let n_insts: i64 = blk.insts.len() as i64;
                     // Locate the arm's own result Upsilon by id rather than assuming
-                    // block position: the "Phis for mutated variables" pass above may
-                    // have already appended extra Upsilons after this arm's own
-                    // [Upsilon, Jump] pair, so it's not reliably the block's tail.
+                    // block position: the arm's mutation Upsilons precede its result
+                    // Upsilon, so it is not the block's first Upsilon either.
                     let mut up_pos: i64 = -1;
                     let mut old_arg: i64 = -1;
                     let mut fj: i64 = 0;
@@ -5138,7 +5216,12 @@ fn lower_let_binding(ctx: LowerCtx, pat_id: i64, ann_tid: i64, init_eid: i64, sp
         }
     }
     let mut val: i64 = lower_expr(ctx, init_eid);
-    lctx_set_inst_span(ctx, val, span);
+    // A linear binding's unconsumed-obligation diagnostic points at the whole
+    // `let` statement, as the Rust checker's LinearTypeViolation does; every
+    // other value keeps its own expression's span.
+    if lctx_inst_ty(ctx, val) == ITY_LPTR() {
+        lctx_set_inst_span(ctx, val, span);
+    }
     let ptag: i64 = pat_tag(a, pat_id);
     if ptag == PAT_IDENT() {
             let name_sid: i64 = pat_a(a, pat_id);
@@ -5316,9 +5399,134 @@ fn collect_free_vars_in_expr(ctx: LowerCtx, eid: i64, out_names: Vec<String>, ou
     } else if tag == EXPR_CAST() {
         let inner_eid: i64 = expr_a(a, eid);
         collect_free_vars_in_expr(ctx, inner_eid, out_names, out_ids);
+    } else if tag == EXPR_BLOCK() {
+        collect_free_vars_in_block(ctx, expr_a(a, eid), out_names, out_ids);
     } else if tag == EXPR_IF() {
-        let cond_eid: i64 = expr_a(a, eid);
-        collect_free_vars_in_expr(ctx, cond_eid, out_names, out_ids);
+        collect_free_vars_in_expr(ctx, expr_a(a, eid), out_names, out_ids);
+        collect_free_vars_in_block(ctx, expr_b(a, eid), out_names, out_ids);
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid != -1 {
+            collect_free_vars_in_expr(ctx, else_eid, out_names, out_ids);
+        }
+    } else if tag == EXPR_FIELD() {
+        let recv_eid: i64 = expr_a(a, eid);
+        let recv_tag: i64 = expr_tag(a, recv_eid);
+        let field_name: String = arena_str(a, expr_b(a, eid));
+        if recv_tag == EXPR_IDENT() || recv_tag == EXPR_RESULT() {
+            let base: String = {
+                if recv_tag == EXPR_RESULT() { String::from("result") }
+                else { arena_str(a, expr_a(a, recv_eid)) }
+            };
+            let dotted: String = String::from("");
+            dotted.push_str(base);
+            dotted.push_str(String::from("."));
+            dotted.push_str(field_name);
+            let val: i64 = lctx_lookup(ctx, base);
+            if val != -1 && !vec_contains_str(out_names, dotted) {
+                out_names.push(dotted);
+                out_ids.push(val);
+            }
+        } else {
+            collect_free_vars_in_expr(ctx, recv_eid, out_names, out_ids);
+        }
+    }
+}
+
+fn collect_free_vars_in_block(ctx: LowerCtx, bid: i64, out_names: Vec<String>, out_ids: Vec<i64>) {
+    let a: AstArena = ctx.arena;
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, stmts_lid, i);
+        if stmt_tag(a, sid) == STMT_EXPR() {
+            collect_free_vars_in_expr(ctx, stmt_a(a, sid), out_names, out_ids);
+        }
+        i = i + 1;
+    }
+    let trail_eid: i64 = blk_trail(a, bid);
+    if trail_eid != -1 {
+        collect_free_vars_in_expr(ctx, trail_eid, out_names, out_ids);
+    }
+}
+
+fn binding_last_dot(name: String) -> i64 {
+    let mut i: i64 = name.len() as i64;
+    while i > 0 {
+        i = i - 1;
+        if name.byte_at(i as u64) == 46 { return i; }
+    }
+    -1
+}
+
+fn binding_is_primitive_field(type_name: String) -> bool {
+    type_name == String::from("i32") || type_name == String::from("i64")
+        || type_name == String::from("f32") || type_name == String::from("f64")
+        || type_name == String::from("bool")
+}
+
+fn emit_binding_field_get(ctx: LowerCtx, ptr_id: i64, idx: i64, span: i64) -> i64 {
+    let fg_args: Vec<i64> = Vec::new();
+    fg_args.push(ptr_id);
+    let id: i64 = lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), fg_args, IDATA_FIELD(), idx, 0, String::from(""));
+    lctx_set_inst_span(ctx, id, span);
+    id
+}
+
+// Twin of `expand_ptr_bindings` in vow-ir/src/lower/vow.rs: a struct-pointer
+// binding is replaced by one captured value per primitive field, so a
+// VowViolation reports `result.c`, not an address. Pointer bindings with no
+// registered struct (String, Vec, maps, enums) are dropped.
+fn lower_vow_bindings(ctx: LowerCtx, eid: i64, span: i64, out_names: Vec<String>, out_ids: Vec<i64>) {
+    let raw_names: Vec<String> = Vec::new();
+    let raw_ids: Vec<i64> = Vec::new();
+    collect_free_vars_in_expr(ctx, eid, raw_names, raw_ids);
+    let mut i: u64 = 0u64;
+    while i < raw_names.len() {
+        let name: String = raw_names[i];
+        let inst_id: i64 = raw_ids[i];
+        let ty: i64 = lctx_inst_ty(ctx, inst_id);
+        if ty != ITY_PTR() && ty != ITY_LPTR() {
+            out_names.push(name);
+            out_ids.push(inst_id);
+        } else {
+            let struct_name: String = lctx_get_tag(ctx, inst_id);
+            let sidx: i64 = {
+                if struct_name.len() == 0 { -1 } else { lctx_find_struct(ctx, struct_name) }
+            };
+            if sidx != -1 {
+                let field_names: Vec<String> = ctx.struct_field_lists[sidx as u64];
+                let field_types: Vec<String> = ctx.struct_field_type_names[sidx as u64];
+                let dot: i64 = binding_last_dot(name);
+                if dot >= 0 {
+                    let field: String = name.substring((dot + 1) as u64, name.len());
+                    let mut fi: u64 = 0u64;
+                    let mut found: i64 = -1;
+                    while fi < field_names.len() {
+                        if found == -1 && field_names[fi] == field { found = fi as i64; }
+                        fi = fi + 1;
+                    }
+                    if found != -1 && found < field_types.len() as i64 && binding_is_primitive_field(field_types[found as u64]) {
+                        out_names.push(name);
+                        out_ids.push(emit_binding_field_get(ctx, inst_id, found, span));
+                    }
+                } else {
+                    let mut fi: u64 = 0u64;
+                    while fi < field_names.len() {
+                        if fi < field_types.len() && binding_is_primitive_field(field_types[fi]) {
+                            let dotted: String = String::from("");
+                            dotted.push_str(name);
+                            dotted.push_str(String::from("."));
+                            dotted.push_str(field_names[fi]);
+                            out_names.push(dotted);
+                            out_ids.push(emit_binding_field_get(ctx, inst_id, fi as i64, span));
+                        }
+                        fi = fi + 1;
+                    }
+                }
+            }
+        }
+        i = i + 1;
     }
 }
 
@@ -5335,13 +5543,14 @@ fn lower_requires_clauses(ctx: LowerCtx, vow_lid: i64) {
             desc.push_str(print_expr_text(a, clause_eid));
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
-            collect_free_vars_in_expr(ctx, clause_eid, binding_names, binding_ids);
+            lower_vow_bindings(ctx, clause_eid, vow_clause_span(a, cid), binding_names, binding_ids);
             let clause_offset: i64 = span_unpack_start(vow_clause_span(a, cid));
             let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLER(), binding_ids, binding_names, clause_offset);
             let pred_id: i64 = lower_expr(ctx, clause_eid);
             let vow_args: Vec<i64> = Vec::new();
             vow_args.push(pred_id);
-            lctx_emit(ctx, IOP_VOW_REQ(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            let vow_inst: i64 = lctx_emit(ctx, IOP_VOW_REQ(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            lctx_set_inst_span(ctx, vow_inst, vow_clause_span(a, cid));
         }
         i = i + 1;
     }
@@ -5362,13 +5571,14 @@ fn lower_ensures_clauses(ctx: LowerCtx, vow_lid: i64, result_id: i64) {
             desc.push_str(print_expr_text(a, clause_eid));
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
-            collect_free_vars_in_expr(ctx, clause_eid, binding_names, binding_ids);
+            lower_vow_bindings(ctx, clause_eid, vow_clause_span(a, cid), binding_names, binding_ids);
             let clause_offset: i64 = span_unpack_start(vow_clause_span(a, cid));
             let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLEE(), binding_ids, binding_names, clause_offset);
             let pred_id: i64 = lower_expr(ctx, clause_eid);
             let vow_args: Vec<i64> = Vec::new();
             vow_args.push(pred_id);
-            lctx_emit(ctx, IOP_VOW_ENS(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            let vow_inst: i64 = lctx_emit(ctx, IOP_VOW_ENS(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            lctx_set_inst_span(ctx, vow_inst, vow_clause_span(a, cid));
         }
         i = i + 1;
     }
@@ -5388,13 +5598,14 @@ fn lower_invariant_clauses(ctx: LowerCtx, vow_lid: i64) {
             desc.push_str(print_expr_text(a, clause_eid));
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
-            collect_free_vars_in_expr(ctx, clause_eid, binding_names, binding_ids);
+            lower_vow_bindings(ctx, clause_eid, vow_clause_span(a, cid), binding_names, binding_ids);
             let clause_offset: i64 = span_unpack_start(vow_clause_span(a, cid));
             let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLEE(), binding_ids, binding_names, clause_offset);
             let pred_id: i64 = lower_expr(ctx, clause_eid);
             let vow_args: Vec<i64> = Vec::new();
             vow_args.push(pred_id);
-            lctx_emit(ctx, IOP_VOW_INV(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            let vow_inst: i64 = lctx_emit(ctx, IOP_VOW_INV(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            lctx_set_inst_span(ctx, vow_inst, vow_clause_span(a, cid));
         }
         i = i + 1;
     }
@@ -5422,6 +5633,11 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.current_block = 0;
     ctx.next_inst_id = 0;
     ctx.inst_ty_by_id = Vec::new();
+    ctx.inst_block_by_id = Vec::new();
+    ctx.inst_index_by_id = Vec::new();
+    ctx.phi_first_dependent = Vec::new();
+    ctx.phi_dependent_targets = Vec::new();
+    ctx.phi_next_dependent = Vec::new();
     ctx.scope_vars = Vec::new();
     ctx.scope_vals = Vec::new();
     ctx.scope_starts = Vec::new();
@@ -5528,13 +5744,14 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
             desc.push_str(String::from(")"));
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
-            collect_free_vars_in_expr(ctx, ref_eid, binding_names, binding_ids);
+            lower_vow_bindings(ctx, ref_eid, rname_span, binding_names, binding_ids);
             let ref_offset: i64 = span_unpack_start(rname_span);
             let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLER(), binding_ids, binding_names, ref_offset);
             let pred_id: i64 = lower_expr(ctx, ref_eid);
             let vow_args: Vec<i64> = Vec::new();
             vow_args.push(pred_id);
-            lctx_emit(ctx, IOP_VOW_REQ(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            let vow_inst: i64 = lctx_emit(ctx, IOP_VOW_REQ(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            lctx_set_inst_span(ctx, vow_inst, rname_span);
         }
         ri = ri + 1;
     }

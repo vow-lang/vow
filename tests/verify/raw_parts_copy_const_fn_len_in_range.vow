@@ -1,0 +1,29 @@
+// TEST: category model-drift
+// A length that is the result of a constant-returning function folds to its
+// value: inside the model capacity it is an exact length (no capacity
+// assumption, so no bounded-proof note), and a null source stays empty.
+module RawPartsCopyConstFnLenInRange
+
+fn width() -> u64 {
+    3
+}
+
+fn exact_len(p: i64) -> u64 vow {
+    requires: p != 0
+    ensures: result == 3
+} {
+    let s: String = String::from_raw_parts_copy(p, width());
+    s.len()
+}
+
+fn exact_vec_len(p: i64) -> u64 vow {
+    requires: p != 0
+    ensures: result == 3
+} {
+    let v: Vec<u8> = Vec::from_raw_parts_copy(p, width());
+    v.len()
+}
+
+fn main() -> i32 {
+    0
+}

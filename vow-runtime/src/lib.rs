@@ -1322,21 +1322,43 @@ fn set_vow_vec_capacity(desc: &mut VowVec, capacity: usize, op: &'static str) {
     desc.cap = capacity | (desc.cap & VOW_CAP_RUNTIME_OWNED);
 }
 
-/// Return true iff `vec` is a mutable runtime descriptor allocated by
-/// `__vow_vec_new_in_arena` and its hidden owner is `candidate`.
+/// The arena recorded in a mutable runtime descriptor allocated by
+/// `__vow_vec_new_in_arena`, or `None` for rodata and foreign descriptors.
 ///
 /// Safety: the in-descriptor ownership bit is checked before reading outside
 /// the public descriptor. Only runtime-owned descriptors carry that bit and
 /// have an `OwnedVowVec` prefix; valid foreign descriptors leave it clear.
-unsafe fn vow_vec_is_owned_by(vec: *const u8, candidate: *mut VowArena) -> bool {
+unsafe fn vow_vec_owner(vec: *const u8) -> Option<*mut VowArena> {
     let desc = unsafe { &*(vec as *const VowVec) };
     if desc.cap == VOW_CAP_RODATA || desc.cap & VOW_CAP_RUNTIME_OWNED == 0 {
-        return false;
+        return None;
     }
     let owner_ptr =
         unsafe { vec.sub(core::mem::size_of::<*mut VowArena>()) } as *const *mut VowArena;
-    let owner = unsafe { *owner_ptr };
-    std::ptr::eq(owner as *const VowArena, candidate as *const VowArena)
+    Some(unsafe { *owner_ptr })
+}
+
+/// Return true iff `vec` is a mutable runtime descriptor whose hidden owner
+/// is `candidate`.
+unsafe fn vow_vec_is_owned_by(vec: *const u8, candidate: *mut VowArena) -> bool {
+    unsafe { vow_vec_owner(vec) }
+        .is_some_and(|owner| std::ptr::eq(owner as *const VowArena, candidate as *const VowArena))
+}
+
+/// Run `f` with the arena a growing Vec or String must reallocate in: the arena
+/// recorded in its descriptor, so a receiver reached through a struct field or
+/// a `Vec` element (no provable region) keeps its buffer next to its header
+/// instead of leaking it into the root arena. Rodata and foreign descriptors
+/// fall back to the root arena. A root-owned receiver takes the root lock
+/// unless this thread already holds it.
+unsafe fn with_growth_arena<R>(recv: *const u8, f: impl FnOnce(*mut VowArena) -> R) -> R {
+    if let Some(owner) = unsafe { vow_vec_owner(recv) }
+        && !owner.is_null()
+        && (!arena_is_root(owner) || ROOT_LOCK_HELD.with(Cell::get))
+    {
+        return f(owner);
+    }
+    unsafe { with_root_arena(f) }
 }
 
 unsafe fn alloc_owned_vow_vec_descriptor(arena: *mut VowArena) -> *mut VowVec {
@@ -1561,8 +1583,8 @@ pub unsafe extern "C" fn __vow_vec_reserve_in_arena(
 
 unsafe fn __vow_vec_reserve(vec: *mut u8, additional: usize, elem_size: usize, elem_align: usize) {
     unsafe {
-        with_root_arena(|root| {
-            vec_reserve_in_arena_no_null_check(root, vec, additional, elem_size, elem_align)
+        with_growth_arena(vec, |arena| {
+            vec_reserve_in_arena_no_null_check(arena, vec, additional, elem_size, elem_align)
         })
     }
 }
@@ -1593,7 +1615,9 @@ pub unsafe extern "C" fn __vow_vec_push(
     elem_align: usize,
 ) {
     unsafe {
-        with_root_arena(|root| __vow_vec_push_in_arena(root, vec, elem, elem_size, elem_align))
+        with_growth_arena(vec, |arena| {
+            __vow_vec_push_in_arena(arena, vec, elem, elem_size, elem_align)
+        })
     }
 }
 
@@ -1644,7 +1668,7 @@ pub unsafe extern "C" fn __vow_vec_push_val_in_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
-    unsafe { with_root_arena(|root| __vow_vec_push_val_in_arena(root, vec, value)) }
+    unsafe { with_growth_arena(vec, |arena| __vow_vec_push_val_in_arena(arena, vec, value)) }
 }
 
 #[unsafe(no_mangle)]
@@ -2040,7 +2064,11 @@ pub unsafe extern "C" fn __vow_string_push_str_in_candidate_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_str(dest: *mut u8, src: *const u8) {
-    unsafe { with_root_arena(|root| __vow_string_push_str_in_arena(root, dest, src)) }
+    unsafe {
+        with_growth_arena(dest, |arena| {
+            __vow_string_push_str_in_arena(arena, dest, src)
+        })
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -2135,7 +2163,7 @@ pub unsafe extern "C" fn __vow_string_push_byte_in_candidate_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_byte(s: *mut u8, byte: u64) {
-    unsafe { with_root_arena(|root| __vow_string_push_byte_in_arena(root, s, byte)) }
+    unsafe { with_growth_arena(s, |arena| __vow_string_push_byte_in_arena(arena, s, byte)) }
 }
 
 // ---------------------------------------------------------------------------
@@ -4276,7 +4304,13 @@ pub unsafe extern "C" fn __vow_map_insert_in_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_map_insert(map: *mut u8, key: i64, val: i64) {
-    unsafe { with_root_arena(|root| __vow_map_insert_in_arena(root, map, key, val)) }
+    // `HashMap::insert` allocates only in the map's owner arena, so the root
+    // wrapper needs no root-arena lock: it hands the entry point that owner.
+    let m = unsafe { &*(map as *const VowMap) };
+    if m.cap == VOW_CAP_RODATA {
+        region_literal_mutation_trap("HashMap::insert");
+    }
+    unsafe { __vow_map_insert_in_arena(m.owner, map, key, val) }
 }
 
 /// `HashMap::get`: a fresh `Option<V>` allocated in `arena` (tag 1 and the
@@ -5794,6 +5828,41 @@ mod tests {
     }
 
     #[test]
+    fn root_wrappers_never_take_the_root_lock_for_a_non_root_owner() {
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+
+        let mut owner = empty_arena_header();
+        unsafe { __vow_arena_open(&mut owner) };
+        let map = unsafe { __vow_map_new_in_arena(&mut owner) } as usize;
+        let vec = unsafe { __vow_vec_new_val_in_arena(&mut owner) } as usize;
+        let text = unsafe { __vow_string_new_in_arena(&mut owner, c"".as_ptr(), 0) } as usize;
+        let n = MAP_INITIAL_CAP as i64 * 4;
+        let (done_tx, done_rx) = channel();
+        let guard = ROOT_ARENA_LOCK.lock().unwrap();
+        let worker = std::thread::spawn(move || {
+            for i in 0..n {
+                unsafe { __vow_map_insert(map as *mut u8, i, i) };
+                unsafe { __vow_vec_push_val(vec as *mut u8, i) };
+                unsafe { __vow_string_push_byte(text as *mut u8, b'x' as u64) };
+            }
+            done_tx.send(()).unwrap();
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("growth in a non-root owner must not wait for the root-arena lock");
+        drop(guard);
+        worker.join().unwrap();
+        let header = unsafe { &*(map as *const VowMap) };
+        assert_eq!(header.len, n as usize);
+        let desc = unsafe { &*(vec as *const VowVec) };
+        assert_eq!(desc.len, n as usize);
+        let text = unsafe { &*(text as *const VowVec) };
+        assert_eq!(text.len, n as usize);
+        unsafe { __vow_arena_close(&mut owner) };
+    }
+
+    #[test]
     fn concurrent_growth_of_root_owned_maps_through_the_arena_entry_point() {
         let root = root_arena_ptr() as usize;
         let n = 2000i64;
@@ -6282,6 +6351,56 @@ mod tests {
         assert_eq!(unsigned_max_bytes, b"18446744073709551615");
 
         unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn root_wrappers_grow_owned_vec_and_string_in_their_owner_arena() {
+        let mut owner = empty_arena_header();
+        unsafe { __vow_arena_open(&mut owner) };
+
+        let v = unsafe { __vow_vec_new_val_in_arena(&mut owner) };
+        for i in 0..64 {
+            unsafe { __vow_vec_push_val(v, i) };
+        }
+        let desc = unsafe { &*(v as *const VowVec) };
+        assert_eq!(desc.len, 64);
+        assert_eq!(unsafe { *(desc.ptr as *const i64).add(63) }, 63);
+        assert_eq!(
+            owner.last_alloc_start, desc.ptr,
+            "Vec::push_val growth through the root wrapper stays in the owner arena"
+        );
+
+        let w = unsafe { __vow_vec_new_in_arena(&mut owner, 4, 4) };
+        for i in 0..40u32 {
+            unsafe { __vow_vec_push(w, &i as *const u32 as *const u8, 4, 4) };
+        }
+        let desc = unsafe { &*(w as *const VowVec) };
+        assert_eq!(desc.len, 40);
+        assert_eq!(owner.last_alloc_start, desc.ptr, "Vec::push growth");
+
+        let s = unsafe { __vow_string_new_in_arena(&mut owner, c"".as_ptr(), 0) };
+        for _ in 0..40 {
+            unsafe { __vow_string_push_byte(s, b'x' as u64) };
+        }
+        let desc = unsafe { &*(s as *const VowVec) };
+        assert_eq!(desc.len, 40);
+        assert_eq!(owner.last_alloc_start, desc.ptr, "String::push_byte growth");
+
+        let chunk = unsafe { __vow_string_new_in_arena(&mut owner, c"0123456789".as_ptr(), 10) };
+        for _ in 0..8 {
+            unsafe { __vow_string_push_str(s, chunk) };
+        }
+        let desc = unsafe { &*(s as *const VowVec) };
+        assert_eq!(desc.len, 120);
+        assert_eq!(unsafe { *desc.ptr.add(119) }, b'9');
+        assert_eq!(
+            unsafe { *desc.ptr.add(40) },
+            b'0',
+            "the appended bytes follow the original 40"
+        );
+        assert_eq!(owner.last_alloc_start, desc.ptr, "String::push_str growth");
+
+        unsafe { __vow_arena_close(&mut owner) };
     }
 
     #[test]

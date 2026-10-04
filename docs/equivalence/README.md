@@ -64,6 +64,22 @@ diagnostics while the self-hosted runner emits none (#1183), and the schema for
 them has drifted from both emitters (#1184). Both must close before the field
 can be gated.
 
+Two comparisons are whole-document rather than summaries. `vow verify` output
+(`tests/verify/`, `tests/verify-fail/`, the example and multi-module verifies) goes
+through `parity.py full-json`, which demands identical diagnostics (code, message,
+span, hints, secondary spans, blame), legacy `counterexample` string and every
+counterexample field, and validates both documents against
+`docs/spec/schemas/build-result.schema.json`. Its only allow-list is
+`FULL_JSON_ALLOWLIST` in `scripts/parity.py`: ESBMC's free-text `verify_message`
+(and the same text inside the legacy `counterexample` string of a soft failure),
+the `executable` path (only its presence is compared), the order of non-error
+diagnostics (compared as a multiset), and `$esbmc$` solver temporaries in
+counterexample `values`. The structured runtime aborts of the
+debug fixtures (`tests/debug/`, `tests/debug_multi/`) go through
+`parity.py runtime-json`, which requires every stderr JSON object, `VowViolation`'s
+`file` and `offset` included, to be identical and to satisfy
+`vow-violation.schema.json`; it has no allow-list.
+
 When one compiler's JSON is empty while the other's is not, `full_test.sh`
 treats that as a FAIL, not a SKIP: `scripts/parity.py`'s `classify_empty_output`
 only skips when *both* sides are empty (nothing to compare), since a one-sided

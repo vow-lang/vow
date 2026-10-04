@@ -337,7 +337,15 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
         ),
         def(
             "__vow_clif_fn_vow",
-            vec![Ty::I64, Ty::I64, Ty::Str, vec_ty(Ty::I64), vec_ty(Ty::Str)],
+            vec![
+                Ty::I64,
+                Ty::I64,
+                Ty::Str,
+                vec_ty(Ty::I64),
+                vec_ty(Ty::Str),
+                Ty::Str,
+                Ty::I64,
+            ],
             Ty::I64,
             &[Effect::IO],
         ),
@@ -836,7 +844,7 @@ __vow_clif_fn_begin(I64, I64, I64, Applied(Struct("Vec"), [I64])) -> I64 [IO]
 __vow_clif_fn_block(I64) -> I64 [IO]
 __vow_clif_fn_end(I64) -> I64 [IO]
 __vow_clif_fn_inst(I64, I64, I64, I64, I64, I64, I64, Str, Applied(Struct("Vec"), [I64]), I64) -> I64 [IO]
-__vow_clif_fn_vow(I64, I64, Str, Applied(Struct("Vec"), [I64]), Applied(Struct("Vec"), [Str])) -> I64 [IO]
+__vow_clif_fn_vow(I64, I64, Str, Applied(Struct("Vec"), [I64]), Applied(Struct("Vec"), [Str]), Str, I64) -> I64 [IO]
 __vow_clif_link(Str, Str) -> I64 [IO]
 add_sat_u8(U8, U8) -> U8 []
 args() -> Applied(Struct("Vec"), [Str]) [Read]

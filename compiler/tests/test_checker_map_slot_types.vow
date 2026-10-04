@@ -213,6 +213,48 @@ fn check_diagnostic_order() -> i32 [io] {
     0
 }
 
+fn check_vec_linear_elements() -> i32 [io] {
+    if count_code(linear_param(String::from("Vec<Token>")), EC_UNSUPPORTED_FEATURE()) != 1 { return 111; }
+    if count_code(linear_param(String::from("Vec<Plain>")), EC_UNSUPPORTED_FEATURE()) != 0 { return 112; }
+    if count_code(linear_param(String::from("Vec<Vec<Token>>")), EC_UNSUPPORTED_FEATURE()) != 1 { return 113; }
+    if count_code(linear_param(String::from("Option<Token>")), EC_UNSUPPORTED_FEATURE()) != 0 { return 114; }
+    if count_code(linear_param(String::from("HashMap<i64, Vec<Token>>")), EC_UNSUPPORTED_FEATURE()) != 1 { return 115; }
+    if !only_message(linear_param(String::from("Vec<Token>"))).contains(String::from("Vec element type must be non-linear; found 'Token'")) { return 116; }
+    let vec_hint: String = String::from("a Vec copies and shifts elements bitwise, so a linear element would be duplicated; keep the value in a local binding and store an integer handle instead");
+    if only_hint(linear_param(String::from("Vec<Token>"))) != vec_hint { return 117; }
+    let fwd: String = String::from("module MapSlot\nstruct Holder { v: Vec<Token> }\ntype Tokens = Vec<Token>\nlinear struct Token { id: i64 }\nfn main() -> i32 { 0 }");
+    if count_code(fwd, EC_UNSUPPORTED_FEATURE()) != 2 { return 118; }
+    if count_code(linear_param(String::from("Vec<&Token>")), EC_UNSUPPORTED_FEATURE()) != 0 { return 119; }
+    if count_code(linear_param(String::from("Vec<(i64, Token)>")), EC_UNSUPPORTED_FEATURE()) != 1 { return 120; }
+    if count_code(linear_param(String::from("Vec<Option<&Token>>")), EC_UNSUPPORTED_FEATURE()) != 0 { return 129; }
+    let aliased: String = String::from("module MapSlot\nlinear struct Token { id: i64 }\ntype Toks = Vec<Token>;\nfn a(x: Toks) -> i64 { 0 }\nfn b(x: Toks, y: Toks) -> i64 { 0 }\nfn probe() -> i64 { let z: Toks = Vec::new(); 0 }");
+    if count_code(aliased, EC_UNSUPPORTED_FEATURE()) != 1 { return 130; }
+    0
+}
+
+fn drop_probe(body: String) -> String {
+    let src: String = String::from("module MapSlot\nlinear struct Token { id: i64 }\nfn probe(t: Token, n: i64) -> i64 { ");
+    src.push_str(body);
+    src.push_str(String::from(" }"));
+    src
+}
+
+fn check_drop_and_unit() -> i32 [io] {
+    if diagnostics_of(drop_probe(String::from("drop(t); n"))).len() != 0 { return 121; }
+    if count_code(drop_probe(String::from("drop(n); drop(t); n")), EC_TYPE_MISMATCH()) != 1 { return 122; }
+    if !only_message(drop_probe(String::from("drop(n); drop(t); n"))).contains(String::from("drop requires a linear value, found `i64`")) { return 123; }
+    if count_code(drop_probe(String::from("drop(t, t); n")), EC_TYPE_MISMATCH()) != 1 { return 124; }
+    if !only_message(drop_probe(String::from("drop(t, t); n"))).contains(String::from("function `drop` expects 1 argument but got 2")) { return 131; }
+    if !only_message(drop_probe(String::from("drop(); n"))).contains(String::from("function `drop` expects 1 argument but got 0")) { return 132; }
+    // A second drop is a consume-twice error found by the IR region pass, not by the
+    // checker; tests/error/drop_twice.vow pins the rejection end to end.
+    if diagnostics_of(drop_probe(String::from("drop(t); drop(t); n"))).len() != 0 { return 125; }
+    if diagnostics_of(body_probe(String::from("let u: () = (); let h: HashMap<i64, ()> = HashMap::new(); h.insert(1, u); 0"))).len() != 0 { return 126; }
+    if diagnostics_of(String::from("module U\nfn f() -> () { () }\nfn main() -> i32 { 0 }")).len() != 0 { return 127; }
+    if count_code(body_probe(String::from("let u: () = 1; 0")), EC_TYPE_MISMATCH()) != 1 { return 128; }
+    0
+}
+
 fn main() -> i32 [io] {
     let accepted: i32 = check_accepted_map_types();
     if accepted != 0 { return accepted; }
@@ -232,5 +274,9 @@ fn main() -> i32 [io] {
     if text != 0 { return text; }
     let hints: i32 = check_diagnostic_hints();
     if hints != 0 { return hints; }
+    let vecs: i32 = check_vec_linear_elements();
+    if vecs != 0 { return vecs; }
+    let drops: i32 = check_drop_and_unit();
+    if drops != 0 { return drops; }
     check_diagnostic_order()
 }

@@ -1,0 +1,73 @@
+// TEST: stdout "2\n11\n3\n6\n4\n1\n1\n3\n1\n"
+module ParenBlockPostfixForms
+
+enum Shape {
+    Empty,
+    Circle(i64),
+}
+
+fn radius(s: Shape) -> i64 {
+    match s {
+        Shape::Empty => 0,
+        Shape::Circle(r) => r,
+    }
+}
+
+fn main() [io] {
+    let c: bool = true;
+    let n: i64 = 5;
+    let v: Vec<i64> = Vec::new();
+    v.push(10);
+    v.push(20);
+    let w: Vec<i64> = Vec::new();
+    w.push(7);
+
+    let a: u64 = (if c { 2 } else { 3 }) as u64;
+    print_u64(a);
+    print_str(String::from("\n"));
+
+    let b: i64 = (if c { 10 } else { 20 }) + 1;
+    print_i64(b);
+    print_str(String::from("\n"));
+
+    let len: u64 = (if c { v } else { w }).len() + 1;
+    print_u64(len);
+    print_str(String::from("\n"));
+
+    let chained: i64 = (match Shape::Circle(2) { Shape::Empty => 0, Shape::Circle(r) => r }) * 3;
+    print_i64(chained);
+    print_str(String::from("\n"));
+
+    let cast_chain: i64 = ((if c { 4 } else { 5 }) as u64) as i64;
+    print_i64(cast_chain);
+    print_str(String::from("\n"));
+
+    let wide: u64 = n as u64;
+    let lt: bool = n as u64 < wide + 1;
+    if lt {
+        print_i64(1);
+    } else {
+        print_i64(0);
+    }
+    print_str(String::from("\n"));
+
+    let shifted: u64 = n as u64 << 1;
+    if shifted == 10 {
+        print_i64(1);
+    } else {
+        print_i64(0);
+    }
+    print_str(String::from("\n"));
+
+    let eq: bool = (if c { 3 } else { 4 }) == 3;
+    if eq {
+        print_i64(3);
+    } else {
+        print_i64(0);
+    }
+    print_str(String::from("\n"));
+
+    let idx: i64 = (if c { v } else { w })[0 as u64] - 9;
+    print_i64(idx);
+    print_str(String::from("\n"));
+}

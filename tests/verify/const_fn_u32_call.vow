@@ -1,0 +1,29 @@
+// TEST: category bounds
+// A call of a constant-returning function inlines the constant as a value of
+// the function's own type: a u32 maximum is 4294967295, never its signed
+// bit pattern, and both compilers emit the same spelling.
+module ConstFnU32Call
+
+fn wide() -> u32 {
+    4294967295
+}
+
+fn narrow() -> u32 {
+    7
+}
+
+fn caller() -> u32 vow {
+    ensures: result == 4294967295
+} {
+    wide()
+}
+
+fn small() -> u32 vow {
+    ensures: result == 7
+} {
+    narrow()
+}
+
+fn main() -> i32 {
+    0
+}

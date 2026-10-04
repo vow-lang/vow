@@ -1,0 +1,99 @@
+module TestDiagVerifyJson
+
+use diag
+
+// The JSON shapes docs/spec/schemas pins for a failed `vow verify`: a
+// counterexample's `source` is a `{file, offset, length}` object (or null), and
+// a diagnostic span is exactly `{file, offset, length}` with optional
+// `secondary` spans and no line or column.
+
+fn sample_ce(source: String) -> VerifyCE {
+    VerifyCE {
+        function: String::from("f"),
+        var_names: Vec::new(),
+        var_values: Vec::new(),
+        violation: String::from("ensures result >= 0"),
+        vow_id: 1,
+        source: source,
+        source_start: 215,
+        source_len: 20,
+        blame: DIAG_BLAME_CALLEE(),
+        call_site_functions: Vec::new(),
+        call_site_files: Vec::new(),
+        call_site_offsets: Vec::new(),
+        call_site_lengths: Vec::new(),
+        violating_arg_params: Vec::new(),
+        violating_arg_values: Vec::new(),
+        violating_arg_offsets: Vec::new(),
+        violating_arg_lengths: Vec::new(),
+        replay: String::from(""),
+        replay_reason: String::from(""),
+    }
+}
+
+fn contains(hay: String, needle: String) -> bool {
+    let mut i: u64 = 0;
+    while i + needle.len() <= hay.len() {
+        let mut j: u64 = 0;
+        let mut same: bool = true;
+        while j < needle.len() && same {
+            if hay.byte_at(i + j) != needle.byte_at(j) {
+                same = false;
+            }
+            j = j + 1;
+        }
+        if same {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn check_counterexample_source_is_an_object() -> i64 {
+    let json: String = diag_ce_to_json(sample_ce(String::from("t.vow")));
+    let want: String = String::from("\"source\":{\"file\":\"t.vow\",\"offset\":215,\"length\":20},\"blame\":\"callee\"");
+    if !contains(json, want) { return 100; }
+    0
+}
+
+fn check_an_unattributed_counterexample_has_a_null_source() -> i64 {
+    let json: String = diag_ce_to_json(sample_ce(String::from("")));
+    if !contains(json, String::from("\"source\":null,\"blame\":\"callee\"")) { return 200; }
+    0
+}
+
+fn check_diagnostic_span_has_no_line_or_column() -> i64 {
+    let dctx: DiagCtx = diag_ctx_new();
+    diag_ctx_add_source(dctx, String::from("t.vow"), String::from("module T\nfn f() -> i64 { 1 }\n"));
+    let d: Diagnostic = diag_error(EC_VOW_ENSURES_VIOLATED(), String::from("m"), String::from("t.vow"), 12, 5);
+    let json: String = diag_to_json(d);
+    if !contains(json, String::from("\"span\":{\"file\":\"t.vow\",\"offset\":12,\"length\":5}")) { return 300; }
+    if contains(json, String::from("\"line\"")) { return 301; }
+    if contains(json, String::from("\"column\"")) { return 302; }
+    0
+}
+
+fn check_secondary_spans_are_emitted() -> i64 {
+    let d: Diagnostic = diag_error(EC_VOW_REQUIRES_VIOLATED(), String::from("m"), String::from("t.vow"), 1, 2);
+    let plain: String = diag_to_json(d);
+    if contains(plain, String::from("secondary")) { return 400; }
+    diag_add_secondary(d, String::from("t.vow"), 40, 8);
+    diag_add_secondary(d, String::from("u.vow"), 50, 3);
+    let json: String = diag_to_json(d);
+    let want: String = String::from("\"secondary\":[{\"file\":\"t.vow\",\"offset\":40,\"length\":8},{\"file\":\"u.vow\",\"offset\":50,\"length\":3}]");
+    if !contains(json, want) { return 401; }
+    0
+}
+
+fn main() -> i32 {
+    let r1: i64 = check_counterexample_source_is_an_object();
+    if r1 != 0 { return i64_to_i32_wrap(r1); }
+    let r2: i64 = check_an_unattributed_counterexample_has_a_null_source();
+    if r2 != 0 { return i64_to_i32_wrap(r2); }
+    let r3: i64 = check_diagnostic_span_has_no_line_or_column();
+    if r3 != 0 { return i64_to_i32_wrap(r3); }
+    let r4: i64 = check_secondary_spans_are_emitted();
+    if r4 != 0 { return i64_to_i32_wrap(r4); }
+    0
+}

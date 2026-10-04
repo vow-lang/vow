@@ -16,7 +16,6 @@ fn choose(h: Handle, c: bool) -> Handle {
 
 fn main() -> i32 {
     let h: Handle = Handle { fd: 1 };
-    let v: Vec<Handle> = Vec::new();
-    v.push(choose(h, true));
+    drop(choose(h, true));
     0
 }

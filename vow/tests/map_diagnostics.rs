@@ -70,6 +70,11 @@ const DIRECTIVE_FIXTURES: &[&str] = &[
     "vec_new_unannotated.vow",
     "index_non_indexable.vow",
     "index_hashmap_vec_key.vow",
+    "vec_element_linear.vow",
+    "vec_element_linear_nested.vow",
+    "vec_element_linear_forward_ref.vow",
+    "unit_param.vow",
+    "unit_mismatch.vow",
 ];
 
 fn directive(source: &str, key: &str) -> Option<String> {

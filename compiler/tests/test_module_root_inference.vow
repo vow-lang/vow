@@ -1,0 +1,68 @@
+module TestModuleRootInference
+
+use frontend
+use clif
+
+fn tmr_run2(cmd: String, a: String, b: String) -> i64 [io] {
+    let pargs: Vec<String> = Vec::new();
+    pargs.push(a);
+    pargs.push(b);
+    process_run(cmd, pargs)
+}
+
+fn tmr_temp_dir() -> String [io] {
+    let pargs: Vec<String> = Vec::new();
+    pargs.push(String::from("-c"));
+    pargs.push(String::from("mktemp -d \"${TMPDIR:-/tmp}/vow-module-root.XXXXXXXXXX\""));
+    let rc: i64 = process_run(String::from("sh"), pargs);
+    if rc != 0 { return String::from(""); }
+    string_trim(process_get_stdout())
+}
+
+fn tmr_put(path: String, body: String) -> i64 [io, write] {
+    fs_write(path, body)
+}
+
+fn tmr_join(a: String, b: String) -> String {
+    let r: String = String::from("");
+    r.push_str(a);
+    r.push_str(b);
+    r
+}
+
+fn tmr_run_checks(t: String) -> i32 [io, write] {
+    let root: String = tmr_join(t, String::from("/root"));
+    let tests: String = tmr_join(root, String::from("/tests"));
+    let deep: String = tmr_join(tests, String::from("/sub/deep"));
+    if tmr_run2(String::from("mkdir"), String::from("-p"), deep) != 0 { return 90; }
+    if tmr_put(tmr_join(root, String::from("/dep.vow")), String::from("module Dep\nfn d() -> i64 { 1 }\n")) != 0 { return 91; }
+    if tmr_put(tmr_join(tests, String::from("/helper.vow")), String::from("module Helper\nfn h() -> i64 { 2 }\n")) != 0 { return 92; }
+    if tmr_put(tmr_join(tests, String::from("/test_a.vow")), String::from("module A\nuse dep\nfn main() -> i32 { 0 }\n")) != 0 { return 93; }
+    if tmr_put(tmr_join(tests, String::from("/test_b.vow")), String::from("module B\nfn main() -> i32 { 0 }\n")) != 0 { return 94; }
+    if tmr_put(tmr_join(tests, String::from("/test_c.vow")), String::from("module C\nuse missing\nfn main() -> i32 { 0 }\n")) != 0 { return 95; }
+    if tmr_put(tmr_join(tests, String::from("/test_e.vow")), String::from("module E\nuse helper\nfn main() -> i32 { 0 }\n")) != 0 { return 96; }
+    if tmr_put(tmr_join(deep, String::from("/test_d.vow")), String::from("module D\nuse dep\nuse tests.helper\nfn main() -> i32 { 0 }\n")) != 0 { return 97; }
+
+    if frontend_infer_module_root(tmr_join(tests, String::from("/test_a.vow"))) != root { return 1; }
+    if frontend_infer_module_root(tmr_join(tests, String::from("/test_b.vow"))) != String::from("") { return 2; }
+    if frontend_infer_module_root(tmr_join(tests, String::from("/test_c.vow"))) != String::from("") { return 3; }
+    if frontend_infer_module_root(tmr_join(tests, String::from("/test_e.vow"))) != String::from("") { return 4; }
+    if frontend_infer_module_root(tmr_join(deep, String::from("/test_d.vow"))) != root { return 5; }
+
+    let repo: String = tmr_join(t, String::from("/repo"));
+    let sub: String = tmr_join(repo, String::from("/sub"));
+    if tmr_run2(String::from("mkdir"), String::from("-p"), sub) != 0 { return 98; }
+    if tmr_put(tmr_join(repo, String::from("/.git")), String::from("gitdir: elsewhere\n")) != 0 { return 99; }
+    if tmr_put(tmr_join(t, String::from("/dep.vow")), String::from("module Dep\nfn d() -> i64 { 1 }\n")) != 0 { return 100; }
+    if tmr_put(tmr_join(sub, String::from("/test_f.vow")), String::from("module F\nuse dep\nfn main() -> i32 { 0 }\n")) != 0 { return 101; }
+    if frontend_infer_module_root(tmr_join(sub, String::from("/test_f.vow"))) != String::from("") { return 6; }
+    0
+}
+
+fn main() -> i32 [io, write] {
+    let t: String = tmr_temp_dir();
+    if t.len() == 0 { return 80; }
+    let code: i32 = tmr_run_checks(t);
+    tmr_run2(String::from("rm"), String::from("-rf"), t);
+    code
+}

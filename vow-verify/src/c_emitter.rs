@@ -16,6 +16,7 @@ use vow_ir::{
 pub enum ConstantValue {
     I32(i32),
     I64(i64),
+    U64(u64),
     Bool(bool),
 }
 
@@ -45,6 +46,7 @@ pub fn detect_constant_functions(module: &Module) -> HashMap<FuncId, ConstantVal
         let val = match (&const_inst.opcode, &const_inst.data) {
             (Opcode::ConstI32, InstData::ConstI32(v)) => ConstantValue::I32(*v),
             (Opcode::ConstI64, InstData::ConstI64(v)) => ConstantValue::I64(*v),
+            (Opcode::ConstU64, InstData::ConstU64(v)) => ConstantValue::U64(*v),
             (Opcode::ConstBool, InstData::ConstBool(v)) => ConstantValue::Bool(*v),
             _ => continue,
         };
@@ -894,10 +896,9 @@ pub fn is_modelable(
                 | Opcode::ConstU128
                 | Opcode::Load
                 | Opcode::Store
-                | Opcode::LinearConsume
                 | Opcode::LinearBorrow => false,
 
-                Opcode::DebugCall => true,
+                Opcode::LinearConsume | Opcode::DebugCall => true,
             };
             if !ok {
                 return false;
@@ -962,7 +963,6 @@ fn first_unsupported_opcode(
                 | Opcode::ConstU128
                 | Opcode::Load
                 | Opcode::Store
-                | Opcode::LinearConsume
                 | Opcode::LinearBorrow => return Some(format!("{:?}", inst.opcode)),
                 Opcode::CheckedAdd
                 | Opcode::CheckedSub
@@ -1094,7 +1094,11 @@ fn emit_inst(
         // Constants
         Opcode::ConstI32 => {
             if let InstData::ConstI32(v) = inst.data {
-                out.push_str(&format!("  v{} = {};\n", id, v));
+                if inst.ty == Ty::U32 {
+                    out.push_str(&format!("  v{} = {};\n", id, v as u32));
+                } else {
+                    out.push_str(&format!("  v{} = {};\n", id, v));
+                }
             }
         }
         Opcode::ConstI64 => {
@@ -1429,7 +1433,7 @@ fn emit_inst(
                     format!("v{a} <= {}", target.max)
                 };
                 out.push_str(&format!(
-                    "  v{id}.tag = ({guard});\n  v{id}.payload = v{id}.tag ? ({})v{a} : 0;\n",
+                    "  v{id}.tag = ({guard}); v{id}.payload = v{id}.tag ? ({})v{a} : 0;\n",
                     target.c_ty
                 ));
             } else if name.ends_with("_wrap") {
@@ -1733,11 +1737,16 @@ fn emit_inst(
                              \x20 uint64_t __substr_len_{id} = (uint64_t)v{len};\n\
                              \x20 uint64_t __substr_max_len_{id} = (uint64_t)v{s}.len - __substr_start_{id};\n\
                              \x20 if (__substr_len_{id} > __substr_max_len_{id}) {{ __substr_len_{id} = __substr_max_len_{id}; }}\n\
-                             \x20 v{id}.len = __substr_len_{id};\n\
-                             \x20 for (uint64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
-                             \x20   v{id}.data[__i] = v{s}.data[__substr_start_{id} + __i];\n\
-                             \x20 }}\n",
+                             \x20 v{id}.len = __substr_len_{id};\n",
                         ));
+                        emit_substring_copy(
+                            id,
+                            s,
+                            &format!("__substr_start_{id}"),
+                            string_max,
+                            inst_by_id,
+                            out,
+                        );
                     }
                     "__vow_string_substring" | "__vow_string_substring_in_arena" => {
                         let (s_arg, start_arg, end_arg) =
@@ -1756,11 +1765,16 @@ fn emit_inst(
                              \x20 uint64_t __substring_end_{id} = (uint64_t)v{end};\n\
                              \x20 if (__substring_end_{id} < __substring_start_{id}) {{ __substring_end_{id} = __substring_start_{id}; }}\n\
                              \x20 if (__substring_end_{id} > (uint64_t)v{s}.len) {{ __substring_end_{id} = (uint64_t)v{s}.len; }}\n\
-                             \x20 v{id}.len = __substring_end_{id} - __substring_start_{id};\n\
-                             \x20 for (uint64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
-                             \x20   v{id}.data[__i] = v{s}.data[__substring_start_{id} + __i];\n\
-                             \x20 }}\n",
+                             \x20 v{id}.len = __substring_end_{id} - __substring_start_{id};\n",
                         ));
+                        emit_substring_copy(
+                            id,
+                            s,
+                            &format!("__substring_start_{id}"),
+                            string_max,
+                            inst_by_id,
+                            out,
+                        );
                     }
                     "__vow_string_parse_i64_opt"
                     | "__vow_string_parse_i64_opt_in_arena"
@@ -1803,7 +1817,7 @@ fn emit_inst(
                         out.push_str(&format!(
                             "  v{id}.tag = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.tag == 0 || v{id}.tag == 1);\n\
-                             \x20 if (v{id}.tag == 1) {{ v{id}.payload = __VERIFIER_nondet_ulong(); __ESBMC_assume(v{id}.payload >= 0 && v{id}.payload <= 4294967295ULL); }}\n"
+                             \x20 if (v{id}.tag == 1) {{ v{id}.payload = __VERIFIER_nondet_long(); __ESBMC_assume(v{id}.payload >= 0 && v{id}.payload <= 4294967295); }}\n"
                         ));
                     }
                     "__vow_string_parse_i32_opt" => {
@@ -1933,20 +1947,16 @@ fn emit_inst(
                              \x20   _Bool __found = 0;\n\
                              \x20   uint64_t __pos = v{m}.len;\n\
                              \x20   for (uint64_t __i = 0; __i < v{m}.len; __i++) {{\n\
-                             \x20     if (v{m}.keys[__i] == v{k}) {{\n\
-                             \x20       v{id}.tag = 1; v{id}.payload = v{m}.vals[__i];\n\
-                             \x20       v{m}.vals[__i] = v{v};\n\
-                             \x20       __found = 1; break;\n\
-                             \x20     }}\n\
+                             \x20     if (v{m}.keys[__i] == v{k}) {{ v{id}.tag = 1; v{id}.payload = v{m}.vals[__i]; v{m}.vals[__i] = v{v}; __found = 1; break; }}\n\
                              \x20     if (v{m}.keys[__i] > v{k}) {{ __pos = __i; break; }}\n\
                              \x20   }}\n\
                              \x20   if (!__found) {{\n\
                              \x20     __ESBMC_assert(v{m}.len < {btreemap_max}, \"btreemap capacity\");\n\
                              \x20     for (uint64_t __j = v{m}.len; __j > __pos; __j--) {{\n\
-                             \x20       v{m}.keys[__j] = v{m}.keys[__j - 1];\n\
-                             \x20       v{m}.vals[__j] = v{m}.vals[__j - 1];\n\
+                             \x20       v{m}.keys[__j] = v{m}.keys[__j - 1]; v{m}.vals[__j] = v{m}.vals[__j - 1];\n\
                              \x20     }}\n\
-                             \x20     v{m}.keys[__pos] = v{k}; v{m}.vals[__pos] = v{v}; v{m}.len++;\n\
+                             \x20     v{m}.keys[__pos] = v{k}; v{m}.vals[__pos] = v{v};\n\
+                             \x20     v{m}.len++;\n\
                              \x20   }}\n\
                              \x20 }}\n"
                         ));
@@ -1985,11 +1995,17 @@ fn emit_inst(
             if let InstData::CallTarget(fid) = &inst.data {
                 let val = &const_fns[fid];
                 match val {
+                    ConstantValue::I32(v) if inst.ty == Ty::U32 => {
+                        out.push_str(&format!("  v{} = {};\n", id, *v as u32));
+                    }
                     ConstantValue::I32(v) => {
                         out.push_str(&format!("  v{} = {};\n", id, v));
                     }
                     ConstantValue::I64(v) => {
                         out.push_str(&format!("  v{} = {}LL;\n", id, v));
+                    }
+                    ConstantValue::U64(v) => {
+                        out.push_str(&format!("  v{} = {}ULL;\n", id, v));
                     }
                     ConstantValue::Bool(v) => {
                         out.push_str(&format!("  v{} = {};\n", id, *v as i32));
@@ -2030,12 +2046,13 @@ fn emit_inst(
             out.push_str("  /* verifier no-op: region scope marker */\n");
         }
 
+        // A consume only discharges an ownership obligation; it neither reads nor writes data.
+        Opcode::LinearConsume => {
+            out.push_str("  /* verifier no-op: linear consume marker */\n");
+        }
+
         // Other calls, memory, linear ops — not yet supported for verification
-        Opcode::Call
-        | Opcode::Load
-        | Opcode::Store
-        | Opcode::LinearConsume
-        | Opcode::LinearBorrow => {
+        Opcode::Call | Opcode::Load | Opcode::Store | Opcode::LinearBorrow => {
             emit_unsupported_for_verification(inst, out);
         }
 
@@ -2110,6 +2127,60 @@ fn emit_unmodelled(inst: &Inst, out: &mut String) {
             id,
             c_nondet_suffix(inst.ty)
         ));
+    }
+}
+
+/// True when `inst` consumes a string operand without ever reading its bytes:
+/// the model tracks only `.len` for these (`len`, `eq` through its cached
+/// nondeterministic verdict, `push_str`, `push_byte`, `clear`) or discards the
+/// value (`Return` models every aggregate as `0`).
+fn string_use_reads_only_len(inst: &Inst) -> bool {
+    if inst.opcode == Opcode::Return {
+        return true;
+    }
+    if let (Opcode::Call, InstData::CallExtern(name)) = (inst.opcode, &inst.data) {
+        return matches!(
+            name.as_str(),
+            "__vow_string_len"
+                | "__vow_string_eq"
+                | "__vow_string_push_str"
+                | "__vow_string_push_str_in_arena"
+                | "__vow_string_push_byte"
+                | "__vow_string_push_byte_in_arena"
+                | "__vow_string_clear"
+        );
+    }
+    false
+}
+
+/// Whether any instruction of the function may read the bytes of string `id`.
+fn string_bytes_observed(id: u32, inst_by_id: &HashMap<u32, &Inst>) -> bool {
+    inst_by_id
+        .values()
+        .any(|user| user.args.iter().any(|a| a.0 == id) && !string_use_reads_only_len(user))
+}
+
+/// The byte-copy loop of a `substr`/`substring` result, or a marker comment
+/// when no instruction reads the result's bytes. The result length is already
+/// exact (min/clamp arithmetic) before this point; a bounded copy loop longer
+/// than the incremental-BMC step bound makes ESBMC answer `unknown` even for a
+/// pure length contract, so the loop exists only where the bytes are observable.
+fn emit_substring_copy(
+    id: u32,
+    source: u32,
+    start_var: &str,
+    string_max: usize,
+    inst_by_id: &HashMap<u32, &Inst>,
+    out: &mut String,
+) {
+    if string_bytes_observed(id, inst_by_id) {
+        out.push_str(&format!(
+            "  for (uint64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
+             \x20   v{id}.data[__i] = v{source}.data[{start_var} + __i];\n\
+             \x20 }}\n"
+        ));
+    } else {
+        out.push_str("  /* length-only substring: bytes never read, copy loop elided */\n");
     }
 }
 
@@ -2464,7 +2535,6 @@ pub fn emit_c_function_full(
                 }
             }
         }
-        ups_sources.sort();
         for src in ups_sources {
             // Upsilon temps must share the source's struct type; struct-to-int64 assignment corrupts the payload.
             if option_vars.contains(&src) {
@@ -2501,7 +2571,7 @@ pub fn emit_c_function_full(
             inst_by_id.insert(inst.id.0, inst);
         }
     }
-    let const_bits = LazyConstBits::new(func);
+    let const_bits = LazyConstBits::new(func, const_fns);
 
     // Block-visit tracking variables
     for block in &func.blocks {
@@ -2605,9 +2675,11 @@ pub fn emit_c_function_full(
     out
 }
 
-/// Set of `(is_shl, signedness, width)` shift-helper flavors actually used by
-/// the module.
-type ShiftNeeds = std::collections::BTreeSet<(bool, IntegerSignedness, IntegerWidth)>;
+/// Set of `(width, signedness, is_shr)` shift-helper flavors actually used by
+/// the module. The tuple order is the canonical emission order shared with
+/// `compiler/c_emitter.vow` (`append_model_helpers`): width ascending, signed
+/// before unsigned, `shl` before `shr`.
+type ShiftNeeds = std::collections::BTreeSet<(IntegerWidth, IntegerSignedness, bool)>;
 
 fn scan_shift_needs(funcs: &[&Function]) -> ShiftNeeds {
     let mut needs = ShiftNeeds::new();
@@ -2620,7 +2692,7 @@ fn scan_shift_needs(funcs: &[&Function]) -> ShiftNeeds {
                     _ => continue,
                 };
                 if let InstData::Integer(IntegerType { width, signedness }) = inst.data {
-                    needs.insert((is_shl, signedness, width));
+                    needs.insert((width, signedness, !is_shl));
                 }
             }
         }
@@ -2798,9 +2870,9 @@ pub fn contracts_only_source(c_src: &str) -> String {
 }
 
 /// Set of `(op, signedness, width)` overflow-guard helper flavors the module
-/// actually uses. Mirrors [`ShiftNeeds`]; only `+!`/`-!`/`*!` need a helper,
+/// actually uses, in the same width-signedness-op order as [`ShiftNeeds`]; only `+!`/`-!`/`*!` need a helper,
 /// since the `/!`/`%!` guards are single comparisons emitted inline.
-type ArithNeeds = std::collections::BTreeSet<(ArithAbort, IntegerSignedness, IntegerWidth)>;
+type ArithNeeds = std::collections::BTreeSet<(IntegerWidth, IntegerSignedness, ArithAbort)>;
 
 /// The helper flavor a checked opcode needs, or `None` for the div/rem forms
 /// whose guards are emitted inline.
@@ -2821,7 +2893,7 @@ fn scan_arith_needs(funcs: &[&Function]) -> ArithNeeds {
                 if let Some(abort) = checked_helper_abort(inst.opcode)
                     && let Some(int_ty) = checked_integer_type(inst)
                 {
-                    needs.insert((abort, int_ty.signedness, int_ty.width));
+                    needs.insert((int_ty.width, int_ty.signedness, abort));
                 }
             }
         }
@@ -3050,12 +3122,9 @@ fn emit_c_preamble(out: &mut String, helpers: &ModelHelpers, limits: &VerifyLimi
     out.push_str("extern void __ESBMC_assert(_Bool, const char*);\n");
     out.push_str("extern int __VERIFIER_nondet_int(void);\n");
     out.push_str("extern char __VERIFIER_nondet_char(void);\n");
-    out.push_str("extern unsigned char __VERIFIER_nondet_uchar(void);\n");
     out.push_str("extern unsigned char __VERIFIER_nondet_unsigned_char(void);\n");
     out.push_str("extern short __VERIFIER_nondet_short(void);\n");
-    out.push_str("extern unsigned short __VERIFIER_nondet_ushort(void);\n");
     out.push_str("extern unsigned short __VERIFIER_nondet_unsigned_short(void);\n");
-    out.push_str("extern unsigned int __VERIFIER_nondet_uint(void);\n");
     out.push_str("extern unsigned int __VERIFIER_nondet_unsigned_int(void);\n");
     out.push_str("extern long __VERIFIER_nondet_long(void);\n");
     out.push_str("extern unsigned long __VERIFIER_nondet_unsigned_long(void);\n");
@@ -3081,10 +3150,10 @@ fn emit_c_preamble(out: &mut String, helpers: &ModelHelpers, limits: &VerifyLimi
         "typedef struct {{ uint64_t len; int64_t keys[{btreemap_max}]; int64_t vals[{btreemap_max}]; }} __vow_btreemap_t;\n",
     ));
     out.push_str("typedef struct { int64_t tag; int64_t payload; } __vow_option_t;\n");
-    for &(is_shl, signedness, width) in &helpers.shifts {
-        emit_shift_helper(out, is_shl, signedness, width);
+    for &(width, signedness, is_shr) in &helpers.shifts {
+        emit_shift_helper(out, !is_shr, signedness, width);
     }
-    for &(abort, signedness, width) in &helpers.arith {
+    for &(width, signedness, abort) in &helpers.arith {
         emit_arith_helper(out, abort, signedness, width);
     }
     if !helpers.shifts.is_empty() || !helpers.arith.is_empty() {
@@ -4582,13 +4651,13 @@ mod tests {
             "v1.payload >= -128 && v1.payload <= 127",
             "v2.payload >= -32768 && v2.payload <= 32767",
             "v3.payload >= 0 && v3.payload <= 65535",
-            "v4.payload >= 0 && v4.payload <= 4294967295ULL",
+            "v4.payload >= 0 && v4.payload <= 4294967295",
         ] {
             assert!(c.contains(expected), "missing `{expected}` in:\n{c}");
         }
         assert!(
-            c.contains("v4.payload = __VERIFIER_nondet_ulong()"),
-            "u32 parse payload must use the unsigned nondeterministic model:\n{c}"
+            c.contains("v4.payload = __VERIFIER_nondet_long()"),
+            "u32 parse payload must use the declared nondeterministic model:\n{c}"
         );
     }
 
@@ -5027,6 +5096,336 @@ mod tests {
             !c.contains("__vow_shr_u64"),
             "no shift helpers should be present: {c}"
         );
+    }
+
+    /// Shift helpers come out width ascending, signed before unsigned, `shl`
+    /// before `shr` -- the order `compiler/c_emitter.vow` prints them in, so both
+    /// emitters produce the same preamble for the same module.
+    #[test]
+    fn model_helpers_are_emitted_in_canonical_order() {
+        let shift = |name: &str, ty: Ty, opcode: Opcode| {
+            make_func(
+                name,
+                vec![ty, Ty::U32],
+                ty,
+                vec![
+                    inst(0, Opcode::GetArg, ty, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::U32, vec![], InstData::ArgIndex(1)),
+                    inst(
+                        2,
+                        opcode,
+                        ty,
+                        vec![0, 1],
+                        InstData::Integer(ir_ty_to_integer_type(ty).unwrap()),
+                    ),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            )
+        };
+        let mut funcs = [
+            shift("shr_u8", Ty::U8, Opcode::Shr),
+            shift("shl_u16", Ty::U16, Opcode::Shl),
+            shift("shr_i8", Ty::I8, Opcode::Shr),
+            shift("shl_i8", Ty::I8, Opcode::Shl),
+            shift("shl_i64", Ty::I64, Opcode::Shl),
+        ];
+        for (i, f) in funcs.iter_mut().enumerate() {
+            f.id = FuncId(i as u32);
+        }
+        let refs: Vec<&Function> = funcs.iter().collect();
+        let c = emit_c_module(&refs, &HashMap::new(), &VerifyLimits::default());
+        let at = |needle: &str| {
+            c.find(needle)
+                .unwrap_or_else(|| panic!("missing `{needle}` in:\n{c}"))
+        };
+        let order = [
+            at("static inline int8_t __vow_shl_i8("),
+            at("static inline int8_t __vow_shr_i8("),
+            at("static inline uint8_t __vow_shr_u8("),
+            at("static inline uint16_t __vow_shl_u16("),
+            at("static inline int64_t __vow_shl_i64("),
+        ];
+        assert!(
+            order.windows(2).all(|w| w[0] < w[1]),
+            "order {order:?}: {c}"
+        );
+        assert!(!c.contains("& 63ULL"), "masks carry no suffix: {c}");
+    }
+
+    fn substring_fn(read_bytes: bool) -> Function {
+        let mut insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::U64, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::GetArg, Ty::U64, vec![], InstData::ArgIndex(2)),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0, 1, 2],
+                InstData::CallExtern("__vow_string_substring".to_string()),
+            ),
+        ];
+        if read_bytes {
+            insts.extend([
+                inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                inst(
+                    5,
+                    Opcode::Call,
+                    Ty::I64,
+                    vec![3, 4],
+                    InstData::CallExtern("__vow_string_byte_at".to_string()),
+                ),
+                inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
+            ]);
+        } else {
+            insts.extend([
+                inst(
+                    4,
+                    Opcode::Call,
+                    Ty::U64,
+                    vec![3],
+                    InstData::CallExtern("__vow_string_len".to_string()),
+                ),
+                inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+            ]);
+        }
+        let ret = if read_bytes { Ty::I64 } else { Ty::U64 };
+        make_func("sub", vec![Ty::Ptr, Ty::U64, Ty::U64], ret, insts)
+    }
+
+    /// The substring's length is exact before the copy; the byte-copy loop is
+    /// only emitted when an instruction reads the result's bytes.
+    #[test]
+    fn substring_copy_loop_follows_byte_reads() {
+        let limits = VerifyLimits::default();
+        let max = limits.string_max;
+        let len_only = emit_c_function(&substring_fn(false), &HashMap::new(), &limits);
+        assert!(
+            len_only.contains("/* length-only substring: bytes never read, copy loop elided */"),
+            "{len_only}"
+        );
+        assert!(!len_only.contains("v3.data[__i]"), "{len_only}");
+        assert!(
+            len_only.contains("v3.len = __substring_end_3 - __substring_start_3;"),
+            "{len_only}"
+        );
+
+        let observed = emit_c_function(&substring_fn(true), &HashMap::new(), &limits);
+        assert!(
+            observed.contains(&format!(
+                "for (uint64_t __i = 0; __i < v3.len && __i < {max}; __i++) {{"
+            )),
+            "{observed}"
+        );
+        assert!(
+            observed.contains("v3.data[__i] = v0.data[__substring_start_3 + __i];"),
+            "{observed}"
+        );
+        assert!(!observed.contains("copy loop elided"), "{observed}");
+    }
+
+    /// Only a `len` query, an `eq` verdict, appends, `clear` and the discarded
+    /// `Return` leave the bytes unread; every other user observes them.
+    #[test]
+    fn string_use_reads_only_len_classifies_users() {
+        let call = |name: &str| {
+            test_inst(
+                9,
+                Opcode::Call,
+                Ty::I64,
+                &[3],
+                InstData::CallExtern(name.to_string()),
+            )
+        };
+        assert!(string_use_reads_only_len(&test_inst(
+            9,
+            Opcode::Return,
+            Ty::Unit,
+            &[3],
+            InstData::None
+        )));
+        for name in [
+            "__vow_string_len",
+            "__vow_string_push_byte",
+            "__vow_string_clear",
+        ] {
+            assert!(string_use_reads_only_len(&call(name)), "{name}");
+        }
+        assert!(!string_use_reads_only_len(&call("__vow_string_byte_at")));
+        let upsilon = test_inst(
+            9,
+            Opcode::Upsilon,
+            Ty::Unit,
+            &[3],
+            InstData::PhiTarget(vow_ir::InstId(4)),
+        );
+        assert!(!string_use_reads_only_len(&upsilon));
+        let insts = [
+            test_inst(3, Opcode::GetArg, Ty::Ptr, &[], InstData::ArgIndex(0)),
+            upsilon,
+        ];
+        let by_id: HashMap<u32, &Inst> = insts.iter().map(|i| (i.id.0, i)).collect();
+        assert!(string_bytes_observed(3, &by_id));
+        assert!(!string_bytes_observed(9, &by_id));
+    }
+
+    /// `BTreeMap::insert` replaces the value of an existing key and shifts the
+    /// larger keys up for a new one, returning the previous value as an `Option`.
+    #[test]
+    fn btreemap_insert_model_replaces_or_shifts() {
+        let func = make_func(
+            "bt",
+            vec![],
+            Ty::Unit,
+            vec![
+                test_inst(
+                    0,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    &[],
+                    InstData::CallExtern("__vow_btreemap_new".to_string()),
+                ),
+                test_inst(1, Opcode::ConstI64, Ty::I64, &[], InstData::ConstI64(1)),
+                test_inst(2, Opcode::ConstI64, Ty::I64, &[], InstData::ConstI64(2)),
+                test_inst(
+                    3,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    &[0, 1, 2],
+                    InstData::CallExtern("__vow_btreemap_insert".to_string()),
+                ),
+                test_inst(4, Opcode::Return, Ty::Unit, &[], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        for needle in [
+            "if (v0.keys[__i] == v1) { v3.tag = 1; v3.payload = v0.vals[__i]; v0.vals[__i] = v2; __found = 1; break; }",
+            "if (v0.keys[__i] > v1) { __pos = __i; break; }",
+            "__ESBMC_assert(v0.len < 64, \"btreemap capacity\");",
+            "v0.keys[__j] = v0.keys[__j - 1]; v0.vals[__j] = v0.vals[__j - 1];",
+            "v0.keys[__pos] = v1; v0.vals[__pos] = v2;",
+            "v0.len++;",
+        ] {
+            assert!(c.contains(needle), "missing `{needle}`:\n{c}");
+        }
+    }
+
+    fn constant_fn_returning(id: u32, ty: Ty, value: Inst) -> Function {
+        let mut f = make_func(
+            "k",
+            vec![],
+            ty,
+            vec![
+                value,
+                test_inst(1, Opcode::Return, Ty::Unit, &[0], InstData::None),
+            ],
+        );
+        f.id = FuncId(id);
+        f
+    }
+
+    /// A function whose only instructions are one constant and its `Return` is
+    /// a constant function whatever the constant's scalar kind.
+    #[test]
+    fn detect_constant_functions_covers_each_scalar_kind() {
+        let funcs = [
+            constant_fn_returning(
+                0,
+                Ty::I32,
+                test_inst(0, Opcode::ConstI32, Ty::I32, &[], InstData::ConstI32(-3)),
+            ),
+            constant_fn_returning(
+                1,
+                Ty::U64,
+                test_inst(
+                    0,
+                    Opcode::ConstU64,
+                    Ty::U64,
+                    &[],
+                    InstData::ConstU64(u64::MAX),
+                ),
+            ),
+            constant_fn_returning(
+                2,
+                Ty::Bool,
+                test_inst(
+                    0,
+                    Opcode::ConstBool,
+                    Ty::Bool,
+                    &[],
+                    InstData::ConstBool(true),
+                ),
+            ),
+        ];
+        let module = Module {
+            name: "m".to_string(),
+            functions: funcs.to_vec(),
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let found = detect_constant_functions(&module);
+        assert!(matches!(found[&FuncId(0)], ConstantValue::I32(-3)));
+        assert!(matches!(found[&FuncId(1)], ConstantValue::U64(u64::MAX)));
+        assert!(matches!(found[&FuncId(2)], ConstantValue::Bool(true)));
+    }
+
+    /// A call to a constant function prints the constant at the type of the
+    /// call: a 32-bit constant stored sign-extended prints unsigned for a `u32`.
+    #[test]
+    fn constant_call_prints_the_value_of_the_call_type() {
+        let call = |ty: Ty| {
+            make_func(
+                "c",
+                vec![],
+                ty,
+                vec![
+                    test_inst(0, Opcode::Call, ty, &[], InstData::CallTarget(FuncId(7))),
+                    test_inst(1, Opcode::Return, Ty::Unit, &[0], InstData::None),
+                ],
+            )
+        };
+        let consts = HashMap::from([(FuncId(7), ConstantValue::I32(-1))]);
+        let unsigned = emit_c_function(&call(Ty::U32), &consts, &VerifyLimits::default());
+        assert!(unsigned.contains("v0 = 4294967295;"), "{unsigned}");
+        let signed = emit_c_function(&call(Ty::I32), &consts, &VerifyLimits::default());
+        assert!(signed.contains("v0 = -1;"), "{signed}");
+    }
+
+    /// Integer constants print as the value of their IR type, whichever
+    /// representation a lowering stored them in.
+    #[test]
+    fn integer_constants_print_as_their_type() {
+        let func = make_func(
+            "consts",
+            vec![],
+            Ty::U64,
+            vec![
+                inst(
+                    0,
+                    Opcode::ConstU64,
+                    Ty::U64,
+                    vec![],
+                    InstData::ConstU64(u64::MAX),
+                ),
+                inst(
+                    1,
+                    Opcode::ConstU64,
+                    Ty::U64,
+                    vec![],
+                    InstData::ConstU64(10_000_000_000_000_000_000),
+                ),
+                inst(2, Opcode::ConstI32, Ty::U32, vec![], InstData::ConstI32(-1)),
+                inst(3, Opcode::ConstU8, Ty::I8, vec![], InstData::ConstU8(251)),
+                inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(c.contains("v0 = 18446744073709551615ULL;"), "{c}");
+        assert!(c.contains("v1 = 10000000000000000000ULL;"), "{c}");
+        assert!(c.contains("v2 = 4294967295;"), "{c}");
+        assert!(c.contains("v3 = UINT8_C(251);"), "{c}");
     }
 
     #[test]
@@ -6029,7 +6428,17 @@ mod tests {
                         origin: sp(),
                         region: RegionId::Root,
                     },
-                    inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+                    inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    Inst {
+                        id: InstId(5),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(3), InstId(4)],
+                        data: InstData::CallExtern("__vow_string_byte_at".to_string()),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
@@ -6092,7 +6501,17 @@ mod tests {
                         origin: sp(),
                         region: RegionId::Root,
                     },
-                    inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+                    inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    Inst {
+                        id: InstId(5),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(3), InstId(4)],
+                        data: InstData::CallExtern("__vow_string_byte_at".to_string()),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
@@ -8440,7 +8859,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &HashMap::new(),
-            &LazyConstBits::new(&dummy),
+            &LazyConstBits::new(&dummy, &const_fns),
             &empty_module,
             &VerifyLimits::default(),
             Ty::I64,
@@ -8484,7 +8903,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &HashMap::new(),
-            &LazyConstBits::new(&dummy),
+            &LazyConstBits::new(&dummy, &HashMap::new()),
             &empty_module,
             &VerifyLimits::default(),
             Ty::I64,
@@ -8895,6 +9314,61 @@ mod tests {
                 let f = raw_parts_fn_with_body(extern_name, body, len_id);
                 assert_fails_closed(&f, kind, what);
             }
+        }
+    }
+
+    /// A length that is the result of calling a constant-returning function
+    /// folds like a literal: a constant beyond the capacity fails closed, one
+    /// inside it stays an exact length.
+    #[test]
+    fn raw_parts_copy_const_fn_len_folds_like_a_literal() {
+        for (extern_name, kind, cap) in RAW_PARTS_CASES {
+            let call = test_inst(
+                1,
+                Opcode::Call,
+                Ty::U64,
+                &[],
+                InstData::CallTarget(FuncId(7)),
+            );
+            let f = raw_parts_fn_with_body(extern_name, vec![call], 1);
+
+            let beyond = HashMap::from([(FuncId(7), ConstantValue::U64(cap as u64 + 200))]);
+            let c = emit_c_function(&f, &beyond, &VerifyLimits::default());
+            let label = format!("{} capacity", kind.to_lowercase());
+            assert!(
+                c.contains(&format!("__ESBMC_assert(v0 == 0, \"{label}\");")),
+                "{kind}: a constant-returning call beyond the capacity fails closed: {c}"
+            );
+            assert!(!c.contains("__ESBMC_assume(v0 == 0 ||"), "{kind}: {c}");
+
+            let inside = HashMap::from([(FuncId(7), ConstantValue::U64(3))]);
+            let c = emit_c_function(&f, &inside, &VerifyLimits::default());
+            assert!(
+                c.contains("__ESBMC_assume(v0 == 0 || (v1 < "),
+                "{kind}: {c}"
+            );
+            assert!(!c.contains("vow:model-bound"), "{kind}: {c}");
+
+            let wide = HashMap::from([(FuncId(7), ConstantValue::I64(-1))]);
+            let c = emit_c_function(&f, &wide, &VerifyLimits::default());
+            assert!(
+                c.contains(&format!("__ESBMC_assert(v0 == 0, \"{label}\");")),
+                "{kind}: a negative i64 constant reinterprets as a huge u64: {c}"
+            );
+
+            let narrow = HashMap::from([(FuncId(7), ConstantValue::I32(-1))]);
+            let c = emit_c_function(&f, &narrow, &VerifyLimits::default());
+            assert!(
+                c.contains(&format!("__ESBMC_assert(v0 == 0, \"{label}\");")),
+                "{kind}: a negative i32 constant sign-extends to a huge u64: {c}"
+            );
+
+            let flag = HashMap::from([(FuncId(7), ConstantValue::Bool(true))]);
+            let c = emit_c_function(&f, &flag, &VerifyLimits::default());
+            assert!(
+                c.contains("__ESBMC_assume(v0 == 0 || (v1 < "),
+                "{kind}: a bool constant is no length and keeps the assumption: {c}"
+            );
         }
     }
 

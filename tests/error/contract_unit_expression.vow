@@ -1,7 +1,8 @@
 // TEST: error-code UnsupportedFeature
 // TEST: stderr "tuple expressions are not supported in contract predicates"
-// The empty tuple `()` has no IR representation either, so it is rejected inside a
-// contract clause like any other tuple expression instead of reaching IR lowering.
+// The unit value `()` is a value in code, but contract predicates have no tuple or
+// unit values, so it is rejected inside a contract clause like any other tuple
+// expression.
 module ContractUnitExpression
 
 fn unit_value(a: i64) -> i64 vow {

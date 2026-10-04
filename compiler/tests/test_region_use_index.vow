@@ -1,0 +1,77 @@
+module TestRegionUseIndex
+
+use ir
+use diag
+use region
+use tests.builders
+
+// `build_use_index` must list, for every value id, exactly the argument
+// positions the old per-value rescan of the function visited, in program
+// order (block, instruction, argument).
+
+fn uses_of(idx: UseIndex, id: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let off: Vec<i64> = idx.off;
+    let pos: Vec<i64> = idx.pos;
+    if id < 0 || id + 1 >= off.len() as i64 { return out; }
+    let mut k: i64 = off[id as u64];
+    while k < off[(id + 1) as u64] {
+        out.push(pos[(3 * k) as u64]);
+        out.push(pos[(3 * k + 1) as u64]);
+        out.push(pos[(3 * k + 2) as u64]);
+        k = k + 1;
+    }
+    out
+}
+
+fn triple_is(v: Vec<i64>, n: u64, b: i64, i: i64, a: i64) -> bool {
+    v[3 * n] == b && v[3 * n + 1] == i && v[3 * n + 2] == a
+}
+
+fn main() -> i32 {
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(0);
+    call_args.push(1);
+    call_args.push(0);
+    let b0: Vec<IrInst> = Vec::new();
+    b0.push(mk_inst_arg(0, ITY_PTR(), 0));
+    b0.push(mk_inst_arg(1, ITY_PTR(), 1));
+    b0.push(mk_inst_call_extern(2, ITY_PTR(), call_args, String::from("__vow_string_concat")));
+    let b1: Vec<IrInst> = Vec::new();
+    b1.push(mk_inst_return(3, 2));
+    let b2: Vec<IrInst> = Vec::new();
+    b2.push(mk_inst_return(4, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, b0));
+    blocks.push(mk_block(1, b1));
+    blocks.push(mk_block(2, b2));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    params.push(ITY_PTR());
+    let f: IrFunction = mk_function(0, String::from("f"), params, ITY_PTR(), blocks);
+    let idx: UseIndex = build_use_index(f);
+
+    let u0: Vec<i64> = uses_of(idx, 0);
+    if u0.len() != 9 { return 1; }
+    if !triple_is(u0, 0, 0, 2, 0) { return 2; }
+    if !triple_is(u0, 1, 0, 2, 2) { return 3; }
+    if !triple_is(u0, 2, 2, 0, 0) { return 4; }
+
+    let u1: Vec<i64> = uses_of(idx, 1);
+    if u1.len() != 3 { return 5; }
+    if !triple_is(u1, 0, 0, 2, 1) { return 6; }
+
+    let u2: Vec<i64> = uses_of(idx, 2);
+    if u2.len() != 3 { return 7; }
+    if !triple_is(u2, 0, 1, 0, 0) { return 8; }
+
+    if uses_of(idx, 3).len() != 0 { return 9; }
+    if uses_of(idx, 4).len() != 0 { return 10; }
+    if uses_of(idx, 99).len() != 0 { return 11; }
+    if uses_of(idx, -1).len() != 0 { return 12; }
+
+    let empty: IrFunction = mk_function(1, String::from("g"), Vec::new(), ITY_UNIT(), Vec::new());
+    let eidx: UseIndex = build_use_index(empty);
+    if uses_of(eidx, 0).len() != 0 { return 13; }
+    0
+}

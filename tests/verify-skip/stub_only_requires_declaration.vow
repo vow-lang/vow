@@ -1,0 +1,26 @@
+// TEST: category unverifiable
+module StubOnlyRequiresDeclaration
+
+// A contracted declaration with no backing implementation anywhere -- the
+// adjacent case #1472's loader fallback cannot help with, since there is no
+// sibling `.vow` source to fall back to (library-only distribution, or a
+// single file declaring a function it never defines). `is_declaration`
+// functions are excluded from `fn_items`/`func_index` during IR lowering, so
+// a call to `f` lowers to an untyped `CallExtern`, making the caller
+// non-modelable. This must stay Skipped (fail-closed) -- never falsely
+// Verified. See docs/spec notes on #1053 for the (out of scope) axiomatic
+// verification that would let a bodyless declaration be checked directly.
+fn f(x: i64) -> i64 vow {
+    requires: x > 0
+};
+
+fn g() -> i64 vow {
+    ensures: result >= 0
+} {
+    f(0 - 5)
+}
+
+fn main() -> i32 [io] {
+    print_i64(0);
+    0
+}

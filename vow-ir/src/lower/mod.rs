@@ -1177,6 +1177,16 @@ impl LowerCtx {
         None
     }
 
+    /// Pairs each of `names` that is in scope now with its current value, in
+    /// order. Names declared inside the construct being lowered are not yet in
+    /// scope and drop out, so they are never carried through a loop or branch.
+    pub(super) fn in_scope_vars(&self, names: Vec<String>) -> Vec<(String, InstId)> {
+        names
+            .into_iter()
+            .filter_map(|name| self.lookup(&name).map(|id| (name, id)))
+            .collect()
+    }
+
     /// Look up a variable considering only scope frames up to (exclusive) `depth`.
     /// Used by `continue` to resolve loop-carried vars from the loop header scope,
     /// skipping any inner-scope shadows introduced in the loop body.
@@ -1303,42 +1313,79 @@ impl LowerCtx {
     }
 }
 
-/// Collect names of variables assigned anywhere in a block (recursively).
-/// Used to identify loop-carried variables that need Phi nodes.
-fn collect_assigned_vars(block: &Block) -> Vec<String> {
+/// Names assigned anywhere in a loop's per-iteration code (`condition` for
+/// `while`, then `body`), in first-assignment source order and without regard
+/// to scope. Callers keep only the names in scope at loop entry via
+/// `LowerCtx::in_scope_vars`. The self-hosted `collect_loop_assigned_vars` in
+/// compiler/lower.vow has the identical contract and traversal.
+fn collect_loop_assigned_vars(condition: Option<&Expr>, body: &Block) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut result = vec![];
-    for stmt in &block.stmts {
-        collect_assigned_in_stmt(stmt, &mut seen, &mut result);
+    if let Some(c) = condition {
+        collect_assigned_in_expr(c, &mut seen, &mut result);
     }
-    if let Some(e) = &block.trailing_expr {
-        collect_assigned_in_expr(e, &mut seen, &mut result);
-    }
+    collect_assigned_in_block(body, &mut seen, &mut result);
     result
 }
 
-fn collect_assigned_in_stmt(stmt: &Stmt, seen: &mut HashSet<String>, out: &mut Vec<String>) {
-    if let Stmt::Expr { expr, .. } = stmt {
-        collect_assigned_in_expr(expr, seen, out);
+fn collect_assigned_in_block(block: &Block, seen: &mut HashSet<String>, out: &mut Vec<String>) {
+    for stmt in &block.stmts {
+        collect_assigned_in_stmt(stmt, seen, out);
+    }
+    if let Some(e) = &block.trailing_expr {
+        collect_assigned_in_expr(e, seen, out);
     }
 }
 
+fn collect_assigned_in_stmt(stmt: &Stmt, seen: &mut HashSet<String>, out: &mut Vec<String>) {
+    match stmt {
+        Stmt::Let { init, .. } => collect_assigned_in_expr(init, seen, out),
+        Stmt::Expr { expr, .. } => collect_assigned_in_expr(expr, seen, out),
+    }
+}
+
+/// Visits every sub-expression in evaluation order. The match is exhaustive on
+/// purpose: an assignment hidden in any operand position must be carried by the
+/// enclosing loop, so a new `ExprKind` has to decide how it is scanned.
 fn collect_assigned_in_expr(expr: &Expr, seen: &mut HashSet<String>, out: &mut Vec<String>) {
     match &expr.kind {
+        ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Continue | ExprKind::Result => {}
         ExprKind::Assign { lhs, rhs } => {
-            if let ExprKind::Ident(name) = &lhs.kind
-                && seen.insert(name.clone())
-            {
-                out.push(name.clone());
+            if let ExprKind::Ident(name) = &lhs.kind {
+                if seen.insert(name.clone()) {
+                    out.push(name.clone());
+                }
+            } else {
+                collect_assigned_in_expr(lhs, seen, out);
             }
             collect_assigned_in_expr(rhs, seen, out);
         }
-        ExprKind::Block(b) => {
-            for s in &b.stmts {
-                collect_assigned_in_stmt(s, seen, out);
+        ExprKind::BinaryOp { lhs, rhs, .. } => {
+            collect_assigned_in_expr(lhs, seen, out);
+            collect_assigned_in_expr(rhs, seen, out);
+        }
+        ExprKind::UnaryOp { operand, .. } => collect_assigned_in_expr(operand, seen, out),
+        ExprKind::Call { callee, args } => {
+            collect_assigned_in_expr(callee, seen, out);
+            for a in args {
+                collect_assigned_in_expr(a, seen, out);
             }
-            if let Some(e) = &b.trailing_expr {
-                collect_assigned_in_expr(e, seen, out);
+        }
+        ExprKind::MethodCall { receiver, args, .. } => {
+            collect_assigned_in_expr(receiver, seen, out);
+            for a in args {
+                collect_assigned_in_expr(a, seen, out);
+            }
+        }
+        ExprKind::FieldAccess { base, .. } => collect_assigned_in_expr(base, seen, out),
+        ExprKind::Index { base, index } => {
+            collect_assigned_in_expr(base, seen, out);
+            collect_assigned_in_expr(index, seen, out);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_assigned_in_expr(scrutinee, seen, out);
+            for arm in arms {
+                collect_assigned_in_expr(&arm.body, seen, out);
             }
         }
         ExprKind::If {
@@ -1347,12 +1394,7 @@ fn collect_assigned_in_expr(expr: &Expr, seen: &mut HashSet<String>, out: &mut V
             else_branch,
         } => {
             collect_assigned_in_expr(condition, seen, out);
-            for s in &then_branch.stmts {
-                collect_assigned_in_stmt(s, seen, out);
-            }
-            if let Some(e) = &then_branch.trailing_expr {
-                collect_assigned_in_expr(e, seen, out);
-            }
+            collect_assigned_in_block(then_branch, seen, out);
             if let Some(e) = else_branch {
                 collect_assigned_in_expr(e, seen, out);
             }
@@ -1361,44 +1403,32 @@ fn collect_assigned_in_expr(expr: &Expr, seen: &mut HashSet<String>, out: &mut V
             condition, body, ..
         } => {
             collect_assigned_in_expr(condition, seen, out);
-            for s in &body.stmts {
-                collect_assigned_in_stmt(s, seen, out);
+            collect_assigned_in_block(body, seen, out);
+        }
+        ExprKind::ForEach { iterable, body, .. } => {
+            collect_assigned_in_expr(iterable, seen, out);
+            collect_assigned_in_block(body, seen, out);
+        }
+        ExprKind::Loop { body, .. } => collect_assigned_in_block(body, seen, out),
+        ExprKind::Break { value } | ExprKind::Return { value } => {
+            if let Some(v) = value {
+                collect_assigned_in_expr(v, seen, out);
             }
-            if let Some(e) = &body.trailing_expr {
+        }
+        ExprKind::Block(b) => collect_assigned_in_block(b, seen, out),
+        ExprKind::Question { expr } | ExprKind::Cast { expr, .. } => {
+            collect_assigned_in_expr(expr, seen, out);
+        }
+        ExprKind::Tuple(items) | ExprKind::EnumConstruct { fields: items, .. } => {
+            for e in items {
                 collect_assigned_in_expr(e, seen, out);
             }
         }
-        ExprKind::Loop { body, .. } => {
-            for s in &body.stmts {
-                collect_assigned_in_stmt(s, seen, out);
-            }
-            if let Some(e) = &body.trailing_expr {
+        ExprKind::StructLiteral { fields, .. } => {
+            for (_, e) in fields {
                 collect_assigned_in_expr(e, seen, out);
             }
         }
-        ExprKind::ForEach { body, .. } => {
-            for s in &body.stmts {
-                collect_assigned_in_stmt(s, seen, out);
-            }
-            if let Some(e) = &body.trailing_expr {
-                collect_assigned_in_expr(e, seen, out);
-            }
-        }
-        ExprKind::BinaryOp { lhs, rhs, .. } => {
-            collect_assigned_in_expr(lhs, seen, out);
-            collect_assigned_in_expr(rhs, seen, out);
-        }
-        ExprKind::UnaryOp { operand, .. } => collect_assigned_in_expr(operand, seen, out),
-        ExprKind::Return { value: Some(v), .. } => {
-            collect_assigned_in_expr(v, seen, out);
-        }
-        ExprKind::Return { value: None, .. } => {}
-        ExprKind::Match { arms, .. } => {
-            for arm in arms {
-                collect_assigned_in_expr(&arm.body, seen, out);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -1473,23 +1503,27 @@ fn block_result_is_coercible_int_marker(block: &Block) -> bool {
     false
 }
 
-fn choose_match_result_ty(
-    arm_results: &[(BlockId, InstId, Ty, Vec<InstId>)],
-    arm_result_markers: &[bool],
-) -> Ty {
-    if arm_results.iter().any(|(_, _, ty, _)| *ty == Ty::LinearPtr) {
+/// A match arm that reaches the merge block: `(exit_block, result_upsilon,
+/// result_ty, mutated_variable_values, mutated_variable_upsilons)`.
+type MatchArmExit = (BlockId, InstId, Ty, Vec<InstId>, Vec<InstId>);
+
+fn choose_match_result_ty(arm_results: &[MatchArmExit], arm_result_markers: &[bool]) -> Ty {
+    if arm_results
+        .iter()
+        .any(|(_, _, ty, _, _)| *ty == Ty::LinearPtr)
+    {
         // Empty generic variants have no payload value from which lowering can
         // infer ownership. A linear sibling carries the checker-resolved
         // wrapper type for the merge, so the Phi must retain that obligation.
         return Ty::LinearPtr;
     }
-    let Some((_, _, first_ty, _)) = arm_results.first() else {
+    let Some((_, _, first_ty, _, _)) = arm_results.first() else {
         return Ty::I64;
     };
     let mut result_ty = *first_ty;
     let mut result_is_marker = arm_result_markers.first().copied().unwrap_or(false);
 
-    for (i, (_, _, arm_ty, _)) in arm_results.iter().enumerate().skip(1) {
+    for (i, (_, _, arm_ty, _, _)) in arm_results.iter().enumerate().skip(1) {
         let arm_is_marker = arm_result_markers.get(i).copied().unwrap_or(false);
         if result_is_marker && ir_ty_is_integer(*arm_ty) {
             result_ty = *arm_ty;
@@ -1535,19 +1569,11 @@ fn collect_if_mutations(
 ) -> Vec<(String, InstId)> {
     let mut seen = HashSet::new();
     let mut names = vec![];
-    for s in &then_branch.stmts {
-        collect_assigned_in_stmt(s, &mut seen, &mut names);
-    }
-    if let Some(e) = &then_branch.trailing_expr {
-        collect_assigned_in_expr(e, &mut seen, &mut names);
-    }
+    collect_assigned_in_block(then_branch, &mut seen, &mut names);
     if let Some(e) = else_branch {
         collect_assigned_in_expr(e, &mut seen, &mut names);
     }
-    names
-        .into_iter()
-        .filter_map(|name| ctx.lookup(&name).map(|id| (name, id)))
-        .collect()
+    ctx.in_scope_vars(names)
 }
 
 pub(super) fn lower_expr_pub(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
@@ -1832,6 +1858,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 _ => todo!("non-ident callee in Call lowering"),
             };
             let call_info = ctx.func_index.get(&callee_name).cloned();
+            if callee_name == "drop" && call_info.is_none() {
+                for a in args {
+                    lower_consumed_expr(ctx, a);
+                }
+                return ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
+            }
             if callee_name == "string_matches_literal_at" {
                 let string_id = args
                     .first()
@@ -2002,6 +2034,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                 .collect();
+            let then_mut_upsilons: Vec<InstId> = if then_terminated {
+                Vec::new()
+            } else {
+                then_mut_vals
+                    .iter()
+                    .map(|&val| emit_pending_upsilon(ctx, val, span))
+                    .collect()
+            };
             let then_upsilon_id = if !then_terminated {
                 let u = ctx.emit(
                     Opcode::Upsilon,
@@ -2038,6 +2078,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                 .collect();
+            let else_mut_upsilons: Vec<InstId> = if else_terminated {
+                Vec::new()
+            } else {
+                else_mut_vals
+                    .iter()
+                    .map(|&val| emit_pending_upsilon(ctx, val, span))
+                    .collect()
+            };
             let else_upsilon_id = if !else_terminated {
                 let u = ctx.emit(
                     Opcode::Upsilon,
@@ -2063,39 +2111,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             ctx.switch_to_block(merge_block);
 
-            // Create Phis for each mutated variable, wiring Upsilons from both branches.
-            // Upsilons are appended even after the Jump (they are no-ops in codegen but
-            // are found by collect_target_block_args which scans all instructions).
-            for (i, (name, pre_id)) in mutations.iter().enumerate() {
-                let t_val = then_mut_vals[i];
-                let e_val = else_mut_vals[i];
-                if t_val == *pre_id && e_val == *pre_id {
-                    // Variable unchanged by both branches — no phi needed.
-                    continue;
-                }
-                let phi_ty = merge_phi_ty(ctx.inst_ty(t_val), ctx.inst_ty(e_val));
+            // Create a Phi for each mutated variable and wire the Upsilons each
+            // branch emitted for it ahead of its result Upsilon and Jump.
+            for (i, (name, _)) in mutations.iter().enumerate() {
+                let phi_ty =
+                    merge_phi_ty(ctx.inst_ty(then_mut_vals[i]), ctx.inst_ty(else_mut_vals[i]));
                 let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
-                if !then_terminated {
-                    ctx.switch_to_block(then_upsilon_block);
-                    ctx.emit(
-                        Opcode::Upsilon,
-                        phi_ty,
-                        vec![t_val],
-                        InstData::PhiTarget(phi_id),
-                        span,
-                    );
-                    ctx.switch_to_block(merge_block);
+                if let Some(&up) = then_mut_upsilons.get(i) {
+                    backpatch_upsilon(ctx, then_upsilon_block, up, phi_id);
                 }
-                if !else_terminated {
-                    ctx.switch_to_block(else_upsilon_block);
-                    ctx.emit(
-                        Opcode::Upsilon,
-                        phi_ty,
-                        vec![e_val],
-                        InstData::PhiTarget(phi_id),
-                        span,
-                    );
-                    ctx.switch_to_block(merge_block);
+                if let Some(&up) = else_mut_upsilons.get(i) {
+                    backpatch_upsilon(ctx, else_upsilon_block, up, phi_id);
                 }
                 ctx.assign(name, phi_id);
             }
@@ -2309,13 +2335,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             body,
             vow: while_vow,
         } => {
-            let mutated = collect_assigned_vars(body);
-
-            // Gather pre-loop (name, current_value) for mutated vars that exist in scope.
-            let loop_vars: Vec<(String, InstId)> = mutated
-                .into_iter()
-                .filter_map(|name| ctx.lookup(&name).map(|id| (name, id)))
-                .collect();
+            // Pre-loop (name, current_value) for assigned vars that exist in scope.
+            let loop_vars =
+                ctx.in_scope_vars(collect_loop_assigned_vars(Some(condition.as_ref()), body));
 
             let pre_header_block = ctx.current_block;
             let header_block = ctx.new_block();
@@ -2383,14 +2405,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
             ctx.switch_to_block(cond_block);
 
-            // Upsilons for natural exit (condition false → exit_block):
-            // pass header Phi values into exit-block Phis.
+            // Upsilons for natural exit (condition false → exit_block): pass each
+            // variable's value after the condition ran into its exit-block Phi, so
+            // an assignment inside the condition survives the final evaluation.
             for (name, exit_phi) in &exit_phi_ids {
-                let header_phi = phi_ids.iter().find(|(n, _)| n == name).unwrap().1;
+                let exit_val = ctx
+                    .lookup(name)
+                    .expect("loop variable is rebound to its header Phi");
                 ctx.emit(
                     Opcode::Upsilon,
-                    ctx.inst_ty(header_phi),
-                    vec![header_phi],
+                    ctx.inst_ty(exit_val),
+                    vec![exit_val],
                     InstData::PhiTarget(*exit_phi),
                     span,
                 );
@@ -2484,11 +2509,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
 
-            let mutated = collect_assigned_vars(body);
-            let loop_vars: Vec<(String, InstId)> = mutated
-                .into_iter()
-                .filter_map(|name| ctx.lookup(&name).map(|id| (name, id)))
-                .collect();
+            let loop_vars = ctx.in_scope_vars(collect_loop_assigned_vars(None, body));
 
             let pre_header_block = ctx.current_block;
             let header_block = ctx.new_block();
@@ -2689,11 +2710,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             body,
             vow: loop_vow,
         } => {
-            let mutated = collect_assigned_vars(body);
-            let loop_vars: Vec<(String, InstId)> = mutated
-                .into_iter()
-                .filter_map(|name| ctx.lookup(&name).map(|id| (name, id)))
-                .collect();
+            let loop_vars = ctx.in_scope_vars(collect_loop_assigned_vars(None, body));
 
             let pre_header_block = ctx.current_block;
             let header_block = ctx.new_block();
@@ -3344,22 +3361,19 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let merge_block = ctx.new_block();
 
             // Collect mutations across all arm bodies.
-            let mutations: Vec<(String, InstId)> = {
+            let mutations = {
                 let mut seen = HashSet::new();
                 let mut names = vec![];
                 for arm in arms {
                     collect_assigned_in_expr(&arm.body, &mut seen, &mut names);
                 }
-                names
-                    .into_iter()
-                    .filter_map(|name| ctx.lookup(&name).map(|id| (name, id)))
-                    .collect()
+                ctx.in_scope_vars(names)
             };
 
             let scope_snap = ctx.snapshot_scope();
 
-            // Merge-reaching arm tracking: (exit_block, result_upsilon, result_ty, mut_vals)
-            let mut arm_results: Vec<(BlockId, InstId, Ty, Vec<InstId>)> = Vec::new();
+            // Merge-reaching arm tracking: (exit_block, result_upsilon, result_ty, mut_vals, mut_upsilons)
+            let mut arm_results: Vec<MatchArmExit> = Vec::new();
             let mut arm_result_markers: Vec<bool> = Vec::new();
             let mut arm_result_values: Vec<InstId> = Vec::new();
             // Parallel to arm_results/arm_result_markers: the arm body expr, so a marker
@@ -3460,6 +3474,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                                 .collect();
 
+                            let arm_mut_upsilons: Vec<InstId> = arm_mut_vals
+                                .iter()
+                                .map(|&val| emit_pending_upsilon(ctx, val, span))
+                                .collect();
                             let up_id = ctx.emit(
                                 Opcode::Upsilon,
                                 Ty::Unit,
@@ -3475,7 +3493,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                 span,
                             );
                             let exit_block = ctx.current_block;
-                            arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
+                            arm_results.push((
+                                exit_block,
+                                up_id,
+                                arm_ty,
+                                arm_mut_vals,
+                                arm_mut_upsilons,
+                            ));
                             arm_result_markers.push(expr_is_coercible_int_marker(&arm.body));
                             arm_result_values.push(arm_result);
                             arm_bodies.push(&arm.body);
@@ -3506,6 +3530,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                                 .collect();
 
+                            let arm_mut_upsilons: Vec<InstId> = arm_mut_vals
+                                .iter()
+                                .map(|&val| emit_pending_upsilon(ctx, val, span))
+                                .collect();
                             let up_id = ctx.emit(
                                 Opcode::Upsilon,
                                 Ty::Unit,
@@ -3521,7 +3549,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                 span,
                             );
                             let exit_block = ctx.current_block;
-                            arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
+                            arm_results.push((
+                                exit_block,
+                                up_id,
+                                arm_ty,
+                                arm_mut_vals,
+                                arm_mut_upsilons,
+                            ));
                             arm_result_markers.push(expr_is_coercible_int_marker(&arm.body));
                             arm_result_values.push(arm_result);
                             arm_bodies.push(&arm.body);
@@ -3537,6 +3571,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
                         let arm_mut_vals: Vec<InstId> =
                             mutations.iter().map(|(_, pre_id)| *pre_id).collect();
+                        let arm_mut_upsilons: Vec<InstId> = arm_mut_vals
+                            .iter()
+                            .map(|&val| emit_pending_upsilon(ctx, val, span))
+                            .collect();
 
                         let up_id = ctx.emit(
                             Opcode::Upsilon,
@@ -3552,7 +3590,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             InstData::JumpTarget(merge_block),
                             span,
                         );
-                        arm_results.push((arm_block, up_id, Ty::Unit, arm_mut_vals));
+                        arm_results.push((
+                            arm_block,
+                            up_id,
+                            Ty::Unit,
+                            arm_mut_vals,
+                            arm_mut_upsilons,
+                        ));
                         arm_result_markers.push(false);
                         arm_result_values.push(unit);
                         arm_bodies.push(&arm.body);
@@ -3567,30 +3611,19 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 return ctx.emit(Opcode::Unreachable, Ty::Unit, vec![], InstData::None, span);
             }
 
-            // Create Phis for mutated variables.
-            for (i, (name, pre_id)) in mutations.iter().enumerate() {
-                let changed = arm_results.iter().any(|(_, _, _, mvs)| mvs[i] != *pre_id);
-                if !changed {
-                    continue;
-                }
+            // Create a Phi for each mutated variable and wire the Upsilons every
+            // arm emitted for it ahead of its result Upsilon and Jump.
+            for (i, (name, _)) in mutations.iter().enumerate() {
                 let phi_ty = arm_results
                     .iter()
                     .skip(1)
-                    .fold(ctx.inst_ty(arm_results[0].3[i]), |ty, (_, _, _, values)| {
-                        merge_phi_ty(ty, ctx.inst_ty(values[i]))
+                    .fold(ctx.inst_ty(arm_results[0].3[i]), |ty, arm| {
+                        merge_phi_ty(ty, ctx.inst_ty(arm.3[i]))
                     });
                 let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
-                for (exit_block, _, _, arm_mut_vals) in &arm_results {
-                    ctx.switch_to_block(*exit_block);
-                    ctx.emit(
-                        Opcode::Upsilon,
-                        phi_ty,
-                        vec![arm_mut_vals[i]],
-                        InstData::PhiTarget(phi_id),
-                        span,
-                    );
+                for (exit_block, _, _, _, mut_upsilons) in &arm_results {
+                    backpatch_upsilon(ctx, *exit_block, mut_upsilons[i], phi_id);
                 }
-                ctx.switch_to_block(merge_block);
                 ctx.assign(name, phi_id);
             }
 
@@ -3612,9 +3645,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     }
                     let block_idx = arm_block.0 as usize;
                     // Locate the arm's own result Upsilon by id rather than assuming
-                    // block position: the "Phis for mutated variables" pass above may
-                    // have already appended extra Upsilons after this arm's own
-                    // [Upsilon, Jump] pair, so it's not reliably the block's tail.
+                    // block position: the arm's mutation Upsilons precede its result
+                    // Upsilon, so it is not the block's first Upsilon either.
                     let up_pos = ctx.func.blocks[block_idx]
                         .insts
                         .iter()
@@ -3643,7 +3675,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
             merge_compatible_aggregate_metadata(ctx, &arm_result_values, phi_id);
 
-            for (arm_block, up_id, _, _) in &arm_results {
+            for (arm_block, up_id, _, _, _) in &arm_results {
                 backpatch_upsilon(ctx, *arm_block, *up_id, phi_id);
             }
 
@@ -4075,6 +4107,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             } else {
                 val
             }
+        }
+        ExprKind::Tuple(elems) if elems.is_empty() => {
+            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
         }
         _ => todo!("IR lowering not implemented for {:?}", expr.kind),
     }
@@ -4736,6 +4771,16 @@ fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<In
             op: UnOp::Neg,
             operand,
         } => {
+            if let ExprKind::Lit(Lit::Int(value)) = &operand.kind
+                && !matches!(ty, Ty::I128 | Ty::U128)
+            {
+                return Some(emit_narrow_integer_constant(
+                    ctx,
+                    value.wrapping_neg(),
+                    ty,
+                    expr.span,
+                ));
+            }
             let zero = emit_narrow_integer_constant(ctx, 0, ty, expr.span);
             let value = lower_integer_marker_as(ctx, operand, ty)?;
             Some(ctx.emit(
@@ -4807,8 +4852,7 @@ fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: T
 /// The branch's Upsilon still carries its speculative default-width value
 /// (see `expr_is_coercible_int_marker`) from before the merge's real result
 /// type was known. Locates the Upsilon **by id**, not by block-tail
-/// position, because the mutated-variable Phi loop earlier in the same
-/// `ExprKind::If` arm may already have appended extra Upsilons after it.
+/// position, because the branch's mutation Upsilons precede it in the block.
 /// Returns `None` if the Upsilon can't be found (should not happen for a
 /// live branch, but callers must not panic on a missing id).
 fn renarrow_if_branch_result(
@@ -4884,6 +4928,18 @@ fn binop_opcode(op: BinOp, operand_ty: &Ty) -> (Opcode, Ty, InstData) {
         BinOp::Shl => (Opcode::Shl, result_ty, integer_data),
         BinOp::Shr => (Opcode::Shr, result_ty, integer_data),
     }
+}
+
+/// An Upsilon whose Phi does not exist yet: emitted in the branch block now and
+/// pointed at its Phi by `backpatch_upsilon` once the merge block creates it.
+fn emit_pending_upsilon(ctx: &mut LowerCtx, value: InstId, span: Span) -> InstId {
+    ctx.emit(
+        Opcode::Upsilon,
+        Ty::Unit,
+        vec![value],
+        InstData::PhiTarget(InstId(u32::MAX)),
+        span,
+    )
 }
 
 fn backpatch_upsilon(ctx: &mut LowerCtx, block_id: BlockId, upsilon_id: InstId, phi_id: InstId) {
@@ -6565,6 +6621,91 @@ fn unsigned_max() -> u128 {
         func.blocks.iter().flat_map(|block| &block.insts).collect()
     }
 
+    fn lowered_function(source: &str, name: &str) -> Function {
+        lower_source_to_module(source, "lowering_probe.vow")
+            .functions
+            .into_iter()
+            .find(|func| func.name == name)
+            .unwrap_or_else(|| panic!("function `{name}`"))
+    }
+
+    /// A negated literal in a narrow context is one constant of that width, not
+    /// a `0 - literal` subtraction, so both compilers emit the same IR (and C).
+    #[test]
+    fn negated_narrow_literal_lowers_to_one_constant() {
+        let func = lowered_function(
+            "module M\nfn probe(x: i8) -> bool {\n  x == -5\n}\n",
+            "probe",
+        );
+        let insts = insts_of(&func);
+        assert!(
+            insts.iter().any(|i| i.opcode == Opcode::ConstU8
+                && i.ty == Ty::I8
+                && i.data == InstData::ConstU8(251)),
+            "{insts:?}"
+        );
+        assert!(
+            !insts
+                .iter()
+                .any(|i| i.opcode == Opcode::WrappingSub && i.ty == Ty::I8),
+            "{insts:?}"
+        );
+    }
+
+    /// Every branch of an `if` or `match` ends in its terminator: the Upsilons
+    /// feeding the Phis of mutated variables come before it, ahead of the
+    /// branch's own result Upsilon, in the same order as `compiler/lower.vow`.
+    #[test]
+    fn merge_upsilons_precede_the_branch_terminator() {
+        let sources = [
+            (
+                2,
+                "module M\nfn probe(c: bool) -> u64 {\n  let mut n: u64 = 1;\n  if c {\n    n = 2;\n  }\n  n\n}\n",
+            ),
+            (
+                2,
+                "module M\nfn probe(o: Option<u64>) -> u64 {\n  let mut n: u64 = 1;\n  match o {\n    Option::Some(v) => {\n      n = v;\n    },\n    Option::None => {\n      n = 3;\n    },\n  }\n  n\n}\n",
+            ),
+            (
+                1,
+                "module M\nfn probe(k: u64) -> u64 {\n  let mut n: u64 = 1;\n  match k {\n    7 => {\n      n = 2;\n    },\n    _ => {\n      n = 3;\n    },\n  }\n  n\n}\n",
+            ),
+        ];
+        for (expected, source) in sources {
+            let func = lowered_function(source, "probe");
+            let phis: std::collections::HashSet<InstId> = insts_of(&func)
+                .iter()
+                .filter(|i| i.opcode == Opcode::Phi)
+                .map(|i| i.id)
+                .collect();
+            for upsilon in insts_of(&func)
+                .iter()
+                .filter(|i| i.opcode == Opcode::Upsilon)
+            {
+                let InstData::PhiTarget(target) = upsilon.data else {
+                    panic!("{source}: upsilon without a phi target: {upsilon:?}");
+                };
+                assert!(phis.contains(&target), "{source}: dangling {upsilon:?}");
+            }
+            let mut mutation_upsilons = 0;
+            for block in &func.blocks {
+                let terminal = block.insts.iter().position(|i| i.opcode.is_terminal());
+                if let Some(at) = terminal {
+                    assert_eq!(at, block.insts.len() - 1, "{source}: {block:?}");
+                }
+                let jump_at = block.insts.iter().position(|i| i.opcode == Opcode::Jump);
+                if let Some(at) = jump_at
+                    && at >= 2
+                    && block.insts[at - 1].opcode == Opcode::Upsilon
+                    && block.insts[at - 2].opcode == Opcode::Upsilon
+                {
+                    mutation_upsilons += 1;
+                }
+            }
+            assert!(mutation_upsilons >= expected, "{source}: {func:?}");
+        }
+    }
+
     fn lowered_probe(source: &str) -> Function {
         lower_source_to_module(source, "map_probe.vow")
             .functions
@@ -7083,6 +7224,64 @@ fn sum(v: Vec<i64>) -> i64 {
         );
     }
 
+    /// Marker constants (>= 1000) fed to the Upsilons, in block order. The
+    /// fixture initialises each variable of interest with a distinct marker, so
+    /// the list names which variables a loop carries and in which order.
+    fn carried_markers(func: &Function) -> Vec<i64> {
+        let insts = insts_of(func);
+        let markers: HashMap<InstId, i64> = insts
+            .iter()
+            .filter_map(|i| match i.data {
+                InstData::ConstI64(v) if v >= 1000 => Some((i.id, v)),
+                _ => None,
+            })
+            .collect();
+        insts
+            .iter()
+            .filter(|i| i.opcode == Opcode::Upsilon)
+            .filter_map(|i| markers.get(&i.args[0]).copied())
+            .collect()
+    }
+
+    /// `// carried <fn>: <markers>` lines of the shared fixture.
+    fn expected_carried(fixture: &str) -> Vec<(String, Vec<i64>)> {
+        fixture
+            .lines()
+            .filter_map(|line| line.strip_prefix("// carried "))
+            .map(|rest| {
+                let (name, markers) = rest.split_once(':').expect("`// carried <fn>: ...`");
+                let markers = markers
+                    .split_whitespace()
+                    .map(|m| m.parse().expect("marker"))
+                    .collect();
+                (name.to_string(), markers)
+            })
+            .collect()
+    }
+
+    /// Loops carry exactly the variables assigned in their condition or body
+    /// that were already in scope at loop entry, in first-assignment order.
+    /// Body-local `let mut`s once became `%-1` Upsilons in the self-hosted
+    /// lowerer, shifting every later instruction id and breaking cross-compiler
+    /// IR placement parity; assignments nested in operand positions were once
+    /// missed by both lowerers. The self-hosted twin is
+    /// `compiler/tests/test_lower_loop_carried_scope.vow`; both read
+    /// `tests/fixtures/loop_carried_scope.vow`.
+    #[test]
+    fn loops_carry_the_expected_variables() {
+        let fixture = include_str!("../../../tests/fixtures/loop_carried_scope.vow");
+        let module = lower_source_to_module(fixture, "loop_carried_scope.vow");
+        let expected = expected_carried(fixture);
+        assert!(!expected.is_empty(), "fixture lists its functions");
+        for (name, markers) in expected {
+            let func = module
+                .functions
+                .iter()
+                .find(|f| f.name == name)
+                .unwrap_or_else(|| panic!("fixture function `{name}`"));
+            assert_eq!(carried_markers(func), markers, "carried by `{name}`");
+        }
+    }
     /// A `from_raw_parts_copy` length literal is lowered in its `u64` context.
     /// A wrapped negative `ConstI64` here made the C model's `>= 0` guard
     /// unsatisfiable and so proved everything after the call.
@@ -8288,6 +8487,35 @@ fn parse_or_default(s: String) -> i64 {
             .find(|i| i.opcode == Opcode::WrappingAdd)
             .expect("expected addition of the two bound elements");
         assert_eq!(add.args, vec![const_insts[0].id, const_insts[1].id]);
+    }
+
+    #[test]
+    fn lower_unit_literal_emits_const_unit() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(tuple_expr(vec![]))),
+            span: sp(),
+        };
+        let fn_def = make_fn("unit_value", vec![], unit_ty(), body, vec![]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        let entry = &func.blocks[0];
+        let unit = entry
+            .insts
+            .iter()
+            .find(|i| i.opcode == Opcode::ConstUnit)
+            .expect("`()` lowers to ConstUnit");
+        assert_eq!(unit.ty, Ty::Unit);
     }
 
     #[test]

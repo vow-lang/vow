@@ -65,7 +65,7 @@ fn collect_vars_in_expr(ctx: &LowerCtx, expr: &Expr, out: &mut Vec<(String, Inst
             collect_vars_in_expr(ctx, lhs, out);
             collect_vars_in_expr(ctx, rhs, out);
         }
-        ExprKind::UnaryOp { operand, .. } => {
+        ExprKind::UnaryOp { operand, .. } | ExprKind::Cast { expr: operand, .. } => {
             collect_vars_in_expr(ctx, operand, out);
         }
         ExprKind::Call { callee, args } => {
@@ -782,5 +782,40 @@ mod tests {
             .expect("binding InstId should exist");
         assert_eq!(field_get.opcode, Opcode::FieldGet);
         assert_eq!(field_get.data, InstData::FieldIndex(1));
+    }
+
+    fn binding_names(source: &str, function: &str) -> Vec<Vec<String>> {
+        let (ast, diagnostics) = vow_syntax::parser::parse_module(source, "bindings.vow");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let item_files = vec!["bindings.vow".to_string(); ast.items.len()];
+        let module = crate::lower::lower_module_with_pattern_aggregates(
+            &ast,
+            &item_files,
+            &crate::lower::StringExprSet::new(),
+            crate::lower::PatternAggregateMap::new(),
+        );
+        let func = module
+            .functions
+            .iter()
+            .find(|f| f.name == function)
+            .expect("function");
+        func.vows
+            .iter()
+            .map(|v| v.bindings.iter().map(|(n, _)| n.clone()).collect())
+            .collect()
+    }
+
+    /// A struct-valued binding is captured one primitive field at a time, so a
+    /// violation reports `result.c`, not an address; a variable under a cast is
+    /// still a free variable of the predicate.
+    #[test]
+    fn violation_bindings_expand_struct_fields_and_see_through_casts() {
+        let source = "module M\nstruct Thing { a: i64, b: i64, c: i64 }\n\
+            fn set_c(t: Thing, c: i64) -> Thing vow {\n  requires: c >= 0,\n  ensures: result.c == c\n} {\n  Thing { a: t.a, b: t.b, c: c }\n}\n\
+            fn bounded(n: u64) -> u64 vow {\n  requires: n < 10 as u64\n} {\n  n\n}\n";
+        let set_c = binding_names(source, "set_c");
+        assert_eq!(set_c[1], ["result.c", "c"], "{set_c:?}");
+        let bounded = binding_names(source, "bounded");
+        assert_eq!(bounded[0], ["n"], "{bounded:?}");
     }
 }

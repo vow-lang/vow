@@ -1,0 +1,12 @@
+// TEST: error-code UnsupportedFeature
+// TEST: error-count 1
+module BorrowExprInCallArgument
+
+fn id(x: i64) -> i64 {
+    x
+}
+
+fn main() -> i64 {
+    let x: i64 = 5;
+    id(-&x)
+}

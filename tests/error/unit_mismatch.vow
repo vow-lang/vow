@@ -1,0 +1,13 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 2
+// The unit value `()` has the unit type and nothing else.
+module UnitMismatch
+
+fn wants_i64() -> i64 {
+    ()
+}
+
+fn main() -> i32 {
+    let n: i64 = ();
+    0
+}

@@ -36,10 +36,9 @@
           },
           "additionalProperties": false
         },
-        { "type": "string" },
         { "type": "null" }
       ],
-      "description": "Source location of the violated vow clause; Rust emits a span object, self-hosted emits the source path string"
+      "description": "Source location of the violated vow clause, identical in both compilers; null when the failure cannot be attributed to a vow clause"
     },
     "blame": {
       "type": "string",

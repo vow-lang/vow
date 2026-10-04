@@ -116,7 +116,7 @@ fn collect_may_write_sites<'a>(expr: &'a Expr, env: &TypeEnv, sites: &mut Vec<&'
                 collect_may_write_sites(v, env, sites);
             }
         }
-        ExprKind::Borrow { expr } | ExprKind::Question { expr } => {
+        ExprKind::Question { expr } => {
             collect_may_write_sites(expr, env, sites);
         }
         ExprKind::FieldAccess { base, .. } => {
@@ -304,7 +304,7 @@ fn collect_loop_vows_in_expr<'a>(expr: &'a Expr, out: &mut Vec<&'a VowBlock>) {
                 collect_loop_vows_in_expr(v, out);
             }
         }
-        ExprKind::Borrow { expr } | ExprKind::Question { expr } => {
+        ExprKind::Question { expr } => {
             collect_loop_vows_in_expr(expr, out);
         }
         ExprKind::FieldAccess { base, .. } => collect_loop_vows_in_expr(base, out),
@@ -418,7 +418,7 @@ fn collect_calls_in_expr<'a>(
                 collect_calls_in_expr(v, calls, panic_exprs);
             }
         }
-        ExprKind::Borrow { expr } | ExprKind::Question { expr } => {
+        ExprKind::Question { expr } => {
             collect_calls_in_expr(expr, calls, panic_exprs);
         }
         ExprKind::FieldAccess { base, .. } => {
@@ -582,57 +582,67 @@ pub fn check_vow_purity(
             VowClause::Ensures { expr, .. } => expr,
             VowClause::Invariant { expr, .. } => expr,
         };
+        check_predicate_purity(expr, env, file, emitter);
+    }
+}
 
-        let mut calls = Vec::new();
-        let mut panic_exprs = Vec::new();
-        collect_calls_in_expr(expr, &mut calls, &mut panic_exprs);
+/// Purity check for one predicate expression: a contract clause or a
+/// parameter `where` refinement, which obey the same rule.
+pub fn check_predicate_purity(
+    expr: &Expr,
+    env: &TypeEnv,
+    file: &str,
+    emitter: &mut dyn DiagnosticEmitter,
+) {
+    let mut calls = Vec::new();
+    let mut panic_exprs = Vec::new();
+    collect_calls_in_expr(expr, &mut calls, &mut panic_exprs);
 
-        for (callee_expr, callee_name) in &calls {
-            if let Some(sig) = env.lookup_fn(callee_name)
-                && !sig.effects.is_empty()
-            {
-                emitter.emit(&Diagnostic {
-                    severity: Severity::Error,
-                    code: ErrorCode::EffectViolation,
-                    message: format!(
-                        "vow predicate must be pure but calls effectful function `{}`",
-                        callee_name,
-                    ),
-                    primary: SourceLocation {
-                        file: file.to_string(),
-                        byte_offset: callee_expr.span.start,
-                        byte_len: callee_expr.span.len,
-                    },
-                    secondary: vec![],
-                    blame: Blame::Callee,
-                    hints: vec![
-                        "vow predicates must be pure — move effectful code outside the vow block"
-                            .to_string(),
-                    ],
-                });
-            }
-        }
-
-        let mut write_sites = Vec::new();
-        collect_may_write_sites(expr, env, &mut write_sites);
-        for site in write_sites {
+    for (callee_expr, callee_name) in &calls {
+        if let Some(sig) = env.lookup_fn(callee_name)
+            && !sig.effects.is_empty()
+        {
             emitter.emit(&Diagnostic {
                 severity: Severity::Error,
                 code: ErrorCode::EffectViolation,
-                message: "vow predicate must be pure but this expression may write through a shared argument".to_string(),
+                message: format!(
+                    "vow predicate must be pure but calls effectful function `{}`",
+                    callee_name,
+                ),
                 primary: SourceLocation {
                     file: file.to_string(),
-                    byte_offset: site.span.start,
-                    byte_len: site.span.len,
+                    byte_offset: callee_expr.span.start,
+                    byte_len: callee_expr.span.len,
                 },
                 secondary: vec![],
                 blame: Blame::Callee,
                 hints: vec![
-                    "vow predicates must not write to a struct field, a Vec/map element, or call a mutating builtin method — move the write outside the vow block"
+                    "vow predicates must be pure — move effectful code outside the vow block"
                         .to_string(),
                 ],
             });
         }
+    }
+
+    let mut write_sites = Vec::new();
+    collect_may_write_sites(expr, env, &mut write_sites);
+    for site in write_sites {
+        emitter.emit(&Diagnostic {
+            severity: Severity::Error,
+            code: ErrorCode::EffectViolation,
+            message: "vow predicate must be pure but this expression may write through a shared argument".to_string(),
+            primary: SourceLocation {
+                file: file.to_string(),
+                byte_offset: site.span.start,
+                byte_len: site.span.len,
+            },
+            secondary: vec![],
+            blame: Blame::Callee,
+            hints: vec![
+                "vow predicates must not write to a struct field, a Vec/map element, or call a mutating builtin method — move the write outside the vow block"
+                    .to_string(),
+            ],
+        });
     }
 }
 
@@ -1534,7 +1544,7 @@ mod tests {
         );
     }
 
-    // --- codecov: rare ExprKind arms (Index, UnaryOp, Borrow, Question,
+    // --- codecov: rare ExprKind arms (Index, UnaryOp, Question,
     // Cast, Tuple, EnumConstruct, StructLiteral, Break, ForEach, Loop) must
     // still be searched through, not just the common ones already exercised
     // above. ---
@@ -1554,15 +1564,6 @@ mod tests {
             kind: ExprKind::UnaryOp {
                 op: UnOp::Not,
                 operand: Box::new(inner),
-            },
-            span: dummy_span(),
-        }
-    }
-
-    fn wrap_borrow(inner: Expr) -> Expr {
-        Expr {
-            kind: ExprKind::Borrow {
-                expr: Box::new(inner),
             },
             span: dummy_span(),
         }
@@ -1658,7 +1659,6 @@ mod tests {
     fn wrap_all_rare_kinds(inner: Expr) -> Expr {
         let e = wrap_index(inner);
         let e = wrap_unary(e);
-        let e = wrap_borrow(e);
         let e = wrap_question(e);
         let e = wrap_cast(e);
         let e = wrap_tuple(e);
@@ -1681,7 +1681,7 @@ mod tests {
         check_vow_purity(&vow, &env, "test.vow", &mut emitter);
         assert!(
             !emitter.0.is_empty(),
-            "a write nested inside Index/UnaryOp/Borrow/Question/Cast/Tuple/\
+            "a write nested inside Index/UnaryOp/Question/Cast/Tuple/\
              EnumConstruct/StructLiteral/Break/ForEach/Loop must still be found"
         );
         assert_eq!(emitter.0[0].code, ErrorCode::EffectViolation);
@@ -1712,7 +1712,7 @@ mod tests {
                 .0
                 .iter()
                 .any(|d| d.code == ErrorCode::EffectViolation),
-            "a while loop nested inside Index/UnaryOp/Borrow/Question/Cast/Tuple/\
+            "a while loop nested inside Index/UnaryOp/Question/Cast/Tuple/\
              EnumConstruct/StructLiteral/Break/ForEach/Loop must still be reached"
         );
     }
