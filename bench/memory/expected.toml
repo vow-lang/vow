@@ -31,6 +31,11 @@ file = "programs/alloc_escape_param_vec.vow"
 max_rss_kb = 7500
 expected = "pass"
 
+[alloc_escape_phi_container]
+file = "programs/alloc_escape_phi_container.vow"
+max_rss_kb = 7500
+expected = "pass"
+
 [alloc_escape_pin]
 file = "programs/alloc_escape_pin.vow"
 max_rss_kb = 9152

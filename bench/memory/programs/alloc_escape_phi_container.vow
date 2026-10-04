@@ -1,0 +1,33 @@
+// BENCH: max-rss-kb 7500
+module AllocEscapePhiContainer
+
+fn store(items: Vec<Option<i64>>, m: HashMap<i64, i64>, k: i64) {
+    items.push(m.get(k));
+    items.push(m.get(k + 1));
+}
+
+fn round(m: HashMap<i64, i64>, flip: bool) -> u64 {
+    let left: Vec<Option<i64>> = Vec::new();
+    let right: Vec<Option<i64>> = Vec::new();
+    let target: Vec<Option<i64>> = if flip { left } else { right };
+    let mut i: i64 = 0;
+    while i < 32 {
+        store(target, m, i % 4);
+        i = i + 1;
+    }
+    target.len()
+}
+
+fn main() -> i32 [io] {
+    let m: HashMap<i64, i64> = HashMap::new();
+    m.insert(1, 10);
+    let mut i: i64 = 0;
+    let mut t: u64 = 0;
+    while i < 100000 {
+        t = t + round(m, i % 2 == 0);
+        i = i + 1;
+    }
+    print_u64(t);
+    print_str("\n");
+    0
+}

@@ -570,7 +570,7 @@ fresh allocation, and codegen routes accordingly:
 |---|---|---|
 | `Block(_)` (non-escaping, e.g. a lookup inside a loop) | `<name>_in_arena` with the block arena | freed when the block region closes |
 | `Caller(_)` (returned to the caller) | `<name>_in_arena` with the hidden caller arena | owned by the caller's region |
-| `Root` (stored into two or more distinct parameter containers, into a container reached through a Phi merge, or pinned) | root wrapper | program lifetime, with a `RegionRootEscape` note on the allocation site |
+| `Root` (stored into two or more distinct parameter containers, into a container chosen by a Phi over parameter containers, or pinned) | root wrapper | program lifetime, with a `RegionRootEscape` note on the allocation site |
 
 **An escaping result is owned by the container it is stored into.** The
 analysis places the cell in that container's region whenever it can prove which
@@ -587,11 +587,22 @@ container receives it (§4.6 gives the rule and its soundness argument):
 
 Only the cases that have no single owning region keep the root variant: a value
 stored into two or more distinct parameter containers (one hidden arena cannot
-be shorter-lived than both), a container reached through a Phi merge, and a
+be shorter-lived than both), a container chosen by a Phi over parameter
+containers, and a
 pinned value. Those are retained in the root arena for the life of the process,
-and the compiler says so with the `RegionRootEscape` note. The cell is 16 bytes
-(it was a 32-byte descriptor), and it no longer takes the process-wide root
-arena lock unless it really is root-owned.
+and the compiler says so with the `RegionRootEscape` note. That is a
+leak-but-safe placement, and it is the one escaping shape that is not bounded by
+the live set: a callee that stores one lookup result into two parameter
+containers that the caller drops every iteration (`fan_out(a, b, m, k)` called
+32 times per round, 10^5 rounds) retains every cell for the life of the process
+(about 53 MB measured, against 3 MB when the result goes into one container).
+Closing it needs a hidden "join" arena the caller computes as the outer of the
+two argument regions, which is a summary and ABI extension and not an inference
+refinement; until then the note is the signal, and storing into a single
+container (or copying the value into each with `String::from`/`Vec` copies)
+keeps the value in that container's region. The cell is 16 bytes (it was a
+32-byte descriptor), and it no longer takes the process-wide root arena lock
+unless it really is root-owned.
 
 A loop of 10^6 non-escaping `BTreeMap::get`, `BTreeMap::insert`,
 `HashMap::get`, `parse_u64` or `_try` calls therefore no longer grows resident
@@ -602,8 +613,9 @@ memory. The `bench/memory` programs `alloc_loop_btreemap_get`,
 store lookup results and fresh `String`/`Vec` builtin results into it through a
 callee, a struct field, a `Vec` element or an accessor, and drop it, is flat
 too: `alloc_escape_param_vec`, `alloc_escape_struct_field`,
-`alloc_escape_vec_elem`, `alloc_escape_accessor`, `alloc_escape_fresh_builtins`
-and `alloc_loop_field_vec_growth` pin it, and so do `alloc_loop_struct_map` and
+`alloc_escape_vec_elem`, `alloc_escape_accessor`, `alloc_escape_fresh_builtins`,
+`alloc_escape_phi_container` (a `Vec` chosen by an `if` over two local
+containers) and `alloc_loop_field_vec_growth` pin it, and so do `alloc_loop_struct_map` and
 `alloc_loop_vec_map` for maps held in a struct field or a `Vec` element. Only
 escaping results that are live (the `alloc_escape_btreemap_get` and
 `alloc_escape_hashmap_get` programs keep 10^6 of them in one container) grow,
