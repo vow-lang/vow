@@ -501,6 +501,9 @@ fn parse_params(p: Parser) -> i64 {
     arena_add_list(p.arena, items)
 }
 
+// Each clause's span runs from its keyword to the end of its predicate, as the
+// Rust parser's does: counterexample `source` and the Vow* instruction origins
+// are read off it.
 fn parse_vow_block(p: Parser) -> i64 {
     if !at(p, tok_kw_vow()) {
         return -1;
@@ -511,12 +514,11 @@ fn parse_vow_block(p: Parser) -> i64 {
     while !at(p, tok_rbrace()) && !at_end(p) {
         let ct: Token = peek(p);
         let ctag: i64 = ct.tag;
-        let span: i64 = span_pack(ct.span_start, ct.span_len);
         if ctag == tok_kw_requires() {
             let _ck: Token = advance(p);
             let _colon: bool = expect(p, tok_colon());
             let eid: i64 = parse_expr(p);
-            let cid: i64 = arena_add_vow_clause(p.arena, CLAUSE_REQUIRES(), eid, span);
+            let cid: i64 = arena_add_vow_clause(p.arena, CLAUSE_REQUIRES(), eid, span_pack_to_here(p, ct.span_start));
             clause_ids.push(cid);
         } else if ctag == tok_kw_ensures() {
             let _ck: Token = advance(p);
@@ -524,13 +526,13 @@ fn parse_vow_block(p: Parser) -> i64 {
             p.in_ensures = 1;
             let eid: i64 = parse_expr(p);
             p.in_ensures = 0;
-            let cid: i64 = arena_add_vow_clause(p.arena, CLAUSE_ENSURES(), eid, span);
+            let cid: i64 = arena_add_vow_clause(p.arena, CLAUSE_ENSURES(), eid, span_pack_to_here(p, ct.span_start));
             clause_ids.push(cid);
         } else if ctag == tok_kw_invariant() {
             let _ck: Token = advance(p);
             let _colon: bool = expect(p, tok_colon());
             let eid: i64 = parse_expr(p);
-            let cid: i64 = arena_add_vow_clause(p.arena, CLAUSE_INVARIANT(), eid, span);
+            let cid: i64 = arena_add_vow_clause(p.arena, CLAUSE_INVARIANT(), eid, span_pack_to_here(p, ct.span_start));
             clause_ids.push(cid);
         } else {
             push_error(p, String::from("expected requires, ensures, or invariant"));

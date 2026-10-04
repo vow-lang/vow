@@ -810,6 +810,11 @@ These are emitted to stderr as JSON when a compiled program runs (debug mode for
 {"error":"VowViolation","vow_id":0,"blame":"Caller","description":"y != 0","file":"divide.vow","offset":42,"values":{"y":0}}
 ```
 
+`file` is the source file that defines the violated clause (the module file for a
+clause in an imported module, not the entry file) and `offset` is the byte offset
+at which that clause starts. Both compilers report the same `file` and `offset`
+for the same program, never an empty placeholder.
+
 The `blame` field indicates who is at fault:
 - `Caller` — a `requires` was violated (the caller passed bad arguments)
 - `Callee` — an `ensures` or `invariant` was violated (the function has a bug)

@@ -26,7 +26,7 @@ def counterexample(**fields):
         "values": {"x": "1"},
         "violation": "x > 0",
         "vow_id": 0,
-        "source": "a.vow",
+        "source": {"file": "a.vow", "offset": 1, "length": 2},
         "blame": "callee",
         **fields,
     }
@@ -955,9 +955,8 @@ class CompareTestTest(unittest.TestCase):
         self.assertEqual([], errors)
 
     def test_counterexamples_use_the_format_tolerant_comparison(self):
-        # `source` differs in shape between the emitters by design and
-        # `$esbmc$` names are internal, so raw equality would be a false
-        # positive; a real field divergence must still be reported.
+        # `$esbmc$` names are solver temporaries, so raw equality would be a
+        # false positive; a real field divergence must still be reported.
         def suite_with(**overrides):
             return self.suite(
                 tests=[
@@ -969,16 +968,23 @@ class CompareTestTest(unittest.TestCase):
             )
 
         tolerated = parity.compare_test(
-            suite_with(
-                source={"file": "a.vow", "offset": 1, "length": 2},
-                values={"$esbmc$tmp": "3", "x": "1"},
-            ),
-            suite_with(source="a.vow", values={"x": "1"}),
+            suite_with(values={"$esbmc$tmp": "3", "x": "1"}),
+            suite_with(values={"x": "1"}),
             0,
             0,
         )
 
         self.assertEqual([], tolerated)
+
+        moved = parity.compare_test(
+            suite_with(),
+            suite_with(source={"file": "a.vow", "offset": 2, "length": 2}),
+            0,
+            0,
+        )
+
+        self.assertEqual(1, len(moved))
+        self.assertIn("counterexample[0].source:", moved[0])
 
         real = parity.compare_test(suite_with(), self.suite(), 0, 0)
 
@@ -1094,7 +1100,7 @@ class CompareTestTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            set(schema["properties"]) - {"source", "values"},
+            set(schema["properties"]) - {"values"},
             set(parity.COUNTEREXAMPLE_COMPARED_FIELDS),
         )
 
@@ -1586,6 +1592,534 @@ class ParityCliCharacterizationTest(unittest.TestCase):
         )
 
         self.assertEqual((0, "OK"), (completed.returncode, completed.stdout.strip()))
+
+
+def span(offset=10, length=5, file="a.vow"):
+    return {"file": file, "offset": offset, "length": length}
+
+
+def violation_diagnostic(**fields):
+    return {
+        "error_code": "VowEnsuresViolated",
+        "message": "contract violation in `f`: ensures result >= 0",
+        "severity": "error",
+        "span": span(),
+        "hints": ["function `f` failed to establish its postcondition"],
+        "blame": "callee",
+        **fields,
+    }
+
+
+def verify_failed(**fields):
+    """A schema-conforming `vow verify` document with one callee-blame failure."""
+    return {
+        "status": "VerifyFailed",
+        "executable": None,
+        "diagnostics": [violation_diagnostic()],
+        "function": "f",
+        "counterexample": "[Counterexample]",
+        "counterexamples": [
+            counterexample(function="f", source=span(), values={"a": "1"})
+        ],
+        **fields,
+    }
+
+
+def soft_failure(**fields):
+    return {
+        "status": "VerifyFailed",
+        "executable": None,
+        "diagnostics": [],
+        "function": "f",
+        "counterexample": "verification timed out",
+        "counterexamples": [],
+        **fields,
+    }
+
+
+class CompareFullJsonTest(unittest.TestCase):
+    def test_identical_documents_agree(self):
+        self.assertEqual(
+            [], parity.compare_full_json(verify_failed(), verify_failed(), 1, 1)
+        )
+
+    def test_exit_codes_must_match(self):
+        errors = parity.compare_full_json(verify_failed(), verify_failed(), 1, 0)
+
+        self.assertEqual(["exit code: 1 vs 0"], errors)
+
+    def test_a_missing_diagnostic_is_reported(self):
+        errors = parity.compare_full_json(
+            verify_failed(), verify_failed(diagnostics=[]), 1, 1
+        )
+
+        self.assertEqual(1, len(errors))
+        self.assertTrue(errors[0].startswith("diagnostics: [{"), errors)
+
+    def test_a_diagnostic_hint_difference_is_reported(self):
+        other = verify_failed(
+            diagnostics=[violation_diagnostic(hints=["a different hint"])]
+        )
+
+        errors = parity.compare_full_json(verify_failed(), other, 1, 1)
+
+        self.assertEqual(1, len(errors))
+        self.assertTrue(errors[0].startswith("diagnostics:"), errors)
+
+    def test_the_legacy_counterexample_string_must_match(self):
+        errors = parity.compare_full_json(
+            verify_failed(),
+            verify_failed(counterexample="VerifyFailed: ensures result >= 0"),
+            1,
+            1,
+        )
+
+        self.assertEqual(
+            ["counterexample: [Counterexample] vs VerifyFailed: ensures result >= 0"],
+            errors,
+        )
+
+    def test_the_counterexample_source_span_must_match(self):
+        other = verify_failed(
+            counterexamples=[
+                counterexample(function="f", source=span(offset=11), values={"a": "1"})
+            ]
+        )
+
+        errors = parity.compare_full_json(verify_failed(), other, 1, 1)
+
+        self.assertEqual(
+            [f"counterexample[0].source: {span()} vs {span(offset=11)}"], errors
+        )
+
+    def test_a_string_source_violates_the_schema(self):
+        other = verify_failed(
+            counterexamples=[counterexample(function="f", source="a.vow")]
+        )
+
+        errors = parity.compare_full_json(verify_failed(), other, 1, 1)
+
+        self.assertTrue(
+            any(
+                error.startswith("self violates build-result.schema.json:")
+                and "counterexamples[0].source" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_call_sites_and_violating_args_are_compared(self):
+        site = {"caller_function": "g", "file": "a.vow", "offset": 1, "length": 8}
+        arg = {"param": "x", "value": "-5", "arg_offset": 3, "arg_length": 5}
+        rust = verify_failed(
+            counterexamples=[
+                counterexample(
+                    function="f", source=span(), call_sites=[site], violating_args=[arg]
+                )
+            ]
+        )
+        other = verify_failed(
+            counterexamples=[
+                counterexample(
+                    function="f",
+                    source=span(),
+                    call_sites=[{**site, "offset": 2}],
+                    violating_args=[{**arg, "value": ""}],
+                )
+            ]
+        )
+
+        errors = parity.compare_full_json(rust, other, 1, 1)
+
+        self.assertEqual(
+            ["counterexample[0].call_sites:", "counterexample[0].violating_args:"],
+            [error.split("[{")[0].strip() for error in errors],
+        )
+
+    def test_an_unattributed_failure_must_agree_on_a_null_source(self):
+        rust = verify_failed(counterexamples=[counterexample(source=None)])
+        other = verify_failed(counterexamples=[counterexample(source=span())])
+
+        errors = parity.compare_full_json(rust, other, 1, 1)
+
+        self.assertEqual([f"counterexample[0].source: None vs {span()}"], errors)
+
+    def test_counterexample_count_is_compared(self):
+        errors = parity.compare_full_json(
+            verify_failed(), verify_failed(counterexamples=[]), 1, 1
+        )
+
+        self.assertEqual(["counterexamples count: 1 vs 0"], errors)
+
+    def test_esbmc_internal_values_are_ignored(self):
+        noisy = verify_failed(
+            counterexamples=[
+                counterexample(
+                    function="f", source=span(), values={"a": "1", "$esbmc$v3": "7"}
+                )
+            ]
+        )
+
+        self.assertEqual([], parity.compare_full_json(verify_failed(), noisy, 1, 1))
+
+    def test_user_values_are_not_ignored(self):
+        other = verify_failed(
+            counterexamples=[
+                counterexample(function="f", source=span(), values={"a": "2"})
+            ]
+        )
+
+        errors = parity.compare_full_json(verify_failed(), other, 1, 1)
+
+        self.assertEqual(["counterexample[0].values: {'a': '1'} vs {'a': '2'}"], errors)
+
+    def test_verify_message_text_is_ignored(self):
+        errors = parity.compare_full_json(
+            soft_failure(verify_status="unknown", verify_message="giving up"),
+            soft_failure(verify_status="unknown", verify_message="Unable to prove"),
+            1,
+            1,
+        )
+
+        self.assertEqual([], errors)
+
+    def test_verify_status_is_not_ignored(self):
+        errors = parity.compare_full_json(
+            soft_failure(verify_status="timeout"),
+            soft_failure(verify_status="unknown"),
+            1,
+            1,
+        )
+
+        self.assertEqual(["verify_status: timeout vs unknown"], errors)
+
+    def test_executable_paths_are_ignored_but_presence_is_not(self):
+        built = {"status": "Verified", "diagnostics": [], "counterexamples": []}
+
+        same = parity.compare_full_json(
+            {**built, "executable": "/tmp/rust_out"},
+            {**built, "executable": "/tmp/self_out"},
+            0,
+            0,
+        )
+        absent = parity.compare_full_json(
+            {**built, "executable": "/tmp/rust_out"},
+            {**built, "executable": None},
+            0,
+            0,
+        )
+
+        self.assertEqual([], same)
+        self.assertEqual(["executable: <path> vs None"], absent)
+
+    def test_diagnostic_line_and_column_violate_the_schema(self):
+        located = violation_diagnostic(span={**span(), "line": 3, "column": 1})
+
+        errors = parity.compare_full_json(
+            verify_failed(), verify_failed(diagnostics=[located]), 1, 1
+        )
+
+        self.assertTrue(
+            any("self violates build-result.schema.json" in error for error in errors),
+            errors,
+        )
+
+    def test_cli_reports_ok_and_fail(self):
+        agree = run_parity_cli("full-json", verify_failed(), verify_failed(), 1, 1)
+        differ = run_parity_cli(
+            "full-json", verify_failed(), verify_failed(diagnostics=[]), 1, 1
+        )
+
+        self.assertEqual((0, "OK"), (agree.returncode, agree.stdout.strip()))
+        self.assertEqual(1, differ.returncode)
+        self.assertTrue(differ.stdout.startswith("FAIL: diagnostics:"), differ.stdout)
+
+    def test_known_counterexample_value_divergence_is_still_a_loud_skip(self):
+        rust = verify_failed(
+            counterexamples=[counterexample(source=span(), values={"x": "-1"})]
+        )
+        other = verify_failed(
+            counterexamples=[counterexample(source=span(), values={"n": "-1"})]
+        )
+
+        completed = run_parity_cli(
+            "full-json", rust, other, 1, 1, fixture_text=KNOWN_CEX_FIXTURE
+        )
+
+        self.assertEqual(
+            (0, "SKIP: known counterexample divergence (#1139: variable names differ)"),
+            (completed.returncode, completed.stdout.strip()),
+        )
+
+
+def violation_line(**fields):
+    return json.dumps(
+        {
+            "error": "VowViolation",
+            "vow_id": 0,
+            "blame": "Caller",
+            "description": "n < 10",
+            "file": "t.vow",
+            "offset": 323,
+            "values": {"n": 42},
+            **fields,
+        }
+    )
+
+
+def stderr_with(*json_lines):
+    return "\n".join(("vow violation: n < 10, blame=Caller", *json_lines, ""))
+
+
+class CompareRuntimeJsonTest(unittest.TestCase):
+    def test_identical_violations_agree(self):
+        text = stderr_with(violation_line())
+
+        self.assertEqual([], parity.compare_runtime_json(text, text, 134, 134))
+
+    def test_the_human_line_is_not_a_structured_error(self):
+        documents = parity.runtime_error_documents(stderr_with(violation_line()))
+
+        self.assertEqual(1, len(documents))
+        self.assertEqual("VowViolation", documents[0]["error"])
+
+    def test_an_empty_file_and_zero_offset_are_reported(self):
+        rust = stderr_with(violation_line())
+        self_hosted = stderr_with(violation_line(file="", offset=0))
+
+        errors = parity.compare_runtime_json(rust, self_hosted, 134, 134)
+
+        self.assertEqual(
+            ["runtime[0].file: t.vow vs ", "runtime[0].offset: 323 vs 0"], errors
+        )
+
+    def test_values_are_compared(self):
+        rust = stderr_with(violation_line())
+        self_hosted = stderr_with(violation_line(values={"n": 41}))
+
+        errors = parity.compare_runtime_json(rust, self_hosted, 134, 134)
+
+        self.assertEqual(["runtime[0].values: {'n': 42} vs {'n': 41}"], errors)
+
+    def test_exit_codes_are_compared(self):
+        text = stderr_with(violation_line())
+
+        errors = parity.compare_runtime_json(text, text, 134, 1)
+
+        self.assertEqual(["exit code: 134 vs 1"], errors)
+
+    def test_a_missing_structured_error_on_the_self_side_is_reported(self):
+        errors = parity.compare_runtime_json(
+            stderr_with(violation_line()), "vow violation: n < 10\n", 134, 134
+        )
+
+        self.assertEqual(["runtime errors count: 1 vs 0"], errors)
+
+    def test_a_rust_side_without_structured_errors_fails_closed(self):
+        errors = parity.compare_runtime_json("", "", 134, 134)
+
+        self.assertEqual(["rust wrote no structured runtime error to stderr"], errors)
+
+    def test_a_malformed_violation_breaks_the_schema(self):
+        text = stderr_with(violation_line(offset=-1))
+
+        errors = parity.compare_runtime_json(text, text, 134, 134)
+
+        self.assertEqual(2, len(errors))
+        self.assertTrue(all("vow-violation.schema.json" in error for error in errors))
+
+    def test_other_aborts_are_compared_field_for_field(self):
+        rust = stderr_with('{"error":"IndexOutOfBounds"}')
+        self_hosted = stderr_with('{"error":"UnwrapOnNone"}')
+
+        errors = parity.compare_runtime_json(rust, self_hosted, 134, 134)
+
+        self.assertEqual(["runtime[0].error: IndexOutOfBounds vs UnwrapOnNone"], errors)
+
+    def test_cli_compares_two_stderr_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rust_path = Path(directory) / "rust.err"
+            self_path = Path(directory) / "self.err"
+            rust_path.write_text(stderr_with(violation_line()))
+            self_path.write_text(stderr_with(violation_line(file="")))
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "runtime-json",
+                    str(rust_path),
+                    str(self_path),
+                    "134",
+                    "134",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(1, completed.returncode)
+        self.assertEqual("FAIL: runtime[0].file: t.vow vs", completed.stdout.strip())
+
+
+class CompareFullJsonArgumentValueTest(unittest.TestCase):
+    ARGUMENT = {"param": "x", "value": "0", "arg_offset": 3, "arg_length": 5}
+
+    def failure(self, value, hint_value, label):
+        argument = {**self.ARGUMENT, "value": value}
+        return verify_failed(
+            diagnostics=[
+                violation_diagnostic(
+                    hints=[
+                        "the call site violated function `f`'s precondition",
+                        f"argument `x` = {hint_value} violates the contract",
+                    ],
+                    blame="caller",
+                )
+            ],
+            counterexamples=[
+                counterexample(
+                    function="f",
+                    source=span(),
+                    blame="caller",
+                    values={label: "-1"},
+                    violating_args=[argument],
+                )
+            ],
+        )
+
+    def test_argument_values_must_match_by_default(self):
+        errors = parity.compare_full_json(
+            self.failure("0", "0", "x"), self.failure("", "", "x"), 1, 1
+        )
+
+        self.assertEqual(2, len(errors))
+        self.assertTrue(errors[0].startswith("diagnostics:"), errors)
+        self.assertTrue(errors[1].startswith("counterexample[0].violating_args:"))
+
+    def test_a_known_divergence_blanks_only_the_argument_values(self):
+        errors = parity.compare_full_json(
+            self.failure("0", "0", "x"),
+            self.failure("", "", "n"),
+            1,
+            1,
+            argument_values_diverge=True,
+        )
+
+        self.assertEqual(
+            ["counterexample[0].values: {'x': '-1'} vs {'n': '-1'}"], errors
+        )
+
+    def test_a_known_divergence_does_not_hide_a_moved_argument_span(self):
+        other = self.failure("", "", "x")
+        other["counterexamples"][0]["violating_args"][0]["arg_offset"] = 4
+
+        errors = parity.compare_full_json(
+            self.failure("0", "0", "x"), other, 1, 1, argument_values_diverge=True
+        )
+
+        self.assertEqual(1, len(errors))
+        self.assertTrue(errors[0].startswith("counterexample[0].violating_args:"))
+
+    def test_malformed_entries_are_schema_failures_not_crashes(self):
+        malformed = self.failure("0", "0", "x")
+        malformed["diagnostics"].append("not a diagnostic")
+        malformed["counterexamples"][0]["violating_args"].append("not an argument")
+        malformed["counterexamples"].append("not a counterexample")
+
+        errors = parity.compare_full_json(
+            self.failure("0", "0", "x"),
+            malformed,
+            1,
+            1,
+            argument_values_diverge=True,
+        )
+
+        self.assertTrue(any("violates build-result.schema.json" in e for e in errors))
+
+    def test_cli_applies_the_tolerance_only_to_a_fixture_with_the_directive(self):
+        rust = self.failure("0", "0", "x")
+        self_hosted = self.failure("", "", "n")
+
+        tracked = run_parity_cli(
+            "full-json", rust, self_hosted, 1, 1, fixture_text=KNOWN_CEX_FIXTURE
+        )
+        untracked = run_parity_cli(
+            "full-json", rust, self_hosted, 1, 1, fixture_text="module T\n"
+        )
+
+        self.assertEqual(
+            (0, "SKIP: known counterexample divergence (#1139: variable names differ)"),
+            (tracked.returncode, tracked.stdout.strip()),
+        )
+        self.assertEqual(1, untracked.returncode)
+
+
+class CompareFullJsonAllowListTest(unittest.TestCase):
+    def note(self, offset):
+        return {
+            "error_code": "RegionRootEscape",
+            "message": "allocation may live in the root region",
+            "severity": "note",
+            "span": span(offset=offset),
+        }
+
+    def test_the_legacy_string_of_a_soft_failure_is_compared_by_category(self):
+        rust = soft_failure(
+            verify_status="error",
+            counterexample="esbmc error: parse failed in /tmp/a/x.c:51",
+        )
+        other = soft_failure(
+            verify_status="error",
+            counterexample="esbmc error: parse failed in /tmp/b/y.c:49",
+        )
+
+        self.assertEqual([], parity.compare_full_json(rust, other, 1, 1))
+
+    def test_a_soft_failure_category_difference_is_still_reported(self):
+        rust = soft_failure(verify_status="error", counterexample="esbmc error: boom")
+        other = soft_failure(
+            verify_status="error", counterexample="verification timed out"
+        )
+
+        errors = parity.compare_full_json(rust, other, 1, 1)
+
+        self.assertEqual(
+            ["counterexample: esbmc error vs verification timed out"], errors
+        )
+
+    def test_non_error_diagnostics_are_compared_as_a_multiset(self):
+        rust = verify_failed(
+            diagnostics=[self.note(1), self.note(2), violation_diagnostic()]
+        )
+        other = verify_failed(
+            diagnostics=[self.note(2), self.note(1), violation_diagnostic()]
+        )
+
+        self.assertEqual([], parity.compare_full_json(rust, other, 1, 1))
+
+    def test_a_missing_note_is_still_reported(self):
+        rust = verify_failed(diagnostics=[self.note(1), violation_diagnostic()])
+        other = verify_failed(diagnostics=[violation_diagnostic()])
+
+        errors = parity.compare_full_json(rust, other, 1, 1)
+
+        self.assertEqual(1, len(errors))
+        self.assertTrue(errors[0].startswith("diagnostics:"), errors)
+
+    def test_error_diagnostics_keep_their_order(self):
+        first = violation_diagnostic(message="first")
+        second = violation_diagnostic(message="second")
+
+        errors = parity.compare_full_json(
+            verify_failed(diagnostics=[first, second]),
+            verify_failed(diagnostics=[second, first]),
+            1,
+            1,
+        )
+
+        self.assertEqual(1, len(errors))
+        self.assertTrue(errors[0].startswith("diagnostics:"), errors)
 
 
 if __name__ == "__main__":

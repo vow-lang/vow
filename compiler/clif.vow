@@ -416,7 +416,7 @@ fn clif_compile_function(ctx: i64, func_idx: i64, f: IrFunction) -> i64 [io] {
         let bids: Vec<i64> = ve.binding_ids;
         let bnames: Vec<String> = ve.binding_names;
         let rc_vow: i64 = __vow_clif_fn_vow(
-            ctx, ve.id, ve.description, bids, bnames
+            ctx, ve.id, ve.description, bids, bnames, ve.file, ve.offset
         );
         if rc_vow != 0 {
             return rc_vow;

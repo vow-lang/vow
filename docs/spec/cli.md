@@ -337,7 +337,20 @@ failure.
 {
   "status": "VerifyFailed",
   "executable": "examples/cegis_broken",
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "error_code": "VowEnsuresViolated",
+      "message": "contract violation in `safe_sub`: ensures result >= 0",
+      "severity": "error",
+      "span": {
+        "file": "examples/cegis_broken.vow",
+        "offset": 76,
+        "length": 20
+      },
+      "hints": ["function `safe_sub` failed to establish its postcondition"],
+      "blame": "callee"
+    }
+  ],
   "function": "safe_sub",
   "counterexample": "[Counterexample]",
   "counterexamples": [
@@ -356,6 +369,25 @@ failure.
   ]
 }
 ```
+
+Every counterexample also yields one `error` diagnostic, appended after any
+warnings. Its code follows the counterexample's `blame` (`caller` →
+`VowRequiresViolated`, `callee` → `VowEnsuresViolated`; a failed `invariant` is
+callee-blamed, so it reports `VowEnsuresViolated`), or is
+`VerifierAssertionUnattributed` when the failure is not attributed to a vow
+clause. The `message` is ``contract violation in `<function>`: <violation>`` (or
+``verification failed in `<function>` on an unattributed property: <violation>``),
+`span` is the counterexample's `source` (an empty file and zero offset/length
+when `source` is `null`), `secondary` lists the counterexample's `call_sites`,
+and `hints` name the failing function and, for caller blame, each violating
+argument. A `timeout`, `unknown`, `error` or `panicked` outcome has no
+counterexample and adds no such diagnostic. Both compilers emit the same
+`diagnostics[]`, `counterexample` and `counterexamples[]` for the same source;
+the only fields that are not specified byte for byte are `verify_message`
+(ESBMC's free text) and `values` entries named `$esbmc$...` (solver temporaries).
+
+A diagnostic's `span` is exactly `{file, offset, length}`: positions are byte
+offsets, and neither compiler adds line or column fields.
 
 For caller-blame failures where a verified function violates a callee's
 `requires` clause, the counterexample reports the callee clause in `violation`
@@ -379,7 +411,7 @@ shift count) rather than exposing raw verifier output.
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
 | `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
-| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
+| `counterexample`   | string              | VerifyFailed      | Legacy description string: `"[Counterexample]"` when ESBMC produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>`, ...) |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |
 | `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
