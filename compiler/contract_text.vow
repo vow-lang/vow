@@ -148,18 +148,13 @@ fn binop_precedence(op: i64) -> i64 {
     9
 }
 
-fn is_block_like_tag(tag: i64) -> bool {
-    tag == EXPR_IF() || tag == EXPR_WHILE() || tag == EXPR_FOR()
-        || tag == EXPR_LOOP() || tag == EXPR_BLOCK() || tag == EXPR_MATCH()
-}
-
 // Mirrors `print_postfix_base`: an unparenthesised block-like expression ends
 // the expression, so it (like any operator expression) is parenthesized before
 // a postfix `.`, `[`, `(` or `?`.
 fn print_postfix_base_text(a: AstArena, eid: i64) -> String {
     let text: String = print_expr_text(a, eid);
     let tag: i64 = expr_tag(a, eid);
-    if is_block_like_tag(tag) || tag == EXPR_BINOP() || tag == EXPR_UNOP() || tag == EXPR_ASSIGN()
+    if is_block_expr(a, eid) || tag == EXPR_BINOP() || tag == EXPR_UNOP() || tag == EXPR_ASSIGN()
         || tag == EXPR_BREAK() || tag == EXPR_RETURN() {
         return parenthesize_text(text);
     }
@@ -171,7 +166,7 @@ fn print_postfix_base_text(a: AstArena, eid: i64) -> String {
 // block-like left operand is always parenthesized.
 fn print_binop_operand_text(a: AstArena, eid: i64, parent_prec: i64, is_right: bool) -> String {
     let text: String = print_expr_text(a, eid);
-    if !is_right && is_block_like_tag(expr_tag(a, eid)) { return parenthesize_text(text); }
+    if !is_right && is_block_expr(a, eid) { return parenthesize_text(text); }
     if expr_tag(a, eid) != EXPR_BINOP() { return text; }
     let child_prec: i64 = binop_precedence(expr_a(a, eid));
     let needs: bool = if is_right { child_prec <= parent_prec } else { child_prec < parent_prec };

@@ -329,6 +329,20 @@ pub enum ExprKind {
     },
 }
 
+impl ExprKind {
+    pub fn is_block_like(&self) -> bool {
+        matches!(
+            self,
+            ExprKind::If { .. }
+                | ExprKind::While { .. }
+                | ExprKind::ForEach { .. }
+                | ExprKind::Loop { .. }
+                | ExprKind::Block(_)
+                | ExprKind::Match { .. }
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Lit {
     Int(u128),

@@ -48,6 +48,7 @@ STRICT_SPAN_FIXTURES = frozenset(
         "borrow_expr_unsupported.vow",
         "borrow_expr_after_binary_op.vow",
         "borrow_expr_in_call_argument.vow",
+        "borrow_expr_mut_and_double_amp.vow",
         "break_outside_loop.vow",
         "continue_outside_loop.vow",
         "i32_u64_if.vow",

@@ -487,22 +487,10 @@ fn expr_precedence(expr: &Expr) -> u8 {
     }
 }
 
-fn is_block_like(expr: &Expr) -> bool {
-    matches!(
-        expr.kind,
-        ExprKind::If { .. }
-            | ExprKind::While { .. }
-            | ExprKind::ForEach { .. }
-            | ExprKind::Loop { .. }
-            | ExprKind::Block(_)
-            | ExprKind::Match { .. }
-    )
-}
-
 // An unparenthesised block-like expression ends the expression, so it needs
 // parentheses before any postfix operator and as a left binary operand.
 fn print_postfix_base(expr: &Expr) -> String {
-    if is_block_like(expr)
+    if expr.kind.is_block_like()
         || matches!(
             expr.kind,
             ExprKind::BinaryOp { .. }
@@ -528,7 +516,7 @@ fn print_expr_with_parens(expr: &Expr, parent_prec: u8, is_right: bool) -> Strin
                 child_prec < parent_prec
             }
         }
-        _ => !is_right && is_block_like(expr),
+        _ => !is_right && expr.kind.is_block_like(),
     };
     if needs_parens {
         format!("({})", print_expr(expr))

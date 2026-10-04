@@ -795,6 +795,37 @@ mod tests {
         assert_eq!(emitter.0[0].code, ErrorCode::LinearTypeViolation);
     }
 
+    #[test]
+    fn test_reference_parameter_passed_on_does_not_consume() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param(
+            "h",
+            Type::Reference {
+                inner: Box::new(named_type("FileHandle")),
+                span: dummy_span(),
+            },
+        )];
+        let body = Block {
+            stmts: vec![Stmt::Expr {
+                expr: call_with("inspect", "h"),
+                has_semicolon: true,
+                span: dummy_span(),
+            }],
+            trailing_expr: Some(Box::new(call_with("inspect", "h"))),
+            span: dummy_span(),
+        };
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(
+            emitter.0.is_empty(),
+            "Expected no errors but got: {:?}",
+            emitter.0
+        );
+    }
+
     // --- Stmt::Let registration ---
 
     #[test]

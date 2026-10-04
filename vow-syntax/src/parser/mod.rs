@@ -547,16 +547,7 @@ impl Parser {
                         trailing_expr = Some(Box::new(expr));
                         break;
                     } else {
-                        let is_block_like = !starts_with_paren
-                            && matches!(
-                                expr.kind,
-                                ExprKind::If { .. }
-                                    | ExprKind::While { .. }
-                                    | ExprKind::ForEach { .. }
-                                    | ExprKind::Loop { .. }
-                                    | ExprKind::Block(_)
-                                    | ExprKind::Match { .. }
-                            );
+                        let is_block_like = !starts_with_paren && expr.kind.is_block_like();
                         stmts.push(Stmt::Expr {
                             span: expr_start,
                             expr,

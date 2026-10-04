@@ -88,19 +88,14 @@ impl Parser {
         let parenthesised = self.at(&TokenKind::LParen);
         let mut lhs = self.parse_prefix();
 
-        if !parenthesised
-            && matches!(
-                lhs.kind,
-                ExprKind::If { .. }
-                    | ExprKind::While { .. }
-                    | ExprKind::ForEach { .. }
-                    | ExprKind::Loop { .. }
-                    | ExprKind::Block(_)
-                    | ExprKind::Match { .. }
-            )
-        {
+        if !parenthesised && lhs.kind.is_block_like() {
             return lhs;
         }
+
+        // A postfix operator never applies to a whole unary, binary or
+        // assignment expression: when one follows, its operand ended in an
+        // unparenthesised block-like expression, which ends the expression.
+        let mut postfix_ok = parenthesised || !matches!(lhs.kind, ExprKind::UnaryOp { .. });
 
         loop {
             let kind = self.peek_kind().clone();
@@ -113,6 +108,9 @@ impl Parser {
                     | TokenKind::LBracket
                     | TokenKind::KwAs
             ) {
+                if !postfix_ok {
+                    break;
+                }
                 lhs = self.parse_postfix(lhs);
                 continue;
             }
@@ -132,6 +130,7 @@ impl Parser {
                     },
                     span,
                 };
+                postfix_ok = false;
                 continue;
             }
 
@@ -155,6 +154,7 @@ impl Parser {
                     },
                     span,
                 };
+                postfix_ok = false;
                 continue;
             }
 
@@ -265,7 +265,7 @@ impl Parser {
                     span,
                 }
             }
-            TokenKind::Amp => {
+            TokenKind::Amp | TokenKind::AmpAmp => {
                 self.push_error_with_hint(
                     vow_diag::ErrorCode::UnsupportedFeature,
                     "borrow expressions (`&expr`) are not supported in Vow".to_string(),
@@ -273,6 +273,9 @@ impl Parser {
                     BORROW_HINT,
                 );
                 self.advance();
+                if self.at(&TokenKind::KwMut) {
+                    self.advance();
+                }
                 self.parse_expr_inner(PREFIX_BINDING_POWER)
             }
             TokenKind::LParen => self.parse_paren_or_tuple(),
@@ -632,6 +635,7 @@ impl Parser {
                 | TokenKind::Bang
                 | TokenKind::Minus
                 | TokenKind::Amp
+                | TokenKind::AmpAmp
                 | TokenKind::LParen
                 | TokenKind::LBrace
                 | TokenKind::KwIf
@@ -1563,14 +1567,43 @@ mod tests {
     }
 
     #[test]
+    fn postfix_after_an_operand_ending_in_a_block_like_expression_is_rejected() {
+        for body in [
+            "-if c { 1 } else { 2 } as u64",
+            "3 * if c { 1 } else { 2 } as u64",
+            "3 * if c { 1 } else { 2 }.len()",
+            "x = if c { 1 } else { 2 } as u64",
+        ] {
+            let src =
+                format!("module M\nfn f(c: bool) -> u64 {{\n    let y: u64 = {body};\n    y\n}}\n");
+            let (_, diagnostics) = crate::parser::parse_module(&src, "t.vow");
+            assert!(!diagnostics.is_empty(), "{body:?}");
+            assert!(
+                diagnostics
+                    .iter()
+                    .all(|d| d.code == vow_diag::ErrorCode::UnexpectedToken),
+                "{body:?}: {diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
     fn borrow_expression_is_rejected_once_with_a_hint_at_the_ampersand() {
-        for (src, offset) in [("&x", 0), ("x & &y", 4), ("-&x", 1), ("f(&x)", 2)] {
+        for (src, offset, len) in [
+            ("&x", 0, 1),
+            ("x & &y", 4, 1),
+            ("-&x", 1, 1),
+            ("f(&x)", 2, 1),
+            ("&mut x", 0, 1),
+            ("&&x", 0, 2),
+            ("f(&&mut x)", 2, 2),
+        ] {
             let diagnostics = parse_diagnostics(src);
             assert_eq!(diagnostics.len(), 1, "{src:?}: {diagnostics:?}");
             let d = &diagnostics[0];
             assert_eq!(d.code, vow_diag::ErrorCode::UnsupportedFeature);
             assert_eq!(d.primary.byte_offset, offset, "{src:?}");
-            assert_eq!(d.primary.byte_len, 1, "{src:?}");
+            assert_eq!(d.primary.byte_len, len, "{src:?}");
             assert_eq!(d.hints, vec![BORROW_HINT.to_string()]);
         }
     }
