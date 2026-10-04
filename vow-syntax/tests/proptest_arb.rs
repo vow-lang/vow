@@ -320,18 +320,34 @@ pub fn arb_fn_def() -> impl Strategy<Value = FnDef> {
         arb_effects(),
         prop::option::of(arb_vow_block()),
         arb_block(),
+        prop::bool::weighted(0.2),
     )
-        .prop_map(|(name, params, ret_ty, effects, vow, body)| FnDef {
-            vis: Visibility::Private,
-            name,
-            params,
-            return_ty: ret_ty,
-            effects,
-            vow,
-            body,
-            span: z(),
-            is_declaration: false,
-        })
+        .prop_map(
+            |(name, params, ret_ty, effects, vow, body, is_declaration)| {
+                // A declaration has no body; the parser produces an empty block for it,
+                // so generate that directly to keep print-parse roundtrips AST-equal.
+                let body = if is_declaration {
+                    Block {
+                        stmts: vec![],
+                        trailing_expr: None,
+                        span: z(),
+                    }
+                } else {
+                    body
+                };
+                FnDef {
+                    vis: Visibility::Private,
+                    name,
+                    params,
+                    return_ty: ret_ty,
+                    effects,
+                    vow,
+                    body,
+                    span: z(),
+                    is_declaration,
+                }
+            },
+        )
 }
 
 pub fn arb_field_def() -> impl Strategy<Value = FieldDef> {

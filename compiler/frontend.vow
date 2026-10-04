@@ -74,7 +74,7 @@ fn frontend_dir_path(path: String) -> String {
     }
 }
 
-fn resolve_use_path(arena: AstArena, root_dir: String, use_lid: i64) -> String [read] {
+fn resolve_use_vow_path(arena: AstArena, root_dir: String, use_lid: i64) -> String [read] {
     let r: String = String::from("");
     r.push_str(root_dir);
     let n: i64 = list_len(arena, use_lid);
@@ -87,8 +87,43 @@ fn resolve_use_path(arena: AstArena, root_dir: String, use_lid: i64) -> String [
         i = i + 1;
     }
     r.push_str(String::from(".vow"));
+    r
+}
+
+fn resolve_use_path(arena: AstArena, root_dir: String, use_lid: i64) -> String [read] {
+    let r: String = resolve_use_vow_path(arena, root_dir, use_lid);
     let decl_path: String = str2(r, String::from(".d"));
     if fs_exists(decl_path) == 1 { decl_path } else { r }
+}
+
+fn frontend_parse_source_into(dctx: DiagCtx, arena: AstArena, path: String, src: String) -> Module {
+    diag_ctx_add_source(dctx, path, src);
+    let tokens: Vec<Token> = lex(src);
+    parse_module_into(tokens, arena, dctx, path)
+}
+
+// True when `m` contains a declaration-only top-level function carrying a
+// `vow` block -- it has no body for the verifier to check a call site
+// against (#1472). The self-hosted compiler has no `impl`/trait support at
+// all (confirmed: no ITEM_IMPL kind exists), so only ITEM_FN needs scanning;
+// mirrors module_loader::module_has_unenforceable_contract in the Rust driver
+// modulo that gap.
+fn module_has_unenforceable_contract(m: Module) -> bool {
+    let arena: AstArena = m.arena;
+    let items: Vec<i64> = m.items;
+    let n: u64 = items.len();
+    let mut i: u64 = 0u64;
+    while i < n {
+        let v: i64 = items[i];
+        if item_kind(v) == ITEM_FN() {
+            let fid: i64 = item_id(v);
+            if fn_is_declaration(arena, fid) && fn_vow_lid(arena, fid) != -1 {
+                return true;
+            }
+        }
+        i = i + 1u64;
+    }
+    false
 }
 
 fn frontend_parent_dir(dir: String) -> String {
@@ -157,7 +192,9 @@ fn load_frontend_deps(root_dir: String, m: Module, arena: AstArena, all_items: V
     let mut ui: u64 = 0u64;
     while ui < n_uses {
         let use_lid: i64 = uses[ui];
-        let dep_path: String = resolve_use_path(arena, root_dir, use_lid);
+        let vow_path: String = resolve_use_vow_path(arena, root_dir, use_lid);
+        let decl_path: String = str2(vow_path, String::from(".d"));
+        let dep_path: String = if fs_exists(decl_path) == 1 { decl_path } else { vow_path };
         if !vec_contains_str(visited, dep_path) {
             visited.push(dep_path);
             let src: String = fs_read(dep_path);
@@ -168,16 +205,28 @@ fn load_frontend_deps(root_dir: String, m: Module, arena: AstArena, all_items: V
                 let d: Diagnostic = diag_error(EC_IO_ERROR(), str2(String::from("cannot read "), dep_path), importing_file, span_start, span_len);
                 diag_ctx_emit(dctx, d);
             } else {
-                diag_ctx_add_source(dctx, dep_path, src);
-                let tokens: Vec<Token> = lex(src);
-                let dep_m: Module = parse_module_into(tokens, arena, dctx, dep_path);
-                load_frontend_deps(root_dir, dep_m, arena, all_items, item_files, visited, dctx, dep_path);
-                let dep_items: Vec<i64> = dep_m.items;
+                let dep_m: Module = frontend_parse_source_into(dctx, arena, dep_path, src);
+                // A `.vow.d` stub whose declarations carry a contract the
+                // verifier cannot enforce from a bodyless signature cannot be
+                // relied on -- fall back to the sibling `.vow` source when it
+                // exists (#1472). A library shipping only the stub keeps
+                // today's behavior: the call stays non-modelable downstream,
+                // never falsely verified.
+                let use_source_fallback: bool = dep_path != vow_path && module_has_unenforceable_contract(dep_m) && fs_exists(vow_path) == 1;
+                let final_path: String = if use_source_fallback { vow_path } else { dep_path };
+                let final_m: Module = if use_source_fallback {
+                    let fallback_src: String = fs_read(vow_path);
+                    frontend_parse_source_into(dctx, arena, vow_path, fallback_src)
+                } else {
+                    dep_m
+                };
+                load_frontend_deps(root_dir, final_m, arena, all_items, item_files, visited, dctx, final_path);
+                let dep_items: Vec<i64> = final_m.items;
                 let n_dep: u64 = dep_items.len();
                 let mut di: u64 = 0u64;
                 while di < n_dep {
                     all_items.push(dep_items[di]);
-                    item_files.push(dep_path);
+                    item_files.push(final_path);
                     di = di + 1;
                 }
             }

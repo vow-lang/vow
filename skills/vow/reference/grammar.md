@@ -24,7 +24,17 @@ use foo.bar
 
 This resolves relative to the main source file. The module loader first uses
 `<rootdir>/foo/bar.vow.d` when that declaration stub exists, and otherwise
-falls back to `<rootdir>/foo/bar.vow`.
+falls back to `<rootdir>/foo/bar.vow`. If the stub's declarations carry a
+`vow` block, the stub cannot be relied on: a bodyless declaration has no
+implementation for the verifier to check a call site against, so a contract
+there would otherwise be silently dropped from verification. In that case the
+loader loads the sibling `<rootdir>/foo/bar.vow` source instead, where the
+usual intra-module `requires`-as-assert/Caller-blame mechanism applies
+unchanged. A stub whose declarations carry no `vow` block is unaffected and
+is still preferred over source. A stub shipped with no sibling `.vow` source
+at all (e.g. a library distributing only its interface) is also unaffected —
+a call through it remains non-modelable in the verifier (`Skipped`, never
+falsely `Verified`).
 
 ## Const Declarations
 

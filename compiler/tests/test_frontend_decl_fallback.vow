@@ -1,0 +1,147 @@
+module TestFrontendDeclFallback
+
+use frontend
+use ast
+use diag
+use clif
+
+fn tfdf_run2(cmd: String, a: String, b: String) -> i64 [io] {
+    let pargs: Vec<String> = Vec::new();
+    pargs.push(a);
+    pargs.push(b);
+    process_run(cmd, pargs)
+}
+
+fn tfdf_temp_dir() -> String [io] {
+    let pargs: Vec<String> = Vec::new();
+    pargs.push(String::from("-c"));
+    pargs.push(String::from("mktemp -d \"${TMPDIR:-/tmp}/vow-frontend-decl-fallback.XXXXXXXXXX\""));
+    let rc: i64 = process_run(String::from("sh"), pargs);
+    if rc != 0 { return String::from(""); }
+    string_trim(process_get_stdout())
+}
+
+fn tfdf_put(path: String, body: String) -> i64 [io, write] {
+    fs_write(path, body)
+}
+
+fn tfdf_join(a: String, b: String) -> String {
+    let r: String = String::from("");
+    r.push_str(a);
+    r.push_str(b);
+    r
+}
+
+// Finds the item named `name` in `m.items` and returns the originating file
+// recorded in the parallel `item_files` Vec, or "" if not found.
+fn tfdf_item_file(m: Module, item_files: Vec<String>, name: String) -> String {
+    let arena: AstArena = m.arena;
+    let items: Vec<i64> = m.items;
+    let n: u64 = items.len();
+    let mut i: u64 = 0u64;
+    while i < n {
+        let v: i64 = items[i];
+        if item_kind(v) == ITEM_FN() {
+            let fid: i64 = item_id(v);
+            let name_sid: i64 = fn_name_sid(arena, fid);
+            if arena.strs[name_sid as u64] == name {
+                return item_files[i];
+            }
+        }
+        i = i + 1u64;
+    }
+    String::from("")
+}
+
+fn tfdf_check_fallback(t: String) -> i32 [io, write] {
+    let dir: String = tfdf_join(t, String::from("/fallback"));
+    if tfdf_run2(String::from("mkdir"), String::from("-p"), dir) != 0 { return 90; }
+    if tfdf_put(
+        tfdf_join(dir, String::from("/dep.vow")),
+        String::from("module Dep\npub fn f(x: i64) -> i64 vow { requires: x > 0 } {\n    x\n}\n")
+    ) != 0 { return 91; }
+    if tfdf_put(
+        tfdf_join(dir, String::from("/dep.vow.d")),
+        String::from("module Dep\npub fn f(x: i64) -> i64 vow { requires: x > 0 };\n")
+    ) != 0 { return 92; }
+    if tfdf_put(
+        tfdf_join(dir, String::from("/main.vow")),
+        String::from("module Main\nuse dep\nfn g() -> i64 { 0 }\n")
+    ) != 0 { return 93; }
+
+    let prep: FrontendPrep = frontend_prepare_path(tfdf_join(dir, String::from("/main.vow")));
+    if prep.checked.n_errors != 0 { return 1; }
+    let file: String = tfdf_item_file(prep.merged, prep.item_files, String::from("f"));
+    if string_ends_with(file, String::from("dep.vow.d")) != 0 { return 2; }
+    if string_ends_with(file, String::from("dep.vow")) == 0 { return 3; }
+    0
+}
+
+fn tfdf_check_stub_still_preferred(t: String) -> i32 [io, write] {
+    let dir: String = tfdf_join(t, String::from("/preferred"));
+    if tfdf_run2(String::from("mkdir"), String::from("-p"), dir) != 0 { return 94; }
+    // Deliberately ill-typed, mirroring tests/multi/decl_stub_preference: the
+    // loader must never touch this body while the contract-free stub is
+    // preferred.
+    if tfdf_put(
+        tfdf_join(dir, String::from("/dep.vow")),
+        String::from("module Dep\nfn source_only() -> i64 {\n    true\n}\n")
+    ) != 0 { return 95; }
+    if tfdf_put(
+        tfdf_join(dir, String::from("/dep.vow.d")),
+        String::from("module Dep\npub fn declaration_only() -> i64;\n")
+    ) != 0 { return 96; }
+    if tfdf_put(
+        tfdf_join(dir, String::from("/main.vow")),
+        String::from("module Main\nuse dep\nfn g() -> i64 { 0 }\n")
+    ) != 0 { return 97; }
+
+    let prep: FrontendPrep = frontend_prepare_path(tfdf_join(dir, String::from("/main.vow")));
+    if prep.checked.n_errors != 0 { return 11; }
+    let file: String = tfdf_item_file(prep.merged, prep.item_files, String::from("declaration_only"));
+    if string_ends_with(file, String::from("dep.vow.d")) == 0 { return 12; }
+    0
+}
+
+// A stub that fails to parse must surface its own parse error rather than
+// silently falling back to a valid sibling .vow source: the fallback is
+// scoped to #1472's contract-hiding bug, not stub parse robustness. Mirrors
+// vow/src/module_loader.rs's load_deps_does_not_fall_back_when_stub_fails_to_parse.
+fn tfdf_check_stub_parse_failure_does_not_fall_back(t: String) -> i32 [io, write] {
+    let dir: String = tfdf_join(t, String::from("/parsefail"));
+    if tfdf_run2(String::from("mkdir"), String::from("-p"), dir) != 0 { return 98; }
+    if tfdf_put(
+        tfdf_join(dir, String::from("/dep.vow")),
+        String::from("module Dep\npub fn f(x: i64) -> i64 {\n    x\n}\n")
+    ) != 0 { return 99; }
+    if tfdf_put(
+        tfdf_join(dir, String::from("/dep.vow.d")),
+        String::from("module Dep\npub fn f(x: i64 -> i64;\n")
+    ) != 0 { return 100; }
+    if tfdf_put(
+        tfdf_join(dir, String::from("/main.vow")),
+        String::from("module Main\nuse dep\nfn g() -> i64 { 0 }\n")
+    ) != 0 { return 101; }
+
+    let prep: FrontendPrep = frontend_prepare_path(tfdf_join(dir, String::from("/main.vow")));
+    if prep.checked.n_errors == 0 { return 21; }
+    0
+}
+
+fn main() -> i32 [io, write] {
+    let t: String = tfdf_temp_dir();
+    if t.len() == 0 { return 80; }
+    let fallback_code: i32 = tfdf_check_fallback(t);
+    if fallback_code != 0 {
+        tfdf_run2(String::from("rm"), String::from("-rf"), t);
+        return fallback_code;
+    }
+    let preferred_code: i32 = tfdf_check_stub_still_preferred(t);
+    if preferred_code != 0 {
+        tfdf_run2(String::from("rm"), String::from("-rf"), t);
+        return preferred_code;
+    }
+    let parse_failure_code: i32 = tfdf_check_stub_parse_failure_does_not_fall_back(t);
+    tfdf_run2(String::from("rm"), String::from("-rf"), t);
+    parse_failure_code
+}

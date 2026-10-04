@@ -32,7 +32,10 @@ the contracts — see [Verification status](#verification-status).
 `use` declarations resolve to a single directory: `use foo` loads
 `<dir>/foo.vow.d` when that declaration stub exists, and otherwise loads
 `<dir>/foo.vow`, where `<dir>` is the directory of the **entry file** passed to
-`vow build`/`vow verify`.
+`vow build`/`vow verify`. A stub is used only when none of its declarations
+carry a `vow` block — otherwise the sibling `<dir>/foo.vow` source is loaded
+instead, so a declaration's contract is never silently dropped from
+verification (a bodyless declaration cannot be checked at a call site).
 All transitive `use`s in dependency modules resolve against that **same** directory.
 There is no search path, and `--module-root` is only available on `vow test` — not
 `vow build` or `vow verify`.

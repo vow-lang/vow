@@ -1,0 +1,22 @@
+// TEST: counterexample-blame caller
+// Regression for #1472: `dep.vow.d`'s declaration carries `f`'s `requires`
+// contract, but a bodyless declaration cannot be checked by the verifier at
+// a call site. The loader must fall back to the sibling `dep.vow` source so
+// `f` is verified like any other intra-module callee, and a call violating
+// its precondition is caught (Caller blame, VerifyFailed) rather than
+// silently Skipped or falsely Verified.
+module Main
+
+use dep
+
+fn g() -> i64 vow {
+    ensures: result == 0
+} {
+    let unused: i64 = f(0 - 5);
+    0
+}
+
+fn main() -> i32 [io] {
+    print_i64(g());
+    0
+}

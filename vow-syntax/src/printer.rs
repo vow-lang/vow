@@ -67,10 +67,15 @@ fn print_fn_decl(f: &FnDef, level: usize) -> String {
         _ => format!(" -> {}", ret),
     };
 
-    format!(
-        "{}{}fn {}({}){}{};\n",
+    let mut out = format!(
+        "{}{}fn {}({}){}{}",
         ind, vis, f.name, params, ret_part, effects
-    )
+    );
+    if let Some(vow) = &f.vow {
+        push_vow_block_inline(&mut out, vow, level);
+    }
+    out.push_str(";\n");
+    out
 }
 
 fn print_impl_decl(i: &ImplBlock, level: usize) -> String {
@@ -160,11 +165,23 @@ fn print_vow_block(vow: &VowBlock, level: usize) -> String {
             }
         }
     }
-    out.push_str(&format!("{}}}\n", ind));
+    out.push_str(&format!("{}}}", ind));
     out
 }
 
+/// Appends ` vow { ... }` (no trailing separator) to `out` for inline
+/// embedding after a function signature, reusing `print_vow_block`'s
+/// rendering of the clauses themselves.
+fn push_vow_block_inline(out: &mut String, vow: &VowBlock, level: usize) {
+    out.push(' ');
+    out.push_str(print_vow_block(vow, level).trim_start());
+}
+
 fn print_fn(f: &FnDef, level: usize) -> String {
+    if f.is_declaration {
+        return print_fn_decl(f, level);
+    }
+
     let ind = indent(level);
     let vis = print_visibility(&f.vis);
     let params = print_params(&f.params);
@@ -181,31 +198,10 @@ fn print_fn(f: &FnDef, level: usize) -> String {
         ind, vis, f.name, params, ret_part, effects
     );
 
-    if f.is_declaration {
-        out.push_str(";\n");
-        return out;
-    }
-
     if let Some(vow) = &f.vow {
-        out.push_str(" vow {\n");
-        for clause in &vow.clauses {
-            let inner = indent(level + 1);
-            match clause {
-                VowClause::Requires { expr, .. } => {
-                    out.push_str(&format!("{}requires: {}\n", inner, print_expr(expr)));
-                }
-                VowClause::Ensures { expr, .. } => {
-                    out.push_str(&format!("{}ensures: {}\n", inner, print_expr(expr)));
-                }
-                VowClause::Invariant { expr, .. } => {
-                    out.push_str(&format!("{}invariant: {}\n", inner, print_expr(expr)));
-                }
-            }
-        }
-        out.push_str(&format!("{}}} {{\n", ind));
-    } else {
-        out.push_str(" {\n");
+        push_vow_block_inline(&mut out, vow, level);
     }
+    out.push_str(" {\n");
 
     out.push_str(&print_block_body(&f.body, level + 1));
     out.push_str(&format!("{}}}\n", ind));
@@ -372,6 +368,7 @@ fn print_extern(e: &ExternBlock, level: usize) -> String {
     let mut out = format!("{}extern \"C\" {{\n", ind);
     if let Some(vow) = &e.vow {
         out.push_str(&print_vow_block(vow, level + 1));
+        out.push('\n');
     }
     for f in &e.fns {
         out.push_str(&print_extern_fn(f, level + 1));
@@ -1040,6 +1037,96 @@ mod tests {
             "must contain ensures: {}",
             out
         );
+    }
+
+    fn declaration_with_vow() -> FnDef {
+        let requires_expr = binop_expr(BinOp::Gt, ident_expr("x"), lit_expr(Lit::Int(0)));
+        let ensures_expr = binop_expr(BinOp::Gt, ident_expr("result"), ident_expr("x"));
+        let vow = VowBlock {
+            clauses: vec![
+                VowClause::Requires {
+                    expr: requires_expr,
+                    span: s(),
+                },
+                VowClause::Ensures {
+                    expr: ensures_expr,
+                    span: s(),
+                },
+            ],
+            span: s(),
+        };
+        FnDef {
+            vis: Visibility::Public,
+            name: "positive".to_string(),
+            params: vec![Param {
+                name: "x".to_string(),
+                ty: named_ty("i64"),
+                refinement: None,
+                span: s(),
+            }],
+            return_ty: named_ty("i64"),
+            effects: vec![],
+            vow: Some(vow),
+            body: empty_block(),
+            span: s(),
+            is_declaration: true,
+        }
+    }
+
+    #[test]
+    fn declaration_with_vow_block_prints_requires_and_ensures() {
+        let f = declaration_with_vow();
+        let m = Module {
+            name: "M".to_string(),
+            uses: vec![],
+            items: vec![Item::Fn(f)],
+            span: s(),
+        };
+        let out = print_module(&m);
+        assert!(out.contains("vow {"), "must contain vow block: {}", out);
+        assert!(
+            out.contains("requires: x > 0"),
+            "must contain requires: {}",
+            out
+        );
+        assert!(
+            out.contains("ensures: result > x"),
+            "must contain ensures: {}",
+            out
+        );
+        assert!(out.contains("};\n"), "declaration must end in ';': {}", out);
+    }
+
+    #[test]
+    fn print_declarations_keeps_vow_block_on_declaration() {
+        let f = declaration_with_vow();
+        let m = Module {
+            name: "M".to_string(),
+            uses: vec![],
+            items: vec![Item::Fn(f)],
+            span: s(),
+        };
+        let out = print_declarations(&m);
+        assert!(out.contains("vow {"), "must contain vow block: {}", out);
+        assert!(
+            out.contains("requires: x > 0"),
+            "must contain requires: {}",
+            out
+        );
+        assert!(
+            out.contains("ensures: result > x"),
+            "must contain ensures: {}",
+            out
+        );
+        assert!(out.contains("};\n"), "declaration must end in ';': {}", out);
+    }
+
+    #[test]
+    fn declaration_without_vow_block_still_prints_bare_semicolon() {
+        let mut f = declaration_with_vow();
+        f.vow = None;
+        let out = print_fn_decl(&f, 0);
+        assert_eq!(out, "pub fn positive(x: i64) -> i64;\n");
     }
 
     #[test]
