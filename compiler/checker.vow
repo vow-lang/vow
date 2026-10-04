@@ -473,6 +473,31 @@ fn is_opaque(tid: i64) -> bool vow {
     tid == CTY_NEVER() || tid == CTY_UNKNOWN()
 }
 
+// CTY_UNKNOWN is the marker for an expression that already failed type
+// checking; every later check absorbs it so one mistake yields one
+// diagnostic. CTY_NEVER is a different thing: the bottom type of
+// `Option::None`, `Vec::new()` and diverging expressions.
+fn is_unknown(tid: i64) -> bool vow {
+    requires: tid >= 0
+} {
+    tid == CTY_UNKNOWN()
+}
+
+// The bottom type coerces to everything, so it would let `Option::None` or
+// `Vec::new()` stand in for a scalar. Where an index or builtin argument
+// expects a non-aggregate type, a Never-typed expression is accepted only if it
+// really diverges (mirrors Rust `never_is_not_a_value`).
+fn never_is_not_a_value(e: CheckEnv, m: Module, eid: i64, from_tid: i64, to_tid: i64) -> bool {
+    if from_tid != CTY_NEVER() {
+        return false;
+    }
+    let to_tag: i64 = ty_tag(e.ts, to_tid);
+    if to_tag == CTY_APPLIED() || to_tag == CTY_NEVER() || to_tag == CTY_UNKNOWN() {
+        return false;
+    }
+    !expr_diverges(e, m, eid)
+}
+
 fn is_flat_slot_tid(ts: TyStore, tid: i64) -> bool {
     let tag: i64 = ty_tag(ts, tid);
     (tag >= CTY_I8() && tag <= CTY_U128()) || tag == CTY_F32() || tag == CTY_F64() || tag == CTY_BOOL()
@@ -1717,7 +1742,7 @@ fn emit_unknown_method(e: CheckEnv, a: AstArena, eid: i64, mname: String, tyname
 // pre-check loop; re-checking here would double-emit diagnostics and
 // double-consume linear values.
 fn check_method_argument_exact(
-    e: CheckEnv, a: AstArena, args_lid: i64, arg_tids: Vec<i64>, index: i64, target_tid: i64, mname: String
+    e: CheckEnv, m: Module, a: AstArena, args_lid: i64, arg_tids: Vec<i64>, index: i64, target_tid: i64, mname: String
 ) {
     if index < 0 || index >= list_len(a, args_lid) { return; }
     let arg_eid: i64 = list_get(a, args_lid, index);
@@ -1725,10 +1750,12 @@ fn check_method_argument_exact(
     if is_opaque(target_tid) { return; }
     if index >= arg_tids.len() as i64 { return; }
     let arg_tid: i64 = arg_tids[index as u64];
-    if is_opaque(arg_tid) { return; }
-    if !is_coercible(e.ts, arg_tid, target_tid) {
+    if is_unknown(arg_tid) { return; }
+    let bare_never: bool = never_is_not_a_value(e, m, arg_eid, arg_tid, target_tid);
+    if arg_tid == CTY_NEVER() && !bare_never { return; }
+    if bare_never || !is_coercible(e.ts, arg_tid, target_tid) {
         let msg: String = String::from("argument has type `");
-        msg.push_str(ty_value_display_name(e.ts, arg_tid));
+        msg.push_str(ty_full_display_name(e.ts, arg_tid));
         msg.push_str(String::from("` but `"));
         msg.push_str(mname);
         msg.push_str(String::from("` expects `"));
@@ -2524,6 +2551,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             }
             ci = ci + 1;
         }
+        if !env_var_defined(e, name) {
+            let uvmsg: String = String::from("undefined variable `");
+            uvmsg.push_str(name);
+            uvmsg.push_str(String::from("`"));
+            env_emit_error(e, uvmsg, expr_span(a, eid));
+            return CTY_UNKNOWN();
+        }
         return env_lookup_var(e, name);
     }
 
@@ -2609,14 +2643,17 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             }
             return CTY_BOOL();
         }
+        if is_unknown(lhs_tid) || is_unknown(rhs_tid) {
+            return CTY_UNKNOWN();
+        }
         if op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR() || op == BINOP_SHL() || op == BINOP_SHR() {
             if !ty_is_integer_or_lit_int(e.ts, lhs_tid) {
                 env_emit_error(e, String::from("bitwise operator requires integer operands"), expr_span(a, eid));
-                return CTY_I64();
+                return CTY_UNKNOWN();
             }
             if !ty_is_integer_or_lit_int(e.ts, rhs_tid) {
                 env_emit_error(e, String::from("bitwise operator requires integer operands"), expr_span(a, eid));
-                return CTY_I64();
+                return CTY_UNKNOWN();
             }
             let literal_lhs_shift: bool = ty_is_lit_int(e.ts, lhs_tid) && ty_is_integer(e.ts, rhs_tid);
             if (op == BINOP_SHL() || op == BINOP_SHR()) && (ty_is_integer(e.ts, lhs_tid) || literal_lhs_shift) {
@@ -2661,13 +2698,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             }
             if lhs_tid != rhs_tid {
                 env_emit_error(e, String::from("bitwise operator requires matching integer types"), expr_span(a, eid));
-                return CTY_I64();
+                return CTY_UNKNOWN();
             }
             return lhs_tid;
         }
         if ty_is_numeric_or_lit_int(e.ts, lhs_tid) && ty_is_numeric_or_lit_int(e.ts, rhs_tid) && !bin_operands_compatible(e.ts, lhs_tid, rhs_tid) {
             env_emit_error(e, String::from("arithmetic operands have different types"), expr_span(a, eid));
-            return CTY_I64();
+            return CTY_UNKNOWN();
         }
         // The concrete operand fixes the result type; an unsuffixed-literal
         // marker coerces to it. Two markers stay a marker (mirrors
@@ -2721,6 +2758,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         }
         if op == UNOP_NEG() && ty_is_unsigned(e.ts, operand_tid) {
             env_emit_error(e, String::from("unary negation is not allowed on unsigned type"), expr_span(a, eid));
+            return CTY_UNKNOWN();
         }
         return operand_tid;
     }
@@ -2744,7 +2782,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             if name == String::from("pin_to_root") {
                 if n_args != 1 {
                     env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
-                    return CTY_NEVER();
+                    return CTY_UNKNOWN();
                 }
                 let arg_eid: i64 = list_get(a, args_lid, 0);
                 let arg_tid: i64 = check_expr(e, m, arg_eid);
@@ -2756,7 +2794,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             if name == String::from("string_matches_literal_at") {
                 if n_args != 3 {
                     env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
-                    return CTY_NEVER();
+                    return CTY_UNKNOWN();
                 }
                 let s_eid: i64 = list_get(a, args_lid, 0);
                 let pos_eid: i64 = list_get(a, args_lid, 1);
@@ -2791,7 +2829,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 msg.push_str(name);
                 msg.push_str(String::from("`"));
                 env_emit_error(e, msg, expr_span(a, eid));
-                return CTY_NEVER();
+                return CTY_UNKNOWN();
             }
             if env_is_extern_fn(e, name) {
                 let msg: String = String::from("calling extern-declared function `");
@@ -2801,7 +2839,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     e, EC_UNSUPPORTED_FEATURE(), msg, expr_span(a, eid),
                     String::from("extern \"C\" functions can be declared but not called yet; lowering extern calls to IR/codegen is not implemented")
                 );
-                return CTY_NEVER();
+                return CTY_UNKNOWN();
             }
             if e.fn_param_count[fidx as u64] != n_args {
                 env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
@@ -2823,7 +2861,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         }
         let _callee_tid: i64 = check_expr(e, m, callee_eid);
         env_emit_error(e, String::from("function call callee must be an identifier"), expr_span(a, callee_eid));
-        return CTY_UNIT();
+        return CTY_UNKNOWN();
     }
 
     if tag == EXPR_METHOD() {
@@ -2851,23 +2889,23 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     String::from("`Vec::new()`, `HashMap::new()` and `BTreeMap::new()` take their element types from the annotation, for example `let m: HashMap<i64, i64> = HashMap::new();`")
                 );
             }
-            return recv_tid;
+            return CTY_UNKNOWN();
         }
         let recv_tag: i64 = ty_tag(e.ts, recv_tid);
         if recv_tag == CTY_STR() {
             if mname == String::from("push_str") || mname == String::from("eq") ||
                mname == String::from("contains") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_STR(), mname);
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_STR(), mname);
             }
             if mname == String::from("byte_at") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64(), mname);
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_U64(), mname);
             }
             if mname == String::from("push_byte") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U8(), mname);
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_U8(), mname);
             }
             if mname == String::from("substring") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64(), mname);
-                check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64(), mname);
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_U64(), mname);
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 1, CTY_U64(), mname);
             }
             if mname == String::from("len") { return CTY_U64(); }
             if mname == String::from("byte_at") { return CTY_I64(); }
@@ -2890,7 +2928,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 return ts_make_applied(e.ts, opt_base, opt_args);
             }
             emit_unknown_method(e, a, eid, mname, String::from("String"));
-            return CTY_UNIT();
+            return CTY_UNKNOWN();
         }
         if recv_tag == CTY_APPLIED() {
             let base_tid: i64 = ty_a(e.ts, recv_tid);
@@ -2900,10 +2938,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 if base_name == String::from("Vec") {
                     let hargs_lid: i64 = ty_b(e.ts, recv_tid);
                     if mname == String::from("push") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
                     }
                     if mname == String::from("truncate") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64(), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_U64(), mname);
                     }
                     if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("push") { return CTY_UNIT(); }
@@ -2911,7 +2949,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if mname == String::from("clear") { return CTY_UNIT(); }
                     if mname == String::from("truncate") { return CTY_UNIT(); }
                     emit_unknown_method(e, a, eid, mname, String::from("Vec"));
-                    return CTY_UNIT();
+                    return CTY_UNKNOWN();
                 }
                 if base_name == String::from("Option") || base_name == String::from("Result") {
                     let hargs_lid: i64 = ty_b(e.ts, recv_tid);
@@ -2935,7 +2973,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         return inner_tid;
                     }
                     emit_unknown_method(e, a, eid, mname, base_name);
-                    return CTY_UNIT();
+                    return CTY_UNKNOWN();
                 }
                 if base_name == String::from("HashMap") {
                     let hargs_lid: i64 = ty_b(e.ts, recv_tid);
@@ -2945,13 +2983,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         CTY_I64()
                     };
                     if mname == String::from("insert") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, hargs_lid, 1), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, hargs_lid, 1), mname);
                     }
                     if mname == String::from("get") ||
                        mname == String::from("contains_key") ||
                        mname == String::from("remove") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
                     }
                     if mname == String::from("insert") { return CTY_UNIT(); }
                     if mname == String::from("get") {
@@ -2964,7 +3002,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("remove") { return CTY_UNIT(); }
                     emit_unknown_method(e, a, eid, mname, String::from("HashMap"));
-                    return CTY_UNIT();
+                    return CTY_UNKNOWN();
                 }
                 if base_name == String::from("BTreeMap") {
                     let bargs_lid: i64 = ty_b(e.ts, recv_tid);
@@ -2974,11 +3012,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         CTY_I64()
                     };
                     if mname == String::from("insert") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, bargs_lid, 1), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, bargs_lid, 1), mname);
                     }
                     if mname == String::from("get") || mname == String::from("contains") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
                     }
                     if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("contains") { return CTY_BOOL(); }
@@ -2995,7 +3033,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         return ts_make_applied(e.ts, opt_base, opt_args);
                     }
                     emit_unknown_method(e, a, eid, mname, String::from("BTreeMap"));
-                    return CTY_UNIT();
+                    return CTY_UNKNOWN();
                 }
             }
         }
@@ -3003,20 +3041,27 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         uerr_msg.push_str(mname);
         uerr_msg.push_str(String::from("` on this type"));
         env_emit_error_code(e, EC_UNKNOWN_METHOD(), uerr_msg, expr_span(a, eid));
-        return CTY_UNIT();
+        return CTY_UNKNOWN();
     }
 
     if tag == EXPR_FIELD() {
         let recv_eid: i64 = expr_a(a, eid);
         let fname_sid: i64 = expr_b(a, eid);
         let recv_tid: i64 = check_expr(e, m, recv_eid);
-        if is_opaque(recv_tid) {
+        if is_unknown(recv_tid) {
+            return recv_tid;
+        }
+        if recv_tid == CTY_NEVER() && expr_diverges(e, m, recv_eid) {
             return recv_tid;
         }
         let fname: String = arena_str(a, fname_sid);
-        let recv_tag: i64 = ty_tag(e.ts, recv_tid);
+        let mut base_tid: i64 = recv_tid;
+        if ty_tag(e.ts, recv_tid) == CTY_REF() {
+            base_tid = ty_a(e.ts, recv_tid);
+        }
+        let recv_tag: i64 = ty_tag(e.ts, base_tid);
         if recv_tag == CTY_STRUCT() {
-            let sname: String = ty_struct_name(e.ts, recv_tid);
+            let sname: String = ty_struct_name(e.ts, base_tid);
             let sidx: i64 = env_lookup_struct(e, sname);
             if sidx != -1 {
                 let fname_lid: i64 = e.sdef_field_name_lids[sidx as u64];
@@ -3032,9 +3077,25 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     }
                     i = i + 1;
                 }
+                let nfmsg: String = String::from("struct `");
+                nfmsg.push_str(sname);
+                nfmsg.push_str(String::from("` has no field `"));
+                nfmsg.push_str(fname);
+                nfmsg.push_str(String::from("`"));
+                env_emit_error_code(e, EC_TYPE_MISMATCH(), nfmsg, expr_span(a, eid));
+                return CTY_UNKNOWN();
             }
+            let usmsg: String = String::from("unknown struct `");
+            usmsg.push_str(sname);
+            usmsg.push_str(String::from("`"));
+            env_emit_error_code(e, EC_TYPE_MISMATCH(), usmsg, expr_span(a, eid));
+            return CTY_UNKNOWN();
         }
-        return CTY_NEVER();
+        let fmsg: String = String::from("field access on non-struct type `");
+        fmsg.push_str(ty_full_display_name(e.ts, recv_tid));
+        fmsg.push_str(String::from("`"));
+        env_emit_error_code(e, EC_TYPE_MISMATCH(), fmsg, expr_span(a, eid));
+        return CTY_UNKNOWN();
     }
 
     if tag == EXPR_INDEX() {
@@ -3043,13 +3104,17 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let recv_tid: i64 = check_expr(e, m, recv_eid);
         let idx_tid: i64 = check_expr(e, m, idx_eid);
         check_contextual_integer_literal_ranges(e, a, idx_eid, CTY_U64());
-        if !is_opaque(idx_tid) && !is_coercible(e.ts, idx_tid, CTY_U64()) {
+        let bare_never_idx: bool = never_is_not_a_value(e, m, idx_eid, idx_tid, CTY_U64());
+        if !is_unknown(idx_tid) && (bare_never_idx || (idx_tid != CTY_NEVER() && !is_coercible(e.ts, idx_tid, CTY_U64()))) {
             let imsg: String = String::from("index has type `");
-            imsg.push_str(ty_tag_name(ty_tag(e.ts, idx_tid)));
+            imsg.push_str(ty_full_display_name(e.ts, idx_tid));
             imsg.push_str(String::from("` but must be `u64`"));
             env_emit_error_code(e, EC_TYPE_MISMATCH(), imsg, expr_span(a, idx_eid));
         }
-        if is_opaque(recv_tid) {
+        if is_unknown(recv_tid) {
+            return recv_tid;
+        }
+        if recv_tid == CTY_NEVER() && expr_diverges(e, m, recv_eid) {
             return recv_tid;
         }
         if ty_tag(e.ts, recv_tid) == CTY_APPLIED() {
@@ -3070,7 +3135,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             e, EC_TYPE_MISMATCH(), inmsg, expr_span(a, eid),
             String::from("indexing is supported on Vec<T> only; read a map entry with `get`, which returns an `Option`")
         );
-        return CTY_NEVER();
+        return CTY_UNKNOWN();
     }
 
     if tag == EXPR_IF() {
@@ -3245,7 +3310,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             validation_i = validation_i + 1;
         }
         let scrutinee_supported: bool = is_enum_match_tid(e.ts, scrutinee_tid);
-        if all_arms_supported && !scrutinee_supported {
+        if all_arms_supported && !scrutinee_supported && !is_unknown(scrutinee_tid) {
             env_emit_error_code_hint(e, EC_UNSUPPORTED_PATTERN(), String::from("match scrutinee must be an enum"), expr_span(a, scrutinee_eid), String::from("use `if`/`else` comparisons for scalar values"));
         }
         let mut result_tid: i64 = CTY_NEVER();
@@ -3440,7 +3505,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             i = i + 1;
         }
         if sidx == -1 {
-            return CTY_UNIT();
+            return CTY_UNKNOWN();
         }
         return ts_make_struct(e.ts, sname);
     }
@@ -3508,8 +3573,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if n_args != 2 {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
                     }
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64(), second_name);
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64(), second_name);
+                    check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_I64(), second_name);
+                    check_method_argument_exact(e, m, a, args_lid, arg_tids, 1, CTY_U64(), second_name);
                     return CTY_NEVER();
                 }
             }
@@ -3531,8 +3596,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if n_args != 2 {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
                     }
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64(), second_name);
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64(), second_name);
+                    check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_I64(), second_name);
+                    check_method_argument_exact(e, m, a, args_lid, arg_tids, 1, CTY_U64(), second_name);
                     return CTY_STR();
                 }
                 if second_name == String::from("from") {
@@ -3540,7 +3605,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         env_emit_error(e, String::from("String::from expects one String argument"), expr_span(a, eid));
                         return CTY_STR();
                     }
-                    if first_arg_tid != CTY_STR() && first_arg_tid != CTY_NEVER() {
+                    if first_arg_tid != CTY_STR() && !is_unknown(first_arg_tid)
+                        && !(first_arg_tid == CTY_NEVER() && expr_diverges(e, m, list_get(a, args_lid, 0))) {
                         env_emit_error(e, String::from("String::from argument must be String"), expr_span(a, eid));
                     }
                     return CTY_STR();
@@ -3589,7 +3655,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         env_emit_error_code(e, EC_TYPE_MISMATCH(),
                             String::from("the `?` operator on Option requires the caller to return `Option`"),
                             expr_span(a, eid));
-                        return CTY_UNIT();
+                        return CTY_UNKNOWN();
                     }
                     let args_lid: i64 = ty_b(e.ts, inner_tid);
                     if ts_arg_len(e.ts, args_lid) > 0 {
@@ -3603,12 +3669,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     env_emit_error_code(e, EC_TYPE_MISMATCH(),
                         String::from("Result propagation with `?` is not lowered yet"),
                         expr_span(a, eid));
-                    return CTY_UNIT();
+                    return CTY_UNKNOWN();
                 }
             }
         }
         env_emit_error(e, String::from("the `?` operator requires `Option<T>` or `Result<T,E>`"), expr_span(a, eid));
-        return CTY_UNIT();
+        return CTY_UNKNOWN();
     }
 
     if tag == EXPR_RESULT() {

@@ -1,0 +1,9 @@
+// TEST: error-code UnknownMethod
+// TEST: error-count 1
+module RubbleNoCascadeBinary
+
+fn main() -> i32 {
+    let s: String = String::from("s");
+    let x: i64 = s.nope() + 1;
+    0
+}
