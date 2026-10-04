@@ -62,6 +62,20 @@ fn runtime_link_failure(json: &serde_json::Value) -> bool {
 
 const ENUM_DEF: &str = "enum Color {\n    Red,\n    Green,\n    Blue,\n}\n";
 
+/// Asserts `src` compiles: either the frontend succeeded, or (standalone test
+/// runs only) the build got as far as a `libvow_runtime.a`-only link failure.
+/// See `runtime_link_failure` for why the latter counts as success here.
+fn assert_compiles(src: &str, context: &str) {
+    let (exit, json) = build_no_verify(src);
+    let status = json["status"].as_str();
+    let frontend_success = exit == 0 && matches!(status, Some("Verified" | "Unverified"));
+    let link_only_failure = exit != 0 && runtime_link_failure(&json);
+    assert!(
+        frontend_success || link_only_failure,
+        "{context}\nexit: {exit}\njson: {json}"
+    );
+}
+
 #[test]
 fn non_exhaustive_enum_match_fails_build() {
     let src = format!(
@@ -95,14 +109,9 @@ fn wildcard_arm_suppresses_non_exhaustive_check() {
          }}\n\
          fn main() -> i32 {{ 0 }}\n"
     );
-    let (exit, json) = build_no_verify(&src);
-    let status = json["status"].as_str();
-    let frontend_success = exit == 0 && matches!(status, Some("Verified" | "Unverified"));
-    let link_only_failure = exit != 0 && runtime_link_failure(&json);
-    assert!(
-        frontend_success || link_only_failure,
-        "a trailing wildcard arm must suppress NonExhaustiveMatch\n\
-         exit: {exit}\njson: {json}"
+    assert_compiles(
+        &src,
+        "a trailing wildcard arm must suppress NonExhaustiveMatch",
     );
 }
 
@@ -120,13 +129,5 @@ fn exhaustive_enum_match_compiles() {
          }}\n\
          fn main() -> i32 {{ 0 }}\n"
     );
-    let (exit, json) = build_no_verify(&src);
-    let status = json["status"].as_str();
-    let frontend_success = exit == 0 && matches!(status, Some("Verified" | "Unverified"));
-    let link_only_failure = exit != 0 && runtime_link_failure(&json);
-    assert!(
-        frontend_success || link_only_failure,
-        "an exhaustive match over all variants must compile\n\
-         exit: {exit}\njson: {json}"
-    );
+    assert_compiles(&src, "an exhaustive match over all variants must compile");
 }

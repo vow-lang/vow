@@ -2236,20 +2236,15 @@ fn is_enum_match_tid(ts: TyStore, tid: i64) -> bool {
 
 fn check_exhaustive(e: CheckEnv, m: Module, scrutinee_tid: i64, arms_lid: i64, n_arms: i64, span: i64) {
     let a: AstArena = m.arena;
-    let mut i: i64 = 0;
-    while i < n_arms {
-        let pid: i64 = list_get(a, arms_lid, i * 2);
-        let tag: i64 = pat_tag(a, pid);
-        if tag == PAT_WILD() {
+    if n_arms > 0 {
+        let last_pid: i64 = list_get(a, arms_lid, (n_arms - 1) * 2);
+        let last_tag: i64 = pat_tag(a, last_pid);
+        if last_tag == PAT_WILD() {
             return;
         }
-        if tag == PAT_IDENT() && pat_b(a, pid) == 0 {
+        if last_tag == PAT_IDENT() && pat_b(a, last_pid) == 0 {
             return;
         }
-        i = i + 1;
-    }
-    if !is_enum_match_tid(e.ts, scrutinee_tid) {
-        return;
     }
     let enum_name: String = enum_name_from_tid(e.ts, scrutinee_tid);
     let enum_idx: i64 = env_lookup_enum(e, enum_name);
