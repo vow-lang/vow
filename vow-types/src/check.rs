@@ -1243,7 +1243,7 @@ impl<'e> Checker<'e> {
                 Item::Struct(s) => {
                     for f in &s.fields {
                         if let Ok(ty) = self.env.resolve(&f.ty) {
-                            self.check_map_types_in_ty(&ty, f.span);
+                            self.check_written_ty(&f.ty, f.span);
                             if crate::linear::is_linear_owner_ty(&ty, &self.env) {
                                 self.emit_error(
                                     ErrorCode::LinearTypeViolation,
@@ -1262,27 +1262,19 @@ impl<'e> Checker<'e> {
                         match &v.kind {
                             vow_syntax::ast::VariantKind::Tuple(types) => {
                                 for t in types {
-                                    if let Ok(ty) = self.env.resolve(t) {
-                                        self.check_map_types_in_ty(&ty, t.span());
-                                    }
+                                    self.check_written_ty(t, t.span());
                                 }
                             }
                             vow_syntax::ast::VariantKind::Struct(fields) => {
                                 for f in fields {
-                                    if let Ok(ty) = self.env.resolve(&f.ty) {
-                                        self.check_map_types_in_ty(&ty, f.span);
-                                    }
+                                    self.check_written_ty(&f.ty, f.span);
                                 }
                             }
                             vow_syntax::ast::VariantKind::Unit => {}
                         }
                     }
                 }
-                Item::TypeAlias(a) => {
-                    if let Ok(ty) = self.env.resolve(&a.ty) {
-                        self.check_map_types_in_ty(&ty, a.ty.span());
-                    }
-                }
+                Item::TypeAlias(a) => self.check_written_ty(&a.ty, a.ty.span()),
                 _ => {}
             }
         }
@@ -1293,7 +1285,7 @@ impl<'e> Checker<'e> {
             if let Item::Const(c) = item {
                 let ty = match self.env.resolve(&c.ty) {
                     Ok(ty) => {
-                        self.check_map_types_in_ty(&ty, c.ty.span());
+                        self.check_written_ty(&c.ty, c.ty.span());
                         ty
                     }
                     Err(msg) => {
@@ -1374,7 +1366,8 @@ impl<'e> Checker<'e> {
                         .iter()
                         .map(|p| match self.env.resolve(&p.ty) {
                             Ok(ty) => {
-                                self.check_param_ty(&ty, &p.name, p.span);
+                                self.check_written_ty(&p.ty, p.span);
+                                self.check_unit_param(&ty, &p.name, p.span);
                                 ty
                             }
                             Err(msg) => {
@@ -1385,7 +1378,7 @@ impl<'e> Checker<'e> {
                         .collect();
                     let return_ty = match self.env.resolve(&fn_def.return_ty) {
                         Ok(ty) => {
-                            self.check_map_types_in_ty(&ty, fn_def.return_ty.span());
+                            self.check_written_ty(&fn_def.return_ty, fn_def.return_ty.span());
                             ty
                         }
                         Err(msg) => {
@@ -1420,7 +1413,8 @@ impl<'e> Checker<'e> {
                             .iter()
                             .map(|p| match self.env.resolve(&p.ty) {
                                 Ok(ty) => {
-                                    self.check_param_ty(&ty, &p.name, p.span);
+                                    self.check_written_ty(&p.ty, p.span);
+                                    self.check_unit_param(&ty, &p.name, p.span);
                                     ty
                                 }
                                 Err(msg) => {
@@ -1431,7 +1425,7 @@ impl<'e> Checker<'e> {
                             .collect();
                         let return_ty = match self.env.resolve(&f.return_ty) {
                             Ok(ty) => {
-                                self.check_map_types_in_ty(&ty, f.return_ty.span());
+                                self.check_written_ty(&f.return_ty, f.return_ty.span());
                                 ty
                             }
                             Err(msg) => {
@@ -1725,7 +1719,7 @@ impl<'e> Checker<'e> {
                 let binding_ty = if let Some(ann) = ty {
                     match self.env.resolve(ann) {
                         Ok(ann_ty) => {
-                            self.check_map_types_in_ty(&ann_ty, ann.span());
+                            self.check_written_ty(ann, ann.span());
                             self.check_contextual_integer_literal_ranges(init, &ann_ty);
                             if !can_context_coerce(&init_ty, &ann_ty) {
                                 self.emit_error_with_hints(
@@ -3680,12 +3674,8 @@ impl<'e> Checker<'e> {
         }
     }
 
-    // The one place every per-collection rule lives, for a single `Vec`, `HashMap`
-    // or `BTreeMap` type. A `Vec` element that is or contains a linear owner is an
-    // UnsupportedFeature (the vector copies and shifts elements bitwise). Collection
-    // types never count as linear themselves (the rule is enforced at the
-    // collection that holds the linear value), so one written site reports once.
-    // For maps, diagnostics are emitted in this order: key, linear value, wide value.
+    // The one place every per-map rule lives, for a single `HashMap`/`BTreeMap`
+    // type. Diagnostics are emitted in this order: key, linear value, wide value.
     // BTreeMap keys must be `i64` and linear values use the dedicated BTreeMap
     // codes; the runtime stores every other key and value in one 64-bit slot, so a
     // HashMap key that is not a by-value scalar, a linear HashMap value, and a
@@ -3699,22 +3689,6 @@ impl<'e> Checker<'e> {
         let Ty::Struct(map_name) = base.as_ref() else {
             return;
         };
-        if map_name == "Vec" {
-            if let Some(elem_ty) = args.first().filter(|t| self.is_linear_ty(t)) {
-                self.emit_error_with_hints(
-                    ErrorCode::UnsupportedFeature,
-                    format!(
-                        "Vec element type must be non-linear; found '{}'",
-                        elem_ty.user_name()
-                    ),
-                    span,
-                    vec![
-                        "a Vec copies and shifts elements bitwise, so a linear element would be duplicated; keep the value in a local binding and store an integer handle instead".to_string(),
-                    ],
-                );
-            }
-            return;
-        }
         let is_btree = map_name == "BTreeMap";
         if map_name != "HashMap" && !is_btree {
             return;
@@ -3782,8 +3756,7 @@ impl<'e> Checker<'e> {
     // A `()` parameter carries no information and has no ABI slot, so a call would
     // pass an argument the callee signature does not declare. Rejected at the
     // declaration instead of miscompiling.
-    fn check_param_ty(&mut self, ty: &Ty, name: &str, span: vow_syntax::span::Span) {
-        self.check_map_types_in_ty(ty, span);
+    fn check_unit_param(&mut self, ty: &Ty, name: &str, span: vow_syntax::span::Span) {
         if *ty == Ty::Unit {
             self.emit_error_with_hints(
                 ErrorCode::UnsupportedFeature,
@@ -3794,32 +3767,84 @@ impl<'e> Checker<'e> {
         }
     }
 
-    // Checks every map type written in `ty`, recursing through composite types so
-    // nested maps (e.g. `Vec<BTreeMap<bool, i64>>`) are also caught. Called from the
-    // major type-resolution sites (Stmt::Let annotations, function param / return /
-    // field / alias / const types) so the error fires at type formation rather than
-    // only at method-call sites.
-    fn check_map_types_in_ty(&mut self, ty: &Ty, span: vow_syntax::span::Span) {
-        self.check_map_slot_types(ty, span);
+    // A `Vec` copies and shifts elements bitwise, so an element that owns a linear
+    // obligation (a `linear struct`, a tuple holding one, or an enum-like wrapper
+    // around one) would be duplicated. References borrow rather than own, so
+    // `Vec<&Token>` is fine, and a nested collection is judged where it is written,
+    // so each written site reports once.
+    fn check_vec_element_ty(&mut self, elem_ty: &Ty, span: vow_syntax::span::Span) {
+        if !self.is_linear_vec_element(elem_ty) {
+            return;
+        }
+        self.emit_error_with_hints(
+            ErrorCode::UnsupportedFeature,
+            format!(
+                "Vec element type must be non-linear; found '{}'",
+                elem_ty.user_name()
+            ),
+            span,
+            vec![
+                "a Vec copies and shifts elements bitwise, so a linear element would be duplicated; keep the value in a local binding and store an integer handle instead".to_string(),
+            ],
+        );
+    }
+
+    fn is_linear_vec_element(&self, ty: &Ty) -> bool {
         match ty {
-            Ty::Applied(_, args) => {
-                for a in args {
-                    self.check_map_types_in_ty(a, span);
-                }
-            }
-            Ty::Tuple(tys) => {
-                for t in tys {
-                    self.check_map_types_in_ty(t, span);
-                }
-            }
-            Ty::Reference(inner) => self.check_map_types_in_ty(inner, span),
-            _ => {}
+            Ty::Tuple(tys) => tys.iter().any(|t| self.is_linear_vec_element(t)),
+            _ => crate::linear::is_linear_owner_ty(ty, &self.env),
         }
     }
 
-    // Returns true if `ty` is or transitively contains a `linear struct`.
-    // Used to gate BTreeMap value payloads: the runtime/verifier copy entries
-    // bitwise, which would silently duplicate a linear obligation.
+    // Applies the per-collection rules to one resolved `Vec`/`HashMap`/`BTreeMap`
+    // type. Non-recursive: `check_written_ty` owns the recursion.
+    fn check_collection_slots(&mut self, ty: &Ty, span: vow_syntax::span::Span) {
+        match ty {
+            Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Struct(n) if n == "Vec") => {
+                if let Some(elem_ty) = args.first() {
+                    self.check_vec_element_ty(elem_ty, span);
+                }
+            }
+            _ => self.check_map_slot_types(ty, span),
+        }
+    }
+
+    // Checks every collection type written in `ast`, recursing through composite
+    // types so nested collections (e.g. `Vec<BTreeMap<bool, i64>>`) are also
+    // caught. It walks the written type rather than the resolved one so a type
+    // alias is reported once, at its definition, instead of at every use. Called
+    // from the major type-resolution sites (Stmt::Let annotations, function param /
+    // return / field / alias / const types) so the error fires at type formation
+    // rather than only at method-call sites.
+    fn check_written_ty(&mut self, ast: &Type, span: vow_syntax::span::Span) {
+        match ast {
+            Type::Generic { args, .. } => {
+                if let Ok(ty) = self.env.resolve(ast) {
+                    self.check_collection_slots(&ty, span);
+                }
+                for a in args {
+                    self.check_written_ty(a, span);
+                }
+            }
+            Type::Tuple { elems, .. } => {
+                for t in elems {
+                    self.check_written_ty(t, span);
+                }
+            }
+            Type::Reference { inner, .. } | Type::Slice { inner, .. } => {
+                self.check_written_ty(inner, span);
+            }
+            Type::Refinement { base, .. } => self.check_written_ty(base, span),
+            Type::Named { .. } | Type::Unit { .. } | Type::Never { .. } => {}
+        }
+    }
+
+    // Returns true if `ty` is or transitively contains a `linear struct`, looking
+    // through references and tuples. Used to gate map values and tuple
+    // destructuring: the runtime/verifier copy map entries bitwise, which would
+    // silently duplicate a linear obligation. A `Vec`/`HashMap`/`BTreeMap` never
+    // counts as linear itself; the collection rules fire where the collection is
+    // written. Vec elements use `is_linear_vec_element` (owner semantics) instead.
     fn is_linear_ty(&self, ty: &Ty) -> bool {
         let mut visited = HashSet::new();
         self.is_linear_ty_rec(ty, &mut visited)
@@ -7502,7 +7527,7 @@ mod tests {
             Box::new(Ty::Struct("BTreeMap".to_string())),
             vec![Ty::I64, Ty::Struct("Token".to_string())],
         );
-        checker.check_map_types_in_ty(&ty, dummy_span());
+        check_ty_slots(&mut checker, &ty);
         assert!(
             emitter
                 .0
@@ -7529,7 +7554,7 @@ mod tests {
             Box::new(Ty::Struct("BTreeMap".to_string())),
             vec![Ty::I64, Ty::Struct("Pair".to_string())],
         );
-        checker.check_map_types_in_ty(&ty, dummy_span());
+        check_ty_slots(&mut checker, &ty);
         assert!(
             !emitter
                 .0
@@ -7538,6 +7563,34 @@ mod tests {
             "did not expect BTreeMapValueMustBeNonLinear; got {:?}",
             emitter.0.iter().map(|d| d.code).collect::<Vec<_>>()
         );
+    }
+
+    fn check_ty_slots(checker: &mut Checker, ty: &Ty) {
+        checker.check_collection_slots(ty, dummy_span());
+        match ty {
+            Ty::Applied(_, args) | Ty::Tuple(args) => {
+                for a in args {
+                    check_ty_slots(checker, a);
+                }
+            }
+            Ty::Reference(inner) => check_ty_slots(checker, inner),
+            _ => {}
+        }
+    }
+
+    fn named(name: &str) -> Type {
+        Type::Named {
+            name: name.to_string(),
+            span: dummy_span(),
+        }
+    }
+
+    fn generic(name: &str, args: Vec<Type>) -> Type {
+        Type::Generic {
+            name: name.to_string(),
+            args,
+            span: dummy_span(),
+        }
     }
 
     fn define_linear_token(checker: &mut Checker) {
@@ -7569,7 +7622,7 @@ mod tests {
         let mut checker = Checker::new("test.vow", &mut emitter);
         define_linear_token(&mut checker);
         let ty = applied("Vec", vec![Ty::Struct("Token".to_string())]);
-        checker.check_map_types_in_ty(&ty, dummy_span());
+        check_ty_slots(&mut checker, &ty);
         assert_eq!(unsupported_feature_count(&emitter), 1);
         let diag = &emitter.0[0];
         assert!(
@@ -7584,7 +7637,7 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = Checker::new("test.vow", &mut emitter);
         define_linear_token(&mut checker);
-        checker.check_map_types_in_ty(&applied("Vec", vec![Ty::I64]), dummy_span());
+        check_ty_slots(&mut checker, &applied("Vec", vec![Ty::I64]));
         assert!(emitter.0.is_empty(), "got {:?}", emitter.0);
     }
 
@@ -7597,7 +7650,7 @@ mod tests {
             Box::new(Ty::Enum("Option".to_string())),
             vec![Ty::Struct("Token".to_string())],
         );
-        checker.check_map_types_in_ty(&applied("Vec", vec![opt]), dummy_span());
+        check_ty_slots(&mut checker, &applied("Vec", vec![opt]));
         assert_eq!(unsupported_feature_count(&emitter), 1);
     }
 
@@ -7607,17 +7660,69 @@ mod tests {
         let mut checker = Checker::new("test.vow", &mut emitter);
         define_linear_token(&mut checker);
         let inner = applied("Vec", vec![Ty::Struct("Token".to_string())]);
-        checker.check_map_types_in_ty(&applied("Vec", vec![inner.clone()]), dummy_span());
-        checker.check_map_types_in_ty(&applied("HashMap", vec![Ty::I64, inner]), dummy_span());
+        check_ty_slots(&mut checker, &applied("Vec", vec![inner.clone()]));
+        check_ty_slots(&mut checker, &applied("HashMap", vec![Ty::I64, inner]));
         assert_eq!(unsupported_feature_count(&emitter), 2);
+    }
+
+    #[test]
+    fn vec_of_reference_to_linear_accepted() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        define_linear_token(&mut checker);
+        let borrowed = Ty::Reference(Box::new(Ty::Struct("Token".to_string())));
+        check_ty_slots(&mut checker, &applied("Vec", vec![borrowed]));
+        assert!(emitter.0.is_empty(), "got {:?}", emitter.0);
+    }
+
+    #[test]
+    fn vec_of_tuple_holding_linear_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        define_linear_token(&mut checker);
+        let pair = Ty::Tuple(vec![Ty::I64, Ty::Struct("Token".to_string())]);
+        check_ty_slots(&mut checker, &applied("Vec", vec![pair]));
+        assert_eq!(unsupported_feature_count(&emitter), 1);
+    }
+
+    #[test]
+    fn written_alias_of_linear_vec_is_reported_once_at_its_definition() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        define_linear_token(&mut checker);
+        let toks = applied("Vec", vec![Ty::Struct("Token".to_string())]);
+        checker.env.define_alias("Toks", toks);
+        let definition = generic("Vec", vec![named("Token")]);
+        checker.check_written_ty(&definition, dummy_span());
+        for _ in 0..3 {
+            checker.check_written_ty(&named("Toks"), dummy_span());
+            checker.check_written_ty(&generic("Option", vec![named("Toks")]), dummy_span());
+        }
+        assert_eq!(unsupported_feature_count(&emitter), 1);
+    }
+
+    #[test]
+    fn written_vec_of_reference_to_linear_accepted() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        define_linear_token(&mut checker);
+        let ast = generic(
+            "Vec",
+            vec![Type::Reference {
+                inner: Box::new(named("Token")),
+                span: dummy_span(),
+            }],
+        );
+        checker.check_written_ty(&ast, dummy_span());
+        assert!(emitter.0.is_empty(), "got {:?}", emitter.0);
     }
 
     #[test]
     fn unit_parameter_rejected() {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = Checker::new("test.vow", &mut emitter);
-        checker.check_param_ty(&Ty::Unit, "u", dummy_span());
-        checker.check_param_ty(&Ty::I64, "n", dummy_span());
+        checker.check_unit_param(&Ty::Unit, "u", dummy_span());
+        checker.check_unit_param(&Ty::I64, "n", dummy_span());
         assert_eq!(unsupported_feature_count(&emitter), 1);
         assert_eq!(emitter.0.len(), 1);
         assert!(
@@ -7699,7 +7804,7 @@ mod tests {
             Box::new(Ty::Struct("BTreeMap".to_string())),
             vec![Ty::I64, Ty::Struct("Outer".to_string())],
         );
-        checker.check_map_types_in_ty(&ty, dummy_span());
+        check_ty_slots(&mut checker, &ty);
         assert!(
             emitter
                 .0
@@ -7815,7 +7920,7 @@ mod tests {
             Box::new(Ty::Struct("BTreeMap".to_string())),
             vec![Ty::I64, Ty::Enum("Wrap".to_string())],
         );
-        checker.check_map_types_in_ty(&ty, dummy_span());
+        check_ty_slots(&mut checker, &ty);
         assert!(
             emitter
                 .0
@@ -7844,7 +7949,7 @@ mod tests {
             Box::new(Ty::Struct("BTreeMap".to_string())),
             vec![Ty::I64, Ty::Enum("Tag".to_string())],
         );
-        checker.check_map_types_in_ty(&ty, dummy_span());
+        check_ty_slots(&mut checker, &ty);
         assert!(
             !emitter
                 .0
@@ -7878,7 +7983,7 @@ mod tests {
             Box::new(Ty::Struct("BTreeMap".to_string())),
             vec![Ty::I64, Ty::Struct("Node".to_string())],
         );
-        checker.check_map_types_in_ty(&ty, dummy_span());
+        check_ty_slots(&mut checker, &ty);
         assert!(
             !emitter
                 .0
@@ -7923,7 +8028,7 @@ mod tests {
             Box::new(Ty::Struct("BTreeMap".to_string())),
             vec![Ty::I64, Ty::Struct("Holder".to_string())],
         );
-        checker.check_map_types_in_ty(&ty, dummy_span());
+        check_ty_slots(&mut checker, &ty);
         assert!(
             emitter
                 .0
@@ -8024,7 +8129,7 @@ mod tests {
                 },
             );
         }
-        checker.check_map_types_in_ty(&ty, dummy_span());
+        check_ty_slots(&mut checker, &ty);
         emitter.0.iter().map(|d| d.code).collect()
     }
 

@@ -104,9 +104,12 @@ fn is_collection_base(e: CheckEnv, base: i64) -> bool {
 }
 
 // Returns 1 if `tid` is or transitively contains a linear struct.
-// Mirrors vow-types/src/check.rs::is_linear_ty. Used to gate Vec elements and
-// map values: bitwise shift/copy in the runtime/verifier would silently
-// duplicate a linear obligation.
+// Mirrors vow-types/src/check.rs::is_linear_ty. Looks through references and
+// tuples. Used to gate map values and tuple destructuring: bitwise shift/copy
+// in the runtime/verifier would silently duplicate a linear obligation. A
+// collection never counts as linear itself; the collection rules fire where
+// the collection is written. Vec elements use is_linear_vec_element (owner
+// semantics) instead.
 fn is_linear_ty(e: CheckEnv, tid: i64) -> i64 {
     let visited: Vec<i64> = Vec::new();
     is_linear_ty_rec(e, tid, visited)
@@ -278,6 +281,25 @@ fn is_linear_owner_ty_rec(e: CheckEnv, tid: i64, visited: Vec<i64>) -> i64 {
     0
 }
 
+// A Vec element is rejected when it owns a linear obligation: a linear struct,
+// an enum-like wrapper around one, or a tuple holding one. References borrow,
+// so Vec<&Token> is fine. Mirrors Rust `is_linear_vec_element`.
+fn is_linear_vec_element(e: CheckEnv, tid: i64) -> i64 {
+    if ty_tag(e.ts, tid) == CTY_TUPLE() {
+        let lid: i64 = ty_a(e.ts, tid);
+        let n: i64 = ts_arg_len(e.ts, lid);
+        let mut i: i64 = 0;
+        while i < n {
+            if is_linear_vec_element(e, ts_arg_get(e.ts, lid, i)) == 1 {
+                return 1;
+            }
+            i = i + 1;
+        }
+        return 0;
+    }
+    is_linear_owner_ty(e, tid)
+}
+
 fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
     if ast_tid == -1 {
         return CTY_UNIT();
@@ -349,8 +371,9 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
             return ts_make_applied(e.ts, base_ptid, arg_tids);
         }
         if name == String::from("Vec") {
-            let velem_tid: i64 = if arg_tids.len() > 0 { arg_tids[0] } else { -1 };
-            check_map_slot_types(e, name, -1, velem_tid, type_span(a, ast_tid));
+            if arg_tids.len() > 0 {
+                check_vec_element_type(e, arg_tids[0], type_span(a, ast_tid));
+            }
             return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
         }
         if name == String::from("Option") {
@@ -419,11 +442,8 @@ fn hashmap_key_tag_supported(tag: i64) -> bool {
         || tag == CTY_UNKNOWN()
 }
 
-// The one place every per-collection rule lives, for a single `Vec`,
-// `HashMap` or `BTreeMap` type (a Vec's element is passed as `val_tid`). A Vec
-// element that is or contains a linear owner is an UnsupportedFeature: the
-// vector copies and shifts elements bitwise. For maps, diagnostics are emitted
-// in this order: key, linear value, wide value.
+// The one place every per-map rule lives, for a single `HashMap`/`BTreeMap`
+// type. Diagnostics are emitted in this order: key, linear value, wide value.
 // A BTreeMap key must be i64 and a linear BTreeMap value uses the dedicated
 // BTreeMap codes; the runtime stores every other key and value in one 64-bit
 // slot, so a HashMap key that is not a by-value scalar (<= 64-bit integer or
@@ -431,12 +451,6 @@ fn hashmap_key_tag_supported(tag: i64) -> bool {
 // in either map are UnsupportedFeature. A tid of -1 means the type argument is
 // absent. Mirrors Rust `check_map_slot_types`.
 fn check_map_slot_types(e: CheckEnv, name: String, key_tid: i64, val_tid: i64, span: i64) {
-    if name == String::from("Vec") {
-        if val_tid >= 0 && !e.defer_map_linear && is_linear_ty(e, val_tid) == 1 {
-            emit_vec_linear_element_error(e, val_tid, span);
-        }
-        return;
-    }
     let is_btree: bool = name == String::from("BTreeMap");
     if key_tid >= 0 {
         let ktag: i64 = ty_tag(e.ts, key_tid);
@@ -471,6 +485,16 @@ fn check_map_slot_types(e: CheckEnv, name: String, key_tid: i64, val_tid: i64, s
             e, EC_UNSUPPORTED_FEATURE(), vmsg, span,
             String::from("keep a 128-bit value as two `u64` halves under separate keys or in two maps; floats cannot be map values")
         );
+    }
+}
+
+// A Vec copies and shifts elements bitwise, so an element that owns a linear
+// obligation would be duplicated. Deferred while definitions are still being
+// registered; recheck_tid_map_linearity re-runs the rule afterwards. Mirrors
+// Rust `check_vec_element_ty`.
+fn check_vec_element_type(e: CheckEnv, elem_tid: i64, span: i64) {
+    if !e.defer_map_linear && is_linear_vec_element(e, elem_tid) == 1 {
+        emit_vec_linear_element_error(e, elem_tid, span);
     }
 }
 
@@ -552,53 +576,60 @@ fn is_vec_raw_parts_copy_expr(a: AstArena, eid: i64) -> bool {
     arena_str(a, first_sid) == String::from("Vec") && arena_str(a, second_sid) == String::from("from_raw_parts_copy")
 }
 
-// Walk a resolved tid; if it is HashMap<K, V> or BTreeMap<K, V>, check that V is
-// non-linear. The only linearity check for struct fields, enum payloads and
-// aliases (resolved with defer_map_linear set); runs once every definition is
-// complete. Mirrors the Rust Pass 1b-fixup.
-fn recheck_tid_map_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
+// The linearity rules for one written `Vec`/`HashMap`/`BTreeMap` node, run once
+// every definition is complete. Non-recursive.
+fn recheck_collection_node(e: CheckEnv, tid: i64, span: i64) [io] {
+    let base: i64 = ty_a(e.ts, tid);
+    let base_tag: i64 = ty_tag(e.ts, base);
+    let lid: i64 = ty_b(e.ts, tid);
+    let nargs: i64 = ts_arg_len(e.ts, lid);
+    if base_tag == CTY_ENUM() && ty_struct_name(e.ts, base) == String::from("Vec") {
+        if nargs == 1 && is_linear_vec_element(e, ts_arg_get(e.ts, lid, 0)) == 1 {
+            emit_vec_linear_element_error(e, ts_arg_get(e.ts, lid, 0), span);
+        }
+    }
+    if base_tag == CTY_STRUCT() {
+        let bname: String = ty_struct_name(e.ts, base);
+        if (bname == String::from("BTreeMap") || bname == String::from("HashMap")) && nargs == 2 {
+            let vtid: i64 = ts_arg_get(e.ts, lid, 1);
+            if is_linear_ty(e, vtid) == 1 {
+                emit_map_linear_value_error(e, bname, vtid, span);
+            }
+        }
+    }
+}
+
+// Walks a written type in step with its resolved tid and applies the collection
+// linearity rules at every written collection. A type alias is not entered: its
+// expansion is checked once, at the alias definition, instead of at every use.
+// The only linearity check for struct fields, enum payloads and aliases
+// (resolved with defer_map_linear set). Mirrors Rust `check_written_ty`.
+fn recheck_written_ty(e: CheckEnv, a: AstArena, ast_tid: i64, tid: i64, span: i64) [io] {
+    let atag: i64 = type_tag(a, ast_tid);
     let tag: i64 = ty_tag(e.ts, tid);
-    if tag == CTY_APPLIED() {
-        let base: i64 = ty_a(e.ts, tid);
-        let base_tag: i64 = ty_tag(e.ts, base);
-        if base_tag == CTY_ENUM() && ty_struct_name(e.ts, base) == String::from("Vec") {
-            let vlid: i64 = ty_b(e.ts, tid);
-            if ts_arg_len(e.ts, vlid) == 1 && is_linear_ty(e, ts_arg_get(e.ts, vlid, 0)) == 1 {
-                emit_vec_linear_element_error(e, ts_arg_get(e.ts, vlid, 0), span);
-            }
-        }
-        if base_tag == CTY_STRUCT() {
-            let bname: String = ty_struct_name(e.ts, base);
-            if bname == String::from("BTreeMap") || bname == String::from("HashMap") {
-                let lid: i64 = ty_b(e.ts, tid);
-                let nargs: i64 = ts_arg_len(e.ts, lid);
-                if nargs == 2 {
-                    let vtid: i64 = ts_arg_get(e.ts, lid, 1);
-                    if is_linear_ty(e, vtid) == 1 {
-                        emit_map_linear_value_error(e, bname, vtid, span);
-                    }
-                }
-            }
-        }
+    if atag == TY_GENERIC() && tag == CTY_APPLIED() {
+        recheck_collection_node(e, tid, span);
+        let ast_args: i64 = type_b(a, ast_tid);
         let alid: i64 = ty_b(e.ts, tid);
-        let an: i64 = ts_arg_len(e.ts, alid);
+        let an: i64 = list_len(a, ast_args);
         let mut ai: i64 = 0;
-        while ai < an {
-            recheck_tid_map_linearity(e, ts_arg_get(e.ts, alid, ai), span);
+        while ai < an && ai < ts_arg_len(e.ts, alid) {
+            recheck_written_ty(e, a, list_get(a, ast_args, ai), ts_arg_get(e.ts, alid, ai), span);
             ai = ai + 1;
         }
     }
-    if tag == CTY_TUPLE() {
-        let lid: i64 = ty_a(e.ts, tid);
-        let tn: i64 = ts_arg_len(e.ts, lid);
+    if atag == TY_TUPLE() && tag == CTY_TUPLE() {
+        let ast_elems: i64 = type_a(a, ast_tid);
+        let tlid: i64 = ty_a(e.ts, tid);
+        let tn: i64 = list_len(a, ast_elems);
         let mut ti: i64 = 0;
-        while ti < tn {
-            recheck_tid_map_linearity(e, ts_arg_get(e.ts, lid, ti), span);
+        while ti < tn && ti < ts_arg_len(e.ts, tlid) {
+            recheck_written_ty(e, a, list_get(a, ast_elems, ti), ts_arg_get(e.ts, tlid, ti), span);
             ti = ti + 1;
         }
     }
-    if tag == CTY_REF() {
-        recheck_tid_map_linearity(e, ty_a(e.ts, tid), span);
+    if atag == TY_REF() && tag == CTY_REF() {
+        recheck_written_ty(e, a, type_a(a, ast_tid), ty_a(e.ts, tid), span);
     }
 }
 
@@ -662,10 +693,10 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
                 let mut fi: i64 = 0;
                 while fi < nf {
                     let ftid: i64 = ts_arg_get(e.ts, ftid_lid, fi);
-                    recheck_tid_map_linearity(e, ftid, sdef_span(a, id));
+                    let ast_ftid: i64 = list_get(a, fields_lid, fi * 2 + 1);
+                    recheck_written_ty(e, a, ast_ftid, ftid, sdef_span(a, id));
                     if is_linear_owner_ty(e, ftid) == 1 {
                         let field_name: String = arena_str(a, list_get(a, fields_lid, fi * 2));
-                        let ast_ftid: i64 = list_get(a, fields_lid, fi * 2 + 1);
                         let msg: String = String::from("struct fields cannot own linear values: `");
                         msg.push_str(struct_name);
                         msg.push_str(String::from("."));
@@ -682,14 +713,16 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
             if eidx != -1 {
                 let nv: i64 = e.edef_variant_count[eidx as u64];
                 let vpayload_lid: i64 = e.edef_vpayload_lids[eidx as u64];
+                let variants_lid: i64 = edef_variants_lid(a, id);
                 let mut vi: i64 = 0;
                 while vi < nv {
                     let payload_lid: i64 = ts_arg_get(e.ts, vpayload_lid, vi);
+                    let ast_payload_lid: i64 = list_get(a, variants_lid, vi * 2 + 1);
                     let pn: i64 = ts_arg_len(e.ts, payload_lid);
                     let mut pi: i64 = 0;
                     while pi < pn {
                         let ptid: i64 = ts_arg_get(e.ts, payload_lid, pi);
-                        recheck_tid_map_linearity(e, ptid, edef_span(a, id));
+                        recheck_written_ty(e, a, list_get(a, ast_payload_lid, pi), ptid, edef_span(a, id));
                         pi = pi + 1;
                     }
                     vi = vi + 1;
@@ -699,7 +732,7 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
             let a: AstArena = m.arena;
             let alias_tid: i64 = env_lookup_alias(e, arena_str(a, alias_name_sid(a, id)));
             if alias_tid != -1 {
-                recheck_tid_map_linearity(e, alias_tid, alias_span(a, id));
+                recheck_written_ty(e, a, alias_type_tid(a, id), alias_tid, alias_span(a, id));
             }
         }
         i = i + 1;
@@ -2918,8 +2951,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             let name: String = arena_str(a, name_sid);
             if name == String::from("drop") && env_lookup_fn(e, name) == -1 {
                 if n_args != 1 {
+                    let amsg: String = String::from("function `drop` expects 1 argument but got ");
+                    amsg.push_str(i64_to_string(n_args));
                     env_emit_error_code_hint(
-                        e, EC_TYPE_MISMATCH(), String::from("function `drop` expects 1 argument"), expr_span(a, eid),
+                        e, EC_TYPE_MISMATCH(), amsg, expr_span(a, eid),
                         String::from("expected signature: (linear_value)")
                     );
                     return CTY_UNIT();

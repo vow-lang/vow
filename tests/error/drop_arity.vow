@@ -1,5 +1,6 @@
 // TEST: error-code TypeMismatch
 // TEST: error-count 1
+// TEST: stderr "function `drop` expects 1 argument but got 2"
 module DropArity
 
 linear struct Handle {

@@ -1,0 +1,20 @@
+// TEST: stdout "42 7\n"
+// A user-defined function named `drop` shadows the intrinsic in the checker and
+// in both lowerers, including when it is declared after its first use.
+module DropUserDefined
+
+fn main() -> i32 [io] {
+    print_i64(drop(41));
+    print_str(" ");
+    print_i64(later_drop(3));
+    print_str("\n");
+    0
+}
+
+fn drop(n: i64) -> i64 {
+    n + 1
+}
+
+fn later_drop(n: i64) -> i64 {
+    drop(n) + 3
+}

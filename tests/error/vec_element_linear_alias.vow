@@ -1,0 +1,31 @@
+// TEST: error-code UnsupportedFeature
+// TEST: error-count 2
+// TEST: stderr "Vec element type must be non-linear"
+// A type alias is reported once, where its collection type is written, not at
+// every use of the alias.
+module VecElementLinearAlias
+
+linear struct Token {
+    id: i64,
+}
+
+type Tokens = Vec<Token>;
+type TokenMap = HashMap<i64, Token>;
+
+struct Holder {
+    items: Tokens,
+}
+
+fn first(a: Tokens, b: Tokens) -> u64 {
+    a.len() + b.len()
+}
+
+fn lookup(m: TokenMap, n: TokenMap) -> u64 {
+    m.len() + n.len()
+}
+
+fn main() -> i32 {
+    let t: Tokens = Vec::new();
+    let u: Option<Tokens> = Option::None;
+    0
+}
