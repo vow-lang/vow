@@ -1,0 +1,12 @@
+// TEST: error-code BTreeMapKeyTypeMustBeI64
+// TEST: error-count 1
+// TEST: stderr "BTreeMap key type must be i64; found 'String'"
+module BTreeMapKeyStringReportedOnce
+
+fn main() -> i32 [panic] {
+    let m: BTreeMap<String, i64> = BTreeMap::new();
+    m.insert(String::from("a"), 1);
+    m.insert(String::from("b"), 2);
+    let present: bool = m.contains(String::from("a"));
+    if present && m.len() == 2 { 0 } else { 1 }
+}

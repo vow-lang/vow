@@ -2606,6 +2606,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
             project_vec_index_metadata(ctx, iter_id, elem_id);
+            record_collection_foreach_element(ctx, iter_id, elem_id);
 
             // Save scope depth before pushing the for-each binding scope.
             // Loop-carried phis track outer mutation variables whose bindings
@@ -3654,16 +3655,21 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             args,
         } => {
             let recv_id = lower_expr(ctx, receiver);
-            let recv_struct = ctx.inst_struct_type.get(&recv_id).cloned().or_else(|| {
-                if ctx
-                    .string_exprs
-                    .contains(&(receiver.as_ref() as *const Expr as usize))
-                {
-                    Some("String".to_string())
-                } else {
-                    None
-                }
-            });
+            let recv_struct = ctx
+                .inst_struct_type
+                .get(&recv_id)
+                .cloned()
+                .or_else(|| {
+                    if ctx
+                        .string_exprs
+                        .contains(&(receiver.as_ref() as *const Expr as usize))
+                    {
+                        Some("String".to_string())
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| declared_map(ctx, recv_id).map(|map| map.tag.to_string()));
             let recv = recv_struct.as_deref();
             // Twenty builtin methods lower to a single extern call with a fixed result
             // type; `builtin_method_spec` owns those rows. Consulting the table before
@@ -3716,6 +3722,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 );
                 if let Some(tag) = result_tag {
                     ctx.inst_struct_type.insert(result, tag.to_string());
+                    if tag == "Option" {
+                        record_map_value_option_ty(ctx, recv_id, result);
+                    }
                 }
                 return result;
             }
@@ -3785,6 +3794,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     );
                     ctx.inst_struct_type.insert(result, "Option".to_string());
+                    record_map_value_option_ty(ctx, recv_id, result);
                     result
                 }
                 (Some("HashMap"), "insert") => {
@@ -4339,18 +4349,84 @@ fn known_assignment_ast_type(ctx: &LowerCtx, lhs: &Expr) -> Option<AstType> {
     .flatten()
 }
 
+/// A map type declared for an instruction, resolved through type aliases: its
+/// tag and its key and value AST types.
+struct DeclaredMap<'a> {
+    tag: &'a str,
+    key: Option<&'a AstType>,
+    value: Option<&'a AstType>,
+}
+
+/// The one accessor for map-typed declarations. Method dispatch keys on the map tag, so
+/// an instruction whose only evidence of being a map is its declared type, such as a
+/// `Vec<HashMap<..>>` element, would otherwise fall through to the catch-all arm and the
+/// call would be silently dropped.
+fn declared_map(ctx: &LowerCtx, inst: InstId) -> Option<DeclaredMap<'_>> {
+    let ast_ty = ctx.inst_declared_ast_types.get(&inst)?;
+    match resolve_type_alias(ast_ty, &ctx.type_aliases) {
+        AstType::Generic { name, args, .. } if name == "HashMap" || name == "BTreeMap" => {
+            Some(DeclaredMap {
+                tag: name,
+                key: args.first(),
+                value: args.get(1),
+            })
+        }
+        _ => None,
+    }
+}
+
 fn known_map_argument_ast_types(
     ctx: &LowerCtx,
     recv_id: InstId,
 ) -> (Option<AstType>, Option<AstType>) {
-    let Some(ast_ty) = ctx.inst_declared_ast_types.get(&recv_id) else {
-        return (None, None);
+    declared_map(ctx, recv_id).map_or((None, None), |map| (map.key.cloned(), map.value.cloned()))
+}
+
+/// Record a `for` binding's declared type when the iterated `Vec`'s element is itself a
+/// collection (`Vec`, `HashMap` or `BTreeMap`), as an indexed element already does, so
+/// the binding dispatches map methods and indexes into an inner `Vec<Map>` correctly.
+fn record_collection_foreach_element(ctx: &mut LowerCtx, iter_id: InstId, elem_id: InstId) {
+    let Some(iter_ty) = ctx.inst_declared_ast_types.get(&iter_id) else {
+        return;
     };
-    match resolve_type_alias(ast_ty, &ctx.type_aliases) {
-        AstType::Generic { name, args, .. } if name == "HashMap" || name == "BTreeMap" => {
-            (args.first().cloned(), args.get(1).cloned())
-        }
-        _ => (None, None),
+    let AstType::Generic { name, args, .. } = resolve_type_alias(iter_ty, &ctx.type_aliases) else {
+        return;
+    };
+    if name != "Vec" {
+        return;
+    }
+    if let Some(elem_ty) = args
+        .first()
+        .filter(|ty| {
+            matches!(
+                resolve_type_alias(ty, &ctx.type_aliases),
+                AstType::Generic { name, .. } if matches!(name.as_str(), "Vec" | "HashMap" | "BTreeMap")
+            )
+        })
+        .cloned()
+    {
+        ctx.inst_declared_ast_types.insert(elem_id, elem_ty);
+    }
+}
+
+/// A map stores each value in one 64-bit slot, so the `Option<V>` that `get` and
+/// `BTreeMap::insert` return carries the value at full width. For a narrow integer
+/// `V` the payload must be typed at `V`'s width, or an unwrapped value mixes an `i64`
+/// with `V`-typed operands and fails Cranelift verification.
+fn record_map_value_option_ty(ctx: &mut LowerCtx, map_id: InstId, option_id: InstId) {
+    let Some(DeclaredMap {
+        value: Some(value_ast_ty),
+        ..
+    }) = declared_map(ctx, map_id)
+    else {
+        return;
+    };
+    let value_ty = lower_ty_with_linear(value_ast_ty, &ctx.linear_owner_names, &ctx.type_aliases);
+    if matches!(
+        narrow_int_width(value_ty),
+        Some(IntegerWidth::W8 | IntegerWidth::W16 | IntegerWidth::W32)
+    ) {
+        ctx.inst_option_elem_ty.insert(option_id, value_ty);
     }
 }
 
@@ -4554,16 +4630,10 @@ fn lower_consumed_expr_with_expected_ast_type(
     expr: &Expr,
     expected: Option<&AstType>,
 ) -> InstId {
-    let wide_ty = expected
-        .map(|ast_ty| {
-            record_wide_expected_ast_context(ctx, expr, ast_ty);
-            lower_ty_with_linear(ast_ty, &ctx.linear_owner_names, &ctx.type_aliases)
-        })
-        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128));
-    let original = lower_consumed_expr(ctx, expr);
-    wide_ty
-        .map(|ty| lower_narrow_literal(ctx, expr, original, ty))
-        .unwrap_or(original)
+    if let Some(ast_ty) = expected {
+        record_wide_expected_ast_context(ctx, expr, ast_ty);
+    }
+    lower_consumed_expr(ctx, expr)
 }
 
 /// Lower a `from_raw_parts_copy` length argument in its `u64` context so an
@@ -6493,6 +6563,103 @@ fn unsigned_max() -> u128 {
 
     fn insts_of(func: &Function) -> Vec<&Inst> {
         func.blocks.iter().flat_map(|block| &block.insts).collect()
+    }
+
+    fn lowered_probe(source: &str) -> Function {
+        lower_source_to_module(source, "map_probe.vow")
+            .functions
+            .into_iter()
+            .find(|func| func.name == "probe")
+            .expect("probe function")
+    }
+
+    fn payload_ty(func: &Function) -> Ty {
+        insts_of(func)
+            .into_iter()
+            .find(|inst| inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1))
+            .expect("payload FieldGet")
+            .ty
+    }
+
+    fn extern_calls_of(func: &Function) -> Vec<String> {
+        insts_of(func)
+            .into_iter()
+            .filter_map(|inst| match &inst.data {
+                InstData::CallExtern(symbol) => Some(symbol.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // Payload typing only; the runtime behaviour of each receiver shape is pinned
+    // by tests/run/map_receiver_shapes.vow and tests/run/map_narrow_values.vow.
+    #[test]
+    fn map_get_unwrap_types_the_payload_at_the_value_width() {
+        for (map, value, value_ty) in [
+            ("HashMap<i64, u8>", "u8", Ty::U8),
+            ("HashMap<i64, i32>", "i32", Ty::I32),
+            ("BTreeMap<i64, i16>", "i16", Ty::I16),
+            ("BTreeMap<i64, u32>", "u32", Ty::U32),
+            ("HashMap<i64, i64>", "i64", Ty::I64),
+        ] {
+            let func = lowered_probe(&format!(
+                "module MapNarrow\nfn probe(m: {map}) -> {value} [panic] {{ m.get(1).unwrap() }}\n"
+            ));
+            assert_eq!(payload_ty(&func), value_ty, "{map}");
+        }
+    }
+
+    // Twin of compiler/tests/test_lower_map_receiver_dispatch.vow: a map reached
+    // through a collection element, a field, a `let`, or a `for` binding must
+    // dispatch to the map runtime rather than fall through the catch-all arm.
+    #[test]
+    fn map_methods_on_collection_element_receivers_route_to_the_map_runtime() {
+        for (params, body, symbol) in [
+            (
+                "v: Vec<HashMap<i64, u8>>",
+                "v[0].contains_key(1)",
+                "__vow_map_contains",
+            ),
+            (
+                "v: Vec<BTreeMap<i64, u8>>",
+                "v[0].contains(1)",
+                "__vow_btreemap_contains",
+            ),
+            (
+                "v: Vec<Vec<HashMap<i64, u8>>>",
+                "v[0][0].contains_key(1)",
+                "__vow_map_contains",
+            ),
+            ("o: Outer", "o.vs[0].contains_key(1)", "__vow_map_contains"),
+            (
+                "v: Vec<HashMap<i64, u8>>",
+                "(v[0]).contains_key(1)",
+                "__vow_map_contains",
+            ),
+            (
+                "v: Vec<HashMap<i64, u8>>",
+                "{ let m = v[0]; m.contains_key(1) }",
+                "__vow_map_contains",
+            ),
+            (
+                "v: Vec<HashMap<i64, u8>>",
+                "{ let mut r: bool = false; for m in v { r = m.contains_key(1); } r }",
+                "__vow_map_contains",
+            ),
+            (
+                "vv: Vec<Vec<HashMap<i64, u8>>>",
+                "{ let mut r: bool = false; for inner in vv { r = inner[0].contains_key(1); } r }",
+                "__vow_map_contains",
+            ),
+        ] {
+            let func = lowered_probe(&format!(
+                "module MapElem\nstruct Outer {{ vs: Vec<HashMap<i64, u8>> }}\nfn probe({params}) -> bool [panic] {{ {body} }}\n"
+            ));
+            assert!(
+                extern_calls_of(&func).iter().any(|callee| callee == symbol),
+                "{body} must call {symbol}"
+            );
+        }
     }
 
     #[test]

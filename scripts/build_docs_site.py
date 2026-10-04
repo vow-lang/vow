@@ -18,6 +18,7 @@ from __future__ import annotations
 import functools
 import re
 import shutil
+import unicodedata
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -105,6 +106,87 @@ def _heading_anchors(markdown_text: str) -> set[str]:
 @functools.lru_cache(maxsize=None)
 def _heading_anchors_for(target_path: Path) -> frozenset[str]:
     return frozenset(_heading_anchors(target_path.read_text()))
+
+
+_HTML_TAG = re.compile(r"<[^>]+>")
+_CODE_SPAN = re.compile(r"(`+)(.+?)\1")
+_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+
+
+def _site_slug(heading: str) -> str:
+    """Reproduce the heading id the published site generates for `heading`.
+
+    The site renders with Python-Markdown's `toc` extension, whose ids differ
+    from GitHub's: raw HTML in a heading such as `<T>` in `Vec<T> Methods` is
+    dropped before slugifying (`vec-methods`, where GitHub keeps the letters and
+    gives `vect-methods`), and runs of whitespace and hyphens collapse into one
+    hyphen. In-page and sibling links resolve on the site, so they are checked
+    against these ids.
+    """
+    parts: list[str] = []
+    last = 0
+    for span in _CODE_SPAN.finditer(heading):
+        parts.append(_HTML_TAG.sub("", heading[last : span.start()]))
+        parts.append(span.group(2).strip())
+        last = span.end()
+    parts.append(_HTML_TAG.sub("", heading[last:]))
+    text = _MD_LINK.sub(r"\1", "".join(parts)).replace("*", "")
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    text = re.sub(r"[^\w\s-]", "", text).strip().lower()
+    return re.sub(r"[-\s]+", "-", text)
+
+
+def _site_heading_anchors(markdown_text: str) -> set[str]:
+    """The set of heading ids the published site gives `markdown_text`.
+
+    Duplicate ids get Python-Markdown's `_1`, `_2`, ... suffixes.
+    """
+    anchors: set[str] = set()
+    in_fence = False
+    for line in markdown_text.splitlines():
+        if _FENCE.match(line):
+            in_fence = not in_fence
+            continue
+        match = None if in_fence else _ATX_HEADING.match(line)
+        if not match:
+            continue
+        slug = _site_slug(_CLOSING_HASHES.sub("", match.group(1)).strip())
+        while slug in anchors or not slug:
+            tail = re.match(r"^(.*)_([0-9]+)$", slug)
+            slug = f"{tail.group(1)}_{int(tail.group(2)) + 1}" if tail else f"{slug}_1"
+        anchors.add(slug)
+    return anchors
+
+
+_SITE_LINK = re.compile(r"\]\(([A-Za-z0-9_./-]*\.md)?#([^)\s]*)(\s+\"[^\"]*\")?\)")
+
+
+def _validate_site_anchors(pages: dict[str, str]) -> None:
+    """Fail loudly when an in-page or sibling `#fragment` link has no heading.
+
+    `pages` maps each published page name to its Markdown. A link such as
+    `](grammar.md#hashmap-methods)` or `](#vec-methods)` resolves inside the
+    built site, where `zensical build --strict` rejects a fragment that matches
+    no heading id; checking here reports the page, link, and valid ids before
+    the site build runs. `../` links are checked separately against their
+    GitHub targets, and links inside code are ignored.
+    """
+    anchors = {name: _site_heading_anchors(text) for name, text in pages.items()}
+    for name, text in pages.items():
+        protected = _protected_ranges(text)
+        for match in _SITE_LINK.finditer(text):
+            if _is_protected(match.start(), protected):
+                continue
+            target = match.group(1) or name
+            fragment = match.group(2)
+            if target not in anchors or not fragment:
+                continue
+            if fragment not in anchors[target]:
+                raise SystemExit(
+                    f"{name}: link '{target if match.group(1) else ''}#{fragment}' has "
+                    f"no heading id '{fragment}' on the published site page "
+                    f"{target}. Valid ids: {sorted(anchors[target])}"
+                )
 
 
 # A fence line is a run of 3+ identical backticks or tildes, optionally
@@ -328,22 +410,26 @@ def main() -> None:
     _reset(SITE_DOCS / "stdlib.md")
 
     copied = 0
+    pages: dict[str, str] = {}
 
     for name in REFERENCE_PAGES:
         src = SPEC / name
         if not src.is_file():
             raise SystemExit(f"missing canonical page: {src}")
-        (REFERENCE / name).write_text(_retarget_escaping_links(src.read_text(), name))
+        pages[name] = _retarget_escaping_links(src.read_text(), name)
         copied += 1
 
     # Standard library reference is a single comprehensive page.
     stdlib_src = SPEC / "stdlib.md"
     if not stdlib_src.is_file():
         raise SystemExit(f"missing canonical page: {stdlib_src}")
-    (SITE_DOCS / "stdlib.md").write_text(
-        _retarget_escaping_links(stdlib_src.read_text(), "stdlib.md")
-    )
+    pages["stdlib.md"] = _retarget_escaping_links(stdlib_src.read_text(), "stdlib.md")
     copied += 1
+
+    _validate_site_anchors(pages)
+    for name in REFERENCE_PAGES:
+        (REFERENCE / name).write_text(pages[name])
+    (SITE_DOCS / "stdlib.md").write_text(pages["stdlib.md"])
 
     # JSON schemas referenced by cli.md, served as static assets.
     schemas_src = SPEC / "schemas"

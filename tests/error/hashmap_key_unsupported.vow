@@ -1,0 +1,33 @@
+// TEST: error-code UnsupportedFeature
+// TEST: error-count 5
+// TEST: stderr "HashMap key type"
+module HashMapKeyUnsupported
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn key_f64() {
+    let m: HashMap<f64, i64> = HashMap::new();
+}
+
+fn key_i128() {
+    let m: HashMap<i128, i64> = HashMap::new();
+}
+
+fn key_nested_in_vec() {
+    let v: Vec<HashMap<String, bool>> = Vec::new();
+}
+
+fn key_tuple() {
+    let m: HashMap<(i64, i64), i64> = HashMap::new();
+}
+
+fn key_struct_param(m: HashMap<Point, i64>) -> u64 {
+    m.len()
+}
+
+fn main() -> i32 {
+    0
+}

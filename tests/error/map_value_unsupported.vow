@@ -1,0 +1,24 @@
+// TEST: error-code UnsupportedFeature
+// TEST: error-count 4
+// TEST: stderr "value type"
+module MapValueUnsupported
+
+fn hashmap_f64() {
+    let m: HashMap<i64, f64> = HashMap::new();
+}
+
+fn hashmap_i128() {
+    let m: HashMap<i64, i128> = HashMap::new();
+}
+
+fn btreemap_f64() {
+    let m: BTreeMap<i64, f64> = BTreeMap::new();
+}
+
+fn btreemap_u128() {
+    let m: BTreeMap<i64, u128> = BTreeMap::new();
+}
+
+fn main() -> i32 {
+    0
+}

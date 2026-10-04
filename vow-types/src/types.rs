@@ -103,8 +103,30 @@ impl Ty {
     }
 }
 
-impl fmt::Display for Ty {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Ty {
+    /// The user-facing spelling of a type for diagnostics. `Display` prints
+    /// `Ty::Str` as `str`; the language spells it `String`. The self-hosted
+    /// `ty_full_display_name` produces the same text.
+    pub fn user_name(&self) -> String {
+        struct User<'a>(&'a Ty);
+        impl fmt::Display for User<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.write_spelled(f, true)
+            }
+        }
+        User(self).to_string()
+    }
+
+    fn write_spelled(&self, f: &mut fmt::Formatter<'_>, user_spelling: bool) -> fmt::Result {
+        let write_list = |f: &mut fmt::Formatter<'_>, tys: &[Ty]| -> fmt::Result {
+            for (i, ty) in tys.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                ty.write_spelled(f, user_spelling)?;
+            }
+            Ok(())
+        };
         match self {
             Ty::LitInt => write!(f, "integer literal"),
             Ty::I8 => write!(f, "i8"),
@@ -120,27 +142,21 @@ impl fmt::Display for Ty {
             Ty::F32 => write!(f, "f32"),
             Ty::F64 => write!(f, "f64"),
             Ty::Bool => write!(f, "bool"),
-            Ty::Str => write!(f, "str"),
+            Ty::Str => write!(f, "{}", if user_spelling { "String" } else { "str" }),
             Ty::Struct(s) | Ty::Enum(s) => write!(f, "{s}"),
             Ty::Applied(base, args) => {
-                write!(f, "{base}<")?;
-                for (i, arg) in args.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{arg}")?;
-                }
+                base.write_spelled(f, user_spelling)?;
+                write!(f, "<")?;
+                write_list(f, args)?;
                 write!(f, ">")
             }
-            Ty::Reference(inner) => write!(f, "&{inner}"),
+            Ty::Reference(inner) => {
+                write!(f, "&")?;
+                inner.write_spelled(f, user_spelling)
+            }
             Ty::Tuple(elems) => {
                 write!(f, "(")?;
-                for (i, elem) in elems.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{elem}")?;
-                }
+                write_list(f, elems)?;
                 write!(f, ")")
             }
             Ty::Unit => write!(f, "()"),
@@ -149,9 +165,33 @@ impl fmt::Display for Ty {
     }
 }
 
+impl fmt::Display for Ty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.write_spelled(f, false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_name_spells_str_as_string_at_every_depth() {
+        let map = Ty::Applied(
+            Box::new(Ty::Struct("HashMap".to_string())),
+            vec![
+                Ty::Tuple(vec![Ty::I64, Ty::Str]),
+                Ty::Reference(Box::new(Ty::Applied(
+                    Box::new(Ty::Struct("Vec".to_string())),
+                    vec![Ty::Str],
+                ))),
+            ],
+        );
+        assert_eq!(map.user_name(), "HashMap<(i64, String), &Vec<String>>");
+        assert_eq!(map.to_string(), "HashMap<(i64, str), &Vec<str>>");
+        assert_eq!(Ty::Never.user_name(), "!");
+        assert_eq!(Ty::Unit.user_name(), "()");
+    }
 
     #[test]
     fn from_primitive_name_correct_variants() {

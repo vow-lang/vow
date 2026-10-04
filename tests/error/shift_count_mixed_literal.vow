@@ -1,0 +1,11 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 1
+// TEST: stderr "u64 shift count must be u32 or u64"
+module ShiftCountMixedLiteral
+
+fn main() -> i32 {
+  let ux: u64 = 8u64;
+  let x: i64 = 2;
+  let r: u64 = ux << (1 + x);
+  0
+}
