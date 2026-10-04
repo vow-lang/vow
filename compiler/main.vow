@@ -6556,7 +6556,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Output:** `index has type 'i64' but must be 'u64'`\n"));
+    r.push_str(String::from("**Output:** ``index has type `i64` but must be `u64` ``\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Keep index counters `u64` (`.len()` is already `u64`), or convert at\n"));
     r.push_str(String::from("the index site with `as u64` (`v[i as u64]`). Unsuffixed integer literals\n"));
@@ -6855,9 +6855,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Output:** `unknown method 'psh' on type 'Vec<i64>'`\n"));
+    r.push_str(String::from("**Output:** ``unknown method `psh` on type `Vec` ``\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps.\n"));
+    r.push_str(String::from("**Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps. A `Vec` receiver calling `get` carries the structured hint ``use `v[i]` to read an element; `Vec` has no `get` `` in the diagnostic's `hints` array, identically in both compilers. Any other unknown method on a `String`, `Vec`, `HashMap`, `BTreeMap`, `Option` or `Result` receiver carries ``did you mean `push`?`` for the nearest builtin method within an edit distance of 3 (the earliest in the method list wins a tie; names over 128 bytes get none), and otherwise `available methods: len, push, pop, clear, truncate`, again identically in both compilers.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### UnsupportedFeature\n"));
     r.push_str(String::from("\n"));
@@ -12010,7 +12010,7 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Output:** `index has type 'i64' but must be 'u64'`\n"));
+    r.push_str(String::from("**Output:** ``index has type `i64` but must be `u64` ``\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Keep index counters `u64` (`.len()` is already `u64`), or convert at\n"));
     r.push_str(String::from("the index site with `as u64` (`v[i as u64]`). Unsuffixed integer literals\n"));
@@ -12309,9 +12309,9 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Output:** `unknown method 'psh' on type 'Vec<i64>'`\n"));
+    r.push_str(String::from("**Output:** ``unknown method `psh` on type `Vec` ``\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps.\n"));
+    r.push_str(String::from("**Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps. A `Vec` receiver calling `get` carries the structured hint ``use `v[i]` to read an element; `Vec` has no `get` `` in the diagnostic's `hints` array, identically in both compilers. Any other unknown method on a `String`, `Vec`, `HashMap`, `BTreeMap`, `Option` or `Result` receiver carries ``did you mean `push`?`` for the nearest builtin method within an edit distance of 3 (the earliest in the method list wins a tie; names over 128 bytes get none), and otherwise `available methods: len, push, pop, clear, truncate`, again identically in both compilers.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### UnsupportedFeature\n"));
     r.push_str(String::from("\n"));

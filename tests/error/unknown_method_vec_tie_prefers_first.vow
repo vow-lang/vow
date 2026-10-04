@@ -1,0 +1,11 @@
+// TEST: error-code UnknownMethod
+// TEST: error-count 1
+// TEST: build-json x.get('hints') == ['did you mean `push`?']
+module UnknownMethodVecTie
+
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    v.push(1);
+    v.pu();
+    0
+}

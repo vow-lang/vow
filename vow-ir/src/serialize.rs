@@ -49,6 +49,16 @@ pub enum DecodeError {
     /// Carries a short label identifying the invariant and, where natural,
     /// a `u32` witness (e.g. the duplicated key or the mismatched count).
     Malformed(&'static str, u32),
+    /// A LEB128 value used a continuation byte after its tenth byte.
+    LebOverlong,
+    /// The tenth LEB128 byte carried bits above bit 63.
+    LebOverflow,
+    /// A LEB128 value was not in its shortest form (e.g. `[0x80, 0x00]`).
+    LebNonCanonical,
+    /// A LEB128 count above `i64::MAX`, negative in the signed wire view.
+    NegativeCount,
+    /// A LEB128 count larger than the bytes left in the buffer.
+    CountExceedsRemaining,
 }
 
 // ---------------------------------------------------------------------------
@@ -89,9 +99,12 @@ impl<'a> Reader<'a> {
     /// Rejects values that exceed the remaining buffer (and fit in
     /// `usize`), preventing `Vec::with_capacity` DoS on crafted input.
     fn bounded_count(&self, n: u64) -> Result<usize, DecodeError> {
-        let n = usize::try_from(n).map_err(|_| DecodeError::Truncated)?;
+        if i64::try_from(n).is_err() {
+            return Err(DecodeError::NegativeCount);
+        }
+        let n = usize::try_from(n).map_err(|_| DecodeError::CountExceedsRemaining)?;
         if n > self.remaining() {
-            return Err(DecodeError::Truncated);
+            return Err(DecodeError::CountExceedsRemaining);
         }
         Ok(n)
     }
@@ -125,7 +138,7 @@ impl<'a> Reader<'a> {
             // value. See LEB128 canonicity rules (WebAssembly binary format
             // adopts the same check).
             if shift == 63 && chunk > 1 {
-                return Err(DecodeError::Truncated);
+                return Err(DecodeError::LebOverflow);
             }
             v |= chunk << shift;
             if b & 0x80 == 0 {
@@ -136,14 +149,14 @@ impl<'a> Reader<'a> {
                 // form so distinct byte streams can't decode to the same
                 // value.
                 if shift > 0 && chunk == 0 {
-                    return Err(DecodeError::Truncated);
+                    return Err(DecodeError::LebNonCanonical);
                 }
                 return Ok(v);
             }
             shift += 7;
             if shift >= 64 {
                 // 11th continuation byte: LEB too long, overflow region.
-                return Err(DecodeError::Truncated);
+                return Err(DecodeError::LebOverlong);
             }
         }
     }
@@ -1078,13 +1091,51 @@ mod tests {
     fn leb_overflow_10th_byte_rejected() {
         // 10-byte LEB where the 10th byte's high bits would shift past u64.
         // `[0x80 × 9, 0x02]` previously decoded silently to 0 (losing bit
-        // 64). Must now return Truncated.
+        // 64). Must now return LebOverflow.
         let mut b = encode_module(&empty_module());
         // Replace the function-count byte (the last zero byte of the empty
         // module) with a 10-byte overflow-bearing LEB.
         b.pop();
         b.extend_from_slice(&[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02]);
-        assert!(matches!(decode_module(&b), Err(DecodeError::Truncated)));
+        assert_eq!(decode_module(&b), Err(DecodeError::LebOverflow));
+    }
+
+    #[test]
+    fn leb_continuation_past_tenth_byte_rejected() {
+        let mut b = encode_module(&empty_module());
+        b.pop();
+        b.extend_from_slice(&[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x81]);
+        b.extend_from_slice(&[0x00]);
+        assert_eq!(decode_module(&b), Err(DecodeError::LebOverlong));
+    }
+
+    #[test]
+    fn count_larger_than_remaining_bytes_rejected() {
+        let mut b = encode_module(&empty_module());
+        b.pop();
+        b.extend_from_slice(&[0x05, 0x00, 0x00]);
+        assert_eq!(decode_module(&b), Err(DecodeError::CountExceedsRemaining));
+    }
+
+    #[test]
+    fn negative_as_i64_counts_rejected() {
+        // `u64::MAX` and `2^63` both decode negative when read as `i64`, which
+        // is how the self-hosted reader sees them; each must be a decode error
+        // in the module name length and in a section count.
+        let leb_u64_max = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01];
+        let leb_2_pow_63 = [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01];
+        for leb in [leb_u64_max, leb_2_pow_63] {
+            let mut name_len = encode_module(&empty_module())[..8].to_vec();
+            name_len.extend_from_slice(&leb);
+            name_len.extend_from_slice(&[0, 0, 0, 0]);
+            assert_eq!(decode_module(&name_len), Err(DecodeError::NegativeCount));
+
+            let mut strings_n = encode_module(&empty_module())[..8].to_vec();
+            strings_n.extend_from_slice(&[0]);
+            strings_n.extend_from_slice(&leb);
+            strings_n.extend_from_slice(&[0, 0, 0]);
+            assert_eq!(decode_module(&strings_n), Err(DecodeError::NegativeCount));
+        }
     }
 
     #[test]
@@ -1102,7 +1153,7 @@ mod tests {
         b.truncate(12);
         // LEB128 encoding of 2^63 (massive count)
         b.extend_from_slice(&[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]);
-        assert!(matches!(decode_module(&b), Err(DecodeError::Truncated)));
+        assert_eq!(decode_module(&b), Err(DecodeError::NegativeCount));
     }
 
     #[test]
@@ -1283,13 +1334,13 @@ mod tests {
         // `[0x80, 0x00]` decodes to 0 under a naive LEB reader but is
         // non-minimal — the encoding could have been `[0x00]`. Canonical
         // LEB128 requires the shortest form, so distinct byte streams
-        // cannot decode to the same value. Must return Truncated.
+        // cannot decode to the same value. Must return LebNonCanonical.
         let mut b = encode_module(&empty_module());
         // Replace the trailing function-count byte (0) with a 2-byte
         // overlong encoding of 0.
         b.pop();
         b.extend_from_slice(&[0x80, 0x00]);
-        assert!(matches!(decode_module(&b), Err(DecodeError::Truncated)));
+        assert_eq!(decode_module(&b), Err(DecodeError::LebNonCanonical));
     }
 
     fn issue197_fixture_bytes() -> Vec<u8> {

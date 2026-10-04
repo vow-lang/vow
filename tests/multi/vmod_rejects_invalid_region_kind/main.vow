@@ -1,0 +1,24 @@
+// TEST: exit 1
+// TEST: stdout "{"error":"ModuleDecodeError","kind":"InvalidKind","label":"RegionId","value":4,"offset":0}\n"
+// A region kind past Rodata is InvalidKind labelled RegionId.
+module Main
+
+use ir
+use module_io
+
+fn main() -> i32 [io] {
+    let bytes: Vec<i64> = Vec::new();
+    bytes.push(4);
+    bytes.push(0);
+    bytes.push(0);
+    bytes.push(0);
+    bytes.push(0);
+    let r: ModuleReader = reader_new(bytes);
+    let _rgn: i64 = region_decode(r);
+    if r.err_kind != DEC_OK() {
+        print_str(decode_error_json(r.err_kind, r.err_label, r.err_value, r.err_offset));
+        print_str(String::from("\n"));
+        return 1;
+    }
+    0
+}

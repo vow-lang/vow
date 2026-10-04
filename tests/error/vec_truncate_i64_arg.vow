@@ -1,6 +1,6 @@
 // TEST: error-code TypeMismatch
 // TEST: error-count 1
-// TEST: stderr "u64"
+// TEST: stderr "argument has type `i64` but `truncate` expects `u64`"
 module VecTruncateI64Arg
 
 fn main() -> i32 {

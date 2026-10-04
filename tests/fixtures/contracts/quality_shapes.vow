@@ -4,8 +4,8 @@
 // has no end-to-end coverage at all and the two classifiers can drift.
 //
 // Every clause here must classify identically in both compilers. The cast forms
-// are the ones #1104's `len()` cast bridge produced, and they escaped the
-// classifier until the cast fold landed (#1114).
+// are the ones the `len() as u64` casts of #1104's migration produced, and they
+// escaped the classifier until the cast fold landed (#1114).
 module QualityShapes
 
 // weak: an ensures that only bounds result by a literal.

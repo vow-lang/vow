@@ -174,6 +174,7 @@ fn pattern_aggregate_info(ty: &Ty, is_linear: bool) -> Option<PatternAggregateIn
 
 const MAX_HINT_CANDIDATES: usize = 256;
 const MAX_HINT_IDENTIFIER_BYTES: usize = 128;
+const VEC_GET_HINT: &str = "use `v[i]` to read an element; `Vec` has no `get`";
 
 fn bounded_edit_distance(a: &str, b: &str, max_distance: usize) -> Option<usize> {
     let a_len = a.len();
@@ -2521,7 +2522,9 @@ impl<'e> Checker<'e> {
                             .map(|s| s.to_string())
                             .collect();
                         let mut hints = Vec::new();
-                        if let Some(s) = suggest_similar(method, &candidates, 3) {
+                        if is_vec && method == "get" {
+                            hints.push(VEC_GET_HINT.to_string());
+                        } else if let Some(s) = suggest_similar(method, &candidates, 3) {
                             hints.push(format!("did you mean `{s}`?"));
                         } else if !candidates.is_empty() {
                             hints.push(format!("available methods: {}", candidates.join(", ")));
@@ -4725,7 +4728,7 @@ mod tests {
 
     #[test]
     fn unsigned_ge_zero_cast_rejected() {
-        // The `#1104` migration bridge shape: `x >= 0 as u64`.
+        // The shape `#1104`'s migration casts produced: `x >= 0 as u64`.
         assert_tautological(
             &cmp(BinOp::Ge, cast_to(1, "u64"), cast_to(0, "u64")),
             "true",
@@ -4795,7 +4798,7 @@ mod tests {
         // `(x as i64) >= 0` with `x: u32`. The cast moves the compared type to a
         // signed one, so the plain unsigned rule cannot see it — but a u32
         // zero-extends into i64, so the clause is still always true. This is the
-        // shape #1104's `v.len() as u64` cast bridge invites, and it bypassed the
+        // shape #1104's `v.len() as u64` migration casts produced, and it bypassed the
         // #1112 guarantee until this rule existed.
         assert_tautological_widened(
             &cmp(BinOp::Ge, cast_of(cast_to(1, "u32"), "i64"), lit_int(0)),
@@ -5830,10 +5833,9 @@ mod tests {
         });
         checker.check_expr(&expr);
         assert!(
-            checker
+            !checker
                 .pattern_aggregates
-                .get(&(&expr as *const Expr as usize))
-                .is_none()
+                .contains_key(&(&expr as *const Expr as usize))
         );
     }
 

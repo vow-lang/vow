@@ -97,7 +97,7 @@ cargo build --all          # build all crates
 cargo test --all           # run all tests
 cargo test -p vow-syntax   # run tests for a single crate
 cargo test lexer::tests::lex_keywords  # run a single test by path
-cargo clippy --all -- -D warnings      # lint (CI enforces zero warnings)
+cargo clippy --all --all-targets -- -D warnings  # lint incl. tests (CI enforces zero warnings)
 cargo fmt --all            # format all code
 ```
 

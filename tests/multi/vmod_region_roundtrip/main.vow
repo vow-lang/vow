@@ -237,7 +237,11 @@ fn main() -> i32 [read, io, panic] {
         fail = fail + 1;
     }
 
-    let decoded: IrModule = module_decode(hex_decode_bytes(expected_hex));
+    let res: ModuleDecode = module_decode(hex_decode_bytes(expected_hex));
+    if module_decode_failed(res) {
+        fail = fail + 1;
+    }
+    let decoded: IrModule = res.m;
     fail = fail + check_module_shape(decoded);
 
     let roundtrip_hex: String = hex_encode_bytes(module_encode(decoded));

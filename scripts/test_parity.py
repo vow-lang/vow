@@ -565,6 +565,107 @@ class CompareErrorSpanParityTest(unittest.TestCase):
         )
 
 
+class CompareErrorHintParityTest(unittest.TestCase):
+    HINT = "use `v[i]` to read an element; `Vec` has no `get`"
+
+    @staticmethod
+    def failed(*diagnostics):
+        built = []
+        for code, hints in diagnostics:
+            diagnostic = {"error_code": code, "span": {"offset": 5, "length": 8}}
+            if hints:
+                diagnostic["hints"] = list(hints)
+            built.append(diagnostic)
+        return document("CompileFailed", diagnostics=built)
+
+    def compare(self, rust, self_hosted, fixture_name="x.vow"):
+        return parity.compare_error(rust, self_hosted, 1, 1, fixture_name)
+
+    def test_identical_hints_pass(self):
+        both = self.failed(("UnknownMethod", [self.HINT]))
+
+        self.assertEqual([], self.compare(both, both))
+
+    def test_a_hint_missing_from_the_self_hosted_diagnostic_fails(self):
+        errors = self.compare(
+            self.failed(("UnknownMethod", [self.HINT])),
+            self.failed(("UnknownMethod", [])),
+        )
+
+        self.assertEqual(1, len(errors))
+        self.assertTrue(errors[0].startswith("hints: "))
+
+    def test_a_different_hint_text_fails(self):
+        errors = self.compare(
+            self.failed(("UnknownMethod", ["did you mean `push`?"])),
+            self.failed(("UnknownMethod", ["available methods: len, push"])),
+        )
+
+        self.assertEqual(1, len(errors))
+        self.assertTrue(errors[0].startswith("hints: "))
+
+    def test_hints_are_compared_for_inputs_without_a_fixture_name(self):
+        errors = parity.compare_error(
+            self.failed(("UnknownMethod", [self.HINT])),
+            self.failed(("UnknownMethod", [])),
+            1,
+            1,
+            None,
+        )
+
+        self.assertEqual(1, len(errors))
+
+    def test_hints_are_not_compared_when_the_error_codes_already_differ(self):
+        errors = self.compare(
+            self.failed(("UnknownMethod", [self.HINT])),
+            self.failed(("TypeMismatch", [])),
+        )
+
+        self.assertEqual(1, len(errors))
+        self.assertTrue(errors[0].startswith("error codes: "))
+
+    def test_uncompared_codes_do_not_fail_on_hint_differences(self):
+        for code in parity.HINT_UNCOMPARED_CODES:
+            with self.subTest(code=code):
+                self.assertEqual(
+                    [],
+                    self.compare(
+                        self.failed((code, ["rust only"])), self.failed((code, []))
+                    ),
+                )
+
+    def test_an_uncompared_code_does_not_mask_a_compared_one(self):
+        rust = self.failed(
+            ("TypeMismatch", ["rust only"]), ("UnknownMethod", [self.HINT])
+        )
+        self_hosted = self.failed(("TypeMismatch", []), ("UnknownMethod", []))
+
+        errors = self.compare(rust, self_hosted)
+
+        self.assertEqual(1, len(errors))
+        self.assertTrue(errors[0].startswith("hints: "))
+
+    def test_every_uncompared_code_states_its_reason(self):
+        self.assertTrue(parity.HINT_UNCOMPARED_CODES)
+        for code, reason in parity.HINT_UNCOMPARED_CODES.items():
+            with self.subTest(code=code):
+                self.assertGreater(len(reason), 40)
+
+    def test_unknown_method_is_a_compared_code(self):
+        self.assertNotIn("UnknownMethod", parity.HINT_UNCOMPARED_CODES)
+
+    def test_unknown_method_fixtures_cover_every_receiver_kind(self):
+        fixtures = sorted((REPO_ROOT / "tests" / "error").glob("unknown_method_*.vow"))
+        stems = " ".join(fixture.stem for fixture in fixtures)
+
+        for receiver in ("vec", "string", "hashmap", "btreemap", "option", "result"):
+            with self.subTest(receiver=receiver):
+                self.assertIn(f"unknown_method_{receiver}_", stems)
+        self.assertTrue(
+            (REPO_ROOT / "tests/error/vec_get_unknown_method.vow").is_file()
+        )
+
+
 class CompareTestTest(unittest.TestCase):
     @staticmethod
     def entry(name, **fields):

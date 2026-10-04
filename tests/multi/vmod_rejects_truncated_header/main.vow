@@ -1,0 +1,24 @@
+// TEST: exit 1
+// TEST: stdout "{"error":"ModuleDecodeError","kind":"Truncated","label":"","value":0,"offset":4}\n"
+// A buffer that ends inside the version word is Truncated at the start of that read.
+module Main
+
+use ir
+use module_io
+
+fn main() -> i32 [io] {
+    let bytes: Vec<i64> = Vec::new();
+    bytes.push(MODULE_MAGIC_0());
+    bytes.push(MODULE_MAGIC_1());
+    bytes.push(MODULE_MAGIC_2());
+    bytes.push(MODULE_MAGIC_3());
+    bytes.push(MODULE_VERSION());
+    bytes.push(0);
+    let res: ModuleDecode = module_decode(bytes);
+    if module_decode_failed(res) {
+        print_str(module_decode_error_json(res));
+        print_str(String::from("\n"));
+        return 1;
+    }
+    0
+}

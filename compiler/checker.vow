@@ -601,7 +601,10 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
             let fns_lid: i64 = ext_fns_lid(a, id);
             let nf: i64 = list_len(a, fns_lid);
             if ext_vow_lid(a, id) == -1 && nf > 0 {
-                env_emit_error_code(e, EC_MISSING_CONTRACT(), String::from("extern block requires a vow contract"), ext_span(a, id));
+                env_emit_error_code_hint(
+                    e, EC_MISSING_CONTRACT(), String::from("extern block requires a vow contract"), ext_span(a, id),
+                    String::from("add a `vow { ... }` block specifying contracts for foreign functions")
+                );
             }
             let mut fi: i64 = 0;
             while fi < nf {
@@ -638,6 +641,16 @@ fn register_alias(e: CheckEnv, m: Module, aid: i64) [io] {
     }
 }
 
+fn emit_const_type_mismatch(e: CheckEnv, name: String, tid: i64, expected: String, span: i64) {
+    let msg: String = String::from("const `");
+    msg.push_str(name);
+    msg.push_str(String::from("` has type `"));
+    msg.push_str(ty_value_display_name(e.ts, tid));
+    msg.push_str(String::from("`, expected "));
+    msg.push_str(expected);
+    env_emit_error(e, msg, span);
+}
+
 fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
     let a: AstArena = m.arena;
     let name_sid: i64 = cdef_name_sid(a, cid);
@@ -651,11 +664,11 @@ fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
     }
     if val_tag == EXPR_LIT_INT() {
         if !ty_is_integer(e.ts, resolved_tid) {
-            env_emit_error(e, String::from("const has integer value but non-integer type"), cdef_span(a, cid));
+            emit_const_type_mismatch(e, name, resolved_tid, String::from("integer type"), cdef_span(a, cid));
         }
     } else if val_tag == EXPR_LIT_BOOL() {
         if resolved_tid != CTY_BOOL() {
-            env_emit_error(e, String::from("const has bool value but non-bool type"), cdef_span(a, cid));
+            emit_const_type_mismatch(e, name, resolved_tid, String::from("bool"), cdef_span(a, cid));
         }
     } else if val_tag == EXPR_UNOP() {
         let op: i64 = expr_a(a, val_eid);
@@ -663,7 +676,7 @@ fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
             env_emit_error(e, String::from("const value must be a literal"), expr_span(a, val_eid));
         } else {
             if !ty_is_integer(e.ts, resolved_tid) {
-                env_emit_error(e, String::from("const has negated value but non-integer type"), cdef_span(a, cid));
+                emit_const_type_mismatch(e, name, resolved_tid, String::from("integer type"), cdef_span(a, cid));
             }
             let inner_eid: i64 = expr_b(a, val_eid);
             let inner_tag: i64 = expr_tag(a, inner_eid);
@@ -788,7 +801,10 @@ fn check_clause_purity(e: CheckEnv, m: Module, clause_eid: i64) [io] {
                     let msg: String = String::from("vow predicate must be pure but calls effectful function `");
                     msg.push_str(cname);
                     msg.push_str(String::from("`"));
-                    env_emit_error_code(e, EC_EFFECT_VIOLATION(), msg, expr_span(a, clause_eid));
+                    env_emit_error_code_hint(
+                        e, EC_EFFECT_VIOLATION(), msg, expr_span(a, clause_eid),
+                        String::from("vow predicates must be pure — move effectful code outside the vow block")
+                    );
                 }
             }
         }
@@ -802,7 +818,10 @@ fn check_clause_purity(e: CheckEnv, m: Module, clause_eid: i64) [io] {
     while wi < n_writes {
         let site_eid: i64 = write_sites[wi];
         let msg: String = String::from("vow predicate must be pure but this expression may write through a shared argument");
-        env_emit_error_code(e, EC_EFFECT_VIOLATION(), msg, expr_span(a, site_eid));
+        env_emit_error_code_hint(
+            e, EC_EFFECT_VIOLATION(), msg, expr_span(a, site_eid),
+            String::from("vow predicates must not write to a struct field, a Vec/map element, or call a mutating builtin method — move the write outside the vow block")
+        );
         wi = wi + 1;
     }
 }
@@ -820,16 +839,21 @@ fn check_vow_clause(e: CheckEnv, m: Module, vow_lid: i64, kind: i64, context: St
             let clause_tid: i64 = check_expr(e, m, clause_eid);
             e.contract_depth = e.contract_depth - 1;
             if clause_tid != CTY_BOOL() && !is_opaque(clause_tid) {
-                let msg: String = String::from("`");
-                if kind == CLAUSE_REQUIRES() {
-                    msg.push_str(String::from("requires"));
+                let kind_name: String = if kind == CLAUSE_REQUIRES() {
+                    String::from("requires")
                 } else if kind == CLAUSE_ENSURES() {
-                    msg.push_str(String::from("ensures"));
+                    String::from("ensures")
                 } else {
-                    msg.push_str(String::from("invariant"));
-                }
+                    String::from("invariant")
+                };
+                let msg: String = String::from("`");
+                msg.push_str(kind_name);
                 msg.push_str(String::from("` clause must be `bool`"));
-                env_emit_error_code(e, EC_CONTRACT_TYPE_MISMATCH(), msg, expr_span(a, clause_eid));
+                let hint: String = String::from(context);
+                hint.push_str(String::from(" `"));
+                hint.push_str(kind_name);
+                hint.push_str(String::from("` clauses must evaluate to `bool`"));
+                env_emit_error_code_hint(e, EC_CONTRACT_TYPE_MISMATCH(), msg, expr_span(a, clause_eid), hint);
             }
             check_clause_purity(e, m, clause_eid);
         }
@@ -1289,6 +1313,16 @@ fn wide_literal_range_message(a: AstArena, lit_eid: i64, target_tag: i64) -> Str
     msg
 }
 
+fn emit_literal_out_of_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_tag: i64) {
+    let hint: String = String::from("use a value in ");
+    hint.push_str(integer_tag_range_text(target_tag));
+    hint.push_str(String::from(" or choose an explicit narrowing intrinsic"));
+    env_emit_error_code_hint(
+        e, EC_LITERAL_OUT_OF_RANGE(),
+        wide_literal_range_message(a, lit_eid, target_tag), expr_span(a, lit_eid), hint
+    );
+}
+
 // 64- and 128-bit shifts additionally accept a count of the left operand's
 // own type (docs/spec/grammar.md "Shift count type"); narrower ones are u32-only.
 fn shift_own_type_count_allowed(width: i64) -> bool {
@@ -1388,10 +1422,7 @@ fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_ta
         return;
     }
     if integer_literal_out_of_range(a, lit_eid, target_tag) {
-        env_emit_error_code(
-            e, EC_LITERAL_OUT_OF_RANGE(),
-            wide_literal_range_message(a, lit_eid, target_tag), expr_span(a, lit_eid)
-        );
+        emit_literal_out_of_range(e, a, lit_eid, target_tag);
     }
 }
 
@@ -1520,13 +1551,68 @@ fn ts_arg_or_unknown(ts: TyStore, args_lid: i64, index: i64) -> i64 {
     ts_arg_get(ts, args_lid, index)
 }
 
+fn builtin_method_candidates(tyname: String) -> Vec<String> {
+    let names: Vec<String> = Vec::new();
+    if tyname == String::from("String") {
+        names.push(String::from("len"));
+        names.push(String::from("push_str"));
+        names.push(String::from("eq"));
+        names.push(String::from("contains"));
+        names.push(String::from("byte_at"));
+        names.push(String::from("push_byte"));
+        names.push(String::from("substring"));
+        names.push(String::from("parse_i64"));
+        names.push(String::from("parse_u64"));
+        names.push(String::from("clear"));
+    } else if tyname == String::from("Vec") {
+        names.push(String::from("len"));
+        names.push(String::from("push"));
+        names.push(String::from("pop"));
+        names.push(String::from("clear"));
+        names.push(String::from("truncate"));
+    } else if tyname == String::from("HashMap") {
+        names.push(String::from("len"));
+        names.push(String::from("insert"));
+        names.push(String::from("get"));
+        names.push(String::from("contains_key"));
+        names.push(String::from("remove"));
+    } else if tyname == String::from("BTreeMap") {
+        names.push(String::from("len"));
+        names.push(String::from("insert"));
+        names.push(String::from("get"));
+        names.push(String::from("contains"));
+    } else if tyname == String::from("Option") {
+        names.push(String::from("unwrap"));
+    } else if tyname == String::from("Result") {
+        names.push(String::from("unwrap"));
+    }
+    names
+}
+
+fn emit_unknown_method(e: CheckEnv, a: AstArena, eid: i64, mname: String, tyname: String) {
+    let msg: String = String::from("unknown method `");
+    msg.push_str(mname);
+    msg.push_str(String::from("` on type `"));
+    msg.push_str(tyname);
+    msg.push_str(String::from("`"));
+    let mut hint: String = diag_candidate_hint(mname, builtin_method_candidates(tyname), String::from("methods"));
+    if tyname == String::from("Vec") && mname == String::from("get") {
+        hint = String::from("use `v[i]` to read an element; `Vec` has no `get`");
+    }
+    if hint.len() > 0 {
+        env_emit_error_code_hint(e, EC_UNKNOWN_METHOD(), msg, expr_span(a, eid), hint);
+    } else {
+        env_emit_error_code(e, EC_UNKNOWN_METHOD(), msg, expr_span(a, eid));
+    }
+}
+
 // Value-shaped builtin-method argument: the actual type must coerce to
 // `target_tid`, mirroring the Rust checker's per-argument expected `Ty` from
 // `method_argument_expectations`. Argument types come from the caller's
 // pre-check loop; re-checking here would double-emit diagnostics and
 // double-consume linear values.
 fn check_method_argument_exact(
-    e: CheckEnv, a: AstArena, args_lid: i64, arg_tids: Vec<i64>, index: i64, target_tid: i64
+    e: CheckEnv, a: AstArena, args_lid: i64, arg_tids: Vec<i64>, index: i64, target_tid: i64, mname: String
 ) {
     if index < 0 || index >= list_len(a, args_lid) { return; }
     let arg_eid: i64 = list_get(a, args_lid, index);
@@ -1536,11 +1622,13 @@ fn check_method_argument_exact(
     let arg_tid: i64 = arg_tids[index as u64];
     if is_opaque(arg_tid) { return; }
     if !is_coercible(e.ts, arg_tid, target_tid) {
-        let msg: String = String::from("argument has type '");
-        msg.push_str(ty_tag_name(ty_tag(e.ts, arg_tid)));
-        msg.push_str(String::from("' but method expects '"));
-        msg.push_str(ty_tag_name(ty_tag(e.ts, target_tid)));
-        msg.push_str(String::from("'"));
+        let msg: String = String::from("argument has type `");
+        msg.push_str(ty_value_display_name(e.ts, arg_tid));
+        msg.push_str(String::from("` but `"));
+        msg.push_str(mname);
+        msg.push_str(String::from("` expects `"));
+        msg.push_str(ty_value_display_name(e.ts, target_tid));
+        msg.push_str(String::from("`"));
         env_emit_error_code(e, EC_TYPE_MISMATCH(), msg, expr_span(a, arg_eid));
     }
 }
@@ -1624,11 +1712,12 @@ fn bind_pattern(e: CheckEnv, m: Module, pid: i64, init_eid: i64, tid: i64, decl_
         bind_tuple_pattern(e, m, pid, init_eid, tid, decl_span);
         return;
     }
-    env_emit_error_code(
+    env_emit_error_code_hint(
         e,
         EC_UNSUPPORTED_PATTERN(),
         String::from("let bindings only support identifier, wildcard, and tuple patterns"),
         pat_span(a, pid),
+        String::from("refutable patterns (literals, enum variants, struct fields, or-patterns) are not allowed in `let`"),
     );
 }
 
@@ -1639,11 +1728,12 @@ fn bind_tuple_pattern(e: CheckEnv, m: Module, pid: i64, init_eid: i64, tid: i64,
     let ty_ok: bool = ty_tag(e.ts, tid) == CTY_TUPLE() && ts_arg_len(e.ts, ty_a(e.ts, tid)) == n;
     let init_ok: bool = init_eid != -1 && expr_tag(a, init_eid) == EXPR_TUPLE() && list_len(a, expr_a(a, init_eid)) == n;
     if !ty_ok || !init_ok {
-        env_emit_error_code(
+        env_emit_error_code_hint(
             e,
             EC_UNSUPPORTED_PATTERN(),
             String::from("tuple destructuring requires a tuple literal initializer with matching arity"),
             pat_span(a, pid),
+            String::from("rewrite as `let (a, b) = (expr1, expr2);` with one element per pattern slot"),
         );
         return;
     }
@@ -1655,11 +1745,15 @@ fn bind_tuple_pattern(e: CheckEnv, m: Module, pid: i64, init_eid: i64, tid: i64,
         let sub_tid: i64 = ts_arg_get(e.ts, elems_lid, i);
         let sub_init_eid: i64 = list_get(a, init_elems_lid, i);
         if is_linear_ty(e, sub_tid) != 0 {
-            env_emit_error_code(
+            let linear_hint: String = String::from("`");
+            linear_hint.push_str(ty_value_display_name(e.ts, sub_tid));
+            linear_hint.push_str(String::from("` is linear; bind the whole tuple's owner separately instead"));
+            env_emit_error_code_hint(
                 e,
                 EC_UNSUPPORTED_PATTERN(),
                 String::from("tuple destructuring cannot bind a linear-typed element"),
                 pat_span(a, sub_pid),
+                linear_hint,
             );
         } else {
             bind_pattern(e, m, sub_pid, sub_init_eid, sub_tid, decl_span);
@@ -1770,7 +1864,7 @@ fn validate_arm_pattern(e: CheckEnv, m: Module, pid: i64, is_last: bool) -> bool
     let tag: i64 = pat_tag(a, pid);
     if tag == PAT_WILD() {
         if !is_last {
-            env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("catchall match patterns must be the final arm; move the catchall pattern to the final match arm"), pat_span(a, pid));
+            env_emit_error_code_hint(e, EC_UNSUPPORTED_PATTERN(), String::from("catchall match patterns must be the final arm"), pat_span(a, pid), String::from("move the catchall pattern to the final match arm"));
             return false;
         }
         return true;
@@ -1778,18 +1872,18 @@ fn validate_arm_pattern(e: CheckEnv, m: Module, pid: i64, is_last: bool) -> bool
     if tag == PAT_IDENT() {
         if pat_b(a, pid) == 0 {
             if !is_last {
-                env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("catchall match patterns must be the final arm; move the catchall pattern to the final match arm"), pat_span(a, pid));
+                env_emit_error_code_hint(e, EC_UNSUPPORTED_PATTERN(), String::from("catchall match patterns must be the final arm"), pat_span(a, pid), String::from("move the catchall pattern to the final match arm"));
                 return false;
             }
             return true;
         }
-        env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("mutable identifier patterns are not supported; remove `mut` from the binding"), pat_span(a, pid));
+        env_emit_error_code_hint(e, EC_UNSUPPORTED_PATTERN(), String::from("mutable identifier patterns are not supported"), pat_span(a, pid), String::from("remove `mut` from the identifier binding"));
         return false;
     }
     if tag == PAT_ENUM() {
         let path_lid: i64 = pat_a(a, pid);
         if list_len(a, path_lid) != 2 {
-            env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("enum variant patterns must use a qualified `Enum::Variant` path"), pat_span(a, pid));
+            env_emit_error_code_hint(e, EC_UNSUPPORTED_PATTERN(), String::from("enum variant patterns must use a qualified `Enum::Variant` path"), pat_span(a, pid), String::from("qualify the variant with its enum name"));
             return false;
         }
         let inner_lid: i64 = pat_b(a, pid);
@@ -1800,7 +1894,7 @@ fn validate_arm_pattern(e: CheckEnv, m: Module, pid: i64, is_last: bool) -> bool
             let inner_tag: i64 = pat_tag(a, inner_pid);
             let supported_ident: bool = inner_tag == PAT_IDENT() && pat_b(a, inner_pid) == 0;
             if inner_tag != PAT_WILD() && !supported_ident {
-                env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("nested enum payload patterns are not supported; bind the payload and inspect it separately"), pat_span(a, pid));
+                env_emit_error_code_hint(e, EC_UNSUPPORTED_PATTERN(), String::from("nested enum payload patterns are not supported"), pat_span(a, pid), String::from("bind each payload to an immutable identifier and inspect it separately"));
                 return false;
             }
             i = i + 1;
@@ -1808,13 +1902,13 @@ fn validate_arm_pattern(e: CheckEnv, m: Module, pid: i64, is_last: bool) -> bool
         return true;
     }
     if tag == PAT_LIT() {
-        env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("literal match patterns are not supported; use `if`/`else` comparisons"), pat_span(a, pid));
+        env_emit_error_code_hint(e, EC_UNSUPPORTED_PATTERN(), String::from("literal match patterns are not supported"), pat_span(a, pid), String::from("use `if`/`else` comparisons for literal values"));
     } else if tag == PAT_TUPLE() {
-        env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("tuple match patterns are not supported; access elements explicitly"), pat_span(a, pid));
+        env_emit_error_code_hint(e, EC_UNSUPPORTED_PATTERN(), String::from("tuple match patterns are not supported"), pat_span(a, pid), String::from("access tuple elements explicitly instead of destructuring in `match`"));
     } else if tag == PAT_STRUCT() {
-        env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("struct match patterns are not supported; access fields explicitly"), pat_span(a, pid));
+        env_emit_error_code_hint(e, EC_UNSUPPORTED_PATTERN(), String::from("struct match patterns are not supported"), pat_span(a, pid), String::from("access struct fields explicitly instead of destructuring in `match`"));
     } else if tag == PAT_OR() {
-        env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("or-patterns are not supported; write separate enum variant arms"), pat_span(a, pid));
+        env_emit_error_code_hint(e, EC_UNSUPPORTED_PATTERN(), String::from("or-patterns are not supported"), pat_span(a, pid), String::from("write a separate match arm for each enum variant"));
     } else {
         env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("pattern form is not supported"), pat_span(a, pid));
     }
@@ -2393,7 +2487,18 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                             message.push_str(ty_tag_name(unsigned_tag));
                             message.push_str(String::from("`"));
                         }
-                        env_emit_error_code(e, EC_TAUTOLOGICAL_COMPARISON(), message, expr_span(a, eid));
+                        let hint: String = String::from("`");
+                        if widened_tag >= 0 {
+                            hint.push_str(ty_tag_name(widened_tag));
+                            hint.push_str(String::from("` zero-extends into `"));
+                            hint.push_str(ty_tag_name(widened_to_tag));
+                            hint.push_str(String::from("`, so the result is never negative"));
+                        } else {
+                            hint.push_str(ty_tag_name(unsigned_tag));
+                            hint.push_str(String::from("` values are never negative"));
+                        }
+                        hint.push_str(String::from("; drop the clause, or state the real bound (e.g. `i < v.len()`)"));
+                        env_emit_error_code_hint(e, EC_TAUTOLOGICAL_COMPARISON(), message, expr_span(a, eid), hint);
                     }
                 }
             }
@@ -2434,7 +2539,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     message.push_str(wide_literal_decimal(a, rhs_eid));
                     message.push_str(String::from(" is out of range for "));
                     message.push_str(ty_tag_name(shift_tag));
-                    env_emit_error_code(e, EC_SHIFT_COUNT_OUT_OF_RANGE(), message, expr_span(a, rhs_eid));
+                    let hint: String = ty_tag_name(shift_tag);
+                    hint.push_str(String::from(" shift counts must be in 0.."));
+                    hint.push_str(i64_to_string(width));
+                    env_emit_error_code_hint(e, EC_SHIFT_COUNT_OUT_OF_RANGE(), message, expr_span(a, rhs_eid), hint);
                 }
                 return shift_tid;
             }
@@ -2497,11 +2605,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 expr_int_lo(a, inner_eid) == 0u64 && expr_int_hi(a, inner_eid) == 0u64;
             if (is_signed_wide || is_unsigned_zero) && expr_tag(a, inner_eid) == EXPR_LIT_INT() {
                 if integer_literal_out_of_range(a, eid, target_tag) {
-                    env_emit_error_code(
-                        e, EC_LITERAL_OUT_OF_RANGE(),
-                        wide_literal_range_message(a, eid, target_tag),
-                        expr_span(a, eid)
-                    );
+                    emit_literal_out_of_range(e, a, eid, target_tag);
                 }
                 return target_tid;
             }
@@ -2566,11 +2670,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     env_emit_error(e, String::from("argument has wrong type for string_matches_literal_at"), expr_span(a, literal_eid));
                 }
                 if expr_tag(a, literal_eid) != EXPR_LIT_STR() {
-                    env_emit_error_code(
+                    env_emit_error_code_hint(
                         e,
                         EC_STATIC_LITERAL_REQUIRED(),
                         String::from("string_matches_literal_at requires a string literal as its third argument"),
-                        expr_span(a, literal_eid)
+                        expr_span(a, literal_eid),
+                        String::from("pass the literal directly so the compiler can lower it without allocating a String")
                     );
                 }
                 return CTY_I64();
@@ -2587,7 +2692,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 let msg: String = String::from("calling extern-declared function `");
                 msg.push_str(name);
                 msg.push_str(String::from("` is not yet supported"));
-                env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), msg, expr_span(a, eid));
+                env_emit_error_code_hint(
+                    e, EC_UNSUPPORTED_FEATURE(), msg, expr_span(a, eid),
+                    String::from("extern \"C\" functions can be declared but not called yet; lowering extern calls to IR/codegen is not implemented")
+                );
                 return CTY_NEVER();
             }
             if e.fn_param_count[fidx as u64] != n_args {
@@ -2635,17 +2743,17 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if recv_tag == CTY_STR() {
             if mname == String::from("push_str") || mname == String::from("eq") ||
                mname == String::from("contains") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_STR());
+                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_STR(), mname);
             }
             if mname == String::from("byte_at") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64());
+                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64(), mname);
             }
             if mname == String::from("push_byte") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U8());
+                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U8(), mname);
             }
             if mname == String::from("substring") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64());
-                check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64());
+                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64(), mname);
+                check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64(), mname);
             }
             if mname == String::from("len") { return CTY_U64(); }
             if mname == String::from("byte_at") { return CTY_I64(); }
@@ -2667,10 +2775,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 opt_args.push(CTY_U64());
                 return ts_make_applied(e.ts, opt_base, opt_args);
             }
-            let err_msg: String = String::from("unknown method '");
-            err_msg.push_str(mname);
-            err_msg.push_str(String::from("' on type 'String'"));
-            env_emit_error_code(e, EC_UNKNOWN_METHOD(), err_msg, expr_span(a, eid));
+            emit_unknown_method(e, a, eid, mname, String::from("String"));
             return CTY_UNIT();
         }
         if recv_tag == CTY_APPLIED() {
@@ -2681,20 +2786,17 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 if base_name == String::from("Vec") {
                     let hargs_lid: i64 = ty_b(e.ts, recv_tid);
                     if mname == String::from("push") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0));
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
                     }
                     if mname == String::from("truncate") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64());
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64(), mname);
                     }
                     if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("push") { return CTY_UNIT(); }
                     if mname == String::from("pop") { return CTY_UNIT(); }
                     if mname == String::from("clear") { return CTY_UNIT(); }
                     if mname == String::from("truncate") { return CTY_UNIT(); }
-                    let verr_msg: String = String::from("unknown method '");
-                    verr_msg.push_str(mname);
-                    verr_msg.push_str(String::from("' on type 'Vec'"));
-                    env_emit_error_code(e, EC_UNKNOWN_METHOD(), verr_msg, expr_span(a, eid));
+                    emit_unknown_method(e, a, eid, mname, String::from("Vec"));
                     return CTY_UNIT();
                 }
                 if base_name == String::from("Option") || base_name == String::from("Result") {
@@ -2718,12 +2820,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         record_question_aggregate(e, eid, inner_tid);
                         return inner_tid;
                     }
-                    let oerr_msg: String = String::from("unknown method '");
-                    oerr_msg.push_str(mname);
-                    oerr_msg.push_str(String::from("' on type '"));
-                    oerr_msg.push_str(base_name);
-                    oerr_msg.push_str(String::from("'"));
-                    env_emit_error_code(e, EC_UNKNOWN_METHOD(), oerr_msg, expr_span(a, eid));
+                    emit_unknown_method(e, a, eid, mname, base_name);
                     return CTY_UNIT();
                 }
                 if base_name == String::from("HashMap") {
@@ -2739,13 +2836,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         CTY_I64()
                     };
                     if mname == String::from("insert") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0));
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, hargs_lid, 1));
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, hargs_lid, 1), mname);
                     }
                     if mname == String::from("get") ||
                        mname == String::from("contains_key") ||
                        mname == String::from("remove") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0));
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
                     }
                     if mname == String::from("insert") { return CTY_UNIT(); }
                     if mname == String::from("get") {
@@ -2757,10 +2854,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if mname == String::from("contains_key") { return CTY_BOOL(); }
                     if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("remove") { return CTY_UNIT(); }
-                    let herr_msg: String = String::from("unknown method '");
-                    herr_msg.push_str(mname);
-                    herr_msg.push_str(String::from("' on type 'HashMap'"));
-                    env_emit_error_code(e, EC_UNKNOWN_METHOD(), herr_msg, expr_span(a, eid));
+                    emit_unknown_method(e, a, eid, mname, String::from("HashMap"));
                     return CTY_UNIT();
                 }
                 if base_name == String::from("BTreeMap") {
@@ -2783,11 +2877,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         env_emit_error_code(e, EC_BTREEMAP_KEY_TYPE_MUST_BE_I64(), kerr_msg, expr_span(a, eid));
                     }
                     if mname == String::from("insert") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0));
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, bargs_lid, 1));
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, bargs_lid, 1), mname);
                     }
                     if mname == String::from("get") || mname == String::from("contains") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0));
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
                     }
                     if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("contains") { return CTY_BOOL(); }
@@ -2803,17 +2897,14 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         opt_args.push(bval_tid);
                         return ts_make_applied(e.ts, opt_base, opt_args);
                     }
-                    let bterr_msg: String = String::from("unknown method '");
-                    bterr_msg.push_str(mname);
-                    bterr_msg.push_str(String::from("' on type 'BTreeMap'"));
-                    env_emit_error_code(e, EC_UNKNOWN_METHOD(), bterr_msg, expr_span(a, eid));
+                    emit_unknown_method(e, a, eid, mname, String::from("BTreeMap"));
                     return CTY_UNIT();
                 }
             }
         }
-        let uerr_msg: String = String::from("unknown method '");
+        let uerr_msg: String = String::from("unknown method `");
         uerr_msg.push_str(mname);
-        uerr_msg.push_str(String::from("' on this type"));
+        uerr_msg.push_str(String::from("` on this type"));
         env_emit_error_code(e, EC_UNKNOWN_METHOD(), uerr_msg, expr_span(a, eid));
         return CTY_UNIT();
     }
@@ -2856,9 +2947,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let idx_tid: i64 = check_expr(e, m, idx_eid);
         check_contextual_integer_literal_ranges(e, a, idx_eid, CTY_U64());
         if !is_opaque(idx_tid) && !is_coercible(e.ts, idx_tid, CTY_U64()) {
-            let imsg: String = String::from("index has type '");
+            let imsg: String = String::from("index has type `");
             imsg.push_str(ty_tag_name(ty_tag(e.ts, idx_tid)));
-            imsg.push_str(String::from("' but must be 'u64'"));
+            imsg.push_str(String::from("` but must be `u64`"));
             env_emit_error_code(e, EC_TYPE_MISMATCH(), imsg, expr_span(a, idx_eid));
         }
         if is_opaque(recv_tid) {
@@ -3050,7 +3141,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         }
         let scrutinee_supported: bool = is_enum_match_tid(e.ts, scrutinee_tid);
         if all_arms_supported && !scrutinee_supported {
-            env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("match scrutinee must be an enum; use `if`/`else` comparisons for scalar values"), expr_span(a, scrutinee_eid));
+            env_emit_error_code_hint(e, EC_UNSUPPORTED_PATTERN(), String::from("match scrutinee must be an enum"), expr_span(a, scrutinee_eid), String::from("use `if`/`else` comparisons for scalar values"));
         }
         let mut result_tid: i64 = CTY_NEVER();
         let handled_variants: Vec<String> = Vec::new();
@@ -3312,8 +3403,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if n_args != 2 {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
                     }
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64());
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64());
+                    check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64(), second_name);
+                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64(), second_name);
                     return CTY_NEVER();
                 }
             }
@@ -3326,8 +3417,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if n_args != 2 {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
                     }
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64());
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64());
+                    check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64(), second_name);
+                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64(), second_name);
                     return CTY_STR();
                 }
                 if second_name == String::from("from") {
@@ -3430,9 +3521,14 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 message.push_str(String::from(" to "));
                 message.push_str(ty_tag_name(tgt_tag));
                 message.push_str(String::from(" via as"));
-                env_emit_error_code(e, EC_NARROWING_CAST_NOT_ALLOWED(),
+                let hint: String = String::from("use a `");
+                hint.push_str(ty_tag_name(src_tag));
+                hint.push_str(String::from("_to_"));
+                hint.push_str(ty_tag_name(tgt_tag));
+                hint.push_str(String::from("_try`, `_wrap`, or `_sat` narrowing intrinsic"));
+                env_emit_error_code_hint(e, EC_NARROWING_CAST_NOT_ALLOWED(),
                     message,
-                    expr_span(a, inner_eid));
+                    expr_span(a, inner_eid), hint);
             }
             let root_src_tag: i64 = zero_extended_source_tag(e, a, inner_eid, src_tid, tgt_tid);
             if root_src_tag >= 0 {

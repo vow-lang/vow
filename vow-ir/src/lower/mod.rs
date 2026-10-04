@@ -5527,7 +5527,12 @@ mod tests {
     #[test]
     fn builtin_method_spec_covers_every_row() {
         use MethodArg::{Absent, Consumed, ConsumedOrZero, Unconsumed};
-        let rows: &[(Option<&str>, &str, (&str, Ty, MethodArg, Option<&str>))] = &[
+        type SpecRow<'a> = (
+            Option<&'a str>,
+            &'a str,
+            (&'a str, Ty, MethodArg, Option<&'a str>),
+        );
+        let rows: &[SpecRow] = &[
             (
                 Some("String"),
                 "len",
