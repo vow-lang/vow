@@ -420,6 +420,11 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         let inner: i64 = resolve_ast_ty(e, m, type_a(a, ast_tid));
         return ty_add(e.ts, CTY_REF(), inner, 0);
     }
+    if tag == TY_SLICE() {
+        let elem_tids: Vec<i64> = Vec::new();
+        elem_tids.push(resolve_ast_ty(e, m, type_a(a, ast_tid)));
+        return ts_make_applied(e.ts, ts_make_struct(e.ts, String::from("Slice")), elem_tids);
+    }
     if tag == TY_TUPLE() {
         let elems_lid: i64 = type_a(a, ast_tid);
         let n: i64 = list_len(a, elems_lid);
