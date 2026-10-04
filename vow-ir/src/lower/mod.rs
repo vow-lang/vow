@@ -6639,10 +6639,20 @@ fn unsigned_max() -> u128 {
     #[test]
     fn merge_upsilons_precede_the_branch_terminator() {
         let sources = [
-            "module M\nfn probe(c: bool) -> u64 {\n  let mut n: u64 = 1;\n  if c {\n    n = 2;\n  }\n  n\n}\n",
-            "module M\nfn probe(o: Option<u64>) -> u64 {\n  let mut n: u64 = 1;\n  match o {\n    Option::Some(v) => {\n      n = v;\n    },\n    Option::None => {\n      n = 3;\n    },\n  }\n  n\n}\n",
+            (
+                2,
+                "module M\nfn probe(c: bool) -> u64 {\n  let mut n: u64 = 1;\n  if c {\n    n = 2;\n  }\n  n\n}\n",
+            ),
+            (
+                2,
+                "module M\nfn probe(o: Option<u64>) -> u64 {\n  let mut n: u64 = 1;\n  match o {\n    Option::Some(v) => {\n      n = v;\n    },\n    Option::None => {\n      n = 3;\n    },\n  }\n  n\n}\n",
+            ),
+            (
+                1,
+                "module M\nfn probe(k: u64) -> u64 {\n  let mut n: u64 = 1;\n  match k {\n    7 => {\n      n = 2;\n    },\n    _ => {\n      n = 3;\n    },\n  }\n  n\n}\n",
+            ),
         ];
-        for source in sources {
+        for (expected, source) in sources {
             let func = lowered_function(source, "probe");
             let mut mutation_upsilons = 0;
             for block in &func.blocks {
@@ -6659,7 +6669,7 @@ fn unsigned_max() -> u128 {
                     mutation_upsilons += 1;
                 }
             }
-            assert!(mutation_upsilons >= 2, "{source}: {func:?}");
+            assert!(mutation_upsilons >= expected, "{source}: {func:?}");
         }
     }
 

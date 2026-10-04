@@ -5225,6 +5225,175 @@ mod tests {
         assert!(!observed.contains("copy loop elided"), "{observed}");
     }
 
+    /// Only a `len` query, an `eq` verdict, appends, `clear` and the discarded
+    /// `Return` leave the bytes unread; every other user observes them.
+    #[test]
+    fn string_use_reads_only_len_classifies_users() {
+        let call = |name: &str| {
+            test_inst(
+                9,
+                Opcode::Call,
+                Ty::I64,
+                &[3],
+                InstData::CallExtern(name.to_string()),
+            )
+        };
+        assert!(string_use_reads_only_len(&test_inst(
+            9,
+            Opcode::Return,
+            Ty::Unit,
+            &[3],
+            InstData::None
+        )));
+        for name in [
+            "__vow_string_len",
+            "__vow_string_push_byte",
+            "__vow_string_clear",
+        ] {
+            assert!(string_use_reads_only_len(&call(name)), "{name}");
+        }
+        assert!(!string_use_reads_only_len(&call("__vow_string_byte_at")));
+        let upsilon = test_inst(
+            9,
+            Opcode::Upsilon,
+            Ty::Unit,
+            &[3],
+            InstData::PhiTarget(vow_ir::InstId(4)),
+        );
+        assert!(!string_use_reads_only_len(&upsilon));
+        let insts = [
+            test_inst(3, Opcode::GetArg, Ty::Ptr, &[], InstData::ArgIndex(0)),
+            upsilon,
+        ];
+        let by_id: HashMap<u32, &Inst> = insts.iter().map(|i| (i.id.0, i)).collect();
+        assert!(string_bytes_observed(3, &by_id));
+        assert!(!string_bytes_observed(9, &by_id));
+    }
+
+    /// `BTreeMap::insert` replaces the value of an existing key and shifts the
+    /// larger keys up for a new one, returning the previous value as an `Option`.
+    #[test]
+    fn btreemap_insert_model_replaces_or_shifts() {
+        let func = make_func(
+            "bt",
+            vec![],
+            Ty::Unit,
+            vec![
+                test_inst(
+                    0,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    &[],
+                    InstData::CallExtern("__vow_btreemap_new".to_string()),
+                ),
+                test_inst(1, Opcode::ConstI64, Ty::I64, &[], InstData::ConstI64(1)),
+                test_inst(2, Opcode::ConstI64, Ty::I64, &[], InstData::ConstI64(2)),
+                test_inst(
+                    3,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    &[0, 1, 2],
+                    InstData::CallExtern("__vow_btreemap_insert".to_string()),
+                ),
+                test_inst(4, Opcode::Return, Ty::Unit, &[], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        for needle in [
+            "if (v0.keys[__i] == v1) { v3.tag = 1; v3.payload = v0.vals[__i]; v0.vals[__i] = v2; __found = 1; break; }",
+            "if (v0.keys[__i] > v1) { __pos = __i; break; }",
+            "__ESBMC_assert(v0.len < 64, \"btreemap capacity\");",
+            "v0.keys[__j] = v0.keys[__j - 1]; v0.vals[__j] = v0.vals[__j - 1];",
+            "v0.keys[__pos] = v1; v0.vals[__pos] = v2;",
+            "v0.len++;",
+        ] {
+            assert!(c.contains(needle), "missing `{needle}`:\n{c}");
+        }
+    }
+
+    fn constant_fn_returning(id: u32, ty: Ty, value: Inst) -> Function {
+        let mut f = make_func(
+            "k",
+            vec![],
+            ty,
+            vec![
+                value,
+                test_inst(1, Opcode::Return, Ty::Unit, &[0], InstData::None),
+            ],
+        );
+        f.id = FuncId(id);
+        f
+    }
+
+    /// A function whose only instructions are one constant and its `Return` is
+    /// a constant function whatever the constant's scalar kind.
+    #[test]
+    fn detect_constant_functions_covers_each_scalar_kind() {
+        let funcs = [
+            constant_fn_returning(
+                0,
+                Ty::I32,
+                test_inst(0, Opcode::ConstI32, Ty::I32, &[], InstData::ConstI32(-3)),
+            ),
+            constant_fn_returning(
+                1,
+                Ty::U64,
+                test_inst(
+                    0,
+                    Opcode::ConstU64,
+                    Ty::U64,
+                    &[],
+                    InstData::ConstU64(u64::MAX),
+                ),
+            ),
+            constant_fn_returning(
+                2,
+                Ty::Bool,
+                test_inst(
+                    0,
+                    Opcode::ConstBool,
+                    Ty::Bool,
+                    &[],
+                    InstData::ConstBool(true),
+                ),
+            ),
+        ];
+        let module = Module {
+            name: "m".to_string(),
+            functions: funcs.to_vec(),
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let found = detect_constant_functions(&module);
+        assert!(matches!(found[&FuncId(0)], ConstantValue::I32(-3)));
+        assert!(matches!(found[&FuncId(1)], ConstantValue::U64(u64::MAX)));
+        assert!(matches!(found[&FuncId(2)], ConstantValue::Bool(true)));
+    }
+
+    /// A call to a constant function prints the constant at the type of the
+    /// call: a 32-bit constant stored sign-extended prints unsigned for a `u32`.
+    #[test]
+    fn constant_call_prints_the_value_of_the_call_type() {
+        let call = |ty: Ty| {
+            make_func(
+                "c",
+                vec![],
+                ty,
+                vec![
+                    test_inst(0, Opcode::Call, ty, &[], InstData::CallTarget(FuncId(7))),
+                    test_inst(1, Opcode::Return, Ty::Unit, &[0], InstData::None),
+                ],
+            )
+        };
+        let consts = HashMap::from([(FuncId(7), ConstantValue::I32(-1))]);
+        let unsigned = emit_c_function(&call(Ty::U32), &consts, &VerifyLimits::default());
+        assert!(unsigned.contains("v0 = 4294967295;"), "{unsigned}");
+        let signed = emit_c_function(&call(Ty::I32), &consts, &VerifyLimits::default());
+        assert!(signed.contains("v0 = -1;"), "{signed}");
+    }
+
     /// Integer constants print as the value of their IR type, whichever
     /// representation a lowering stored them in.
     #[test]
@@ -9186,6 +9355,20 @@ mod tests {
             assert!(
                 c.contains(&format!("__ESBMC_assert(v0 == 0, \"{label}\");")),
                 "{kind}: a negative i64 constant reinterprets as a huge u64: {c}"
+            );
+
+            let narrow = HashMap::from([(FuncId(7), ConstantValue::I32(-1))]);
+            let c = emit_c_function(&f, &narrow, &VerifyLimits::default());
+            assert!(
+                c.contains(&format!("__ESBMC_assert(v0 == 0, \"{label}\");")),
+                "{kind}: a negative i32 constant sign-extends to a huge u64: {c}"
+            );
+
+            let flag = HashMap::from([(FuncId(7), ConstantValue::Bool(true))]);
+            let c = emit_c_function(&f, &flag, &VerifyLimits::default());
+            assert!(
+                c.contains("__ESBMC_assume(v0 == 0 || (v1 < "),
+                "{kind}: a bool constant is no length and keeps the assumption: {c}"
             );
         }
     }
