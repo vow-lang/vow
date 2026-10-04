@@ -8,6 +8,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import parity_c
 import schema_check
 
 KNOWN_CEX_DIVERGENCE = re.compile(
@@ -757,6 +758,8 @@ MODE_ARITY = {
 def main(argv=None):
     """Run a comparator over two JSON files for scripts/full_test.sh."""
     args = sys.argv[1:] if argv is None else argv
+    if args and args[0] == "c":
+        return parity_c.main(args[1:])
     arity = MODE_ARITY.get(args[0]) if args else None
     if arity is None or not (arity[0] <= len(args) <= arity[1]):
         print(

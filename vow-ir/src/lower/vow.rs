@@ -65,7 +65,7 @@ fn collect_vars_in_expr(ctx: &LowerCtx, expr: &Expr, out: &mut Vec<(String, Inst
             collect_vars_in_expr(ctx, lhs, out);
             collect_vars_in_expr(ctx, rhs, out);
         }
-        ExprKind::UnaryOp { operand, .. } => {
+        ExprKind::UnaryOp { operand, .. } | ExprKind::Cast { expr: operand, .. } => {
             collect_vars_in_expr(ctx, operand, out);
         }
         ExprKind::Call { callee, args } => {

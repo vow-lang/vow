@@ -2488,6 +2488,9 @@ fn lower_integer_marker_as(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) -> i64
         return emit_narrow_integer_constant(ctx, expr_a(a, eid), ty);
     }
     if tag == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
+        if expr_tag(a, expr_b(a, eid)) == EXPR_LIT_INT() && ty != ITY_I128() && ty != ITY_U128() {
+            return emit_narrow_integer_constant(ctx, 0 - expr_a(a, expr_b(a, eid)), ty);
+        }
         let zero: i64 = emit_integer_zero(ctx, ty);
         let value: i64 = lower_integer_marker_as(ctx, a, expr_b(a, eid), ty);
         let neg_args: Vec<i64> = Vec::new();
@@ -2587,9 +2590,8 @@ fn backpatch_upsilon(ctx: LowerCtx, block_id: i64, upsilon_id: i64, phi_id: i64)
 // Re-lower an if-expression branch's own result Upsilon at target_ty. The
 // branch's Upsilon still carries its speculative default-width value (see
 // expr_is_coercible_int_marker) from before the merge's real result type
-// was known. Locates the Upsilon by id, not block-tail position, since the
-// mutated-variable Phi loop earlier in the same EXPR_IF() arm may already
-// have appended extra Upsilons after it. Returns up_id unchanged if it
+// was known. Locates the Upsilon by id, not block position, since the
+// branch's mutation Upsilons precede it in the block. Returns up_id unchanged if it
 // can't be found. Twin of renarrow_if_branch_result in
 // vow-ir/src/lower/mod.rs.
 fn renarrow_if_branch_result(ctx: LowerCtx, a: AstArena, block_id: i64, up_id: i64, result_eid: i64, target_ty: i64, span: i64) -> i64 {
@@ -2865,22 +2867,18 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         // of the default i64, so it shares a register width with a genuinely
         // `operand_ty`-typed sibling operand in the same binary op.
         if narrow_int_width(operand_ty) != 0 {
-            let narrow_op: i64 = if operand_ty == ITY_I8() || operand_ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
-            let narrow_data: i64 = if operand_ty == ITY_I8() || operand_ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
             if expr_is_const_int(a, lhs_eid) {
                 if operand_ty == ITY_I128() || operand_ty == ITY_U128() {
                     lhs_id = lower_integer_marker_as(ctx, a, lhs_eid, operand_ty);
                 } else {
-                    let const_args: Vec<i64> = Vec::new();
-                    lhs_id = lctx_emit(ctx, narrow_op, operand_ty, const_args, narrow_data, expr_const_int_value(a, lhs_eid), 0, String::from(""));
+                    lhs_id = emit_narrow_integer_constant(ctx, expr_const_int_value(a, lhs_eid), operand_ty);
                 }
             }
             if op != BINOP_SHL() && op != BINOP_SHR() && expr_is_const_int(a, rhs_eid) {
                 if operand_ty == ITY_I128() || operand_ty == ITY_U128() {
                     rhs_id = lower_integer_marker_as(ctx, a, rhs_eid, operand_ty);
                 } else {
-                    let const_args: Vec<i64> = Vec::new();
-                    rhs_id = lctx_emit(ctx, narrow_op, operand_ty, const_args, narrow_data, expr_const_int_value(a, rhs_eid), 0, String::from(""));
+                    rhs_id = emit_narrow_integer_constant(ctx, expr_const_int_value(a, rhs_eid), operand_ty);
                 }
             }
         }
@@ -4751,9 +4749,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let blk: IrBlock = ctx.func.blocks[arm_block as u64];
                     let n_insts: i64 = blk.insts.len() as i64;
                     // Locate the arm's own result Upsilon by id rather than assuming
-                    // block position: the "Phis for mutated variables" pass above may
-                    // have already appended extra Upsilons after this arm's own
-                    // [Upsilon, Jump] pair, so it's not reliably the block's tail.
+                    // block position: the arm's mutation Upsilons precede its result
+                    // Upsilon, so it is not the block's first Upsilon either.
                     let mut up_pos: i64 = -1;
                     let mut old_arg: i64 = -1;
                     let mut fj: i64 = 0;
@@ -5316,9 +5313,134 @@ fn collect_free_vars_in_expr(ctx: LowerCtx, eid: i64, out_names: Vec<String>, ou
     } else if tag == EXPR_CAST() {
         let inner_eid: i64 = expr_a(a, eid);
         collect_free_vars_in_expr(ctx, inner_eid, out_names, out_ids);
+    } else if tag == EXPR_BLOCK() {
+        collect_free_vars_in_block(ctx, expr_a(a, eid), out_names, out_ids);
     } else if tag == EXPR_IF() {
-        let cond_eid: i64 = expr_a(a, eid);
-        collect_free_vars_in_expr(ctx, cond_eid, out_names, out_ids);
+        collect_free_vars_in_expr(ctx, expr_a(a, eid), out_names, out_ids);
+        collect_free_vars_in_block(ctx, expr_b(a, eid), out_names, out_ids);
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid != -1 {
+            collect_free_vars_in_expr(ctx, else_eid, out_names, out_ids);
+        }
+    } else if tag == EXPR_FIELD() {
+        let recv_eid: i64 = expr_a(a, eid);
+        let recv_tag: i64 = expr_tag(a, recv_eid);
+        let field_name: String = arena_str(a, expr_b(a, eid));
+        if recv_tag == EXPR_IDENT() || recv_tag == EXPR_RESULT() {
+            let base: String = {
+                if recv_tag == EXPR_RESULT() { String::from("result") }
+                else { arena_str(a, expr_a(a, recv_eid)) }
+            };
+            let dotted: String = String::from("");
+            dotted.push_str(base);
+            dotted.push_str(String::from("."));
+            dotted.push_str(field_name);
+            let val: i64 = lctx_lookup(ctx, base);
+            if val != -1 && !vec_contains_str(out_names, dotted) {
+                out_names.push(dotted);
+                out_ids.push(val);
+            }
+        } else {
+            collect_free_vars_in_expr(ctx, recv_eid, out_names, out_ids);
+        }
+    }
+}
+
+fn collect_free_vars_in_block(ctx: LowerCtx, bid: i64, out_names: Vec<String>, out_ids: Vec<i64>) {
+    let a: AstArena = ctx.arena;
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, stmts_lid, i);
+        if stmt_tag(a, sid) == STMT_EXPR() {
+            collect_free_vars_in_expr(ctx, stmt_a(a, sid), out_names, out_ids);
+        }
+        i = i + 1;
+    }
+    let trail_eid: i64 = blk_trail(a, bid);
+    if trail_eid != -1 {
+        collect_free_vars_in_expr(ctx, trail_eid, out_names, out_ids);
+    }
+}
+
+fn binding_last_dot(name: String) -> i64 {
+    let mut i: i64 = name.len() as i64;
+    while i > 0 {
+        i = i - 1;
+        if name.byte_at(i as u64) == 46 { return i; }
+    }
+    -1
+}
+
+fn binding_is_primitive_field(type_name: String) -> bool {
+    type_name == String::from("i32") || type_name == String::from("i64")
+        || type_name == String::from("f32") || type_name == String::from("f64")
+        || type_name == String::from("bool")
+}
+
+fn emit_binding_field_get(ctx: LowerCtx, ptr_id: i64, idx: i64, span: i64) -> i64 {
+    let fg_args: Vec<i64> = Vec::new();
+    fg_args.push(ptr_id);
+    let id: i64 = lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), fg_args, IDATA_FIELD(), idx, 0, String::from(""));
+    lctx_set_inst_span(ctx, id, span);
+    id
+}
+
+// Twin of `expand_ptr_bindings` in vow-ir/src/lower/vow.rs: a struct-pointer
+// binding is replaced by one captured value per primitive field, so a
+// VowViolation reports `result.c`, not an address. Pointer bindings with no
+// registered struct (String, Vec, maps, enums) are dropped.
+fn lower_vow_bindings(ctx: LowerCtx, eid: i64, span: i64, out_names: Vec<String>, out_ids: Vec<i64>) {
+    let raw_names: Vec<String> = Vec::new();
+    let raw_ids: Vec<i64> = Vec::new();
+    collect_free_vars_in_expr(ctx, eid, raw_names, raw_ids);
+    let mut i: u64 = 0u64;
+    while i < raw_names.len() {
+        let name: String = raw_names[i];
+        let inst_id: i64 = raw_ids[i];
+        let ty: i64 = lctx_inst_ty(ctx, inst_id);
+        if ty != ITY_PTR() && ty != ITY_LPTR() {
+            out_names.push(name);
+            out_ids.push(inst_id);
+        } else {
+            let struct_name: String = lctx_get_tag(ctx, inst_id);
+            let sidx: i64 = {
+                if struct_name.len() == 0 { -1 } else { lctx_find_struct(ctx, struct_name) }
+            };
+            if sidx != -1 {
+                let field_names: Vec<String> = ctx.struct_field_lists[sidx as u64];
+                let field_types: Vec<String> = ctx.struct_field_type_names[sidx as u64];
+                let dot: i64 = binding_last_dot(name);
+                if dot >= 0 {
+                    let field: String = name.substring((dot + 1) as u64, name.len());
+                    let mut fi: u64 = 0u64;
+                    let mut found: i64 = -1;
+                    while fi < field_names.len() {
+                        if found == -1 && field_names[fi] == field { found = fi as i64; }
+                        fi = fi + 1;
+                    }
+                    if found != -1 && found < field_types.len() as i64 && binding_is_primitive_field(field_types[found as u64]) {
+                        out_names.push(name);
+                        out_ids.push(emit_binding_field_get(ctx, inst_id, found, span));
+                    }
+                } else {
+                    let mut fi: u64 = 0u64;
+                    while fi < field_names.len() {
+                        if fi < field_types.len() && binding_is_primitive_field(field_types[fi]) {
+                            let dotted: String = String::from("");
+                            dotted.push_str(name);
+                            dotted.push_str(String::from("."));
+                            dotted.push_str(field_names[fi]);
+                            out_names.push(dotted);
+                            out_ids.push(emit_binding_field_get(ctx, inst_id, fi as i64, span));
+                        }
+                        fi = fi + 1;
+                    }
+                }
+            }
+        }
+        i = i + 1;
     }
 }
 
@@ -5335,7 +5457,7 @@ fn lower_requires_clauses(ctx: LowerCtx, vow_lid: i64) {
             desc.push_str(print_expr_text(a, clause_eid));
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
-            collect_free_vars_in_expr(ctx, clause_eid, binding_names, binding_ids);
+            lower_vow_bindings(ctx, clause_eid, vow_clause_span(a, cid), binding_names, binding_ids);
             let clause_offset: i64 = span_unpack_start(vow_clause_span(a, cid));
             let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLER(), binding_ids, binding_names, clause_offset);
             let pred_id: i64 = lower_expr(ctx, clause_eid);
@@ -5362,7 +5484,7 @@ fn lower_ensures_clauses(ctx: LowerCtx, vow_lid: i64, result_id: i64) {
             desc.push_str(print_expr_text(a, clause_eid));
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
-            collect_free_vars_in_expr(ctx, clause_eid, binding_names, binding_ids);
+            lower_vow_bindings(ctx, clause_eid, vow_clause_span(a, cid), binding_names, binding_ids);
             let clause_offset: i64 = span_unpack_start(vow_clause_span(a, cid));
             let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLEE(), binding_ids, binding_names, clause_offset);
             let pred_id: i64 = lower_expr(ctx, clause_eid);
@@ -5388,7 +5510,7 @@ fn lower_invariant_clauses(ctx: LowerCtx, vow_lid: i64) {
             desc.push_str(print_expr_text(a, clause_eid));
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
-            collect_free_vars_in_expr(ctx, clause_eid, binding_names, binding_ids);
+            lower_vow_bindings(ctx, clause_eid, vow_clause_span(a, cid), binding_names, binding_ids);
             let clause_offset: i64 = span_unpack_start(vow_clause_span(a, cid));
             let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLEE(), binding_ids, binding_names, clause_offset);
             let pred_id: i64 = lower_expr(ctx, clause_eid);
@@ -5528,7 +5650,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
             desc.push_str(String::from(")"));
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
-            collect_free_vars_in_expr(ctx, ref_eid, binding_names, binding_ids);
+            lower_vow_bindings(ctx, ref_eid, rname_span, binding_names, binding_ids);
             let ref_offset: i64 = span_unpack_start(rname_span);
             let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLER(), binding_ids, binding_names, ref_offset);
             let pred_id: i64 = lower_expr(ctx, ref_eid);

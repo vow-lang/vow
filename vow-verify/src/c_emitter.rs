@@ -1094,7 +1094,11 @@ fn emit_inst(
         // Constants
         Opcode::ConstI32 => {
             if let InstData::ConstI32(v) = inst.data {
-                out.push_str(&format!("  v{} = {};\n", id, v));
+                if inst.ty == Ty::U32 {
+                    out.push_str(&format!("  v{} = {};\n", id, v as u32));
+                } else {
+                    out.push_str(&format!("  v{} = {};\n", id, v));
+                }
             }
         }
         Opcode::ConstI64 => {
@@ -1429,7 +1433,7 @@ fn emit_inst(
                     format!("v{a} <= {}", target.max)
                 };
                 out.push_str(&format!(
-                    "  v{id}.tag = ({guard});\n  v{id}.payload = v{id}.tag ? ({})v{a} : 0;\n",
+                    "  v{id}.tag = ({guard}); v{id}.payload = v{id}.tag ? ({})v{a} : 0;\n",
                     target.c_ty
                 ));
             } else if name.ends_with("_wrap") {
@@ -1803,7 +1807,7 @@ fn emit_inst(
                         out.push_str(&format!(
                             "  v{id}.tag = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.tag == 0 || v{id}.tag == 1);\n\
-                             \x20 if (v{id}.tag == 1) {{ v{id}.payload = __VERIFIER_nondet_ulong(); __ESBMC_assume(v{id}.payload >= 0 && v{id}.payload <= 4294967295ULL); }}\n"
+                             \x20 if (v{id}.tag == 1) {{ v{id}.payload = __VERIFIER_nondet_long(); __ESBMC_assume(v{id}.payload >= 0 && v{id}.payload <= 4294967295); }}\n"
                         ));
                     }
                     "__vow_string_parse_i32_opt" => {
@@ -1933,20 +1937,16 @@ fn emit_inst(
                              \x20   _Bool __found = 0;\n\
                              \x20   uint64_t __pos = v{m}.len;\n\
                              \x20   for (uint64_t __i = 0; __i < v{m}.len; __i++) {{\n\
-                             \x20     if (v{m}.keys[__i] == v{k}) {{\n\
-                             \x20       v{id}.tag = 1; v{id}.payload = v{m}.vals[__i];\n\
-                             \x20       v{m}.vals[__i] = v{v};\n\
-                             \x20       __found = 1; break;\n\
-                             \x20     }}\n\
+                             \x20     if (v{m}.keys[__i] == v{k}) {{ v{id}.tag = 1; v{id}.payload = v{m}.vals[__i]; v{m}.vals[__i] = v{v}; __found = 1; break; }}\n\
                              \x20     if (v{m}.keys[__i] > v{k}) {{ __pos = __i; break; }}\n\
                              \x20   }}\n\
                              \x20   if (!__found) {{\n\
                              \x20     __ESBMC_assert(v{m}.len < {btreemap_max}, \"btreemap capacity\");\n\
                              \x20     for (uint64_t __j = v{m}.len; __j > __pos; __j--) {{\n\
-                             \x20       v{m}.keys[__j] = v{m}.keys[__j - 1];\n\
-                             \x20       v{m}.vals[__j] = v{m}.vals[__j - 1];\n\
+                             \x20       v{m}.keys[__j] = v{m}.keys[__j - 1]; v{m}.vals[__j] = v{m}.vals[__j - 1];\n\
                              \x20     }}\n\
-                             \x20     v{m}.keys[__pos] = v{k}; v{m}.vals[__pos] = v{v}; v{m}.len++;\n\
+                             \x20     v{m}.keys[__pos] = v{k}; v{m}.vals[__pos] = v{v};\n\
+                             \x20     v{m}.len++;\n\
                              \x20   }}\n\
                              \x20 }}\n"
                         ));
@@ -2464,7 +2464,6 @@ pub fn emit_c_function_full(
                 }
             }
         }
-        ups_sources.sort();
         for src in ups_sources {
             // Upsilon temps must share the source's struct type; struct-to-int64 assignment corrupts the payload.
             if option_vars.contains(&src) {
@@ -2605,9 +2604,11 @@ pub fn emit_c_function_full(
     out
 }
 
-/// Set of `(is_shl, signedness, width)` shift-helper flavors actually used by
-/// the module.
-type ShiftNeeds = std::collections::BTreeSet<(bool, IntegerSignedness, IntegerWidth)>;
+/// Set of `(width, signedness, is_shr)` shift-helper flavors actually used by
+/// the module. The tuple order is the canonical emission order shared with
+/// `compiler/c_emitter.vow` (`append_model_helpers`): width ascending, signed
+/// before unsigned, `shl` before `shr`.
+type ShiftNeeds = std::collections::BTreeSet<(IntegerWidth, IntegerSignedness, bool)>;
 
 fn scan_shift_needs(funcs: &[&Function]) -> ShiftNeeds {
     let mut needs = ShiftNeeds::new();
@@ -2620,7 +2621,7 @@ fn scan_shift_needs(funcs: &[&Function]) -> ShiftNeeds {
                     _ => continue,
                 };
                 if let InstData::Integer(IntegerType { width, signedness }) = inst.data {
-                    needs.insert((is_shl, signedness, width));
+                    needs.insert((width, signedness, !is_shl));
                 }
             }
         }
@@ -2798,9 +2799,9 @@ pub fn contracts_only_source(c_src: &str) -> String {
 }
 
 /// Set of `(op, signedness, width)` overflow-guard helper flavors the module
-/// actually uses. Mirrors [`ShiftNeeds`]; only `+!`/`-!`/`*!` need a helper,
+/// actually uses, in the same width-signedness-op order as [`ShiftNeeds`]; only `+!`/`-!`/`*!` need a helper,
 /// since the `/!`/`%!` guards are single comparisons emitted inline.
-type ArithNeeds = std::collections::BTreeSet<(ArithAbort, IntegerSignedness, IntegerWidth)>;
+type ArithNeeds = std::collections::BTreeSet<(IntegerWidth, IntegerSignedness, ArithAbort)>;
 
 /// The helper flavor a checked opcode needs, or `None` for the div/rem forms
 /// whose guards are emitted inline.
@@ -2821,7 +2822,7 @@ fn scan_arith_needs(funcs: &[&Function]) -> ArithNeeds {
                 if let Some(abort) = checked_helper_abort(inst.opcode)
                     && let Some(int_ty) = checked_integer_type(inst)
                 {
-                    needs.insert((abort, int_ty.signedness, int_ty.width));
+                    needs.insert((int_ty.width, int_ty.signedness, abort));
                 }
             }
         }
@@ -3050,12 +3051,9 @@ fn emit_c_preamble(out: &mut String, helpers: &ModelHelpers, limits: &VerifyLimi
     out.push_str("extern void __ESBMC_assert(_Bool, const char*);\n");
     out.push_str("extern int __VERIFIER_nondet_int(void);\n");
     out.push_str("extern char __VERIFIER_nondet_char(void);\n");
-    out.push_str("extern unsigned char __VERIFIER_nondet_uchar(void);\n");
     out.push_str("extern unsigned char __VERIFIER_nondet_unsigned_char(void);\n");
     out.push_str("extern short __VERIFIER_nondet_short(void);\n");
-    out.push_str("extern unsigned short __VERIFIER_nondet_ushort(void);\n");
     out.push_str("extern unsigned short __VERIFIER_nondet_unsigned_short(void);\n");
-    out.push_str("extern unsigned int __VERIFIER_nondet_uint(void);\n");
     out.push_str("extern unsigned int __VERIFIER_nondet_unsigned_int(void);\n");
     out.push_str("extern long __VERIFIER_nondet_long(void);\n");
     out.push_str("extern unsigned long __VERIFIER_nondet_unsigned_long(void);\n");
@@ -3081,10 +3079,10 @@ fn emit_c_preamble(out: &mut String, helpers: &ModelHelpers, limits: &VerifyLimi
         "typedef struct {{ uint64_t len; int64_t keys[{btreemap_max}]; int64_t vals[{btreemap_max}]; }} __vow_btreemap_t;\n",
     ));
     out.push_str("typedef struct { int64_t tag; int64_t payload; } __vow_option_t;\n");
-    for &(is_shl, signedness, width) in &helpers.shifts {
-        emit_shift_helper(out, is_shl, signedness, width);
+    for &(width, signedness, is_shr) in &helpers.shifts {
+        emit_shift_helper(out, !is_shr, signedness, width);
     }
-    for &(abort, signedness, width) in &helpers.arith {
+    for &(width, signedness, abort) in &helpers.arith {
         emit_arith_helper(out, abort, signedness, width);
     }
     if !helpers.shifts.is_empty() || !helpers.arith.is_empty() {
@@ -4582,13 +4580,13 @@ mod tests {
             "v1.payload >= -128 && v1.payload <= 127",
             "v2.payload >= -32768 && v2.payload <= 32767",
             "v3.payload >= 0 && v3.payload <= 65535",
-            "v4.payload >= 0 && v4.payload <= 4294967295ULL",
+            "v4.payload >= 0 && v4.payload <= 4294967295",
         ] {
             assert!(c.contains(expected), "missing `{expected}` in:\n{c}");
         }
         assert!(
-            c.contains("v4.payload = __VERIFIER_nondet_ulong()"),
-            "u32 parse payload must use the unsigned nondeterministic model:\n{c}"
+            c.contains("v4.payload = __VERIFIER_nondet_long()"),
+            "u32 parse payload must use the declared nondeterministic model:\n{c}"
         );
     }
 

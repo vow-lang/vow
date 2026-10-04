@@ -1474,22 +1474,22 @@ fn block_result_is_coercible_int_marker(block: &Block) -> bool {
 }
 
 fn choose_match_result_ty(
-    arm_results: &[(BlockId, InstId, Ty, Vec<InstId>)],
+    arm_results: &[(BlockId, InstId, Ty, Vec<InstId>, Vec<InstId>)],
     arm_result_markers: &[bool],
 ) -> Ty {
-    if arm_results.iter().any(|(_, _, ty, _)| *ty == Ty::LinearPtr) {
+    if arm_results.iter().any(|(_, _, ty, _, _)| *ty == Ty::LinearPtr) {
         // Empty generic variants have no payload value from which lowering can
         // infer ownership. A linear sibling carries the checker-resolved
         // wrapper type for the merge, so the Phi must retain that obligation.
         return Ty::LinearPtr;
     }
-    let Some((_, _, first_ty, _)) = arm_results.first() else {
+    let Some((_, _, first_ty, _, _)) = arm_results.first() else {
         return Ty::I64;
     };
     let mut result_ty = *first_ty;
     let mut result_is_marker = arm_result_markers.first().copied().unwrap_or(false);
 
-    for (i, (_, _, arm_ty, _)) in arm_results.iter().enumerate().skip(1) {
+    for (i, (_, _, arm_ty, _, _)) in arm_results.iter().enumerate().skip(1) {
         let arm_is_marker = arm_result_markers.get(i).copied().unwrap_or(false);
         if result_is_marker && ir_ty_is_integer(*arm_ty) {
             result_ty = *arm_ty;
@@ -2002,6 +2002,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                 .collect();
+            let then_mut_upsilons: Vec<InstId> = if then_terminated {
+                Vec::new()
+            } else {
+                then_mut_vals
+                    .iter()
+                    .map(|&val| emit_pending_upsilon(ctx, val, span))
+                    .collect()
+            };
             let then_upsilon_id = if !then_terminated {
                 let u = ctx.emit(
                     Opcode::Upsilon,
@@ -2038,6 +2046,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                 .collect();
+            let else_mut_upsilons: Vec<InstId> = if else_terminated {
+                Vec::new()
+            } else {
+                else_mut_vals
+                    .iter()
+                    .map(|&val| emit_pending_upsilon(ctx, val, span))
+                    .collect()
+            };
             let else_upsilon_id = if !else_terminated {
                 let u = ctx.emit(
                     Opcode::Upsilon,
@@ -2063,39 +2079,19 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             ctx.switch_to_block(merge_block);
 
-            // Create Phis for each mutated variable, wiring Upsilons from both branches.
-            // Upsilons are appended even after the Jump (they are no-ops in codegen but
-            // are found by collect_target_block_args which scans all instructions).
-            for (i, (name, pre_id)) in mutations.iter().enumerate() {
-                let t_val = then_mut_vals[i];
-                let e_val = else_mut_vals[i];
-                if t_val == *pre_id && e_val == *pre_id {
-                    // Variable unchanged by both branches — no phi needed.
-                    continue;
-                }
-                let phi_ty = merge_phi_ty(ctx.inst_ty(t_val), ctx.inst_ty(e_val));
+            // Create a Phi for each mutated variable and wire the Upsilons each
+            // branch emitted for it ahead of its result Upsilon and Jump.
+            for (i, (name, _)) in mutations.iter().enumerate() {
+                let phi_ty = merge_phi_ty(
+                    ctx.inst_ty(then_mut_vals[i]),
+                    ctx.inst_ty(else_mut_vals[i]),
+                );
                 let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
-                if !then_terminated {
-                    ctx.switch_to_block(then_upsilon_block);
-                    ctx.emit(
-                        Opcode::Upsilon,
-                        phi_ty,
-                        vec![t_val],
-                        InstData::PhiTarget(phi_id),
-                        span,
-                    );
-                    ctx.switch_to_block(merge_block);
+                if let Some(&up) = then_mut_upsilons.get(i) {
+                    backpatch_upsilon(ctx, then_upsilon_block, up, phi_id);
                 }
-                if !else_terminated {
-                    ctx.switch_to_block(else_upsilon_block);
-                    ctx.emit(
-                        Opcode::Upsilon,
-                        phi_ty,
-                        vec![e_val],
-                        InstData::PhiTarget(phi_id),
-                        span,
-                    );
-                    ctx.switch_to_block(merge_block);
+                if let Some(&up) = else_mut_upsilons.get(i) {
+                    backpatch_upsilon(ctx, else_upsilon_block, up, phi_id);
                 }
                 ctx.assign(name, phi_id);
             }
@@ -3358,8 +3354,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             let scope_snap = ctx.snapshot_scope();
 
-            // Merge-reaching arm tracking: (exit_block, result_upsilon, result_ty, mut_vals)
-            let mut arm_results: Vec<(BlockId, InstId, Ty, Vec<InstId>)> = Vec::new();
+            // Merge-reaching arm tracking: (exit_block, result_upsilon, result_ty, mut_vals, mut_upsilons)
+            let mut arm_results: Vec<(BlockId, InstId, Ty, Vec<InstId>, Vec<InstId>)> = Vec::new();
             let mut arm_result_markers: Vec<bool> = Vec::new();
             let mut arm_result_values: Vec<InstId> = Vec::new();
             // Parallel to arm_results/arm_result_markers: the arm body expr, so a marker
@@ -3460,6 +3456,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                                 .collect();
 
+                            let arm_mut_upsilons: Vec<InstId> = arm_mut_vals
+                                .iter()
+                                .map(|&val| emit_pending_upsilon(ctx, val, span))
+                                .collect();
                             let up_id = ctx.emit(
                                 Opcode::Upsilon,
                                 Ty::Unit,
@@ -3475,7 +3475,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                 span,
                             );
                             let exit_block = ctx.current_block;
-                            arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
+                            arm_results.push((
+                                exit_block,
+                                up_id,
+                                arm_ty,
+                                arm_mut_vals,
+                                arm_mut_upsilons,
+                            ));
                             arm_result_markers.push(expr_is_coercible_int_marker(&arm.body));
                             arm_result_values.push(arm_result);
                             arm_bodies.push(&arm.body);
@@ -3506,6 +3512,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                                 .collect();
 
+                            let arm_mut_upsilons: Vec<InstId> = arm_mut_vals
+                                .iter()
+                                .map(|&val| emit_pending_upsilon(ctx, val, span))
+                                .collect();
                             let up_id = ctx.emit(
                                 Opcode::Upsilon,
                                 Ty::Unit,
@@ -3521,7 +3531,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                 span,
                             );
                             let exit_block = ctx.current_block;
-                            arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
+                            arm_results.push((
+                                exit_block,
+                                up_id,
+                                arm_ty,
+                                arm_mut_vals,
+                                arm_mut_upsilons,
+                            ));
                             arm_result_markers.push(expr_is_coercible_int_marker(&arm.body));
                             arm_result_values.push(arm_result);
                             arm_bodies.push(&arm.body);
@@ -3537,6 +3553,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
                         let arm_mut_vals: Vec<InstId> =
                             mutations.iter().map(|(_, pre_id)| *pre_id).collect();
+                        let arm_mut_upsilons: Vec<InstId> = arm_mut_vals
+                            .iter()
+                            .map(|&val| emit_pending_upsilon(ctx, val, span))
+                            .collect();
 
                         let up_id = ctx.emit(
                             Opcode::Upsilon,
@@ -3552,7 +3572,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             InstData::JumpTarget(merge_block),
                             span,
                         );
-                        arm_results.push((arm_block, up_id, Ty::Unit, arm_mut_vals));
+                        arm_results.push((
+                            arm_block,
+                            up_id,
+                            Ty::Unit,
+                            arm_mut_vals,
+                            arm_mut_upsilons,
+                        ));
                         arm_result_markers.push(false);
                         arm_result_values.push(unit);
                         arm_bodies.push(&arm.body);
@@ -3567,30 +3593,19 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 return ctx.emit(Opcode::Unreachable, Ty::Unit, vec![], InstData::None, span);
             }
 
-            // Create Phis for mutated variables.
-            for (i, (name, pre_id)) in mutations.iter().enumerate() {
-                let changed = arm_results.iter().any(|(_, _, _, mvs)| mvs[i] != *pre_id);
-                if !changed {
-                    continue;
-                }
+            // Create a Phi for each mutated variable and wire the Upsilons every
+            // arm emitted for it ahead of its result Upsilon and Jump.
+            for (i, (name, _)) in mutations.iter().enumerate() {
                 let phi_ty = arm_results
                     .iter()
                     .skip(1)
-                    .fold(ctx.inst_ty(arm_results[0].3[i]), |ty, (_, _, _, values)| {
-                        merge_phi_ty(ty, ctx.inst_ty(values[i]))
+                    .fold(ctx.inst_ty(arm_results[0].3[i]), |ty, arm| {
+                        merge_phi_ty(ty, ctx.inst_ty(arm.3[i]))
                     });
                 let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
-                for (exit_block, _, _, arm_mut_vals) in &arm_results {
-                    ctx.switch_to_block(*exit_block);
-                    ctx.emit(
-                        Opcode::Upsilon,
-                        phi_ty,
-                        vec![arm_mut_vals[i]],
-                        InstData::PhiTarget(phi_id),
-                        span,
-                    );
+                for (exit_block, _, _, _, mut_upsilons) in &arm_results {
+                    backpatch_upsilon(ctx, *exit_block, mut_upsilons[i], phi_id);
                 }
-                ctx.switch_to_block(merge_block);
                 ctx.assign(name, phi_id);
             }
 
@@ -3612,9 +3627,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     }
                     let block_idx = arm_block.0 as usize;
                     // Locate the arm's own result Upsilon by id rather than assuming
-                    // block position: the "Phis for mutated variables" pass above may
-                    // have already appended extra Upsilons after this arm's own
-                    // [Upsilon, Jump] pair, so it's not reliably the block's tail.
+                    // block position: the arm's mutation Upsilons precede its result
+                    // Upsilon, so it is not the block's first Upsilon either.
                     let up_pos = ctx.func.blocks[block_idx]
                         .insts
                         .iter()
@@ -3643,7 +3657,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
             merge_compatible_aggregate_metadata(ctx, &arm_result_values, phi_id);
 
-            for (arm_block, up_id, _, _) in &arm_results {
+            for (arm_block, up_id, _, _, _) in &arm_results {
                 backpatch_upsilon(ctx, *arm_block, *up_id, phi_id);
             }
 
@@ -4736,6 +4750,16 @@ fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<In
             op: UnOp::Neg,
             operand,
         } => {
+            if let ExprKind::Lit(Lit::Int(value)) = &operand.kind
+                && !matches!(ty, Ty::I128 | Ty::U128)
+            {
+                return Some(emit_narrow_integer_constant(
+                    ctx,
+                    value.wrapping_neg(),
+                    ty,
+                    expr.span,
+                ));
+            }
             let zero = emit_narrow_integer_constant(ctx, 0, ty, expr.span);
             let value = lower_integer_marker_as(ctx, operand, ty)?;
             Some(ctx.emit(
@@ -4807,8 +4831,7 @@ fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: T
 /// The branch's Upsilon still carries its speculative default-width value
 /// (see `expr_is_coercible_int_marker`) from before the merge's real result
 /// type was known. Locates the Upsilon **by id**, not by block-tail
-/// position, because the mutated-variable Phi loop earlier in the same
-/// `ExprKind::If` arm may already have appended extra Upsilons after it.
+/// position, because the branch's mutation Upsilons precede it in the block.
 /// Returns `None` if the Upsilon can't be found (should not happen for a
 /// live branch, but callers must not panic on a missing id).
 fn renarrow_if_branch_result(
@@ -4884,6 +4907,18 @@ fn binop_opcode(op: BinOp, operand_ty: &Ty) -> (Opcode, Ty, InstData) {
         BinOp::Shl => (Opcode::Shl, result_ty, integer_data),
         BinOp::Shr => (Opcode::Shr, result_ty, integer_data),
     }
+}
+
+/// An Upsilon whose Phi does not exist yet: emitted in the branch block now and
+/// pointed at its Phi by `backpatch_upsilon` once the merge block creates it.
+fn emit_pending_upsilon(ctx: &mut LowerCtx, value: InstId, span: Span) -> InstId {
+    ctx.emit(
+        Opcode::Upsilon,
+        Ty::Unit,
+        vec![value],
+        InstData::PhiTarget(InstId(u32::MAX)),
+        span,
+    )
 }
 
 fn backpatch_upsilon(ctx: &mut LowerCtx, block_id: BlockId, upsilon_id: InstId, phi_id: InstId) {
