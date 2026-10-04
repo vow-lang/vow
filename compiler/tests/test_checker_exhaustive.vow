@@ -1,0 +1,67 @@
+module TestCheckerExhaustive
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use checker
+use env
+
+fn checked_diags(source: String) -> DiagCtx [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("exhaustive.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < parsed.items.len() {
+        item_files.push(String::from("exhaustive.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("exhaustive.vow"));
+    check_module(check_env, parsed, item_files);
+    dctx
+}
+
+fn source_with_arms(arms: String) -> String {
+    let src: String = String::from("module ExhaustiveTest\nenum Color { Red, Green, Blue }\nfn describe(c: Color) -> i64 {\n    match c {\n");
+    src.push_str(arms);
+    src.push_str(String::from("    }\n}\n"));
+    src
+}
+
+fn first_diag(dctx: DiagCtx) -> Diagnostic {
+    let diags: Vec<Diagnostic> = dctx.diags;
+    diags[0]
+}
+
+fn check_non_exhaustive_match_reports_missing_variant() -> i32 [io] {
+    let dctx: DiagCtx = checked_diags(source_with_arms(String::from("        Color::Red => 1,\n        Color::Green => 2,\n")));
+    if dctx.error_count != 1 { return 1; }
+    let d: Diagnostic = first_diag(dctx);
+    if d.code != EC_NON_EXHAUSTIVE_MATCH() { return 2; }
+    if !d.message.contains(String::from("Blue")) { return 3; }
+    0
+}
+
+fn check_wildcard_arm_suppresses_non_exhaustive() -> i32 [io] {
+    let dctx: DiagCtx = checked_diags(source_with_arms(String::from("        Color::Red => 1,\n        Color::Green => 2,\n        _ => 3,\n")));
+    if dctx.error_count != 0 { return 11; }
+    0
+}
+
+fn check_exhaustive_match_has_no_errors() -> i32 [io] {
+    let dctx: DiagCtx = checked_diags(source_with_arms(String::from("        Color::Red => 1,\n        Color::Green => 2,\n        Color::Blue => 3,\n")));
+    if dctx.error_count != 0 { return 21; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let r1: i32 = check_non_exhaustive_match_reports_missing_variant();
+    if r1 != 0 { return r1; }
+    let r2: i32 = check_wildcard_arm_suppresses_non_exhaustive();
+    if r2 != 0 { return r2; }
+    check_exhaustive_match_has_no_errors()
+}
