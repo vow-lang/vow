@@ -1641,7 +1641,7 @@ fn analyze_function(
     }
 
     collect_regular_use_markers(func, &mut must_outlive);
-    propagate_alias_markers(func, summaries, &phi_arms, &mut must_outlive);
+    propagate_alias_markers(func, summaries, &phi_arms, &inst_lookup, &mut must_outlive);
 
     // Compute return-region contributions in a deep pass, walking Phi/Call
     // origins with the current summaries fixed. This is the canonical
@@ -2185,7 +2185,9 @@ fn handle_inst(
                     &mut BTreeSet::new(),
                 );
                 // If the target traces to a parameter, record a store_effect.
-                if let Some(target_param) = trace_param(target_id, inst_lookup) {
+                if let Some(target_param) =
+                    trace_target_param(target_id, inst_lookup, summaries)
+                {
                     add_store_effect_source_constraints(
                         summary,
                         target_param,
@@ -2239,7 +2241,9 @@ fn handle_inst(
                         false,
                         &mut BTreeSet::new(),
                     );
-                    if let Some(target_param) = trace_param(target_id, inst_lookup) {
+                    if let Some(target_param) =
+                        trace_target_param(target_id, inst_lookup, summaries)
+                    {
                         add_store_effect_source_constraints(
                             summary,
                             target_param,
@@ -2250,7 +2254,8 @@ fn handle_inst(
                     }
                 });
                 if let Some(target_id) = extern_growth_target(sym, &inst.args)
-                    && let Some(target_param) = trace_param(target_id, inst_lookup)
+                    && let Some(target_param) =
+                        trace_target_param(target_id, inst_lookup, summaries)
                 {
                     summary.store_effects.insert((
                         target_param,
@@ -2280,7 +2285,9 @@ fn handle_inst(
                         continue;
                     }
                     let target_arg_id = inst.args[target_idx];
-                    if let Some(current_target_param) = trace_param(target_arg_id, inst_lookup) {
+                    if let Some(current_target_param) =
+                        trace_target_param(target_arg_id, inst_lookup, summaries)
+                    {
                         publish_transitive_store_effect(
                             summary,
                             current_target_param,
@@ -2749,13 +2756,163 @@ fn collect_regular_use_markers(
     }
 }
 
+/// What a function stores into which container, for the containment closure.
+///
+/// A value stored through a container `c` must outlive `c`, and everything
+/// reachable from `c` outlives it too. A callee that stores into a parameter
+/// container writes into the hidden arena of the region the caller passes for
+/// that argument, and may reach any container nested in it; a store through a
+/// projection (`s.items.push(v)`) lands in whichever container `s.items` holds.
+/// Both are sound only if the region of the outermost local container (the
+/// base) is at least the region of everything stored into it. `widened` holds
+/// those bases; `pairs` holds the `(container base, contained value)` facts the
+/// closure walks.
+struct ContainmentFacts<'a> {
+    inst_lookup: &'a BTreeMap<InstId, (BlockId, &'a Inst)>,
+    phi_arms: &'a BTreeMap<InstId, Vec<InstId>>,
+    summaries: &'a [InternalSummary],
+    /// `(container base, contained value, direct)`. A pair is direct when this
+    /// function itself stores the value; pairs derived from a callee summary or
+    /// from the arguments embedded in a fresh result are over-approximations.
+    pairs: Vec<(InstId, InstId, bool)>,
+    widened: BTreeSet<InstId>,
+}
+
+impl<'a> ContainmentFacts<'a> {
+    fn new(
+        inst_lookup: &'a BTreeMap<InstId, (BlockId, &'a Inst)>,
+        phi_arms: &'a BTreeMap<InstId, Vec<InstId>>,
+        summaries: &'a [InternalSummary],
+    ) -> Self {
+        ContainmentFacts {
+            inst_lookup,
+            phi_arms,
+            summaries,
+            pairs: Vec::new(),
+            widened: BTreeSet::new(),
+        }
+    }
+
+    fn is_param(&self, id: InstId) -> bool {
+        matches!(self.inst_lookup.get(&id), Some((_, inst)) if inst.opcode == Opcode::GetArg)
+    }
+
+    /// Only pointer-typed values can hold or be a container; scalars carry no
+    /// region.
+    fn is_pointer(&self, id: InstId) -> bool {
+        matches!(
+            self.inst_lookup.get(&id),
+            Some((_, inst)) if matches!(inst.ty, Ty::Ptr | Ty::LinearPtr)
+        )
+    }
+
+    /// `source` is stored through `target`. `widen` marks the containers as
+    /// needing the closure even when `target` is the container itself (a call
+    /// whose callee stores into that argument); a store through a projection
+    /// always does. With `flow`, a projection base also passes the markers of
+    /// its later widening on to the stored value via an alias edge.
+    fn record_store(
+        &mut self,
+        target: InstId,
+        source: InstId,
+        widen: bool,
+        flow: bool,
+        alias_edges: &mut Vec<(InstId, InstId)>,
+    ) {
+        for (base, projected) in
+            container_leaves(target, self.inst_lookup, self.phi_arms, self.summaries)
+        {
+            if self.is_param(base) {
+                continue;
+            }
+            self.pairs.push((base, source, !widen));
+            if projected && flow {
+                alias_edges.push((base, source));
+            }
+            if widen || projected {
+                self.widened.insert(base);
+            }
+        }
+    }
+
+    fn record_widened_target(&mut self, target: InstId) {
+        for (base, _) in container_leaves(target, self.inst_lookup, self.phi_arms, self.summaries) {
+            if !self.is_param(base) {
+                self.widened.insert(base);
+            }
+        }
+    }
+
+    fn alias_call_args(&self, id: InstId) -> Option<Vec<InstId>> {
+        let (_, inst) = self.inst_lookup.get(&id)?;
+        alias_call_args(inst, self.summaries)
+    }
+
+    /// Edges `(contained, container)`: the contained value's markers flow into
+    /// every widened container that holds it, transitively. The second set holds
+    /// the containers that hold a parameter's container: its region belongs to
+    /// the caller, which this function cannot name (see "Stores through nested
+    /// containers" in `docs/design/arena_memory.md`).
+    fn closure_edges(&self) -> (Vec<(InstId, InstId)>, BTreeSet<InstId>) {
+        let mut reached: BTreeSet<InstId> = self.widened.clone();
+        let mut edges: BTreeSet<(InstId, InstId)> = BTreeSet::new();
+        let mut param_holders: BTreeSet<InstId> = BTreeSet::new();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &(container, contained, direct) in &self.pairs {
+                if !reached.contains(&container) {
+                    continue;
+                }
+                let mut values = vec![contained];
+                let mut seen = BTreeSet::new();
+                while let Some(v) = values.pop() {
+                    if !seen.insert(v) {
+                        continue;
+                    }
+                    if let Some(arms) = self.phi_arms.get(&v) {
+                        values.extend(arms.iter().copied());
+                        continue;
+                    }
+                    if let Some(args) = self.alias_call_args(v) {
+                        values.extend(args);
+                        continue;
+                    }
+                    // A projection read is typed `i64` whether the field is a
+                    // scalar or a heap pointer, so a local projection holds
+                    // through its base; only a pointer-typed value or a
+                    // parameter itself is evidence of a held caller container.
+                    let base = projection_base(v, self.inst_lookup, self.summaries);
+                    let value_is_pointer = self.is_pointer(v);
+                    for held in [v, base] {
+                        if !self.is_pointer(held) {
+                            continue;
+                        }
+                        if self.is_param(held) {
+                            if direct && (held == v || value_is_pointer) {
+                                changed |= param_holders.insert(container);
+                            }
+                        } else if held != container {
+                            changed |= edges.insert((held, container));
+                            changed |= reached.insert(held);
+                        }
+                    }
+                }
+            }
+        }
+        (edges.into_iter().collect(), param_holders)
+    }
+}
+
 fn propagate_alias_markers(
     func: &Function,
     summaries: &[InternalSummary],
     phi_arms: &BTreeMap<InstId, Vec<InstId>>,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     must_outlive: &mut BTreeMap<InstId, BTreeSet<MustOutliveMarker>>,
 ) {
     let mut alias_edges: Vec<(InstId, InstId)> = Vec::new();
+    let mut containment = ContainmentFacts::new(inst_lookup, phi_arms, summaries);
     for (phi_id, arms) in phi_arms {
         for &arm_id in arms {
             alias_edges.push((*phi_id, arm_id));
@@ -2780,11 +2937,25 @@ fn propagate_alias_markers(
                     // the target's origin marker; this edge catches later
                     // use-derived markers such as `Return(target)`.
                     alias_edges.push((inst.args[0], inst.args[1]));
+                    containment.record_store(
+                        inst.args[0],
+                        inst.args[1],
+                        false,
+                        true,
+                        &mut alias_edges,
+                    );
                 }
                 Opcode::Call => {
                     if let InstData::CallExtern(sym) = &inst.data {
                         for_each_extern_store_edge(sym, &inst.args, |target_id, source_id| {
                             alias_edges.push((target_id, source_id));
+                            containment.record_store(
+                                target_id,
+                                source_id,
+                                false,
+                                true,
+                                &mut alias_edges,
+                            );
                         });
                         if matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get")
                             && let Some(&source) = inst.args.first()
@@ -2804,11 +2975,26 @@ fn propagate_alias_markers(
                             continue;
                         }
                         let target_arg = inst.args[target_idx];
+                        // A growth-only effect (`ConstantGlobal`) stores no new
+                        // heap value, so it needs no closure over the container.
+                        if !matches!(
+                            source_constraint,
+                            InternalReturnRegion::Published(RegionConstraint::ConstantGlobal)
+                        ) {
+                            containment.record_widened_target(target_arg);
+                        }
                         match source_constraint {
                             InternalReturnRegion::Published(RegionConstraint::AliasOf(p)) => {
                                 let p_idx = *p as usize;
                                 if p_idx < inst.args.len() {
                                     alias_edges.push((target_arg, inst.args[p_idx]));
+                                    containment.record_store(
+                                        target_arg,
+                                        inst.args[p_idx],
+                                        true,
+                                        true,
+                                        &mut alias_edges,
+                                    );
                                 }
                             }
                             InternalReturnRegion::Published(RegionConstraint::AliasOfAny(ps)) => {
@@ -2816,6 +3002,13 @@ fn propagate_alias_markers(
                                     let p_idx = *p as usize;
                                     if p_idx < inst.args.len() {
                                         alias_edges.push((target_arg, inst.args[p_idx]));
+                                        containment.record_store(
+                                            target_arg,
+                                            inst.args[p_idx],
+                                            true,
+                                            false,
+                                            &mut alias_edges,
+                                        );
                                     }
                                 }
                             }
@@ -2847,6 +3040,7 @@ fn propagate_alias_markers(
                             // arguments that may have been embedded in it.
                             for &arg_id in &inst.args {
                                 alias_edges.push((inst.id, arg_id));
+                                containment.pairs.push((inst.id, arg_id, false));
                             }
                         }
                         _ => {}
@@ -2857,13 +3051,55 @@ fn propagate_alias_markers(
         }
     }
 
+    // A held container's markers carry its later widening; its defining block
+    // is not a marker (the LUB adds it), so state it for the holder explicitly.
+    let (closure, param_holders) = containment.closure_edges();
+    for &(held, _) in &closure {
+        if let Some((block_id, inst)) = inst_lookup.get(&held)
+            && is_heap_producing(inst, summaries)
+        {
+            add_marker(must_outlive, held, MustOutliveMarker::Block(*block_id));
+        }
+    }
+    alias_edges.extend(closure);
+
+    let bound = alias_edges.len().saturating_add(func.blocks.len()).max(8);
+    propagate_to_fixpoint(&alias_edges, must_outlive, bound);
+
+    // A block-local container that holds a parameter's container hands its own
+    // arena to a callee that stores through it, but the stored value must
+    // outlive the caller's container, whose region this function cannot name:
+    // the holder (and what is stored through it) goes to the root arena. A
+    // holder that already escapes to the caller keeps its caller region.
+    let root_holders: Vec<InstId> = param_holders
+        .into_iter()
+        .filter(|holder| {
+            must_outlive.get(holder).is_none_or(|markers| {
+                markers
+                    .iter()
+                    .all(|m| matches!(m, MustOutliveMarker::Block(_)))
+            })
+        })
+        .collect();
+    if !root_holders.is_empty() {
+        for holder in root_holders {
+            add_marker(must_outlive, holder, MustOutliveMarker::WidenedCallerRoot);
+        }
+        propagate_to_fixpoint(&alias_edges, must_outlive, bound);
+    }
+}
+
+fn propagate_to_fixpoint(
+    alias_edges: &[(InstId, InstId)],
+    must_outlive: &mut BTreeMap<InstId, BTreeSet<MustOutliveMarker>>,
+    bound: usize,
+) {
     let mut changed = true;
     let mut iters = 0usize;
-    let bound = alias_edges.len().saturating_add(func.blocks.len()).max(8);
     while changed && iters <= bound {
         changed = false;
         iters += 1;
-        for &(result_id, arg_id) in &alias_edges {
+        for &(result_id, arg_id) in alias_edges {
             changed |= propagate_alias(must_outlive, result_id, arg_id);
         }
     }
@@ -3361,9 +3597,13 @@ fn add_store_target_markers(
         }
         return;
     }
-    let marker = match trace_param(target_id, inst_lookup) {
+    let marker = match trace_target_param(target_id, inst_lookup, summaries) {
         Some(p) => MustOutliveMarker::CallerStoreTarget(p),
-        None => target_region_marker(target_id, inst_lookup, summaries),
+        None => target_region_marker(
+            projection_base(target_id, inst_lookup, summaries),
+            inst_lookup,
+            summaries,
+        ),
     };
     // A container reached through a Phi merge cannot commit to a single hidden
     // caller slot: distinct arms may bind distinct slots, which the LUB rejects
@@ -3386,14 +3626,120 @@ fn add_store_target_markers(
     add_marker(must_outlive, source_id, marker);
 }
 
+/// Follow `FieldGet`, `Load` and `Vec` element reads (and internal calls that
+/// return an alias of an argument) back to the value the projection was read
+/// from. A container reached through a projection of a local aggregate is owned
+/// by that aggregate's region, not by the projection.
+fn projection_base(
+    id: InstId,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    summaries: &[InternalSummary],
+) -> InstId {
+    let mut current = id;
+    let mut seen = BTreeSet::new();
+    while seen.insert(current) {
+        let Some((_, inst)) = inst_lookup.get(&current) else {
+            break;
+        };
+        let source = match (&inst.opcode, &inst.data) {
+            (Opcode::FieldGet | Opcode::Load, _) => inst.args.first().copied(),
+            (Opcode::Call, InstData::CallExtern(sym))
+                if matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get") =>
+            {
+                inst.args.first().copied()
+            }
+            (Opcode::Call, InstData::CallTarget(_)) => alias_call_arg(inst, summaries),
+            _ => None,
+        };
+        match source {
+            Some(source) => current = source,
+            None => break,
+        }
+    }
+    current
+}
+
+/// The concrete containers a store through `id` may reach: the Phi arms of `id`
+/// (recursively), each followed back to its projection base. The flag is true
+/// when the container was reached through a projection, i.e. the base owns it
+/// without being the store target itself.
+fn container_leaves(
+    id: InstId,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
+    summaries: &[InternalSummary],
+) -> Vec<(InstId, bool)> {
+    let mut leaves = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut work = vec![id];
+    while let Some(cur) = work.pop() {
+        if !seen.insert(cur) {
+            continue;
+        }
+        if let Some(arms) = phi_arms.get(&cur) {
+            work.extend(arms.iter().copied());
+            continue;
+        }
+        let base = projection_base(cur, inst_lookup, summaries);
+        leaves.push((base, base != cur));
+    }
+    leaves
+}
+
 fn trace_param(id: InstId, inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>) -> Option<u32> {
     let mut visiting = VecDeque::new();
-    trace_param_inner(id, inst_lookup, &mut visiting)
+    trace_param_inner(id, inst_lookup, None, &mut visiting)
+}
+
+/// `trace_param` for a store target: also follows an internal call whose callee
+/// returns `AliasOf(j)` back to its `j`-th argument, so a store through an
+/// accessor (`items(s).push(v)`) is a store into `s`.
+fn trace_target_param(
+    id: InstId,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    summaries: &[InternalSummary],
+) -> Option<u32> {
+    let mut visiting = VecDeque::new();
+    trace_param_inner(id, inst_lookup, Some(summaries), &mut visiting)
+}
+
+/// The arguments an internal call result is the same object as, when its callee
+/// returns an alias of them (`AliasOf` or `AliasOfAny`).
+fn alias_call_args(inst: &Inst, summaries: &[InternalSummary]) -> Option<Vec<InstId>> {
+    let InstData::CallTarget(callee) = &inst.data else {
+        return None;
+    };
+    let positions: Vec<u32> = match &summaries.get(callee.0 as usize)?.return_region {
+        InternalReturnRegion::Published(RegionConstraint::AliasOf(j)) => vec![*j],
+        InternalReturnRegion::Published(RegionConstraint::AliasOfAny(js)) => js.clone(),
+        _ => return None,
+    };
+    Some(
+        positions
+            .into_iter()
+            .filter_map(|j| inst.args.get(j as usize).copied())
+            .collect(),
+    )
+}
+
+/// The single argument an internal call result is the same object as, when its
+/// callee returns `AliasOf(j)`.
+fn alias_call_arg(inst: &Inst, summaries: &[InternalSummary]) -> Option<InstId> {
+    let InstData::CallTarget(callee) = &inst.data else {
+        return None;
+    };
+    match &summaries.get(callee.0 as usize)?.return_region {
+        InternalReturnRegion::Published(RegionConstraint::AliasOf(j)) => {
+            inst.args.get(*j as usize).copied()
+        }
+        _ => None,
+    }
 }
 
 fn trace_param_inner(
     id: InstId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    summaries: Option<&[InternalSummary]>,
     visiting: &mut VecDeque<InstId>,
 ) -> Option<u32> {
     if visiting.contains(&id) {
@@ -3405,7 +3751,7 @@ fn trace_param_inner(
         (Opcode::FieldGet, _) | (Opcode::Load, _) => {
             let source = *inst.args.first()?;
             visiting.push_back(id);
-            let result = trace_param_inner(source, inst_lookup, visiting);
+            let result = trace_param_inner(source, inst_lookup, summaries, visiting);
             visiting.pop_back();
             result
         }
@@ -3414,7 +3760,14 @@ fn trace_param_inner(
         {
             let source = *inst.args.first()?;
             visiting.push_back(id);
-            let result = trace_param_inner(source, inst_lookup, visiting);
+            let result = trace_param_inner(source, inst_lookup, summaries, visiting);
+            visiting.pop_back();
+            result
+        }
+        (Opcode::Call, InstData::CallTarget(_)) => {
+            let source = alias_call_arg(inst, summaries?)?;
+            visiting.push_back(id);
+            let result = trace_param_inner(source, inst_lookup, summaries, visiting);
             visiting.pop_back();
             result
         }
@@ -8850,6 +9203,490 @@ mod tests {
             conflicts.is_empty(),
             "did not expect RegionConflict for ConstStr→param store, got: {:?}",
             conflicts
+        );
+    }
+
+    /// `push_fresh(s)`: pushes a fresh `Vec` into the container `s.items`, a
+    /// projection of its parameter. Its summary stores `FreshInCaller` into
+    /// parameter 0.
+    fn push_fresh_callee() -> Function {
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                1,
+                Opcode::FieldGet,
+                Ty::Ptr,
+                vec![0],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_vec_new_val".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::Unit,
+                vec![1, 2],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(4, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        function(
+            0,
+            "push_fresh",
+            vec![Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, insts)],
+        )
+    }
+
+    /// `x = Vec::new(); { s = Sink { items: x }; push_fresh(s); } return x`
+    /// with `s` declared in a nested block.
+    fn holder_around_outer_container(returns_outer: bool) -> Module {
+        let ret_args = if returns_outer { vec![10] } else { vec![] };
+        let b0 = vec![
+            inst(
+                10,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_vec_new_val".to_string()),
+            ),
+            jump_inst(20, 1),
+        ];
+        let b1 = vec![
+            inst(
+                11,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                12,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![11, 10],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                13,
+                Opcode::Call,
+                Ty::Unit,
+                vec![11],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(
+                14,
+                Opcode::Return,
+                if returns_outer { Ty::Ptr } else { Ty::Unit },
+                ret_args,
+                InstData::None,
+            ),
+        ];
+        let caller = function(
+            1,
+            "caller",
+            vec![],
+            if returns_outer { Ty::Ptr } else { Ty::Unit },
+            vec![block(0, b0), block(1, b1)],
+        );
+        module(vec![push_fresh_callee(), caller])
+    }
+
+    #[test]
+    fn effect_target_holder_outlives_the_container_it_wraps() {
+        let mut m = holder_around_outer_container(true);
+        infer_regions(&mut m);
+        let b1 = &m.functions[1].blocks[1].insts;
+        assert_eq!(
+            b1[0].region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "the callee stores into the returned container through the holder, so the \
+             holder (whose arena the callee receives) must outlive that container"
+        );
+    }
+
+    #[test]
+    fn effect_target_holder_widens_to_the_wrapped_container_region() {
+        let mut m = holder_around_outer_container(false);
+        infer_regions(&mut m);
+        let b1 = &m.functions[1].blocks[1].insts;
+        assert_eq!(
+            b1[0].region,
+            RegionId::Block(BlockId(0)),
+            "the holder takes the region of the container declared in the outer block"
+        );
+    }
+
+    #[test]
+    fn holder_without_store_effect_call_stays_block_local() {
+        let b0 = vec![
+            inst(
+                10,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_vec_new_val".to_string()),
+            ),
+            jump_inst(20, 1),
+        ];
+        let b1 = vec![
+            inst(
+                11,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                12,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![11, 10],
+                InstData::FieldIndex(0),
+            ),
+            inst(13, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "caller",
+            vec![],
+            Ty::Unit,
+            vec![block(0, b0), block(1, b1)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+        assert_eq!(
+            m.functions[0].blocks[1].insts[0].region,
+            RegionId::Block(BlockId(1)),
+            "no callee stores through the holder, so it keeps its block-local region"
+        );
+    }
+
+    #[test]
+    fn effect_target_projection_widens_its_base_not_the_projection() {
+        // `h = Holder { sink: s }; push_fresh(h.sink)` where `s` outlives `h`.
+        let b0 = vec![
+            inst(
+                10,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_vec_new_val".to_string()),
+            ),
+            jump_inst(20, 1),
+        ];
+        let b1 = vec![
+            inst(
+                11,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                12,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![11, 10],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                13,
+                Opcode::FieldGet,
+                Ty::Ptr,
+                vec![11],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                14,
+                Opcode::Call,
+                Ty::Unit,
+                vec![13],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(15, Opcode::Return, Ty::Ptr, vec![10], InstData::None),
+        ];
+        let caller = function(
+            1,
+            "caller",
+            vec![],
+            Ty::Ptr,
+            vec![block(0, b0), block(1, b1)],
+        );
+        let mut m = module(vec![push_fresh_callee(), caller]);
+        infer_regions(&mut m);
+        assert_eq!(
+            m.functions[1].blocks[1].insts[0].region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "the base of the projected effect target outlives the returned container"
+        );
+    }
+
+    #[test]
+    fn push_through_local_projection_is_owned_by_the_base_not_root() {
+        // x = Vec::new(); s = Sink { items: x }; s.items.push(fresh); return x
+        let insts = vec![
+            inst(
+                0,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_vec_new_val".to_string()),
+            ),
+            inst(
+                1,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                2,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![1, 0],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                3,
+                Opcode::FieldGet,
+                Ty::Ptr,
+                vec![1],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                4,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_vec_new_val".to_string()),
+            ),
+            inst(
+                5,
+                Opcode::Call,
+                Ty::Unit,
+                vec![3, 4],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(6, Opcode::Return, Ty::Ptr, vec![0], InstData::None),
+        ];
+        let f = function(0, "local_push", vec![], Ty::Ptr, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+        assert_eq!(
+            m.functions[0].blocks[0].insts[4].region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "a value pushed into the returned container follows it to the caller region, \
+             not the root arena"
+        );
+    }
+
+    #[test]
+    fn push_through_local_projection_of_a_dying_holder_is_block_local() {
+        // s = Sink { items: Vec::new() }; s.items.push(fresh)   (nothing escapes)
+        let insts = vec![
+            inst(
+                0,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_vec_new_val".to_string()),
+            ),
+            inst(
+                1,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                2,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![1, 0],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                3,
+                Opcode::FieldGet,
+                Ty::Ptr,
+                vec![1],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                4,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_vec_new_val".to_string()),
+            ),
+            inst(
+                5,
+                Opcode::Call,
+                Ty::Unit,
+                vec![3, 4],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(6, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(0, "local_push", vec![], Ty::Unit, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+        assert!(
+            matches!(m.functions[0].blocks[0].insts[4].region, RegionId::Block(_)),
+            "a value pushed through a projection of a local that never escapes dies with \
+             the block, got {:?}",
+            m.functions[0].blocks[0].insts[4].region
+        );
+    }
+
+    #[test]
+    fn push_through_alias_returning_accessor_is_a_store_into_the_argument() {
+        // items(s) -> s.items            (summary: AliasOf(0))
+        // f(s): items(s).push(Vec::new())  (stores a fresh value into param 0)
+        let accessor = function(
+            0,
+            "items",
+            vec![Ty::Ptr],
+            Ty::Ptr,
+            vec![block(
+                0,
+                vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(
+                        1,
+                        Opcode::FieldGet,
+                        Ty::I64,
+                        vec![0],
+                        InstData::FieldIndex(0),
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            )],
+        );
+        let pusher = function(
+            1,
+            "f",
+            vec![Ty::Ptr],
+            Ty::Unit,
+            vec![block(
+                0,
+                vec![
+                    inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(
+                        11,
+                        Opcode::Call,
+                        Ty::I64,
+                        vec![10],
+                        InstData::CallTarget(FuncId(0)),
+                    ),
+                    inst(
+                        12,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![],
+                        InstData::CallExtern("__vow_vec_new_val".to_string()),
+                    ),
+                    inst(
+                        13,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![11, 12],
+                        InstData::CallExtern("__vow_vec_push_val".to_string()),
+                    ),
+                    inst(14, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            )],
+        );
+        let mut m = module(vec![accessor, pusher]);
+        infer_regions(&mut m);
+        assert_eq!(
+            m.functions[0].summary.return_region,
+            RegionConstraint::AliasOf(0)
+        );
+        assert!(
+            m.functions[1]
+                .summary
+                .store_effects
+                .iter()
+                .any(|e| e.target == 0 && e.source == RegionConstraint::FreshInCaller),
+            "a store through the accessor result is a store into parameter 0: {:?}",
+            m.functions[1].summary.store_effects
+        );
+        assert_eq!(
+            m.functions[1].blocks[0].insts[2].region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "the pushed value lives in the parameter container's hidden arena, not root"
+        );
+    }
+
+    /// `f(x) { s = Sink { items: x }; push_fresh(s); [return s] }`
+    fn holder_of_parameter_container(returns_holder: bool) -> RegionId {
+        let insts = vec![
+            inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                11,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                12,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![11, 10],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                13,
+                Opcode::Call,
+                Ty::Unit,
+                vec![11],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(
+                14,
+                Opcode::Return,
+                if returns_holder { Ty::Ptr } else { Ty::Unit },
+                if returns_holder { vec![11] } else { vec![] },
+                InstData::None,
+            ),
+        ];
+        let f = function(
+            1,
+            "f",
+            vec![Ty::Ptr],
+            if returns_holder { Ty::Ptr } else { Ty::Unit },
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![push_fresh_callee(), f]);
+        infer_regions(&mut m);
+        m.functions[1].blocks[0].insts[1].region
+    }
+
+    #[test]
+    fn block_local_holder_of_a_parameter_container_goes_to_the_root_arena() {
+        assert_eq!(
+            holder_of_parameter_container(false),
+            RegionId::Root,
+            "the callee stores through the holder into the caller's container, which the \
+             holder's block arena does not outlive"
+        );
+    }
+
+    #[test]
+    fn escaping_holder_of_a_parameter_container_keeps_its_caller_region() {
+        assert_eq!(
+            holder_of_parameter_container(true),
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "a holder returned to the caller is already caller-owned"
         );
     }
 }

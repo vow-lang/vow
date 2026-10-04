@@ -1,0 +1,34 @@
+// BENCH: max-rss-kb 7500
+module AllocLoopStructMap
+
+struct Holder {
+    map: HashMap<i64, i64>,
+    tag: i64,
+}
+
+fn work() -> i64 {
+    let h: Holder = Holder { map: HashMap::new(), tag: 1 };
+    let m: HashMap<i64, i64> = h.map;
+    let mut i: i64 = 0;
+    while i < 64 {
+        m.insert(i, i);
+        i = i + 1;
+    }
+    let a: i64 = match m.get(h.tag) {
+        Option::Some(v) => v,
+        Option::None => 0,
+    };
+    a + (m.len() as i64)
+}
+
+fn main() -> i32 [io] {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 100000 {
+        t = t + work();
+        i = i + 1;
+    }
+    print_i64(t);
+    print_str("\n");
+    0
+}

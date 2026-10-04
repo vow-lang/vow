@@ -1,0 +1,164 @@
+// TEST: stdout "churn=12800\nvec=40768 len=64\nstr=480 first=a last=b\nmap=4096 len=64\nnested=2016 rows=3\nbt=4096 len=64\n"
+// Vec, String, HashMap and BTreeMap buffers grow in the arena that owns the
+// container, whatever region the analysis could prove for the receiver: a
+// container reached through a struct field or a Vec element has no provable
+// region at the call that grows it. Contents must read back intact after the
+// buffers moved several times.
+module ContainerGrowthOwnerArena
+
+struct Bag {
+    nums: Vec<i64>,
+    text: String,
+    map: HashMap<i64, i64>,
+    ordered: BTreeMap<i64, i64>,
+    tag: i64,
+}
+
+fn new_bag() -> Bag {
+    Bag {
+        nums: Vec::new(),
+        text: String::from(""),
+        map: HashMap::new(),
+        ordered: BTreeMap::new(),
+        tag: 7,
+    }
+}
+
+fn grow_nums(b: Bag, n: i64) {
+    let mut i: i64 = 0;
+    while i < n {
+        b.nums.push(i * 20 + b.tag);
+        i = i + 1;
+    }
+}
+
+fn grow_text(b: Bag, n: i64) {
+    let mut i: i64 = 0;
+    while i < n {
+        b.text.push_str(String::from("ab"));
+        i = i + 1;
+    }
+}
+
+fn grow_maps(b: Bag, n: i64) {
+    let mut i: i64 = 0;
+    while i < n {
+        b.map.insert(i, i * 2 + 1);
+        b.ordered.insert(n - i, i * 2 + 1);
+        i = i + 1;
+    }
+}
+
+fn grow_row(rows: Vec<Vec<i64>>, which: u64, n: i64) {
+    let mut i: i64 = 0;
+    while i < n {
+        rows[which].push(i);
+        i = i + 1;
+    }
+}
+
+fn sum_nums(b: Bag) -> i64 {
+    let mut j: u64 = 0;
+    let mut t: i64 = 0;
+    while j < b.nums.len() {
+        t = t + b.nums[j];
+        j = j + 1;
+    }
+    t
+}
+
+fn sum_map(b: Bag, n: i64) -> i64 {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < n {
+        t = t + match b.map.get(i) {
+            Option::Some(v) => v,
+            Option::None => 0,
+        };
+        i = i + 1;
+    }
+    t
+}
+
+fn sum_ordered(b: Bag, n: i64) -> i64 {
+    let mut i: i64 = 1;
+    let mut t: i64 = 0;
+    while i <= n {
+        t = t + match b.ordered.get(i) {
+            Option::Some(v) => v,
+            Option::None => 0,
+        };
+        i = i + 1;
+    }
+    t
+}
+
+fn rounds() -> i64 {
+    let mut r: i64 = 0;
+    let mut t: i64 = 0;
+    while r < 200 {
+        let b: Bag = new_bag();
+        grow_nums(b, 64);
+        grow_text(b, 8);
+        grow_maps(b, 64);
+        t = t + b.nums.len() as i64;
+        r = r + 1;
+    }
+    t
+}
+
+fn main() -> i32 [io] {
+    let churn: i64 = rounds();
+    print_str("churn=");
+    print_i64(churn);
+    print_str("\n");
+    let b: Bag = new_bag();
+    grow_nums(b, 64);
+    print_str("vec=");
+    print_i64(sum_nums(b));
+    print_str(" len=");
+    print_u64(b.nums.len());
+    print_str("\n");
+
+    grow_text(b, 240);
+    print_str("str=");
+    print_u64(b.text.len());
+    print_str(" first=");
+    print_str(b.text.substring(0, 1));
+    print_str(" last=");
+    print_str(b.text.substring(b.text.len() - 1, b.text.len()));
+    print_str("\n");
+
+    grow_maps(b, 64);
+    print_str("map=");
+    print_i64(sum_map(b, 64));
+    print_str(" len=");
+    print_u64(b.map.len());
+    print_str("\n");
+
+    let rows: Vec<Vec<i64>> = Vec::new();
+    rows.push(Vec::new());
+    rows.push(Vec::new());
+    rows.push(Vec::new());
+    grow_row(rows, 0, 64);
+    grow_row(rows, 1, 64);
+    grow_row(rows, 2, 64);
+    let mut s: i64 = 0;
+    let mut k: u64 = 0;
+    while k < rows[2].len() {
+        s = s + rows[2][k];
+        k = k + 1;
+    }
+    print_str("nested=");
+    print_i64(s);
+    print_str(" rows=");
+    print_u64(rows.len());
+    print_str("\n");
+
+    print_str("bt=");
+    print_i64(sum_ordered(b, 64));
+    print_str(" len=");
+    print_u64(b.ordered.len());
+    print_str("\n");
+    0
+}

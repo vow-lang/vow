@@ -1510,3 +1510,104 @@ fn fresh_builtin_root_escape_note() {
         3,
     );
 }
+
+/// Builds `tests/run/<fixture>` with `compiler`, runs the executable and returns
+/// `(RegionRootEscape note count, stdout)`; `None` when the self-hosted build
+/// could not link the runtime (the recognized missing-`libvow_runtime.a` case).
+fn build_run_and_count_notes(
+    compiler: &std::path::Path,
+    label: &str,
+    fixture: &str,
+) -> Option<(usize, String)> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let exe = std::env::temp_dir().join(format!(
+        "vow_region_equiv_{}_{}_{}",
+        std::process::id(),
+        label,
+        fixture.trim_end_matches(".vow")
+    ));
+    let out = Command::new(compiler)
+        .args(["build", "--no-verify", "--no-cache"])
+        .arg(root.join("tests").join("run").join(fixture))
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run {label}: {e}"));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("{label}: bad JSON: {e}\nstdout: {stdout}\nstderr: {stderr}"));
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            label == "self-hosted" && self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "{label}: build failed: {stdout}\n{stderr}"
+        );
+        return None;
+    };
+    let notes = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .count();
+    let run = Command::new(&exe)
+        .output()
+        .unwrap_or_else(|e| panic!("{label}: failed to run {}: {e}", exe.display()));
+    let _ = std::fs::remove_file(&exe);
+    assert!(
+        run.status.success(),
+        "{label}: {fixture} exited with {:?}",
+        run.status
+    );
+    Some((notes, String::from_utf8_lossy(&run.stdout).into_owned()))
+}
+
+/// The expected output a fixture declares in its `// TEST: stdout "..."` line.
+fn declared_stdout(fixture: &str) -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("tests")
+        .join("run")
+        .join(fixture);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let line = text
+        .lines()
+        .find_map(|l| l.strip_prefix("// TEST: stdout \""))
+        .and_then(|l| l.strip_suffix('"'))
+        .unwrap_or_else(|| panic!("{fixture} declares no // TEST: stdout"));
+    line.replace("\\n", "\n")
+}
+
+/// Containment closure parity. Per-instruction placement is not part of the
+/// published summary, so the two compilers are held to the same observable
+/// behaviour on the fixtures that exercise it: the program reads back every
+/// stored value (a placement in a region that closes early reads as garbage) and
+/// both compilers emit the same number of `RegionRootEscape` notes.
+#[test]
+fn container_closure_fixtures_behave_identically_in_both_compilers() {
+    for fixture in [
+        "region_container_effect_outlives.vow",
+        "container_growth_owner_arena.vow",
+    ] {
+        let expected = declared_stdout(fixture);
+        let (rust_notes, rust_out) = build_run_and_count_notes(
+            std::path::Path::new(env!("CARGO_BIN_EXE_vow")),
+            "rust",
+            fixture,
+        )
+        .expect("the Rust compiler always links");
+        assert_eq!(rust_out, expected, "rust output for {fixture}");
+        if let Some(vowc) = self_hosted_vowc()
+            && let Some((self_notes, self_out)) =
+                build_run_and_count_notes(&vowc, "self-hosted", fixture)
+        {
+            assert_eq!(self_out, expected, "self-hosted output for {fixture}");
+            assert_eq!(
+                rust_notes, self_notes,
+                "RegionRootEscape note-count parity broken on {fixture}"
+            );
+        }
+    }
+}

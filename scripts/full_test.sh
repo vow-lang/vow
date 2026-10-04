@@ -1513,6 +1513,22 @@ print(next((d.get('file', '') for d in docs if d.get('error') == 'VowViolation')
     fi
 done
 
+# Nested-container growth and escaping stores route allocations through owner
+# arenas; sanitize mode must run them cleanly and print what the plain runs print.
+for sanitize_fixture in container_growth_owner_arena region_container_effect_outlives; do
+    sanitize_src="tests/run/${sanitize_fixture}.vow"
+    $RUST build --mode sanitize --no-verify "$sanitize_src" -o "$TMPDIR/rust_sanitize_${sanitize_fixture}" >/dev/null 2>/dev/null
+    run_self build --mode sanitize --no-verify "$sanitize_src" -o "$TMPDIR/self_sanitize_${sanitize_fixture}" >/dev/null 2>/dev/null
+    compare_runtime "${sanitize_fixture}/sanitize" "$TMPDIR/rust_sanitize_${sanitize_fixture}" "$TMPDIR/self_sanitize_${sanitize_fixture}"
+    sanitize_want=$(sed -n 's|^// TEST: stdout "\(.*\)"$|\1|p' "$sanitize_src" | head -1)
+    sanitize_got=$("$TMPDIR/rust_sanitize_${sanitize_fixture}" </dev/null 2>/dev/null | awk 'BEGIN{ORS="\\n"} {print}')
+    if [ "$sanitize_got" = "$sanitize_want" ]; then
+        pass "${sanitize_fixture}/sanitize-stdout"
+    else
+        fail "${sanitize_fixture}/sanitize-stdout" "sanitize stdout differs from the fixture's TEST: stdout"
+    fi
+done
+
 echo ""
 # ─── Section 6: Multi-Module ───────────────────────────────────────
 
@@ -1675,6 +1691,29 @@ if uv run python scripts/generate_operations.py --check >"$ops_catalogue_drift_l
     pass "ops/catalogue-drift"
 else
     fail "ops/catalogue-drift" "$(cat "$ops_catalogue_drift_log"); run 'uv run python scripts/generate_operations.py'"
+fi
+echo ""
+
+# ─── Section 8a: Memory Bounds ─────────────────────────────────────
+#
+# bench/memory/programs/*.vow loop 10^5-10^6 times over allocation shapes that
+# must not grow resident memory. Built and run once per compiler, so a per-call
+# leak in either region inference or either lowering fails here, not in a
+# long-running service. Linux only (peak RSS is sampled from /proc).
+
+section_begin "Section 8a: Memory Bounds"
+if [ "$(uname -s)" = "Linux" ]; then
+    for memory_label in rust self; do
+        if [ "$memory_label" = "rust" ]; then memory_compiler="$RUST"; else memory_compiler="$SELF"; fi
+        memory_bounds_log="$TMPDIR/memory_bounds_${memory_label}.log"
+        if python3 scripts/check_memory_bounds.py --compiler "$memory_compiler" >"$memory_bounds_log" 2>&1; then
+            pass "memory/bounds-${memory_label}"
+        else
+            fail "memory/bounds-${memory_label}" "$(grep -v '"status": "pass"' "$memory_bounds_log" | tail -8)"
+        fi
+    done
+else
+    skip "memory/bounds" "peak RSS is sampled from /proc (Linux only)"
 fi
 echo ""
 

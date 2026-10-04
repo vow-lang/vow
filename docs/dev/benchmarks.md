@@ -21,3 +21,9 @@ bench/memory/run.sh --record
 ```
 
 `--record` rewrites `bench/memory/expected.toml` and the source annotations using fresh measurements plus a fixed 4096 KiB cushion. Lower bounds only when a real implementation improvement has been measured; do not turn one noisy low run into a tighter regression gate.
+
+### CI gate
+
+`scripts/check_memory_bounds.py --compiler <vow|vowc>` runs the same programs and the same `// BENCH:` bounds without GNU `time` and against either compiler. It samples `VmHWM` from `/proc/<pid>/status` while the program runs (a `wait4` `ru_maxrss` would include the resident size of the forking parent), so it is Linux only. `scripts/full_test.sh` runs it once per compiler (Section 8a, `memory/bounds-rust` and `memory/bounds-self`), so a per-call leak in region inference, in either lowering, or in the runtime fails CI, not just a developer's local `run.sh`. Its unit tests are `scripts/test_check_memory_bounds.py`.
+
+A program that must stay flat has to loop long enough that a per-iteration leak is far beyond the 4096 KiB cushion: 10^5 iterations of a 16-byte leak is already 1.6 MB, so size the loop so the leak per iteration times the iteration count is tens of MB.
