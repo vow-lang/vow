@@ -2843,24 +2843,9 @@ impl<'a> ContainmentFacts<'a> {
         }
     }
 
-    /// The arguments an internal call result is the same object as, when its
-    /// callee returns an alias of them.
     fn alias_call_args(&self, id: InstId) -> Option<Vec<InstId>> {
         let (_, inst) = self.inst_lookup.get(&id)?;
-        let InstData::CallTarget(callee) = &inst.data else {
-            return None;
-        };
-        let positions: Vec<u32> = match &self.summaries.get(callee.0 as usize)?.return_region {
-            InternalReturnRegion::Published(RegionConstraint::AliasOf(j)) => vec![*j],
-            InternalReturnRegion::Published(RegionConstraint::AliasOfAny(js)) => js.clone(),
-            _ => return None,
-        };
-        Some(
-            positions
-                .into_iter()
-                .filter_map(|j| inst.args.get(j as usize).copied())
-                .collect(),
-        )
+        alias_call_args(inst, self.summaries)
     }
 
     /// Edges `(contained, container)`: the contained value's markers flow into
@@ -3718,8 +3703,27 @@ fn trace_target_param(
     trace_param_inner(id, inst_lookup, Some(summaries), &mut visiting)
 }
 
-/// The argument an internal call result is the same object as, when its callee
-/// returns `AliasOf(j)`.
+/// The arguments an internal call result is the same object as, when its callee
+/// returns an alias of them (`AliasOf` or `AliasOfAny`).
+fn alias_call_args(inst: &Inst, summaries: &[InternalSummary]) -> Option<Vec<InstId>> {
+    let InstData::CallTarget(callee) = &inst.data else {
+        return None;
+    };
+    let positions: Vec<u32> = match &summaries.get(callee.0 as usize)?.return_region {
+        InternalReturnRegion::Published(RegionConstraint::AliasOf(j)) => vec![*j],
+        InternalReturnRegion::Published(RegionConstraint::AliasOfAny(js)) => js.clone(),
+        _ => return None,
+    };
+    Some(
+        positions
+            .into_iter()
+            .filter_map(|j| inst.args.get(j as usize).copied())
+            .collect(),
+    )
+}
+
+/// The single argument an internal call result is the same object as, when its
+/// callee returns `AliasOf(j)`.
 fn alias_call_arg(inst: &Inst, summaries: &[InternalSummary]) -> Option<InstId> {
     let InstData::CallTarget(callee) = &inst.data else {
         return None;
