@@ -628,21 +628,21 @@ pub fn check_predicate_purity(
     collect_may_write_sites(expr, env, &mut write_sites);
     for site in write_sites {
         emitter.emit(&Diagnostic {
-                severity: Severity::Error,
-                code: ErrorCode::EffectViolation,
-                message: "vow predicate must be pure but this expression may write through a shared argument".to_string(),
-                primary: SourceLocation {
-                    file: file.to_string(),
-                    byte_offset: site.span.start,
-                    byte_len: site.span.len,
-                },
-                secondary: vec![],
-                blame: Blame::Callee,
-                hints: vec![
-                    "vow predicates must not write to a struct field, a Vec/map element, or call a mutating builtin method — move the write outside the vow block"
-                        .to_string(),
-                ],
-            });
+            severity: Severity::Error,
+            code: ErrorCode::EffectViolation,
+            message: "vow predicate must be pure but this expression may write through a shared argument".to_string(),
+            primary: SourceLocation {
+                file: file.to_string(),
+                byte_offset: site.span.start,
+                byte_len: site.span.len,
+            },
+            secondary: vec![],
+            blame: Blame::Callee,
+            hints: vec![
+                "vow predicates must not write to a struct field, a Vec/map element, or call a mutating builtin method — move the write outside the vow block"
+                    .to_string(),
+            ],
+        });
     }
 }
 
