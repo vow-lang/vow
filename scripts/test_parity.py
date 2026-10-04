@@ -2021,6 +2021,22 @@ class CompareFullJsonArgumentValueTest(unittest.TestCase):
         self.assertEqual(1, len(errors))
         self.assertTrue(errors[0].startswith("counterexample[0].violating_args:"))
 
+    def test_malformed_entries_are_schema_failures_not_crashes(self):
+        malformed = self.failure("0", "0", "x")
+        malformed["diagnostics"].append("not a diagnostic")
+        malformed["counterexamples"][0]["violating_args"].append("not an argument")
+        malformed["counterexamples"].append("not a counterexample")
+
+        errors = parity.compare_full_json(
+            self.failure("0", "0", "x"),
+            malformed,
+            1,
+            1,
+            argument_values_diverge=True,
+        )
+
+        self.assertTrue(any("violates build-result.schema.json" in e for e in errors))
+
     def test_cli_applies_the_tolerance_only_to_a_fixture_with_the_directive(self):
         rust = self.failure("0", "0", "x")
         self_hosted = self.failure("", "", "n")

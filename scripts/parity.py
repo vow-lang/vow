@@ -410,11 +410,14 @@ def _normalise_for_full_json(document, argument_values_diverge=False):
     for counterexample in document.get(FULL_JSON_COUNTEREXAMPLES, []):
         if isinstance(counterexample, dict) and "values" in counterexample:
             counterexample["values"] = _counterexample_values(counterexample)
-        if argument_values_diverge:
+        if argument_values_diverge and isinstance(counterexample, dict):
             for argument in counterexample.get("violating_args", []):
-                argument["value"] = DIVERGENT_ARGUMENT_VALUE
+                if isinstance(argument, dict):
+                    argument["value"] = DIVERGENT_ARGUMENT_VALUE
     if argument_values_diverge:
         for diagnostic in document.get("diagnostics", []):
+            if not isinstance(diagnostic, dict):
+                continue
             diagnostic["hints"] = [
                 ARGUMENT_HINT_VALUE.sub(rf"\1{DIVERGENT_ARGUMENT_VALUE}\2", hint)
                 for hint in diagnostic.get("hints", [])
@@ -990,23 +993,27 @@ def main(argv=None):
         verdict = None
     elif mode in ("json", "full-json"):
         try:
-            fixture_text = (
-                Path(fixture_path).read_text(errors="replace") if fixture_path else ""
-            )
+            if mode == "full-json":
+                fixture_text = (
+                    Path(fixture_path).read_text(errors="replace")
+                    if fixture_path
+                    else ""
+                )
+                errors = compare_full_json(
+                    rust,
+                    self_hosted,
+                    int(rust_exit),
+                    int(self_exit),
+                    argument_values_diverge=bool(
+                        KNOWN_CEX_DIVERGENCE.search(fixture_text)
+                    ),
+                )
+            else:
+                errors = compare_json(rust, self_hosted, int(rust_exit), int(self_exit))
+            verdict = _known_cex_verdict(rust, self_hosted, errors, fixture_path)
         except OSError as error:
             print(f"FAIL: fixture read error: {error}")
             return 1
-        if mode == "full-json":
-            errors = compare_full_json(
-                rust,
-                self_hosted,
-                int(rust_exit),
-                int(self_exit),
-                argument_values_diverge=bool(KNOWN_CEX_DIVERGENCE.search(fixture_text)),
-            )
-        else:
-            errors = compare_json(rust, self_hosted, int(rust_exit), int(self_exit))
-        verdict = _known_cex_verdict(rust, self_hosted, errors, fixture_path)
     else:
         fixture_name = Path(fixture_path).name if fixture_path else None
         errors = compare_error(
