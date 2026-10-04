@@ -67,7 +67,7 @@ fn check_diagnostic_span_has_no_line_or_column() -> i64 {
     let dctx: DiagCtx = diag_ctx_new();
     diag_ctx_add_source(dctx, String::from("t.vow"), String::from("module T\nfn f() -> i64 { 1 }\n"));
     let d: Diagnostic = diag_error(EC_VOW_ENSURES_VIOLATED(), String::from("m"), String::from("t.vow"), 12, 5);
-    let json: String = diag_to_json(d, dctx);
+    let json: String = diag_to_json(d);
     if !contains(json, String::from("\"span\":{\"file\":\"t.vow\",\"offset\":12,\"length\":5}")) { return 300; }
     if contains(json, String::from("\"line\"")) { return 301; }
     if contains(json, String::from("\"column\"")) { return 302; }
@@ -76,11 +76,11 @@ fn check_diagnostic_span_has_no_line_or_column() -> i64 {
 
 fn check_secondary_spans_are_emitted() -> i64 {
     let d: Diagnostic = diag_error(EC_VOW_REQUIRES_VIOLATED(), String::from("m"), String::from("t.vow"), 1, 2);
-    let plain: String = diag_to_json(d, diag_ctx_new());
+    let plain: String = diag_to_json(d);
     if contains(plain, String::from("secondary")) { return 400; }
     diag_add_secondary(d, String::from("t.vow"), 40, 8);
     diag_add_secondary(d, String::from("u.vow"), 50, 3);
-    let json: String = diag_to_json(d, diag_ctx_new());
+    let json: String = diag_to_json(d);
     let want: String = String::from("\"secondary\":[{\"file\":\"t.vow\",\"offset\":40,\"length\":8},{\"file\":\"u.vow\",\"offset\":50,\"length\":3}]");
     if !contains(json, want) { return 401; }
     0

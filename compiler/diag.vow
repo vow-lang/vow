@@ -472,7 +472,7 @@ fn diag_json_escape_str(s: String) -> String {
     r
 }
 
-fn diag_to_json(d: Diagnostic, ctx: DiagCtx) -> String {
+fn diag_to_json(d: Diagnostic) -> String {
     let r: String = String::from("{\"error_code\":\"");
     r.push_str(ec_name(d.code));
     r.push_str(String::from("\",\"message\":\""));
@@ -538,7 +538,7 @@ fn diag_ctx_to_json(ctx: DiagCtx) -> String {
         if i > 0 {
             r.push_str(String::from(","));
         }
-        r.push_str(diag_to_json(ds[i], ctx));
+        r.push_str(diag_to_json(ds[i]));
         i = i + 1;
     }
     r.push_str(String::from("]"));
