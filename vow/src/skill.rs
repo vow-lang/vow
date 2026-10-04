@@ -1392,7 +1392,17 @@ use foo.bar
 
 This resolves relative to the main source file. The module loader first uses
 `<rootdir>/foo/bar.vow.d` when that declaration stub exists, and otherwise
-falls back to `<rootdir>/foo/bar.vow`.
+falls back to `<rootdir>/foo/bar.vow`. If the stub's declarations carry a
+`vow` block, the stub cannot be relied on: a bodyless declaration has no
+implementation for the verifier to check a call site against, so a contract
+there would otherwise be silently dropped from verification. In that case the
+loader loads the sibling `<rootdir>/foo/bar.vow` source instead, where the
+usual intra-module `requires`-as-assert/Caller-blame mechanism applies
+unchanged. A stub whose declarations carry no `vow` block is unaffected and
+is still preferred over source. A stub shipped with no sibling `.vow` source
+at all (e.g. a library distributing only its interface) is also unaffected —
+a call through it remains non-modelable in the verifier (`Skipped`, never
+falsely `Verified`).
 
 ## Const Declarations
 
@@ -2964,7 +2974,7 @@ vow test [OPTIONS] [<path>]
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 
-**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). A single-file invocation without `--module-root` (`vow test compiler/tests/test_region.vow`) infers the module root the same way: starting at the file's own directory and walking up through its ancestors, it picks the nearest directory against which every `use` declaration of the file resolves (to `<path>.vow`, or `<path>.vow.d`). The walk stops after the first directory that contains `.git` (the repository root), at a `..` path component, or at `.` / `/`. If the file's own directory already resolves every `use`, if the file has no `use` declarations, or if no directory resolves them all, the file's parent directory is used and any unresolved module is reported as an ordinary `IoError`. When the file's own directory does not shadow a module of the tree, the inferred root is the one the directory form would use, so the test gives the same result in both forms; a module in the file's own directory takes precedence over one in an ancestor. This rule applies to `vow test` only; `vow build` and `vow verify` keep resolving `use` against the entry file's parent directory.
+**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). A single-file invocation without `--module-root` (`vow test compiler/tests/test_region.vow`) infers the module root the same way: starting at the file's own directory and walking up through its ancestors, it picks the nearest directory against which every `use` declaration of the file resolves (to `<path>.vow`, or `<path>.vow.d`). The walk stops after the first directory that contains `.git` (the repository root), at a `..` path component, or at `.` / `/`. If the file's own directory already resolves every `use`, if the file has no `use` declarations, or if no directory resolves them all, the file's parent directory is used and any unresolved module is reported as an ordinary `IoError`. When the file's own directory does not shadow a module of the tree, the inferred root is the one the directory form would use, so the test gives the same result in both forms; a module in the file's own directory takes precedence over one in an ancestor. This rule applies to `vow test` only; `vow build` and `vow verify` keep resolving `use` against the entry file's parent directory. This existence-only walk never inspects file contents, so it is unaffected by the `.vow.d` stub-vs-source contract fallback described under [Use Declarations](grammar.md#use-declarations): that check only runs once a concrete `use` is actually loaded for a build/verify/test run, not during root inference's probing of candidate directories.
 
 **Concurrency.** Test files in a scan run concurrently, at most `--jobs` at a time, and the `tests` array is always in sorted-path order regardless of completion order. A test's `duration_ms` covers its own compile, verification, and execution. Beyond the first, a worker starts a new file only while the machine is not under memory or IO stall pressure (Linux PSI `/proc/pressure/memory` `some avg10` and `/proc/pressure/io` `full avg10`, both below 20), so a loaded machine degrades to fewer workers rather than thrashing; with no PSI available the limit is just `--jobs`. `--jobs 1` runs files strictly one after another. The self-hosted compiler runs each file of a concurrent scan in a worker subprocess of itself, using an internal `--worker-entry` flag whose output is not part of the CLI contract; a worker that dies without a result is reported as a `compile_error` entry so the suite stays fail-closed.
 
@@ -5512,7 +5522,10 @@ the contracts — see [Verification status](#verification-status).
 `use` declarations resolve to a single directory: `use foo` loads
 `<dir>/foo.vow.d` when that declaration stub exists, and otherwise loads
 `<dir>/foo.vow`, where `<dir>` is the directory of the **entry file** passed to
-`vow build`/`vow verify`.
+`vow build`/`vow verify`. A stub is used only when none of its declarations
+carry a `vow` block — otherwise the sibling `<dir>/foo.vow` source is loaded
+instead, so a declaration's contract is never silently dropped from
+verification (a bodyless declaration cannot be checked at a call site).
 All transitive `use`s in dependency modules resolve against that **same** directory.
 There is no search path, and `--module-root` is only available on `vow test` — not
 `vow build` or `vow verify`.
@@ -7140,7 +7153,17 @@ use foo.bar
 
 This resolves relative to the main source file. The module loader first uses
 `<rootdir>/foo/bar.vow.d` when that declaration stub exists, and otherwise
-falls back to `<rootdir>/foo/bar.vow`.
+falls back to `<rootdir>/foo/bar.vow`. If the stub's declarations carry a
+`vow` block, the stub cannot be relied on: a bodyless declaration has no
+implementation for the verifier to check a call site against, so a contract
+there would otherwise be silently dropped from verification. In that case the
+loader loads the sibling `<rootdir>/foo/bar.vow` source instead, where the
+usual intra-module `requires`-as-assert/Caller-blame mechanism applies
+unchanged. A stub whose declarations carry no `vow` block is unaffected and
+is still preferred over source. A stub shipped with no sibling `.vow` source
+at all (e.g. a library distributing only its interface) is also unaffected —
+a call through it remains non-modelable in the verifier (`Skipped`, never
+falsely `Verified`).
 
 ## Const Declarations
 
@@ -8713,7 +8736,7 @@ vow test [OPTIONS] [<path>]
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 
-**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). A single-file invocation without `--module-root` (`vow test compiler/tests/test_region.vow`) infers the module root the same way: starting at the file's own directory and walking up through its ancestors, it picks the nearest directory against which every `use` declaration of the file resolves (to `<path>.vow`, or `<path>.vow.d`). The walk stops after the first directory that contains `.git` (the repository root), at a `..` path component, or at `.` / `/`. If the file's own directory already resolves every `use`, if the file has no `use` declarations, or if no directory resolves them all, the file's parent directory is used and any unresolved module is reported as an ordinary `IoError`. When the file's own directory does not shadow a module of the tree, the inferred root is the one the directory form would use, so the test gives the same result in both forms; a module in the file's own directory takes precedence over one in an ancestor. This rule applies to `vow test` only; `vow build` and `vow verify` keep resolving `use` against the entry file's parent directory.
+**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). A single-file invocation without `--module-root` (`vow test compiler/tests/test_region.vow`) infers the module root the same way: starting at the file's own directory and walking up through its ancestors, it picks the nearest directory against which every `use` declaration of the file resolves (to `<path>.vow`, or `<path>.vow.d`). The walk stops after the first directory that contains `.git` (the repository root), at a `..` path component, or at `.` / `/`. If the file's own directory already resolves every `use`, if the file has no `use` declarations, or if no directory resolves them all, the file's parent directory is used and any unresolved module is reported as an ordinary `IoError`. When the file's own directory does not shadow a module of the tree, the inferred root is the one the directory form would use, so the test gives the same result in both forms; a module in the file's own directory takes precedence over one in an ancestor. This rule applies to `vow test` only; `vow build` and `vow verify` keep resolving `use` against the entry file's parent directory. This existence-only walk never inspects file contents, so it is unaffected by the `.vow.d` stub-vs-source contract fallback described under [Use Declarations](grammar.md#use-declarations): that check only runs once a concrete `use` is actually loaded for a build/verify/test run, not during root inference's probing of candidate directories.
 
 **Concurrency.** Test files in a scan run concurrently, at most `--jobs` at a time, and the `tests` array is always in sorted-path order regardless of completion order. A test's `duration_ms` covers its own compile, verification, and execution. Beyond the first, a worker starts a new file only while the machine is not under memory or IO stall pressure (Linux PSI `/proc/pressure/memory` `some avg10` and `/proc/pressure/io` `full avg10`, both below 20), so a loaded machine degrades to fewer workers rather than thrashing; with no PSI available the limit is just `--jobs`. `--jobs 1` runs files strictly one after another. The self-hosted compiler runs each file of a concurrent scan in a worker subprocess of itself, using an internal `--worker-entry` flag whose output is not part of the CLI contract; a worker that dies without a result is reported as a `compile_error` entry so the suite stays fail-closed.
 
@@ -11265,7 +11288,10 @@ the contracts — see [Verification status](#verification-status).
 `use` declarations resolve to a single directory: `use foo` loads
 `<dir>/foo.vow.d` when that declaration stub exists, and otherwise loads
 `<dir>/foo.vow`, where `<dir>` is the directory of the **entry file** passed to
-`vow build`/`vow verify`.
+`vow build`/`vow verify`. A stub is used only when none of its declarations
+carry a `vow` block — otherwise the sibling `<dir>/foo.vow` source is loaded
+instead, so a declaration's contract is never silently dropped from
+verification (a bodyless declaration cannot be checked at a call site).
 All transitive `use`s in dependency modules resolve against that **same** directory.
 There is no search path, and `--module-root` is only available on `vow test` — not
 `vow build` or `vow verify`.
