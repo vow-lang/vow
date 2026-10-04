@@ -62,12 +62,16 @@ fn load_deps(
 }
 
 /// Load the dependency `module_file_for_use` chose for `use_decl`. When
-/// `file_path` is a `.vow.d` stub that fails to parse, or that parses but
-/// carries a declaration with a `vow` block the verifier cannot enforce from
-/// a bodyless signature, fall back to the sibling `.vow` source instead
-/// (#1472) — but only when that source actually exists. A library shipping
-/// only a stub keeps today's behavior unchanged: the call becomes
-/// non-modelable downstream, never falsely `Verified`.
+/// `file_path` is a `.vow.d` stub that parses but carries a declaration with
+/// a `vow` block the verifier cannot enforce from a bodyless signature, fall
+/// back to the sibling `.vow` source instead (#1472) — but only when that
+/// source actually exists. A library shipping only a stub keeps today's
+/// behavior unchanged: the call becomes non-modelable downstream, never
+/// falsely `Verified`. A stub that fails to parse is reported as-is and never
+/// triggers the source fallback: parse robustness of `.vow.d` stubs is a
+/// separate concern from #1472's contract-hiding bug, and neither
+/// `docs/spec/grammar.md` nor `docs/spec/stdlib.md` documents a parse-failure
+/// fallback.
 fn load_dep_module(
     root_dir: &Path,
     use_decl: &UseDecl,
@@ -79,15 +83,13 @@ fn load_dep_module(
     }
 
     let stub_result = read_and_parse(file_path, use_decl);
-    let needs_fallback = match &stub_result {
-        Ok((_, module)) => module_has_unenforceable_contract(module),
-        Err(_) => true,
-    };
-    if needs_fallback && vow_path.exists() {
-        read_and_parse(&vow_path, use_decl)
-    } else {
-        stub_result
+    if let Ok((_, module)) = &stub_result
+        && module_has_unenforceable_contract(module)
+        && vow_path.exists()
+    {
+        return read_and_parse(&vow_path, use_decl);
     }
+    stub_result
 }
 
 fn read_and_parse(
@@ -137,7 +139,9 @@ fn module_has_unenforceable_contract(module: &Module) -> bool {
 
 /// Resolve a dotted `use` path to the file to load, relative to `root_dir`,
 /// preferring a sibling `.vow.d` declaration stub over the full `.vow` source
-/// when one exists.
+/// when one exists. This choice is not final: `load_dep_module` may still
+/// override it and load the `.vow` source instead when the stub it names
+/// carries a contract the verifier cannot enforce (#1472).
 ///
 /// `decl_exists` is the on-disk existence check for the derived `.vow.d` path,
 /// injected so the resolution decision is testable without touching the
@@ -596,6 +600,36 @@ mod tests {
             fn_item_is_declaration(dep_module, "declaration_only"),
             Some(true),
             "contract-free stub must still be preferred over source"
+        );
+    }
+
+    #[test]
+    fn load_deps_does_not_fall_back_when_stub_fails_to_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("dep.vow"),
+            "module Dep\npub fn f(x: i64) -> i64 {\n    x\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("dep.vow.d"),
+            // Deliberately malformed: an unclosed parameter list. The source
+            // fallback is scoped to #1472's contract-hiding bug, not stub
+            // parse robustness, so a broken stub must surface its own parse
+            // error rather than silently falling back to the valid sibling.
+            "module Dep\npub fn f(x: i64 -> i64;\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("main.vow"),
+            "module Main\nuse dep\nfn g() -> i64 { 0 }\n",
+        )
+        .unwrap();
+
+        let result = load_graph_for(dir.path(), "main.vow");
+        assert!(
+            result.is_err(),
+            "a stub that fails to parse must not fall back to a valid sibling .vow source"
         );
     }
 }

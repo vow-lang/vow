@@ -103,6 +103,31 @@ fn tfdf_check_stub_still_preferred(t: String) -> i32 [io, write] {
     0
 }
 
+// A stub that fails to parse must surface its own parse error rather than
+// silently falling back to a valid sibling .vow source: the fallback is
+// scoped to #1472's contract-hiding bug, not stub parse robustness. Mirrors
+// vow/src/module_loader.rs's load_deps_does_not_fall_back_when_stub_fails_to_parse.
+fn tfdf_check_stub_parse_failure_does_not_fall_back(t: String) -> i32 [io, write] {
+    let dir: String = tfdf_join(t, String::from("/parsefail"));
+    if tfdf_run2(String::from("mkdir"), String::from("-p"), dir) != 0 { return 98; }
+    if tfdf_put(
+        tfdf_join(dir, String::from("/dep.vow")),
+        String::from("module Dep\npub fn f(x: i64) -> i64 {\n    x\n}\n")
+    ) != 0 { return 99; }
+    if tfdf_put(
+        tfdf_join(dir, String::from("/dep.vow.d")),
+        String::from("module Dep\npub fn f(x: i64 -> i64;\n")
+    ) != 0 { return 100; }
+    if tfdf_put(
+        tfdf_join(dir, String::from("/main.vow")),
+        String::from("module Main\nuse dep\nfn g() -> i64 { 0 }\n")
+    ) != 0 { return 101; }
+
+    let prep: FrontendPrep = frontend_prepare_path(tfdf_join(dir, String::from("/main.vow")));
+    if prep.checked.n_errors == 0 { return 21; }
+    0
+}
+
 fn main() -> i32 [io, write] {
     let t: String = tfdf_temp_dir();
     if t.len() == 0 { return 80; }
@@ -112,6 +137,11 @@ fn main() -> i32 [io, write] {
         return fallback_code;
     }
     let preferred_code: i32 = tfdf_check_stub_still_preferred(t);
+    if preferred_code != 0 {
+        tfdf_run2(String::from("rm"), String::from("-rf"), t);
+        return preferred_code;
+    }
+    let parse_failure_code: i32 = tfdf_check_stub_parse_failure_does_not_fall_back(t);
     tfdf_run2(String::from("rm"), String::from("-rf"), t);
-    preferred_code
+    parse_failure_code
 }
