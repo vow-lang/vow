@@ -2228,7 +2228,9 @@ containers copy and shift entries bitwise, so storing a linear value would
 duplicate its obligation or let it escape the checker. `Vec` and `HashMap` use
 `UnsupportedFeature`; `BTreeMap` uses `BTreeMapValueMustBeNonLinear`. A nested
 collection (`Vec<Vec<Token>>`) is reported once, at the innermost collection that
-holds the linear value.
+holds the linear value, and a type alias is reported once, at its definition. A
+`Vec` element test is about ownership: `Vec<&Token>` borrows and is accepted,
+while a tuple that holds a linear owner is rejected.
 A linear value that is no longer needed is discharged with the intrinsic
 `drop(value)` (see [Linear Intrinsics](#linear-intrinsics)). Passing it to a
 function that consumes it, returning it, or matching it are the other ways to
@@ -4996,7 +4998,7 @@ fn f() -> () {
 
 #### Linear collection elements
 
-The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking.
+The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking. A reference element (`Vec<&Token>`) borrows rather than owns and is accepted; a nested collection is reported once, where the innermost `Vec` is written, and a type alias once, at its definition.
 
 ```vow
 linear struct Token { id: i64 }
@@ -5249,7 +5251,7 @@ changing the source will not help.
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `LinearBorrow`. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
 
 ```json
 {
@@ -7974,7 +7976,9 @@ containers copy and shift entries bitwise, so storing a linear value would
 duplicate its obligation or let it escape the checker. `Vec` and `HashMap` use
 `UnsupportedFeature`; `BTreeMap` uses `BTreeMapValueMustBeNonLinear`. A nested
 collection (`Vec<Vec<Token>>`) is reported once, at the innermost collection that
-holds the linear value.
+holds the linear value, and a type alias is reported once, at its definition. A
+`Vec` element test is about ownership: `Vec<&Token>` borrows and is accepted,
+while a tuple that holds a linear owner is rejected.
 A linear value that is no longer needed is discharged with the intrinsic
 `drop(value)` (see [Linear Intrinsics](#linear-intrinsics)). Passing it to a
 function that consumes it, returning it, or matching it are the other ways to
@@ -10746,7 +10750,7 @@ fn f() -> () {
 
 #### Linear collection elements
 
-The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking.
+The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking. A reference element (`Vec<&Token>`) borrows rather than owns and is accepted; a nested collection is reported once, where the innermost `Vec` is written, and a type alias once, at its definition.
 
 ```vow
 linear struct Token { id: i64 }
@@ -10999,7 +11003,7 @@ changing the source will not help.
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `LinearBorrow`. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
 
 ```json
 {

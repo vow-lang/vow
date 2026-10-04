@@ -860,7 +860,9 @@ containers copy and shift entries bitwise, so storing a linear value would
 duplicate its obligation or let it escape the checker. `Vec` and `HashMap` use
 `UnsupportedFeature`; `BTreeMap` uses `BTreeMapValueMustBeNonLinear`. A nested
 collection (`Vec<Vec<Token>>`) is reported once, at the innermost collection that
-holds the linear value.
+holds the linear value, and a type alias is reported once, at its definition. A
+`Vec` element test is about ownership: `Vec<&Token>` borrows and is accepted,
+while a tuple that holds a linear owner is rejected.
 A linear value that is no longer needed is discharged with the intrinsic
 `drop(value)` (see [Linear Intrinsics](#linear-intrinsics)). Passing it to a
 function that consumes it, returning it, or matching it are the other ways to

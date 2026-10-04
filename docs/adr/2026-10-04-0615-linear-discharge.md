@@ -19,7 +19,11 @@ not exist.
 
 1. `Vec<T>` is rejected, in both compilers and at every site where the type is
    written, when `T` is or contains a linear owner (`UnsupportedFeature`, with a
-   hint). `HashMap` and `BTreeMap` values already followed the same rule.
+   hint). `HashMap` and `BTreeMap` values already followed the same rule. The
+   test is owner semantics: a reference element (`Vec<&Token>`) borrows and stays
+   legal, a tuple holding a linear owner is rejected, and a nested collection is
+   reported once, at the innermost `Vec`. A type alias is reported once, at its
+   definition, not at each use.
    `Option` and `Result` are not collections: they are linear owners that `match`
    consumes, and they stay legal.
 2. A new intrinsic `drop(value)` is the terminal discharge. It accepts only a
@@ -33,8 +37,11 @@ not exist.
 - **Does not make verification harder.** The consume marker neither reads nor
   writes data, so modelling it as a no-op is exact. Functions that previously
   fell out of the verifier (`Skipped`, because of the consume opcode) are now
-  modelled; a verify and a verify-fail fixture pin that `drop` changes no
-  verdict.
+  modelled. The marker is a no-op for every consume, not only `drop`; verify and
+  verify-fail fixtures pin that a call argument, a user-enum match payload, an
+  `Option` payload, a region-allocated value and a returned linear value are
+  each proven when correct and refuted when the contract is false, identically in
+  both compilers.
 - **Eliminates a class of agent bugs.** An agent can no longer satisfy the
   linear checker by parking a value in a vector that is never emptied. The only
   ways to end a linear value's life are explicit: consume it in a callee, return
@@ -58,4 +65,6 @@ not exist.
 - Any program that used a `Vec` of linear values must keep an integer handle in
   the `Vec` and consume the linear value directly, or drop it.
 - A user function named `drop` shadows the intrinsic, so existing programs keep
-  their meaning.
+  their meaning. The checker and both lowerers each decide independently (by
+  looking the name up in their function tables); `tests/run/drop_user_defined.vow`
+  pins that they agree.

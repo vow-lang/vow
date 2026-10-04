@@ -4478,7 +4478,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("duplicate its obligation or let it escape the checker. `Vec` and `HashMap` use\n"));
     r.push_str(String::from("`UnsupportedFeature`; `BTreeMap` uses `BTreeMapValueMustBeNonLinear`. A nested\n"));
     r.push_str(String::from("collection (`Vec<Vec<Token>>`) is reported once, at the innermost collection that\n"));
-    r.push_str(String::from("holds the linear value.\n"));
+    r.push_str(String::from("holds the linear value, and a type alias is reported once, at its definition. A\n"));
+    r.push_str(String::from("`Vec` element test is about ownership: `Vec<&Token>` borrows and is accepted,\n"));
+    r.push_str(String::from("while a tuple that holds a linear owner is rejected.\n"));
     r.push_str(String::from("A linear value that is no longer needed is discharged with the intrinsic\n"));
     r.push_str(String::from("`drop(value)` (see [Linear Intrinsics](#linear-intrinsics)). Passing it to a\n"));
     r.push_str(String::from("function that consumes it, returning it, or matching it are the other ways to\n"));
@@ -7246,7 +7248,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("#### Linear collection elements\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking.\n"));
+    r.push_str(String::from("The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking. A reference element (`Vec<&Token>`) borrows rather than owns and is accepted; a nested collection is reported once, where the innermost `Vec` is written, and a type alias once, at its definition.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("linear struct Token { id: i64 }\n"));
@@ -7499,7 +7501,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("### VerificationSkipped\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)\n"));
-    r.push_str(String::from("**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent -- most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `LinearBorrow`. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.\n"));
+    r.push_str(String::from("**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent -- most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```json\n"));
     r.push_str(String::from("{\n"));
@@ -10246,7 +10248,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("duplicate its obligation or let it escape the checker. `Vec` and `HashMap` use\n"));
     r.push_str(String::from("`UnsupportedFeature`; `BTreeMap` uses `BTreeMapValueMustBeNonLinear`. A nested\n"));
     r.push_str(String::from("collection (`Vec<Vec<Token>>`) is reported once, at the innermost collection that\n"));
-    r.push_str(String::from("holds the linear value.\n"));
+    r.push_str(String::from("holds the linear value, and a type alias is reported once, at its definition. A\n"));
+    r.push_str(String::from("`Vec` element test is about ownership: `Vec<&Token>` borrows and is accepted,\n"));
+    r.push_str(String::from("while a tuple that holds a linear owner is rejected.\n"));
     r.push_str(String::from("A linear value that is no longer needed is discharged with the intrinsic\n"));
     r.push_str(String::from("`drop(value)` (see [Linear Intrinsics](#linear-intrinsics)). Passing it to a\n"));
     r.push_str(String::from("function that consumes it, returning it, or matching it are the other ways to\n"));
@@ -13022,7 +13026,7 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("#### Linear collection elements\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking.\n"));
+    r.push_str(String::from("The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking. A reference element (`Vec<&Token>`) borrows rather than owns and is accepted; a nested collection is reported once, where the innermost `Vec` is written, and a type alias once, at its definition.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("linear struct Token { id: i64 }\n"));
@@ -13275,7 +13279,7 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("### VerificationSkipped\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)\n"));
-    r.push_str(String::from("**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent -- most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `LinearBorrow`. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.\n"));
+    r.push_str(String::from("**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent -- most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```json\n"));
     r.push_str(String::from("{\n"));
