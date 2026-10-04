@@ -7,6 +7,12 @@ use parser
 use ir
 use lower
 
+// Twin of `loops_carry_the_expected_variables` in vow-ir/src/lower/mod.rs. Both
+// lower tests/fixtures/loop_carried_scope.vow and compare, per function, the
+// marker constants fed to the pre-loop Upsilons against the fixture's own
+// `// carried <fn>: <markers>` line: which variables each loop carries, and in
+// which order.
+
 fn lower_fixture(source: String, file: String) -> IrModule {
     let arena: AstArena = arena_new();
     let parsed: Module = parse_module_into(lex(source), arena, diag_ctx_new(), file);
@@ -23,63 +29,163 @@ fn lower_fixture(source: String, file: String) -> IrModule {
     )
 }
 
-fn count_op(f: IrFunction, op: i64) -> i64 {
-    let mut n: i64 = 0;
+fn find_function(m: IrModule, name: String) -> i64 {
+    let mut i: u64 = 0;
+    while i < m.functions.len() {
+        let f: IrFunction = m.functions[i];
+        if f.name == name {
+            return i as i64;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+// Value of the marker constant (>= 1000) defined by instruction `id`, or -1.
+fn marker_value(f: IrFunction, id: i64) -> i64 {
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let block: IrBlock = f.blocks[bi];
-        let mut ii: u64 = 0;
         let insts: Vec<IrInst> = block.insts;
+        let mut ii: u64 = 0;
         while ii < insts.len() {
             let inst: IrInst = insts[ii];
-            if inst.op == op {
-                n = n + 1;
+            if inst.id == id && inst.op == IOP_CONST_I64() && inst.dv >= 1000 {
+                return inst.dv;
             }
             ii = ii + 1;
         }
         bi = bi + 1;
     }
-    n
+    -1
 }
 
-fn undefined_upsilon_sources(f: IrFunction) -> i64 {
-    let mut n: i64 = 0;
+fn carried_markers(f: IrFunction) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let block: IrBlock = f.blocks[bi];
-        let mut ii: u64 = 0;
         let insts: Vec<IrInst> = block.insts;
+        let mut ii: u64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            let args: Vec<i64> = inst.args;
+            if inst.op == IOP_UPSILON() && args.len() == 1 {
+                let marker: i64 = marker_value(f, args[0]);
+                if marker >= 0 {
+                    out.push(marker);
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    out
+}
+
+fn has_undefined_upsilon_source(f: IrFunction) -> bool {
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let block: IrBlock = f.blocks[bi];
+        let insts: Vec<IrInst> = block.insts;
+        let mut ii: u64 = 0;
         while ii < insts.len() {
             let inst: IrInst = insts[ii];
             let args: Vec<i64> = inst.args;
             if inst.op == IOP_UPSILON() && args.len() == 1 && args[0] < 0 {
-                n = n + 1;
+                return true;
             }
             ii = ii + 1;
         }
         bi = bi + 1;
     }
-    n
+    false
 }
 
-fn main() -> i32 {
-    let src: String = String::from(
-        "module LoopCarriedScope\nfn w(n: i64) -> i64 {\n    let mut i: i64 = 0;\n    while i < n {\n        let mut j: i64 = 0;\n        let mut k: i64 = 0;\n        while j < 3 {\n            j = j + 1;\n            k = k + j;\n        }\n        i = i + k;\n    }\n    i\n}\nfn l(n: i64) -> i64 {\n    let mut i: i64 = 0;\n    loop {\n        let mut t: i64 = 0;\n        t = t + 1;\n        i = i + t;\n        if i > n { break; }\n    }\n    i\n}\nfn f(v: Vec<i64>) -> i64 {\n    let mut s: i64 = 0;\n    for x in v {\n        let mut t: i64 = 0;\n        t = t + x;\n        s = s + t;\n    }\n    s\n}"
-    );
+fn line_end(s: String, from: u64) -> u64 {
+    let mut i: u64 = from;
+    while i < s.len() && s.byte_at(i) != 10 {
+        i = i + 1;
+    }
+    i
+}
+
+fn find_byte(s: String, byte: i64, from: u64) -> u64 {
+    let mut i: u64 = from;
+    while i < s.len() && s.byte_at(i) != byte {
+        i = i + 1;
+    }
+    i
+}
+
+fn parse_markers(line: String, from: u64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut cur: i64 = 0;
+    let mut in_number: bool = false;
+    let mut i: u64 = from;
+    while i < line.len() {
+        let b: i64 = line.byte_at(i);
+        if b >= 48 && b <= 57 {
+            cur = cur * 10 + (b - 48);
+            in_number = true;
+        } else if in_number {
+            out.push(cur);
+            cur = 0;
+            in_number = false;
+        }
+        i = i + 1;
+    }
+    if in_number {
+        out.push(cur);
+    }
+    out
+}
+
+fn same_markers(a: Vec<i64>, b: Vec<i64>) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i: u64 = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn main() -> i32 [read] {
+    let src: String = fs_read(String::from("tests/fixtures/loop_carried_scope.vow"));
+    if src.len() == 0 { return 1; }
     let lowered: IrModule = lower_fixture(src, String::from("loop_carried_scope.vow"));
-    if lowered.functions.len() != 3 { return 1; }
-    let w: IrFunction = lowered.functions[0];
-    let l: IrFunction = lowered.functions[1];
-    let fe: IrFunction = lowered.functions[2];
-    // Header and exit Phis per carried variable, matching the Rust lowerer:
-    // `i` is carried by the outer loop; `j` and `k` only by the inner loop.
-    if count_op(w, IOP_PHI()) != 6 { return 10; }
-    if undefined_upsilon_sources(w) != 0 { return 11; }
-    // `t` is declared in the loop body, so only `i` is carried.
-    if count_op(l, IOP_PHI()) != 3 { return 20; }
-    if undefined_upsilon_sources(l) != 0 { return 21; }
-    // The for-each index and `s` are carried; `t` is body-local.
-    if count_op(fe, IOP_PHI()) != 3 { return 30; }
-    if undefined_upsilon_sources(fe) != 0 { return 31; }
+
+    // A body-local name must never become a `%-1` Upsilon source.
+    let mut fi: u64 = 0;
+    while fi < lowered.functions.len() {
+        let f: IrFunction = lowered.functions[fi];
+        if has_undefined_upsilon_source(f) { return 2; }
+        fi = fi + 1;
+    }
+
+    let prefix: String = String::from("// carried ");
+    let mut checked: i32 = 0;
+    let mut pos: u64 = 0;
+    while pos < src.len() {
+        let end: u64 = line_end(src, pos);
+        let line: String = src.substring(pos, end);
+        if line.len() > prefix.len() && line.substring(0, prefix.len()) == prefix {
+            let colon: u64 = find_byte(line, 58, prefix.len());
+            let name: String = line.substring(prefix.len(), colon);
+            let expected: Vec<i64> = parse_markers(line, colon + 1);
+            let idx: i64 = find_function(lowered, name);
+            if idx < 0 { return 10 + checked; }
+            let f: IrFunction = lowered.functions[idx as u64];
+            if !same_markers(carried_markers(f), expected) { return 50 + checked; }
+            checked = checked + 1;
+        }
+        pos = end + 1;
+    }
+    if checked == 0 { return 3; }
     0
 }

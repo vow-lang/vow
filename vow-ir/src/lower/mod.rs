@@ -1177,6 +1177,16 @@ impl LowerCtx {
         None
     }
 
+    /// Pairs each of `names` that is in scope now with its current value, in
+    /// order. Names declared inside the construct being lowered are not yet in
+    /// scope and drop out, so they are never carried through a loop or branch.
+    pub(super) fn in_scope_vars(&self, names: Vec<String>) -> Vec<(String, InstId)> {
+        names
+            .into_iter()
+            .filter_map(|name| self.lookup(&name).map(|id| (name, id)))
+            .collect()
+    }
+
     /// Look up a variable considering only scope frames up to (exclusive) `depth`.
     /// Used by `continue` to resolve loop-carried vars from the loop header scope,
     /// skipping any inner-scope shadows introduced in the loop body.
@@ -1303,42 +1313,79 @@ impl LowerCtx {
     }
 }
 
-/// Collect names of variables assigned anywhere in a block (recursively).
-/// Used to identify loop-carried variables that need Phi nodes.
-fn collect_assigned_vars(block: &Block) -> Vec<String> {
+/// Names assigned anywhere in a loop's per-iteration code (`condition` for
+/// `while`, then `body`), in first-assignment source order and without regard
+/// to scope. Callers keep only the names in scope at loop entry via
+/// `LowerCtx::in_scope_vars`. The self-hosted `collect_loop_assigned_vars` in
+/// compiler/lower.vow has the identical contract and traversal.
+fn collect_loop_assigned_vars(condition: Option<&Expr>, body: &Block) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut result = vec![];
-    for stmt in &block.stmts {
-        collect_assigned_in_stmt(stmt, &mut seen, &mut result);
+    if let Some(c) = condition {
+        collect_assigned_in_expr(c, &mut seen, &mut result);
     }
-    if let Some(e) = &block.trailing_expr {
-        collect_assigned_in_expr(e, &mut seen, &mut result);
-    }
+    collect_assigned_in_block(body, &mut seen, &mut result);
     result
 }
 
-fn collect_assigned_in_stmt(stmt: &Stmt, seen: &mut HashSet<String>, out: &mut Vec<String>) {
-    if let Stmt::Expr { expr, .. } = stmt {
-        collect_assigned_in_expr(expr, seen, out);
+fn collect_assigned_in_block(block: &Block, seen: &mut HashSet<String>, out: &mut Vec<String>) {
+    for stmt in &block.stmts {
+        collect_assigned_in_stmt(stmt, seen, out);
+    }
+    if let Some(e) = &block.trailing_expr {
+        collect_assigned_in_expr(e, seen, out);
     }
 }
 
+fn collect_assigned_in_stmt(stmt: &Stmt, seen: &mut HashSet<String>, out: &mut Vec<String>) {
+    match stmt {
+        Stmt::Let { init, .. } => collect_assigned_in_expr(init, seen, out),
+        Stmt::Expr { expr, .. } => collect_assigned_in_expr(expr, seen, out),
+    }
+}
+
+/// Visits every sub-expression in evaluation order. The match is exhaustive on
+/// purpose: an assignment hidden in any operand position must be carried by the
+/// enclosing loop, so a new `ExprKind` has to decide how it is scanned.
 fn collect_assigned_in_expr(expr: &Expr, seen: &mut HashSet<String>, out: &mut Vec<String>) {
     match &expr.kind {
+        ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Continue | ExprKind::Result => {}
         ExprKind::Assign { lhs, rhs } => {
-            if let ExprKind::Ident(name) = &lhs.kind
-                && seen.insert(name.clone())
-            {
-                out.push(name.clone());
+            if let ExprKind::Ident(name) = &lhs.kind {
+                if seen.insert(name.clone()) {
+                    out.push(name.clone());
+                }
+            } else {
+                collect_assigned_in_expr(lhs, seen, out);
             }
             collect_assigned_in_expr(rhs, seen, out);
         }
-        ExprKind::Block(b) => {
-            for s in &b.stmts {
-                collect_assigned_in_stmt(s, seen, out);
+        ExprKind::BinaryOp { lhs, rhs, .. } => {
+            collect_assigned_in_expr(lhs, seen, out);
+            collect_assigned_in_expr(rhs, seen, out);
+        }
+        ExprKind::UnaryOp { operand, .. } => collect_assigned_in_expr(operand, seen, out),
+        ExprKind::Call { callee, args } => {
+            collect_assigned_in_expr(callee, seen, out);
+            for a in args {
+                collect_assigned_in_expr(a, seen, out);
             }
-            if let Some(e) = &b.trailing_expr {
-                collect_assigned_in_expr(e, seen, out);
+        }
+        ExprKind::MethodCall { receiver, args, .. } => {
+            collect_assigned_in_expr(receiver, seen, out);
+            for a in args {
+                collect_assigned_in_expr(a, seen, out);
+            }
+        }
+        ExprKind::FieldAccess { base, .. } => collect_assigned_in_expr(base, seen, out),
+        ExprKind::Index { base, index } => {
+            collect_assigned_in_expr(base, seen, out);
+            collect_assigned_in_expr(index, seen, out);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_assigned_in_expr(scrutinee, seen, out);
+            for arm in arms {
+                collect_assigned_in_expr(&arm.body, seen, out);
             }
         }
         ExprKind::If {
@@ -1347,12 +1394,7 @@ fn collect_assigned_in_expr(expr: &Expr, seen: &mut HashSet<String>, out: &mut V
             else_branch,
         } => {
             collect_assigned_in_expr(condition, seen, out);
-            for s in &then_branch.stmts {
-                collect_assigned_in_stmt(s, seen, out);
-            }
-            if let Some(e) = &then_branch.trailing_expr {
-                collect_assigned_in_expr(e, seen, out);
-            }
+            collect_assigned_in_block(then_branch, seen, out);
             if let Some(e) = else_branch {
                 collect_assigned_in_expr(e, seen, out);
             }
@@ -1361,44 +1403,32 @@ fn collect_assigned_in_expr(expr: &Expr, seen: &mut HashSet<String>, out: &mut V
             condition, body, ..
         } => {
             collect_assigned_in_expr(condition, seen, out);
-            for s in &body.stmts {
-                collect_assigned_in_stmt(s, seen, out);
+            collect_assigned_in_block(body, seen, out);
+        }
+        ExprKind::ForEach { iterable, body, .. } => {
+            collect_assigned_in_expr(iterable, seen, out);
+            collect_assigned_in_block(body, seen, out);
+        }
+        ExprKind::Loop { body, .. } => collect_assigned_in_block(body, seen, out),
+        ExprKind::Break { value } | ExprKind::Return { value } => {
+            if let Some(v) = value {
+                collect_assigned_in_expr(v, seen, out);
             }
-            if let Some(e) = &body.trailing_expr {
+        }
+        ExprKind::Block(b) => collect_assigned_in_block(b, seen, out),
+        ExprKind::Question { expr } | ExprKind::Cast { expr, .. } => {
+            collect_assigned_in_expr(expr, seen, out);
+        }
+        ExprKind::Tuple(items) | ExprKind::EnumConstruct { fields: items, .. } => {
+            for e in items {
                 collect_assigned_in_expr(e, seen, out);
             }
         }
-        ExprKind::Loop { body, .. } => {
-            for s in &body.stmts {
-                collect_assigned_in_stmt(s, seen, out);
-            }
-            if let Some(e) = &body.trailing_expr {
+        ExprKind::StructLiteral { fields, .. } => {
+            for (_, e) in fields {
                 collect_assigned_in_expr(e, seen, out);
             }
         }
-        ExprKind::ForEach { body, .. } => {
-            for s in &body.stmts {
-                collect_assigned_in_stmt(s, seen, out);
-            }
-            if let Some(e) = &body.trailing_expr {
-                collect_assigned_in_expr(e, seen, out);
-            }
-        }
-        ExprKind::BinaryOp { lhs, rhs, .. } => {
-            collect_assigned_in_expr(lhs, seen, out);
-            collect_assigned_in_expr(rhs, seen, out);
-        }
-        ExprKind::UnaryOp { operand, .. } => collect_assigned_in_expr(operand, seen, out),
-        ExprKind::Return { value: Some(v), .. } => {
-            collect_assigned_in_expr(v, seen, out);
-        }
-        ExprKind::Return { value: None, .. } => {}
-        ExprKind::Match { arms, .. } => {
-            for arm in arms {
-                collect_assigned_in_expr(&arm.body, seen, out);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -1539,19 +1569,11 @@ fn collect_if_mutations(
 ) -> Vec<(String, InstId)> {
     let mut seen = HashSet::new();
     let mut names = vec![];
-    for s in &then_branch.stmts {
-        collect_assigned_in_stmt(s, &mut seen, &mut names);
-    }
-    if let Some(e) = &then_branch.trailing_expr {
-        collect_assigned_in_expr(e, &mut seen, &mut names);
-    }
+    collect_assigned_in_block(then_branch, &mut seen, &mut names);
     if let Some(e) = else_branch {
         collect_assigned_in_expr(e, &mut seen, &mut names);
     }
-    names
-        .into_iter()
-        .filter_map(|name| ctx.lookup(&name).map(|id| (name, id)))
-        .collect()
+    ctx.in_scope_vars(names)
 }
 
 pub(super) fn lower_expr_pub(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
@@ -2313,13 +2335,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             body,
             vow: while_vow,
         } => {
-            let mutated = collect_assigned_vars(body);
-
-            // Gather pre-loop (name, current_value) for mutated vars that exist in scope.
-            let loop_vars: Vec<(String, InstId)> = mutated
-                .into_iter()
-                .filter_map(|name| ctx.lookup(&name).map(|id| (name, id)))
-                .collect();
+            // Pre-loop (name, current_value) for assigned vars that exist in scope.
+            let loop_vars =
+                ctx.in_scope_vars(collect_loop_assigned_vars(Some(condition.as_ref()), body));
 
             let pre_header_block = ctx.current_block;
             let header_block = ctx.new_block();
@@ -2488,11 +2506,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
 
-            let mutated = collect_assigned_vars(body);
-            let loop_vars: Vec<(String, InstId)> = mutated
-                .into_iter()
-                .filter_map(|name| ctx.lookup(&name).map(|id| (name, id)))
-                .collect();
+            let loop_vars = ctx.in_scope_vars(collect_loop_assigned_vars(None, body));
 
             let pre_header_block = ctx.current_block;
             let header_block = ctx.new_block();
@@ -2693,11 +2707,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             body,
             vow: loop_vow,
         } => {
-            let mutated = collect_assigned_vars(body);
-            let loop_vars: Vec<(String, InstId)> = mutated
-                .into_iter()
-                .filter_map(|name| ctx.lookup(&name).map(|id| (name, id)))
-                .collect();
+            let loop_vars = ctx.in_scope_vars(collect_loop_assigned_vars(None, body));
 
             let pre_header_block = ctx.current_block;
             let header_block = ctx.new_block();
@@ -3348,16 +3358,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let merge_block = ctx.new_block();
 
             // Collect mutations across all arm bodies.
-            let mutations: Vec<(String, InstId)> = {
+            let mutations = {
                 let mut seen = HashSet::new();
                 let mut names = vec![];
                 for arm in arms {
                     collect_assigned_in_expr(&arm.body, &mut seen, &mut names);
                 }
-                names
-                    .into_iter()
-                    .filter_map(|name| ctx.lookup(&name).map(|id| (name, id)))
-                    .collect()
+                ctx.in_scope_vars(names)
             };
 
             let scope_snap = ctx.snapshot_scope();
@@ -7214,71 +7221,64 @@ fn sum(v: Vec<i64>) -> i64 {
         );
     }
 
-    /// Only variables already in scope at loop entry are loop-carried; a
-    /// `let mut` declared inside the body gets no Phi. The self-hosted lowerer
-    /// once carried body-local names too (as `%-1` Upsilons), shifting every
-    /// later instruction id and breaking cross-compiler IR placement parity.
-    /// Counts are mirrored by `compiler/tests/test_lower_loop_carried_scope.vow`.
+    /// Marker constants (>= 1000) fed to the Upsilons, in block order. The
+    /// fixture initialises each variable of interest with a distinct marker, so
+    /// the list names which variables a loop carries and in which order.
+    fn carried_markers(func: &Function) -> Vec<i64> {
+        let insts = insts_of(func);
+        let markers: HashMap<InstId, i64> = insts
+            .iter()
+            .filter_map(|i| match i.data {
+                InstData::ConstI64(v) if v >= 1000 => Some((i.id, v)),
+                _ => None,
+            })
+            .collect();
+        insts
+            .iter()
+            .filter(|i| i.opcode == Opcode::Upsilon)
+            .filter_map(|i| markers.get(&i.args[0]).copied())
+            .collect()
+    }
+
+    /// `// carried <fn>: <markers>` lines of the shared fixture.
+    fn expected_carried(fixture: &str) -> Vec<(String, Vec<i64>)> {
+        fixture
+            .lines()
+            .filter_map(|line| line.strip_prefix("// carried "))
+            .map(|rest| {
+                let (name, markers) = rest.split_once(':').expect("`// carried <fn>: ...`");
+                let markers = markers
+                    .split_whitespace()
+                    .map(|m| m.parse().expect("marker"))
+                    .collect();
+                (name.to_string(), markers)
+            })
+            .collect()
+    }
+
+    /// Loops carry exactly the variables assigned in their condition or body
+    /// that were already in scope at loop entry, in first-assignment order.
+    /// Body-local `let mut`s once became `%-1` Upsilons in the self-hosted
+    /// lowerer, shifting every later instruction id and breaking cross-compiler
+    /// IR placement parity; assignments nested in operand positions were once
+    /// missed by both lowerers. The self-hosted twin is
+    /// `compiler/tests/test_lower_loop_carried_scope.vow`; both read
+    /// `tests/fixtures/loop_carried_scope.vow`.
     #[test]
-    fn loops_carry_only_variables_in_scope_at_entry() {
-        let module = lower_source_to_module(
-            r#"
-module LoopCarriedScope
-
-fn w(n: i64) -> i64 {
-    let mut i: i64 = 0;
-    while i < n {
-        let mut j: i64 = 0;
-        let mut k: i64 = 0;
-        while j < 3 {
-            j = j + 1;
-            k = k + j;
-        }
-        i = i + k;
-    }
-    i
-}
-
-fn l(n: i64) -> i64 {
-    let mut i: i64 = 0;
-    loop {
-        let mut t: i64 = 0;
-        t = t + 1;
-        i = i + t;
-        if i > n { break; }
-    }
-    i
-}
-
-fn f(v: Vec<i64>) -> i64 {
-    let mut s: i64 = 0;
-    for x in v {
-        let mut t: i64 = 0;
-        t = t + x;
-        s = s + t;
-    }
-    s
-}
-"#,
-            "loop_carried_scope.vow",
-        );
-
-        let phis = |name: &str| {
+    fn loops_carry_the_expected_variables() {
+        let fixture = include_str!("../../../tests/fixtures/loop_carried_scope.vow");
+        let module = lower_source_to_module(fixture, "loop_carried_scope.vow");
+        let expected = expected_carried(fixture);
+        assert!(!expected.is_empty(), "fixture lists its functions");
+        for (name, markers) in expected {
             let func = module
                 .functions
                 .iter()
                 .find(|f| f.name == name)
-                .expect("function lowered");
-            insts_of(func)
-                .iter()
-                .filter(|i| i.opcode == Opcode::Phi)
-                .count()
-        };
-        assert_eq!(phis("w"), 6, "outer carries i; inner carries j and k");
-        assert_eq!(phis("l"), 3, "loop carries only i");
-        assert_eq!(phis("f"), 3, "for-each carries the index and s");
+                .unwrap_or_else(|| panic!("fixture function `{name}`"));
+            assert_eq!(carried_markers(func), markers, "carried by `{name}`");
+        }
     }
-
     /// A `from_raw_parts_copy` length literal is lowered in its `u64` context.
     /// A wrapped negative `ConstI64` here made the C model's `>= 0` guard
     /// unsatisfiable and so proved everything after the call.
