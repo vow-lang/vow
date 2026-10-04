@@ -20,6 +20,10 @@
         "LinearTypeViolation",
         "NonExhaustiveMatch",
         "UnsupportedPattern",
+        "LiteralOutOfRange",
+        "NarrowingCastNotAllowed",
+        "ShiftCountOutOfRange",
+        "TautologicalComparison",
         "ImmutableAssignment",
         "UnusedMut",
         "VowRequiresViolated",
@@ -27,6 +31,8 @@
         "VowInvariantViolated",
         "UnknownMethod",
         "UnsupportedFeature",
+        "BTreeMapKeyTypeMustBeI64",
+        "BTreeMapValueMustBeNonLinear",
         "LoweringWarning",
         "MissingContract",
         "ContractTypeMismatch",
@@ -36,8 +42,11 @@
         "CodegenFailed",
         "LinkFailed",
         "RegionConflict",
+        "RegionLiteralMutation",
         "RegionLinear",
         "RegionRootEscape",
+        "VerificationSkipped",
+        "ArithOverflowReachable",
         "VerifierAssertionUnattributed",
         "ModelCapacityAssumed"
       ],
@@ -52,7 +61,25 @@
       "enum": ["error", "warning", "note"],
       "description": "Diagnostic severity"
     },
-    "span": {
+    "span": { "$ref": "#/$defs/Span" },
+    "hints": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Actionable suggestions for fixing the diagnostic; omitted when there are none"
+    },
+    "secondary": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Span" },
+      "description": "Related source locations (for a caller-blame contract violation, the call sites); omitted when there are none"
+    },
+    "blame": {
+      "type": "string",
+      "enum": ["caller", "callee"],
+      "description": "Who is responsible for a contract violation; omitted when no party is at fault"
+    }
+  },
+  "$defs": {
+    "Span": {
       "type": "object",
       "required": ["file", "offset", "length"],
       "properties": {

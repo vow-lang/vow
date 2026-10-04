@@ -85,6 +85,53 @@ HINT_UNCOMPARED_CODES = {
 # enforcement point to slot back into, per _span_errors below.
 SPANLESS_SELF_FIXTURES = frozenset()
 
+# `vow verify`'s output contract, read back out of the schemas rather than
+# restated so a field added there is compared by the full-document gate
+# automatically.
+BUILD_RESULT_SCHEMA, BUILD_SCHEMA_DIR = schema_check.load(
+    Path(__file__).resolve().parent.parent
+    / "docs/spec/schemas/build-result.schema.json"
+)
+# The only parts of a `vow verify` document the full comparison does not demand
+# be equal. Each entry names the reason; everything else — status, diagnostics
+# (code, message, span, hints, secondary spans, blame), the legacy
+# `counterexample` string, every counterexample field including `source`,
+# `call_sites`, `violating_args`, `execution_path` and `branch_decisions` — must
+# match exactly.
+FULL_JSON_ALLOWLIST = {
+    "verify_message": (
+        "ESBMC's free-text explanation of a soft failure; its wording is not "
+        "stable across solver versions"
+    ),
+    "counterexample": (
+        "when `verify_status` is set the legacy string embeds that same ESBMC "
+        "free text after its first colon, so only the leading category is compared"
+    ),
+    "diagnostics order": (
+        "the two compilers enumerate non-error diagnostics (region notes, "
+        "warnings) in different orders, so those are compared as a multiset; "
+        "error diagnostics keep their order"
+    ),
+    "executable": (
+        "a path the invoker chose, so only whether one was produced is compared"
+    ),
+    ESBMC_INTERNAL_VALUE_PREFIX: (
+        "counterexample value names ESBMC invents for its own temporaries"
+    ),
+}
+FULL_JSON_COUNTEREXAMPLES = "counterexamples"
+DIVERGENT_ARGUMENT_VALUE = "<divergent>"
+ARGUMENT_HINT_VALUE = re.compile(r"^(argument `[^`]*` = ).*( violates the contract)$")
+
+# A compiled program's structured runtime aborts (`VowViolation`, bounds, ...)
+# are one JSON object per stderr line, each keyed by an `error` name.
+RUNTIME_ERROR_KEY = "error"
+VOW_VIOLATION_ERROR = "VowViolation"
+VOW_VIOLATION_SCHEMA, VOW_VIOLATION_SCHEMA_DIR = schema_check.load(
+    Path(__file__).resolve().parent.parent
+    / "docs/spec/schemas/vow-violation.schema.json"
+)
+
 # `vow test`'s authoritative output contract. Read back out of the schema
 # rather than restated so a field added there is compared by this blocking
 # gate automatically, instead of drifting out of coverage unnoticed.
@@ -103,14 +150,11 @@ TEST_NONDETERMINISTIC_FIELDS = frozenset({"duration_ms"})
 # form would leave this blocking gate permanently red. Excluded by name, with
 # the issue attached, so re-including it is a deliberate act once #1183 closes.
 TEST_TRACKED_DIVERGENT_FIELDS = frozenset({"diagnostics"})
-# Compared, but not by raw equality: `counterexample.schema.json` documents
-# `source` as differing in SHAPE between the two emitters (Rust a span object,
-# self-hosted a path string), and ESBMC's `$esbmc$` internals are noise. Routed
-# through the same format-tolerant comparison `compare_json` already applies.
+# Compared, but not by raw equality: ESBMC's `$esbmc$` internals are noise.
+# Routed through the same tolerant comparison `compare_json` already applies.
 TEST_COUNTEREXAMPLE_FIELD = "counterexamples"
-# Every counterexample field the schema declares except the two the comparison
-# owns separately: `source` is the documented shape divergence, and `values`
-# is compared with the ESBMC internals stripped. The rest — including
+# Every counterexample field the schema declares except `values`, which is
+# compared with the ESBMC internals stripped. The rest — including `source`,
 # `violation`, `call_sites`, `violating_args`, `execution_path`,
 # `branch_decisions`, `replay`, and `replay_reason` — are deterministic for the
 # same sources and derived here so a field added to the schema is compared
@@ -120,9 +164,7 @@ _COUNTEREXAMPLE_SCHEMA, _ = schema_check.load(
     / "docs/spec/schemas/counterexample.schema.json"
 )
 COUNTEREXAMPLE_COMPARED_FIELDS = tuple(
-    field
-    for field in _COUNTEREXAMPLE_SCHEMA["properties"]
-    if field not in ("source", VALUES_LABEL)
+    field for field in _COUNTEREXAMPLE_SCHEMA["properties"] if field != VALUES_LABEL
 )
 # Which entry fields name a test rather than describe its outcome. The membership
 # delta keys off these; the rest are compared per shared entry.
@@ -332,6 +374,150 @@ def compare_json(rust, self_hosted, rust_exit, self_exit):
             ("function", "vow_id", "blame", "violation"),
         )
 
+    return errors
+
+
+def _canonical_diagnostic_order(diagnostics):
+    """Non-error diagnostics sorted by content, then the errors in their order."""
+
+    def is_error(diagnostic):
+        return isinstance(diagnostic, dict) and diagnostic.get("severity") == "error"
+
+    others = sorted(
+        (d for d in diagnostics if not is_error(d)),
+        key=lambda d: json.dumps(d, sort_keys=True),
+    )
+    return others + [d for d in diagnostics if is_error(d)]
+
+
+def _normalise_for_full_json(document, argument_values_diverge=False):
+    """The document with every FULL_JSON_ALLOWLIST entry neutralised.
+
+    `argument_values_diverge` additionally blanks the caller-argument values a
+    known counterexample-label divergence taints: `violating_args[].value` and
+    the `argument ... = <value>` diagnostic hint built from it.
+    """
+    document = copy.deepcopy(document)
+    document.pop("verify_message", None)
+    if isinstance(document.get("diagnostics"), list):
+        document["diagnostics"] = _canonical_diagnostic_order(document["diagnostics"])
+    if document.get("verify_status") and isinstance(
+        document.get("counterexample"), str
+    ):
+        document["counterexample"] = document["counterexample"].split(":", 1)[0]
+    if document.get("executable") is not None:
+        document["executable"] = "<path>"
+    for counterexample in document.get(FULL_JSON_COUNTEREXAMPLES, []):
+        if isinstance(counterexample, dict) and "values" in counterexample:
+            counterexample["values"] = _counterexample_values(counterexample)
+        if argument_values_diverge:
+            for argument in counterexample.get("violating_args", []):
+                argument["value"] = DIVERGENT_ARGUMENT_VALUE
+    if argument_values_diverge:
+        for diagnostic in document.get("diagnostics", []):
+            diagnostic["hints"] = [
+                ARGUMENT_HINT_VALUE.sub(rf"\1{DIVERGENT_ARGUMENT_VALUE}\2", hint)
+                for hint in diagnostic.get("hints", [])
+            ]
+    return document
+
+
+def _full_json_schema_errors(name, document):
+    return [
+        f"{name} violates build-result.schema.json: {error}"
+        for error in schema_check.validate(
+            document, BUILD_RESULT_SCHEMA, BUILD_SCHEMA_DIR
+        )
+    ]
+
+
+def compare_full_json(
+    rust, self_hosted, rust_exit, self_exit, argument_values_diverge=False
+):
+    """Return parity errors for a `vow verify` run, comparing the whole document.
+
+    Unlike `compare_json`, nothing is summarised: two documents that differ in
+    any byte of a diagnostic, a counterexample or a legacy field fail, apart
+    from FULL_JSON_ALLOWLIST. Both documents are also checked against the build
+    result schema, because parity alone cannot see a field both compilers
+    emit wrongly. A fixture carrying `// TEST: known-cex-divergence` passes
+    `argument_values_diverge`, since its tracked counterexample-label gap also
+    changes the caller-argument value recovered from the same variable.
+    """
+    errors = _mismatch("exit code", rust_exit, self_exit)
+    errors += _full_json_schema_errors("rust", rust)
+    errors += _full_json_schema_errors("self", self_hosted)
+
+    rust = _normalise_for_full_json(rust, argument_values_diverge)
+    self_hosted = _normalise_for_full_json(self_hosted, argument_values_diverge)
+    rust_counterexamples = rust.pop(FULL_JSON_COUNTEREXAMPLES, [])
+    self_counterexamples = self_hosted.pop(FULL_JSON_COUNTEREXAMPLES, [])
+
+    for field in sorted(set(rust) | set(self_hosted)):
+        errors += _mismatch(field, rust.get(field), self_hosted.get(field))
+
+    errors += _mismatch(
+        COUNTEREXAMPLE_COUNT_LABEL, len(rust_counterexamples), len(self_counterexamples)
+    )
+    for index, (rust_cex, self_cex) in enumerate(
+        zip(rust_counterexamples, self_counterexamples)
+    ):
+        for field in sorted(set(rust_cex) | set(self_cex)):
+            errors += _mismatch(
+                f"counterexample[{index}].{field}",
+                rust_cex.get(field),
+                self_cex.get(field),
+            )
+    return errors
+
+
+def runtime_error_documents(stderr_text):
+    """The structured runtime aborts a program wrote to stderr, in order."""
+    documents = []
+    for line in stderr_text.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            document = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(document, dict) and RUNTIME_ERROR_KEY in document:
+            documents.append(document)
+    return documents
+
+
+def _violation_schema_errors(name, documents):
+    return [
+        f"{name} runtime[{index}] violates vow-violation.schema.json: {error}"
+        for index, document in enumerate(documents)
+        if document[RUNTIME_ERROR_KEY] == VOW_VIOLATION_ERROR
+        for error in schema_check.validate(
+            document, VOW_VIOLATION_SCHEMA, VOW_VIOLATION_SCHEMA_DIR
+        )
+    ]
+
+
+def compare_runtime_json(rust_stderr, self_stderr, rust_exit, self_exit):
+    """Return parity errors for the structured aborts of two compiled programs.
+
+    Both programs run the same source built by each compiler, so every field of
+    every abort object — `VowViolation`'s `file` and `offset` included — must
+    be identical; there is no allow-list.
+    """
+    errors = _mismatch("exit code", rust_exit, self_exit)
+    rust = runtime_error_documents(rust_stderr)
+    self_hosted = runtime_error_documents(self_stderr)
+    if not rust:
+        errors.append("rust wrote no structured runtime error to stderr")
+    errors += _violation_schema_errors("rust", rust)
+    errors += _violation_schema_errors("self", self_hosted)
+    errors += _mismatch("runtime errors count", len(rust), len(self_hosted))
+    for index, (rust_doc, self_doc) in enumerate(zip(rust, self_hosted)):
+        for field in sorted(set(rust_doc) | set(self_doc)):
+            errors += _mismatch(
+                f"runtime[{index}].{field}", rust_doc.get(field), self_doc.get(field)
+            )
     return errors
 
 
@@ -748,6 +934,8 @@ def classify_empty_output(rust_empty, self_empty):
 # mode extends this table instead of widening one `or` chain.
 MODE_ARITY = {
     "json": (5, 6),
+    "full-json": (5, 6),
+    "runtime-json": (5, 5),
     "error": (5, 6),
     "test": (5, 6),
     "empty-output": (3, 3),
@@ -760,8 +948,9 @@ def main(argv=None):
     arity = MODE_ARITY.get(args[0]) if args else None
     if arity is None or not (arity[0] <= len(args) <= arity[1]):
         print(
-            "usage: parity.py {json,error,test} RUST_JSON SELF_JSON "
+            "usage: parity.py {json,full-json,error,test} RUST_JSON SELF_JSON "
             "RUST_EXIT SELF_EXIT [FIXTURE]\n"
+            "       parity.py runtime-json RUST_STDERR SELF_STDERR RUST_EXIT SELF_EXIT\n"
             "       parity.py empty-output RUST_EMPTY SELF_EMPTY",
             file=sys.stderr,
         )
@@ -773,6 +962,22 @@ def main(argv=None):
         return 0
 
     mode, rust_path, self_path, rust_exit, self_exit = args[:5]
+    if mode == "runtime-json":
+        try:
+            rust_stderr = Path(rust_path).read_text(errors="replace")
+            self_stderr = Path(self_path).read_text(errors="replace")
+        except OSError as error:
+            print(f"FAIL: stderr read error: {error}")
+            return 1
+        errors = compare_runtime_json(
+            rust_stderr, self_stderr, int(rust_exit), int(self_exit)
+        )
+        if errors:
+            print("FAIL: " + "; ".join(errors))
+            return 1
+        print("OK")
+        return 0
+
     fixture_path = args[5] if len(args) == 6 else None
     try:
         rust, self_hosted = _load_documents(rust_path, self_path)
@@ -783,13 +988,25 @@ def main(argv=None):
     if mode == "test":
         errors = compare_test(rust, self_hosted, int(rust_exit), int(self_exit))
         verdict = None
-    elif mode == "json":
-        errors = compare_json(rust, self_hosted, int(rust_exit), int(self_exit))
+    elif mode in ("json", "full-json"):
         try:
-            verdict = _known_cex_verdict(rust, self_hosted, errors, fixture_path)
+            fixture_text = (
+                Path(fixture_path).read_text(errors="replace") if fixture_path else ""
+            )
         except OSError as error:
             print(f"FAIL: fixture read error: {error}")
             return 1
+        if mode == "full-json":
+            errors = compare_full_json(
+                rust,
+                self_hosted,
+                int(rust_exit),
+                int(self_exit),
+                argument_values_diverge=bool(KNOWN_CEX_DIVERGENCE.search(fixture_text)),
+            )
+        else:
+            errors = compare_json(rust, self_hosted, int(rust_exit), int(self_exit))
+        verdict = _known_cex_verdict(rust, self_hosted, errors, fixture_path)
     else:
         fixture_name = Path(fixture_path).name if fixture_path else None
         errors = compare_error(

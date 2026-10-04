@@ -3089,7 +3089,20 @@ failure.
 {
   "status": "VerifyFailed",
   "executable": "examples/cegis_broken",
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "error_code": "VowEnsuresViolated",
+      "message": "contract violation in `safe_sub`: ensures result >= 0",
+      "severity": "error",
+      "span": {
+        "file": "examples/cegis_broken.vow",
+        "offset": 76,
+        "length": 20
+      },
+      "hints": ["function `safe_sub` failed to establish its postcondition"],
+      "blame": "callee"
+    }
+  ],
   "function": "safe_sub",
   "counterexample": "[Counterexample]",
   "counterexamples": [
@@ -3108,6 +3121,25 @@ failure.
   ]
 }
 ```
+
+Every counterexample also yields one `error` diagnostic, appended after any
+warnings. Its code follows the counterexample's `blame` (`caller` →
+`VowRequiresViolated`, `callee` → `VowEnsuresViolated`; a failed `invariant` is
+callee-blamed, so it reports `VowEnsuresViolated`), or is
+`VerifierAssertionUnattributed` when the failure is not attributed to a vow
+clause. The `message` is ``contract violation in `<function>`: <violation>`` (or
+``verification failed in `<function>` on an unattributed property: <violation>``),
+`span` is the counterexample's `source` (an empty file and zero offset/length
+when `source` is `null`), `secondary` lists the counterexample's `call_sites`,
+and `hints` name the failing function and, for caller blame, each violating
+argument. A `timeout`, `unknown`, `error` or `panicked` outcome has no
+counterexample and adds no such diagnostic. Both compilers emit the same
+`diagnostics[]`, `counterexample` and `counterexamples[]` for the same source;
+the only fields that are not specified byte for byte are `verify_message`
+(ESBMC's free text) and `values` entries named `$esbmc$...` (solver temporaries).
+
+A diagnostic's `span` is exactly `{file, offset, length}`: positions are byte
+offsets, and neither compiler adds line or column fields.
 
 For caller-blame failures where a verified function violates a callee's
 `requires` clause, the counterexample reports the callee clause in `violation`
@@ -3131,7 +3163,7 @@ shift count) rather than exposing raw verifier output.
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
 | `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
-| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
+| `counterexample`   | string              | VerifyFailed      | Legacy description string: `"[Counterexample]"` when ESBMC produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>`, ...) |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |
 | `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
@@ -5169,6 +5201,11 @@ These are emitted to stderr as JSON when a compiled program runs (debug mode for
 {"error":"VowViolation","vow_id":0,"blame":"Caller","description":"y != 0","file":"divide.vow","offset":42,"values":{"y":0}}
 ```
 
+`file` is the source file that defines the violated clause (the module file for a
+clause in an imported module, not the entry file) and `offset` is the byte offset
+at which that clause starts. Both compilers report the same `file` and `offset`
+for the same program, never an empty placeholder.
+
 The `blame` field indicates who is at fault:
 - `Caller` — a `requires` was violated (the caller passed bad arguments)
 - `Callee` — an `ensures` or `invariant` was violated (the function has a bug)
@@ -6518,10 +6555,9 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           },
           "additionalProperties": false
         },
-        { "type": "string" },
         { "type": "null" }
       ],
-      "description": "Source location of the violated vow clause; Rust emits a span object, self-hosted emits the source path string"
+      "description": "Source location of the violated vow clause, identical in both compilers; null when the failure cannot be attributed to a vow clause"
     },
     "blame": {
       "type": "string",
@@ -6626,6 +6662,10 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "LinearTypeViolation",
         "NonExhaustiveMatch",
         "UnsupportedPattern",
+        "LiteralOutOfRange",
+        "NarrowingCastNotAllowed",
+        "ShiftCountOutOfRange",
+        "TautologicalComparison",
         "ImmutableAssignment",
         "UnusedMut",
         "VowRequiresViolated",
@@ -6633,6 +6673,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "VowInvariantViolated",
         "UnknownMethod",
         "UnsupportedFeature",
+        "BTreeMapKeyTypeMustBeI64",
+        "BTreeMapValueMustBeNonLinear",
         "LoweringWarning",
         "MissingContract",
         "ContractTypeMismatch",
@@ -6642,8 +6684,11 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "CodegenFailed",
         "LinkFailed",
         "RegionConflict",
+        "RegionLiteralMutation",
         "RegionLinear",
         "RegionRootEscape",
+        "VerificationSkipped",
+        "ArithOverflowReachable",
         "VerifierAssertionUnattributed",
         "ModelCapacityAssumed"
       ],
@@ -6658,7 +6703,25 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
       "enum": ["error", "warning", "note"],
       "description": "Diagnostic severity"
     },
-    "span": {
+    "span": { "$ref": "#/$defs/Span" },
+    "hints": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Actionable suggestions for fixing the diagnostic; omitted when there are none"
+    },
+    "secondary": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Span" },
+      "description": "Related source locations (for a caller-blame contract violation, the call sites); omitted when there are none"
+    },
+    "blame": {
+      "type": "string",
+      "enum": ["caller", "callee"],
+      "description": "Who is responsible for a contract violation; omitted when no party is at fault"
+    }
+  },
+  "$defs": {
+    "Span": {
       "type": "object",
       "required": ["file", "offset", "length"],
       "properties": {
@@ -8634,7 +8697,20 @@ failure.
 {
   "status": "VerifyFailed",
   "executable": "examples/cegis_broken",
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "error_code": "VowEnsuresViolated",
+      "message": "contract violation in `safe_sub`: ensures result >= 0",
+      "severity": "error",
+      "span": {
+        "file": "examples/cegis_broken.vow",
+        "offset": 76,
+        "length": 20
+      },
+      "hints": ["function `safe_sub` failed to establish its postcondition"],
+      "blame": "callee"
+    }
+  ],
   "function": "safe_sub",
   "counterexample": "[Counterexample]",
   "counterexamples": [
@@ -8653,6 +8729,25 @@ failure.
   ]
 }
 ```
+
+Every counterexample also yields one `error` diagnostic, appended after any
+warnings. Its code follows the counterexample's `blame` (`caller` →
+`VowRequiresViolated`, `callee` → `VowEnsuresViolated`; a failed `invariant` is
+callee-blamed, so it reports `VowEnsuresViolated`), or is
+`VerifierAssertionUnattributed` when the failure is not attributed to a vow
+clause. The `message` is ``contract violation in `<function>`: <violation>`` (or
+``verification failed in `<function>` on an unattributed property: <violation>``),
+`span` is the counterexample's `source` (an empty file and zero offset/length
+when `source` is `null`), `secondary` lists the counterexample's `call_sites`,
+and `hints` name the failing function and, for caller blame, each violating
+argument. A `timeout`, `unknown`, `error` or `panicked` outcome has no
+counterexample and adds no such diagnostic. Both compilers emit the same
+`diagnostics[]`, `counterexample` and `counterexamples[]` for the same source;
+the only fields that are not specified byte for byte are `verify_message`
+(ESBMC's free text) and `values` entries named `$esbmc$...` (solver temporaries).
+
+A diagnostic's `span` is exactly `{file, offset, length}`: positions are byte
+offsets, and neither compiler adds line or column fields.
 
 For caller-blame failures where a verified function violates a callee's
 `requires` clause, the counterexample reports the callee clause in `violation`
@@ -8676,7 +8771,7 @@ shift count) rather than exposing raw verifier output.
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
 | `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
-| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
+| `counterexample`   | string              | VerifyFailed      | Legacy description string: `"[Counterexample]"` when ESBMC produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>`, ...) |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |
 | `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
@@ -10717,6 +10812,11 @@ These are emitted to stderr as JSON when a compiled program runs (debug mode for
 {"error":"VowViolation","vow_id":0,"blame":"Caller","description":"y != 0","file":"divide.vow","offset":42,"values":{"y":0}}
 ```
 
+`file` is the source file that defines the violated clause (the module file for a
+clause in an imported module, not the entry file) and `offset` is the byte offset
+at which that clause starts. Both compilers report the same `file` and `offset`
+for the same program, never an empty placeholder.
+
 The `blame` field indicates who is at fault:
 - `Caller` — a `requires` was violated (the caller passed bad arguments)
 - `Callee` — an `ensures` or `invariant` was violated (the function has a bug)
@@ -12061,10 +12161,9 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           },
           "additionalProperties": false
         },
-        { "type": "string" },
         { "type": "null" }
       ],
-      "description": "Source location of the violated vow clause; Rust emits a span object, self-hosted emits the source path string"
+      "description": "Source location of the violated vow clause, identical in both compilers; null when the failure cannot be attributed to a vow clause"
     },
     "blame": {
       "type": "string",
@@ -12146,7 +12245,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         ),
         (
             r#"schemas/diagnostic.schema.json"#,
-            r#"{
+            r##"{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vow-lang.dev/schemas/diagnostic.schema.json",
   "title": "Diagnostic",
@@ -12168,6 +12267,10 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "LinearTypeViolation",
         "NonExhaustiveMatch",
         "UnsupportedPattern",
+        "LiteralOutOfRange",
+        "NarrowingCastNotAllowed",
+        "ShiftCountOutOfRange",
+        "TautologicalComparison",
         "ImmutableAssignment",
         "UnusedMut",
         "VowRequiresViolated",
@@ -12175,6 +12278,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "VowInvariantViolated",
         "UnknownMethod",
         "UnsupportedFeature",
+        "BTreeMapKeyTypeMustBeI64",
+        "BTreeMapValueMustBeNonLinear",
         "LoweringWarning",
         "MissingContract",
         "ContractTypeMismatch",
@@ -12184,8 +12289,11 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "CodegenFailed",
         "LinkFailed",
         "RegionConflict",
+        "RegionLiteralMutation",
         "RegionLinear",
         "RegionRootEscape",
+        "VerificationSkipped",
+        "ArithOverflowReachable",
         "VerifierAssertionUnattributed",
         "ModelCapacityAssumed"
       ],
@@ -12200,7 +12308,25 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
       "enum": ["error", "warning", "note"],
       "description": "Diagnostic severity"
     },
-    "span": {
+    "span": { "$ref": "#/$defs/Span" },
+    "hints": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Actionable suggestions for fixing the diagnostic; omitted when there are none"
+    },
+    "secondary": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Span" },
+      "description": "Related source locations (for a caller-blame contract violation, the call sites); omitted when there are none"
+    },
+    "blame": {
+      "type": "string",
+      "enum": ["caller", "callee"],
+      "description": "Who is responsible for a contract violation; omitted when no party is at fault"
+    }
+  },
+  "$defs": {
+    "Span": {
       "type": "object",
       "required": ["file", "offset", "length"],
       "properties": {
@@ -12213,7 +12339,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   },
   "additionalProperties": false
 }
-"#,
+"##,
         ),
         (
             r#"schemas/mutants-result.schema.json"#,

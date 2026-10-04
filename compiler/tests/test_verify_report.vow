@@ -1,0 +1,241 @@
+module TestVerifyReport
+
+use ir
+use diag
+use verify_report
+use tests.builders
+
+// Unit checks for the helpers that turn a failed verification into the
+// `vow verify` JSON, mirroring vow/src/verify_outcome.rs and
+// vow/src/counterexample.rs: where a violated clause lives, which call-site
+// argument values a counterexample names, and the per-counterexample
+// diagnostics.
+
+fn const_u64(id: i64, bits: i64) -> IrInst {
+    ir_inst_new(id, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), bits, 0, String::from(""))
+}
+
+fn const_bool(id: i64, value: i64) -> IrInst {
+    ir_inst_new(id, IOP_CONST_BOOL(), ITY_BOOL(), Vec::new(), IDATA_CONST_BOOL(), value, 0, String::from(""))
+}
+
+fn binary(id: i64, op: i64, lhs: i64, rhs: i64) -> IrInst {
+    let args: Vec<i64> = Vec::new();
+    args.push(lhs);
+    args.push(rhs);
+    ir_inst_new(id, op, ITY_I64(), args, IDATA_NONE(), 0, 0, String::from(""))
+}
+
+fn single_block_function(insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(0, String::from("f"), Vec::new(), ITY_I64(), blocks)
+}
+
+fn check_u64_values_render_unsigned() -> i64 {
+    if ce_u64_to_string(0) != String::from("0") { return 100; }
+    if ce_u64_to_string(8) != String::from("8") { return 101; }
+    if ce_u64_to_string(-1) != String::from("18446744073709551615") { return 102; }
+    if ce_u64_to_string(-9223372036854775807 - 1) != String::from("9223372036854775808") { return 103; }
+    0
+}
+
+fn check_argument_values_follow_the_rust_evaluator() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 0));
+    insts.push(mk_inst_const_i64(1, 5));
+    insts.push(binary(2, IOP_WSUB(), 0, 1));
+    insts.push(binary(3, IOP_CADD(), 0, 1));
+    insts.push(const_u64(4, 8));
+    insts.push(const_u64(5, -1));
+    insts.push(const_bool(6, 1));
+    insts.push(binary(7, IOP_WADD(), 4, 1));
+    let f: IrFunction = single_block_function(insts);
+    if ce_arg_value_string(f, 2) != String::from("-5") { return 200; }
+    if ce_arg_value_string(f, 3) != String::from("") { return 201; }
+    if ce_arg_value_string(f, 4) != String::from("8") { return 202; }
+    if ce_arg_value_string(f, 5) != String::from("18446744073709551615") { return 203; }
+    if ce_arg_value_string(f, 6) != String::from("true") { return 204; }
+    if ce_arg_value_string(f, 7) != String::from("") { return 205; }
+    if ce_arg_value_string(f, 99) != String::from("") { return 206; }
+    0
+}
+
+fn vow_inst(id: i64, op: i64, vow_id: i64, start: i64, len: i64) -> IrInst {
+    let inst: IrInst = ir_inst_new(id, op, ITY_UNIT(), Vec::new(), IDATA_VOW_ID(), vow_id, 0, String::from(""));
+    inst.ostart = start;
+    inst.olen = len;
+    inst
+}
+
+fn entry(id: i64, file: String) -> IrVowEntry {
+    IrVowEntry {
+        id: id,
+        description: String::from("requires x > 0"),
+        blame: 0,
+        binding_ids: Vec::new(),
+        binding_names: Vec::new(),
+        file: file,
+        offset: 0,
+    }
+}
+
+fn check_clause_source_is_the_vow_instruction_origin() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(vow_inst(0, IOP_VOW_REQ(), 0, 215, 20));
+    insts.push(vow_inst(1, IOP_VOW_ENS(), 1, 300, 12));
+    let f: IrFunction = single_block_function(insts);
+    let own: CeSource = ce_source_for_vow(f, entry(0, String::from("m.vow")), String::from("entry.vow"));
+    if own.file != String::from("m.vow") { return 300; }
+    if own.start != 215 { return 301; }
+    if own.len != 20 { return 302; }
+    let second: CeSource = ce_source_for_vow(f, entry(1, String::from("m.vow")), String::from("entry.vow"));
+    if second.start != 300 { return 303; }
+    if second.len != 12 { return 304; }
+    0
+}
+
+fn check_clause_file_falls_back_to_the_function_then_the_path() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(vow_inst(0, IOP_VOW_REQ(), 0, 10, 4));
+    let f: IrFunction = single_block_function(insts);
+    let from_function: CeSource = ce_source_for_vow(f, entry(0, String::from("")), String::from("entry.vow"));
+    if from_function.file != String::from("test.vow") { return 400; }
+    let bare: IrFunction = single_block_function(insts);
+    bare.source_file = String::from("");
+    let from_path: CeSource = ce_source_for_vow(bare, entry(0, String::from("")), String::from("entry.vow"));
+    if from_path.file != String::from("entry.vow") { return 401; }
+    0
+}
+
+fn check_an_unknown_clause_has_no_source() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(vow_inst(0, IOP_VOW_REQ(), 0, 10, 4));
+    let f: IrFunction = single_block_function(insts);
+    let missing: CeSource = ce_source_for_vow(f, entry(7, String::from("m.vow")), String::from("entry.vow"));
+    if missing.file.len() != 0 { return 500; }
+    0
+}
+
+fn counterexample(vow_id: i64, blame: i64) -> VerifyCE {
+    VerifyCE {
+        function: String::from("f"),
+        var_names: Vec::new(),
+        var_values: Vec::new(),
+        violation: String::from("ensures result >= 0"),
+        vow_id: vow_id,
+        source: String::from("t.vow"),
+        source_start: 215,
+        source_len: 20,
+        blame: blame,
+        call_site_functions: Vec::new(),
+        call_site_files: Vec::new(),
+        call_site_offsets: Vec::new(),
+        call_site_lengths: Vec::new(),
+        violating_arg_params: Vec::new(),
+        violating_arg_values: Vec::new(),
+        violating_arg_offsets: Vec::new(),
+        violating_arg_lengths: Vec::new(),
+        replay: String::from(""),
+        replay_reason: String::from(""),
+    }
+}
+
+fn only_diag(ces: Vec<VerifyCE>) -> Diagnostic {
+    let dctx: DiagCtx = diag_ctx_new();
+    vf_add_ce_diagnostics(dctx, ces);
+    let ds: Vec<Diagnostic> = dctx.diags;
+    ds[0]
+}
+
+fn check_callee_blame_is_a_postcondition_error() -> i64 {
+    let ces: Vec<VerifyCE> = Vec::new();
+    ces.push(counterexample(1, DIAG_BLAME_CALLEE()));
+    let d: Diagnostic = only_diag(ces);
+    if d.code != EC_VOW_ENSURES_VIOLATED() { return 600; }
+    if d.severity != SEV_ERROR() { return 601; }
+    if d.blame != DIAG_BLAME_CALLEE() { return 602; }
+    if d.message != String::from("contract violation in `f`: ensures result >= 0") { return 603; }
+    if d.file != String::from("t.vow") { return 604; }
+    if d.span_start != 215 { return 605; }
+    if d.span_len != 20 { return 606; }
+    let hints: Vec<String> = d.hints;
+    if hints.len() != 1 { return 607; }
+    if hints[0] != String::from("function `f` failed to establish its postcondition") { return 608; }
+    0
+}
+
+fn check_caller_blame_carries_call_sites_and_argument_hints() -> i64 {
+    let ce: VerifyCE = counterexample(0, DIAG_BLAME_CALLER());
+    ce.call_site_functions.push(String::from("g"));
+    ce.call_site_files.push(String::from("t.vow"));
+    ce.call_site_offsets.push(1022);
+    ce.call_site_lengths.push(8);
+    ce.violating_arg_params.push(String::from("x"));
+    ce.violating_arg_values.push(String::from("-5"));
+    ce.violating_arg_offsets.push(1024);
+    ce.violating_arg_lengths.push(5);
+    let ces: Vec<VerifyCE> = Vec::new();
+    ces.push(ce);
+    let d: Diagnostic = only_diag(ces);
+    if d.code != EC_VOW_REQUIRES_VIOLATED() { return 700; }
+    if d.blame != DIAG_BLAME_CALLER() { return 701; }
+    let hints: Vec<String> = d.hints;
+    if hints.len() != 2 { return 702; }
+    if hints[0] != String::from("the call site violated function `f`'s precondition") { return 703; }
+    if hints[1] != String::from("argument `x` = -5 violates the contract") { return 704; }
+    if d.secondary_files.len() != 1 { return 705; }
+    if d.secondary_starts[0] != 1022 { return 706; }
+    if d.secondary_lens[0] != 8 { return 707; }
+    0
+}
+
+fn check_an_unattributed_failure_has_its_own_code_and_no_hints() -> i64 {
+    let ce: VerifyCE = counterexample(verifier_unattributed_vow_id(), DIAG_BLAME_NONE());
+    ce.source = String::from("");
+    let ces: Vec<VerifyCE> = Vec::new();
+    ces.push(ce);
+    let d: Diagnostic = only_diag(ces);
+    if d.code != EC_VERIFIER_ASSERTION_UNATTRIBUTED() { return 800; }
+    if d.blame != DIAG_BLAME_NONE() { return 801; }
+    if d.message != String::from("verification failed in `f` on an unattributed property: ensures result >= 0") { return 802; }
+    if d.file.len() != 0 { return 803; }
+    let hints: Vec<String> = d.hints;
+    if hints.len() != 0 { return 804; }
+    0
+}
+
+fn check_diagnostics_follow_existing_warnings() -> i64 {
+    let dctx: DiagCtx = diag_ctx_new();
+    diag_ctx_emit(dctx, diag_new(SEV_WARNING(), EC_ARITH_OVERFLOW_REACHABLE(), String::from("w"), String::from(""), 0, 0, DIAG_BLAME_NONE()));
+    let ces: Vec<VerifyCE> = Vec::new();
+    ces.push(counterexample(1, DIAG_BLAME_CALLEE()));
+    vf_add_ce_diagnostics(dctx, ces);
+    let ds: Vec<Diagnostic> = dctx.diags;
+    if ds.len() != 2 { return 900; }
+    if ds[0].code != EC_ARITH_OVERFLOW_REACHABLE() { return 901; }
+    if ds[1].code != EC_VOW_ENSURES_VIOLATED() { return 902; }
+    0
+}
+
+fn main() -> i32 {
+    let r1: i64 = check_u64_values_render_unsigned();
+    if r1 != 0 { return i64_to_i32_wrap(r1); }
+    let r2: i64 = check_argument_values_follow_the_rust_evaluator();
+    if r2 != 0 { return i64_to_i32_wrap(r2); }
+    let r3: i64 = check_clause_source_is_the_vow_instruction_origin();
+    if r3 != 0 { return i64_to_i32_wrap(r3); }
+    let r4: i64 = check_clause_file_falls_back_to_the_function_then_the_path();
+    if r4 != 0 { return i64_to_i32_wrap(r4); }
+    let r5: i64 = check_an_unknown_clause_has_no_source();
+    if r5 != 0 { return i64_to_i32_wrap(r5); }
+    let r6: i64 = check_callee_blame_is_a_postcondition_error();
+    if r6 != 0 { return i64_to_i32_wrap(r6); }
+    let r7: i64 = check_caller_blame_carries_call_sites_and_argument_hints();
+    if r7 != 0 { return i64_to_i32_wrap(r7); }
+    let r8: i64 = check_an_unattributed_failure_has_its_own_code_and_no_hints();
+    if r8 != 0 { return i64_to_i32_wrap(r8); }
+    let r9: i64 = check_diagnostics_follow_existing_warnings();
+    if r9 != 0 { return i64_to_i32_wrap(r9); }
+    0
+}

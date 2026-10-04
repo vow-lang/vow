@@ -69,6 +69,34 @@ unsafe fn read_vow_string(vow_vec_ptr: i64) -> &'static str {
     std::str::from_utf8(bytes).unwrap_or("")
 }
 
+// Source location of one vow clause, as reported in the runtime `VowViolation`
+// payload: a NUL-terminated path global and the clause's byte offset.
+struct VowLocation {
+    file_gv: GlobalValue,
+    offset: i64,
+}
+
+// Defines `text` as an anonymous NUL-terminated data object and declares it in
+// the function being built.
+fn define_cstring_global(
+    obj_module: &mut ObjectModule,
+    builder: &mut FunctionBuilder,
+    text: &str,
+    what: &str,
+) -> GlobalValue {
+    let mut bytes = text.as_bytes().to_vec();
+    bytes.push(0);
+    let mut desc = DataDescription::new();
+    desc.define(bytes.into_boxed_slice());
+    let data_id = obj_module
+        .declare_anonymous_data(false, false)
+        .unwrap_or_else(|e| panic!("declare {what}: {e}"));
+    obj_module
+        .define_data(data_id, &desc)
+        .unwrap_or_else(|e| panic!("define {what}: {e}"));
+    obj_module.declare_data_in_func(data_id, builder.func)
+}
+
 // ---------------------------------------------------------------------------
 // Status codes returned across the FFI boundary (must match compiler/clif.vow)
 //
@@ -867,6 +895,8 @@ struct FnScratch {
     // Per vow entry:
     vow_ids: Vec<i64>,
     vow_desc_ptrs: Vec<i64>, // raw VowVec ptrs — see struct-level doc
+    vow_file_ptrs: Vec<i64>, // raw VowVec ptrs — see struct-level doc
+    vow_offsets: Vec<i64>,
     binding_counts: Vec<i64>,
     binding_inst_ids_all: Vec<i64>,
     binding_names_ptrs: Vec<i64>, // raw VowVec ptrs — see struct-level doc
@@ -894,6 +924,8 @@ impl FnScratch {
         self.arg_lengths.clear();
         self.vow_ids.clear();
         self.vow_desc_ptrs.clear();
+        self.vow_file_ptrs.clear();
+        self.vow_offsets.clear();
         self.binding_counts.clear();
         self.binding_inst_ids_all.clear();
         self.binding_names_ptrs.clear();
@@ -1218,6 +1250,8 @@ pub unsafe extern "C" fn __vow_clif_fn_inst(
 // Add a vow entry to the current function. The `blame` field (Caller vs
 // Callee) is not a parameter here because the shim derives it from the IR
 // opcode (`IOP_VOW_REQ` → Caller, else Callee) — see `blame_byte` below.
+// `file_vec` is the vow's source path (a VowVec String) and `offset` its byte
+// offset: both reach the runtime `VowViolation` payload.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_clif_fn_vow(
     ctx_ptr: i64,
@@ -1225,6 +1259,8 @@ pub unsafe extern "C" fn __vow_clif_fn_vow(
     desc_vec: i64,
     binding_inst_ids_vec: i64,
     binding_names_vec: i64,
+    file_vec: i64,
+    offset: i64,
 ) -> i64 {
     let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
     if !ctx.fn_scratch.began {
@@ -1251,6 +1287,8 @@ pub unsafe extern "C" fn __vow_clif_fn_vow(
     }
     ctx.fn_scratch.vow_ids.push(id);
     ctx.fn_scratch.vow_desc_ptrs.push(desc_vec);
+    ctx.fn_scratch.vow_file_ptrs.push(file_vec);
+    ctx.fn_scratch.vow_offsets.push(offset);
     ctx.fn_scratch.binding_counts.push(bids.len() as i64);
     ctx.fn_scratch.binding_inst_ids_all.extend_from_slice(bids);
     ctx.fn_scratch.binding_names_ptrs.extend_from_slice(bnames);
@@ -1302,6 +1340,8 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     let arg_lengths: &[i64] = &ctx.fn_scratch.arg_lengths;
     let vow_ids: &[i64] = &ctx.fn_scratch.vow_ids;
     let vow_desc_ptrs: &[i64] = &ctx.fn_scratch.vow_desc_ptrs;
+    let vow_file_ptrs: &[i64] = &ctx.fn_scratch.vow_file_ptrs;
+    let vow_offsets: &[i64] = &ctx.fn_scratch.vow_offsets;
     let binding_counts: &[i64] = &ctx.fn_scratch.binding_counts;
     let binding_inst_ids_all: &[i64] = &ctx.fn_scratch.binding_inst_ids_all;
     let binding_names_ptrs: &[i64] = &ctx.fn_scratch.binding_names_ptrs;
@@ -1661,23 +1701,30 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
 
     // Create vow description data sections (debug/sanitize mode)
     let mut vow_desc_gvs: HashMap<i64, GlobalValue> = HashMap::new();
-    // We don't have file info from the self-hosted IR, so skip file/offset vow metadata
+    let mut vow_locations: HashMap<i64, VowLocation> = HashMap::new();
     if ctx.mode == 1 || ctx.mode == 3 {
         for (vi, &vow_id) in vow_ids.iter().enumerate() {
             let desc_str = unsafe { read_vow_string(vow_desc_ptrs[vi]) };
-            let mut bytes = desc_str.as_bytes().to_vec();
-            bytes.push(0);
-            let mut desc = DataDescription::new();
-            desc.define(bytes.into_boxed_slice());
-            let data_id = ctx
-                .obj_module
-                .declare_anonymous_data(false, false)
-                .expect("declare vow desc");
-            ctx.obj_module
-                .define_data(data_id, &desc)
-                .expect("define vow desc");
-            let gv = ctx.obj_module.declare_data_in_func(data_id, builder.func);
+            let gv = define_cstring_global(&mut ctx.obj_module, &mut builder, desc_str, "vow desc");
             vow_desc_gvs.insert(vow_id, gv);
+
+            let file_str = if vow_file_ptrs[vi] == 0 {
+                ""
+            } else {
+                unsafe { read_vow_string(vow_file_ptrs[vi]) }
+            };
+            vow_locations.insert(
+                vow_id,
+                VowLocation {
+                    file_gv: define_cstring_global(
+                        &mut ctx.obj_module,
+                        &mut builder,
+                        file_str,
+                        "vow file",
+                    ),
+                    offset: vow_offsets[vi],
+                },
+            );
         }
     }
 
@@ -1694,20 +1741,12 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             let mut bindings = Vec::new();
             for bi in 0..bc {
                 let name_str = unsafe { read_vow_string(binding_names_ptrs[bind_offset + bi]) };
-                let mut name_bytes = name_str.as_bytes().to_vec();
-                name_bytes.push(0);
-                let mut name_desc = DataDescription::new();
-                name_desc.define(name_bytes.into_boxed_slice());
-                let name_data_id = ctx
-                    .obj_module
-                    .declare_anonymous_data(false, false)
-                    .expect("declare binding name");
-                ctx.obj_module
-                    .define_data(name_data_id, &name_desc)
-                    .expect("define binding name");
-                let name_gv = ctx
-                    .obj_module
-                    .declare_data_in_func(name_data_id, builder.func);
+                let name_gv = define_cstring_global(
+                    &mut ctx.obj_module,
+                    &mut builder,
+                    name_str,
+                    "binding name",
+                );
                 bindings.push(VowBindingInfo {
                     name_gv,
                     inst_id: binding_inst_ids_all[bind_offset + bi],
@@ -2389,6 +2428,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                 &captures,
                                 vow_violation_ref,
                                 &vow_desc_gvs,
+                                vow_locations.get(&vow_id),
                                 trace_vow_ref,
                                 fn_name_gv,
                             ) {
@@ -3049,6 +3089,7 @@ fn emit_vow_check(
     captures: &[(GlobalValue, Value, i64)],
     vow_violation_ref: Option<FuncRef>,
     vow_desc_gvs: &HashMap<i64, GlobalValue>,
+    vow_location: Option<&VowLocation>,
     trace_vow_ref: Option<FuncRef>,
     fn_name_gv: Option<GlobalValue>,
 ) -> Result<(), i64> {
@@ -3131,9 +3172,16 @@ fn emit_vow_check(
             (null, zero)
         };
 
-        // No file/offset info from self-hosted IR
-        let file_ptr = builder.ins().iconst(types::I64, 0);
-        let offset_val = builder.ins().iconst(types::I32, 0);
+        let (file_ptr, offset_val) = match vow_location {
+            Some(loc) => (
+                builder.ins().symbol_value(types::I64, loc.file_gv),
+                builder.ins().iconst(types::I32, loc.offset),
+            ),
+            None => (
+                builder.ins().iconst(types::I64, 0),
+                builder.ins().iconst(types::I32, 0),
+            ),
+        };
 
         builder.ins().call(
             vr,
@@ -3929,8 +3977,8 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_clif_fn_vow" => {
-            // ctx, id, desc_vec, binding_inst_ids_vec, binding_names_vec
-            for _ in 0..5 {
+            // ctx, id, desc_vec, binding_inst_ids_vec, binding_names_vec, file_vec, offset
+            for _ in 0..7 {
                 sig.params.push(AbiParam::new(types::I64));
             }
             sig.returns.push(AbiParam::new(types::I64));
@@ -5779,6 +5827,7 @@ mod tests {
         add_test_inst(ctx, 8, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
 
         let description = vow_string("narrow captures");
+        let file = vow_string("narrow.vow");
         let binding_ids = [0, 1, 2, 3, 4, 5];
         let binding_ids_vec = vow_i64_vec(&binding_ids);
         let binding_names = [
@@ -5802,6 +5851,8 @@ mod tests {
                     &description as *const VowVec as i64,
                     &binding_ids_vec as *const VowVec as i64,
                     &binding_names_vec as *const VowVec as i64,
+                    &file as *const VowVec as i64,
+                    42,
                 ),
                 0
             );
@@ -5850,6 +5901,7 @@ mod tests {
         add_test_inst(ctx, 4, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
 
         let description = vow_string("wide captures");
+        let file = vow_string("wide.vow");
         let binding_ids_vec = vow_i64_vec(&[0, 1]);
         let binding_names = [vow_string("i128v"), vow_string("u128v")];
         let binding_name_ptrs: Vec<i64> = binding_names
@@ -5865,6 +5917,8 @@ mod tests {
                     &description as *const VowVec as i64,
                     &binding_ids_vec as *const VowVec as i64,
                     &binding_names_vec as *const VowVec as i64,
+                    &file as *const VowVec as i64,
+                    42,
                 ),
                 0
             );

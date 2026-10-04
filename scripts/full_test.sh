@@ -136,6 +136,25 @@ compare_json() {
     run_parity json "$@"
 }
 
+# Whole-document comparison for `vow verify` output: every diagnostic and every
+# counterexample field must match, modulo the documented allow-list in
+# scripts/parity.py (FULL_JSON_ALLOWLIST).
+compare_full_json() {
+    run_parity full-json "$@"
+}
+
+# Structured runtime aborts (one JSON object per stderr line) of the same
+# program built by each compiler. Takes the two stderr files, not JSON text.
+compare_runtime_json() {
+    local label="$1" rust_err="$2" self_err="$3" rust_exit="$4" self_exit="$5"
+    local result
+    if result=$(python3 scripts/parity.py runtime-json "$rust_err" "$self_err" "$rust_exit" "$self_exit" 2>&1); then
+        pass "$label"
+    else
+        fail "$label" "$result"
+    fi
+}
+
 # A fixture may carry `// TEST: known-divergence <issue> "<why>"` to document a
 # tracked Rust-vs-self-hosted runtime divergence (docs/equivalence/README.md).
 # Such a fixture is committed deliberately: it pins a real miscompile so the
@@ -311,7 +330,7 @@ run_promoted_run_tests() {
             self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
 
             if ! check_empty_output "${name}/test-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
-                compare_json "${name}/test-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
+                compare_full_json "${name}/test-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
                 # Parity alone would pass a regression that makes BOTH compilers
                 # reject the fixture, so pin the absolute expectation too (as
                 # Section 4b does for tests/verify/).
@@ -750,7 +769,7 @@ for vow_file in examples/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
+    compare_full_json "${name}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
 done
 echo ""
 
@@ -891,7 +910,7 @@ for vow_file in tests/verify/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
+    compare_full_json "${name}/verify-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
     if [ -n "$actual_status" ] && [ "$actual_status" != "Verified" ]; then
         fail "${name}/verify-expected-pass" "expected Verified, got $actual_status"
@@ -913,7 +932,7 @@ for vow_file in tests/verify-fail/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify-fail-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
+    compare_full_json "${name}/verify-fail-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
     if [ -n "$actual_status" ] && [ "$actual_status" != "VerifyFailed" ]; then
         fail "${name}/verify-expected-fail" "expected VerifyFailed, got $actual_status"
@@ -997,7 +1016,7 @@ for mode in verify build; do
             ;;
     esac
 
-    compare_json "$name/$mode" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$fixture"
+    compare_full_json "$name/$mode" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$fixture"
     for compiler in rust self; do
         if [ "$compiler" = "rust" ]; then
             result_json="$rust_json"
@@ -1246,7 +1265,7 @@ for vow_file in tests/verify-skip/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify-skip-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
+    compare_full_json "${name}/verify-skip-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
     if [ -n "$actual_status" ] && [ "$actual_status" != "Skipped" ]; then
         fail "${name}/verify-expected-skip" "expected Skipped, got $actual_status"
@@ -1300,6 +1319,7 @@ if [ ${#errors[@]} -eq 0 ]; then
 else
     fail "divide/debug-violation" "$(IFS='; '; echo "${errors[*]}")"
 fi
+compare_runtime_json "divide/debug-violation-json" "$TMPDIR/rust_dbg_err" "$TMPDIR/self_dbg_err" "$rust_exit" "$self_exit"
 
 # u8_requires_violation.vow: a captured u8 free variable must report its real
 # value in the VowViolation payload, not 0 (numeric-tower u8 first-class fix).
@@ -1373,6 +1393,12 @@ for vow_file in tests/debug/*.vow; do
         continue
     fi
     check_stderr_directives "${name}/debug-stderr" "$vow_file" "$TMPDIR/rust_dbgstderr_${name}.err" "$TMPDIR/self_dbgstderr_${name}.err"
+    # A runtime abort's JSON (`VowViolation` with its `file` and `offset`, or
+    # the structured abort of another check) is a machine contract: it must be
+    # identical, not merely contain the same substrings.
+    if [ "$expected_exit" -eq 134 ]; then
+        compare_runtime_json "${name}/debug-runtime-json" "$TMPDIR/rust_dbgstderr_${name}.err" "$TMPDIR/self_dbgstderr_${name}.err" "$rust_exit" "$self_exit"
+    fi
 done
 
 # callee_blame, clamp, hello: contracts pass (or none), compare runtime
@@ -1432,6 +1458,34 @@ $RUST build --mode sanitize --no-verify tests/debug/sanitize_vec.vow -o "$TMPDIR
 run_self build --mode sanitize --no-verify tests/debug/sanitize_vec.vow -o "$TMPDIR/self_sanitize_vec" >/dev/null 2>/dev/null
 compare_runtime "sanitize_vec/sanitize" "$TMPDIR/rust_sanitize_vec" "$TMPDIR/self_sanitize_vec"
 
+# tests/debug_multi/<dir>/main.vow: a VowViolation whose clause lives in a
+# module other than the entry file. Both compilers must report the defining
+# module as `file` and the same `offset`.
+for multi_dir in tests/debug_multi/*/; do
+    name=$(basename "$multi_dir")
+    main_file="${multi_dir}main.vow"
+    $RUST build --mode debug --no-verify "$main_file" -o "$TMPDIR/rust_dbgmulti_${name}" >/dev/null 2>/dev/null
+    run_self build --mode debug --no-verify "$main_file" -o "$TMPDIR/self_dbgmulti_${name}" >/dev/null 2>/dev/null
+    rust_exit=0 self_exit=0
+    capture_stderr_with_optional_stdin "$TMPDIR/rust_dbgmulti_${name}.err" "" "$TMPDIR/rust_dbgmulti_${name}" || rust_exit=$?
+    capture_stderr_with_optional_stdin "$TMPDIR/self_dbgmulti_${name}.err" "" run_self_bin "$TMPDIR/self_dbgmulti_${name}" || self_exit=$?
+    compare_runtime_json "${name}/debug-multi-runtime-json" "$TMPDIR/rust_dbgmulti_${name}.err" "$TMPDIR/self_dbgmulti_${name}.err" "$rust_exit" "$self_exit"
+    defining_file=$(sed -n 's|^// TEST: violation-file \(.*\)$|\1|p' "$main_file" | head -1)
+    if [ -n "$defining_file" ]; then
+        for side in rust self; do
+            reported=$(python3 -c "
+import json, sys
+docs = [json.loads(l) for l in sys.stdin if l.startswith('{')]
+print(next((d.get('file', '') for d in docs if d.get('error') == 'VowViolation'), ''))
+" < "$TMPDIR/${side}_dbgmulti_${name}.err" 2>/dev/null) || reported="<unparseable>"
+            case "$reported" in
+                *"$defining_file") pass "${name}/debug-multi-file-${side}" ;;
+                *) fail "${name}/debug-multi-file-${side}" "expected a file ending in '$defining_file', got '$reported'" ;;
+            esac
+        done
+    fi
+done
+
 echo ""
 # ─── Section 6: Multi-Module ───────────────────────────────────────
 
@@ -1456,7 +1510,7 @@ for multi in stack geometry bignum gc math heap; do
     self_json=$(run_self verify "$main_file" 2>/dev/null) || self_exit=$?
 
     if ! check_empty_output "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
-        compare_json "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
+        compare_full_json "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
     fi
 
     # runtime execution

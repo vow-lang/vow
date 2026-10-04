@@ -7,6 +7,7 @@ use runner_plan
 use clif
 use c_emitter
 use verifier
+use verify_report
 use diag
 use perfetto
 use mutants_sites
@@ -524,6 +525,9 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
     let violating_arg_values: Vec<String> = Vec::new();
     let violating_arg_offsets: Vec<i64> = Vec::new();
     let violating_arg_lengths: Vec<i64> = Vec::new();
+    let mut ce_source_file: String = String::from("");
+    let mut ce_source_start: i64 = 0;
+    let mut ce_source_len: i64 = 0;
     if vow_id == unsupported_op_vow_id() {
         // Fail-closed assertion from emit_unsupported_for_verification: no
         // user-authored vow has this id, so synthesize an actionable message
@@ -539,6 +543,10 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
                 let ve: IrVowEntry = vows[vi as u64];
                 ce_violation = ve.description;
                 ce_blame = DIAG_BLAME_CALLER();
+                let callee_src: CeSource = ce_source_for_vow(callee, ve, path);
+                ce_source_file = callee_src.file;
+                ce_source_start = callee_src.start;
+                ce_source_len = callee_src.len;
 
                 let exact_call_matches: i64 = count_exact_callee_precondition_calls(f, callee, ve, vr);
                 let blocks: Vec<IrBlock> = f.blocks;
@@ -566,7 +574,7 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
                                         if ce_val.len() > 0 {
                                             violating_arg_values.push(ce_val);
                                         } else {
-                                            violating_arg_values.push(inst_const_i64_string_by_id(f, arg_inst_id));
+                                            violating_arg_values.push(ce_arg_value_string(f, arg_inst_id));
                                         }
                                         violating_arg_offsets.push(inst_offset_by_id(f, arg_inst_id));
                                         violating_arg_lengths.push(inst_len_by_id(f, arg_inst_id));
@@ -600,6 +608,10 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
             if ve.id == vow_id {
                 ce_violation = ve.description;
                 ce_blame = ve.blame;
+                let own_src: CeSource = ce_source_for_vow(f, ve, path);
+                ce_source_file = own_src.file;
+                ce_source_start = own_src.start;
+                ce_source_len = own_src.len;
             }
             vi = vi + 1;
         }
@@ -618,7 +630,9 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
         var_values: vr.var_values,
         violation: ce_violation,
         vow_id: public_vow_id,
-        source: path,
+        source: ce_source_file,
+        source_start: ce_source_start,
+        source_len: ce_source_len,
         blame: ce_blame,
         call_site_functions: call_site_functions,
         call_site_files: call_site_files,
@@ -1020,6 +1034,8 @@ fn replay_all(ces: Vec<VerifyCE>, fns: Vec<IrFunction>, path: String, argv0: Str
             violation: ce.violation,
             vow_id: ce.vow_id,
             source: ce.source,
+            source_start: ce.source_start,
+            source_len: ce.source_len,
             blame: ce.blame,
             call_site_functions: ce.call_site_functions,
             call_site_files: ce.call_site_files,
@@ -1250,9 +1266,7 @@ fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunct
     if vf_prefers_counterexample(ces, soft_meta, fns) {
         let ce: VerifyCE = ces[0];
         result.push(ce.function);
-        let desc: String = String::from("VerifyFailed: ");
-        desc.push_str(ce.violation);
-        result.push(desc);
+        result.push(String::from("[Counterexample]"));
         return result;
     }
     if soft_meta.len() >= 3 {
@@ -1630,6 +1644,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         vf_ce = legacy[1];
     }
     trace_write(tctx);
+    vf_add_ce_diagnostics(dctx, ces_final);
     diag_emit_verify_json_full(status_str, dctx, ces_final, vstatus, vmsg, vf_func, vf_ce);
     if outcome != 0 {
         return 1;
@@ -1911,6 +1926,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         vf_ce = legacy[1];
     }
     trace_write(tctx);
+    vf_add_ce_diagnostics(dctx, ces_final);
     diag_emit_build_verify_json_full(status_str, out, dctx, ces_final, vstatus, vmsg, vf_func, vf_ce);
     if all_proven == 0 || any_skipped == 1 {
         return 1;
@@ -2322,6 +2338,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 vf_func_leg = legacy_leg[0];
                 vf_ce_leg = legacy_leg[1];
             }
+            vf_add_ce_diagnostics(dctx, ces_final_leg);
             diag_emit_verify_json_full(status_str, dctx, ces_final_leg, vstatus_leg, vmsg_leg, vf_func_leg, vf_ce_leg);
             if outcome != 0 {
                 return 1;
@@ -5285,7 +5302,20 @@ fn skill_bundle() -> String {
     r.push_str(String::from("{\n"));
     r.push_str(String::from("  \"status\": \"VerifyFailed\",\n"));
     r.push_str(String::from("  \"executable\": \"examples/cegis_broken\",\n"));
-    r.push_str(String::from("  \"diagnostics\": [],\n"));
+    r.push_str(String::from("  \"diagnostics\": [\n"));
+    r.push_str(String::from("    {\n"));
+    r.push_str(String::from("      \"error_code\": \"VowEnsuresViolated\",\n"));
+    r.push_str(String::from("      \"message\": \"contract violation in `safe_sub`: ensures result >= 0\",\n"));
+    r.push_str(String::from("      \"severity\": \"error\",\n"));
+    r.push_str(String::from("      \"span\": {\n"));
+    r.push_str(String::from("        \"file\": \"examples/cegis_broken.vow\",\n"));
+    r.push_str(String::from("        \"offset\": 76,\n"));
+    r.push_str(String::from("        \"length\": 20\n"));
+    r.push_str(String::from("      },\n"));
+    r.push_str(String::from("      \"hints\": [\"function `safe_sub` failed to establish its postcondition\"],\n"));
+    r.push_str(String::from("      \"blame\": \"callee\"\n"));
+    r.push_str(String::from("    }\n"));
+    r.push_str(String::from("  ],\n"));
     r.push_str(String::from("  \"function\": \"safe_sub\",\n"));
     r.push_str(String::from("  \"counterexample\": \"[Counterexample]\",\n"));
     r.push_str(String::from("  \"counterexamples\": [\n"));
@@ -5304,6 +5334,25 @@ fn skill_bundle() -> String {
     r.push_str(String::from("  ]\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Every counterexample also yields one `error` diagnostic, appended after any\n"));
+    r.push_str(String::from("warnings. Its code follows the counterexample's `blame` (`caller` →\n"));
+    r.push_str(String::from("`VowRequiresViolated`, `callee` → `VowEnsuresViolated`; a failed `invariant` is\n"));
+    r.push_str(String::from("callee-blamed, so it reports `VowEnsuresViolated`), or is\n"));
+    r.push_str(String::from("`VerifierAssertionUnattributed` when the failure is not attributed to a vow\n"));
+    r.push_str(String::from("clause. The `message` is ``contract violation in `<function>`: <violation>`` (or\n"));
+    r.push_str(String::from("``verification failed in `<function>` on an unattributed property: <violation>``),\n"));
+    r.push_str(String::from("`span` is the counterexample's `source` (an empty file and zero offset/length\n"));
+    r.push_str(String::from("when `source` is `null`), `secondary` lists the counterexample's `call_sites`,\n"));
+    r.push_str(String::from("and `hints` name the failing function and, for caller blame, each violating\n"));
+    r.push_str(String::from("argument. A `timeout`, `unknown`, `error` or `panicked` outcome has no\n"));
+    r.push_str(String::from("counterexample and adds no such diagnostic. Both compilers emit the same\n"));
+    r.push_str(String::from("`diagnostics[]`, `counterexample` and `counterexamples[]` for the same source;\n"));
+    r.push_str(String::from("the only fields that are not specified byte for byte are `verify_message`\n"));
+    r.push_str(String::from("(ESBMC's free text) and `values` entries named `$esbmc$...` (solver temporaries).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A diagnostic's `span` is exactly `{file, offset, length}`: positions are byte\n"));
+    r.push_str(String::from("offsets, and neither compiler adds line or column fields.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("For caller-blame failures where a verified function violates a callee's\n"));
     r.push_str(String::from("`requires` clause, the counterexample reports the callee clause in `violation`\n"));
@@ -5327,7 +5376,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |\n"));
     r.push_str(String::from("| `message`          | string              | CompileFailed     | Compatibility error category/detail (for example \"parse error\", \"type error\", \"module load error\", backend/link detail, or \"failed to emit frontend diagnostics: {io_error}\"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |\n"));
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
-    r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
+    r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string: `\"[Counterexample]\"` when ESBMC produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>`, ...) |\n"));
     r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |\n"));
     r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"unknown\"`, `\"error\"`, `\"tool_not_found\"`, or `\"panicked\"` (verifier worker thread crashed -- no counterexample available) |\n"));
     r.push_str(String::from("| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |\n"));
@@ -7365,6 +7414,11 @@ fn skill_bundle() -> String {
     r.push_str(String::from("{\"error\":\"VowViolation\",\"vow_id\":0,\"blame\":\"Caller\",\"description\":\"y != 0\",\"file\":\"divide.vow\",\"offset\":42,\"values\":{\"y\":0}}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("`file` is the source file that defines the violated clause (the module file for a\n"));
+    r.push_str(String::from("clause in an imported module, not the entry file) and `offset` is the byte offset\n"));
+    r.push_str(String::from("at which that clause starts. Both compilers report the same `file` and `offset`\n"));
+    r.push_str(String::from("for the same program, never an empty placeholder.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("The `blame` field indicates who is at fault:\n"));
     r.push_str(String::from("- `Caller` -- a `requires` was violated (the caller passed bad arguments)\n"));
     r.push_str(String::from("- `Callee` -- an `ensures` or `invariant` was violated (the function has a bug)\n"));
@@ -8714,10 +8768,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("          },\n"));
     r.push_str(String::from("          \"additionalProperties\": false\n"));
     r.push_str(String::from("        },\n"));
-    r.push_str(String::from("        { \"type\": \"string\" },\n"));
     r.push_str(String::from("        { \"type\": \"null\" }\n"));
     r.push_str(String::from("      ],\n"));
-    r.push_str(String::from("      \"description\": \"Source location of the violated vow clause; Rust emits a span object, self-hosted emits the source path string\"\n"));
+    r.push_str(String::from("      \"description\": \"Source location of the violated vow clause, identical in both compilers; null when the failure cannot be attributed to a vow clause\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"blame\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
@@ -8822,6 +8875,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"LinearTypeViolation\",\n"));
     r.push_str(String::from("        \"NonExhaustiveMatch\",\n"));
     r.push_str(String::from("        \"UnsupportedPattern\",\n"));
+    r.push_str(String::from("        \"LiteralOutOfRange\",\n"));
+    r.push_str(String::from("        \"NarrowingCastNotAllowed\",\n"));
+    r.push_str(String::from("        \"ShiftCountOutOfRange\",\n"));
+    r.push_str(String::from("        \"TautologicalComparison\",\n"));
     r.push_str(String::from("        \"ImmutableAssignment\",\n"));
     r.push_str(String::from("        \"UnusedMut\",\n"));
     r.push_str(String::from("        \"VowRequiresViolated\",\n"));
@@ -8829,6 +8886,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"VowInvariantViolated\",\n"));
     r.push_str(String::from("        \"UnknownMethod\",\n"));
     r.push_str(String::from("        \"UnsupportedFeature\",\n"));
+    r.push_str(String::from("        \"BTreeMapKeyTypeMustBeI64\",\n"));
+    r.push_str(String::from("        \"BTreeMapValueMustBeNonLinear\",\n"));
     r.push_str(String::from("        \"LoweringWarning\",\n"));
     r.push_str(String::from("        \"MissingContract\",\n"));
     r.push_str(String::from("        \"ContractTypeMismatch\",\n"));
@@ -8838,8 +8897,11 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"CodegenFailed\",\n"));
     r.push_str(String::from("        \"LinkFailed\",\n"));
     r.push_str(String::from("        \"RegionConflict\",\n"));
+    r.push_str(String::from("        \"RegionLiteralMutation\",\n"));
     r.push_str(String::from("        \"RegionLinear\",\n"));
     r.push_str(String::from("        \"RegionRootEscape\",\n"));
+    r.push_str(String::from("        \"VerificationSkipped\",\n"));
+    r.push_str(String::from("        \"ArithOverflowReachable\",\n"));
     r.push_str(String::from("        \"VerifierAssertionUnattributed\",\n"));
     r.push_str(String::from("        \"ModelCapacityAssumed\"\n"));
     r.push_str(String::from("      ],\n"));
@@ -8854,7 +8916,25 @@ fn skill_bundle() -> String {
     r.push_str(String::from("      \"enum\": [\"error\", \"warning\", \"note\"],\n"));
     r.push_str(String::from("      \"description\": \"Diagnostic severity\"\n"));
     r.push_str(String::from("    },\n"));
-    r.push_str(String::from("    \"span\": {\n"));
+    r.push_str(String::from("    \"span\": { \"$ref\": \"#/$defs/Span\" },\n"));
+    r.push_str(String::from("    \"hints\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"items\": { \"type\": \"string\" },\n"));
+    r.push_str(String::from("      \"description\": \"Actionable suggestions for fixing the diagnostic; omitted when there are none\"\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"secondary\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"items\": { \"$ref\": \"#/$defs/Span\" },\n"));
+    r.push_str(String::from("      \"description\": \"Related source locations (for a caller-blame contract violation, the call sites); omitted when there are none\"\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"blame\": {\n"));
+    r.push_str(String::from("      \"type\": \"string\",\n"));
+    r.push_str(String::from("      \"enum\": [\"caller\", \"callee\"],\n"));
+    r.push_str(String::from("      \"description\": \"Who is responsible for a contract violation; omitted when no party is at fault\"\n"));
+    r.push_str(String::from("    }\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"$defs\": {\n"));
+    r.push_str(String::from("    \"Span\": {\n"));
     r.push_str(String::from("      \"type\": \"object\",\n"));
     r.push_str(String::from("      \"required\": [\"file\", \"offset\", \"length\"],\n"));
     r.push_str(String::from("      \"properties\": {\n"));
@@ -10853,7 +10933,20 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("{\n"));
     r.push_str(String::from("  \"status\": \"VerifyFailed\",\n"));
     r.push_str(String::from("  \"executable\": \"examples/cegis_broken\",\n"));
-    r.push_str(String::from("  \"diagnostics\": [],\n"));
+    r.push_str(String::from("  \"diagnostics\": [\n"));
+    r.push_str(String::from("    {\n"));
+    r.push_str(String::from("      \"error_code\": \"VowEnsuresViolated\",\n"));
+    r.push_str(String::from("      \"message\": \"contract violation in `safe_sub`: ensures result >= 0\",\n"));
+    r.push_str(String::from("      \"severity\": \"error\",\n"));
+    r.push_str(String::from("      \"span\": {\n"));
+    r.push_str(String::from("        \"file\": \"examples/cegis_broken.vow\",\n"));
+    r.push_str(String::from("        \"offset\": 76,\n"));
+    r.push_str(String::from("        \"length\": 20\n"));
+    r.push_str(String::from("      },\n"));
+    r.push_str(String::from("      \"hints\": [\"function `safe_sub` failed to establish its postcondition\"],\n"));
+    r.push_str(String::from("      \"blame\": \"callee\"\n"));
+    r.push_str(String::from("    }\n"));
+    r.push_str(String::from("  ],\n"));
     r.push_str(String::from("  \"function\": \"safe_sub\",\n"));
     r.push_str(String::from("  \"counterexample\": \"[Counterexample]\",\n"));
     r.push_str(String::from("  \"counterexamples\": [\n"));
@@ -10872,6 +10965,25 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("  ]\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Every counterexample also yields one `error` diagnostic, appended after any\n"));
+    r.push_str(String::from("warnings. Its code follows the counterexample's `blame` (`caller` →\n"));
+    r.push_str(String::from("`VowRequiresViolated`, `callee` → `VowEnsuresViolated`; a failed `invariant` is\n"));
+    r.push_str(String::from("callee-blamed, so it reports `VowEnsuresViolated`), or is\n"));
+    r.push_str(String::from("`VerifierAssertionUnattributed` when the failure is not attributed to a vow\n"));
+    r.push_str(String::from("clause. The `message` is ``contract violation in `<function>`: <violation>`` (or\n"));
+    r.push_str(String::from("``verification failed in `<function>` on an unattributed property: <violation>``),\n"));
+    r.push_str(String::from("`span` is the counterexample's `source` (an empty file and zero offset/length\n"));
+    r.push_str(String::from("when `source` is `null`), `secondary` lists the counterexample's `call_sites`,\n"));
+    r.push_str(String::from("and `hints` name the failing function and, for caller blame, each violating\n"));
+    r.push_str(String::from("argument. A `timeout`, `unknown`, `error` or `panicked` outcome has no\n"));
+    r.push_str(String::from("counterexample and adds no such diagnostic. Both compilers emit the same\n"));
+    r.push_str(String::from("`diagnostics[]`, `counterexample` and `counterexamples[]` for the same source;\n"));
+    r.push_str(String::from("the only fields that are not specified byte for byte are `verify_message`\n"));
+    r.push_str(String::from("(ESBMC's free text) and `values` entries named `$esbmc$...` (solver temporaries).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A diagnostic's `span` is exactly `{file, offset, length}`: positions are byte\n"));
+    r.push_str(String::from("offsets, and neither compiler adds line or column fields.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("For caller-blame failures where a verified function violates a callee's\n"));
     r.push_str(String::from("`requires` clause, the counterexample reports the callee clause in `violation`\n"));
@@ -10895,7 +11007,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |\n"));
     r.push_str(String::from("| `message`          | string              | CompileFailed     | Compatibility error category/detail (for example \"parse error\", \"type error\", \"module load error\", backend/link detail, or \"failed to emit frontend diagnostics: {io_error}\"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |\n"));
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
-    r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
+    r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string: `\"[Counterexample]\"` when ESBMC produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>`, ...) |\n"));
     r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |\n"));
     r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"unknown\"`, `\"error\"`, `\"tool_not_found\"`, or `\"panicked\"` (verifier worker thread crashed -- no counterexample available) |\n"));
     r.push_str(String::from("| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |\n"));
@@ -12939,6 +13051,11 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("{\"error\":\"VowViolation\",\"vow_id\":0,\"blame\":\"Caller\",\"description\":\"y != 0\",\"file\":\"divide.vow\",\"offset\":42,\"values\":{\"y\":0}}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("`file` is the source file that defines the violated clause (the module file for a\n"));
+    r.push_str(String::from("clause in an imported module, not the entry file) and `offset` is the byte offset\n"));
+    r.push_str(String::from("at which that clause starts. Both compilers report the same `file` and `offset`\n"));
+    r.push_str(String::from("for the same program, never an empty placeholder.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("The `blame` field indicates who is at fault:\n"));
     r.push_str(String::from("- `Caller` -- a `requires` was violated (the caller passed bad arguments)\n"));
     r.push_str(String::from("- `Callee` -- an `ensures` or `invariant` was violated (the function has a bug)\n"));
@@ -14289,10 +14406,9 @@ fn skill_support_content_schemas_counterexample_schema_json_4a456c17() -> String
     r.push_str(String::from("          },\n"));
     r.push_str(String::from("          \"additionalProperties\": false\n"));
     r.push_str(String::from("        },\n"));
-    r.push_str(String::from("        { \"type\": \"string\" },\n"));
     r.push_str(String::from("        { \"type\": \"null\" }\n"));
     r.push_str(String::from("      ],\n"));
-    r.push_str(String::from("      \"description\": \"Source location of the violated vow clause; Rust emits a span object, self-hosted emits the source path string\"\n"));
+    r.push_str(String::from("      \"description\": \"Source location of the violated vow clause, identical in both compilers; null when the failure cannot be attributed to a vow clause\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"blame\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
@@ -14397,6 +14513,10 @@ fn skill_support_content_schemas_diagnostic_schema_json_a46eae68() -> String {
     r.push_str(String::from("        \"LinearTypeViolation\",\n"));
     r.push_str(String::from("        \"NonExhaustiveMatch\",\n"));
     r.push_str(String::from("        \"UnsupportedPattern\",\n"));
+    r.push_str(String::from("        \"LiteralOutOfRange\",\n"));
+    r.push_str(String::from("        \"NarrowingCastNotAllowed\",\n"));
+    r.push_str(String::from("        \"ShiftCountOutOfRange\",\n"));
+    r.push_str(String::from("        \"TautologicalComparison\",\n"));
     r.push_str(String::from("        \"ImmutableAssignment\",\n"));
     r.push_str(String::from("        \"UnusedMut\",\n"));
     r.push_str(String::from("        \"VowRequiresViolated\",\n"));
@@ -14404,6 +14524,8 @@ fn skill_support_content_schemas_diagnostic_schema_json_a46eae68() -> String {
     r.push_str(String::from("        \"VowInvariantViolated\",\n"));
     r.push_str(String::from("        \"UnknownMethod\",\n"));
     r.push_str(String::from("        \"UnsupportedFeature\",\n"));
+    r.push_str(String::from("        \"BTreeMapKeyTypeMustBeI64\",\n"));
+    r.push_str(String::from("        \"BTreeMapValueMustBeNonLinear\",\n"));
     r.push_str(String::from("        \"LoweringWarning\",\n"));
     r.push_str(String::from("        \"MissingContract\",\n"));
     r.push_str(String::from("        \"ContractTypeMismatch\",\n"));
@@ -14413,8 +14535,11 @@ fn skill_support_content_schemas_diagnostic_schema_json_a46eae68() -> String {
     r.push_str(String::from("        \"CodegenFailed\",\n"));
     r.push_str(String::from("        \"LinkFailed\",\n"));
     r.push_str(String::from("        \"RegionConflict\",\n"));
+    r.push_str(String::from("        \"RegionLiteralMutation\",\n"));
     r.push_str(String::from("        \"RegionLinear\",\n"));
     r.push_str(String::from("        \"RegionRootEscape\",\n"));
+    r.push_str(String::from("        \"VerificationSkipped\",\n"));
+    r.push_str(String::from("        \"ArithOverflowReachable\",\n"));
     r.push_str(String::from("        \"VerifierAssertionUnattributed\",\n"));
     r.push_str(String::from("        \"ModelCapacityAssumed\"\n"));
     r.push_str(String::from("      ],\n"));
@@ -14429,7 +14554,25 @@ fn skill_support_content_schemas_diagnostic_schema_json_a46eae68() -> String {
     r.push_str(String::from("      \"enum\": [\"error\", \"warning\", \"note\"],\n"));
     r.push_str(String::from("      \"description\": \"Diagnostic severity\"\n"));
     r.push_str(String::from("    },\n"));
-    r.push_str(String::from("    \"span\": {\n"));
+    r.push_str(String::from("    \"span\": { \"$ref\": \"#/$defs/Span\" },\n"));
+    r.push_str(String::from("    \"hints\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"items\": { \"type\": \"string\" },\n"));
+    r.push_str(String::from("      \"description\": \"Actionable suggestions for fixing the diagnostic; omitted when there are none\"\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"secondary\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"items\": { \"$ref\": \"#/$defs/Span\" },\n"));
+    r.push_str(String::from("      \"description\": \"Related source locations (for a caller-blame contract violation, the call sites); omitted when there are none\"\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"blame\": {\n"));
+    r.push_str(String::from("      \"type\": \"string\",\n"));
+    r.push_str(String::from("      \"enum\": [\"caller\", \"callee\"],\n"));
+    r.push_str(String::from("      \"description\": \"Who is responsible for a contract violation; omitted when no party is at fault\"\n"));
+    r.push_str(String::from("    }\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"$defs\": {\n"));
+    r.push_str(String::from("    \"Span\": {\n"));
     r.push_str(String::from("      \"type\": \"object\",\n"));
     r.push_str(String::from("      \"required\": [\"file\", \"offset\", \"length\"],\n"));
     r.push_str(String::from("      \"properties\": {\n"));

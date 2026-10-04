@@ -2651,7 +2651,33 @@ fn collect_if_mutations(ctx: LowerCtx, then_bid: i64, else_eid: i64) -> Vec<Stri
     filtered
 }
 
+// Anchors an instruction created while lowering one expression to that
+// expression's span, unless it already carries a more specific one. Mirrors the
+// Rust lowerer, which gives every emitted instruction its expression's origin,
+// so a literal argument or a folded `0 - 5` reports its own source range.
+fn lctx_stamp_fresh_unspanned(ctx: LowerCtx, inst_id: i64, first_new_id: i64, span: i64) {
+    if inst_id < first_new_id || inst_id >= ctx.next_inst_id {
+        return;
+    }
+    let iid: u64 = inst_id as u64;
+    let inst_index: u64 = ctx.inst_index_by_id[iid] as u64;
+    let blk: IrBlock = ctx.func.blocks[ctx.inst_block_by_id[iid] as u64];
+    let inst: IrInst = blk.insts[inst_index];
+    if inst.olen == 0 {
+        inst.ostart = span_unpack_start(span);
+        inst.olen = span_unpack_len(span);
+        blk.insts[inst_index] = inst;
+    }
+}
+
 fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
+    let first_new_id: i64 = ctx.next_inst_id;
+    let val: i64 = lower_expr_inner(ctx, eid);
+    lctx_stamp_fresh_unspanned(ctx, val, first_new_id, expr_span(ctx.arena, eid));
+    val
+}
+
+fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
     let a: AstArena = ctx.arena;
     let tag: i64 = expr_tag(a, eid);
 
@@ -5138,7 +5164,12 @@ fn lower_let_binding(ctx: LowerCtx, pat_id: i64, ann_tid: i64, init_eid: i64, sp
         }
     }
     let mut val: i64 = lower_expr(ctx, init_eid);
-    lctx_set_inst_span(ctx, val, span);
+    // A linear binding's unconsumed-obligation diagnostic points at the whole
+    // `let` statement, as the Rust checker's LinearTypeViolation does; every
+    // other value keeps its own expression's span.
+    if lctx_inst_ty(ctx, val) == ITY_LPTR() {
+        lctx_set_inst_span(ctx, val, span);
+    }
     let ptag: i64 = pat_tag(a, pat_id);
     if ptag == PAT_IDENT() {
             let name_sid: i64 = pat_a(a, pat_id);
@@ -5341,7 +5372,8 @@ fn lower_requires_clauses(ctx: LowerCtx, vow_lid: i64) {
             let pred_id: i64 = lower_expr(ctx, clause_eid);
             let vow_args: Vec<i64> = Vec::new();
             vow_args.push(pred_id);
-            lctx_emit(ctx, IOP_VOW_REQ(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            let vow_inst: i64 = lctx_emit(ctx, IOP_VOW_REQ(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            lctx_set_inst_span(ctx, vow_inst, vow_clause_span(a, cid));
         }
         i = i + 1;
     }
@@ -5368,7 +5400,8 @@ fn lower_ensures_clauses(ctx: LowerCtx, vow_lid: i64, result_id: i64) {
             let pred_id: i64 = lower_expr(ctx, clause_eid);
             let vow_args: Vec<i64> = Vec::new();
             vow_args.push(pred_id);
-            lctx_emit(ctx, IOP_VOW_ENS(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            let vow_inst: i64 = lctx_emit(ctx, IOP_VOW_ENS(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            lctx_set_inst_span(ctx, vow_inst, vow_clause_span(a, cid));
         }
         i = i + 1;
     }
@@ -5394,7 +5427,8 @@ fn lower_invariant_clauses(ctx: LowerCtx, vow_lid: i64) {
             let pred_id: i64 = lower_expr(ctx, clause_eid);
             let vow_args: Vec<i64> = Vec::new();
             vow_args.push(pred_id);
-            lctx_emit(ctx, IOP_VOW_INV(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            let vow_inst: i64 = lctx_emit(ctx, IOP_VOW_INV(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            lctx_set_inst_span(ctx, vow_inst, vow_clause_span(a, cid));
         }
         i = i + 1;
     }
@@ -5422,6 +5456,11 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.current_block = 0;
     ctx.next_inst_id = 0;
     ctx.inst_ty_by_id = Vec::new();
+    ctx.inst_block_by_id = Vec::new();
+    ctx.inst_index_by_id = Vec::new();
+    ctx.phi_first_dependent = Vec::new();
+    ctx.phi_dependent_targets = Vec::new();
+    ctx.phi_next_dependent = Vec::new();
     ctx.scope_vars = Vec::new();
     ctx.scope_vals = Vec::new();
     ctx.scope_starts = Vec::new();
@@ -5534,7 +5573,8 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
             let pred_id: i64 = lower_expr(ctx, ref_eid);
             let vow_args: Vec<i64> = Vec::new();
             vow_args.push(pred_id);
-            lctx_emit(ctx, IOP_VOW_REQ(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            let vow_inst: i64 = lctx_emit(ctx, IOP_VOW_REQ(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+            lctx_set_inst_span(ctx, vow_inst, rname_span);
         }
         ri = ri + 1;
     }
