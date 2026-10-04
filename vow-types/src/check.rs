@@ -2017,7 +2017,7 @@ impl<'e> Checker<'e> {
     fn never_is_not_a_value(&self, arg: &Expr, from: &Ty, to: &Ty) -> bool {
         *from == Ty::Never
             && !matches!(to, Ty::Applied(..) | Ty::Never | Ty::Unknown)
-            && !self.is_diverging_never(arg, from)
+            && !self.expr_diverges(arg)
     }
 
     /// A `Never`-typed expression that really diverges, as opposed to
@@ -2707,32 +2707,22 @@ impl<'e> Checker<'e> {
             }
             ExprKind::FieldAccess { base, field } => {
                 let base_ty = self.check_expr(base);
-                let struct_name = match &base_ty {
-                    Ty::Unknown => return Ty::Unknown,
-                    Ty::Struct(n) => n.clone(),
-                    Ty::Reference(inner) => match inner.as_ref() {
-                        Ty::Struct(n) => n.clone(),
-                        _ => {
-                            self.emit_error(
-                                ErrorCode::TypeMismatch,
-                                format!(
-                                    "field access on non-struct type `{}`",
-                                    base_ty.user_name()
-                                ),
-                                expr.span,
-                            );
-                            return Ty::Unknown;
-                        }
-                    },
-                    _ => {
-                        self.emit_error(
-                            ErrorCode::TypeMismatch,
-                            format!("field access on non-struct type `{}`", base_ty.user_name()),
-                            expr.span,
-                        );
-                        return Ty::Unknown;
-                    }
+                if base_ty.is_unknown() {
+                    return Ty::Unknown;
+                }
+                let peeled = match &base_ty {
+                    Ty::Reference(inner) => inner.as_ref(),
+                    other => other,
                 };
+                let Ty::Struct(struct_name) = peeled else {
+                    self.emit_error(
+                        ErrorCode::TypeMismatch,
+                        format!("field access on non-struct type `{}`", base_ty.user_name()),
+                        expr.span,
+                    );
+                    return Ty::Unknown;
+                };
+                let struct_name = struct_name.clone();
                 match self.env.lookup_struct(&struct_name) {
                     Some(info) => match info.fields.iter().find(|(n, _)| n == field) {
                         Some((_, ty)) => ty.clone(),
@@ -2985,9 +2975,7 @@ impl<'e> Checker<'e> {
                 if let Some(tys) = break_tys {
                     let mut result_ty = Ty::Unit;
                     let mut found = false;
-                    let mut saw_unknown = false;
                     for ty in &tys {
-                        saw_unknown |= ty.is_unknown();
                         if ty.is_unknown_or_never() {
                             continue;
                         }
@@ -3007,7 +2995,7 @@ impl<'e> Checker<'e> {
                             break;
                         }
                     }
-                    if !found && saw_unknown {
+                    if !found && tys.iter().any(Ty::is_unknown) {
                         Ty::Unknown
                     } else {
                         result_ty

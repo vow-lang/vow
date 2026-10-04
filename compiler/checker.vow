@@ -577,10 +577,10 @@ fn never_is_not_a_value(e: CheckEnv, m: Module, eid: i64, from_tid: i64, to_tid:
         return false;
     }
     let to_tag: i64 = ty_tag(e.ts, to_tid);
-    if to_tag == CTY_APPLIED() || to_tag == CTY_NEVER() || to_tag == CTY_UNKNOWN() {
+    if to_tag == CTY_APPLIED() || is_opaque(to_tid) {
         return false;
     }
-    !is_diverging_never(e, m, eid, from_tid)
+    !expr_diverges(e, m, eid)
 }
 
 fn is_flat_slot_tid(ts: TyStore, tid: i64) -> bool {
@@ -1127,6 +1127,22 @@ fn where_scope_hint(e: CheckEnv, name: String) -> String {
         return String::from("a `where` clause is checked before the function runs, so `result` does not exist yet; constrain the return value with `ensures`");
     }
     String::new()
+}
+
+fn emit_unknown_struct(e: CheckEnv, sname: String, span: i64) {
+    let msg: String = String::from("unknown struct `");
+    msg.push_str(sname);
+    msg.push_str(String::from("`"));
+    env_emit_error_code(e, EC_TYPE_MISMATCH(), msg, span);
+}
+
+fn emit_no_such_field(e: CheckEnv, sname: String, fname: String, span: i64) {
+    let msg: String = String::from("struct `");
+    msg.push_str(sname);
+    msg.push_str(String::from("` has no field `"));
+    msg.push_str(fname);
+    msg.push_str(String::from("`"));
+    env_emit_error_code(e, EC_TYPE_MISMATCH(), msg, span);
 }
 
 fn emit_undefined_variable(e: CheckEnv, name: String, span: i64) {
@@ -2007,9 +2023,7 @@ fn check_method_argument_exact(
     if index >= arg_tids.len() as i64 { return; }
     let arg_tid: i64 = arg_tids[index as u64];
     if is_unknown(arg_tid) { return; }
-    let bare_never: bool = never_is_not_a_value(e, m, arg_eid, arg_tid, target_tid);
-    if arg_tid == CTY_NEVER() && !bare_never { return; }
-    if bare_never || !is_coercible(e.ts, arg_tid, target_tid) {
+    if never_is_not_a_value(e, m, arg_eid, arg_tid, target_tid) || !is_coercible(e.ts, arg_tid, target_tid) {
         let msg: String = String::from("argument has type `");
         msg.push_str(ty_full_display_name(e.ts, arg_tid));
         msg.push_str(String::from("` but `"));
@@ -3411,18 +3425,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     }
                     i = i + 1;
                 }
-                let nfmsg: String = String::from("struct `");
-                nfmsg.push_str(sname);
-                nfmsg.push_str(String::from("` has no field `"));
-                nfmsg.push_str(fname);
-                nfmsg.push_str(String::from("`"));
-                env_emit_error_code(e, EC_TYPE_MISMATCH(), nfmsg, expr_span(a, eid));
+                emit_no_such_field(e, sname, fname, expr_span(a, eid));
                 return CTY_UNKNOWN();
             }
-            let usmsg: String = String::from("unknown struct `");
-            usmsg.push_str(sname);
-            usmsg.push_str(String::from("`"));
-            env_emit_error_code(e, EC_TYPE_MISMATCH(), usmsg, expr_span(a, eid));
+            emit_unknown_struct(e, sname, expr_span(a, eid));
             return CTY_UNKNOWN();
         }
         let fmsg: String = String::from("field access on non-struct type `");
@@ -3438,8 +3444,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let recv_tid: i64 = check_expr(e, m, recv_eid);
         let idx_tid: i64 = check_expr(e, m, idx_eid);
         check_contextual_integer_literal_ranges(e, a, idx_eid, CTY_U64());
-        let bare_never_idx: bool = never_is_not_a_value(e, m, idx_eid, idx_tid, CTY_U64());
-        if !is_unknown(idx_tid) && (bare_never_idx || (idx_tid != CTY_NEVER() && !is_coercible(e.ts, idx_tid, CTY_U64()))) {
+        if !is_unknown(idx_tid) && (never_is_not_a_value(e, m, idx_eid, idx_tid, CTY_U64()) || !is_coercible(e.ts, idx_tid, CTY_U64())) {
             let imsg: String = String::from("index has type `");
             imsg.push_str(ty_full_display_name(e.ts, idx_tid));
             imsg.push_str(String::from("` but must be `u64`"));
@@ -3790,10 +3795,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let sname: String = arena_str(a, last_sid);
         let sidx: i64 = env_lookup_struct(e, sname);
         if sidx == -1 {
-            let umsg: String = String::from("unknown struct `");
-            umsg.push_str(sname);
-            umsg.push_str(String::from("`"));
-            env_emit_error_code(e, EC_TYPE_MISMATCH(), umsg, expr_span(a, eid));
+            emit_unknown_struct(e, sname, expr_span(a, eid));
         }
         let n_pairs: i64 = list_len(a, fields_lid);
         let n_fields: i64 = n_pairs / 2;
@@ -3835,12 +3837,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         env_emit_error_code(e, EC_TYPE_MISMATCH(), msg, expr_span(a, feid));
                     }
                 } else {
-                    let nfmsg: String = String::from("struct `");
-                    nfmsg.push_str(sname);
-                    nfmsg.push_str(String::from("` has no field `"));
-                    nfmsg.push_str(fname);
-                    nfmsg.push_str(String::from("`"));
-                    env_emit_error_code(e, EC_TYPE_MISMATCH(), nfmsg, expr_span(a, feid));
+                    emit_no_such_field(e, sname, fname, expr_span(a, feid));
                 }
             }
             i = i + 1;
