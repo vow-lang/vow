@@ -47,11 +47,11 @@ fn load_deps(
     errors: &mut Vec<Diagnostic>,
 ) {
     for use_decl in &module.uses {
-        let file_path = module_file_for_use(root_dir, &use_decl.path, |p| p.exists());
+        let (file_path, vow_path) = module_file_for_use(root_dir, &use_decl.path, |p| p.exists());
         if !visited.insert(file_path.clone()) {
             continue;
         }
-        match load_dep_module(root_dir, use_decl, &file_path) {
+        match load_dep_module(use_decl, &file_path, &vow_path) {
             Ok((final_path, dep_ast)) => {
                 load_deps(root_dir, &dep_ast, modules, visited, errors);
                 modules.push((final_path, dep_ast));
@@ -61,7 +61,8 @@ fn load_deps(
     }
 }
 
-/// Load the dependency `module_file_for_use` chose for `use_decl`. When
+/// Load the dependency `module_file_for_use` chose for `use_decl`, given the
+/// `.vow` source path it also resolved alongside that choice. When
 /// `file_path` is a `.vow.d` stub that parses but carries a declaration with
 /// a `vow` block the verifier cannot enforce from a bodyless signature, fall
 /// back to the sibling `.vow` source instead (#1472) — but only when that
@@ -73,11 +74,10 @@ fn load_deps(
 /// `docs/spec/grammar.md` nor `docs/spec/stdlib.md` documents a parse-failure
 /// fallback.
 fn load_dep_module(
-    root_dir: &Path,
     use_decl: &UseDecl,
     file_path: &Path,
+    vow_path: &Path,
 ) -> Result<(PathBuf, Module), Vec<Diagnostic>> {
-    let vow_path = resolve_use(root_dir, &use_decl.path);
     if file_path == vow_path {
         return read_and_parse(file_path, use_decl);
     }
@@ -87,7 +87,7 @@ fn load_dep_module(
         && module_has_unenforceable_contract(module)
         && vow_path.exists()
     {
-        return read_and_parse(&vow_path, use_decl);
+        return read_and_parse(vow_path, use_decl);
     }
     stub_result
 }
@@ -141,7 +141,9 @@ fn module_has_unenforceable_contract(module: &Module) -> bool {
 /// preferring a sibling `.vow.d` declaration stub over the full `.vow` source
 /// when one exists. This choice is not final: `load_dep_module` may still
 /// override it and load the `.vow` source instead when the stub it names
-/// carries a contract the verifier cannot enforce (#1472).
+/// carries a contract the verifier cannot enforce (#1472). The `.vow` source
+/// path is returned alongside the choice so callers that need it for the
+/// fallback decision — `load_dep_module` — don't have to re-derive it.
 ///
 /// `decl_exists` is the on-disk existence check for the derived `.vow.d` path,
 /// injected so the resolution decision is testable without touching the
@@ -150,13 +152,14 @@ fn module_file_for_use(
     root_dir: &Path,
     path: &[String],
     decl_exists: impl Fn(&Path) -> bool,
-) -> PathBuf {
+) -> (PathBuf, PathBuf) {
     let vow_path = resolve_use(root_dir, path);
     let decl_path = vow_path.with_extension("vow.d");
     if decl_exists(&decl_path) {
-        decl_path
+        (decl_path, vow_path)
     } else {
-        vow_path
+        let chosen = vow_path.clone();
+        (chosen, vow_path)
     }
 }
 
@@ -182,7 +185,7 @@ pub(crate) fn infer_module_root(
     }
     let resolves = |dir: &Path| {
         uses.iter()
-            .all(|u| exists(&module_file_for_use(dir, u, &exists)))
+            .all(|u| exists(&module_file_for_use(dir, u, &exists).0))
     };
     let mut first = true;
     for dir in entry.parent()?.ancestors() {
@@ -253,18 +256,9 @@ mod tests {
         parts.iter().map(|s| s.to_string()).collect()
     }
 
-    fn parse_ok(src: &str, file: &str) -> Module {
-        let (module, diags) = vow_syntax::parser::parse_module(src, file);
-        assert!(
-            diags.is_empty(),
-            "unexpected diagnostics for {file}: {diags:?}"
-        );
-        module
-    }
-
     #[test]
     fn module_has_unenforceable_contract_detects_declaration_with_requires() {
-        let m = parse_ok(
+        let m = parse(
             "module M pub fn f(x: i64) -> i64 vow { requires: x > 0 };",
             "m.vow.d",
         );
@@ -273,13 +267,13 @@ mod tests {
 
     #[test]
     fn module_has_unenforceable_contract_false_for_contract_free_declaration() {
-        let m = parse_ok("module M pub fn f(x: i64) -> i64;", "m.vow.d");
+        let m = parse("module M pub fn f(x: i64) -> i64;", "m.vow.d");
         assert!(!module_has_unenforceable_contract(&m));
     }
 
     #[test]
     fn module_has_unenforceable_contract_false_for_non_declaration_with_vow() {
-        let m = parse_ok(
+        let m = parse(
             "module M pub fn f(x: i64) -> i64 vow { requires: x > 0 } { x }",
             "m.vow",
         );
@@ -356,25 +350,29 @@ mod tests {
 
     #[test]
     fn single_component_without_decl_resolves_to_vow_source() {
-        let file = module_file_for_use(Path::new("/proj"), &comps(&["region"]), |_| false);
+        let (file, vow_path) =
+            module_file_for_use(Path::new("/proj"), &comps(&["region"]), |_| false);
         assert_eq!(file, PathBuf::from("/proj/region.vow"));
+        assert_eq!(vow_path, PathBuf::from("/proj/region.vow"));
     }
 
     #[test]
     fn single_component_with_decl_prefers_decl_stub() {
-        let file = module_file_for_use(Path::new("/proj"), &comps(&["region"]), |_| true);
+        let (file, vow_path) =
+            module_file_for_use(Path::new("/proj"), &comps(&["region"]), |_| true);
         assert_eq!(file, PathBuf::from("/proj/region.vow.d"));
+        assert_eq!(vow_path, PathBuf::from("/proj/region.vow"));
     }
 
     #[test]
     fn multi_component_path_nests_directories() {
-        let file = module_file_for_use(Path::new("/proj"), &comps(&["a", "b"]), |_| false);
+        let (file, _) = module_file_for_use(Path::new("/proj"), &comps(&["a", "b"]), |_| false);
         assert_eq!(file, PathBuf::from("/proj/a/b.vow"));
     }
 
     #[test]
     fn multi_component_path_with_decl_prefers_nested_decl_stub() {
-        let file = module_file_for_use(Path::new("/proj"), &comps(&["a", "b"]), |_| true);
+        let (file, _) = module_file_for_use(Path::new("/proj"), &comps(&["a", "b"]), |_| true);
         assert_eq!(file, PathBuf::from("/proj/a/b.vow.d"));
     }
 
@@ -531,7 +529,7 @@ mod tests {
     fn load_graph_for(dir: &Path, main_name: &str) -> Result<ModuleGraph, Vec<Diagnostic>> {
         let main_path = dir.join(main_name);
         let src = std::fs::read_to_string(&main_path).unwrap();
-        let root_ast = parse_ok(&src, main_name);
+        let root_ast = parse(&src, main_name);
         load_modules_with_root(&main_path, None, &root_ast)
     }
 

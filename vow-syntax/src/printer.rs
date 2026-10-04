@@ -72,8 +72,7 @@ fn print_fn_decl(f: &FnDef, level: usize) -> String {
         ind, vis, f.name, params, ret_part, effects
     );
     if let Some(vow) = &f.vow {
-        out.push(' ');
-        out.push_str(print_vow_block(vow, level).trim_start());
+        push_vow_block_inline(&mut out, vow, level);
     }
     out.push_str(";\n");
     out
@@ -170,6 +169,14 @@ fn print_vow_block(vow: &VowBlock, level: usize) -> String {
     out
 }
 
+/// Appends ` vow { ... }` (no trailing separator) to `out` for inline
+/// embedding after a function signature, reusing `print_vow_block`'s
+/// rendering of the clauses themselves.
+fn push_vow_block_inline(out: &mut String, vow: &VowBlock, level: usize) {
+    out.push(' ');
+    out.push_str(print_vow_block(vow, level).trim_start());
+}
+
 fn print_fn(f: &FnDef, level: usize) -> String {
     if f.is_declaration {
         return print_fn_decl(f, level);
@@ -192,12 +199,9 @@ fn print_fn(f: &FnDef, level: usize) -> String {
     );
 
     if let Some(vow) = &f.vow {
-        out.push(' ');
-        out.push_str(print_vow_block(vow, level).trim_start());
-        out.push_str(" {\n");
-    } else {
-        out.push_str(" {\n");
+        push_vow_block_inline(&mut out, vow, level);
     }
+    out.push_str(" {\n");
 
     out.push_str(&print_block_body(&f.body, level + 1));
     out.push_str(&format!("{}}}\n", ind));
