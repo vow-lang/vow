@@ -870,7 +870,7 @@ echo ""
 # esbmc on PATH records what each one writes, and parity.py c diffs the sets of
 # distinct sources per function (scripts/parity_c.py).
 section_begin "Section 2c: Verifier C Parity"
-for vow_file in tests/verify/*.vow tests/verify-fail/*.vow tests/verify-skip/*.vow tests/verify-stress/*.vow; do
+for vow_file in tests/verify/*.vow tests/verify-fail/*.vow tests/verify-skip/*.vow tests/verify-stress/*.vow tests/verify-fail-multi/*/main.vow; do
     [ -f "$vow_file" ] || continue
     c_parity_log="$TMPDIR/c_parity.log"
     c_parity_status=0
@@ -1317,6 +1317,62 @@ else
     fail "verifier-eval/ground-truth" "ground-truth mismatch — see banners below"
 fi
 sed 's/^/    /' "$ve_out"
+echo ""
+
+# ─── Section 4f: Verify-Fail Multi-Module Fixtures (#1472) ────────
+#
+# tests/verify-fail/*.vow is a flat glob of single-file targets (Section 4c);
+# it cannot host a fixture that needs a sibling `dep.vow`/`dep.vow.d` pair.
+# Mirrors tests/multi/'s subdirectory-per-fixture convention (Section 6b) but
+# runs `verify` instead of `build --no-verify`, so each fixture's
+# `// TEST: counterexample-blame <value>` directive can be checked alongside
+# the existing VerifyFailed + full-JSON-parity checks Section 4c already uses.
+
+section_begin "Section 4f: Verify-Fail Multi-Module Fixtures"
+for dir in tests/verify-fail-multi/*/; do
+    name=$(basename "$dir")
+    main_file="${dir}main.vow"
+    [ -f "$main_file" ] || continue
+
+    rust_json="" self_json="" rust_exit=0 self_exit=0
+    rust_json=$($RUST verify "$main_file" 2>/dev/null) || rust_exit=$?
+    self_json=$(run_self verify "$main_file" 2>/dev/null) || self_exit=$?
+
+    if check_empty_output "${name}/verify-fail-multi-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
+        continue
+    fi
+
+    compare_full_json "${name}/verify-fail-multi-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
+    actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
+    if [ -n "$actual_status" ] && [ "$actual_status" != "VerifyFailed" ]; then
+        fail "${name}/verify-expected-fail" "expected VerifyFailed, got $actual_status"
+    fi
+
+    # `// TEST: counterexample-blame <value>` pins the first counterexample's
+    # blame on both compilers — the acceptance criterion for #1472 is Caller
+    # blame specifically, not merely "not Verified" (Skipped would also pass
+    # a bare non-Verified check).
+    expected_blame=$(sed -n 's|^// TEST: counterexample-blame \(.*\)$|\1|p' "$main_file" | head -1)
+    if [ -n "$expected_blame" ]; then
+        blame_errors=()
+        for blame_side in rust self; do
+            if [ "$blame_side" = "rust" ]; then blame_json="$rust_json"; else blame_json="$self_json"; fi
+            actual_blame=$(python3 -c "
+import json, sys
+cx = json.loads(sys.stdin.read()).get('counterexamples') or []
+print(cx[0].get('blame', '') if cx else '')
+" <<< "$blame_json" 2>/dev/null) || actual_blame="<unparseable>"
+            if [ "$actual_blame" != "$expected_blame" ]; then
+                blame_errors+=("$blame_side blame='$actual_blame'")
+            fi
+        done
+        if [ ${#blame_errors[@]} -eq 0 ]; then
+            pass "${name}/verify-fail-multi-blame"
+        else
+            fail "${name}/verify-fail-multi-blame" "expected '$expected_blame'; $(IFS='; '; echo "${blame_errors[*]}")"
+        fi
+    fi
+done
 echo ""
 
 # ─── Section 5: Debug Mode ─────────────────────────────────────────

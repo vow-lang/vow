@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 use vow_diag::{Blame, Diagnostic, ErrorCode, Severity, SourceLocation};
-use vow_syntax::ast::Module;
+use vow_syntax::ast::{Item, Module, UseDecl};
 
 pub(crate) struct ModuleGraph {
     /// Modules in dependency-first order; root is last.
@@ -51,35 +51,88 @@ fn load_deps(
         if !visited.insert(file_path.clone()) {
             continue;
         }
-        match std::fs::read_to_string(&file_path) {
-            Ok(src) => {
-                let file_str = file_path.to_string_lossy();
-                let (dep_ast, diags) = vow_syntax::parser::parse_module(&src, &file_str);
-                let has_error = diags.iter().any(|d| d.severity == Severity::Error);
-                if has_error {
-                    errors.extend(diags);
-                } else {
-                    load_deps(root_dir, &dep_ast, modules, visited, errors);
-                    modules.push((file_path, dep_ast));
-                }
+        match load_dep_module(root_dir, use_decl, &file_path) {
+            Ok((final_path, dep_ast)) => {
+                load_deps(root_dir, &dep_ast, modules, visited, errors);
+                modules.push((final_path, dep_ast));
             }
-            Err(e) => {
-                errors.push(Diagnostic {
-                    severity: Severity::Error,
-                    code: ErrorCode::IoError,
-                    message: format!("cannot load module `{}`: {e}", use_decl.path.join(".")),
-                    primary: SourceLocation {
-                        file: use_decl.path.join("."),
-                        byte_offset: use_decl.span.start,
-                        byte_len: use_decl.span.len,
-                    },
-                    secondary: vec![],
-                    blame: Blame::None,
-                    hints: vec![],
-                });
-            }
+            Err(diags) => errors.extend(diags),
         }
     }
+}
+
+/// Load the dependency `module_file_for_use` chose for `use_decl`. When
+/// `file_path` is a `.vow.d` stub that fails to parse, or that parses but
+/// carries a declaration with a `vow` block the verifier cannot enforce from
+/// a bodyless signature, fall back to the sibling `.vow` source instead
+/// (#1472) — but only when that source actually exists. A library shipping
+/// only a stub keeps today's behavior unchanged: the call becomes
+/// non-modelable downstream, never falsely `Verified`.
+fn load_dep_module(
+    root_dir: &Path,
+    use_decl: &UseDecl,
+    file_path: &Path,
+) -> Result<(PathBuf, Module), Vec<Diagnostic>> {
+    let vow_path = resolve_use(root_dir, &use_decl.path);
+    if file_path == vow_path {
+        return read_and_parse(file_path, use_decl);
+    }
+
+    let stub_result = read_and_parse(file_path, use_decl);
+    let needs_fallback = match &stub_result {
+        Ok((_, module)) => module_has_unenforceable_contract(module),
+        Err(_) => true,
+    };
+    if needs_fallback && vow_path.exists() {
+        read_and_parse(&vow_path, use_decl)
+    } else {
+        stub_result
+    }
+}
+
+fn read_and_parse(
+    file_path: &Path,
+    use_decl: &UseDecl,
+) -> Result<(PathBuf, Module), Vec<Diagnostic>> {
+    match std::fs::read_to_string(file_path) {
+        Ok(src) => {
+            let file_str = file_path.to_string_lossy();
+            let (ast, diags) = vow_syntax::parser::parse_module(&src, &file_str);
+            if diags.iter().any(|d| d.severity == Severity::Error) {
+                Err(diags)
+            } else {
+                Ok((file_path.to_path_buf(), ast))
+            }
+        }
+        Err(e) => Err(vec![Diagnostic {
+            severity: Severity::Error,
+            code: ErrorCode::IoError,
+            message: format!("cannot load module `{}`: {e}", use_decl.path.join(".")),
+            primary: SourceLocation {
+                file: use_decl.path.join("."),
+                byte_offset: use_decl.span.start,
+                byte_len: use_decl.span.len,
+            },
+            secondary: vec![],
+            blame: Blame::None,
+            hints: vec![],
+        }]),
+    }
+}
+
+/// True when `module` contains a declaration-only function (top-level or an
+/// `impl` method) carrying a `vow` block. Such a function has no body for the
+/// verifier to check a call site against — see #1472. Visibility is
+/// deliberately ignored: the self-hosted AST has no visibility slot at all,
+/// so a visibility-aware predicate here would be an unreproducible parity
+/// divergence from the self-hosted loader.
+fn module_has_unenforceable_contract(module: &Module) -> bool {
+    let fn_is_unenforceable = |f: &vow_syntax::ast::FnDef| f.is_declaration && f.vow.is_some();
+    module.items.iter().any(|item| match item {
+        Item::Fn(f) => fn_is_unenforceable(f),
+        Item::Impl(i) => i.methods.iter().any(fn_is_unenforceable),
+        _ => false,
+    })
 }
 
 /// Resolve a dotted `use` path to the file to load, relative to `root_dir`,
@@ -194,6 +247,107 @@ mod tests {
 
     fn comps(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn parse_ok(src: &str, file: &str) -> Module {
+        let (module, diags) = vow_syntax::parser::parse_module(src, file);
+        assert!(
+            diags.is_empty(),
+            "unexpected diagnostics for {file}: {diags:?}"
+        );
+        module
+    }
+
+    #[test]
+    fn module_has_unenforceable_contract_detects_declaration_with_requires() {
+        let m = parse_ok(
+            "module M pub fn f(x: i64) -> i64 vow { requires: x > 0 };",
+            "m.vow.d",
+        );
+        assert!(module_has_unenforceable_contract(&m));
+    }
+
+    #[test]
+    fn module_has_unenforceable_contract_false_for_contract_free_declaration() {
+        let m = parse_ok("module M pub fn f(x: i64) -> i64;", "m.vow.d");
+        assert!(!module_has_unenforceable_contract(&m));
+    }
+
+    #[test]
+    fn module_has_unenforceable_contract_false_for_non_declaration_with_vow() {
+        let m = parse_ok(
+            "module M pub fn f(x: i64) -> i64 vow { requires: x > 0 } { x }",
+            "m.vow",
+        );
+        assert!(!module_has_unenforceable_contract(&m));
+    }
+
+    #[test]
+    fn module_has_unenforceable_contract_detects_impl_method_declaration() {
+        // Built directly rather than parsed: `parse_impl` does not yet accept
+        // `;`-terminated method declarations at all (a separate, pre-existing
+        // gap independent of #1472), so there is no source text today that
+        // would round-trip into this shape.
+        use vow_syntax::ast::{
+            BinOp, Expr, ExprKind, FnDef, ImplBlock, Item, Lit, Type, Visibility, VowBlock,
+            VowClause,
+        };
+        use vow_syntax::span::Span;
+
+        let z = || Span::new(0, 0);
+        let requires = VowClause::Requires {
+            expr: Expr {
+                kind: ExprKind::BinaryOp {
+                    op: BinOp::Gt,
+                    lhs: Box::new(Expr {
+                        kind: ExprKind::Ident("x".to_string()),
+                        span: z(),
+                    }),
+                    rhs: Box::new(Expr {
+                        kind: ExprKind::Lit(Lit::Int(0)),
+                        span: z(),
+                    }),
+                },
+                span: z(),
+            },
+            span: z(),
+        };
+        let method = FnDef {
+            vis: Visibility::Private,
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Type::Named {
+                name: "i64".to_string(),
+                span: z(),
+            },
+            effects: vec![],
+            vow: Some(VowBlock {
+                clauses: vec![requires],
+                span: z(),
+            }),
+            body: vow_syntax::ast::Block {
+                stmts: vec![],
+                trailing_expr: None,
+                span: z(),
+            },
+            span: z(),
+            is_declaration: true,
+        };
+        let m = Module {
+            name: "M".to_string(),
+            uses: vec![],
+            items: vec![Item::Impl(ImplBlock {
+                trait_name: None,
+                self_ty: Type::Named {
+                    name: "Foo".to_string(),
+                    span: z(),
+                },
+                methods: vec![method],
+                span: z(),
+            })],
+            span: z(),
+        };
+        assert!(module_has_unenforceable_contract(&m));
     }
 
     #[test]
@@ -361,5 +515,87 @@ mod tests {
 
         assert_eq!(merged.items.len(), 2);
         assert_eq!(item_files, vec!["solo.vow", "solo.vow"]);
+    }
+
+    fn fn_item_is_declaration(module: &Module, name: &str) -> Option<bool> {
+        module.items.iter().find_map(|item| match item {
+            Item::Fn(f) if f.name == name => Some(f.is_declaration),
+            _ => None,
+        })
+    }
+
+    fn load_graph_for(dir: &Path, main_name: &str) -> Result<ModuleGraph, Vec<Diagnostic>> {
+        let main_path = dir.join(main_name);
+        let src = std::fs::read_to_string(&main_path).unwrap();
+        let root_ast = parse_ok(&src, main_name);
+        load_modules_with_root(&main_path, None, &root_ast)
+    }
+
+    #[test]
+    fn load_deps_falls_back_to_source_when_stub_has_unenforceable_contract() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("dep.vow"),
+            "module Dep\npub fn f(x: i64) -> i64 vow { requires: x > 0 } {\n    x\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("dep.vow.d"),
+            "module Dep\npub fn f(x: i64) -> i64 vow { requires: x > 0 };\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("main.vow"),
+            "module Main\nuse dep\nfn g() -> i64 { 0 }\n",
+        )
+        .unwrap();
+
+        let graph = load_graph_for(dir.path(), "main.vow").expect("load should succeed");
+        let dep_module = &graph
+            .modules
+            .iter()
+            .find(|(path, _)| path.ends_with("dep.vow") || path.ends_with("dep.vow.d"))
+            .expect("dep module present")
+            .1;
+        assert_eq!(
+            fn_item_is_declaration(dep_module, "f"),
+            Some(false),
+            "must fall back to the .vow source, not the contract-bearing stub"
+        );
+    }
+
+    #[test]
+    fn load_deps_still_prefers_contract_free_stub() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("dep.vow"),
+            // Deliberately ill-typed, mirroring tests/multi/decl_stub_preference:
+            // the loader must never touch this body while the stub is preferred.
+            "module Dep\nfn source_only() -> i64 {\n    true\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("dep.vow.d"),
+            "module Dep\npub fn declaration_only() -> i64;\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("main.vow"),
+            "module Main\nuse dep\nfn g() -> i64 { 0 }\n",
+        )
+        .unwrap();
+
+        let graph = load_graph_for(dir.path(), "main.vow").expect("load should succeed");
+        let dep_module = &graph
+            .modules
+            .iter()
+            .find(|(path, _)| path.ends_with("dep.vow") || path.ends_with("dep.vow.d"))
+            .expect("dep module present")
+            .1;
+        assert_eq!(
+            fn_item_is_declaration(dep_module, "declaration_only"),
+            Some(true),
+            "contract-free stub must still be preferred over source"
+        );
     }
 }
