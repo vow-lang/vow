@@ -5,6 +5,26 @@ use crate::token::TokenKind;
 use super::Parser;
 
 const PREFIX_BINDING_POWER: u8 = 19;
+const BORROW_HINT: &str =
+    "Vow has no references: pass the value itself; `&` is only the binary bitwise AND operator";
+
+fn is_scalar_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "f32"
+            | "f64"
+            | "bool"
+    )
+}
 
 fn infix_binding_power(op: BinOp) -> (u8, u8) {
     match op {
@@ -66,17 +86,20 @@ fn peek_infix_op(parser: &Parser) -> Option<(BinOp, usize)> {
 
 impl Parser {
     pub fn parse_expr_inner(&mut self, min_bp: u8) -> Expr {
+        let parenthesised = self.at(&TokenKind::LParen);
         let mut lhs = self.parse_prefix();
 
-        if matches!(
-            lhs.kind,
-            ExprKind::If { .. }
-                | ExprKind::While { .. }
-                | ExprKind::ForEach { .. }
-                | ExprKind::Loop { .. }
-                | ExprKind::Block(_)
-                | ExprKind::Match { .. }
-        ) {
+        if !parenthesised
+            && matches!(
+                lhs.kind,
+                ExprKind::If { .. }
+                    | ExprKind::While { .. }
+                    | ExprKind::ForEach { .. }
+                    | ExprKind::Loop { .. }
+                    | ExprKind::Block(_)
+                    | ExprKind::Match { .. }
+            )
+        {
             return lhs;
         }
 
@@ -208,7 +231,10 @@ impl Parser {
                 if self.at(&TokenKind::ColonColon) {
                     return self.parse_enum_construct(name, start);
                 }
-                if self.at(&TokenKind::LBrace) && self.looks_like_struct_literal() {
+                if self.at(&TokenKind::LBrace)
+                    && name.starts_with(|c: char| c.is_ascii_uppercase())
+                    && self.looks_like_struct_literal()
+                {
                     return self.parse_struct_literal(name, start);
                 }
                 Expr {
@@ -241,15 +267,14 @@ impl Parser {
                 }
             }
             TokenKind::Amp => {
+                self.push_error_with_hint(
+                    vow_diag::ErrorCode::UnsupportedFeature,
+                    "borrow expressions (`&expr`) are not supported in Vow".to_string(),
+                    start,
+                    BORROW_HINT,
+                );
                 self.advance();
-                let operand = self.parse_expr_inner(PREFIX_BINDING_POWER);
-                let span = start.merge(operand.span);
-                Expr {
-                    kind: ExprKind::Borrow {
-                        expr: Box::new(operand),
-                    },
-                    span,
-                }
+                self.parse_expr_inner(PREFIX_BINDING_POWER)
             }
             TokenKind::LParen => self.parse_paren_or_tuple(),
             TokenKind::LBrace => {
@@ -417,7 +442,7 @@ impl Parser {
             }
             TokenKind::KwAs => {
                 let as_span = self.advance().span;
-                let target_ty = self.parse_type_inner();
+                let target_ty = self.parse_cast_target();
                 let target_span = target_ty.span();
                 Expr {
                     kind: ExprKind::Cast {
@@ -429,6 +454,19 @@ impl Parser {
             }
             _ => lhs,
         }
+    }
+
+    // A scalar type name takes no generic arguments, so a `<` after it is a
+    // comparison or shift (`x as u64 < y`, `x as u64 << 1`), not a type-argument list.
+    fn parse_cast_target(&mut self) -> Type {
+        if let TokenKind::Ident(name) = self.peek_kind()
+            && is_scalar_type_name(name)
+        {
+            let name = name.clone();
+            let span = self.advance().span;
+            return Type::Named { name, span };
+        }
+        self.parse_type_inner()
     }
 
     // Returns the closing paren's own span (not the following token's) so
@@ -1220,12 +1258,6 @@ mod tests {
     }
 
     #[test]
-    fn borrow_expr() {
-        let expr = parse_no_errors("&x");
-        assert!(matches!(&expr.kind, ExprKind::Borrow { .. }));
-    }
-
-    #[test]
     fn assign_expr() {
         let expr = parse_no_errors("a = b");
         assert!(matches!(&expr.kind, ExprKind::Assign { .. }));
@@ -1386,5 +1418,178 @@ mod tests {
             }
             _ => panic!("expected EnumConstruct, got {:?}", expr.kind),
         }
+    }
+
+    fn parse_diagnostics(src: &str) -> Vec<vow_diag::Diagnostic> {
+        let tokens = crate::lexer::Lexer::new(src).tokenize().expect("lex error");
+        let mut parser = Parser::new(tokens, String::new(), "<test>".to_string());
+        parser.parse_expr_inner(0);
+        parser.diagnostics
+    }
+
+    // (source, canonical printed text). Every source must parse without
+    // errors, print as the canonical text, and re-parse to that same text.
+    const ACCEPTED_FORMS: &[(&str, &str)] = &[
+        (
+            "(if c { 1 } else { 2 }) as u64",
+            "(if c {\n    1\n} else {\n    2\n}) as u64",
+        ),
+        (
+            "(if c { 1 } else { 2 }) as u64 as i64",
+            "(if c {\n    1\n} else {\n    2\n}) as u64 as i64",
+        ),
+        (
+            "((if c { 1 } else { 2 }) as u64) as i64",
+            "(if c {\n    1\n} else {\n    2\n}) as u64 as i64",
+        ),
+        ("({ x }) as u64", "({\n    x\n}) as u64"),
+        (
+            "(loop { break x; }) as u64",
+            "(loop {\n    break x;\n}) as u64",
+        ),
+        (
+            "(match s { A => 1, _ => 2 }) as u64",
+            "(match s {\n    A => 1,\n    _ => 2,\n}) as u64",
+        ),
+        (
+            "(if c { 1 } else { 2 }) + 1",
+            "(if c {\n    1\n} else {\n    2\n}) + 1",
+        ),
+        (
+            "(if c { 1 } else { 2 }) == (if c { 2 } else { 1 })",
+            "(if c {\n    1\n} else {\n    2\n}) == if c {\n    2\n} else {\n    1\n}",
+        ),
+        (
+            "3 * (if c { 1 } else { 2 })",
+            "3 * if c {\n    1\n} else {\n    2\n}",
+        ),
+        (
+            "-(if c { 1 } else { 2 })",
+            "-if c {\n    1\n} else {\n    2\n}",
+        ),
+        (
+            "(if c { v } else { w }).len()",
+            "(if c {\n    v\n} else {\n    w\n}).len()",
+        ),
+        (
+            "(if c { v } else { w })[0]",
+            "(if c {\n    v\n} else {\n    w\n})[0]",
+        ),
+        (
+            "(if c { v } else { w }).len as i64 + 1",
+            "(if c {\n    v\n} else {\n    w\n}).len as i64 + 1",
+        ),
+        (
+            "(if c { 1 } else { 2 })?",
+            "(if c {\n    1\n} else {\n    2\n})?",
+        ),
+        ("(a + b).len()", "(a + b).len()"),
+        ("(-a).foo", "(-a).foo"),
+        ("(x as u64) < y", "x as u64 < y"),
+        ("x as u64 < y", "x as u64 < y"),
+        ("x as u64 << 1", "x as u64 << 1"),
+        ("x as u64 >> 1 == 0", "x as u64 >> 1 == 0"),
+        ("x as u64 as i64", "x as u64 as i64"),
+        ("-x as u64", "-x as u64"),
+        ("(-x) as u64", "(-x) as u64"),
+        ("(x + 1) as i64", "(x + 1) as i64"),
+        ("x + 1 as i64", "x + 1 as i64"),
+        ("v.len() as i64 + 1", "v.len() as i64 + 1"),
+        ("(((x))) as u64", "x as u64"),
+        ("x & 1 == 1", "x & 1 == 1"),
+        ("x as bool == y", "x as bool == y"),
+    ];
+
+    #[test]
+    fn accepted_forms_print_canonically_and_idempotently() {
+        for (src, canonical) in ACCEPTED_FORMS {
+            let printed = crate::printer::print_expr(&parse_no_errors(src));
+            assert_eq!(&printed, canonical, "printing {src:?}");
+            let reprinted = crate::printer::print_expr(&parse_no_errors(&printed));
+            assert_eq!(reprinted, printed, "re-printing {src:?}");
+        }
+    }
+
+    #[test]
+    fn parenthesised_block_like_operand_takes_postfix_and_cast() {
+        let expr = parse_no_errors("(if c { 1 } else { 2 }) as u64");
+        match &expr.kind {
+            ExprKind::Cast { expr: inner, .. } => {
+                assert!(matches!(inner.kind, ExprKind::If { .. }))
+            }
+            other => panic!("expected Cast, got {other:?}"),
+        }
+        let expr = parse_no_errors("(if c { v } else { w }).len()");
+        assert!(matches!(expr.kind, ExprKind::MethodCall { .. }));
+    }
+
+    #[test]
+    fn scalar_cast_target_leaves_a_following_angle_bracket_alone() {
+        let expr = parse_no_errors("x as u64 < y");
+        match &expr.kind {
+            ExprKind::BinaryOp { op, lhs, .. } => {
+                assert_eq!(*op, BinOp::Lt);
+                assert!(matches!(lhs.kind, ExprKind::Cast { .. }));
+            }
+            other => panic!("expected comparison, got {other:?}"),
+        }
+        let expr = parse_no_errors("x as u64 << 1");
+        assert!(matches!(
+            &expr.kind,
+            ExprKind::BinaryOp { op: BinOp::Shl, .. }
+        ));
+    }
+
+    #[test]
+    fn generic_cast_target_still_takes_type_arguments() {
+        let expr = parse_no_errors("x as Vec<i64>");
+        match &expr.kind {
+            ExprKind::Cast { target_ty, .. } => {
+                assert!(matches!(target_ty.as_ref(), Type::Generic { .. }))
+            }
+            other => panic!("expected Cast, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unparenthesised_block_like_does_not_take_postfix_operators() {
+        let src = "module M\nfn f(c: bool) -> u64 {\n    let y: u64 = if c { 1 } else { 2 } as u64;\n    y\n}\n";
+        let (_, diagnostics) = crate::parser::parse_module(src, "t.vow");
+        assert!(!diagnostics.is_empty());
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| d.code == vow_diag::ErrorCode::UnexpectedToken)
+        );
+    }
+
+    #[test]
+    fn borrow_expression_is_rejected_once_with_a_hint_at_the_ampersand() {
+        for (src, offset) in [("&x", 0), ("x & &y", 4), ("-&x", 1), ("f(&x)", 2)] {
+            let diagnostics = parse_diagnostics(src);
+            assert_eq!(diagnostics.len(), 1, "{src:?}: {diagnostics:?}");
+            let d = &diagnostics[0];
+            assert_eq!(d.code, vow_diag::ErrorCode::UnsupportedFeature);
+            assert_eq!(d.primary.byte_offset, offset, "{src:?}");
+            assert_eq!(d.primary.byte_len, 1, "{src:?}");
+            assert_eq!(d.hints, vec![BORROW_HINT.to_string()]);
+        }
+    }
+
+    #[test]
+    fn lowercase_identifier_before_an_empty_block_is_not_a_struct_literal() {
+        let src = "module M\nfn f(c: bool) -> i64 {\n    while c { }\n    if c { }\n    0\n}\n";
+        let (_, diagnostics) = crate::parser::parse_module(src, "t.vow");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn borrow_recovery_parses_the_operand() {
+        let tokens = crate::lexer::Lexer::new("&x")
+            .tokenize()
+            .expect("lex error");
+        let mut parser = Parser::new(tokens, String::new(), "<test>".to_string());
+        let expr = parser.parse_expr_inner(0);
+        assert!(matches!(&expr.kind, ExprKind::Ident(n) if n == "x"));
     }
 }

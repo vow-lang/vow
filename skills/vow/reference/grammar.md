@@ -455,9 +455,15 @@ From loosest to tightest, Vow follows the usual C/Rust precedence for logical an
 
 `||`, `&&`, comparisons (`== != < <= > >=`), `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`
 
-Unary `-`, `!`, `&`, and `?` bind tighter than every binary operator.
+Unary `-` and `!` bind tighter than every binary operator. The postfix forms
+(`.field`, `.method()`, `[index]`, `(args)`, `?`, and `as Type`) bind tighter
+still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is
+`(a.len() as i64) + 1`.
 
-Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs & rhs` is bitwise AND.
+`&` is only the infix bitwise AND operator (`lhs & rhs`). There is no prefix
+`&expr`: Vow has no reference or borrow expressions, so `&x` (and `x & &y`) is
+an `UnsupportedFeature` error at the `&` token, identically in both compilers
+(see [errors.md](errors.md#unsupportedfeature)). Pass the value itself.
 
 ### Unary Operators
 
@@ -465,8 +471,39 @@ Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs
 |----------|------------|
 | `-`      | Negation (not allowed on unsigned types) |
 | `!`      | Logical NOT|
-| `&`      | Borrow     |
-| `?`      | Unwrap (propagate error) |
+| `?`      | Unwrap (propagate error), postfix |
+
+### Block-like Expressions and Parentheses
+
+`if`, `match`, `while`, `for`, `loop`, and a `{ ... }` block are *block-like*.
+An unparenthesised block-like expression ends the expression it starts: no
+postfix operator (`.`, `[`, `(`, `?`, `as`) and no binary operator may follow it
+directly, so `if c { 1 } else { 2 } as u64` and `if c { 1 } else { 2 } + 1` are
+parse errors. As the right operand of a binary operator or the operand of a
+unary operator it is fine (`3 * if c { 1 } else { 2 }`). A parenthesised
+expression is a primary expression whatever it contains, so every operator may
+follow it:
+
+```vow
+let a: u64 = (if c { 1 } else { 2 }) as u64;
+let b: i64 = (if c { 1 } else { 2 }) + 1;
+let n: u64 = (if c { v } else { w }).len();
+```
+
+Parentheses are not an AST node: the canonical printer re-inserts them exactly
+where a block-like expression, a binary or unary expression, an assignment, or
+`break`/`return` is the left operand of a binary operator or the receiver of a
+postfix operator, so `parse -> print -> parse` is idempotent.
+
+An expression statement ends with `;`. Only two forms may omit it: the last
+expression of a block (its value) and an unparenthesised block-like expression
+(`if c { f(); } g();`). Any other statement without `;` is a parse error
+(`UnexpectedToken`) at the next token, in both compilers, and parsing stops
+there. A `let` statement's trailing `;` is optional.
+
+A scalar type name after `as` (`i8` through `u128`, `f32`, `f64`, `bool`) never
+takes generic arguments, so a following `<` is a comparison or shift:
+`x as u64 < y` and `x as u64 << 1` mean `(x as u64) < y` and `(x as u64) << 1`.
 
 ### Type Cast
 
@@ -820,6 +857,9 @@ Struct literal names must be PascalCase:
 ```vow
 let p: Point = Point { x: 1, y: 2 };
 ```
+
+Because of that, an identifier that does not start with an upper-case letter is
+never a struct literal: in `while c { }` and `if c { }` the `{` opens the body.
 
 ### Field Access
 

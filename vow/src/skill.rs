@@ -979,7 +979,6 @@ fn skill_json() -> String {
       "unary": [
         "-",
         "!",
-        "&",
         "?"
       ]
     },
@@ -1224,7 +1223,7 @@ BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) ->
             print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: u64, len: u64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: u64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_poll_wait: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
 METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/String::from_raw_parts_copy/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   BTreeMap: BTreeMap::new/insert/get/contains/len   Option: unwrap
-OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
+OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! ?
 
 VERIFICATION DEFAULTS (--max-k-step)
   Strategy        : incremental-bmc (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)
@@ -1813,9 +1812,15 @@ From loosest to tightest, Vow follows the usual C/Rust precedence for logical an
 
 `||`, `&&`, comparisons (`== != < <= > >=`), `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`
 
-Unary `-`, `!`, `&`, and `?` bind tighter than every binary operator.
+Unary `-` and `!` bind tighter than every binary operator. The postfix forms
+(`.field`, `.method()`, `[index]`, `(args)`, `?`, and `as Type`) bind tighter
+still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is
+`(a.len() as i64) + 1`.
 
-Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs & rhs` is bitwise AND.
+`&` is only the infix bitwise AND operator (`lhs & rhs`). There is no prefix
+`&expr`: Vow has no reference or borrow expressions, so `&x` (and `x & &y`) is
+an `UnsupportedFeature` error at the `&` token, identically in both compilers
+(see [errors.md](errors.md#unsupportedfeature)). Pass the value itself.
 
 ### Unary Operators
 
@@ -1823,8 +1828,39 @@ Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs
 |----------|------------|
 | `-`      | Negation (not allowed on unsigned types) |
 | `!`      | Logical NOT|
-| `&`      | Borrow     |
-| `?`      | Unwrap (propagate error) |
+| `?`      | Unwrap (propagate error), postfix |
+
+### Block-like Expressions and Parentheses
+
+`if`, `match`, `while`, `for`, `loop`, and a `{ ... }` block are *block-like*.
+An unparenthesised block-like expression ends the expression it starts: no
+postfix operator (`.`, `[`, `(`, `?`, `as`) and no binary operator may follow it
+directly, so `if c { 1 } else { 2 } as u64` and `if c { 1 } else { 2 } + 1` are
+parse errors. As the right operand of a binary operator or the operand of a
+unary operator it is fine (`3 * if c { 1 } else { 2 }`). A parenthesised
+expression is a primary expression whatever it contains, so every operator may
+follow it:
+
+```vow
+let a: u64 = (if c { 1 } else { 2 }) as u64;
+let b: i64 = (if c { 1 } else { 2 }) + 1;
+let n: u64 = (if c { v } else { w }).len();
+```
+
+Parentheses are not an AST node: the canonical printer re-inserts them exactly
+where a block-like expression, a binary or unary expression, an assignment, or
+`break`/`return` is the left operand of a binary operator or the receiver of a
+postfix operator, so `parse -> print -> parse` is idempotent.
+
+An expression statement ends with `;`. Only two forms may omit it: the last
+expression of a block (its value) and an unparenthesised block-like expression
+(`if c { f(); } g();`). Any other statement without `;` is a parse error
+(`UnexpectedToken`) at the next token, in both compilers, and parsing stops
+there. A `let` statement's trailing `;` is optional.
+
+A scalar type name after `as` (`i8` through `u128`, `f32`, `f64`, `bool`) never
+takes generic arguments, so a following `<` is a comparison or shift:
+`x as u64 < y` and `x as u64 << 1` mean `(x as u64) < y` and `(x as u64) << 1`.
 
 ### Type Cast
 
@@ -2178,6 +2214,9 @@ Struct literal names must be PascalCase:
 ```vow
 let p: Point = Point { x: 1, y: 2 };
 ```
+
+Because of that, an identifier that does not start with an upper-case letter is
+never a struct literal: in `while c { }` and `if c { }` the `{` opens the body.
 
 ### Field Access
 
@@ -4799,7 +4838,7 @@ fn f() -> () {
 
 ### UnsupportedFeature
 
-**Phase:** Type Checker
+**Phase:** Parser (`&expr`), Type Checker (everything else)
 **Meaning:** A language feature that is not supported in Vow was used, or a `HashMap`/`BTreeMap` was written with a key or value type the runtime cannot store (see [Map key and value types](#map-key-and-value-types)).
 
 ```vow
@@ -4811,6 +4850,21 @@ trait Foo {
 **Output:** `trait blocks are not supported in Vow`
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
+
+A prefix `&expr` borrow expression is rejected by the parser, at the `&` token, with
+the hint `Vow has no references: pass the value itself; `&` is only the binary bitwise AND
+operator`; the operand is still parsed, so the diagnostic is reported once:
+
+```vow
+fn f(x: i64) -> i64 {
+    let r: i64 = &x;
+    r
+}
+```
+
+**Output:** ``borrow expressions (`&expr`) are not supported in Vow``
+
+**Fix:** Use the value directly. `&` is the bitwise AND operator between two operands (`x & 1`).
 
 A tuple expression, including the empty tuple `()`, inside a contract clause is also
 `UnsupportedFeature`, because tuples have no runtime or verifier representation:
@@ -7357,9 +7411,15 @@ From loosest to tightest, Vow follows the usual C/Rust precedence for logical an
 
 `||`, `&&`, comparisons (`== != < <= > >=`), `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`
 
-Unary `-`, `!`, `&`, and `?` bind tighter than every binary operator.
+Unary `-` and `!` bind tighter than every binary operator. The postfix forms
+(`.field`, `.method()`, `[index]`, `(args)`, `?`, and `as Type`) bind tighter
+still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is
+`(a.len() as i64) + 1`.
 
-Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs & rhs` is bitwise AND.
+`&` is only the infix bitwise AND operator (`lhs & rhs`). There is no prefix
+`&expr`: Vow has no reference or borrow expressions, so `&x` (and `x & &y`) is
+an `UnsupportedFeature` error at the `&` token, identically in both compilers
+(see [errors.md](errors.md#unsupportedfeature)). Pass the value itself.
 
 ### Unary Operators
 
@@ -7367,8 +7427,39 @@ Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs
 |----------|------------|
 | `-`      | Negation (not allowed on unsigned types) |
 | `!`      | Logical NOT|
-| `&`      | Borrow     |
-| `?`      | Unwrap (propagate error) |
+| `?`      | Unwrap (propagate error), postfix |
+
+### Block-like Expressions and Parentheses
+
+`if`, `match`, `while`, `for`, `loop`, and a `{ ... }` block are *block-like*.
+An unparenthesised block-like expression ends the expression it starts: no
+postfix operator (`.`, `[`, `(`, `?`, `as`) and no binary operator may follow it
+directly, so `if c { 1 } else { 2 } as u64` and `if c { 1 } else { 2 } + 1` are
+parse errors. As the right operand of a binary operator or the operand of a
+unary operator it is fine (`3 * if c { 1 } else { 2 }`). A parenthesised
+expression is a primary expression whatever it contains, so every operator may
+follow it:
+
+```vow
+let a: u64 = (if c { 1 } else { 2 }) as u64;
+let b: i64 = (if c { 1 } else { 2 }) + 1;
+let n: u64 = (if c { v } else { w }).len();
+```
+
+Parentheses are not an AST node: the canonical printer re-inserts them exactly
+where a block-like expression, a binary or unary expression, an assignment, or
+`break`/`return` is the left operand of a binary operator or the receiver of a
+postfix operator, so `parse -> print -> parse` is idempotent.
+
+An expression statement ends with `;`. Only two forms may omit it: the last
+expression of a block (its value) and an unparenthesised block-like expression
+(`if c { f(); } g();`). Any other statement without `;` is a parse error
+(`UnexpectedToken`) at the next token, in both compilers, and parsing stops
+there. A `let` statement's trailing `;` is optional.
+
+A scalar type name after `as` (`i8` through `u128`, `f32`, `f64`, `bool`) never
+takes generic arguments, so a following `<` is a comparison or shift:
+`x as u64 < y` and `x as u64 << 1` mean `(x as u64) < y` and `(x as u64) << 1`.
 
 ### Type Cast
 
@@ -7722,6 +7813,9 @@ Struct literal names must be PascalCase:
 ```vow
 let p: Point = Point { x: 1, y: 2 };
 ```
+
+Because of that, an identifier that does not start with an upper-case letter is
+never a struct literal: in `while c { }` and `if c { }` the `{` opens the body.
 
 ### Field Access
 
@@ -10347,7 +10441,7 @@ fn f() -> () {
 
 ### UnsupportedFeature
 
-**Phase:** Type Checker
+**Phase:** Parser (`&expr`), Type Checker (everything else)
 **Meaning:** A language feature that is not supported in Vow was used, or a `HashMap`/`BTreeMap` was written with a key or value type the runtime cannot store (see [Map key and value types](#map-key-and-value-types)).
 
 ```vow
@@ -10359,6 +10453,21 @@ trait Foo {
 **Output:** `trait blocks are not supported in Vow`
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
+
+A prefix `&expr` borrow expression is rejected by the parser, at the `&` token, with
+the hint `Vow has no references: pass the value itself; `&` is only the binary bitwise AND
+operator`; the operand is still parsed, so the diagnostic is reported once:
+
+```vow
+fn f(x: i64) -> i64 {
+    let r: i64 = &x;
+    r
+}
+```
+
+**Output:** ``borrow expressions (`&expr`) are not supported in Vow``
+
+**Fix:** Use the value directly. `&` is the bitwise AND operator between two operands (`x & 1`).
 
 A tuple expression, including the empty tuple `()`, inside a contract clause is also
 `UnsupportedFeature`, because tuples have no runtime or verifier representation:

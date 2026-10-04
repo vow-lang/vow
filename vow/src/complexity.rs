@@ -76,8 +76,6 @@ fn lv_expr(e: &Expr, linear: &HashSet<String>) -> i64 {
         ExprKind::FieldAccess { base, .. } => c += lv_expr(base, linear),
         ExprKind::Question { expr } => c += lv_expr(expr, linear),
         ExprKind::Cast { expr, .. } => c += lv_expr(expr, linear),
-        // Borrow has no node in the self-hosted AST: walk through it transparently.
-        ExprKind::Borrow { expr } => c += lv_expr(expr, linear),
         ExprKind::Call { callee, args } => {
             c += lv_expr(callee, linear);
             for a in args {
@@ -375,8 +373,6 @@ fn cog_expr(e: &Expr, nesting: i64, logctx: Option<BinOp>, selfn: &str, acc: &mu
                 cog_expr(v, nesting, None, selfn, acc);
             }
         }
-        // Borrow has no node in the self-hosted AST: walk through it transparently.
-        ExprKind::Borrow { expr } => cog_expr(expr, nesting, None, selfn, acc),
         ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Continue | ExprKind::Result => {}
     }
 }
@@ -480,9 +476,6 @@ fn walk_expr(e: &Expr, acc: &mut Acc) {
                 walk_expr(v, acc);
             }
         }
-        // `&x` has no node in the self-hosted AST (it is transparent), so
-        // recurse through it here without counting it, to stay byte-identical.
-        ExprKind::Borrow { expr } => walk_expr(expr, acc),
         // Leaves (mirror the self-hosted walk, which does not recurse these).
         ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Continue | ExprKind::Result => {}
     }
@@ -1106,8 +1099,6 @@ fn hal_expr(e: &Expr, acc: &mut HalAcc) {
                 hal_expr(v, acc);
             }
         }
-        // `&x` is transparent in the self-hosted AST: recurse, count nothing.
-        ExprKind::Borrow { expr } => hal_expr(expr, acc),
         ExprKind::Result => {}
     }
 }
@@ -1210,20 +1201,6 @@ fn pred_walk(
     seen: &mut HashSet<String>,
     bound: &mut Vec<String>,
 ) {
-    // Borrow has no node in the self-hosted AST: walk through it transparently.
-    if let ExprKind::Borrow { expr } = &e.kind {
-        pred_walk(
-            expr,
-            depth,
-            nodes,
-            maxdepth,
-            has_index,
-            collect_free_vars,
-            seen,
-            bound,
-        );
-        return;
-    }
     *nodes += 1;
     if depth > *maxdepth {
         *maxdepth = depth;
@@ -1841,8 +1818,6 @@ fn loops_expr(e: &Expr, nesting: i64, total: &mut i64, without: &mut i64, maxnes
         ExprKind::FieldAccess { base, .. } => loops_expr(base, nesting, total, without, maxnest),
         ExprKind::Question { expr } => loops_expr(expr, nesting, total, without, maxnest),
         ExprKind::Cast { expr, .. } => loops_expr(expr, nesting, total, without, maxnest),
-        // Borrow has no node in the self-hosted AST: walk through it transparently.
-        ExprKind::Borrow { expr } => loops_expr(expr, nesting, total, without, maxnest),
         ExprKind::Return { value } => {
             if let Some(v) = value {
                 loops_expr(v, nesting, total, without, maxnest);
@@ -2404,14 +2379,13 @@ fn subject(items: Vec<i64>, o: Option<i64>) -> Option<i64> {
     let u: (i64, i64) = (loop { break 1; }, 2);
     let w: i64 = id(loop { break 4; });
     let z: i64 = items.len() as i64 + items.get_or(loop { break 0; });
-    let b: i64 = &loop { break 6; };
     let q: i64 = parse_i32(String::from(\"1\"))?;
     if k > 100 { return Option::Some(loop { break 5; }); }
     Option::Some(c + s + t + n + f + w + z + q)
 }
 ",
         );
-        assert_eq!(v.loops_total, 16);
+        assert_eq!(v.loops_total, 15);
         assert_eq!(v.loops_without_invariant, v.loops_total);
     }
 }

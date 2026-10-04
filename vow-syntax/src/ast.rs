@@ -306,9 +306,6 @@ pub enum ExprKind {
         value: Option<Box<Expr>>,
     },
     Block(Box<Block>),
-    Borrow {
-        expr: Box<Expr>,
-    },
     Question {
         expr: Box<Expr>,
     },
@@ -436,7 +433,6 @@ pub fn loop_break_values(block: &Block) -> Vec<&Expr> {
             }
             | ExprKind::Assign { lhs, rhs } => pending.extend([lhs.as_ref(), rhs.as_ref()]),
             ExprKind::UnaryOp { operand, .. }
-            | ExprKind::Borrow { expr: operand }
             | ExprKind::Question { expr: operand }
             | ExprKind::Cast { expr: operand, .. }
             | ExprKind::FieldAccess { base: operand, .. } => pending.push(operand),
@@ -612,9 +608,6 @@ mod tests {
                 value: Some(Box::new(break_value(18))),
             }),
             expr(ExprKind::Block(Box::new(block_with(vec![break_value(19)])))),
-            expr(ExprKind::Borrow {
-                expr: Box::new(break_value(20)),
-            }),
             expr(ExprKind::Question {
                 expr: Box::new(break_value(21)),
             }),
@@ -652,7 +645,10 @@ mod tests {
             })
             .collect();
         magnitudes.sort_unstable();
-        assert_eq!(magnitudes, (1..=28).collect::<Vec<_>>());
+        assert_eq!(
+            magnitudes,
+            (1..=28).filter(|v| *v != 20).collect::<Vec<u128>>()
+        );
     }
 
     #[test]

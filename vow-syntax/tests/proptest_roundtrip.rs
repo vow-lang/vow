@@ -126,9 +126,6 @@ fn strip_expr(expr: Expr) -> Expr {
             value: value.map(|e| Box::new(strip_expr(*e))),
         },
         ExprKind::Block(b) => ExprKind::Block(Box::new(strip_block(*b))),
-        ExprKind::Borrow { expr } => ExprKind::Borrow {
-            expr: Box::new(strip_expr(*expr)),
-        },
         ExprKind::Question { expr } => ExprKind::Question {
             expr: Box::new(strip_expr(*expr)),
         },

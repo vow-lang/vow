@@ -148,10 +148,30 @@ fn binop_precedence(op: i64) -> i64 {
     9
 }
 
+fn is_block_like_tag(tag: i64) -> bool {
+    tag == EXPR_IF() || tag == EXPR_WHILE() || tag == EXPR_FOR()
+        || tag == EXPR_LOOP() || tag == EXPR_BLOCK() || tag == EXPR_MATCH()
+}
+
+// Mirrors `print_postfix_base`: an unparenthesised block-like expression ends
+// the expression, so it (like any operator expression) is parenthesized before
+// a postfix `.`, `[`, `(` or `?`.
+fn print_postfix_base_text(a: AstArena, eid: i64) -> String {
+    let text: String = print_expr_text(a, eid);
+    let tag: i64 = expr_tag(a, eid);
+    if is_block_like_tag(tag) || tag == EXPR_BINOP() || tag == EXPR_UNOP() || tag == EXPR_ASSIGN()
+        || tag == EXPR_BREAK() || tag == EXPR_RETURN() {
+        return parenthesize_text(text);
+    }
+    text
+}
+
 // Mirrors `print_expr_with_parens`: a nested binary operand is parenthesized
-// when it binds no tighter than its parent (strictly looser on the left).
+// when it binds no tighter than its parent (strictly looser on the left); a
+// block-like left operand is always parenthesized.
 fn print_binop_operand_text(a: AstArena, eid: i64, parent_prec: i64, is_right: bool) -> String {
     let text: String = print_expr_text(a, eid);
+    if !is_right && is_block_like_tag(expr_tag(a, eid)) { return parenthesize_text(text); }
     if expr_tag(a, eid) != EXPR_BINOP() { return text; }
     let child_prec: i64 = binop_precedence(expr_a(a, eid));
     let needs: bool = if is_right { child_prec <= parent_prec } else { child_prec < parent_prec };
@@ -282,12 +302,12 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
     }
     if tag == EXPR_QUESTION() {
         let result: String = String::from("");
-        result.push_str(print_expr_text(a, expr_a(a, eid)));
+        result.push_str(print_postfix_base_text(a, expr_a(a, eid)));
         result.push_str(String::from("?"));
         return result;
     }
     if tag == EXPR_FIELD() {
-        let base_s: String = print_expr_text(a, expr_a(a, eid));
+        let base_s: String = print_postfix_base_text(a, expr_a(a, eid));
         let result: String = String::from("");
         result.push_str(base_s);
         result.push_str(String::from("."));
@@ -295,7 +315,7 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         return result;
     }
     if tag == EXPR_INDEX() {
-        let base_s: String = print_expr_text(a, expr_a(a, eid));
+        let base_s: String = print_postfix_base_text(a, expr_a(a, eid));
         let idx_s: String = print_expr_text(a, expr_b(a, eid));
         let result: String = String::from("");
         result.push_str(base_s);
@@ -305,7 +325,7 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         return result;
     }
     if tag == EXPR_METHOD() {
-        let recv_s: String = print_expr_text(a, expr_a(a, eid));
+        let recv_s: String = print_postfix_base_text(a, expr_a(a, eid));
         let result: String = String::from("");
         result.push_str(recv_s);
         result.push_str(String::from("."));
@@ -316,7 +336,7 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         return result;
     }
     if tag == EXPR_CALL() {
-        let callee_s: String = print_expr_text(a, expr_a(a, eid));
+        let callee_s: String = print_postfix_base_text(a, expr_a(a, eid));
         let result: String = String::from("");
         result.push_str(callee_s);
         result.push_str(String::from("("));

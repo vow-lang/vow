@@ -116,7 +116,7 @@ fn collect_may_write_sites<'a>(expr: &'a Expr, env: &TypeEnv, sites: &mut Vec<&'
                 collect_may_write_sites(v, env, sites);
             }
         }
-        ExprKind::Borrow { expr } | ExprKind::Question { expr } => {
+        ExprKind::Question { expr } => {
             collect_may_write_sites(expr, env, sites);
         }
         ExprKind::FieldAccess { base, .. } => {
@@ -304,7 +304,7 @@ fn collect_loop_vows_in_expr<'a>(expr: &'a Expr, out: &mut Vec<&'a VowBlock>) {
                 collect_loop_vows_in_expr(v, out);
             }
         }
-        ExprKind::Borrow { expr } | ExprKind::Question { expr } => {
+        ExprKind::Question { expr } => {
             collect_loop_vows_in_expr(expr, out);
         }
         ExprKind::FieldAccess { base, .. } => collect_loop_vows_in_expr(base, out),
@@ -418,7 +418,7 @@ fn collect_calls_in_expr<'a>(
                 collect_calls_in_expr(v, calls, panic_exprs);
             }
         }
-        ExprKind::Borrow { expr } | ExprKind::Question { expr } => {
+        ExprKind::Question { expr } => {
             collect_calls_in_expr(expr, calls, panic_exprs);
         }
         ExprKind::FieldAccess { base, .. } => {
@@ -1534,7 +1534,7 @@ mod tests {
         );
     }
 
-    // --- codecov: rare ExprKind arms (Index, UnaryOp, Borrow, Question,
+    // --- codecov: rare ExprKind arms (Index, UnaryOp, Question,
     // Cast, Tuple, EnumConstruct, StructLiteral, Break, ForEach, Loop) must
     // still be searched through, not just the common ones already exercised
     // above. ---
@@ -1554,15 +1554,6 @@ mod tests {
             kind: ExprKind::UnaryOp {
                 op: UnOp::Not,
                 operand: Box::new(inner),
-            },
-            span: dummy_span(),
-        }
-    }
-
-    fn wrap_borrow(inner: Expr) -> Expr {
-        Expr {
-            kind: ExprKind::Borrow {
-                expr: Box::new(inner),
             },
             span: dummy_span(),
         }
@@ -1658,7 +1649,6 @@ mod tests {
     fn wrap_all_rare_kinds(inner: Expr) -> Expr {
         let e = wrap_index(inner);
         let e = wrap_unary(e);
-        let e = wrap_borrow(e);
         let e = wrap_question(e);
         let e = wrap_cast(e);
         let e = wrap_tuple(e);
@@ -1681,7 +1671,7 @@ mod tests {
         check_vow_purity(&vow, &env, "test.vow", &mut emitter);
         assert!(
             !emitter.0.is_empty(),
-            "a write nested inside Index/UnaryOp/Borrow/Question/Cast/Tuple/\
+            "a write nested inside Index/UnaryOp/Question/Cast/Tuple/\
              EnumConstruct/StructLiteral/Break/ForEach/Loop must still be found"
         );
         assert_eq!(emitter.0[0].code, ErrorCode::EffectViolation);
@@ -1712,7 +1702,7 @@ mod tests {
                 .0
                 .iter()
                 .any(|d| d.code == ErrorCode::EffectViolation),
-            "a while loop nested inside Index/UnaryOp/Borrow/Question/Cast/Tuple/\
+            "a while loop nested inside Index/UnaryOp/Question/Cast/Tuple/\
              EnumConstruct/StructLiteral/Break/ForEach/Loop must still be reached"
         );
     }
