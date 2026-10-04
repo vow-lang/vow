@@ -222,6 +222,9 @@ fn caller_preconditions_only_source(c_src: String) -> String {
     let out: String = String::from("#define __vow_demoted_assert(c, m) __ESBMC_assume(c)\n");
     let assert_call: String = String::from("__ESBMC_assert(");
     let pre_label: String = String::from("\"vow:pre:");
+    // The unsupported-operation trap guards the model's own soundness: demoting
+    // it to `assume(0)` would prune every path and prove the caller vacuously.
+    let trap_label: String = str3(String::from("\"vow:"), verifier_unsupported_op_vow_id_str(), String::from("\""));
     let n: u64 = c_src.len();
     let mut ls: u64 = 0u64;
     while ls < n {
@@ -238,7 +241,8 @@ fn caller_preconditions_only_source(c_src: String) -> String {
         let body: String = c_src.substring(p, le);
         let demote: bool = body.len() >= assert_call.len()
             && body.substring(0u64, assert_call.len()) == assert_call
-            && str_find_from(line, 0, pre_label) < 0;
+            && str_find_from(line, 0, pre_label) < 0
+            && str_find_from(line, 0, trap_label) < 0;
         if demote {
             out.push_str(c_src.substring(ls, p));
             out.push_str(String::from("__vow_demoted_assert("));
@@ -1276,8 +1280,8 @@ fn report_unchecked_calls(fns: Vec<IrFunction>, m: IrModule, const_fn_indices: V
     let mut fi: u64 = 0u64;
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
-        if f.vows.len() == 0 && non_modelable_reason(f, m, const_fn_indices).len() > 0 {
-            if requires_callee_names(f, m).len() > 0 {
+        if f.vows.len() == 0 && requires_callee_names(f, m).len() > 0 {
+            if non_modelable_reason(f, m, const_fn_indices).len() > 0 {
                 emit_unchecked_calls_note(f, m, str3(String::from("`"), f.name, String::from("` cannot be modelled")), dctx);
             }
         }

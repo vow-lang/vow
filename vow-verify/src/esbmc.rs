@@ -723,10 +723,14 @@ pub fn unchecked_precondition_callees<'m>(
     module: &'m Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
 ) -> Vec<&'m str> {
-    if !func.vows.is_empty() || non_modelable_reason(func, module, const_fns).is_none() {
+    if !func.vows.is_empty() {
         return Vec::new();
     }
-    requires_callees(func, module)
+    let callees = requires_callees(func, module);
+    if callees.is_empty() || non_modelable_reason(func, module, const_fns).is_none() {
+        return Vec::new();
+    }
+    callees
 }
 
 /// True when the function carries at least one `requires` clause — the only

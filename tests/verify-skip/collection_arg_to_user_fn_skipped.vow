@@ -1,0 +1,23 @@
+// TEST: category unverifiable
+module CollectionArgToUserFnSkipped
+
+// Issue #1089. The verifier model represents a collection as a struct inside a
+// function but a user function's `Ptr` parameter as an `int64_t`, so passing a
+// `String` across a user-function boundary produced ill-typed C that ESBMC
+// rejected with a parse error. A call that passes a collection to a user
+// function is now non-modelable, so `probe` is Skipped (fail-closed) instead.
+fn text_len(s: String) -> i64 {
+  s.len() as i64
+}
+
+fn probe() -> i64 vow {
+  ensures: result >= 0
+} {
+  let s: String = String::from("ab");
+  text_len(s)
+}
+
+fn main() -> i32 [io] {
+  print_i64(probe());
+  0
+}

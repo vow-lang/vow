@@ -139,7 +139,7 @@ A function with no `vow` block is still a verify target when it **directly calls
 
 Only the callee `requires` are obligations of such a function. Its own bounds, capacity, and checked-arithmetic checks are assumed, not asserted: a helper may rely on an invariant its callers keep, and it owes no contract of its own. A helper that forwards a parameter into a call whose `requires` it cannot establish (`fn g(x: i64) -> i64 { f(x) }` with `f` requiring `x >= 0`) is reported, and the fix is a real `requires` on `g`.
 
-A caller with effects (such as `main() [io]`) or any other non-modelable caller is **not** verified. Its calls into contracted functions are reported once per function as a `VerificationSkipped` **Note** (`calls from ... were not verified`); the build status is unaffected, and the callee `requires` is checked at runtime in `--mode debug` only.
+A caller with effects (such as `main() [io]`) or any other non-modelable caller is **not** verified. Neither is one whose proof the verifier cannot finish (timeout, `unknown`, memory limit): with no contract of its own it has nothing to leave unproved, so the build is not failed — unlike a contracted function, whose undecided proof still fails closed. Its calls into contracted functions are reported once per function as a `VerificationSkipped` **Note** (`calls from ... were not verified: ...`, ending in `cannot be modelled`, `the verifier timed out for ...`, or `the verifier could not decide them for ...`); the build status is unaffected, and the callee `requires` is checked at runtime in `--mode debug` only.
 
 ## Clause Purity and Heap Writes
 

@@ -2857,7 +2857,7 @@ pub fn caller_preconditions_only_source(c_src: &str) -> String {
     let mut out = format!("#define {DEMOTED_ASSERT_MACRO}(c, m) __ESBMC_assume(c)\n");
     for line in c_src.split_inclusive('\n') {
         let body = line.trim_start();
-        if body.starts_with(ASSERT) && !line.contains("\"vow:pre:") {
+        if body.starts_with(ASSERT) && !is_caller_obligation_or_trap(line) {
             let indent = &line[..line.len() - body.len()];
             out.push_str(indent);
             out.push_str(DEMOTED_ASSERT_MACRO);
@@ -2871,6 +2871,14 @@ pub fn caller_preconditions_only_source(c_src: &str) -> String {
 }
 
 const DEMOTED_ASSERT_MACRO: &str = "__vow_demoted_assert";
+
+/// An assert the caller-preconditions projection must keep: a callee `requires`
+/// (`vow:pre:`) is the obligation being checked, and the unsupported-operation
+/// trap guards the model's own soundness — demoting it to `assume(0)` would
+/// prune every path and prove the caller vacuously.
+fn is_caller_obligation_or_trap(line: &str) -> bool {
+    line.contains("\"vow:pre:") || line.contains(&format!("\"vow:{UNSUPPORTED_OP_VOW_ID}\""))
+}
 
 /// Set of `(op, signedness, width)` overflow-guard helper flavors the module
 /// actually uses. Mirrors [`ShiftNeeds`]; only `+!`/`-!`/`*!` need a helper,
@@ -4018,6 +4026,14 @@ mod tests {
         assert!(c.contains("int64_t vow_user_fn_0("), "signature: {c}");
         assert!(c.contains("v2 = v0 + v1"), "add: {c}");
         assert!(c.contains("return v2"), "return: {c}");
+    }
+
+    #[test]
+    fn caller_preconditions_only_keeps_the_unsupported_op_trap() {
+        let src = format!("  __ESBMC_assert(0, \"vow:{UNSUPPORTED_OP_VOW_ID}\");\n");
+        let out = caller_preconditions_only_source(&src);
+        assert!(out.contains(&src), "trap must stay an assert: {out}");
+        assert!(!out.contains("__vow_demoted_assert(0"), "{out}");
     }
 
     #[test]
