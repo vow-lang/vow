@@ -1,0 +1,31 @@
+// TEST: category caller-blame
+// TEST: counterexample-fn "ratio"
+// TEST: counterexample-blame caller
+// TEST: counterexample-violation "requires y != 0"
+// TEST: counterexample-call-site-count 1
+// TEST: counterexample-call-site-fn "ratio"
+// TEST: counterexample-violating-arg-count 1
+// TEST: counterexample-violating-arg-param "y"
+// TEST: counterexample-violating-arg-value "0"
+// Regression for #1089: `ratio` carries no `vow` block, so it used to be no
+// verify target and its call `divide(10, 0)` was never checked against
+// `divide`'s `requires: y != 0` — the program verified clean. A pure
+// uncontracted caller of a contracted function is now a verify target (every
+// parameter nondeterministic, callee `requires` asserted at the call), so the
+// violation is reported with Caller blame.
+module CallerRequiresUncontractedPure
+
+fn divide(x: i64, y: i64) -> i64 vow {
+  requires: y != 0
+} {
+  x / y
+}
+
+fn ratio() -> i64 {
+  divide(10, 0)
+}
+
+fn main() -> i32 [io] {
+  print_i64(ratio());
+  0
+}

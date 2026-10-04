@@ -211,7 +211,7 @@ fn lctx_is_terminated(ctx: LowerCtx) -> bool {
     let n: u64 = blk.insts.len();
     if n == 0 { return false; }
     let last: IrInst = blk.insts[n - 1];
-    iop_is_terminal(last.op)
+    last.op >= 0 && iop_is_terminal(last.op)
 }
 
 fn lctx_block_terminated(ctx: LowerCtx, block_id: i64) -> bool {
@@ -219,7 +219,7 @@ fn lctx_block_terminated(ctx: LowerCtx, block_id: i64) -> bool {
     let n: u64 = blk.insts.len();
     if n == 0 { return false; }
     let last: IrInst = blk.insts[n - 1];
-    iop_is_terminal(last.op)
+    last.op >= 0 && iop_is_terminal(last.op)
 }
 
 fn lctx_inst_ty(ctx: LowerCtx, inst_id: i64) -> i64 {

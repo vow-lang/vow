@@ -371,6 +371,29 @@ fn is_structured_value_id(
         || option_vars.contains(&id)
 }
 
+/// True when a user-function call passes a collection (Vec/String/map/Option
+/// model struct) as an argument. Self-hosted mirror:
+/// `compiler/c_emitter.vow::passes_structured_arg`.
+fn passes_structured_arg(
+    inst: &Inst,
+    vec_vars: &HashSet<u32>,
+    string_vars: &HashSet<u32>,
+    hashmap_vars: &HashSet<u32>,
+    btreemap_vars: &HashSet<u32>,
+    option_vars: &HashSet<u32>,
+) -> bool {
+    inst.args.iter().any(|a| {
+        is_structured_value_id(
+            a.0,
+            vec_vars,
+            string_vars,
+            hashmap_vars,
+            btreemap_vars,
+            option_vars,
+        )
+    })
+}
+
 /// True when `inst` is a vec store/load op whose element side is a model
 /// struct rather than a scalar — the configuration that produces
 /// `int64_t = __vow_vec_t` (issue #505) in the emitted C model.
@@ -860,11 +883,21 @@ pub fn is_modelable(
                                 &option_vars,
                             )
                     }
+                    // A collection passed across a user-function boundary has no
+                    // model: the callee's `Ptr` parameter is an `int64_t`, but the
+                    // caller's value is a model struct.
                     InstData::CallTarget(fid) => {
-                        const_fns.contains_key(fid)
+                        !passes_structured_arg(
+                            inst,
+                            &vec_vars,
+                            &string_vars,
+                            &hashmap_vars,
+                            &btreemap_vars,
+                            &option_vars,
+                        ) && (const_fns.contains_key(fid)
                             || module.functions.iter().find(|f| f.id == *fid).is_some_and(
                                 |callee| is_modelable(callee, module, const_fns, cache),
-                            )
+                            ))
                     }
                     _ => false,
                 },
@@ -994,6 +1027,16 @@ fn first_unsupported_opcode(
                         }
                     }
                     InstData::CallTarget(fid) => {
+                        if passes_structured_arg(
+                            inst,
+                            &vec_vars,
+                            &string_vars,
+                            &hashmap_vars,
+                            &btreemap_vars,
+                            &option_vars,
+                        ) {
+                            return Some("Call target with a collection argument".to_string());
+                        }
                         if !const_fns.contains_key(fid) {
                             if let Some(callee) = module.functions.iter().find(|f| f.id == *fid) {
                                 let mut cache = HashMap::new();
@@ -2797,6 +2840,38 @@ pub fn contracts_only_source(c_src: &str) -> String {
     format!("#define {ARITH_ASSERT_SUPPRESS_MACRO} 1\n{c_src}")
 }
 
+/// Project an emitted model of an uncontracted caller onto its call-site
+/// obligations alone: every `__ESBMC_assert` except a callee `requires`
+/// (`vow:pre:`) becomes an assume of the same condition.
+///
+/// A function with no `vow` block is a verify target only so the preconditions
+/// of the contracted functions it calls are checked. Its own bounds, capacity
+/// and arithmetic asserts are not obligations it owes anyone: a helper may
+/// rely on an invariant its callers keep (`src_len == src.len()`) that its
+/// all-nondeterministic shell cannot know. Demoting them to assumes — the same
+/// move [`contracts_only_source`] makes — restricts the verdict to executions
+/// that do not fault first. Self-hosted mirror:
+/// `compiler/c_emitter.vow::caller_preconditions_only_source`.
+pub fn caller_preconditions_only_source(c_src: &str) -> String {
+    const ASSERT: &str = "__ESBMC_assert(";
+    let mut out = format!("#define {DEMOTED_ASSERT_MACRO}(c, m) __ESBMC_assume(c)\n");
+    for line in c_src.split_inclusive('\n') {
+        let body = line.trim_start();
+        if body.starts_with(ASSERT) && !line.contains("\"vow:pre:") {
+            let indent = &line[..line.len() - body.len()];
+            out.push_str(indent);
+            out.push_str(DEMOTED_ASSERT_MACRO);
+            out.push('(');
+            out.push_str(&body[ASSERT.len()..]);
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+const DEMOTED_ASSERT_MACRO: &str = "__vow_demoted_assert";
+
 /// Set of `(op, signedness, width)` overflow-guard helper flavors the module
 /// actually uses. Mirrors [`ShiftNeeds`]; only `+!`/`-!`/`*!` need a helper,
 /// since the `/!`/`%!` guards are single comparisons emitted inline.
@@ -3943,6 +4018,27 @@ mod tests {
         assert!(c.contains("int64_t vow_user_fn_0("), "signature: {c}");
         assert!(c.contains("v2 = v0 + v1"), "add: {c}");
         assert!(c.contains("return v2"), "return: {c}");
+    }
+
+    #[test]
+    fn caller_preconditions_only_demotes_every_assert_but_callee_requires() {
+        let src = [
+            "extern void __ESBMC_assert(_Bool, const char*);",
+            "  __ESBMC_assert(v1 < v0.len, \"index out of bounds\");",
+            "  __ESBMC_assert(v3, \"vow:pre:7:2\");",
+            "    __ESBMC_assert(v4, \"vow:0\");",
+            "",
+        ]
+        .join("\n");
+        let out = caller_preconditions_only_source(&src);
+        assert!(out.starts_with("#define __vow_demoted_assert(c, m) __ESBMC_assume(c)\n"));
+        assert!(
+            out.contains("extern void __ESBMC_assert(_Bool, const char*);"),
+            "the declaration is untouched: {out}"
+        );
+        assert!(out.contains("  __vow_demoted_assert(v1 < v0.len, \"index out of bounds\");"));
+        assert!(out.contains("  __ESBMC_assert(v3, \"vow:pre:7:2\");"));
+        assert!(out.contains("    __vow_demoted_assert(v4, \"vow:0\");"));
     }
 
     #[test]

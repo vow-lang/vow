@@ -271,6 +271,21 @@ fn is_structured_value_id(id: i64, vec_vars: Vec<i64>, string_vars: Vec<i64>, ha
     || vec_contains_i64(option_vars, id)
 }
 
+// True when a user-function call passes a collection (Vec/String/map/Option
+// model struct) as an argument. Mirrors `passes_structured_arg` in
+// vow-verify/src/c_emitter.rs.
+fn passes_structured_arg(inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64>, hashmap_vars: Vec<i64>, btreemap_vars: Vec<i64>, option_vars: Vec<i64>) -> bool {
+    let iargs: Vec<i64> = inst.args;
+    let mut ai: u64 = 0u64;
+    while ai < iargs.len() {
+        if is_structured_value_id(iargs[ai], vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars) {
+            return true;
+        }
+        ai = ai + 1;
+    }
+    false
+}
+
 // True when inst is a vec store/load op whose element side is a model struct
 // rather than a scalar — produces `int64_t = __vow_vec_t` in the emitted C
 // model (issue #505).
@@ -363,7 +378,11 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                         && !vec_op_carries_non_scalar(inst.ds, inst, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars)
                     } else if inst.dk == IDATA_CALL_TARGET() {
                         let target_fi: i64 = inst.dv;
-                        if vec_contains_i64(const_fn_indices, target_fi) {
+                        // A collection passed across a user-function boundary has
+                        // no model: the callee's `Ptr` parameter is an `int64_t`.
+                        if passes_structured_arg(inst, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars) {
+                            false
+                        } else if vec_contains_i64(const_fn_indices, target_fi) {
                             true
                         } else {
                             let fns: Vec<IrFunction> = m.functions;
@@ -469,6 +488,9 @@ fn first_unsupported_opcode_name(f: IrFunction, m: IrModule, const_fn_indices: V
                     }
                 } else if inst.dk == IDATA_CALL_TARGET() {
                     let target_fi: i64 = inst.dv;
+                    if passes_structured_arg(inst, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars) {
+                        return String::from("Call target with a collection argument");
+                    }
                     if !vec_contains_i64(const_fn_indices, target_fi) {
                         let fns: Vec<IrFunction> = m.functions;
                         let mut found_modelable: bool = false;

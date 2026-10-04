@@ -726,6 +726,19 @@ changing the source will not help.
 
 **Fix:** Refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.
 
+**Note form (uncontracted caller).** The same code also appears with `severity: "note"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed:
+
+```json
+{
+  "error_code": "VerificationSkipped",
+  "severity": "note",
+  "message": "calls from `main` to contracted `divide` were not verified: `main` cannot be modelled",
+  "hints": [
+    "the callee `requires` at these call sites are checked at runtime in --mode debug only"
+  ]
+}
+```
+
 ### ArithOverflowReachable
 
 **Phase:** Verification (Warning; the build status stays `Verified`)

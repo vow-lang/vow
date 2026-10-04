@@ -214,6 +214,43 @@ fn emit_harness(f: IrFunction) -> String {
     out
 }
 
+// Project the model of an uncontracted caller onto its call-site obligations:
+// every `__ESBMC_assert` except a callee `requires` (`vow:pre:`) becomes an
+// assume of the same condition. Mirrors
+// `vow_verify::c_emitter::caller_preconditions_only_source`; see there for why.
+fn caller_preconditions_only_source(c_src: String) -> String {
+    let out: String = String::from("#define __vow_demoted_assert(c, m) __ESBMC_assume(c)\n");
+    let assert_call: String = String::from("__ESBMC_assert(");
+    let pre_label: String = String::from("\"vow:pre:");
+    let n: u64 = c_src.len();
+    let mut ls: u64 = 0u64;
+    while ls < n {
+        let mut le: u64 = ls;
+        while le < n && c_src.byte_at(le) != 10 {
+            le = le + 1u64;
+        }
+        let mut p: u64 = ls;
+        while p < le && c_src.byte_at(p) == 32 {
+            p = p + 1u64;
+        }
+        let line_end: u64 = { if le < n { le + 1u64 } else { le } };
+        let line: String = c_src.substring(ls, line_end);
+        let body: String = c_src.substring(p, le);
+        let demote: bool = body.len() >= assert_call.len()
+            && body.substring(0u64, assert_call.len()) == assert_call
+            && str_find_from(line, 0, pre_label) < 0;
+        if demote {
+            out.push_str(c_src.substring(ls, p));
+            out.push_str(String::from("__vow_demoted_assert("));
+            out.push_str(c_src.substring(p + assert_call.len(), line_end));
+        } else {
+            out.push_str(line);
+        }
+        ls = line_end;
+    }
+    out
+}
+
 fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, reach_label: bool, body_replace: bool) -> String {
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let callee_fis: Vec<i64> = collect_modelable_callees(f, m, const_fn_indices);
@@ -247,6 +284,9 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
         }
     };
     out.push_str(emit_harness(f));
+    if f.vows.len() == 0 {
+        return caller_preconditions_only_source(out);
+    }
     out
 }
 
@@ -1135,6 +1175,141 @@ fn resolve_clause_status(vow_id: i64, verdict_ids: Vec<i64>, verdict_proven: Vec
     }
 }
 
+// Names of the contracted (`requires`) module functions `f` calls directly, in
+// first-call order, without duplicates. Mirrors `requires_callees` in
+// vow-verify/src/esbmc.rs.
+fn requires_callee_names(f: IrFunction, m: IrModule) -> Vec<String> {
+    let names: Vec<String> = Vec::new();
+    let fns: Vec<IrFunction> = m.functions;
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: u64 = 0u64;
+    while bi < blocks.len() {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let mut ii: u64 = 0u64;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+                let mut fi: u64 = 0u64;
+                while fi < fns.len() {
+                    let callee: IrFunction = fns[fi];
+                    if callee.id == inst.dv {
+                        if function_has_requires(callee) && !vec_contains_string(names, callee.name) {
+                            names.push(callee.name);
+                        }
+                        fi = fns.len();
+                    }
+                    fi = fi + 1;
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    names
+}
+
+fn vec_contains_string(v: Vec<String>, s: String) -> bool {
+    let mut i: u64 = 0u64;
+    while i < v.len() {
+        if v[i] == s {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// True when `f` has no `vow` block yet must be verified so the preconditions of
+// the contracted functions it calls are checked. Mirrors
+// `is_caller_precondition_target` in vow-verify/src/esbmc.rs.
+fn is_caller_precondition_target(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>) -> bool {
+    if f.vows.len() > 0 {
+        return false;
+    }
+    if requires_callee_names(f, m).len() == 0 {
+        return false;
+    }
+    non_modelable_reason(f, m, const_fn_indices).len() == 0
+}
+
+// A function is a verify target when it carries a `vow` block or is a
+// caller-precondition target.
+fn is_verify_target(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>) -> bool {
+    f.vows.len() > 0 || is_caller_precondition_target(f, m, const_fn_indices)
+}
+
+// Comma-separated names of `f`'s contracted callees, as the note renders them.
+fn joined_requires_callees(f: IrFunction, m: IrModule) -> String {
+    let callees: Vec<String> = requires_callee_names(f, m);
+    let mut joined: String = String::from("");
+    let mut ci: u64 = 0u64;
+    while ci < callees.len() {
+        if ci > 0u64 {
+            joined = str2(joined, String::from(", "));
+        }
+        joined = str2(joined, callees[ci]);
+        ci = ci + 1;
+    }
+    joined
+}
+
+// Emit the `VerificationSkipped` Note for an uncontracted function whose calls
+// into contracted functions went unchecked. Informational — does not lift the
+// verify status. Mirrors `VerifyWarning::UncheckedCalls`.
+fn emit_unchecked_calls_note(f: IrFunction, m: IrModule, reason: String, dctx: DiagCtx) [io] {
+    let msg: String = str5(
+        String::from("calls from `"),
+        f.name,
+        String::from("` to contracted `"),
+        joined_requires_callees(f, m),
+        str2(String::from("` were not verified: "), reason),
+    );
+    let d: Diagnostic = diag_new(SEV_NOTE(), EC_VERIFICATION_SKIPPED(), msg, String::from(""), 0, 0, DIAG_BLAME_NONE());
+    diag_add_hint(d, String::from("the callee `requires` at these call sites are checked at runtime in --mode debug only"));
+    diag_ctx_emit(dctx, d);
+}
+
+// Note each uncontracted function that calls contracted functions but cannot be
+// modelled (`[io]`, unsupported ops). Mirrors `unchecked_precondition_callees`.
+fn report_unchecked_calls(fns: Vec<IrFunction>, m: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx) [io] {
+    let mut fi: u64 = 0u64;
+    while fi < fns.len() {
+        let f: IrFunction = fns[fi];
+        if f.vows.len() == 0 && non_modelable_reason(f, m, const_fn_indices).len() > 0 {
+            if requires_callee_names(f, m).len() > 0 {
+                emit_unchecked_calls_note(f, m, str3(String::from("`"), f.name, String::from("` cannot be modelled")), dctx);
+            }
+        }
+        fi = fi + 1;
+    }
+}
+
+// An uncontracted caller whose proof the verifier could not finish (timeout,
+// `unknown`, memory limit) carries no contract of its own to leave unproved:
+// report a non-failing note instead of failing the run. Returns true when the
+// soft failure recorded for `f` was demoted. Mirrors `demote_undecided_caller`
+// in vow/src/verification.rs.
+fn demote_undecided_caller(f: IrFunction, m: IrModule, soft_meta: Vec<String>, dctx: DiagCtx) -> bool [io] {
+    if f.vows.len() > 0 || soft_meta.len() != 3 {
+        return false;
+    }
+    let kind: String = soft_meta[0];
+    let why: String = {
+        if kind == String::from("timeout") { String::from("timed out") }
+        else if kind == String::from("unknown") { String::from("could not decide them") }
+        else { String::from("") }
+    };
+    if why.len() == 0 || soft_meta[2] != f.name {
+        return false;
+    }
+    emit_unchecked_calls_note(f, m, str5(String::from("the verifier "), why, String::from(" for `"), f.name, String::from("`")), dctx);
+    soft_meta.pop();
+    soft_meta.pop();
+    soft_meta.pop();
+    true
+}
+
 // True when the function carries at least one `requires` clause — the only
 // contracts subject to antecedent-failure vacuity (#81 PR-B). Mirrors
 // function_has_requires in vow-verify/src/esbmc.rs.
@@ -1545,8 +1720,7 @@ fn build_verify_result(f: IrFunction, status: i64, combined: String) -> VerifyRe
 
 fn verify_function_ir_fallback(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, use_cache: bool, timeout_secs: String,
                                vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> VerifyResult [io] {
-    let vows: Vec<IrVowEntry> = f.vows;
-    if vows.len() == 0 {
+    if f.vows.len() == 0 && requires_callee_names(f, m).len() == 0 {
         return VerifyResult {
             status: VERIFY_PROVEN(),
             vow_id: -1,
@@ -1654,8 +1828,7 @@ fn verify_function_contracts_only(esbmc_bin: String, f: IrFunction, m: IrModule,
 
 fn verify_start(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                 vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> EsbmcStart [io] {
-    let vows: Vec<IrVowEntry> = f.vows;
-    if vows.len() == 0 {
+    if f.vows.len() == 0 && requires_callee_names(f, m).len() == 0 {
         return EsbmcStart { handle: -1, tmp_path: String::from(""), bounds: String::from("") };
     }
     let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, false);

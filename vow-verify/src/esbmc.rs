@@ -12,8 +12,9 @@ use crate::solver_strategy::{
 };
 
 use crate::c_emitter::{
-    ArithAbort, ConstantValue, VerifyLimits, collect_modelable_callees, detect_constant_functions,
-    emit_c_module_with_callees, non_modelable_reason, verifier_c_func_name,
+    ArithAbort, ConstantValue, VerifyLimits, caller_preconditions_only_source,
+    collect_modelable_callees, detect_constant_functions, emit_c_module_with_callees,
+    non_modelable_reason, verifier_c_func_name,
 };
 
 // Path A (single-function, no-module verification) is test-only; these are used
@@ -606,6 +607,9 @@ pub fn emit_verify_c_source(
         false,
     );
     c_src.push_str(&emit_harness(func));
+    if func.vows.is_empty() {
+        return caller_preconditions_only_source(&c_src);
+    }
     c_src
 }
 
@@ -671,6 +675,58 @@ pub fn emit_bodyreplace_c_source(
     );
     c_src.push_str(&emit_harness(func));
     Some(c_src)
+}
+
+/// True when a function with no `vow` block of its own must still be verified
+/// so the preconditions of the contracted functions it calls are checked: it
+/// directly calls a module function carrying `requires`, and the verifier can
+/// model it. The `requires: true`-equivalent shell is the function with every
+/// parameter nondeterministic; each callee `requires` is asserted at the call.
+/// Effectful and otherwise non-modelable callers are not targets (see
+/// [`unchecked_precondition_callees`]). Self-hosted mirror:
+/// `compiler/verifier.vow::is_caller_precondition_target`.
+pub fn is_caller_precondition_target(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+) -> bool {
+    func.vows.is_empty()
+        && !requires_callees(func, module).is_empty()
+        && non_modelable_reason(func, module, const_fns).is_none()
+}
+
+/// Names of the contracted (`requires`) module functions `func` calls directly,
+/// in first-call order, without duplicates.
+pub fn requires_callees<'m>(func: &Function, module: &'m Module) -> Vec<&'m str> {
+    let mut names: Vec<&str> = Vec::new();
+    for inst in func.blocks.iter().flat_map(|b| &b.insts) {
+        let (vow_ir::Opcode::Call, vow_ir::InstData::CallTarget(fid)) = (inst.opcode, &inst.data)
+        else {
+            continue;
+        };
+        if let Some(callee) = module.functions.iter().find(|g| g.id == *fid)
+            && function_has_requires(callee)
+            && !names.contains(&callee.name.as_str())
+        {
+            names.push(callee.name.as_str());
+        }
+    }
+    names
+}
+
+/// Callees whose `requires` go unchecked because their uncontracted caller is
+/// not a verify target: `func` has no vows, calls a contracted function, yet
+/// cannot be modelled (effects such as `[io]`, unsupported ops). Empty
+/// otherwise. Lets the driver say so instead of reporting a silent `Verified`.
+pub fn unchecked_precondition_callees<'m>(
+    func: &Function,
+    module: &'m Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+) -> Vec<&'m str> {
+    if !func.vows.is_empty() || non_modelable_reason(func, module, const_fns).is_none() {
+        return Vec::new();
+    }
+    requires_callees(func, module)
 }
 
 /// True when the function carries at least one `requires` clause — the only
@@ -1512,6 +1568,152 @@ mod tests {
             VerificationResult::Proven | VerificationResult::ToolNotFound => {}
             other => panic!("expected ensures to remain verifiable, got {other:?}"),
         }
+    }
+
+    fn plain_func(
+        id: u32,
+        name: &str,
+        effects: Vec<vow_syntax::ast::Effect>,
+        insts: Vec<Inst>,
+    ) -> Function {
+        Function {
+            id: FuncId(id),
+            name: name.to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects,
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts,
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        }
+    }
+
+    fn contracted_callee(id: u32, name: &str) -> Function {
+        plain_func(
+            id,
+            name,
+            vec![],
+            vec![
+                inst(
+                    0,
+                    Opcode::ConstBool,
+                    Ty::Bool,
+                    vec![],
+                    InstData::ConstBool(true),
+                ),
+                inst(1, Opcode::VowRequires, Ty::Unit, vec![0], InstData::None),
+                inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        )
+    }
+
+    fn caller_of(
+        id: u32,
+        name: &str,
+        effects: Vec<vow_syntax::ast::Effect>,
+        callee: u32,
+    ) -> Function {
+        plain_func(
+            id,
+            name,
+            effects,
+            vec![
+                inst(
+                    0,
+                    Opcode::Call,
+                    Ty::I64,
+                    vec![],
+                    InstData::CallTarget(FuncId(callee)),
+                ),
+                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        )
+    }
+
+    fn module_with(functions: Vec<Function>) -> Module {
+        Module {
+            name: String::new(),
+            functions,
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn pure_uncontracted_caller_of_requires_callee_is_a_target() {
+        let module = module_with(vec![
+            contracted_callee(0, "need"),
+            caller_of(1, "ratio", vec![], 0),
+        ]);
+        let consts = HashMap::new();
+        assert!(is_caller_precondition_target(
+            &module.functions[1],
+            &module,
+            &consts
+        ));
+        assert!(unchecked_precondition_callees(&module.functions[1], &module, &consts).is_empty());
+    }
+
+    #[test]
+    fn effectful_uncontracted_caller_is_not_a_target_but_is_reported_unchecked() {
+        let module = module_with(vec![
+            contracted_callee(0, "need"),
+            caller_of(1, "main", vec![vow_syntax::ast::Effect::IO], 0),
+        ]);
+        let consts = HashMap::new();
+        assert!(!is_caller_precondition_target(
+            &module.functions[1],
+            &module,
+            &consts
+        ));
+        assert_eq!(
+            unchecked_precondition_callees(&module.functions[1], &module, &consts),
+            vec!["need"]
+        );
+    }
+
+    #[test]
+    fn caller_of_callee_without_requires_is_neither_target_nor_unchecked() {
+        let mut plain = contracted_callee(0, "plain");
+        plain.blocks[0]
+            .insts
+            .retain(|i| i.opcode != Opcode::VowRequires);
+        let module = module_with(vec![plain, caller_of(1, "ratio", vec![], 0)]);
+        let consts = HashMap::new();
+        assert!(!is_caller_precondition_target(
+            &module.functions[1],
+            &module,
+            &consts
+        ));
+        assert!(unchecked_precondition_callees(&module.functions[1], &module, &consts).is_empty());
+    }
+
+    #[test]
+    fn caller_with_its_own_vows_is_not_a_caller_precondition_target() {
+        let mut caller = caller_of(1, "ratio", vec![], 0);
+        caller.vows.push(VowEntry {
+            id: VowId(0),
+            description: "true".to_string(),
+            blame: Blame::Caller,
+            bindings: vec![],
+            file: String::new(),
+            offset: 0,
+        });
+        let module = module_with(vec![contracted_callee(0, "need"), caller]);
+        assert!(!is_caller_precondition_target(
+            &module.functions[1],
+            &module,
+            &HashMap::new()
+        ));
     }
 
     #[test]

@@ -1076,11 +1076,16 @@ fn run_verify_loop(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrModule, co
 // `fi` is the function index used as the flow id. A no-op for tracing when `t`
 // is disabled. Returns the proven flag from verify_collect_and_report.
 fn verify_collect_traced(esbmc_bin: String, t: TraceCtx, verify_origin: i64, h: i64, tmp: String, f: IrFunction, fi: i64, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                         vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, dctx: DiagCtx) -> i64 [io] {
+                         vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, model_bounds: Vec<String>, dctx: DiagCtx) -> i64 [io] {
     let proof_start: i64 = trace_now(t);
     trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, fi, TRACE_FLOW_START());
     trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, fi, TRACE_FLOW_END());
-    let proven: i64 = verify_collect_and_report(esbmc_bin, h, tmp, f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, t, dctx);
+    let soft_before: u64 = soft_meta.len();
+    let mut proven: i64 = verify_collect_and_report(esbmc_bin, h, tmp, f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, t, dctx);
+    if proven == 0 && soft_before == 0u64 && ces.len() == 0 && demote_undecided_caller(f, ir_mod, soft_meta, dctx) {
+        proven = 1;
+        model_bounds[fi as u64] = String::from("");
+    }
     trace_span(t, str2(String::from("esbmc:"), f.name), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, trace_now(t) - proof_start, f.name);
     proven
 }
@@ -1099,9 +1104,8 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
     let mut fi: i64 = 0;
     while fi < fns.len() as i64 {
         let f: IrFunction = fns[fi as u64];
-        let vows: Vec<IrVowEntry> = f.vows;
         // Stop launching new ESBMC jobs once any in-flight verification has failed.
-        if vows.len() > 0 && all_proven == 1 {
+        if all_proven == 1 && is_verify_target(f, ir_mod, const_fn_indices) {
             while in_flight_h.len() as i64 >= jobs {
                 let oldest_h: i64 = in_flight_h[0];
                 let oldest_fi: i64 = in_flight_fi[0];
@@ -1110,7 +1114,7 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
                 vec_string_remove_front(in_flight_tmp);
-                let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, dctx);
+                let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, model_bounds, dctx);
                 if proven == 0 {
                     all_proven = 0;
                 }
@@ -1139,14 +1143,21 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
         vec_string_remove_front(in_flight_tmp);
-        let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, dctx);
+        let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, model_bounds, dctx);
         if proven == 0 {
             all_proven = 0;
         }
     }
-    if all_proven == 0 { return 1; }
-    if any_skipped == 1 { return 2; }
+    if all_proven == 0 {
+        report_unchecked_calls(fns, ir_mod, const_fn_indices, dctx);
+        return 1;
+    }
+    if any_skipped == 1 {
+        report_unchecked_calls(fns, ir_mod, const_fn_indices, dctx);
+        return 2;
+    }
     report_capacity_notes(fns, model_bounds, dctx);
+    report_unchecked_calls(fns, ir_mod, const_fn_indices, dctx);
     0
 }
 
@@ -1664,9 +1675,8 @@ fn build_verify_phase(
     let mut fi: i64 = 0;
     while fi < fns.len() as i64 {
         let f: IrFunction = fns[fi as u64];
-        let vows: Vec<IrVowEntry> = f.vows;
         // Stop launching new ESBMC jobs once any in-flight verification has failed.
-        if vows.len() > 0 && all_proven == 1 {
+        if all_proven == 1 && is_verify_target(f, ir_mod, const_fn_indices) {
             while in_flight_h.len() as i64 >= jobs {
                 let oldest_h: i64 = in_flight_h[0];
                 let oldest_fi: i64 = in_flight_fi[0];
@@ -1675,7 +1685,7 @@ fn build_verify_phase(
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
                 vec_string_remove_front(in_flight_tmp);
-                let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, dctx);
+                let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, model_bounds, dctx);
                 if proven == 0 {
                     all_proven = 0;
                 }
@@ -1710,7 +1720,7 @@ fn build_verify_phase(
 //
 // A no-op when `in_flight_h` is empty; callers may invoke it unconditionally
 // without a do_verify guard if desired.
-fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64, verify_origin: i64, t: TraceCtx, dctx: DiagCtx) -> i64 [io] {
+fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64, verify_origin: i64, t: TraceCtx, model_bounds: Vec<String>, dctx: DiagCtx) -> i64 [io] {
     let mut all_proven: i64 = all_proven_in;
     while in_flight_h.len() > 0 {
         let oldest_h: i64 = in_flight_h[0];
@@ -1720,7 +1730,7 @@ fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
         vec_string_remove_front(in_flight_tmp);
-        let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, dctx);
+        let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, model_bounds, dctx);
         if proven == 0 {
             all_proven = 0;
         }
@@ -1883,11 +1893,12 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         diag_emit_build_verify_json(String::from("Unverified"), out, dctx, Vec::new());
         return 0;
     }
-    all_proven = build_drain_verify_phase(esbmc_bin, in_flight_h, in_flight_fi, in_flight_tmp, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven, verify_origin, tctx, dctx);
+    all_proven = build_drain_verify_phase(esbmc_bin, in_flight_h, in_flight_fi, in_flight_tmp, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven, verify_origin, tctx, model_bounds, dctx);
     trace_span(tctx, String::from("verification"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, trace_now(tctx) - verify_origin, String::from(""));
     if all_proven == 1 && any_skipped == 0 {
         report_capacity_notes(fns, model_bounds, dctx);
     }
+    report_unchecked_calls(fns, ir_mod, const_fn_indices, dctx);
     let status_str: String = {
         if all_proven == 0 { String::from("VerifyFailed") }
         else if any_skipped == 1 { String::from("Skipped") }
@@ -5231,7 +5242,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Status          | Meaning                                     |\n"));
     r.push_str(String::from("|-----------------|---------------------------------------------|\n"));
-    r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |\n"));
+    r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC, and every call from a verifiable uncontracted function into a contracted function satisfies the callee's `requires` (see [Callers Without a `vow` Block](contracts.md#callers-without-a-vow-block)). May carry `VerificationSkipped` *Notes* for uncontracted callers that cannot be modelled (e.g. `main() [io]`); those do not change the status. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
     r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
@@ -5730,6 +5741,14 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `requires`  | Caller | The caller passed invalid arguments                |\n"));
     r.push_str(String::from("| `ensures`   | Callee | The function body doesn't satisfy the postcondition|\n"));
     r.push_str(String::from("| `invariant` | Callee | The loop body breaks the invariant                 |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### Callers Without a `vow` Block\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A function with no `vow` block is still a verify target when it **directly calls a function that has `requires`** and the verifier can model it (pure, only modelable operations, and no collection passed as an argument to a user function). Every parameter is nondeterministic -- the equivalent of `requires: true` -- and each callee `requires` is asserted at the call, so a caller that can violate it is reported `VowRequiresViolated` with `blame: \"caller\"`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Only the callee `requires` are obligations of such a function. Its own bounds, capacity, and checked-arithmetic checks are assumed, not asserted: a helper may rely on an invariant its callers keep, and it owes no contract of its own. A helper that forwards a parameter into a call whose `requires` it cannot establish (`fn g(x: i64) -> i64 { f(x) }` with `f` requiring `x >= 0`) is reported, and the fix is a real `requires` on `g`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A caller with effects (such as `main() [io]`) or any other non-modelable caller is **not** verified. Its calls into contracted functions are reported once per function as a `VerificationSkipped` **Note** (`calls from ... were not verified`); the build status is unaffected, and the callee `requires` is checked at runtime in `--mode debug` only.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Clause Purity and Heap Writes\n"));
     r.push_str(String::from("\n"));
@@ -7280,6 +7299,19 @@ fn skill_bundle() -> String {
     r.push_str(String::from("**Why the build fails closed.** Per `CLAUDE.md`'s \"Contract Authoring\" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the function is skipped with a structured warning instead of tripping the defense-in-depth `__ESBMC_assert(0, \"vow:UNSUPPORTED_OP_VOW_ID\")` that historically broke the bootstrap on every vowed struct-builder. But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke ESBMC at all (`Unverified`, exit 0).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Refactor the function so its body uses only modelable opcodes -- typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Note form (uncontracted caller).** The same code also appears with `severity: \"note\"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```json\n"));
+    r.push_str(String::from("{\n"));
+    r.push_str(String::from("  \"error_code\": \"VerificationSkipped\",\n"));
+    r.push_str(String::from("  \"severity\": \"note\",\n"));
+    r.push_str(String::from("  \"message\": \"calls from `main` to contracted `divide` were not verified: `main` cannot be modelled\",\n"));
+    r.push_str(String::from("  \"hints\": [\n"));
+    r.push_str(String::from("    \"the callee `requires` at these call sites are checked at runtime in --mode debug only\"\n"));
+    r.push_str(String::from("  ]\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### ArithOverflowReachable\n"));
     r.push_str(String::from("\n"));
@@ -10799,7 +10831,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Status          | Meaning                                     |\n"));
     r.push_str(String::from("|-----------------|---------------------------------------------|\n"));
-    r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |\n"));
+    r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC, and every call from a verifiable uncontracted function into a contracted function satisfies the callee's `requires` (see [Callers Without a `vow` Block](contracts.md#callers-without-a-vow-block)). May carry `VerificationSkipped` *Notes* for uncontracted callers that cannot be modelled (e.g. `main() [io]`); those do not change the status. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
     r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
@@ -11300,6 +11332,14 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("| `requires`  | Caller | The caller passed invalid arguments                |\n"));
     r.push_str(String::from("| `ensures`   | Callee | The function body doesn't satisfy the postcondition|\n"));
     r.push_str(String::from("| `invariant` | Callee | The loop body breaks the invariant                 |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### Callers Without a `vow` Block\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A function with no `vow` block is still a verify target when it **directly calls a function that has `requires`** and the verifier can model it (pure, only modelable operations, and no collection passed as an argument to a user function). Every parameter is nondeterministic -- the equivalent of `requires: true` -- and each callee `requires` is asserted at the call, so a caller that can violate it is reported `VowRequiresViolated` with `blame: \"caller\"`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Only the callee `requires` are obligations of such a function. Its own bounds, capacity, and checked-arithmetic checks are assumed, not asserted: a helper may rely on an invariant its callers keep, and it owes no contract of its own. A helper that forwards a parameter into a call whose `requires` it cannot establish (`fn g(x: i64) -> i64 { f(x) }` with `f` requiring `x >= 0`) is reported, and the fix is a real `requires` on `g`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A caller with effects (such as `main() [io]`) or any other non-modelable caller is **not** verified. Its calls into contracted functions are reported once per function as a `VerificationSkipped` **Note** (`calls from ... were not verified`); the build status is unaffected, and the callee `requires` is checked at runtime in `--mode debug` only.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Clause Purity and Heap Writes\n"));
     r.push_str(String::from("\n"));
@@ -12854,6 +12894,19 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("**Why the build fails closed.** Per `CLAUDE.md`'s \"Contract Authoring\" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the function is skipped with a structured warning instead of tripping the defense-in-depth `__ESBMC_assert(0, \"vow:UNSUPPORTED_OP_VOW_ID\")` that historically broke the bootstrap on every vowed struct-builder. But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke ESBMC at all (`Unverified`, exit 0).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Refactor the function so its body uses only modelable opcodes -- typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Note form (uncontracted caller).** The same code also appears with `severity: \"note\"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```json\n"));
+    r.push_str(String::from("{\n"));
+    r.push_str(String::from("  \"error_code\": \"VerificationSkipped\",\n"));
+    r.push_str(String::from("  \"severity\": \"note\",\n"));
+    r.push_str(String::from("  \"message\": \"calls from `main` to contracted `divide` were not verified: `main` cannot be modelled\",\n"));
+    r.push_str(String::from("  \"hints\": [\n"));
+    r.push_str(String::from("    \"the callee `requires` at these call sites are checked at runtime in --mode debug only\"\n"));
+    r.push_str(String::from("  ]\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### ArithOverflowReachable\n"));
     r.push_str(String::from("\n"));

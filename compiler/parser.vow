@@ -117,13 +117,14 @@ fn span_end_here(p: Parser) -> i64 {
     }
 }
 
-// Length clamped to [0, 65535] to fit span_pack's 16-bit len slot.
+// Start clamped to >= 0 and length to [0, 65535] to fit span_pack's slots.
 fn span_pack_to_here(p: Parser, span_start: i64) -> i64 {
     let end: i64 = span_end_here(p);
-    let mut len: i64 = end - span_start;
+    let start: i64 = { if span_start < 0 { 0 } else { span_start } };
+    let mut len: i64 = end - start;
     if len < 0 { len = 0; }
     if len > 65535 { len = 65535; }
-    span_pack(span_start, len)
+    span_pack(start, len)
 }
 
 fn push_error(p: Parser, msg: String) {
