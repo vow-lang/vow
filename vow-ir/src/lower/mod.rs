@@ -3901,7 +3901,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         .cloned()
                         .and_then(|ast_ty| non_scalar_type_tag(&ast_ty, &ctx.type_aliases));
                     let is_result = recv == Some("Result") || declared.as_deref() == Some("Result");
-                    lower_unwrap(ctx, expr, recv_id, i64::from(is_result), span)
+                    lower_unwrap(ctx, expr, recv_id, i64::from(is_result))
                 }
                 _ => {
                     for a in args {
@@ -4148,33 +4148,28 @@ fn lower_static_string_literal(
 ///
 /// The abort is emitted in every build mode. `.unwrap()` is a language-level
 /// partial operation, not a vow check, so release builds must trap too (#1108).
-fn lower_unwrap(
-    ctx: &mut LowerCtx,
-    expr: &Expr,
-    recv_id: InstId,
-    empty_tag: i64,
-    span: Span,
-) -> InstId {
+fn lower_unwrap(ctx: &mut LowerCtx, expr: &Expr, recv_id: InstId, empty_tag: i64) -> InstId {
+    let origin = expr.span;
     let tag_id = ctx.emit(
         Opcode::FieldGet,
         Ty::I64,
         vec![recv_id],
         InstData::FieldIndex(0),
-        span,
+        origin,
     );
     let empty_id = ctx.emit(
         Opcode::ConstI64,
         Ty::I64,
         vec![],
         InstData::ConstI64(empty_tag),
-        span,
+        origin,
     );
     let is_empty = ctx.emit(
         Opcode::Eq,
         Ty::Bool,
         vec![tag_id, empty_id],
         InstData::Integer(IntegerType::I64),
-        span,
+        origin,
     );
     let panic_block = ctx.new_block();
     let payload_block = ctx.new_block();
@@ -4186,7 +4181,7 @@ fn lower_unwrap(
             then_block: panic_block,
             else_block: payload_block,
         },
-        span,
+        origin,
     );
 
     ctx.switch_to_block(panic_block);
@@ -4195,9 +4190,15 @@ fn lower_unwrap(
         Ty::Unit,
         vec![],
         InstData::CallExtern("__vow_unwrap_panic".to_string()),
-        span,
+        origin,
     );
-    ctx.emit(Opcode::Unreachable, Ty::Unit, vec![], InstData::None, span);
+    ctx.emit(
+        Opcode::Unreachable,
+        Ty::Unit,
+        vec![],
+        InstData::None,
+        origin,
+    );
 
     ctx.switch_to_block(payload_block);
     let aggregate = ctx
@@ -4223,7 +4224,7 @@ fn lower_unwrap(
         payload_ty,
         vec![recv_id],
         InstData::FieldIndex(1),
-        span,
+        origin,
     );
     if let Some(info) = aggregate {
         apply_pattern_aggregate_metadata(ctx, payload, info);
@@ -6627,6 +6628,65 @@ fn unsigned_max() -> u128 {
             .into_iter()
             .find(|func| func.name == name)
             .unwrap_or_else(|| panic!("function `{name}`"))
+    }
+
+    #[test]
+    fn static_literal_helper_instructions_keep_the_literal_origin() {
+        let source = concat!(
+            "module M\n",
+            "fn span_graph(s: String) -> i64 {\n",
+            "  string_matches_literal_at(s, 0, \"ph\") + 1\n",
+            "}\n",
+        );
+        let func = lowered_function(source, "span_graph");
+        let insts = insts_of(&func);
+        let call_text = "string_matches_literal_at(s, 0, \"ph\")";
+        let call = insts
+            .iter()
+            .find(|inst| {
+                matches!(
+                    &inst.data,
+                    InstData::CallExtern(symbol)
+                        if symbol == "__vow_string_matches_literal_at"
+                )
+            })
+            .expect("literal matcher call");
+        assert_eq!(
+            call.origin,
+            Span::new(
+                source.find(call_text).expect("call source") as u32,
+                call_text.len() as u32,
+            )
+        );
+
+        let literal_text = "\"ph\"";
+        let literal_origin = Span::new(
+            source.find(literal_text).expect("literal source") as u32,
+            literal_text.len() as u32,
+        );
+        let literal_ptr = insts
+            .iter()
+            .find(|inst| inst.id == call.args[2])
+            .expect("literal pointer");
+        let literal_len = insts
+            .iter()
+            .find(|inst| inst.id == call.args[3])
+            .expect("literal length");
+        assert_eq!(literal_ptr.origin, literal_origin);
+        assert_eq!(literal_len.origin, literal_origin);
+
+        let outer_text = "string_matches_literal_at(s, 0, \"ph\") + 1";
+        let outer = insts
+            .iter()
+            .find(|inst| inst.opcode == Opcode::WrappingAdd)
+            .expect("outer wrapping add");
+        assert_eq!(
+            outer.origin,
+            Span::new(
+                source.find(outer_text).expect("outer source") as u32,
+                outer_text.len() as u32,
+            )
+        );
     }
 
     /// A negated literal in a narrow context is one constant of that width, not
