@@ -43,6 +43,19 @@ what ESBMC proves about it), not merely an IR-text/cosmetic difference — the i
 a miscompile today" framing is accurate only for the specific corpus it checked
 (`compiler/main.vow`, which has no such expressions), not as a general claim.
 
+**Checked against existing coverage:** `tests/run/loop_carried_every_expr_kind.vow` (from
+PR #1496) already has an index-assign statement with an effectful index,
+`v[{ ce = ce + 1; 0 }] = q;`, and #1496's merge comment records identical output under
+both compilers. This does **not** contradict the above: that statement's RHS is a plain
+variable read (`q`), with no dependency on `ce` or on evaluation timing, so its output is
+identical regardless of which sub-expression runs first — `ce` increments exactly once
+either way, and `q`'s value never depends on `ce`. It exercises "does the index effect
+fire the right number of times," not "does swapping index/RHS order change a value one
+sub-expression reads from a mutation the other performs." The pure-mutation case above —
+where `index` *reads* `i` and `rhs` *mutates* `i` before yielding its value, so which one
+runs first decides what `index` actually sees — is a different, uncovered scenario, which
+is why Slice 4 adds it explicitly.
+
 **Chosen canonical order: left-to-right source order — `base`, then `index`, then `rhs`.**
 Rationale: it matches how `v[i] = rhs` reads; it's what `compiler/lower.vow` already does
 (so the self-hosted compiler needs no production-code change, only new tests); and it's
@@ -53,9 +66,11 @@ consistent with the type checker's own `lhs`-then-`rhs` traversal
 ## 2. Files to touch
 
 **Rust (production):**
-- `vow-ir/src/lower/mod.rs` — restructure the `ExprKind::Assign` arm so the `Index` case
-  lowers `rhs` *after* `base`/`index`, without changing the `Ident` or `FieldAccess` cases
-  (see Slice 1 below for the exact restructuring shape).
+- `vow-ir/src/lower/mod.rs` — change the `ExprKind::Assign` arm so the `Index` case lowers
+  `base`/`index` *before* `rhs`, touching only the `Index`-specific lines — the `Ident`,
+  `FieldAccess`, and `_` arms, and the shared `let mut new_val = lower_expr(ctx, rhs);`,
+  stay byte-for-byte unchanged (see Slice 2 below for the exact shape; this minimal-diff
+  requirement is itself a risk-mitigation decision, not incidental — see "Risk areas").
 
 **Rust (tests):**
 - `vow-ir/src/lower/mod.rs` (test module, near `lower_source_to_module`/`insts_of` at
@@ -75,8 +90,9 @@ is already canonical):**
 **Shared fixture (read by both unit tests above — nothing copied by hand, per the
 `loop_carried_scope.vow` precedent from PR #1496):**
 - `tests/fixtures/index_assign_eval_order.vow` — one small function using distinguishable
-  literal markers (e.g. index `0`, RHS `4242`) so both unit tests can locate the
-  `__vow_vec_set_val` call and assert that the instruction feeding `args[1]` (index)
+  literal markers (index `1`, RHS `4242`, with `.push(11)`/`.push(12)` so no coincidental
+  zero constant exists to confuse the match — see Slice 0) so both unit tests can locate
+  the `__vow_vec_set_val` call and assert that the instruction feeding `args[1]` (index)
   precedes the instruction feeding `args[2]` (RHS) in emission order.
 
 **Cross-compiler behavioral fixture (the deliverable the issue asks for — pins the fix as
@@ -111,16 +127,20 @@ created* changes, and nothing downstream depends on that.
 
    fn order_probe() -> i64 {
        let v: Vec<i64> = Vec::new();
-       v.push(0);
-       v[0] = 4242;
-       v[0]
+       v.push(11);
+       v.push(12);
+       v[1] = 4242;
+       v[1]
    }
    ```
-   Note: `v` is declared `let`, not `let mut` — grammar.md:643-646 makes a binding that is
-   only ever written via `.push`/`v[i] = e` an `UnusedMut` error (confirmed against the
-   working example in `tests/run/len_u64_unsigned_compare.vow`, which uses plain `let v`
-   for exactly this reason). Both new unit tests below read this one file; nothing is
-   copied by hand, matching the `loop_carried_scope.vow` precedent.
+   Markers deliberately avoid `0`: use `.push(11)`/`.push(12)` and index `1`, not `.push(0)`/
+   index `0`, so the index-position `ConstI64` can't be confused with some other
+   coincidentally-zero constant already in the function (see Slice 1's false-green guard).
+   `v` is declared `let`, not `let mut` — grammar.md:643-646 makes a binding that is only
+   ever written via `.push`/`v[i] = e` an `UnusedMut` error (confirmed against the working
+   example in `tests/run/len_u64_unsigned_compare.vow`, which uses plain `let v` for exactly
+   this reason). Both new unit tests below read this one file; nothing is copied by hand,
+   matching the `loop_carried_scope.vow` precedent.
 
 1. **Red (Rust unit test): pin the wrong order, see it fail.**
    In `vow-ir/src/lower/mod.rs` test module, add
@@ -128,32 +148,51 @@ created* changes, and nothing downstream depends on that.
    `include_str!("../../../tests/fixtures/index_assign_eval_order.vow")` (same relative
    path pattern as `loops_carry_the_expected_variables`'s fixture read):
    - Lower it, find the `CallExtern("__vow_vec_set_val")` instruction via `insts_of`.
-   - Assert: the instruction at `call.args[1]` (the index, `ConstI64(0)`) appears *earlier*
+   - Assert: the instruction at `call.args[1]` (the index, `ConstI64(1)`) appears *earlier*
      in `insts_of(&func)` than the instruction at `call.args[2]` (the RHS, `ConstI64(4242)`).
    - Run `cargo test -p vow-ir index_assign_evaluates_base_and_index_before_rhs` — this
-     **fails** against current `main.rs`'s `ExprKind::Assign` arm, confirming the test
-     exercises the real bug.
+     **fails** against current `vow-ir/src/lower/mod.rs`'s `ExprKind::Assign` arm, confirming
+     the test exercises the real bug. **Guard against a false green**: if this test somehow
+     passes *before* Slice 2's fix, it is not exercising the bug — re-check that
+     `call.args[1]`'s instruction is genuinely the `ConstI64(1)` fed by the `index`
+     sub-expression and not, say, an unrelated constant the test happened to match by
+     position. Do not proceed to Slice 2 until this test is confirmed red first.
 
-2. **Green (Rust production fix).**
-   Restructure `vow-ir/src/lower/mod.rs:2224-2332`'s `ExprKind::Assign` arm:
-   - Keep the context-recording calls (`known_assignment_ast_type`, `known_field_assignment_ty`,
-     `known_index_assignment_ty`, `record_wide_control_flow_context`,
-     `record_wide_expected_ast_context`) exactly where they are — they only read the AST
-     (`rhs`/`lhs` references), they never lower anything, so their position relative to
-     `lower_expr` calls doesn't affect evaluation order.
-   - Remove the single unconditional `let mut new_val = lower_expr(ctx, rhs);` currently at
-     line 2243.
-   - In the `Ident` arm: lower `rhs` first, exactly as today (no behavior change — there is
-     no base/index to evaluate first for a bare identifier).
-   - In the `FieldAccess` arm: lower `rhs` first, exactly as today (**do not** reorder this
-     arm — see "Out of scope" below).
-   - In the `Index` arm: lower `base` (`vec_ptr`), then `index` (`idx_id`), **then** `rhs`
-     (`new_val`), matching `compiler/lower.vow`'s existing order.
-   - In the fallback `_ => {}` arm: still lower `rhs` (needed so the arm produces a valid
-     `new_val` for the expression's result type), preserving current behavior for any
-     lhs kind the type checker doesn't otherwise reject.
-   - Add one line of comment at the `Index` arm noting the cross-compiler invariant (why:
-     not obvious from local code that this ordering must match `compiler/lower.vow`).
+2. **Green (Rust production fix) — minimal-diff shape, preferred.**
+   In `vow-ir/src/lower/mod.rs`'s `ExprKind::Assign` arm, **do not** restructure the
+   per-arm `match` or move the shared `let mut new_val = lower_expr(ctx, rhs);` — per
+   "Risk areas," touching the `Ident`/`FieldAccess`/`_` arms at all risks tripping the
+   `codecov/patch` gate on moved-but-unchanged lines. Instead, add a small pre-lowering
+   branch just above the existing `let mut new_val = lower_expr(ctx, rhs);` line (2243):
+   ```rust
+   let index_parts = if let ExprKind::Index { base, index } = &lhs.kind {
+       Some((lower_expr(ctx, base), lower_expr(ctx, index)))
+   } else {
+       None
+   };
+   let mut new_val = lower_expr(ctx, rhs); // unchanged
+   match &lhs.kind {
+       // Ident, FieldAccess, _ arms: byte-for-byte unchanged
+       ExprKind::Index { .. } => {
+           let (vec_ptr, idx_id) = index_parts.expect("Index arm implies index_parts is Some");
+           // ... rest of the existing Index arm body, minus its own
+           // `let vec_ptr = lower_expr(ctx, base); let idx_id = lower_expr(ctx, index);`
+           // lines, which are now redundant with index_parts.
+       }
+   }
+   ```
+   This evaluates `base`/`index` *before* the shared `lower_expr(ctx, rhs)` call (fixing
+   the order), while changing only ~5 new lines plus the `Index` arm's own two
+   `lower_expr` lines (replaced by one destructuring line) — nothing in the `Ident`,
+   `FieldAccess`, or `_` arms moves or re-indents.
+   **Fallback, only if the above proves awkward in practice** (e.g. borrow-checker friction
+   with `index_parts` capturing `ctx` across the match): fall back to the fuller per-arm
+   restructuring (lower `rhs` inside each arm individually, after that arm's own
+   base/index/receiver lowering), accepting the larger diff and the coverage risk it
+   carries, and re-read the "Risk areas" codecov note before choosing this path.
+   - Add one line of comment near the `index_parts` branch noting the cross-compiler
+     invariant (why: not obvious from local code that this ordering must match
+     `compiler/lower.vow`).
    - Re-run the Slice 1 test — now green. Run the full `vow-ir` test suite
      (`cargo test -p vow-ir`) to confirm no other test asserted the old (buggy) order.
 
@@ -165,8 +204,9 @@ created* changes, and nothing downstream depends on that.
    - Read the same shared fixture via
      `fs_read(String::from("tests/fixtures/index_assign_eval_order.vow"))`, exactly as
      `test_lower_loop_carried_scope.vow` does for its fixture.
-   - Assert the same invariant: the instruction id at `call.args[1]` occurs at an earlier
-     index within the function's flattened instruction list than `call.args[2]`.
+   - Assert the same invariant: the instruction id at `call.args[1]` (the `ConstI64(1)`
+     index) occurs at an earlier index within the function's flattened instruction list
+     than `call.args[2]` (the `ConstI64(4242)` RHS).
    - Run `build/vowc test compiler/tests/test_lower_index_assign_eval_order.vow`. Expect
      this to pass **immediately** (self-hosted is already canonical) — this slice is a
      regression lock, not a bug fix. If it unexpectedly fails, STOP: that means
@@ -222,8 +262,13 @@ created* changes, and nothing downstream depends on that.
      self-hosted is predicted to already match the expected string. Build both binaries
      under `$TMPDIR` (not a hardcoded `/tmp/...` path) and run this fixture through each
      before touching `vow-ir/src/lower/mod.rs`, to empirically confirm the diagnosis and
-     lock the exact expected string from a real run, not from this plan's prediction.
-   - After Slice 2: both compilers must produce the same, now-canonical string. Run via
+     lock the exact expected string from a real run, not from this plan's prediction. Set
+     `VOW_CACHE_DIR=$(mktemp -d)` (or pass `--no-cache`) for every build in this slice — the
+     compile cache is keyed by source revision, not compiler binary, and a stale cached
+     object from a pre-fix build can silently survive a post-fix rebuild at the same
+     revision, making the "after" run look like it didn't change anything.
+   - After Slice 2: both compilers must produce the same, now-canonical string (rebuild
+     with a fresh `VOW_CACHE_DIR` again, for the same reason). Run via
      `VOW_FULL_TEST_PROMOTED_ONLY=1 scripts/full_test.sh` (fast path, exercises
      `run_promoted_run_tests` over `tests/run/*.vow` for both compilers) to confirm it's
      wired into the existing harness with no extra plumbing.
@@ -233,17 +278,26 @@ created* changes, and nothing downstream depends on that.
      should re-grep before landing in case something changed since planning.
 
 5. **Confirm the issue's literal acceptance criterion: byte-diffable IR dumps.**
-   After Slice 2 lands, reproduce `scripts/full_test.sh` Section 0b's command pair:
+   After Slice 2 lands, reproduce `scripts/full_test.sh` Section 0b's command pair (use the
+   actual binary paths, not `$RUST` — that variable is local to `full_test.sh`'s own shell
+   scope, not available standalone), with a fresh cache per the Slice 4 cache note:
    ```bash
-   "$RUST" build --no-verify --dump-ir compiler/main.vow > "$TMPDIR/rust.ir"
-   build/vowc build --no-verify --dump-ir compiler/main.vow > "$TMPDIR/self.ir"
+   VOW_CACHE_DIR=$(mktemp -d) ./target/release/vow build --no-verify --dump-ir compiler/main.vow > "$TMPDIR/rust.ir"
+   VOW_CACHE_DIR=$(mktemp -d) build/vowc build --no-verify --dump-ir compiler/main.vow > "$TMPDIR/self.ir"
    diff "$TMPDIR/rust.ir" "$TMPDIR/self.ir"
    ```
-   Confirm every remaining diff line is one of the two **other** pre-existing, out-of-scope
-   divergences already on record (the `Eq[i64]` vs `Eq[Bool]` typing difference, and the
-   `FieldAccess`/`FieldSet` evaluation-order difference this plan deliberately defers — see
-   Section 6). Any diff line touching `__vow_vec_set_val`/`ConstI64` around an index
-   assignment means the fix is incomplete and Slice 2 must be revisited. This is a stronger
+   Confirm every remaining diff is attributable, **per function**, to the one *other*
+   pre-existing, out-of-scope divergence already on record from #1496's investigation: the
+   `Eq[i64]` vs `Eq[Bool]` typing difference. (#1496's note also mentions a `FieldSet`/
+   `FieldAccess` ordering divergence in the abstract, but do not assume it shows up as a
+   *visible* dump diff the way the `Index` one did — when `base` is a bare identifier, as
+   it is in most `s.f = rhs` call sites in `compiler/main.vow`, looking it up emits no new
+   instruction, so reordering lhs-before-rhs for `FieldAccess` may be invisible in this
+   particular dump even though the lowering order still differs; don't list it as an
+   expected diff line here, and don't treat its absence from the diff as evidence the
+   `FieldAccess` bug doesn't exist — Section 6 already defers it on its own merits.) Any
+   diff touching `__vow_vec_set_val`/`ConstI64` around an index assignment, in any
+   function, means the fix is incomplete and Slice 2 must be revisited. This is a stronger
    check than Section 0b's own block-placement-only comparison and directly verifies the
    issue's stated goal ("both compilers emit the same operand order").
 
@@ -312,11 +366,12 @@ directly:
   modules used by the compiler itself). Confirm `compiler/tests/` is indeed excluded by
   checking `scripts/concat_vow.sh`'s file list before relying on this.
 - **`parse → print → parse` idempotency:** not implicated — no syntax or printer changes.
-- **`cargo clippy --all --all-targets -- -D warnings`:** the restructured `match` arm must
-  still be exhaustive and must not introduce an unused-`mut`/unused-variable warning on
-  `new_val` now that it's declared later and per-arm; watch for a clippy lint on
-  "variable could be declared with more restricted scope" or similar if any instance keeps
-  a stale `let mut new_val` declared too early.
+- **`cargo clippy --all --all-targets -- -D warnings`:** with the preferred minimal-diff
+  shape, watch for `clippy::option_if_let_else` or similar on the new `index_parts`
+  if/else, and confirm `.expect(...)` on a `None` that the type checker guarantees never
+  occurs doesn't trip any lint about avoidable panics. If the fallback per-arm
+  restructuring is used instead, re-check for unused-`mut`/unused-variable warnings on
+  `new_val` now that it would be declared later and per-arm.
 - **Region/rodata analysis (`vow-ir/src/region.rs`, `compiler/region.vow`):** these index
   into `inst.args` positionally (`args[0]`, `args[2]`), not by relying on any relationship
   between `InstId` numeric values and emission order. Re-ordering emission only shifts
@@ -335,14 +390,15 @@ directly:
   `"__vow_vec_set_val"` across both test suites before adding new tests, since a stale
   memory of "no such test exists" is exactly the kind of claim that needs re-verifying
   against current code).
-- **Codecov patch gate:** the restructured Rust `match` arm re-indents/moves existing
-  lines; per project history (`codecov/patch` gate, 95% threshold), moved-but-unchanged
-  lines can count as "new" and need coverage. Slice 1/2's new unit test should cover the
-  `Index` arm's new position directly; the untouched `Ident`/`FieldAccess` arms are only
-  touched by the minimal structural change (moving `new_val` declaration into each arm),
-  so make sure existing tests already covering those arms still execute them post-refactor
-  (they should, since behavior there is unchanged — just confirm via `cargo test -p vow-ir`
-  that no existing `Ident`/`FieldAccess` assignment test regresses).
+- **Codecov patch gate:** per project history (`codecov/patch` gate, 95% threshold),
+  moved-but-unchanged lines count as "new" and need fresh coverage, which is exactly why
+  Slice 2's preferred shape exists — it keeps the `Ident`/`FieldAccess`/`_` arms and the
+  shared `let mut new_val = lower_expr(ctx, rhs);` line byte-for-byte untouched, so only
+  the few genuinely new lines (the `index_parts` branch and the `Index` arm's one
+  destructuring line) need new coverage, which Slice 1's test already provides directly.
+  If the fallback (fuller per-arm restructuring) ends up necessary instead, re-read this
+  note: that path moves lines in the `Ident`/`FieldAccess` arms too and will need each of
+  those arms' existing coverage re-confirmed, not just the `Index` arm's.
 
 ## 6. Out of scope
 
@@ -361,13 +417,13 @@ directly:
   `%1241`, tracked in memory as pre-existing on clean `origin/main`) — unrelated to operand
   order, not touched.
 - **No refactor of the shared `ExprKind::Assign` context-recording helpers**
-  (`known_assignment_ast_type`, `record_wide_control_flow_context`, etc.) beyond what's
-  strictly needed to relocate the `lower_expr(ctx, rhs)` call. No renaming, no
-  consolidation of the `Ident`/`FieldAccess`/`Index` arms into a shared helper function,
-  even though their post-fix shape (lower lhs parts, then rhs, then narrow, then emit) is
-  now structurally similar across all three arms — that consolidation is a legitimate
-  future deepening but is not required to close this issue and would make the diff harder
-  to review and bisect.
+  (`known_assignment_ast_type`, `record_wide_control_flow_context`, etc.) — the preferred
+  Slice 2 shape doesn't touch them at all, and even the fallback shape shouldn't rename or
+  consolidate anything beyond what's strictly needed. No consolidation of the
+  `Ident`/`FieldAccess`/`Index` arms into a shared helper function, even if a future reader
+  notices they could share more structure — that consolidation is a legitimate future
+  deepening but is not required to close this issue and would make the diff harder to
+  review and bisect.
 - **No change to `vow-verify`/`c_emitter` bounds-check emission order** (`emit_bounds_assert`
   is called before the store in both emitters today, independent of lowering order) — not
   implicated, not touched.
