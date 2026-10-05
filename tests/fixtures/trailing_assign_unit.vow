@@ -1,0 +1,35 @@
+// Shared fixture for the trailing-bare-assignment regression (issue #1504): both the
+// Rust lowerer (vow-ir/src/lower/mod.rs, `lower_if_trailing_assign_branch_merges_as_unit`
+// and `lower_match_arm_trailing_assign_merges_as_unit`) and the self-hosted lowerer
+// (compiler/tests/test_lower_trailing_assign_unit.vow) lower an equivalent shape and
+// assert the merge Phi feeding each function's Return is ITY_UNIT()-typed.
+//
+// Each function's first branch/arm ends in a bare assignment (no `;`) to the outer
+// parameter `x`; the second branch/arm independently evaluates to `x` (an `i64`), so a
+// lowering bug that leaks the assignment's RHS type into the merge would observe `I64`
+// instead of `UNIT` here.
+module TrailingAssignUnit
+
+fn bump_if(x: i64) {
+    if x > 0 {
+        x = x + 1
+    } else {
+        x
+    }
+}
+
+enum Pick {
+    Big,
+    Zero,
+}
+
+fn bump_match(p: Pick, x: i64) {
+    match p {
+        Pick::Big => {
+            x = x + 1
+        },
+        Pick::Zero => {
+            x
+        },
+    }
+}

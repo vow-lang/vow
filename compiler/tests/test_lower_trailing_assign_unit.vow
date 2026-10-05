@@ -1,0 +1,125 @@
+module TestLowerTrailingAssignUnit
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+
+// Twin of `lower_if_trailing_assign_branch_merges_as_unit` and
+// `lower_match_arm_trailing_assign_merges_as_unit` in vow-ir/src/lower/mod.rs. Both
+// lower tests/fixtures/trailing_assign_unit.vow and check that each function's Return
+// is fed directly by a Phi typed ITY_UNIT() — not the mutation-tracking Phi for the
+// reassigned parameter `x`, and not the wrong `ITY_I64()` the issue #1504 bug produces.
+
+fn lower_fixture(source: String, file: String) -> IrModule {
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(lex(source), arena, diag_ctx_new(), file);
+    let item_files: Vec<String> = Vec::new();
+    let mut fi: u64 = 0;
+    while fi < parsed.items.len() {
+        item_files.push(file);
+        fi = fi + 1;
+    }
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), item_files
+    )
+}
+
+fn find_function(m: IrModule, name: String) -> i64 {
+    let mut i: u64 = 0;
+    while i < m.functions.len() {
+        let f: IrFunction = m.functions[i];
+        if f.name == name {
+            return i as i64;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn inst_ty_by_id(f: IrFunction, id: i64) -> i64 {
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let block: IrBlock = f.blocks[bi];
+        let insts: Vec<IrInst> = block.insts;
+        let mut ii: u64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.id == id {
+                return inst.ty;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    -1
+}
+
+fn inst_op_by_id(f: IrFunction, id: i64) -> i64 {
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let block: IrBlock = f.blocks[bi];
+        let insts: Vec<IrInst> = block.insts;
+        let mut ii: u64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.id == id {
+                return inst.op;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    -1
+}
+
+// The id of the value fed into `f`'s Return instruction, or -1 if none is found.
+fn return_value_id(f: IrFunction) -> i64 {
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let block: IrBlock = f.blocks[bi];
+        let insts: Vec<IrInst> = block.insts;
+        let mut ii: u64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_RETURN() {
+                let args: Vec<i64> = inst.args;
+                if args.len() > 0 {
+                    return args[0];
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    -1
+}
+
+fn check_fn_result_is_unit(m: IrModule, name: String) -> i32 {
+    let idx: i64 = find_function(m, name);
+    if idx < 0 { return 1; }
+    let f: IrFunction = m.functions[idx as u64];
+    let ret_val: i64 = return_value_id(f);
+    if ret_val < 0 { return 2; }
+    if inst_op_by_id(f, ret_val) != IOP_PHI() { return 3; }
+    if inst_ty_by_id(f, ret_val) != ITY_UNIT() { return 4; }
+    0
+}
+
+fn main() -> i32 [read] {
+    let src: String = fs_read(String::from("tests/fixtures/trailing_assign_unit.vow"));
+    if src.len() == 0 { return 1; }
+    let lowered: IrModule = lower_fixture(src, String::from("trailing_assign_unit.vow"));
+
+    let if_status: i32 = check_fn_result_is_unit(lowered, String::from("bump_if"));
+    if if_status != 0 { return if_status; }
+
+    let match_status: i32 = check_fn_result_is_unit(lowered, String::from("bump_match"));
+    if match_status != 0 { return 10 + match_status; }
+
+    0
+}
