@@ -1,0 +1,24 @@
+// TEST: stdout "6\n-6\n"
+module IfTrailingAssignUnit
+
+// A bare assignment (no `;`) as an if-branch's trailing expression must lower to
+// `()`, not the assignment's RHS type — otherwise the if-expression's merge Phi
+// disagrees in width with one branch's Upsilon and Cranelift's verifier rejects
+// the function (issue #1504).
+fn bump(x: i64) -> i64 {
+    let mut y: i64 = x;
+    if x > 0 {
+        y = y + 1
+    } else {
+        y = y - 1;
+    }
+    y
+}
+
+fn main() -> i32 [io] {
+    print_i64(bump(5));
+    print_str(String::from("\n"));
+    print_i64(bump(-5));
+    print_str(String::from("\n"));
+    0
+}
