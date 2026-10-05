@@ -545,8 +545,6 @@ An assignment's type as an expression is always `()`, independent of its
 right-hand side's type — so a block, `if`-branch, or `match`-arm whose value is
 a bare assignment (no `;`) is itself `()`-typed, not the assignment's RHS type.
 
-
-
 A scalar type name after `as` (`i8` through `u128`, `f32`, `f64`, `bool`) never
 takes generic arguments, so a following `<` is a comparison or shift:
 `x as u64 < y` and `x as u64 << 1` mean `(x as u64) < y` and `(x as u64) << 1`.
