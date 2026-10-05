@@ -4169,6 +4169,12 @@ fn skill_bundle() -> String {
     r.push_str(String::from("(`UnexpectedToken`) at the next token, in both compilers, and parsing stops\n"));
     r.push_str(String::from("there. A `let` statement's trailing `;` is optional.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("An assignment's type as an expression is always `()`, independent of its\n"));
+    r.push_str(String::from("right-hand side's type -- so a block, `if`-branch, or `match`-arm whose value is\n"));
+    r.push_str(String::from("a bare assignment (no `;`) is itself `()`-typed, not the assignment's RHS type.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("A scalar type name after `as` (`i8` through `u128`, `f32`, `f64`, `bool`) never\n"));
     r.push_str(String::from("takes generic arguments, so a following `<` is a comparison or shift:\n"));
     r.push_str(String::from("`x as u64 < y` and `x as u64 << 1` mean `(x as u64) < y` and `(x as u64) << 1`.\n"));
@@ -10013,6 +10019,12 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("(`if c { f(); } g();`). Any other statement without `;` is a parse error\n"));
     r.push_str(String::from("(`UnexpectedToken`) at the next token, in both compilers, and parsing stops\n"));
     r.push_str(String::from("there. A `let` statement's trailing `;` is optional.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("An assignment's type as an expression is always `()`, independent of its\n"));
+    r.push_str(String::from("right-hand side's type -- so a block, `if`-branch, or `match`-arm whose value is\n"));
+    r.push_str(String::from("a bare assignment (no `;`) is itself `()`-typed, not the assignment's RHS type.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("A scalar type name after `as` (`i8` through `u128`, `f32`, `f64`, `bool`) never\n"));
     r.push_str(String::from("takes generic arguments, so a following `<` is a comparison or shift:\n"));
