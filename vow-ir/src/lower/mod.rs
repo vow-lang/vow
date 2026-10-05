@@ -5119,7 +5119,10 @@ fn lower_block(ctx: &mut LowerCtx, block: &Block) -> InstId {
 /// the handful of positions where an expression's lowered value is read as a block/arm result.
 fn lower_value_expr(ctx: &mut LowerCtx, expr: &Expr) -> InstId {
     let val = lower_expr(ctx, expr);
-    if matches!(expr.kind, ExprKind::Assign { .. }) {
+    // A diverging RHS (`x = return 1`) already terminated the block; appending a
+    // ConstUnit after that terminator would violate the one-terminator-per-block
+    // invariant, and no caller reads `val` once `is_terminated()` is true anyway.
+    if !ctx.is_terminated() && matches!(expr.kind, ExprKind::Assign { .. }) {
         ctx.emit(
             Opcode::ConstUnit,
             Ty::Unit,
@@ -9045,6 +9048,76 @@ fn parse_or_default(s: String) -> i64 {
             Ty::Unit,
             "match-merge must be Unit-typed when an arm's tail is a bare assignment"
         );
+    }
+
+    #[test]
+    fn lower_value_expr_does_not_emit_past_a_diverging_assign_rhs() {
+        let diverging_assign = Expr {
+            kind: ExprKind::Assign {
+                lhs: Box::new(ident_expr("x")),
+                rhs: Box::new(Expr {
+                    kind: ExprKind::Return {
+                        value: Some(Box::new(int_expr(1))),
+                    },
+                    span: sp(),
+                }),
+            },
+            span: sp(),
+        };
+        let if_expr = Expr {
+            kind: ExprKind::If {
+                condition: Box::new(bool_expr(true)),
+                then_branch: Box::new(Block {
+                    stmts: vec![],
+                    trailing_expr: Some(Box::new(diverging_assign)),
+                    span: sp(),
+                }),
+                else_branch: Some(Box::new(int_expr(2))),
+            },
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(if_expr)),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "diverging_tail",
+            vec![make_param("x", i64_ty())],
+            i64_ty(),
+            body,
+            vec![],
+        );
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        for block in &func.blocks {
+            for (i, inst) in block.insts.iter().enumerate() {
+                let is_terminator = matches!(
+                    inst.opcode,
+                    Opcode::Return | Opcode::Jump | Opcode::Branch | Opcode::Unreachable
+                );
+                if is_terminator {
+                    assert_eq!(
+                        i,
+                        block.insts.len() - 1,
+                        "a terminator must be the last instruction in its block \
+                         (lower_value_expr must not emit a ConstUnit after a \
+                         diverging assignment RHS terminates the block)"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
