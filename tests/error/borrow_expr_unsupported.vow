@@ -1,0 +1,9 @@
+// TEST: error-code UnsupportedFeature
+// TEST: error-count 1
+module BorrowExprUnsupported
+
+fn main() -> i64 {
+    let x: i64 = 5;
+    let r: i64 = &x;
+    r
+}

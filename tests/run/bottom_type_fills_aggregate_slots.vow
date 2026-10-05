@@ -1,0 +1,30 @@
+// TEST: exit 0
+// `Option::None`, `Vec::new()` and diverging expressions share the bottom type;
+// it must keep filling aggregate slots and diverging positions after the
+// index/argument checks stopped accepting it for scalars (#1130).
+module BottomTypeFillsAggregateSlots
+
+fn first_or_zero(v: Vec<i64>) -> i64 {
+    if v.len() == 0u64 {
+        return 0;
+    }
+    v[0]
+}
+
+fn main() -> i32 {
+    let o: Option<i64> = Option::None;
+    let m: HashMap<i64, i64> = HashMap::new();
+    let nested: Vec<Vec<i64>> = Vec::new();
+    nested.push(Vec::new());
+    let opts: Vec<Option<i64>> = Vec::new();
+    opts.push(Option::None);
+    let v: Vec<i64> = Vec::new();
+    if first_or_zero(v) != 0 {
+        return 1;
+    }
+    let s: String = String::from("ok");
+    if s.len() != 2u64 {
+        return 2;
+    }
+    0
+}

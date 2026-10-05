@@ -1,0 +1,26 @@
+// TEST: stdout "0 0\n"
+// A reference element borrows rather than owns, so `Vec<&Token>` and
+// `Vec<Option<&Token>>` are legal even though `Token` is linear.
+module VecRefToLinear
+
+linear struct Token {
+    id: i64,
+}
+
+fn count_borrowed(v: Vec<&Token>) -> u64 {
+    v.len()
+}
+
+fn count_optional(v: Vec<Option<&Token>>) -> u64 {
+    v.len()
+}
+
+fn main() -> i32 [io] {
+    let a: Vec<&Token> = Vec::new();
+    let b: Vec<Option<&Token>> = Vec::new();
+    print_u64(count_borrowed(a));
+    print_str(" ");
+    print_u64(count_optional(b));
+    print_str("\n");
+    0
+}

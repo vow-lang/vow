@@ -91,10 +91,25 @@ fn ty_full_display_name(ts: TyStore, tid: i64) -> String {
     ty_value_display_name(ts, tid)
 }
 
+// True for the base of a built-in collection type. Collections never count as
+// linear themselves: the rule is enforced at the collection that holds the
+// linear value, so one written site is reported once.
+fn is_collection_base(e: CheckEnv, base: i64) -> bool {
+    let btag: i64 = ty_tag(e.ts, base);
+    if btag != CTY_STRUCT() && btag != CTY_ENUM() {
+        return false;
+    }
+    let name: String = ty_struct_name(e.ts, base);
+    name == String::from("Vec") || name == String::from("HashMap") || name == String::from("BTreeMap")
+}
+
 // Returns 1 if `tid` is or transitively contains a linear struct.
-// Mirrors vow-types/src/check.rs::is_linear_ty. Used to gate BTreeMap value
-// payloads: bitwise shift/copy in the runtime/verifier would silently
-// duplicate a linear obligation.
+// Mirrors vow-types/src/check.rs::is_linear_ty. Looks through references and
+// tuples. Used to gate map values and tuple destructuring: bitwise shift/copy
+// in the runtime/verifier would silently duplicate a linear obligation. A
+// collection never counts as linear itself; the collection rules fire where
+// the collection is written. Vec elements use is_linear_vec_element (owner
+// semantics) instead.
 fn is_linear_ty(e: CheckEnv, tid: i64) -> i64 {
     let visited: Vec<i64> = Vec::new();
     is_linear_ty_rec(e, tid, visited)
@@ -163,6 +178,9 @@ fn is_linear_ty_rec(e: CheckEnv, tid: i64, visited: Vec<i64>) -> i64 {
     }
     if tag == CTY_APPLIED() {
         let base: i64 = ty_a(e.ts, tid);
+        if is_collection_base(e, base) {
+            return 0;
+        }
         if is_linear_ty_rec(e, base, visited) == 1 {
             return 1;
         }
@@ -263,6 +281,25 @@ fn is_linear_owner_ty_rec(e: CheckEnv, tid: i64, visited: Vec<i64>) -> i64 {
     0
 }
 
+// A Vec element is rejected when it owns a linear obligation: a linear struct,
+// an enum-like wrapper around one, or a tuple holding one. References borrow,
+// so Vec<&Token> is fine. Mirrors Rust `is_linear_vec_element`.
+fn is_linear_vec_element(e: CheckEnv, tid: i64) -> i64 {
+    if ty_tag(e.ts, tid) == CTY_TUPLE() {
+        let lid: i64 = ty_a(e.ts, tid);
+        let n: i64 = ts_arg_len(e.ts, lid);
+        let mut i: i64 = 0;
+        while i < n {
+            if is_linear_vec_element(e, ts_arg_get(e.ts, lid, i)) == 1 {
+                return 1;
+            }
+            i = i + 1;
+        }
+        return 0;
+    }
+    is_linear_owner_ty(e, tid)
+}
+
 fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
     if ast_tid == -1 {
         return CTY_UNIT();
@@ -334,6 +371,9 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
             return ts_make_applied(e.ts, base_ptid, arg_tids);
         }
         if name == String::from("Vec") {
+            if arg_tids.len() > 0 {
+                check_vec_element_type(e, arg_tids[0], type_span(a, ast_tid));
+            }
             return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
         }
         if name == String::from("Option") {
@@ -380,6 +420,18 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         let inner: i64 = resolve_ast_ty(e, m, type_a(a, ast_tid));
         return ty_add(e.ts, CTY_REF(), inner, 0);
     }
+    if tag == TY_SLICE() {
+        // `[T]` has no constructor, no indexing and no iteration, so no value of
+        // that type can exist. The error is the point; the Slice<T> shape only
+        // keeps the cascade identical to the Rust resolver.
+        env_emit_error_code_hint(e, EC_UNSUPPORTED_FEATURE(),
+            String::from("slice types (`[T]`) are not supported in Vow"),
+            type_span(a, ast_tid),
+            String::from("use `Vec<T>` to hold a sequence of values"));
+        let elem_tids: Vec<i64> = Vec::new();
+        elem_tids.push(resolve_ast_ty(e, m, type_a(a, ast_tid)));
+        return ts_make_applied(e.ts, ts_make_struct(e.ts, String::from("Slice")), elem_tids);
+    }
     if tag == TY_TUPLE() {
         let elems_lid: i64 = type_a(a, ast_tid);
         let n: i64 = list_len(a, elems_lid);
@@ -392,7 +444,14 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         let lid: i64 = ts_add_args(e.ts, elem_tids);
         return ty_add(e.ts, CTY_TUPLE(), lid, 0);
     }
-    CTY_UNIT()
+    // Every parser-built tag is handled above. An unhandled tag must never
+    // degrade to the unit type: that silently turns an unresolved annotation
+    // into `()` and surfaces later as an unrelated error (or none at all).
+    let tag_msg: String = String::from("unsupported type form (internal AST type tag ");
+    tag_msg.push_str(i64_to_string(tag));
+    tag_msg.push_str(String::from(")"));
+    env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), tag_msg, type_span(a, ast_tid));
+    CTY_UNKNOWN()
 }
 
 fn hashmap_key_tag_supported(tag: i64) -> bool {
@@ -448,6 +507,28 @@ fn check_map_slot_types(e: CheckEnv, name: String, key_tid: i64, val_tid: i64, s
     }
 }
 
+// A Vec copies and shifts elements bitwise, so an element that owns a linear
+// obligation would be duplicated. Deferred while definitions are still being
+// registered; recheck_tid_map_linearity re-runs the rule afterwards. Mirrors
+// Rust `check_vec_element_ty`.
+fn check_vec_element_type(e: CheckEnv, elem_tid: i64, span: i64) {
+    if !e.defer_map_linear && is_linear_vec_element(e, elem_tid) == 1 {
+        emit_vec_linear_element_error(e, elem_tid, span);
+    }
+}
+
+// The linear-element diagnostic shared by the first-pass Vec check and the
+// post-definition re-check.
+fn emit_vec_linear_element_error(e: CheckEnv, elem_tid: i64, span: i64) {
+    let msg: String = String::from("Vec element type must be non-linear; found '");
+    msg.push_str(ty_full_display_name(e.ts, elem_tid));
+    msg.push_str(String::from("'"));
+    env_emit_error_code_hint(
+        e, EC_UNSUPPORTED_FEATURE(), msg, span,
+        String::from("a Vec copies and shifts elements bitwise, so a linear element would be duplicated; keep the value in a local binding and store an integer handle instead")
+    );
+}
+
 // The linear-value diagnostic shared by the first-pass map check and the
 // post-definition re-check: BTreeMap uses its dedicated code, HashMap
 // UnsupportedFeature.
@@ -471,6 +552,35 @@ fn is_opaque(tid: i64) -> bool vow {
     requires: tid >= 0
 } {
     tid == CTY_NEVER() || tid == CTY_UNKNOWN()
+}
+
+// CTY_UNKNOWN is the marker for an expression that already failed type
+// checking; every later check absorbs it so one mistake yields one
+// diagnostic. CTY_NEVER is a different thing: the bottom type of
+// `Option::None`, `Vec::new()` and diverging expressions.
+fn is_unknown(tid: i64) -> bool vow {
+    requires: tid >= 0
+} {
+    tid == CTY_UNKNOWN()
+}
+
+// The bottom type coerces to everything, so it would let `Option::None` or
+// `Vec::new()` stand in for a scalar. Where an index or builtin argument
+// expects a non-aggregate type, a Never-typed expression is accepted only if it
+// really diverges (mirrors Rust `never_is_not_a_value`).
+fn is_diverging_never(e: CheckEnv, m: Module, eid: i64, tid: i64) -> bool {
+    tid == CTY_NEVER() && expr_diverges(e, m, eid)
+}
+
+fn never_is_not_a_value(e: CheckEnv, m: Module, eid: i64, from_tid: i64, to_tid: i64) -> bool {
+    if from_tid != CTY_NEVER() {
+        return false;
+    }
+    let to_tag: i64 = ty_tag(e.ts, to_tid);
+    if to_tag == CTY_APPLIED() || is_opaque(to_tid) {
+        return false;
+    }
+    !expr_diverges(e, m, eid)
 }
 
 fn is_flat_slot_tid(ts: TyStore, tid: i64) -> bool {
@@ -514,47 +624,60 @@ fn is_vec_raw_parts_copy_expr(a: AstArena, eid: i64) -> bool {
     arena_str(a, first_sid) == String::from("Vec") && arena_str(a, second_sid) == String::from("from_raw_parts_copy")
 }
 
-// Walk a resolved tid; if it is HashMap<K, V> or BTreeMap<K, V>, check that V is
-// non-linear. The only linearity check for struct fields, enum payloads and
-// aliases (resolved with defer_map_linear set); runs once every definition is
-// complete. Mirrors the Rust Pass 1b-fixup.
-fn recheck_tid_map_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
-    let tag: i64 = ty_tag(e.ts, tid);
-    if tag == CTY_APPLIED() {
-        let base: i64 = ty_a(e.ts, tid);
-        let base_tag: i64 = ty_tag(e.ts, base);
-        if base_tag == CTY_STRUCT() {
-            let bname: String = ty_struct_name(e.ts, base);
-            if bname == String::from("BTreeMap") || bname == String::from("HashMap") {
-                let lid: i64 = ty_b(e.ts, tid);
-                let nargs: i64 = ts_arg_len(e.ts, lid);
-                if nargs == 2 {
-                    let vtid: i64 = ts_arg_get(e.ts, lid, 1);
-                    if is_linear_ty(e, vtid) == 1 {
-                        emit_map_linear_value_error(e, bname, vtid, span);
-                    }
-                }
+// The linearity rules for one written `Vec`/`HashMap`/`BTreeMap` node, run once
+// every definition is complete. Non-recursive.
+fn recheck_collection_node(e: CheckEnv, tid: i64, span: i64) [io] {
+    let base: i64 = ty_a(e.ts, tid);
+    let base_tag: i64 = ty_tag(e.ts, base);
+    let lid: i64 = ty_b(e.ts, tid);
+    let nargs: i64 = ts_arg_len(e.ts, lid);
+    if base_tag == CTY_ENUM() && ty_struct_name(e.ts, base) == String::from("Vec") {
+        if nargs == 1 && is_linear_vec_element(e, ts_arg_get(e.ts, lid, 0)) == 1 {
+            emit_vec_linear_element_error(e, ts_arg_get(e.ts, lid, 0), span);
+        }
+    }
+    if base_tag == CTY_STRUCT() {
+        let bname: String = ty_struct_name(e.ts, base);
+        if (bname == String::from("BTreeMap") || bname == String::from("HashMap")) && nargs == 2 {
+            let vtid: i64 = ts_arg_get(e.ts, lid, 1);
+            if is_linear_ty(e, vtid) == 1 {
+                emit_map_linear_value_error(e, bname, vtid, span);
             }
         }
+    }
+}
+
+// Walks a written type in step with its resolved tid and applies the collection
+// linearity rules at every written collection. A type alias is not entered: its
+// expansion is checked once, at the alias definition, instead of at every use.
+// The only linearity check for struct fields, enum payloads and aliases
+// (resolved with defer_map_linear set). Mirrors Rust `check_written_ty`.
+fn recheck_written_ty(e: CheckEnv, a: AstArena, ast_tid: i64, tid: i64, span: i64) [io] {
+    let atag: i64 = type_tag(a, ast_tid);
+    let tag: i64 = ty_tag(e.ts, tid);
+    if atag == TY_GENERIC() && tag == CTY_APPLIED() {
+        recheck_collection_node(e, tid, span);
+        let ast_args: i64 = type_b(a, ast_tid);
         let alid: i64 = ty_b(e.ts, tid);
-        let an: i64 = ts_arg_len(e.ts, alid);
+        let an: i64 = list_len(a, ast_args);
         let mut ai: i64 = 0;
-        while ai < an {
-            recheck_tid_map_linearity(e, ts_arg_get(e.ts, alid, ai), span);
+        while ai < an && ai < ts_arg_len(e.ts, alid) {
+            recheck_written_ty(e, a, list_get(a, ast_args, ai), ts_arg_get(e.ts, alid, ai), span);
             ai = ai + 1;
         }
     }
-    if tag == CTY_TUPLE() {
-        let lid: i64 = ty_a(e.ts, tid);
-        let tn: i64 = ts_arg_len(e.ts, lid);
+    if atag == TY_TUPLE() && tag == CTY_TUPLE() {
+        let ast_elems: i64 = type_a(a, ast_tid);
+        let tlid: i64 = ty_a(e.ts, tid);
+        let tn: i64 = list_len(a, ast_elems);
         let mut ti: i64 = 0;
-        while ti < tn {
-            recheck_tid_map_linearity(e, ts_arg_get(e.ts, lid, ti), span);
+        while ti < tn && ti < ts_arg_len(e.ts, tlid) {
+            recheck_written_ty(e, a, list_get(a, ast_elems, ti), ts_arg_get(e.ts, tlid, ti), span);
             ti = ti + 1;
         }
     }
-    if tag == CTY_REF() {
-        recheck_tid_map_linearity(e, ty_a(e.ts, tid), span);
+    if atag == TY_REF() && tag == CTY_REF() {
+        recheck_written_ty(e, a, type_a(a, ast_tid), ty_a(e.ts, tid), span);
     }
 }
 
@@ -576,6 +699,8 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
             register_struct_name(e, m, id);
         } else if kind == ITEM_ENUM() {
             register_enum_name(e, m, id);
+        } else if kind == ITEM_TYPE_ALIAS() {
+            register_alias_name(e, m, id);
         }
         i = i + 1;
     }
@@ -618,10 +743,10 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
                 let mut fi: i64 = 0;
                 while fi < nf {
                     let ftid: i64 = ts_arg_get(e.ts, ftid_lid, fi);
-                    recheck_tid_map_linearity(e, ftid, sdef_span(a, id));
+                    let ast_ftid: i64 = list_get(a, fields_lid, fi * 2 + 1);
+                    recheck_written_ty(e, a, ast_ftid, ftid, sdef_span(a, id));
                     if is_linear_owner_ty(e, ftid) == 1 {
                         let field_name: String = arena_str(a, list_get(a, fields_lid, fi * 2));
-                        let ast_ftid: i64 = list_get(a, fields_lid, fi * 2 + 1);
                         let msg: String = String::from("struct fields cannot own linear values: `");
                         msg.push_str(struct_name);
                         msg.push_str(String::from("."));
@@ -638,14 +763,16 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
             if eidx != -1 {
                 let nv: i64 = e.edef_variant_count[eidx as u64];
                 let vpayload_lid: i64 = e.edef_vpayload_lids[eidx as u64];
+                let variants_lid: i64 = edef_variants_lid(a, id);
                 let mut vi: i64 = 0;
                 while vi < nv {
                     let payload_lid: i64 = ts_arg_get(e.ts, vpayload_lid, vi);
+                    let ast_payload_lid: i64 = list_get(a, variants_lid, vi * 2 + 1);
                     let pn: i64 = ts_arg_len(e.ts, payload_lid);
                     let mut pi: i64 = 0;
                     while pi < pn {
                         let ptid: i64 = ts_arg_get(e.ts, payload_lid, pi);
-                        recheck_tid_map_linearity(e, ptid, edef_span(a, id));
+                        recheck_written_ty(e, a, list_get(a, ast_payload_lid, pi), ptid, edef_span(a, id));
                         pi = pi + 1;
                     }
                     vi = vi + 1;
@@ -655,7 +782,7 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
             let a: AstArena = m.arena;
             let alias_tid: i64 = env_lookup_alias(e, arena_str(a, alias_name_sid(a, id)));
             if alias_tid != -1 {
-                recheck_tid_map_linearity(e, alias_tid, alias_span(a, id));
+                recheck_written_ty(e, a, alias_type_tid(a, id), alias_tid, alias_span(a, id));
             }
         }
         i = i + 1;
@@ -726,6 +853,17 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
         let id: i64 = item_id(item);
         if kind == ITEM_FN() && !fn_is_declaration(m.arena, id) {
             check_fn(e, m, id);
+        } else if kind == ITEM_FN() {
+            check_param_refinements(e, m, id);
+        } else if kind == ITEM_EXTERN() {
+            let a: AstArena = m.arena;
+            let fns_lid: i64 = ext_fns_lid(a, id);
+            let nf: i64 = list_len(a, fns_lid);
+            let mut fi: i64 = 0;
+            while fi < nf {
+                check_param_refinements(e, m, list_get(a, fns_lid, fi));
+                fi = fi + 1;
+            }
         }
         i = i + 1;
     }
@@ -792,6 +930,18 @@ fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
     e.const_tids.push(resolved_tid);
 }
 
+// A `()` parameter carries no information and has no ABI slot. Mirrors Rust
+// `check_param_ty`.
+fn emit_unit_param_error(e: CheckEnv, pname: String, span: i64) {
+    let msg: String = String::from("parameter `");
+    msg.push_str(pname);
+    msg.push_str(String::from("` has type `()`: unit parameters are not supported"));
+    env_emit_error_code_hint(
+        e, EC_UNSUPPORTED_FEATURE(), msg, span,
+        String::from("remove the parameter; a `()` argument carries no information")
+    );
+}
+
 fn register_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     let a: AstArena = m.arena;
     let name_sid: i64 = fn_name_sid(a, fid);
@@ -803,7 +953,11 @@ fn register_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     let mut i: i64 = 0;
     while i < n_params {
         let ast_tid: i64 = list_get(a, params_lid, i * 4 + 1);
-        param_tids.push(resolve_ast_ty(e, m, ast_tid));
+        let ptid: i64 = resolve_ast_ty(e, m, ast_tid);
+        if ptid == CTY_UNIT() {
+            emit_unit_param_error(e, arena_str(a, list_get(a, params_lid, i * 4)), list_get(a, params_lid, i * 4 + 3));
+        }
+        param_tids.push(ptid);
         i = i + 1;
     }
     let ret_ast_tid: i64 = fn_ret_ast_tid(a, fid);
@@ -812,10 +966,31 @@ fn register_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     env_define_fn(e, name, param_tids, ret_tid, eff);
 }
 
+// The resolver binds primitive names and the builtin generic names before any
+// user type, so a user type of the same name would silently alias the builtin in
+// some positions (`Vec`) and shadow it in others. Mirrors Rust
+// `check_reserved_type_name`.
+fn check_reserved_type_name(e: CheckEnv, name: String, span: i64) {
+    let reserved: bool = primitive_tid(e.ts, name) != -1
+        || name == String::from("Vec")
+        || name == String::from("Option")
+        || name == String::from("Result")
+        || name == String::from("HashMap")
+        || name == String::from("BTreeMap");
+    if reserved {
+        let msg: String = String::from("`");
+        msg.push_str(name);
+        msg.push_str(String::from("` is a builtin type name and cannot be declared as a user type"));
+        env_emit_error_code_hint(e, EC_UNSUPPORTED_FEATURE(), msg, span,
+            String::from("choose a different name for this type"));
+    }
+}
+
 fn register_struct_name(e: CheckEnv, m: Module, sid: i64) [io] {
     let a: AstArena = m.arena;
     let name_s: i64 = sdef_name_sid(a, sid);
     let name: String = arena_str(a, name_s);
+    check_reserved_type_name(e, name, sdef_span(a, sid));
     env_define_struct_name(e, name);
 }
 
@@ -823,7 +998,14 @@ fn register_enum_name(e: CheckEnv, m: Module, eid: i64) [io] {
     let a: AstArena = m.arena;
     let name_s: i64 = edef_name_sid(a, eid);
     let name: String = arena_str(a, name_s);
+    check_reserved_type_name(e, name, edef_span(a, eid));
     env_define_enum_name(e, name);
+}
+
+fn register_alias_name(e: CheckEnv, m: Module, aid: i64) [io] {
+    let a: AstArena = m.arena;
+    let name: String = arena_str(a, alias_name_sid(a, aid));
+    check_reserved_type_name(e, name, alias_span(a, aid));
 }
 
 fn register_struct(e: CheckEnv, m: Module, sid: i64) [io] {
@@ -928,6 +1110,119 @@ fn check_clause_purity(e: CheckEnv, m: Module, clause_eid: i64) [io] {
             String::from("vow predicates must not write to a struct field, a Vec/map element, or call a mutating builtin method — move the write outside the vow block")
         );
         wi = wi + 1;
+    }
+}
+
+fn where_scope_hint(e: CheckEnv, name: String) -> String {
+    if e.where_active == 0 {
+        return String::new();
+    }
+    if name_list_contains(e.where_sibs, name) {
+        let hint: String = String::from("a `where` clause can only reference its own parameter `");
+        hint.push_str(e.where_own);
+        hint.push_str(String::from("`; put a condition on several parameters in `requires`"));
+        return hint;
+    }
+    if name == String::from("result") {
+        return String::from("a `where` clause is checked before the function runs, so `result` does not exist yet; constrain the return value with `ensures`");
+    }
+    String::new()
+}
+
+fn emit_unknown_struct(e: CheckEnv, sname: String, span: i64) {
+    let msg: String = String::from("unknown struct `");
+    msg.push_str(sname);
+    msg.push_str(String::from("`"));
+    env_emit_error_code(e, EC_TYPE_MISMATCH(), msg, span);
+}
+
+fn emit_no_such_field(e: CheckEnv, sname: String, fname: String, span: i64) {
+    let msg: String = String::from("struct `");
+    msg.push_str(sname);
+    msg.push_str(String::from("` has no field `"));
+    msg.push_str(fname);
+    msg.push_str(String::from("`"));
+    env_emit_error_code(e, EC_TYPE_MISMATCH(), msg, span);
+}
+
+fn emit_undefined_variable(e: CheckEnv, name: String, span: i64) {
+    let msg: String = String::from("undefined variable `");
+    msg.push_str(name);
+    msg.push_str(String::from("`"));
+    let mut hint: String = where_scope_hint(e, name);
+    if hint.len() == 0 {
+        let suggestion: String = diag_suggest_similar(name, env_visible_var_names(e));
+        if suggestion.len() > 0 {
+            hint = String::from("did you mean `");
+            hint.push_str(suggestion);
+            hint.push_str(String::from("`?"));
+        }
+    }
+    if hint.len() == 0 {
+        env_emit_error(e, msg, span);
+    } else {
+        env_emit_error_code_hint(e, EC_TYPE_MISMATCH(), msg, span, hint);
+    }
+}
+
+// Checks each parameter's `where` refinement like a `requires` clause, in a
+// scope holding only that parameter: a pure `bool` predicate with no tuple
+// expressions. Mirrors `check_param_refinements` in vow-types/src/check.rs.
+fn check_param_refinements(e: CheckEnv, m: Module, fid: i64) [io] {
+    let a: AstArena = m.arena;
+    let params_lid: i64 = fn_params_lid(a, fid);
+    let n_params: i64 = list_len(a, params_lid) / 4;
+    let mut any: bool = false;
+    let mut i: i64 = 0;
+    while i < n_params {
+        if list_get(a, params_lid, i * 4 + 2) != -1 {
+            any = true;
+        }
+        i = i + 1;
+    }
+    if !any {
+        return;
+    }
+    e.cur_fn_name = arena_str(a, fn_name_sid(a, fid));
+    let fidx: i64 = env_lookup_fn(e, e.cur_fn_name);
+    i = 0;
+    while i < n_params {
+        let ref_eid: i64 = list_get(a, params_lid, i * 4 + 2);
+        if ref_eid != -1 {
+            let pname: String = arena_str(a, list_get(a, params_lid, i * 4));
+            let ptid: i64 = if fidx != -1 && i < e.fn_param_count[fidx as u64] {
+                ts_arg_get(e.ts, e.fn_param_lids[fidx as u64], i)
+            } else {
+                resolve_ast_ty(e, m, list_get(a, params_lid, i * 4 + 1))
+            };
+            let sibs: Vec<String> = Vec::new();
+            let mut j: i64 = 0;
+            while j < n_params {
+                if j != i {
+                    sibs.push(arena_str(a, list_get(a, params_lid, j * 4)));
+                }
+                j = j + 1;
+            }
+            env_push_scope(e);
+            env_define_var(e, pname, ptid);
+            e.where_active = 1;
+            e.where_own = pname;
+            e.where_sibs = sibs;
+            e.contract_depth = e.contract_depth + 1;
+            let pred_tid: i64 = check_expr(e, m, ref_eid);
+            e.contract_depth = e.contract_depth - 1;
+            e.where_active = 0;
+            env_pop_scope(e);
+            if pred_tid != CTY_BOOL() && !is_opaque(pred_tid) {
+                env_emit_error_code_hint(
+                    e, EC_CONTRACT_TYPE_MISMATCH(), String::from("`where` clause must be `bool`"),
+                    expr_span(a, ref_eid),
+                    String::from("parameter `where` clauses must evaluate to `bool`")
+                );
+            }
+            check_clause_purity(e, m, ref_eid);
+        }
+        i = i + 1;
     }
 }
 
@@ -1040,6 +1335,8 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     };
     e.cur_ret_tid = ret_tid;
     e.cur_effects = fn_eff(a, fid);
+
+    check_param_refinements(e, m, fid);
 
     let mut_base: u64 = e.var_names.len();
     env_push_scope(e);
@@ -1717,7 +2014,7 @@ fn emit_unknown_method(e: CheckEnv, a: AstArena, eid: i64, mname: String, tyname
 // pre-check loop; re-checking here would double-emit diagnostics and
 // double-consume linear values.
 fn check_method_argument_exact(
-    e: CheckEnv, a: AstArena, args_lid: i64, arg_tids: Vec<i64>, index: i64, target_tid: i64, mname: String
+    e: CheckEnv, m: Module, a: AstArena, args_lid: i64, arg_tids: Vec<i64>, index: i64, target_tid: i64, mname: String
 ) {
     if index < 0 || index >= list_len(a, args_lid) { return; }
     let arg_eid: i64 = list_get(a, args_lid, index);
@@ -1725,10 +2022,10 @@ fn check_method_argument_exact(
     if is_opaque(target_tid) { return; }
     if index >= arg_tids.len() as i64 { return; }
     let arg_tid: i64 = arg_tids[index as u64];
-    if is_opaque(arg_tid) { return; }
-    if !is_coercible(e.ts, arg_tid, target_tid) {
+    if is_unknown(arg_tid) { return; }
+    if never_is_not_a_value(e, m, arg_eid, arg_tid, target_tid) || !is_coercible(e.ts, arg_tid, target_tid) {
         let msg: String = String::from("argument has type `");
-        msg.push_str(ty_value_display_name(e.ts, arg_tid));
+        msg.push_str(ty_full_display_name(e.ts, arg_tid));
         msg.push_str(String::from("` but `"));
         msg.push_str(mname);
         msg.push_str(String::from("` expects `"));
@@ -2029,6 +2326,66 @@ fn is_enum_match_tid(ts: TyStore, tid: i64) -> bool {
         return ty_tag(ts, ty_a(ts, tid)) == CTY_ENUM();
     }
     false
+}
+
+fn check_exhaustive(e: CheckEnv, m: Module, scrutinee_tid: i64, arms_lid: i64, n_arms: i64, span: i64) {
+    let a: AstArena = m.arena;
+    if n_arms > 0 {
+        let last_pid: i64 = list_get(a, arms_lid, (n_arms - 1) * 2);
+        let last_tag: i64 = pat_tag(a, last_pid);
+        if last_tag == PAT_WILD() {
+            return;
+        }
+        if last_tag == PAT_IDENT() && pat_b(a, last_pid) == 0 {
+            return;
+        }
+    }
+    let enum_name: String = enum_name_from_tid(e.ts, scrutinee_tid);
+    let enum_idx: i64 = env_lookup_enum(e, enum_name);
+    if enum_idx == -1 {
+        return;
+    }
+    let covered: Vec<String> = Vec::new();
+    let mut j: i64 = 0;
+    while j < n_arms {
+        let pid: i64 = list_get(a, arms_lid, j * 2);
+        if pat_tag(a, pid) == PAT_ENUM() {
+            let path_lid: i64 = pat_a(a, pid);
+            let path_len: i64 = list_len(a, path_lid);
+            if path_len > 0 {
+                let variant_name: String = arena_str(a, list_get(a, path_lid, path_len - 1));
+                if !handled_variant_contains(covered, variant_name) {
+                    covered.push(variant_name);
+                }
+            }
+        }
+        j = j + 1;
+    }
+    let vname_lid: i64 = e.edef_vname_lids[enum_idx as u64];
+    let nv: i64 = e.edef_variant_count[enum_idx as u64];
+    let missing: Vec<String> = Vec::new();
+    let mut k: i64 = 0;
+    while k < nv {
+        let vsid: i64 = ts_arg_get(e.ts, vname_lid, k);
+        let ts: TyStore = e.ts;
+        let vname: String = ts.strs[vsid as u64];
+        if !handled_variant_contains(covered, vname) {
+            missing.push(vname);
+        }
+        k = k + 1;
+    }
+    if missing.len() > 0u64 {
+        let joined: String = string_join(missing, String::from(", "));
+        let msg: String = String::from("non-exhaustive match: missing patterns: ");
+        msg.push_str(joined);
+        let d: Diagnostic = env_error_diag(e, EC_NON_EXHAUSTIVE_MATCH(), msg, span);
+        let hint1: String = String::from("add arms for: ");
+        hint1.push_str(joined);
+        diag_add_hint(d, hint1);
+        diag_add_hint(d, String::from("or add a wildcard '_' arm to match remaining patterns"));
+        let dctx: DiagCtx = e.dctx;
+        diag_ctx_emit(dctx, d);
+    }
 }
 
 fn pattern_aggregate_name(ts: TyStore, tid: i64) -> String {
@@ -2524,7 +2881,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             }
             ci = ci + 1;
         }
-        return env_lookup_var(e, name);
+        let vidx: i64 = env_find_var(e, name);
+        if vidx < 0 {
+            emit_undefined_variable(e, name, expr_span(a, eid));
+            return CTY_UNKNOWN();
+        }
+        return e.var_tids[vidx as u64];
     }
 
     if tag == EXPR_BINOP() {
@@ -2609,14 +2971,17 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             }
             return CTY_BOOL();
         }
+        if is_unknown(lhs_tid) || is_unknown(rhs_tid) {
+            return CTY_UNKNOWN();
+        }
         if op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR() || op == BINOP_SHL() || op == BINOP_SHR() {
             if !ty_is_integer_or_lit_int(e.ts, lhs_tid) {
                 env_emit_error(e, String::from("bitwise operator requires integer operands"), expr_span(a, eid));
-                return CTY_I64();
+                return CTY_UNKNOWN();
             }
             if !ty_is_integer_or_lit_int(e.ts, rhs_tid) {
                 env_emit_error(e, String::from("bitwise operator requires integer operands"), expr_span(a, eid));
-                return CTY_I64();
+                return CTY_UNKNOWN();
             }
             let literal_lhs_shift: bool = ty_is_lit_int(e.ts, lhs_tid) && ty_is_integer(e.ts, rhs_tid);
             if (op == BINOP_SHL() || op == BINOP_SHR()) && (ty_is_integer(e.ts, lhs_tid) || literal_lhs_shift) {
@@ -2661,13 +3026,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             }
             if lhs_tid != rhs_tid {
                 env_emit_error(e, String::from("bitwise operator requires matching integer types"), expr_span(a, eid));
-                return CTY_I64();
+                return CTY_UNKNOWN();
             }
             return lhs_tid;
         }
         if ty_is_numeric_or_lit_int(e.ts, lhs_tid) && ty_is_numeric_or_lit_int(e.ts, rhs_tid) && !bin_operands_compatible(e.ts, lhs_tid, rhs_tid) {
             env_emit_error(e, String::from("arithmetic operands have different types"), expr_span(a, eid));
-            return CTY_I64();
+            return CTY_UNKNOWN();
         }
         // The concrete operand fixes the result type; an unsuffixed-literal
         // marker coerces to it. Two markers stay a marker (mirrors
@@ -2699,7 +3064,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     if tag == EXPR_UNOP() {
         let op: i64 = expr_a(a, eid);
         let operand_eid: i64 = expr_b(a, eid);
-        if op == UNOP_NEG() && expr_tag(a, operand_eid) == EXPR_CAST() {
+        if op == UNOP_NEG() && expr_tag(a, operand_eid) == EXPR_CAST() &&
+            type_tag(a, expr_b(a, operand_eid)) == TY_NAMED() {
             let inner_eid: i64 = expr_a(a, operand_eid);
             let target_ast_tid: i64 = expr_b(a, operand_eid);
             let target_tid: i64 = resolve_ast_ty(e, m, target_ast_tid);
@@ -2721,6 +3087,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         }
         if op == UNOP_NEG() && ty_is_unsigned(e.ts, operand_tid) {
             env_emit_error(e, String::from("unary negation is not allowed on unsigned type"), expr_span(a, eid));
+            return CTY_UNKNOWN();
         }
         return operand_tid;
     }
@@ -2741,10 +3108,32 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if callee_tag == EXPR_IDENT() {
             let name_sid: i64 = expr_a(a, callee_eid);
             let name: String = arena_str(a, name_sid);
+            if name == String::from("drop") && env_lookup_fn(e, name) == -1 {
+                if n_args != 1 {
+                    let amsg: String = String::from("function `drop` expects 1 argument but got ");
+                    amsg.push_str(i64_to_string(n_args));
+                    env_emit_error_code_hint(
+                        e, EC_TYPE_MISMATCH(), amsg, expr_span(a, eid),
+                        String::from("expected signature: (linear_value)")
+                    );
+                    return CTY_UNKNOWN();
+                }
+                let drop_tid: i64 = arg_tids[0];
+                if !is_opaque(drop_tid) && is_linear_owner_ty(e, drop_tid) != 1 {
+                    let dmsg: String = String::from("drop requires a linear value, found `");
+                    dmsg.push_str(ty_full_display_name(e.ts, drop_tid));
+                    dmsg.push_str(String::from("`"));
+                    env_emit_error_code_hint(
+                        e, EC_TYPE_MISMATCH(), dmsg, expr_span(a, list_get(a, args_lid, 0)),
+                        String::from("only a `linear struct` or an owned enum wrapper that contains one can be dropped; other values need no explicit discharge")
+                    );
+                }
+                return CTY_UNIT();
+            }
             if name == String::from("pin_to_root") {
                 if n_args != 1 {
                     env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
-                    return CTY_NEVER();
+                    return CTY_UNKNOWN();
                 }
                 let arg_eid: i64 = list_get(a, args_lid, 0);
                 let arg_tid: i64 = check_expr(e, m, arg_eid);
@@ -2756,7 +3145,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             if name == String::from("string_matches_literal_at") {
                 if n_args != 3 {
                     env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
-                    return CTY_NEVER();
+                    return CTY_UNKNOWN();
                 }
                 let s_eid: i64 = list_get(a, args_lid, 0);
                 let pos_eid: i64 = list_get(a, args_lid, 1);
@@ -2791,7 +3180,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 msg.push_str(name);
                 msg.push_str(String::from("`"));
                 env_emit_error(e, msg, expr_span(a, eid));
-                return CTY_NEVER();
+                return CTY_UNKNOWN();
             }
             if env_is_extern_fn(e, name) {
                 let msg: String = String::from("calling extern-declared function `");
@@ -2801,7 +3190,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     e, EC_UNSUPPORTED_FEATURE(), msg, expr_span(a, eid),
                     String::from("extern \"C\" functions can be declared but not called yet; lowering extern calls to IR/codegen is not implemented")
                 );
-                return CTY_NEVER();
+                return CTY_UNKNOWN();
             }
             if e.fn_param_count[fidx as u64] != n_args {
                 env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
@@ -2823,7 +3212,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         }
         let _callee_tid: i64 = check_expr(e, m, callee_eid);
         env_emit_error(e, String::from("function call callee must be an identifier"), expr_span(a, callee_eid));
-        return CTY_UNIT();
+        return CTY_UNKNOWN();
     }
 
     if tag == EXPR_METHOD() {
@@ -2851,23 +3240,23 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     String::from("`Vec::new()`, `HashMap::new()` and `BTreeMap::new()` take their element types from the annotation, for example `let m: HashMap<i64, i64> = HashMap::new();`")
                 );
             }
-            return recv_tid;
+            return CTY_UNKNOWN();
         }
         let recv_tag: i64 = ty_tag(e.ts, recv_tid);
         if recv_tag == CTY_STR() {
             if mname == String::from("push_str") || mname == String::from("eq") ||
                mname == String::from("contains") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_STR(), mname);
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_STR(), mname);
             }
             if mname == String::from("byte_at") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64(), mname);
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_U64(), mname);
             }
             if mname == String::from("push_byte") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U8(), mname);
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_U8(), mname);
             }
             if mname == String::from("substring") {
-                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64(), mname);
-                check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64(), mname);
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_U64(), mname);
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 1, CTY_U64(), mname);
             }
             if mname == String::from("len") { return CTY_U64(); }
             if mname == String::from("byte_at") { return CTY_I64(); }
@@ -2890,7 +3279,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 return ts_make_applied(e.ts, opt_base, opt_args);
             }
             emit_unknown_method(e, a, eid, mname, String::from("String"));
-            return CTY_UNIT();
+            return CTY_UNKNOWN();
         }
         if recv_tag == CTY_APPLIED() {
             let base_tid: i64 = ty_a(e.ts, recv_tid);
@@ -2900,10 +3289,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 if base_name == String::from("Vec") {
                     let hargs_lid: i64 = ty_b(e.ts, recv_tid);
                     if mname == String::from("push") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
                     }
                     if mname == String::from("truncate") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_U64(), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_U64(), mname);
                     }
                     if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("push") { return CTY_UNIT(); }
@@ -2911,7 +3300,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if mname == String::from("clear") { return CTY_UNIT(); }
                     if mname == String::from("truncate") { return CTY_UNIT(); }
                     emit_unknown_method(e, a, eid, mname, String::from("Vec"));
-                    return CTY_UNIT();
+                    return CTY_UNKNOWN();
                 }
                 if base_name == String::from("Option") || base_name == String::from("Result") {
                     let hargs_lid: i64 = ty_b(e.ts, recv_tid);
@@ -2935,7 +3324,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         return inner_tid;
                     }
                     emit_unknown_method(e, a, eid, mname, base_name);
-                    return CTY_UNIT();
+                    return CTY_UNKNOWN();
                 }
                 if base_name == String::from("HashMap") {
                     let hargs_lid: i64 = ty_b(e.ts, recv_tid);
@@ -2945,13 +3334,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         CTY_I64()
                     };
                     if mname == String::from("insert") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, hargs_lid, 1), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, hargs_lid, 1), mname);
                     }
                     if mname == String::from("get") ||
                        mname == String::from("contains_key") ||
                        mname == String::from("remove") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
                     }
                     if mname == String::from("insert") { return CTY_UNIT(); }
                     if mname == String::from("get") {
@@ -2964,7 +3353,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("remove") { return CTY_UNIT(); }
                     emit_unknown_method(e, a, eid, mname, String::from("HashMap"));
-                    return CTY_UNIT();
+                    return CTY_UNKNOWN();
                 }
                 if base_name == String::from("BTreeMap") {
                     let bargs_lid: i64 = ty_b(e.ts, recv_tid);
@@ -2974,11 +3363,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         CTY_I64()
                     };
                     if mname == String::from("insert") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, bargs_lid, 1), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, bargs_lid, 1), mname);
                     }
                     if mname == String::from("get") || mname == String::from("contains") {
-                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
+                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
                     }
                     if mname == String::from("len") { return CTY_U64(); }
                     if mname == String::from("contains") { return CTY_BOOL(); }
@@ -2995,7 +3384,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         return ts_make_applied(e.ts, opt_base, opt_args);
                     }
                     emit_unknown_method(e, a, eid, mname, String::from("BTreeMap"));
-                    return CTY_UNIT();
+                    return CTY_UNKNOWN();
                 }
             }
         }
@@ -3003,20 +3392,24 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         uerr_msg.push_str(mname);
         uerr_msg.push_str(String::from("` on this type"));
         env_emit_error_code(e, EC_UNKNOWN_METHOD(), uerr_msg, expr_span(a, eid));
-        return CTY_UNIT();
+        return CTY_UNKNOWN();
     }
 
     if tag == EXPR_FIELD() {
         let recv_eid: i64 = expr_a(a, eid);
         let fname_sid: i64 = expr_b(a, eid);
         let recv_tid: i64 = check_expr(e, m, recv_eid);
-        if is_opaque(recv_tid) {
+        if is_unknown(recv_tid) {
             return recv_tid;
         }
         let fname: String = arena_str(a, fname_sid);
-        let recv_tag: i64 = ty_tag(e.ts, recv_tid);
+        let mut base_tid: i64 = recv_tid;
+        if ty_tag(e.ts, recv_tid) == CTY_REF() {
+            base_tid = ty_a(e.ts, recv_tid);
+        }
+        let recv_tag: i64 = ty_tag(e.ts, base_tid);
         if recv_tag == CTY_STRUCT() {
-            let sname: String = ty_struct_name(e.ts, recv_tid);
+            let sname: String = ty_struct_name(e.ts, base_tid);
             let sidx: i64 = env_lookup_struct(e, sname);
             if sidx != -1 {
                 let fname_lid: i64 = e.sdef_field_name_lids[sidx as u64];
@@ -3032,9 +3425,17 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     }
                     i = i + 1;
                 }
+                emit_no_such_field(e, sname, fname, expr_span(a, eid));
+                return CTY_UNKNOWN();
             }
+            emit_unknown_struct(e, sname, expr_span(a, eid));
+            return CTY_UNKNOWN();
         }
-        return CTY_NEVER();
+        let fmsg: String = String::from("field access on non-struct type `");
+        fmsg.push_str(ty_full_display_name(e.ts, recv_tid));
+        fmsg.push_str(String::from("`"));
+        env_emit_error_code(e, EC_TYPE_MISMATCH(), fmsg, expr_span(a, eid));
+        return CTY_UNKNOWN();
     }
 
     if tag == EXPR_INDEX() {
@@ -3043,13 +3444,16 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let recv_tid: i64 = check_expr(e, m, recv_eid);
         let idx_tid: i64 = check_expr(e, m, idx_eid);
         check_contextual_integer_literal_ranges(e, a, idx_eid, CTY_U64());
-        if !is_opaque(idx_tid) && !is_coercible(e.ts, idx_tid, CTY_U64()) {
+        if !is_unknown(idx_tid) && (never_is_not_a_value(e, m, idx_eid, idx_tid, CTY_U64()) || !is_coercible(e.ts, idx_tid, CTY_U64())) {
             let imsg: String = String::from("index has type `");
-            imsg.push_str(ty_tag_name(ty_tag(e.ts, idx_tid)));
+            imsg.push_str(ty_full_display_name(e.ts, idx_tid));
             imsg.push_str(String::from("` but must be `u64`"));
             env_emit_error_code(e, EC_TYPE_MISMATCH(), imsg, expr_span(a, idx_eid));
         }
-        if is_opaque(recv_tid) {
+        if is_unknown(recv_tid) {
+            return recv_tid;
+        }
+        if is_diverging_never(e, m, recv_eid, recv_tid) {
             return recv_tid;
         }
         if ty_tag(e.ts, recv_tid) == CTY_APPLIED() {
@@ -3070,7 +3474,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             e, EC_TYPE_MISMATCH(), inmsg, expr_span(a, eid),
             String::from("indexing is supported on Vec<T> only; read a map entry with `get`, which returns an `Option`")
         );
-        return CTY_NEVER();
+        return CTY_UNKNOWN();
     }
 
     if tag == EXPR_IF() {
@@ -3140,9 +3544,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let bc_idx: u64 = e.break_counts.len() - 1u64;
         let bc: u64 = e.break_counts[bc_idx] as u64;
         let mut loop_tid: i64 = CTY_NEVER();
+        let mut saw_unknown: bool = false;
         let mut bi: u64 = 0u64;
         while bi < bc {
             let btid: i64 = e.break_tids[break_start + bi];
+            if is_unknown(btid) {
+                saw_unknown = true;
+            }
             if !is_opaque(btid) {
                 if is_opaque(loop_tid) {
                     loop_tid = btid;
@@ -3161,7 +3569,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             bi = bi + 1;
         }
         if is_opaque(loop_tid) {
-            loop_tid = CTY_UNIT();
+            loop_tid = if saw_unknown { CTY_UNKNOWN() } else { CTY_UNIT() };
         }
         let mut ti: u64 = 0u64;
         while ti < bc {
@@ -3245,8 +3653,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             validation_i = validation_i + 1;
         }
         let scrutinee_supported: bool = is_enum_match_tid(e.ts, scrutinee_tid);
-        if all_arms_supported && !scrutinee_supported {
+        if all_arms_supported && !scrutinee_supported && !is_unknown(scrutinee_tid) {
             env_emit_error_code_hint(e, EC_UNSUPPORTED_PATTERN(), String::from("match scrutinee must be an enum"), expr_span(a, scrutinee_eid), String::from("use `if`/`else` comparisons for scalar values"));
+        }
+        if all_arms_supported && scrutinee_supported {
+            check_exhaustive(e, m, scrutinee_tid, arms_lid, n_arms, expr_span(a, eid));
         }
         let mut result_tid: i64 = CTY_NEVER();
         let handled_variants: Vec<String> = Vec::new();
@@ -3384,10 +3795,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let sname: String = arena_str(a, last_sid);
         let sidx: i64 = env_lookup_struct(e, sname);
         if sidx == -1 {
-            let umsg: String = String::from("unknown struct `");
-            umsg.push_str(sname);
-            umsg.push_str(String::from("`"));
-            env_emit_error_code(e, EC_TYPE_MISMATCH(), umsg, expr_span(a, eid));
+            emit_unknown_struct(e, sname, expr_span(a, eid));
         }
         let n_pairs: i64 = list_len(a, fields_lid);
         let n_fields: i64 = n_pairs / 2;
@@ -3429,18 +3837,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         env_emit_error_code(e, EC_TYPE_MISMATCH(), msg, expr_span(a, feid));
                     }
                 } else {
-                    let nfmsg: String = String::from("struct `");
-                    nfmsg.push_str(sname);
-                    nfmsg.push_str(String::from("` has no field `"));
-                    nfmsg.push_str(fname);
-                    nfmsg.push_str(String::from("`"));
-                    env_emit_error_code(e, EC_TYPE_MISMATCH(), nfmsg, expr_span(a, feid));
+                    emit_no_such_field(e, sname, fname, expr_span(a, feid));
                 }
             }
             i = i + 1;
         }
         if sidx == -1 {
-            return CTY_UNIT();
+            return CTY_UNKNOWN();
         }
         return ts_make_struct(e.ts, sname);
     }
@@ -3508,8 +3911,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if n_args != 2 {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
                     }
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64(), second_name);
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64(), second_name);
+                    check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_I64(), second_name);
+                    check_method_argument_exact(e, m, a, args_lid, arg_tids, 1, CTY_U64(), second_name);
                     return CTY_NEVER();
                 }
             }
@@ -3531,8 +3934,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if n_args != 2 {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
                     }
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64(), second_name);
-                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_U64(), second_name);
+                    check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_I64(), second_name);
+                    check_method_argument_exact(e, m, a, args_lid, arg_tids, 1, CTY_U64(), second_name);
                     return CTY_STR();
                 }
                 if second_name == String::from("from") {
@@ -3540,7 +3943,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         env_emit_error(e, String::from("String::from expects one String argument"), expr_span(a, eid));
                         return CTY_STR();
                     }
-                    if first_arg_tid != CTY_STR() && first_arg_tid != CTY_NEVER() {
+                    if first_arg_tid != CTY_STR() && !is_unknown(first_arg_tid)
+                        && !is_diverging_never(e, m, list_get(a, args_lid, 0), first_arg_tid) {
                         env_emit_error(e, String::from("String::from argument must be String"), expr_span(a, eid));
                     }
                     return CTY_STR();
@@ -3589,7 +3993,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         env_emit_error_code(e, EC_TYPE_MISMATCH(),
                             String::from("the `?` operator on Option requires the caller to return `Option`"),
                             expr_span(a, eid));
-                        return CTY_UNIT();
+                        return CTY_UNKNOWN();
                     }
                     let args_lid: i64 = ty_b(e.ts, inner_tid);
                     if ts_arg_len(e.ts, args_lid) > 0 {
@@ -3603,12 +4007,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     env_emit_error_code(e, EC_TYPE_MISMATCH(),
                         String::from("Result propagation with `?` is not lowered yet"),
                         expr_span(a, eid));
-                    return CTY_UNIT();
+                    return CTY_UNKNOWN();
                 }
             }
         }
         env_emit_error(e, String::from("the `?` operator requires `Option<T>` or `Result<T,E>`"), expr_span(a, eid));
-        return CTY_UNIT();
+        return CTY_UNKNOWN();
     }
 
     if tag == EXPR_RESULT() {
@@ -3666,6 +4070,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 String::from("tuple expressions are not supported in contract predicates"),
                 expr_span(a, eid),
             );
+        }
+        if n == 0 {
+            return CTY_UNIT();
         }
         let elem_tids: Vec<i64> = Vec::new();
         let mut i: i64 = 0;

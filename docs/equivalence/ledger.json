@@ -88,15 +88,6 @@
       "rust_error_codes": ["LinearTypeViolation"],
       "self_hosted_error_codes": ["RegionLinear"]
     },
-    "tests/error/linear_match_wrong_enum_qualifier.vow": {
-      "first_seen": "2026-08-25",
-      "observable": "error_code",
-      "status": "expected",
-      "note": "Both reject during linear checking, but Rust emits one additional cascading TypeMismatch diagnostic.",
-      "issue": 588,
-      "rust_error_codes": ["LinearTypeViolation", "TypeMismatch", "TypeMismatch", "TypeMismatch", "TypeMismatch"],
-      "self_hosted_error_codes": ["LinearTypeViolation", "TypeMismatch", "TypeMismatch", "TypeMismatch"]
-    },
     "tests/error/linear_region_branch_partial.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
@@ -145,20 +136,16 @@
     "tests/error/match_arm_missing_comma_block.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
-      "status": "expected",
-      "note": "Both reject with UnexpectedToken (#904, correctly closed); only the diagnostic count differs (2 vs 3). Cosmetic.",
-      "issue": 1088,
-      "rust_error_codes": ["UnexpectedToken", "UnexpectedToken"],
-      "self_hosted_error_codes": ["UnexpectedToken", "UnexpectedToken", "UnexpectedToken"]
+      "status": "fixed",
+      "note": "Was a cascade-depth difference (both reject with UnexpectedToken, #904; self-hosted reported 3 diagnostics to Rust's 2). The self-hosted parser now stops at the first unterminated statement like Rust, so both emit the same two; retained so a reappearance reads as a regression.",
+      "issue": 1088
     },
     "tests/error/match_arm_missing_comma_scalar.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
-      "status": "expected",
-      "note": "Both reject with UnexpectedToken (#904, correctly closed); only the diagnostic count differs (2 vs 3). Cosmetic.",
-      "issue": 1088,
-      "rust_error_codes": ["UnexpectedToken", "UnexpectedToken"],
-      "self_hosted_error_codes": ["UnexpectedToken", "UnexpectedToken", "UnexpectedToken"]
+      "status": "fixed",
+      "note": "Was a cascade-depth difference (both reject with UnexpectedToken, #904; self-hosted reported 3 diagnostics to Rust's 2). The self-hosted parser now stops at the first unterminated statement like Rust, so both emit the same two; retained so a reappearance reads as a regression.",
+      "issue": 1088
     },
     "tests/error/undefined_function.vow": {
       "first_seen": "2026-08-25",

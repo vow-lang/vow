@@ -11,6 +11,8 @@ struct Parser {
     dctx: DiagCtx,
     in_ensures: i64,
     file: String,
+    aborted: i64,
+    recovered: i64,
 }
 
 fn parser_new(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx, file: String) -> Parser {
@@ -21,6 +23,8 @@ fn parser_new(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx, file: String) 
         dctx: dctx,
         in_ensures: 0,
         file: file,
+        aborted: 0,
+        recovered: 0,
     }
 }
 
@@ -132,10 +136,38 @@ fn push_error(p: Parser, msg: String) {
 }
 
 fn push_error_code(p: Parser, code: i64, msg: String) {
+    if p.aborted != 0 { return; }
     let t: Token = peek(p);
     let d: Diagnostic = diag_error(code, msg, p.file, t.span_start, t.span_len);
     let dctx: DiagCtx = p.dctx;
     diag_ctx_emit(dctx, d);
+}
+
+fn parser_abort(p: Parser) {
+    p.aborted = 1;
+    while !at_end(p) {
+        let _skip: Token = advance(p);
+    }
+}
+
+// Errors after which the Rust parser still returns an expression (so the
+// statement loop goes on to report a missing `;`) are counted as recovered and
+// do not count here.
+fn parser_error_count(p: Parser) -> i64 {
+    let dctx: DiagCtx = p.dctx;
+    dctx.error_count - p.recovered
+}
+
+fn push_error_code_hint(p: Parser, code: i64, msg: String, hint: String) {
+    if p.aborted != 0 { return; }
+    let t: Token = peek(p);
+    let d: Diagnostic = diag_error(code, msg, p.file, t.span_start, t.span_len);
+    let owned_hint: String = String::from("");
+    owned_hint.push_str(hint);
+    diag_add_hint(d, owned_hint);
+    let dctx: DiagCtx = p.dctx;
+    diag_ctx_emit(dctx, d);
+    p.recovered = p.recovered + 1;
 }
 
 fn parse_module(tokens: Vec<Token>) -> Module {
@@ -296,7 +328,7 @@ fn parse_extern(p: Parser) -> i64 {
         if name_sid == -1 {
             name_sid = arena_intern_str(p.arena, String::from("<error>"));
         }
-        let params_lid: i64 = parse_params(p);
+        let params_lid: i64 = parse_params(p, false);
         let mut ret_tid: i64 = -1;
         if at(p, tok_thin_arrow()) {
             let _arr: Token = advance(p);
@@ -344,7 +376,7 @@ fn parse_fn_def(p: Parser) -> i64 {
     };
     let _kw: bool = expect(p, tok_kw_fn());
     let name_sid: i64 = expect_ident(p);
-    let params_lid: i64 = parse_params(p);
+    let params_lid: i64 = parse_params(p, true);
     let mut ret_tid: i64 = -1;
     if at(p, tok_thin_arrow()) {
         let _arr: Token = advance(p);
@@ -470,7 +502,9 @@ fn parse_effects(p: Parser) -> i64 {
     eff
 }
 
-fn parse_params(p: Parser) -> i64 {
+// A function definition gives up on the module when its parameter list is
+// malformed, like the Rust parser; an extern declaration stays lenient.
+fn parse_params(p: Parser, strict: bool) -> i64 {
     let lp_ok: bool = expect(p, tok_lparen());
     let items: Vec<i64> = Vec::new();
     if !lp_ok {
@@ -496,12 +530,20 @@ fn parse_params(p: Parser) -> i64 {
         items.push(name_span);
         if at(p, tok_comma()) {
             let _c: Token = advance(p);
+        } else {
+            break;
         }
     }
-    let _rp: bool = expect(p, tok_rparen());
+    let rp_ok: bool = expect(p, tok_rparen());
+    if strict && !rp_ok {
+        parser_abort(p);
+    }
     arena_add_list(p.arena, items)
 }
 
+// Each clause's span runs from its keyword to the end of its predicate, as the
+// Rust parser's does: counterexample `source` and the Vow* instruction origins
+// are read off it.
 fn parse_vow_block(p: Parser) -> i64 {
     if !at(p, tok_kw_vow()) {
         return -1;
@@ -512,12 +554,11 @@ fn parse_vow_block(p: Parser) -> i64 {
     while !at(p, tok_rbrace()) && !at_end(p) {
         let ct: Token = peek(p);
         let ctag: i64 = ct.tag;
-        let span: i64 = span_pack(ct.span_start, ct.span_len);
         if ctag == tok_kw_requires() {
             let _ck: Token = advance(p);
             let _colon: bool = expect(p, tok_colon());
             let eid: i64 = parse_expr(p);
-            let cid: i64 = arena_add_vow_clause(p.arena, CLAUSE_REQUIRES(), eid, span);
+            let cid: i64 = arena_add_vow_clause(p.arena, CLAUSE_REQUIRES(), eid, span_pack_to_here(p, ct.span_start));
             clause_ids.push(cid);
         } else if ctag == tok_kw_ensures() {
             let _ck: Token = advance(p);
@@ -525,13 +566,13 @@ fn parse_vow_block(p: Parser) -> i64 {
             p.in_ensures = 1;
             let eid: i64 = parse_expr(p);
             p.in_ensures = 0;
-            let cid: i64 = arena_add_vow_clause(p.arena, CLAUSE_ENSURES(), eid, span);
+            let cid: i64 = arena_add_vow_clause(p.arena, CLAUSE_ENSURES(), eid, span_pack_to_here(p, ct.span_start));
             clause_ids.push(cid);
         } else if ctag == tok_kw_invariant() {
             let _ck: Token = advance(p);
             let _colon: bool = expect(p, tok_colon());
             let eid: i64 = parse_expr(p);
-            let cid: i64 = arena_add_vow_clause(p.arena, CLAUSE_INVARIANT(), eid, span);
+            let cid: i64 = arena_add_vow_clause(p.arena, CLAUSE_INVARIANT(), eid, span_pack_to_here(p, ct.span_start));
             clause_ids.push(cid);
         } else {
             push_error(p, String::from("expected requires, ensures, or invariant"));
@@ -594,6 +635,8 @@ fn parse_type(p: Parser) -> i64 {
             gen_items.push(parse_type(p));
             if at(p, tok_comma()) {
                 let _c: Token = advance(p);
+            } else {
+                break;
             }
         }
         let _gt: bool = expect(p, tok_gt());
@@ -610,13 +653,38 @@ fn parse_block(p: Parser) -> i64 {
     };
     let _lb: bool = expect(p, tok_lbrace());
     let stmt_items: Vec<i64> = Vec::new();
-    while !at(p, tok_rbrace()) && !at_end(p) {
-        let s: i64 = parse_stmt(p);
-        if s != -1 {
-            stmt_items.push(s);
+    let mut open: bool = false;
+    while !open && !at(p, tok_rbrace()) && !at_end(p) {
+        let errors_before: i64 = parser_error_count(p);
+        if at(p, tok_kw_let()) {
+            stmt_items.push(parse_let_stmt(p));
+        } else {
+            let starts_with_paren: bool = at(p, tok_lparen());
+            let e: i64 = parse_expr(p);
+            let has_semi: i64 = if at(p, tok_semicolon()) {
+                let _sc: Token = advance(p);
+                1
+            } else {
+                0
+            };
+            // An expression statement ends at `;`, at the closing `}` (the
+            // block's value) or, for an unparenthesised block-like expression,
+            // right after its own `}`. Anything else is a missing `;`.
+            open = has_semi == 0 && !at(p, tok_rbrace())
+                && (starts_with_paren || !is_block_expr(p.arena, e));
+            stmt_items.push(arena_add_stmt(p.arena, STMT_EXPR(), e, has_semi, 0, 0));
+            if open {
+                // Like the Rust parser, give up on the module at the first
+                // unterminated statement: report the stray token unless this
+                // statement already reported an error, then stay silent.
+                if parser_error_count(p) == errors_before {
+                    push_error(p, String::from("expected `;` or `}` after expression statement"));
+                }
+                parser_abort(p);
+            }
         }
     }
-    let _rb: bool = expect(p, tok_rbrace());
+    let _rb: bool = if open { false } else { expect(p, tok_rbrace()) };
     let stmts_lid: i64 = arena_add_list(p.arena, stmt_items);
     let span: i64 = span_pack_to_here(p, span_start);
     arena_add_blk(p.arena, stmts_lid, -1, span)
@@ -626,21 +694,6 @@ fn parse_block_expr(p: Parser) -> i64 {
     let span_start: i64 = peek(p).span_start;
     let bid: i64 = parse_block(p);
     arena_add_expr(p.arena, EXPR_BLOCK(), bid, 0, 0, span_pack_to_here(p, span_start))
-}
-
-fn parse_stmt(p: Parser) -> i64 {
-    if at(p, tok_kw_let()) {
-        parse_let_stmt(p)
-    } else {
-        let e: i64 = parse_expr(p);
-        let has_semi: i64 = if at(p, tok_semicolon()) {
-            let _sc: Token = advance(p);
-            1
-        } else {
-            0
-        };
-        arena_add_stmt(p.arena, STMT_EXPR(), e, has_semi, 0, 0)
-    }
 }
 
 fn parse_let_stmt(p: Parser) -> i64 {
@@ -753,18 +806,14 @@ fn looks_like_struct_literal(p: Parser) -> bool {
     false
 }
 
-fn is_block_expr(a: AstArena, eid: i64) -> bool {
-    let tag: i64 = expr_tag(a, eid);
-    tag == EXPR_IF() || tag == EXPR_WHILE() || tag == EXPR_LOOP() || tag == EXPR_FOR() || tag == EXPR_MATCH() || tag == EXPR_BLOCK()
-}
-
 fn parse_expr_prec(p: Parser, min_prec: i64) -> i64 {
     // #585: a binary expression needs a real span, not 0. The checked operators
     // abort on overflow, and the ArithOverflowReachable diagnostic points at the
     // operator's own source range; the Rust parser has always recorded it.
     let expr_start: i64 = peek(p).span_start;
+    let starts_with_paren: bool = at(p, tok_lparen());
     let mut lhs: i64 = parse_unary(p);
-    if is_block_expr(p.arena, lhs) { return lhs; }
+    if !starts_with_paren && is_block_expr(p.arena, lhs) { return lhs; }
     let mut prec: i64 = current_binop_prec(p);
     while prec >= 0 && prec >= min_prec {
         let op: i64 = current_binop(p);
@@ -787,6 +836,18 @@ fn parse_unary(p: Parser) -> i64 {
         let _t: Token = advance(p);
         let operand: i64 = parse_unary(p);
         arena_add_expr(p.arena, EXPR_UNOP(), UNOP_NEG(), operand, 0, span_pack_to_here(p, span_start))
+    } else if at(p, tok_amp()) || at(p, tok_amp_amp()) {
+        push_error_code_hint(
+            p,
+            EC_UNSUPPORTED_FEATURE(),
+            String::from("borrow expressions (`&expr`) are not supported in Vow"),
+            String::from("Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise AND operator")
+        );
+        let _t: Token = advance(p);
+        if at(p, tok_kw_mut()) {
+            let _m: Token = advance(p);
+        }
+        parse_unary(p)
     } else {
         parse_postfix(p)
     }
@@ -800,8 +861,9 @@ fn parse_postfix(p: Parser) -> i64 {
     // into `IrInst.ostart/olen`, leaving region-pass diagnostics anchored
     // to offset 0.
     let span_start: i64 = peek(p).span_start;
+    let starts_with_paren: bool = at(p, tok_lparen());
     let mut e: i64 = parse_primary(p);
-    let mut cont: bool = true;
+    let mut cont: bool = starts_with_paren || !is_block_expr(p.arena, e);
     while cont {
         if at(p, tok_dot()) {
             let _dot: Token = advance(p);
@@ -829,7 +891,7 @@ fn parse_postfix(p: Parser) -> i64 {
             e = arena_add_expr(p.arena, EXPR_QUESTION(), e, 0, 0, span_pack_to_here(p, span_start));
         } else if at(p, tok_kw_as()) {
             let _as: Token = advance(p);
-            let target_tid: i64 = parse_type(p);
+            let target_tid: i64 = parse_cast_target(p);
             e = arena_add_expr(p.arena, EXPR_CAST(), e, target_tid, 0, span_pack_to_here(p, span_start));
         } else if at(p, tok_eq()) {
             let _eq: Token = advance(p);
@@ -841,6 +903,26 @@ fn parse_postfix(p: Parser) -> i64 {
         }
     }
     e
+}
+
+fn is_scalar_type_name(name: String) -> bool {
+    name == String::from("i8") || name == String::from("i16") || name == String::from("i32")
+        || name == String::from("i64") || name == String::from("i128")
+        || name == String::from("u8") || name == String::from("u16") || name == String::from("u32")
+        || name == String::from("u64") || name == String::from("u128")
+        || name == String::from("f32") || name == String::from("f64") || name == String::from("bool")
+}
+
+// A scalar type name takes no generic arguments, so a `<` after it is a
+// comparison or shift (`x as u64 < y`, `x as u64 << 1`).
+fn parse_cast_target(p: Parser) -> i64 {
+    let t: Token = peek(p);
+    if t.tag == tok_ident() && is_scalar_type_name(t.str_val) {
+        let span_start: i64 = t.span_start;
+        let sid: i64 = expect_ident(p);
+        return arena_add_type(p.arena, TY_NAMED(), sid, 0, span_pack_to_here(p, span_start));
+    }
+    parse_type(p)
 }
 
 fn parse_call_args(p: Parser) -> i64 {

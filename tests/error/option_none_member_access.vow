@@ -1,0 +1,24 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 4
+// Rubble and bottom receivers must be diagnosed identically by both compilers.
+module OptionNoneMemberAccess
+
+fn field_of_none() {
+    let x: i64 = Option::None.field;
+}
+
+fn index_of_none() {
+    let x: i64 = Option::None[0];
+}
+
+fn method_of_none() {
+    let x: i64 = Option::None.bogus();
+}
+
+fn method_of_new_map() {
+    let x: i64 = HashMap::new().bogus(1);
+}
+
+fn main() -> i32 {
+    0
+}

@@ -132,8 +132,7 @@ fn main() -> i32 [io] {
     print_str(String::from("\n"));
 
     let token: Token = unwrap_linear(LinearPayload::Token(Token { id: 7 }));
-    let token_sink: Vec<Token> = Vec::new();
-    token_sink.push(token);
+    drop(token);
 
     let found: Box = opt_box_or_default(ms, 5);
     print_i64(found.v);

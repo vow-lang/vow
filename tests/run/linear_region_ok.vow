@@ -6,16 +6,14 @@ linear struct Handle {
 
 fn same_block() -> i64 {
     let h: Handle = Handle { fd: 1 };
-    let v: Vec<Handle> = Vec::new();
-    v.push(h);
+    drop(h);
     0
 }
 
 fn nested_block() -> i64 {
     let h: Handle = Handle { fd: 2 };
-    let v: Vec<Handle> = Vec::new();
     {
-        v.push(h);
+        drop(h);
     }
     0
 }
@@ -32,21 +30,23 @@ fn transfer_return(h: Handle, c: bool) -> Handle {
     }
 }
 
-fn vec_set_transfer() -> i64 {
+fn branch_drop(c: bool) -> i64 {
     let h: Handle = Handle { fd: 4 };
-    let v: Vec<Handle> = Vec::new();
-    v.push(Handle { fd: 0 });
-    v[0] = h;
+    if c {
+        drop(h);
+    } else {
+        drop(h);
+    }
     0
 }
 
 fn main() -> i32 {
     same_block();
     nested_block();
-    vec_set_transfer();
+    branch_drop(true);
+    branch_drop(false);
     let h: Handle = Handle { fd: 3 };
     let h2: Handle = transfer_return(h, true);
-    let v: Vec<Handle> = Vec::new();
-    v.push(h2);
+    drop(h2);
     0
 }

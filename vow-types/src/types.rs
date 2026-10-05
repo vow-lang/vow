@@ -36,6 +36,11 @@ pub enum Ty {
     // Unit and bottom
     Unit,
     Never,
+    // Frontend-only marker for an expression that already failed type checking.
+    // It is not nameable from source, is distinct from `Never` (the type of
+    // `Option::None` and `Vec::new()`), and is absorbed by every later check so
+    // one mistake yields one diagnostic.
+    Unknown,
 }
 
 impl Ty {
@@ -45,6 +50,16 @@ impl Ty {
 
     pub fn is_lit_int(&self) -> bool {
         matches!(self, Ty::LitInt)
+    }
+
+    pub fn is_unknown(&self) -> bool {
+        matches!(self, Ty::Unknown)
+    }
+
+    /// True for the two types a downstream check must not cascade on: error
+    /// recovery rubble (`Unknown`) and the bottom type (`Never`).
+    pub fn is_unknown_or_never(&self) -> bool {
+        matches!(self, Ty::Unknown | Ty::Never)
     }
 
     pub fn is_integer(&self) -> bool {
@@ -161,6 +176,7 @@ impl Ty {
             }
             Ty::Unit => write!(f, "()"),
             Ty::Never => write!(f, "!"),
+            Ty::Unknown => write!(f, "<error>"),
         }
     }
 }
@@ -253,6 +269,11 @@ mod tests {
         assert_eq!(Ty::Str.to_string(), "str");
         assert_eq!(Ty::Unit.to_string(), "()");
         assert_eq!(Ty::Never.to_string(), "!");
+        assert_eq!(Ty::Unknown.to_string(), "<error>");
+        assert!(Ty::Unknown.is_unknown());
+        assert!(Ty::Unknown.is_unknown_or_never());
+        assert!(Ty::Never.is_unknown_or_never());
+        assert!(!Ty::Never.is_unknown());
     }
 
     #[test]

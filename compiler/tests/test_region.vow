@@ -325,6 +325,249 @@ fn check_wrapper_republishes_callee_store_effect() -> i64 {
     0
 }
 
+// `push_fresh(s)`: pushes a fresh Vec into the container `s.items`, a
+// projection of its parameter. Its summary stores FreshInCaller into param 0.
+fn mk_push_fresh_callee() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    let fg_args: Vec<i64> = Vec::new();
+    fg_args.push(0);
+    insts.push(ir_inst_new(1, IOP_FIELD_GET(), ITY_I64(), fg_args, IDATA_FIELD(), 0, 0, String::from("")));
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), Vec::new(), String::from("__vow_vec_new_val")));
+    let push_args: Vec<i64> = Vec::new();
+    push_args.push(1);
+    push_args.push(2);
+    insts.push(mk_inst_call_extern(3, ITY_UNIT(), push_args, String::from("__vow_vec_push_val")));
+    insts.push(ir_inst_new(4, IOP_RETURN(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    mk_function(0, String::from("push_fresh"), params, ITY_UNIT(), blocks)
+}
+
+fn mk_region_alloc(id: i64) -> IrInst {
+    ir_inst_new(id, IOP_REGION_ALLOC(), ITY_PTR(), Vec::new(), IDATA_ALLOC_SIZE(), 16, 8, String::from(""))
+}
+
+fn mk_field_set(id: i64, target: i64, source: i64) -> IrInst {
+    let args: Vec<i64> = Vec::new();
+    args.push(target);
+    args.push(source);
+    ir_inst_new(id, IOP_FIELD_SET(), ITY_UNIT(), args, IDATA_FIELD(), 0, 0, String::from(""))
+}
+
+fn mk_field_get(id: i64, base: i64) -> IrInst {
+    let args: Vec<i64> = Vec::new();
+    args.push(base);
+    ir_inst_new(id, IOP_FIELD_GET(), ITY_I64(), args, IDATA_FIELD(), 0, 0, String::from(""))
+}
+
+fn mk_jump(id: i64, target: i64) -> IrInst {
+    ir_inst_new(id, IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), target, 0, String::from(""))
+}
+
+fn mk_return_unit(id: i64) -> IrInst {
+    ir_inst_new(id, IOP_RETURN(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""))
+}
+
+fn mk_vec_push_val(id: i64, vec_id: i64, value_id: i64) -> IrInst {
+    let args: Vec<i64> = Vec::new();
+    args.push(vec_id);
+    args.push(value_id);
+    mk_inst_call_extern(id, ITY_UNIT(), args, String::from("__vow_vec_push_val"))
+}
+
+fn infer_one(funcs: Vec<IrFunction>) -> IrModule {
+    let dctx: DiagCtx = diag_ctx_new();
+    infer_regions_module(mk_module(funcs), dctx)
+}
+
+// `x = Vec::new(); { s = Sink { items: x }; push_fresh(s); } [return x]` with
+// `s` declared in a nested block. Returns the region inferred for `s`.
+fn holder_around_outer_container(returns_outer: bool) -> i64 {
+    let b0: Vec<IrInst> = Vec::new();
+    b0.push(mk_inst_call_extern(10, ITY_PTR(), Vec::new(), String::from("__vow_vec_new_val")));
+    b0.push(mk_jump(20, 1));
+    let b1: Vec<IrInst> = Vec::new();
+    b1.push(mk_region_alloc(11));
+    b1.push(mk_field_set(12, 11, 10));
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(11);
+    b1.push(mk_inst_call_target(13, ITY_UNIT(), call_args, 0));
+    if returns_outer {
+        b1.push(mk_inst_return(14, 10));
+    } else {
+        b1.push(mk_return_unit(14));
+    }
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, b0));
+    blocks.push(mk_block(1, b1));
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_push_fresh_callee());
+    funcs.push(mk_function(1, String::from("caller"), Vec::new(), if returns_outer { ITY_PTR() } else { ITY_UNIT() }, blocks));
+    let result: IrModule = infer_one(funcs);
+    result.functions[1].blocks[1].insts[0].rgn
+}
+
+// Mirrors `effect_target_holder_outlives_the_container_it_wraps`: the callee
+// stores into the returned container through the holder, so the holder (whose
+// arena the callee receives) must outlive that container.
+fn check_effect_target_holder_outlives_wrapped_container() -> i64 {
+    if holder_around_outer_container(true) != region_pack(REGION_KIND_CALLER(), 0) { return 1; }
+    0
+}
+
+// Mirrors `effect_target_holder_widens_to_the_wrapped_container_region`.
+fn check_effect_target_holder_widens_to_container_region() -> i64 {
+    if holder_around_outer_container(false) != region_pack(REGION_KIND_BLOCK(), 0) { return 1; }
+    0
+}
+
+// Mirrors `holder_without_store_effect_call_stays_block_local`.
+fn check_holder_without_store_effect_stays_block_local() -> i64 {
+    let b0: Vec<IrInst> = Vec::new();
+    b0.push(mk_inst_call_extern(10, ITY_PTR(), Vec::new(), String::from("__vow_vec_new_val")));
+    b0.push(mk_jump(20, 1));
+    let b1: Vec<IrInst> = Vec::new();
+    b1.push(mk_region_alloc(11));
+    b1.push(mk_field_set(12, 11, 10));
+    b1.push(mk_return_unit(13));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, b0));
+    blocks.push(mk_block(1, b1));
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(0, String::from("caller"), Vec::new(), ITY_UNIT(), blocks));
+    let result: IrModule = infer_one(funcs);
+    if result.functions[0].blocks[1].insts[0].rgn != region_pack(REGION_KIND_BLOCK(), 1) { return 1; }
+    0
+}
+
+// Mirrors `effect_target_projection_widens_its_base_not_the_projection`.
+fn check_effect_target_projection_widens_its_base() -> i64 {
+    let b0: Vec<IrInst> = Vec::new();
+    b0.push(mk_inst_call_extern(10, ITY_PTR(), Vec::new(), String::from("__vow_vec_new_val")));
+    b0.push(mk_jump(20, 1));
+    let b1: Vec<IrInst> = Vec::new();
+    b1.push(mk_region_alloc(11));
+    b1.push(mk_field_set(12, 11, 10));
+    b1.push(mk_field_get(13, 11));
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(13);
+    b1.push(mk_inst_call_target(14, ITY_UNIT(), call_args, 0));
+    b1.push(mk_inst_return(15, 10));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, b0));
+    blocks.push(mk_block(1, b1));
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_push_fresh_callee());
+    funcs.push(mk_function(1, String::from("caller"), Vec::new(), ITY_PTR(), blocks));
+    let result: IrModule = infer_one(funcs);
+    if result.functions[1].blocks[1].insts[0].rgn != region_pack(REGION_KIND_CALLER(), 0) { return 1; }
+    0
+}
+
+// `x = Vec::new(); s = Sink { items: x }; s.items.push(fresh) [; return x]`.
+// Returns the region inferred for the pushed value.
+fn push_through_local_projection(returns_outer: bool) -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_call_extern(0, ITY_PTR(), Vec::new(), String::from("__vow_vec_new_val")));
+    insts.push(mk_region_alloc(1));
+    insts.push(mk_field_set(2, 1, 0));
+    insts.push(mk_field_get(3, 1));
+    insts.push(mk_inst_call_extern(4, ITY_PTR(), Vec::new(), String::from("__vow_vec_new_val")));
+    insts.push(mk_vec_push_val(5, 3, 4));
+    if returns_outer {
+        insts.push(mk_inst_return(6, 0));
+    } else {
+        insts.push(mk_return_unit(6));
+    }
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(0, String::from("local_push"), Vec::new(), if returns_outer { ITY_PTR() } else { ITY_UNIT() }, blocks));
+    let result: IrModule = infer_one(funcs);
+    result.functions[0].blocks[0].insts[4].rgn
+}
+
+// Mirrors `push_through_local_projection_is_owned_by_the_base_not_root` and
+// `push_through_local_projection_of_a_dying_holder_is_block_local`.
+fn check_push_through_local_projection_is_owned_by_base() -> i64 {
+    if push_through_local_projection(true) != region_pack(REGION_KIND_CALLER(), 0) { return 1; }
+    if region_kind(push_through_local_projection(false)) != REGION_KIND_BLOCK() { return 2; }
+    0
+}
+
+// Mirrors `push_through_alias_returning_accessor_is_a_store_into_the_argument`:
+// `items(s)` returns an alias of its argument, so `items(s).push(fresh)` stores
+// into parameter 0 and the pushed value lives in that parameter's hidden arena.
+fn check_push_through_alias_accessor_targets_the_argument() -> i64 {
+    let a_insts: Vec<IrInst> = Vec::new();
+    a_insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    a_insts.push(mk_field_get(1, 0));
+    a_insts.push(mk_inst_return(2, 1));
+    let a_blocks: Vec<IrBlock> = Vec::new();
+    a_blocks.push(mk_block(0, a_insts));
+    let a_params: Vec<i64> = Vec::new();
+    a_params.push(ITY_PTR());
+    let accessor: IrFunction = mk_function(0, String::from("items"), a_params, ITY_PTR(), a_blocks);
+
+    let f_insts: Vec<IrInst> = Vec::new();
+    f_insts.push(mk_inst_arg(10, ITY_PTR(), 0));
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(10);
+    f_insts.push(mk_inst_call_target(11, ITY_I64(), call_args, 0));
+    f_insts.push(mk_inst_call_extern(12, ITY_PTR(), Vec::new(), String::from("__vow_vec_new_val")));
+    f_insts.push(mk_vec_push_val(13, 11, 12));
+    f_insts.push(mk_return_unit(14));
+    let f_blocks: Vec<IrBlock> = Vec::new();
+    f_blocks.push(mk_block(0, f_insts));
+    let f_params: Vec<i64> = Vec::new();
+    f_params.push(ITY_PTR());
+    let pusher: IrFunction = mk_function(1, String::from("f"), f_params, ITY_UNIT(), f_blocks);
+
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(accessor);
+    funcs.push(pusher);
+    let result: IrModule = infer_one(funcs);
+    if result.functions[1].blocks[0].insts[2].rgn != region_pack(REGION_KIND_CALLER(), 0) { return 1; }
+    0
+}
+
+// `f(x) { s = Sink { items: x }; push_fresh(s); [return s] }`: the region
+// inferred for `s`.
+fn holder_of_parameter_container(returns_holder: bool) -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(10, ITY_PTR(), 0));
+    insts.push(mk_region_alloc(11));
+    insts.push(mk_field_set(12, 11, 10));
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(11);
+    insts.push(mk_inst_call_target(13, ITY_UNIT(), call_args, 0));
+    if returns_holder {
+        insts.push(mk_inst_return(14, 11));
+    } else {
+        insts.push(mk_return_unit(14));
+    }
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_push_fresh_callee());
+    funcs.push(mk_function(1, String::from("f"), params, if returns_holder { ITY_PTR() } else { ITY_UNIT() }, blocks));
+    let result: IrModule = infer_one(funcs);
+    result.functions[1].blocks[0].insts[1].rgn
+}
+
+// Mirrors `block_local_holder_of_a_parameter_container_goes_to_the_root_arena`
+// and `escaping_holder_of_a_parameter_container_keeps_its_caller_region`.
+fn check_holder_of_parameter_container() -> i64 {
+    if holder_of_parameter_container(false) != region_root() { return 1; }
+    if holder_of_parameter_container(true) != region_pack(REGION_KIND_CALLER(), 0) { return 2; }
+    0
+}
+
 fn main() -> i32 {
     let r1: i64 = check_split_element_lifts_to_caller();
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -340,5 +583,19 @@ fn main() -> i32 {
     if r6 != 0 { return i64_to_i32_wrap(200 + r6); }
     let r7: i64 = check_fresh_runtime_aggregates_follow_escape();
     if r7 != 0 { return i64_to_i32_wrap(300 + r7); }
+    let r8: i64 = check_effect_target_holder_outlives_wrapped_container();
+    if r8 != 0 { return i64_to_i32_wrap(400 + r8); }
+    let r9: i64 = check_effect_target_holder_widens_to_container_region();
+    if r9 != 0 { return i64_to_i32_wrap(500 + r9); }
+    let r10: i64 = check_holder_without_store_effect_stays_block_local();
+    if r10 != 0 { return i64_to_i32_wrap(600 + r10); }
+    let r11: i64 = check_effect_target_projection_widens_its_base();
+    if r11 != 0 { return i64_to_i32_wrap(700 + r11); }
+    let r12: i64 = check_push_through_local_projection_is_owned_by_base();
+    if r12 != 0 { return i64_to_i32_wrap(800 + r12); }
+    let r13: i64 = check_push_through_alias_accessor_targets_the_argument();
+    if r13 != 0 { return i64_to_i32_wrap(900 + r13); }
+    let r14: i64 = check_holder_of_parameter_container();
+    if r14 != 0 { return i64_to_i32_wrap(1000 + r14); }
     0
 }

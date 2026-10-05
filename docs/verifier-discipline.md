@@ -114,6 +114,44 @@ arithmetic has no guard, so it fails closed as non-modelable (`Skipped`) rather
 than reverting to the wrapping model — the same fail-closed precedent as
 `ConstI128`.
 
+## Inventory of emitted assumes
+
+Every `__ESBMC_assume` the C emitters produce (`vow-verify/src/c_emitter.rs`,
+`compiler/c_emitter.vow`; the two emit identical text, enforced by
+`scripts/parity.py c`) falls in exactly one class below. A new assume that fits
+none of them is a pruning assume and must not be added.
+
+| Assume | Class | Why it hides no real behaviour |
+|---|---|---|
+| `requires` clause predicate | contract | The caller's obligation, asserted at call sites (`CALLER_PRECONDITION_VOW_ID`); the callee's own proof is relative to it. |
+| `v.len <= CAP` / `ptr == 0 \|\| len < CAP` / `__vow_heap_top <= CAP` | **model bound** | Prunes executions beyond the verifier's capacity. Tagged `/* vow:model-bound <Kind> <cap> */` and surfaced as a `ModelCapacityAssumed` note; a provable constant beyond the capacity (a literal, a folded phi, the result of a constant-returning function) is an assert instead, never an assume. |
+| `tag == 0 \|\| tag == 1`, `payload` within the parsed type's range | representation invariant | The domain of an `Option` tag and of a narrow-integer `parse_*` payload; no other value exists. |
+| BTreeMap keys strictly ascending | representation invariant | A `BTreeMap`'s keys are unique and sorted by construction; the get/contains/insert model relies on it. |
+| `byte >= 0 && byte <= 255` after `byte_at` | representation invariant (redundant) | The value is already `(unsigned char)`; the assume is a no-op kept for the solver. |
+| no-overflow guard of `+!` `-!` `*!` `/!` `%!` | program abort | See "Modelling an abort is not pruning"; always paired with an `arith:` assert. |
+| `0` at an `Unreachable` instruction | unreachable code | The path cannot execute. |
+
+A result whose proof leaned on a model-bound assume is reported as bounded; the
+other classes need no qualification.
+
+## String copy models
+
+`substring` and `string_substr` compute the result's length in closed form from
+the clamping documented in `grammar.md` (min/clamp arithmetic on unsigned
+values), then copy bytes in a loop bounded by the string capacity. A loop longer
+than the incremental-BMC step bound (`--max-k-step`) makes ESBMC answer
+`unknown`, even when the property under proof mentions only the length. The
+emitters therefore emit the copy loop only when some instruction can read the
+result's bytes (`byte_at`, `contains`, `string_matches_literal_at`, a clone, a
+phi, a call argument). A result that is only measured (`len`), compared with
+`eq` (a cached nondeterministic verdict over the lengths), appended with
+`push_str` (the model tracks only `.len`), or returned carries no loop and is
+marked `/* length-only substring: bytes never read, copy loop elided */`. Both
+forms agree on every observable property, so this removes no behaviour from the
+proof; it only avoids asking the solver to unwind bytes nobody reads. A contract
+that reads the result's bytes keeps the loop and stays bounded by the
+incremental-BMC step bound.
+
 ## Status taxonomy
 
 The status vocabulary already distinguishes a clean proof from every weaker or

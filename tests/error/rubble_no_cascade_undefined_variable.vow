@@ -1,0 +1,22 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 3
+// TEST: stderr "undefined variable `nope`"
+// An undefined variable is error-recovery rubble: arithmetic, negation and a
+// condition built on it must not add diagnostics of their own.
+module RubbleNoCascadeUndefinedVariable
+
+fn arithmetic() {
+    let x: i64 = nope + 1;
+}
+
+fn negation() {
+    let y: i64 = -nope;
+}
+
+fn condition() {
+    let c: bool = nope < 3;
+}
+
+fn main() -> i32 {
+    0
+}

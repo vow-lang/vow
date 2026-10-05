@@ -12,8 +12,7 @@ enum Payload {
 }
 
 fn consume(token: Token) -> () {
-    let sink: Vec<Token> = Vec::new();
-    sink.push(token);
+    drop(token);
 }
 
 fn discard_remaining(value: Payload) -> i64 {

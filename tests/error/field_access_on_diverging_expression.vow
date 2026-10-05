@@ -1,0 +1,15 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 1
+// TEST: stderr "field access on non-struct type"
+// A diverging expression has no fields; both compilers must reject it rather
+// than leave a field read on a value that never exists to lowering.
+module FieldAccessOnDivergingExpression
+
+fn f() -> i64 {
+    let y: i64 = (return 1).foo;
+    y
+}
+
+fn main() -> i32 {
+    0
+}

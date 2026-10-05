@@ -1,0 +1,26 @@
+// TEST: category callee-blame
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-fn "roundtrip"
+// TEST: counterexample-blame callee
+// A consume only discharges an ownership obligation, so a function that consumes
+// a linear value through a region-allocated value is modeled like any other and its
+// contract is decided by the data flow alone.
+// A false postcondition on such a function is still refuted.
+module LinearConsumeRegionFails
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn roundtrip(fd: i64) -> i64 vow {
+    ensures: result == fd + 1
+} {
+    let h: Handle = Handle { fd: fd };
+    let got: i64 = h.fd;
+    drop(h);
+    got
+}
+
+fn main() -> i32 {
+    0
+}

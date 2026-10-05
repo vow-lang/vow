@@ -1,0 +1,7 @@
+// TEST: error-code UnexpectedToken
+module CastAfterUnparenthesisedBlock
+
+fn pick(c: bool) -> u64 {
+    let y: u64 = if c { 1 } else { 2 } as u64;
+    y
+}

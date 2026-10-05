@@ -136,6 +136,25 @@ compare_json() {
     run_parity json "$@"
 }
 
+# Whole-document comparison for `vow verify` output: every diagnostic and every
+# counterexample field must match, modulo the documented allow-list in
+# scripts/parity.py (FULL_JSON_ALLOWLIST).
+compare_full_json() {
+    run_parity full-json "$@"
+}
+
+# Structured runtime aborts (one JSON object per stderr line) of the same
+# program built by each compiler. Takes the two stderr files, not JSON text.
+compare_runtime_json() {
+    local label="$1" rust_err="$2" self_err="$3" rust_exit="$4" self_exit="$5"
+    local result
+    if result=$(python3 scripts/parity.py runtime-json "$rust_err" "$self_err" "$rust_exit" "$self_exit" 2>&1); then
+        pass "$label"
+    else
+        fail "$label" "$result"
+    fi
+}
+
 # A fixture may carry `// TEST: known-divergence <issue> "<why>"` to document a
 # tracked Rust-vs-self-hosted runtime divergence (docs/equivalence/README.md).
 # Such a fixture is committed deliberately: it pins a real miscompile so the
@@ -311,7 +330,7 @@ run_promoted_run_tests() {
             self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
 
             if ! check_empty_output "${name}/test-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
-                compare_json "${name}/test-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
+                compare_full_json "${name}/test-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
                 # Parity alone would pass a regression that makes BOTH compilers
                 # reject the fixture, so pin the absolute expectation too (as
                 # Section 4b does for tests/verify/).
@@ -750,7 +769,7 @@ for vow_file in examples/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
+    compare_full_json "${name}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
 done
 echo ""
 
@@ -845,6 +864,33 @@ else
 fi
 echo ""
 
+# ─── Section 2c: Verifier C Parity ────────────────────────────────
+
+# Both compilers must hand ESBMC byte-identical C for the same program: a fake
+# esbmc on PATH records what each one writes, and parity.py c diffs the sets of
+# distinct sources per function (scripts/parity_c.py).
+section_begin "Section 2c: Verifier C Parity"
+for vow_file in tests/verify/*.vow tests/verify-fail/*.vow tests/verify-skip/*.vow tests/verify-stress/*.vow tests/verify-fail-multi/*/main.vow; do
+    [ -f "$vow_file" ] || continue
+    c_parity_log="$TMPDIR/c_parity.log"
+    c_parity_status=0
+    python3 scripts/parity.py c "$RUST" "$SELF" "$vow_file" >"$c_parity_log" 2>&1 || c_parity_status=$?
+    if [ "$c_parity_status" -ne 0 ]; then
+        fail "verifier-c/$(basename "$(dirname "$vow_file")")/$(basename "$vow_file" .vow)" "$(head -40 "$c_parity_log")"
+    elif grep -q '^SKIP' "$c_parity_log"; then
+        # Only verify-skip fixtures may legitimately never reach ESBMC; anywhere
+        # else an empty capture means both compilers broke before verifying.
+        if [ "$(basename "$(dirname "$vow_file")")" = "verify-skip" ]; then
+            skip "verifier-c/verify-skip/$(basename "$vow_file" .vow)" "neither compiler invoked ESBMC"
+        else
+            fail "verifier-c/$(basename "$(dirname "$vow_file")")/$(basename "$vow_file" .vow)" "neither compiler invoked ESBMC"
+        fi
+    else
+        pass "verifier-c/$(basename "$(dirname "$vow_file")")/$(basename "$vow_file" .vow)"
+    fi
+done
+echo ""
+
 # ─── Section 3: Runtime Execution ──────────────────────────────────
 
 section_begin "Section 3: Runtime Execution"
@@ -891,7 +937,7 @@ for vow_file in tests/verify/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
+    compare_full_json "${name}/verify-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
     if [ -n "$actual_status" ] && [ "$actual_status" != "Verified" ]; then
         fail "${name}/verify-expected-pass" "expected Verified, got $actual_status"
@@ -913,7 +959,7 @@ for vow_file in tests/verify-fail/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify-fail-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
+    compare_full_json "${name}/verify-fail-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
     if [ -n "$actual_status" ] && [ "$actual_status" != "VerifyFailed" ]; then
         fail "${name}/verify-expected-fail" "expected VerifyFailed, got $actual_status"
@@ -997,7 +1043,7 @@ for mode in verify build; do
             ;;
     esac
 
-    compare_json "$name/$mode" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$fixture"
+    compare_full_json "$name/$mode" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$fixture"
     for compiler in rust self; do
         if [ "$compiler" = "rust" ]; then
             result_json="$rust_json"
@@ -1246,7 +1292,7 @@ for vow_file in tests/verify-skip/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify-skip-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
+    compare_full_json "${name}/verify-skip-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
     if [ -n "$actual_status" ] && [ "$actual_status" != "Skipped" ]; then
         fail "${name}/verify-expected-skip" "expected Skipped, got $actual_status"
@@ -1271,6 +1317,62 @@ else
     fail "verifier-eval/ground-truth" "ground-truth mismatch — see banners below"
 fi
 sed 's/^/    /' "$ve_out"
+echo ""
+
+# ─── Section 4f: Verify-Fail Multi-Module Fixtures (#1472) ────────
+#
+# tests/verify-fail/*.vow is a flat glob of single-file targets (Section 4c);
+# it cannot host a fixture that needs a sibling `dep.vow`/`dep.vow.d` pair.
+# Mirrors tests/multi/'s subdirectory-per-fixture convention (Section 6b) but
+# runs `verify` instead of `build --no-verify`, so each fixture's
+# `// TEST: counterexample-blame <value>` directive can be checked alongside
+# the existing VerifyFailed + full-JSON-parity checks Section 4c already uses.
+
+section_begin "Section 4f: Verify-Fail Multi-Module Fixtures"
+for dir in tests/verify-fail-multi/*/; do
+    name=$(basename "$dir")
+    main_file="${dir}main.vow"
+    [ -f "$main_file" ] || continue
+
+    rust_json="" self_json="" rust_exit=0 self_exit=0
+    rust_json=$($RUST verify "$main_file" 2>/dev/null) || rust_exit=$?
+    self_json=$(run_self verify "$main_file" 2>/dev/null) || self_exit=$?
+
+    if check_empty_output "${name}/verify-fail-multi-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
+        continue
+    fi
+
+    compare_full_json "${name}/verify-fail-multi-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
+    actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
+    if [ -n "$actual_status" ] && [ "$actual_status" != "VerifyFailed" ]; then
+        fail "${name}/verify-expected-fail" "expected VerifyFailed, got $actual_status"
+    fi
+
+    # `// TEST: counterexample-blame <value>` pins the first counterexample's
+    # blame on both compilers — the acceptance criterion for #1472 is Caller
+    # blame specifically, not merely "not Verified" (Skipped would also pass
+    # a bare non-Verified check).
+    expected_blame=$(sed -n 's|^// TEST: counterexample-blame \(.*\)$|\1|p' "$main_file" | head -1)
+    if [ -n "$expected_blame" ]; then
+        blame_errors=()
+        for blame_side in rust self; do
+            if [ "$blame_side" = "rust" ]; then blame_json="$rust_json"; else blame_json="$self_json"; fi
+            actual_blame=$(python3 -c "
+import json, sys
+cx = json.loads(sys.stdin.read()).get('counterexamples') or []
+print(cx[0].get('blame', '') if cx else '')
+" <<< "$blame_json" 2>/dev/null) || actual_blame="<unparseable>"
+            if [ "$actual_blame" != "$expected_blame" ]; then
+                blame_errors+=("$blame_side blame='$actual_blame'")
+            fi
+        done
+        if [ ${#blame_errors[@]} -eq 0 ]; then
+            pass "${name}/verify-fail-multi-blame"
+        else
+            fail "${name}/verify-fail-multi-blame" "expected '$expected_blame'; $(IFS='; '; echo "${blame_errors[*]}")"
+        fi
+    fi
+done
 echo ""
 
 # ─── Section 5: Debug Mode ─────────────────────────────────────────
@@ -1300,6 +1402,7 @@ if [ ${#errors[@]} -eq 0 ]; then
 else
     fail "divide/debug-violation" "$(IFS='; '; echo "${errors[*]}")"
 fi
+compare_runtime_json "divide/debug-violation-json" "$TMPDIR/rust_dbg_err" "$TMPDIR/self_dbg_err" "$rust_exit" "$self_exit"
 
 # u8_requires_violation.vow: a captured u8 free variable must report its real
 # value in the VowViolation payload, not 0 (numeric-tower u8 first-class fix).
@@ -1373,6 +1476,12 @@ for vow_file in tests/debug/*.vow; do
         continue
     fi
     check_stderr_directives "${name}/debug-stderr" "$vow_file" "$TMPDIR/rust_dbgstderr_${name}.err" "$TMPDIR/self_dbgstderr_${name}.err"
+    # A runtime abort's JSON (`VowViolation` with its `file` and `offset`, or
+    # the structured abort of another check) is a machine contract: it must be
+    # identical, not merely contain the same substrings.
+    if [ "$expected_exit" -eq 134 ]; then
+        compare_runtime_json "${name}/debug-runtime-json" "$TMPDIR/rust_dbgstderr_${name}.err" "$TMPDIR/self_dbgstderr_${name}.err" "$rust_exit" "$self_exit"
+    fi
 done
 
 # callee_blame, clamp, hello: contracts pass (or none), compare runtime
@@ -1432,6 +1541,50 @@ $RUST build --mode sanitize --no-verify tests/debug/sanitize_vec.vow -o "$TMPDIR
 run_self build --mode sanitize --no-verify tests/debug/sanitize_vec.vow -o "$TMPDIR/self_sanitize_vec" >/dev/null 2>/dev/null
 compare_runtime "sanitize_vec/sanitize" "$TMPDIR/rust_sanitize_vec" "$TMPDIR/self_sanitize_vec"
 
+# tests/debug_multi/<dir>/main.vow: a VowViolation whose clause lives in a
+# module other than the entry file. Both compilers must report the defining
+# module as `file` and the same `offset`.
+for multi_dir in tests/debug_multi/*/; do
+    name=$(basename "$multi_dir")
+    main_file="${multi_dir}main.vow"
+    $RUST build --mode debug --no-verify "$main_file" -o "$TMPDIR/rust_dbgmulti_${name}" >/dev/null 2>/dev/null
+    run_self build --mode debug --no-verify "$main_file" -o "$TMPDIR/self_dbgmulti_${name}" >/dev/null 2>/dev/null
+    rust_exit=0 self_exit=0
+    capture_stderr_with_optional_stdin "$TMPDIR/rust_dbgmulti_${name}.err" "" "$TMPDIR/rust_dbgmulti_${name}" || rust_exit=$?
+    capture_stderr_with_optional_stdin "$TMPDIR/self_dbgmulti_${name}.err" "" run_self_bin "$TMPDIR/self_dbgmulti_${name}" || self_exit=$?
+    compare_runtime_json "${name}/debug-multi-runtime-json" "$TMPDIR/rust_dbgmulti_${name}.err" "$TMPDIR/self_dbgmulti_${name}.err" "$rust_exit" "$self_exit"
+    defining_file=$(sed -n 's|^// TEST: violation-file \(.*\)$|\1|p' "$main_file" | head -1)
+    if [ -n "$defining_file" ]; then
+        for side in rust self; do
+            reported=$(python3 -c "
+import json, sys
+docs = [json.loads(l) for l in sys.stdin if l.startswith('{')]
+print(next((d.get('file', '') for d in docs if d.get('error') == 'VowViolation'), ''))
+" < "$TMPDIR/${side}_dbgmulti_${name}.err" 2>/dev/null) || reported="<unparseable>"
+            case "$reported" in
+                *"$defining_file") pass "${name}/debug-multi-file-${side}" ;;
+                *) fail "${name}/debug-multi-file-${side}" "expected a file ending in '$defining_file', got '$reported'" ;;
+            esac
+        done
+    fi
+done
+
+# Nested-container growth and escaping stores route allocations through owner
+# arenas; sanitize mode must run them cleanly and print what the plain runs print.
+for sanitize_fixture in container_growth_owner_arena region_container_effect_outlives; do
+    sanitize_src="tests/run/${sanitize_fixture}.vow"
+    $RUST build --mode sanitize --no-verify "$sanitize_src" -o "$TMPDIR/rust_sanitize_${sanitize_fixture}" >/dev/null 2>/dev/null
+    run_self build --mode sanitize --no-verify "$sanitize_src" -o "$TMPDIR/self_sanitize_${sanitize_fixture}" >/dev/null 2>/dev/null
+    compare_runtime "${sanitize_fixture}/sanitize" "$TMPDIR/rust_sanitize_${sanitize_fixture}" "$TMPDIR/self_sanitize_${sanitize_fixture}"
+    sanitize_want=$(sed -n 's|^// TEST: stdout "\(.*\)"$|\1|p' "$sanitize_src" | head -1)
+    sanitize_got=$("$TMPDIR/rust_sanitize_${sanitize_fixture}" </dev/null 2>/dev/null | awk 'BEGIN{ORS="\\n"} {print}')
+    if [ "$sanitize_got" = "$sanitize_want" ]; then
+        pass "${sanitize_fixture}/sanitize-stdout"
+    else
+        fail "${sanitize_fixture}/sanitize-stdout" "sanitize stdout differs from the fixture's TEST: stdout"
+    fi
+done
+
 echo ""
 # ─── Section 6: Multi-Module ───────────────────────────────────────
 
@@ -1456,7 +1609,7 @@ for multi in stack geometry bignum gc math heap; do
     self_json=$(run_self verify "$main_file" 2>/dev/null) || self_exit=$?
 
     if ! check_empty_output "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
-        compare_json "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
+        compare_full_json "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
     fi
 
     # runtime execution
@@ -1594,6 +1747,29 @@ if uv run python scripts/generate_operations.py --check >"$ops_catalogue_drift_l
     pass "ops/catalogue-drift"
 else
     fail "ops/catalogue-drift" "$(cat "$ops_catalogue_drift_log"); run 'uv run python scripts/generate_operations.py'"
+fi
+echo ""
+
+# ─── Section 8a: Memory Bounds ─────────────────────────────────────
+#
+# bench/memory/programs/*.vow loop 10^5-10^6 times over allocation shapes that
+# must not grow resident memory. Built and run once per compiler, so a per-call
+# leak in either region inference or either lowering fails here, not in a
+# long-running service. Linux only (peak RSS is sampled from /proc).
+
+section_begin "Section 8a: Memory Bounds"
+if [ "$(uname -s)" = "Linux" ]; then
+    for memory_label in rust self; do
+        if [ "$memory_label" = "rust" ]; then memory_compiler="$RUST"; else memory_compiler="$SELF"; fi
+        memory_bounds_log="$TMPDIR/memory_bounds_${memory_label}.log"
+        if python3 scripts/check_memory_bounds.py --compiler "$memory_compiler" >"$memory_bounds_log" 2>&1; then
+            pass "memory/bounds-${memory_label}"
+        else
+            fail "memory/bounds-${memory_label}" "$(grep -v '"status": "pass"' "$memory_bounds_log" | tail -8)"
+        fi
+    done
+else
+    skip "memory/bounds" "peak RSS is sampled from /proc (Linux only)"
 fi
 echo ""
 
@@ -1760,9 +1936,13 @@ echo ""
 # the same expected file, one escaped description per clause in declaration
 # order (`\` as `\\`, newline as `\n`); the Rust integration test
 # vow-ir/tests/contract_text_forms.rs reads the same files.
-for text_name in contract_text_forms contract_text_blocks contract_text_atoms; do
+# contract_text_postfix is the parse-parity table for parenthesised block-like
+# expressions, cast chains and postfix operators; contract_text_postfix_canonical
+# is its already-canonical twin sharing one expected file, so parse -> print ->
+# parse is checked idempotent in both compilers.
+for text_name in contract_text_forms contract_text_blocks contract_text_atoms contract_text_postfix contract_text_postfix_canonical; do
     text_fixture="tests/fixtures/contracts/${text_name}.vow"
-    text_expected="tests/fixtures/contracts/${text_name}.expected"
+    text_expected="tests/fixtures/contracts/${text_name%_canonical}.expected"
     for text_compiler in rust self; do
         text_json="$TMPDIR/${text_name}_${text_compiler}.json"
         text_ok=0
@@ -1930,6 +2110,39 @@ if ! check_empty_output "test/subcommand" "$rust_test_json" "$self_test_json" "$
     else
         fail "test/filter" "expected 1 test with --filter arith, got $filter_total"
     fi
+
+    # A single test file under compiler/tests/ resolves its `use` declarations
+    # against the inferred module root (compiler/), in both compilers.
+    rust_single=$($RUST test compiler/tests/test_region.vow 2>/dev/null) || true
+    self_single=$(run_self test compiler/tests/test_region.vow 2>/dev/null) || true
+    rust_single_status=$(echo "$rust_single" | uv run python -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || rust_single_status=""
+    self_single_status=$(echo "$self_single" | uv run python -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || self_single_status=""
+    if [ "$rust_single_status" = "TestsPassed" ] && [ "$self_single_status" = "TestsPassed" ]; then
+        pass "test/single-file-module-root"
+    else
+        fail "test/single-file-module-root" "rust=$rust_single_status self=$self_single_status"
+    fi
+
+    # --jobs 1 (strictly sequential) must report the same suite as the
+    # concurrent default: same per-file statuses in the same order.
+    rust_seq=$($RUST test compiler/ --filter test_lexer --jobs 1 2>/dev/null) || true
+    rust_par=$($RUST test compiler/ --filter test_lexer --jobs 4 2>/dev/null) || true
+    self_seq=$(run_self test compiler/ --filter test_lexer --jobs 1 2>/dev/null) || true
+    self_par=$(run_self test compiler/ --filter test_lexer --jobs 4 2>/dev/null) || true
+    for who in rust self; do
+        printf '%s' "$([ $who = rust ] && echo "$rust_par" || echo "$self_par")" >"$TMPDIR/jobs_par_$who.json"
+        printf '%s' "$([ $who = rust ] && echo "$rust_seq" || echo "$self_seq")" >"$TMPDIR/jobs_seq_$who.json"
+        seq_same=$(uv run python -c "
+import json,sys
+a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2]))
+f=lambda d:[(t['file'],t['status']) for t in d['tests']]
+print('ok' if f(a)==f(b) and f(a) and a['status']==b['status'] else 'differ')" "$TMPDIR/jobs_par_$who.json" "$TMPDIR/jobs_seq_$who.json" 2>/dev/null) || seq_same=""
+        if [ "$seq_same" = "ok" ]; then
+            pass "test/jobs-order-independent-$who"
+        else
+            fail "test/jobs-order-independent-$who" "concurrent and --jobs 1 runs disagree ($seq_same)"
+        fi
+    done
 
     # test_complexity_io must not depend on the caller's working directory.
     repo_root=$(pwd -P)

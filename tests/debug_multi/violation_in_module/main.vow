@@ -1,0 +1,10 @@
+// TEST: violation-file guard.vow
+module Main
+use guard
+
+// The violated `requires` lives in guard.vow, not in the entry file: the
+// runtime VowViolation JSON must name the module that defines the clause.
+fn main() -> i32 [io] {
+    guard_bounded(42);
+    0
+}

@@ -111,7 +111,8 @@ vow test [OPTIONS] [<path>]
 | `<path>`          | `.`         | Directory to scan or single `.vow` file    |
 | `--verify`        | (off)       | Run ESBMC verification on test files       |
 | `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |
-| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. |
+| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the nearest ancestor of the entry file that resolves all of its `use` declarations. |
+| `--jobs <N>`      | `min(num_cpus/2, 8)` (`1` with `--verify`) | Max test files compiled and run concurrently |
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
@@ -120,7 +121,9 @@ vow test [OPTIONS] [<path>]
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 
-**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). Single-file invocations (`vow test path/to/test_foo.vow`) keep the default behaviour of resolving `use` against the file's parent directory.
+**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). A single-file invocation without `--module-root` (`vow test compiler/tests/test_region.vow`) infers the module root the same way: starting at the file's own directory and walking up through its ancestors, it picks the nearest directory against which every `use` declaration of the file resolves (to `<path>.vow`, or `<path>.vow.d`). The walk stops after the first directory that contains `.git` (the repository root), at a `..` path component, or at `.` / `/`. If the file's own directory already resolves every `use`, if the file has no `use` declarations, or if no directory resolves them all, the file's parent directory is used and any unresolved module is reported as an ordinary `IoError`. When the file's own directory does not shadow a module of the tree, the inferred root is the one the directory form would use, so the test gives the same result in both forms; a module in the file's own directory takes precedence over one in an ancestor. This rule applies to `vow test` only; `vow build` and `vow verify` keep resolving `use` against the entry file's parent directory. This existence-only walk never inspects file contents, so it is unaffected by the `.vow.d` stub-vs-source contract fallback described under [Use Declarations](grammar.md#use-declarations): that check only runs once a concrete `use` is actually loaded for a build/verify/test run, not during root inference's probing of candidate directories.
+
+**Concurrency.** Test files in a scan run concurrently, at most `--jobs` at a time, and the `tests` array is always in sorted-path order regardless of completion order. A test's `duration_ms` covers its own compile, verification, and execution. Beyond the first, a worker starts a new file only while the machine is not under memory or IO stall pressure (Linux PSI `/proc/pressure/memory` `some avg10` and `/proc/pressure/io` `full avg10`, both below 20), so a loaded machine degrades to fewer workers rather than thrashing; with no PSI available the limit is just `--jobs`. `--jobs 1` runs files strictly one after another. The self-hosted compiler runs each file of a concurrent scan in a worker subprocess of itself, using an internal `--worker-entry` flag whose output is not part of the CLI contract; a worker that dies without a result is reported as a `compile_error` entry so the suite stays fail-closed.
 
 **Test Output JSON:**
 
@@ -282,7 +285,7 @@ rationale.
 |-----------------|---------------------------------------------|
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC, and every call from a verifiable uncontracted function into a contracted function satisfies the callee's `requires` (see [Callers Without a `vow` Block](contracts.md#callers-without-a-vow-block)). "Verifiable" excludes uncontracted callers that cannot be modelled (e.g. `main() [io]`) or whose proof the verifier could not finish; each carries a `VerificationSkipped` *Note* instead, and the note does not change the status. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
-| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
+| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `LinearBorrow`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
@@ -334,7 +337,20 @@ failure.
 {
   "status": "VerifyFailed",
   "executable": "examples/cegis_broken",
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "error_code": "VowEnsuresViolated",
+      "message": "contract violation in `safe_sub`: ensures result >= 0",
+      "severity": "error",
+      "span": {
+        "file": "examples/cegis_broken.vow",
+        "offset": 76,
+        "length": 20
+      },
+      "hints": ["function `safe_sub` failed to establish its postcondition"],
+      "blame": "callee"
+    }
+  ],
   "function": "safe_sub",
   "counterexample": "[Counterexample]",
   "counterexamples": [
@@ -353,6 +369,25 @@ failure.
   ]
 }
 ```
+
+Every counterexample also yields one `error` diagnostic, appended after any
+warnings. Its code follows the counterexample's `blame` (`caller` →
+`VowRequiresViolated`, `callee` → `VowEnsuresViolated`; a failed `invariant` is
+callee-blamed, so it reports `VowEnsuresViolated`), or is
+`VerifierAssertionUnattributed` when the failure is not attributed to a vow
+clause. The `message` is ``contract violation in `<function>`: <violation>`` (or
+``verification failed in `<function>` on an unattributed property: <violation>``),
+`span` is the counterexample's `source` (an empty file and zero offset/length
+when `source` is `null`), `secondary` lists the counterexample's `call_sites`,
+and `hints` name the failing function and, for caller blame, each violating
+argument. A `timeout`, `unknown`, `error` or `panicked` outcome has no
+counterexample and adds no such diagnostic. Both compilers emit the same
+`diagnostics[]`, `counterexample` and `counterexamples[]` for the same source;
+the only fields that are not specified byte for byte are `verify_message`
+(ESBMC's free text) and `values` entries named `$esbmc$...` (solver temporaries).
+
+A diagnostic's `span` is exactly `{file, offset, length}`: positions are byte
+offsets, and neither compiler adds line or column fields.
 
 For caller-blame failures where a verified function violates a callee's
 `requires` clause, the counterexample reports the callee clause in `violation`
@@ -376,7 +411,7 @@ shift count) rather than exposing raw verifier output.
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
 | `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
-| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
+| `counterexample`   | string              | VerifyFailed      | Legacy description string: `"[Counterexample]"` when ESBMC produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>`, ...) |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |
 | `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
@@ -491,7 +526,7 @@ compilers anchor on the byte offset of the parameter name instead.
 | `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
-| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `Linear*` consume/borrow, `RemF*`) or the function has effects. (Struct construction and field ops are modelled — see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
+| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `LinearBorrow`, `RemF*`) or the function has effects. (Struct construction and field ops are modelled — see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
 | `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
 
 The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g. the BV→IR fallback) may never report a weakened check as `proven` are the verifier's soundness discipline — the safe-vs-unsafe retry rules are specified in `docs/verifier-discipline.md`.

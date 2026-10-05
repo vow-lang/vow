@@ -1,0 +1,14 @@
+// TEST: error-code LinearTypeViolation
+// TEST: error-count 1
+module DropTwice
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn main() -> i32 {
+    let h: Handle = Handle { fd: 1 };
+    drop(h);
+    drop(h);
+    0
+}

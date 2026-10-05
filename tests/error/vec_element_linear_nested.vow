@@ -1,0 +1,21 @@
+// TEST: error-code UnsupportedFeature
+// TEST: error-count 4
+// TEST: stderr "Vec element type must be non-linear"
+module VecElementLinearNested
+
+linear struct Token {
+    id: i64,
+}
+
+enum Wrap {
+    Has(Token),
+    Nope,
+}
+
+fn main() -> i32 {
+    let a: Vec<Wrap> = Vec::new();
+    let b: Vec<Option<Token>> = Vec::new();
+    let c: Vec<Vec<Token>> = Vec::new();
+    let d: HashMap<i64, Vec<Token>> = HashMap::new();
+    0
+}

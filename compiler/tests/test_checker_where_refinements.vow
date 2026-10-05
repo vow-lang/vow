@@ -1,0 +1,157 @@
+module TestCheckerWhereRefinements
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use checker
+use env
+
+fn checked_diags(items: String) -> DiagCtx [io] {
+    let source: String = String::from("module WhereRefinements\n");
+    source.push_str(items);
+    source.push_str(String::from("\nfn main() -> i32 { 0 }\n"));
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("where.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < parsed.items.len() {
+        item_files.push(String::from("where.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("where.vow"));
+    check_module(check_env, parsed, item_files);
+    dctx
+}
+
+fn diag_at(dctx: DiagCtx, idx: u64) -> Diagnostic {
+    let diags: Vec<Diagnostic> = dctx.diags;
+    diags[idx]
+}
+
+fn check_valid_refinements_accepted() -> i32 [io] {
+    let items: String = String::from("const LIMIT: i64 = 100;\n");
+    items.push_str(String::from("fn is_small(n: i64) -> bool { n < 10 }\n"));
+    items.push_str(String::from("fn a(x: i64 where x >= 0 && x <= LIMIT) -> i64 { x }\n"));
+    items.push_str(String::from("fn b(x: i64 where is_small(x)) -> i64 { x }\n"));
+    items.push_str(String::from("fn c(x: i64 where { let t: i64 = x + 1; t > 0 }) -> i64 { x }\n"));
+    items.push_str(String::from("fn d(a: i64 where a > 0, b: i64 where b > 0) -> i64 { a + b }\n"));
+    let dctx: DiagCtx = checked_diags(items);
+    if dctx.error_count != 0 { return 1; }
+    0
+}
+
+fn check_undefined_name_single_error_with_suggestion() -> i32 [io] {
+    let dctx: DiagCtx = checked_diags(String::from("fn f(x: i64 where y > 0) -> i64 { x }\n"));
+    if dctx.error_count != 1 { return 11; }
+    let d: Diagnostic = diag_at(dctx, 0);
+    if d.code != EC_TYPE_MISMATCH() { return 12; }
+    if !d.message.contains(String::from("undefined variable `y`")) { return 13; }
+    let hints: Vec<String> = d.hints;
+    if hints.len() != 1 { return 14; }
+    if hints[0] != String::from("did you mean `x`?") { return 15; }
+    0
+}
+
+fn check_sibling_parameter_out_of_scope() -> i32 [io] {
+    let dctx: DiagCtx = checked_diags(String::from("fn f(a: i64, b: i64 where b > a) -> i64 { b }\n"));
+    if dctx.error_count != 1 { return 21; }
+    let d: Diagnostic = diag_at(dctx, 0);
+    if d.code != EC_TYPE_MISMATCH() { return 22; }
+    if !d.message.contains(String::from("undefined variable `a`")) { return 23; }
+    let hints: Vec<String> = d.hints;
+    if hints.len() != 1 { return 24; }
+    if !hints[0].contains(String::from("only reference its own parameter `b`")) { return 25; }
+    0
+}
+
+fn check_result_out_of_scope() -> i32 [io] {
+    let dctx: DiagCtx = checked_diags(String::from("fn f(x: i64 where result > 0) -> i64 { x }\n"));
+    if dctx.error_count != 1 { return 31; }
+    let d: Diagnostic = diag_at(dctx, 0);
+    let hints: Vec<String> = d.hints;
+    if hints.len() != 1 { return 32; }
+    if !hints[0].contains(String::from("`ensures`")) { return 33; }
+    0
+}
+
+fn check_non_bool_predicate_rejected() -> i32 [io] {
+    let dctx: DiagCtx = checked_diags(String::from("fn f(x: i64 where x + 1) -> i64 { x }\n"));
+    if dctx.error_count != 1 { return 41; }
+    let d: Diagnostic = diag_at(dctx, 0);
+    if d.code != EC_CONTRACT_TYPE_MISMATCH() { return 42; }
+    let hints: Vec<String> = d.hints;
+    if hints.len() != 1 { return 43; }
+    if hints[0] != String::from("parameter `where` clauses must evaluate to `bool`") { return 44; }
+    0
+}
+
+fn check_tuple_expression_rejected() -> i32 [io] {
+    let dctx: DiagCtx = checked_diags(String::from("fn f(x: i64 where (x, 1) != (2, 3)) -> i64 { x }\n"));
+    if dctx.error_count == 0 { return 51; }
+    let d: Diagnostic = diag_at(dctx, 0);
+    if d.code != EC_UNSUPPORTED_FEATURE() { return 52; }
+    0
+}
+
+fn check_effectful_call_rejected() -> i32 [io] {
+    let items: String = String::from("fn noisy(x: i64) -> bool [io] { print_i64(x); true }\n");
+    items.push_str(String::from("fn f(x: i64 where noisy(x)) -> i64 { x }\n"));
+    let dctx: DiagCtx = checked_diags(items);
+    if dctx.error_count != 1 { return 61; }
+    let d: Diagnostic = diag_at(dctx, 0);
+    if d.code != EC_EFFECT_VIOLATION() { return 62; }
+    0
+}
+
+fn check_literal_range_checked() -> i32 [io] {
+    let dctx: DiagCtx = checked_diags(String::from("fn f(x: u8 where x < 300) -> u8 { x }\n"));
+    if dctx.error_count != 1 { return 71; }
+    let d: Diagnostic = diag_at(dctx, 0);
+    if d.code != EC_LITERAL_OUT_OF_RANGE() { return 72; }
+    0
+}
+
+fn check_declaration_and_extern_refinements_checked() -> i32 [io] {
+    let decl: DiagCtx = checked_diags(String::from("fn external(x: i64 where n > 0) -> i64;\n"));
+    if decl.error_count != 1 { return 81; }
+    let ext_items: String = String::from("extern \"C\" {\n    vow {\n        requires: true\n    }\n");
+    ext_items.push_str(String::from("    fn abs(x: i32 where n > 0) -> i32;\n}\n"));
+    let ext: DiagCtx = checked_diags(ext_items);
+    if ext.error_count != 1 { return 82; }
+    0
+}
+
+fn check_undefined_variable_in_body() -> i32 [io] {
+    let dctx: DiagCtx = checked_diags(String::from("fn f() -> i64 { let z: i64 = y; z }\n"));
+    if dctx.error_count != 1 { return 91; }
+    let d: Diagnostic = diag_at(dctx, 0);
+    if !d.message.contains(String::from("undefined variable `y`")) { return 92; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let r1: i32 = check_valid_refinements_accepted();
+    if r1 != 0 { return r1; }
+    let r2: i32 = check_undefined_name_single_error_with_suggestion();
+    if r2 != 0 { return r2; }
+    let r3: i32 = check_sibling_parameter_out_of_scope();
+    if r3 != 0 { return r3; }
+    let r4: i32 = check_result_out_of_scope();
+    if r4 != 0 { return r4; }
+    let r5: i32 = check_non_bool_predicate_rejected();
+    if r5 != 0 { return r5; }
+    let r6: i32 = check_tuple_expression_rejected();
+    if r6 != 0 { return r6; }
+    let r7: i32 = check_effectful_call_rejected();
+    if r7 != 0 { return r7; }
+    let r8: i32 = check_literal_range_checked();
+    if r8 != 0 { return r8; }
+    let r9: i32 = check_declaration_and_extern_refinements_checked();
+    if r9 != 0 { return r9; }
+    check_undefined_variable_in_body()
+}

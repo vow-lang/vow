@@ -1,0 +1,10 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 1
+// TEST: stderr "undefined variable `nope`"
+// A loop whose break value is rubble is itself rubble, not `()`.
+module RubbleNoCascadeLoopBreak
+
+fn main() -> i32 {
+    let x: i64 = loop { break nope; };
+    0
+}

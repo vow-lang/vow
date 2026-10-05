@@ -1,0 +1,31 @@
+// TEST: category model-drift
+// A consume only discharges an ownership obligation, so a function that consumes
+// a linear value through a user enum match payload is modeled like any other and its
+// contract is decided by the data flow alone.
+module LinearConsumeMatchPayload
+
+linear struct Handle {
+    fd: i64,
+}
+
+enum Wrap {
+    Has(Handle),
+    Nope,
+}
+
+fn unwrap_fd(w: Wrap) -> i64 vow {
+    ensures: result >= 0
+} {
+    match w {
+        Wrap::Has(h) => {
+            let fd: i64 = h.fd;
+            drop(h);
+            if fd < 0 { 0 } else { fd }
+        },
+        Wrap::Nope => 0,
+    }
+}
+
+fn main() -> i32 {
+    0
+}

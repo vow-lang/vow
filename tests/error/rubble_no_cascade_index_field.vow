@@ -1,0 +1,11 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 1
+// TEST: stderr "field access on non-struct type"
+module RubbleNoCascadeIndexField
+
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    let s: String = String::from("s");
+    let x: i64 = v[s.nofield];
+    0
+}

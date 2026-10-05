@@ -1,0 +1,188 @@
+module TestLowerOriginSpans
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+
+// The source ranges a counterexample reports (`source`, `call_sites`,
+// `violating_args`) are read off instruction origins, so the lowerer must give
+// every instruction the span the Rust lowerer does: a vow clause's own range, a
+// call expression's range (not its enclosing `let`), and a literal's own range.
+
+fn lower_source(source: String) -> IrModule {
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, diag_ctx_new(), String::from("origin_spans.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut item_i: u64 = 0;
+    while item_i < parsed.items.len() {
+        item_files.push(String::from("origin_spans.vow"));
+        item_i = item_i + 1;
+    }
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), item_files
+    )
+}
+
+fn find_sub(hay: String, needle: String) -> i64 {
+    let mut i: u64 = 0;
+    while i + needle.len() <= hay.len() {
+        let mut j: u64 = 0;
+        let mut same: bool = true;
+        while j < needle.len() && same {
+            if hay.byte_at(i + j) != needle.byte_at(j) {
+                same = false;
+            }
+            j = j + 1;
+        }
+        if same {
+            return i as i64;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn function_named(m: IrModule, name: String) -> IrFunction {
+    let fns: Vec<IrFunction> = m.functions;
+    let mut fi: u64 = 0;
+    while fi < fns.len() {
+        let f: IrFunction = fns[fi];
+        if f.name == name {
+            return f;
+        }
+        fi = fi + 1;
+    }
+    fns[0]
+}
+
+fn first_inst(f: IrFunction) -> IrInst {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let b: IrBlock = blocks[0];
+    let insts: Vec<IrInst> = b.insts;
+    insts[0]
+}
+
+fn inst_with_id(f: IrFunction, id: i64) -> IrInst {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: u64 = 0;
+    while bi < blocks.len() {
+        let b: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = b.insts;
+        let mut ii: u64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.id == id {
+                return inst;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    first_inst(f)
+}
+
+fn first_inst_with_op(f: IrFunction, op: i64) -> IrInst {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: u64 = 0;
+    while bi < blocks.len() {
+        let b: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = b.insts;
+        let mut ii: u64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.op == op {
+                return inst;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    first_inst(f)
+}
+
+fn sample_source() -> String {
+    let source: String = String::from("");
+    source.push_str("module T\n");
+    source.push_str("fn g(x: i64) -> i64 vow {\n");
+    source.push_str("  requires: x > 0,\n");
+    source.push_str("  ensures: result > 0\n");
+    source.push_str("} { x }\n");
+    source.push_str("fn f() -> i64 {\n");
+    source.push_str("  let k: i64 = 7;\n");
+    source.push_str("  let y: i64 = g(0 - 5);\n");
+    source.push_str("  y + k\n");
+    source.push_str("}\n");
+    source
+}
+
+fn check_vow_instructions_carry_their_clause_range() -> i64 {
+    let source: String = sample_source();
+    let m: IrModule = lower_source(source);
+    let g: IrFunction = function_named(m, String::from("g"));
+    let req: IrInst = first_inst_with_op(g, IOP_VOW_REQ());
+    let req_text: String = String::from("requires: x > 0");
+    if req.ostart != find_sub(source, req_text) { return 100; }
+    if req.olen != req_text.len() as i64 { return 101; }
+    let ens: IrInst = first_inst_with_op(g, IOP_VOW_ENS());
+    let ens_text: String = String::from("ensures: result > 0");
+    if ens.ostart != find_sub(source, ens_text) { return 102; }
+    if ens.olen != ens_text.len() as i64 { return 103; }
+    let vows: Vec<IrVowEntry> = g.vows;
+    let ve: IrVowEntry = vows[0];
+    if ve.offset != req.ostart { return 104; }
+    0
+}
+
+fn check_a_call_keeps_its_own_range_inside_a_let() -> i64 {
+    let source: String = sample_source();
+    let m: IrModule = lower_source(source);
+    let f: IrFunction = function_named(m, String::from("f"));
+    let call: IrInst = first_inst_with_op(f, IOP_CALL());
+    let call_text: String = String::from("g(0 - 5)");
+    if call.ostart != find_sub(source, call_text) { return 200; }
+    if call.olen != call_text.len() as i64 { return 201; }
+    let arg: IrInst = inst_with_id(f, call.args[0]);
+    let arg_text: String = String::from("0 - 5");
+    if arg.ostart != find_sub(source, arg_text) { return 202; }
+    if arg.olen != arg_text.len() as i64 { return 203; }
+    0
+}
+
+fn check_a_let_bound_literal_keeps_its_own_range() -> i64 {
+    let source: String = sample_source();
+    let m: IrModule = lower_source(source);
+    let f: IrFunction = function_named(m, String::from("f"));
+    let lit: IrInst = first_inst_with_op(f, IOP_CONST_I64());
+    if lit.dv != 7 { return 300; }
+    if lit.ostart != find_sub(source, String::from("= 7;")) + 2 { return 301; }
+    if lit.olen != 1 { return 302; }
+    0
+}
+
+fn check_each_function_indexes_its_own_instructions() -> i64 {
+    let source: String = sample_source();
+    let m: IrModule = lower_source(source);
+    let f: IrFunction = function_named(m, String::from("f"));
+    let k: IrInst = first_inst_with_op(f, IOP_CONST_I64());
+    if k.olen == 0 { return 401; }
+    0
+}
+
+fn main() -> i32 {
+    let r1: i64 = check_vow_instructions_carry_their_clause_range();
+    if r1 != 0 { return i64_to_i32_wrap(r1); }
+    let r2: i64 = check_a_call_keeps_its_own_range_inside_a_let();
+    if r2 != 0 { return i64_to_i32_wrap(r2); }
+    let r3: i64 = check_a_let_bound_literal_keeps_its_own_range();
+    if r3 != 0 { return i64_to_i32_wrap(r3); }
+    let r4: i64 = check_each_function_indexes_its_own_instructions();
+    if r4 != 0 { return i64_to_i32_wrap(r4); }
+    0
+}

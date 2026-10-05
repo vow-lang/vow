@@ -1,0 +1,11 @@
+// TEST: stdout "done\n"
+module EmptyBlockAfterLowercaseIdent
+
+fn main() [io] {
+    let c: bool = false;
+    while c { }
+    if c { }
+    if c { } else { }
+    for _item in Vec::new() { }
+    print_str(String::from("done\n"));
+}

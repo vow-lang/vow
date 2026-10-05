@@ -1,0 +1,30 @@
+// TEST: category model-drift
+module UnitSetValues
+
+fn singleton(k: i64) -> HashMap<i64, ()> vow {
+  ensures: result.contains_key(k),
+  ensures: result.len() == 1
+} {
+  let m: HashMap<i64, ()> = HashMap::new();
+  m.insert(k, ());
+  m
+}
+
+fn sorted_pair(a: i64, b: i64) -> BTreeMap<i64, ()> vow {
+  requires: a != b,
+  ensures: result.contains(a),
+  ensures: result.contains(b),
+  ensures: result.len() == 2
+} {
+  let m: BTreeMap<i64, ()> = BTreeMap::new();
+  m.insert(a, ());
+  m.insert(b, ());
+  m
+}
+
+fn main() -> i32 [io] {
+  let s: HashMap<i64, ()> = singleton(7);
+  let t: BTreeMap<i64, ()> = sorted_pair(1, 2);
+  print_u64(s.len() + t.len());
+  0
+}

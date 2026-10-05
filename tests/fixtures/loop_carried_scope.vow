@@ -1,0 +1,183 @@
+// Shared fixture for the loop-carried variable tests: the Rust lowerer
+// (vow-ir/src/lower/mod.rs, `loops_carry_the_expected_variables`) and the
+// self-hosted lowerer (compiler/tests/test_lower_loop_carried_scope.vow) both
+// lower this file and compare against the `// carried <fn>:` lines below.
+//
+// Each carried variable is initialised with a distinct marker constant >= 1000,
+// so the marker values fed to the pre-loop Upsilons (in block order) name which
+// variables a loop carries and in which order. Variables initialised with
+// smaller constants are carried too but are not observable this way. A marker
+// that never shows up belongs to a variable the loop correctly did not carry.
+module LoopCarriedScope
+
+enum Pick {
+    Low,
+    High(i64),
+}
+
+struct Pair {
+    a: i64,
+    b: i64,
+}
+
+fn pick(n: i64) -> Pick {
+    if n > 2 { Pick::High(n) } else { Pick::Low {} }
+}
+
+fn bump(x: i64) -> i64 { x + 1 }
+
+// Only `i` is carried by the outer loop; `j` and `k` are declared in its body
+// and carried by the inner loop alone, in first-assignment order.
+// carried body_locals: 1001 2001 2002
+fn body_locals(n: i64) -> i64 {
+    let mut i: i64 = 1001;
+    while i < n {
+        let mut j: i64 = 2001;
+        let mut k: i64 = 2002;
+        while j < 3 {
+            j = j + 1;
+            k = k + j;
+        }
+        i = i + k;
+    }
+    i
+}
+
+// carried loop_locals: 1001
+fn loop_locals(n: i64) -> i64 {
+    let mut i: i64 = 1001;
+    loop {
+        let mut t: i64 = 2001;
+        t = t + 1;
+        i = i + t;
+        if i > n { break; }
+    }
+    i
+}
+
+// carried for_locals: 1001
+fn for_locals(v: Vec<i64>) -> i64 {
+    let mut s: i64 = 1001;
+    for x in v {
+        let mut t: i64 = 2001;
+        t = t + x;
+        s = s + t;
+    }
+    s
+}
+
+// Order follows the first assignment in the loop, not the declaration order.
+// carried source_order: 1003 1001 1002
+fn source_order(n: i64) -> i64 {
+    let mut a: i64 = 1001;
+    let mut b: i64 = 1002;
+    let mut c: i64 = 1003;
+    let mut i: i64 = 0;
+    while i < n {
+        c = c + 1;
+        a = a + c;
+        b = b + a;
+        i = i + 1;
+    }
+    a + b + c
+}
+
+// The collector works on names: assigning the inner `i` also carries the outer
+// `i`, which only costs an unused Phi. The body-local marker 3001 is not carried.
+// carried shadowed: 1001 1002
+fn shadowed(n: i64) -> i64 {
+    let mut i: i64 = 1001;
+    let mut m: i64 = 1002;
+    while m < n {
+        let mut i: i64 = 3001;
+        i = i + 1;
+        m = m + i;
+    }
+    i = i + m;
+    i
+}
+
+// carried branch_arms: 1001 1002 1003
+fn branch_arms(n: i64) -> i64 {
+    let mut a: i64 = 1001;
+    let mut b: i64 = 1002;
+    let mut c: i64 = 1003;
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 1 { a = a + 1; } else { b = b + 1; }
+        match pick(i) {
+            Pick::Low => { c = c + 1; },
+            Pick::High(h) => { c = c + h; },
+        }
+        let mut local: i64 = 3001;
+        local = local + 1;
+        i = i + 1;
+    }
+    a + b + c
+}
+
+// The inner loop assigns `total`, so the outer loop carries it as well.
+// carried nested_outer: 1001 1002 2001
+fn nested_outer(n: i64) -> i64 {
+    let mut total: i64 = 1001;
+    let mut i: i64 = 1002;
+    while i < n {
+        let mut j: i64 = 2001;
+        while j < 3 {
+            total = total + j;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    total
+}
+
+// The condition runs every iteration, so its assignment comes first.
+// carried cond_assign: 1002 1001
+fn cond_assign(n: i64) -> i64 {
+    let mut k: i64 = 1001;
+    let mut seen: i64 = 1002;
+    while { seen = seen + 1; k < n } {
+        k = k + 1;
+    }
+    k + seen
+}
+
+// An assignment inside any operand position is a loop assignment.
+// carried operand_kinds: 1001 1002 1003 1004 1005 1006 1008 1009 1010 1011 1012 1007
+fn operand_kinds(n: i64) -> i64 {
+    let mut a: i64 = 1001;
+    let mut b: i64 = 1002;
+    let mut c: i64 = 1003;
+    let mut d: i64 = 1004;
+    let mut e: i64 = 1005;
+    let mut f: i64 = 1006;
+    let mut g: i64 = 1007;
+    let mut h: i64 = 1008;
+    let mut m: i64 = 1009;
+    let mut p: i64 = 1010;
+    let mut q: i64 = 1011;
+    let mut r: i64 = 1012;
+    let mut i: i64 = 0;
+    let out: Vec<i64> = Vec::new();
+    out.push(0);
+    while i < n {
+        let t1: i64 = { a = a + 1; a };
+        let t2: i64 = 1 + { b = b + 1; b };
+        let t3: i64 = bump({ c = c + 1; c });
+        out.push({ d = d + 1; d });
+        let t4: Pair = Pair { a: { e = e + 1; e }, b: 0 };
+        let t5: i64 = out[{ f = f + 1; 0 }];
+        let t6: i64 = -{ h = h + 1; h };
+        let t7: u64 = ({ m = m + 1; m }) as u64;
+        let (t8, t9): (i64, i64) = ({ p = p + 1; p }, 2);
+        let t10: Pick = Pick::High({ q = q + 1; q });
+        match pick({ r = r + 1; r }) {
+            Pick::Low => { i = i + 0; },
+            Pick::High(x) => { i = i + 0; },
+        }
+        if i > 100 { return { g = g + 1; g }; }
+        i = i + 1;
+    }
+    i
+}

@@ -1,0 +1,75 @@
+// Parse parity fixture for parenthesised block-like expressions, cast chains,
+// postfix operators and the unary/binary combinations around them. Each clause
+// is spelled with redundant or tricky parentheses; the canonical text both
+// compilers must print is in contract_text_postfix.expected, one escaped line
+// per clause (backslash as `\\`, newline as `\n`). The same expected file also
+// describes contract_text_postfix_canonical.vow, whose clauses are already that
+// canonical text, so parse -> print -> parse is checked to be idempotent.
+module ContractTextPostfix
+
+enum Shape { Empty, Circle(i64) }
+
+fn casts(x: i64, c: bool) -> i64 vow {
+  requires: (if c { 1 } else { 2 }) as u64 == 1
+  requires: (if c { 1 } else { 2 }) as u64 as i64 == 1
+  requires: ((if c { 1 } else { 2 }) as u64) as i64 == 1
+  requires: (if c { if c { 1 } else { 2 } } else { 3 }) as u64 == 1
+  requires: ({ x }) as u64 == 1
+  requires: (loop { break x; }) as u64 == 1
+  requires: x as u64 as i64 == 1
+  requires: (x as u64) as i64 == 1
+  requires: ((x as u64)) as i64 == 1
+  requires: (((x))) as u64 == 1
+  requires: (-x) as u64 == 1
+  requires: (x + 1) as i64 == 2
+  requires: x as i64 + 1 == 2
+  requires: x + 1 as i64 == 2
+  requires: (x as u64) + 1 == 2
+} {
+  x
+}
+
+fn compares(x: i64, c: bool) -> i64 vow {
+  requires: x as u64 < 5
+  requires: (x as u64) < 5
+  requires: x as u64 << 1 == 2
+  requires: (x as u64) >> 1 == 0
+  requires: x as u64 < 5 && c
+  requires: (x as u64 < 5) == c
+  requires: (x & 1) == 1
+  requires: x & 1 == 1
+} {
+  x
+}
+
+fn blocks(x: i64, c: bool, s: Shape) -> i64 vow {
+  requires: (if c { 1 } else { 2 }) + 1 == 2
+  requires: (if c { 1 } else { 2 }) * 3 == 3
+  requires: 3 * (if c { 1 } else { 2 }) == 3
+  requires: 3 * if c { 1 } else { 2 } == 3
+  requires: (if c { 1 } else { 2 }) == (if c { 2 } else { 1 })
+  requires: (match s { Shape::Empty => 1, Shape::Circle(r) => r }) as u64 == 1
+  requires: (match s { Shape::Empty => 1, Shape::Circle(r) => r }) + 1 == 2
+  requires: (if c { true } else { false }) && c
+  requires: c || (if c { true } else { false })
+  requires: -(if c { 1 } else { 2 }) == 1
+  requires: !(if c { true } else { false })
+  requires: - if c { 1 } else { 2 } == 1
+  requires: (if c { 1 } else { 2 }) as u64 < 5
+  requires: (if c { 1 } else { 2 }) as u64 << 1 == 2
+} {
+  x
+}
+
+fn postfix(x: i64, c: bool, v: Vec<i64>, w: Vec<i64>) -> i64 vow {
+  requires: (if c { v } else { w }).len() == 1
+  requires: (if c { v } else { w }).len() as i64 + 1 == 2
+  requires: (if c { v } else { w })[0] == 1
+  requires: (v.len()) as i64 == 1
+  requires: v.len() as i64 + 1 == 2
+  requires: v[0] as u64 == 1
+  requires: (v[0]) as u64 == 1
+  requires: (v.len() as i64) + x == 1
+} {
+  x
+}

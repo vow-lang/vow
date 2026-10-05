@@ -49,3 +49,5 @@ bench/memory/run.sh --record
 `--record` reruns every program, rewrites the `// BENCH:` annotations and `expected.toml`, and adds a fixed 4096 KiB cushion to each measured maximum RSS. It still fails without rewriting if any program fails to build or exits nonzero.
 
 Later memory-precision slices should lower a bound only after measuring a real improvement locally. Do not lower limits just because a single noisy run happens to scrape under a smaller number; these checked-in values are characterization baselines until the allocation behavior itself improves.
+
+`scripts/check_memory_bounds.py --compiler <vow|vowc>` runs the same programs and bounds against either compiler without `/usr/bin/time`, and `scripts/full_test.sh` runs it for both (see `docs/dev/benchmarks.md`). Add a program here whenever an allocation shape is fixed; it is then pinned in the Rust and the self-hosted compiler alike.

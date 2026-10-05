@@ -1,0 +1,18 @@
+// TEST: category callee-blame
+// TEST: counterexample-fn "first_byte_is_a"
+// TEST: counterexample-blame callee
+// TEST: counterexample-vow-id 1
+// The result's bytes are read (`byte_at`), so the model keeps the byte-copy
+// loop: the refutation depends on the substring carrying the source's bytes.
+module StringSubstringBytesObserved
+
+fn first_byte_is_a(s: String) -> i64 vow {
+  requires: s.len() >= 1,
+  ensures: result == 65
+} {
+  s.substring(0, 1).byte_at(0)
+}
+
+fn main() -> i32 {
+  0
+}

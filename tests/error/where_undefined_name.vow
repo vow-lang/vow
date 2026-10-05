@@ -1,0 +1,13 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "undefined variable `y`"
+// A `where` refinement is name-resolved like a `requires` clause: an undefined
+// name is a type error, not an IR lowering panic or a Cranelift verifier error.
+module WhereUndefinedName
+
+fn positive(x: i64 where y > 0) -> i64 {
+    x
+}
+
+fn main() -> i32 {
+    0
+}

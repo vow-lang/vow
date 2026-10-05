@@ -1,0 +1,31 @@
+// BENCH: max-rss-kb 7500
+module AllocLoopVecMap
+
+fn work() -> i64 {
+    let v: Vec<BTreeMap<i64, i64>> = Vec::new();
+    v.push(BTreeMap::new());
+    let mut i: i64 = 0;
+    while i < 64 {
+        let m: BTreeMap<i64, i64> = v[0];
+        m.insert(i, i);
+        i = i + 1;
+    }
+    let m2: BTreeMap<i64, i64> = v[0];
+    let a: i64 = match m2.get(5) {
+        Option::Some(x) => x,
+        Option::None => 0,
+    };
+    a + (m2.len() as i64)
+}
+
+fn main() -> i32 [io] {
+    let mut i: i64 = 0;
+    let mut t: i64 = 0;
+    while i < 100000 {
+        t = t + work();
+        i = i + 1;
+    }
+    print_i64(t);
+    print_str("\n");
+    0
+}
