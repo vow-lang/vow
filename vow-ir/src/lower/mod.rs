@@ -2240,6 +2240,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     record_wide_expected_ast_context(ctx, rhs, &expected);
                 }
             }
+            // `v[i] = rhs` must evaluate `base`/`index` before `rhs` to match
+            // the self-hosted lowerer's EXPR_INDEX assignment arm (#1502).
+            let index_parts = if let ExprKind::Index { base, index } = &lhs.kind {
+                Some((lower_expr(ctx, base), lower_expr(ctx, index)))
+            } else {
+                None
+            };
             let mut new_val = lower_expr(ctx, rhs);
             match &lhs.kind {
                 ExprKind::Ident(name) => {
@@ -2310,9 +2317,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         );
                     }
                 }
-                ExprKind::Index { base, index } => {
-                    let vec_ptr = lower_expr(ctx, base);
-                    let idx_id = lower_expr(ctx, index);
+                ExprKind::Index { .. } => {
+                    let (vec_ptr, idx_id) =
+                        index_parts.expect("Index arm implies index_parts is Some");
                     if let Some(index_ty) = index_ty {
                         new_val = lower_narrow_literal(ctx, rhs, new_val, index_ty);
                     }
@@ -7342,6 +7349,42 @@ fn sum(v: Vec<i64>) -> i64 {
             assert_eq!(carried_markers(func), markers, "carried by `{name}`");
         }
     }
+
+    /// `v[i] = rhs` must evaluate `base`/`index` before `rhs` (issue #1502):
+    /// the self-hosted lowerer's `EXPR_INDEX` assignment arm already does
+    /// this, so a mismatch here is a genuine cross-compiler evaluation-order
+    /// divergence, not just an IR-text difference. The self-hosted twin is
+    /// `compiler/tests/test_lower_index_assign_eval_order.vow`; both read
+    /// `tests/fixtures/index_assign_eval_order.vow`.
+    #[test]
+    fn index_assign_evaluates_base_and_index_before_rhs() {
+        let fixture = include_str!("../../../tests/fixtures/index_assign_eval_order.vow");
+        let func = lowered_function(fixture, "order_probe");
+        let insts = insts_of(&func);
+        let call = insts
+            .iter()
+            .find(|i| i.data == InstData::CallExtern("__vow_vec_set_val".to_string()))
+            .expect("__vow_vec_set_val call");
+        let idx_id = call.args[1];
+        let rhs_id = call.args[2];
+        let idx_pos = insts
+            .iter()
+            .position(|i| i.id == idx_id)
+            .expect("index operand instruction");
+        let rhs_pos = insts
+            .iter()
+            .position(|i| i.id == rhs_id)
+            .expect("rhs operand instruction");
+        let idx_inst = insts[idx_pos];
+        let rhs_inst = insts[rhs_pos];
+        assert_eq!(idx_inst.data, InstData::ConstI64(1), "index operand");
+        assert_eq!(rhs_inst.data, InstData::ConstI64(4242), "rhs operand");
+        assert!(
+            idx_pos < rhs_pos,
+            "index (pos {idx_pos}) must be emitted before rhs (pos {rhs_pos})"
+        );
+    }
+
     /// A `from_raw_parts_copy` length literal is lowered in its `u64` context.
     /// A wrapped negative `ConstI64` here made the C model's `>= 0` guard
     /// unsatisfiable and so proved everything after the call.

@@ -1,0 +1,32 @@
+// TEST: stdout "1\n2\n42\npure=7\n"
+module IndexAssignEvalOrderRun
+
+fn idx_with_effect() -> u64 [io] {
+    print_i64(1);
+    print_str(String::from("\n"));
+    0
+}
+
+fn rhs_with_effect() -> i64 [io] {
+    print_i64(2);
+    print_str(String::from("\n"));
+    42
+}
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::new();
+    v.push(0);
+    v[idx_with_effect()] = rhs_with_effect();
+    print_i64(v[0]);
+    print_str(String::from("\n"));
+
+    let mut i: u64 = 0;
+    let pv: Vec<i64> = Vec::new();
+    pv.push(0);
+    pv.push(0);
+    pv[i] = { i = i + 1; 7 };
+    print_str(String::from("pure="));
+    print_i64(pv[0]);
+    print_str(String::from("\n"));
+    0
+}

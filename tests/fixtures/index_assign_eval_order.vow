@@ -1,0 +1,18 @@
+// Shared fixture for the index-assign operand-order tests: the Rust lowerer
+// (vow-ir/src/lower/mod.rs, `index_assign_evaluates_base_and_index_before_rhs`)
+// and the self-hosted lowerer (compiler/tests/test_lower_index_assign_eval_order.vow)
+// both lower this file and assert that the `__vow_vec_set_val` call's index
+// operand (ConstI64(1)) is emitted before its RHS operand (ConstI64(4242)).
+//
+// Markers deliberately avoid 0: `.push(11)`/`.push(12)` and index `1`, not
+// `.push(0)`/index `0`, so the index-position ConstI64 can't be confused with
+// some other coincidentally-zero constant already in the function.
+module IndexAssignEvalOrder
+
+fn order_probe() -> i64 {
+    let v: Vec<i64> = Vec::new();
+    v.push(11);
+    v.push(12);
+    v[1] = 4242;
+    v[1]
+}
