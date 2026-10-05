@@ -5187,7 +5187,10 @@ fn lower_block(ctx: LowerCtx, bid: i64) -> i64 {
 fn lower_value_expr(ctx: LowerCtx, eid: i64) -> i64 {
     let a: AstArena = ctx.arena;
     let val: i64 = lower_expr(ctx, eid);
-    if expr_tag(a, eid) == EXPR_ASSIGN() {
+    // A diverging RHS (`x = return 1`) already terminated the block; appending a
+    // ConstUnit after that terminator would violate the one-terminator-per-block
+    // invariant, and no caller reads `val` once `lctx_is_terminated` is true anyway.
+    if !lctx_is_terminated(ctx) && expr_tag(a, eid) == EXPR_ASSIGN() {
         let u_args: Vec<i64> = Vec::new();
         return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""), expr_span(a, eid));
     }
