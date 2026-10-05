@@ -1,0 +1,10 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 1
+// TEST: stderr "undefined function `missing`"
+module RubbleNoCascadeIfBranch
+
+fn main() -> i32 {
+    let c: bool = true;
+    let x: i64 = if c { missing() } else { 5 };
+    0
+}

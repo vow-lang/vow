@@ -262,7 +262,11 @@ fn is_vec_raw_parts_copy_expr(expr: &vow_syntax::ast::Expr) -> bool {
 }
 
 fn can_context_coerce(from: &Ty, to: &Ty) -> bool {
-    if from == to || *from == Ty::Never || (from.is_lit_int() && to.is_integer()) {
+    if from == to
+        || from.is_unknown_or_never()
+        || *to == Ty::Unknown
+        || (from.is_lit_int() && to.is_integer())
+    {
         return true;
     }
 
@@ -335,8 +339,8 @@ fn method_argument_expectations(receiver: &Ty, method: &str) -> Vec<Ty> {
 
 /// `HashMap` keys are stored and compared as one machine word, so only types
 /// whose equality is value equality of a single canonical word qualify:
-/// integers of at most 64 bits and `bool`. `Never` is the already-diagnosed
-/// unresolved marker. Heap-backed keys (`String`, `Vec`, structs, enums,
+/// integers of at most 64 bits and `bool`. `Never` and `Unknown` are the
+/// already-diagnosed unresolved markers. Heap-backed keys (`String`, `Vec`, structs, enums,
 /// tuples, `Option`) would compare by pointer, `i128`/`u128` would truncate,
 /// and floats have no total equality.
 fn hashmap_key_supported(key: &Ty) -> bool {
@@ -352,6 +356,7 @@ fn hashmap_key_supported(key: &Ty) -> bool {
             | Ty::U64
             | Ty::Bool
             | Ty::Never
+            | Ty::Unknown
     )
 }
 
@@ -473,6 +478,8 @@ fn unsigned_comparison_ty(lhs: &Ty, rhs: &Ty) -> Option<Ty> {
 fn merge_result_ty(current: &Ty, incoming: &Ty) -> Option<Ty> {
     if current == incoming {
         Some(current.clone())
+    } else if current.is_unknown() || incoming.is_unknown() {
+        Some(Ty::Unknown)
     } else if *current == Ty::Never {
         Some(incoming.clone())
     } else if *incoming == Ty::Never {
@@ -689,7 +696,7 @@ fn cast_verdict(src: &Ty, tgt: &Ty) -> CastVerdict {
             CastVerdict::Ok
         };
     }
-    if *src != Ty::Never {
+    if !src.is_unknown_or_never() {
         return CastVerdict::Mismatch;
     }
     CastVerdict::Ok
@@ -737,6 +744,7 @@ fn question_verdict(inner_ty: &Ty, return_ty: &Ty) -> Result<Ty, QuestionReject>
             Err(QuestionReject::ResultNotLowered)
         }
         Ty::Never => Ok(Ty::Never),
+        Ty::Unknown => Ok(Ty::Unknown),
         _ => Err(QuestionReject::NotTryable),
     }
 }
@@ -865,6 +873,9 @@ enum OperandError {
 /// checking. Then literal absorption runs, then the class check on the left
 /// operand only, then the equality check.
 fn same_operand_ty(lhs: Ty, rhs: Ty, class: OperandClass) -> Result<Ty, OperandError> {
+    if lhs == Ty::Unknown || rhs == Ty::Unknown {
+        return Ok(Ty::Unknown);
+    }
     if lhs == Ty::Never {
         return Ok(rhs);
     }
@@ -1556,7 +1567,7 @@ impl<'e> Checker<'e> {
             let pred_ty = self.check_contract_expr(refinement);
             self.where_ctx = outer;
             self.exit_scope();
-            if pred_ty != Ty::Bool && pred_ty != Ty::Never {
+            if pred_ty != Ty::Bool && !pred_ty.is_unknown_or_never() {
                 self.emit_error_with_hints(
                     ErrorCode::ContractTypeMismatch,
                     format!("`where` clause has type `{pred_ty}` but must be `bool`"),
@@ -1581,7 +1592,7 @@ impl<'e> Checker<'e> {
                 VowClause::Invariant { expr, span } => (expr, *span, "invariant"),
             };
             let ty = self.check_contract_expr(expr);
-            if ty != Ty::Bool && ty != Ty::Never {
+            if ty != Ty::Bool && !ty.is_unknown_or_never() {
                 self.emit_error_with_hints(
                     ErrorCode::ContractTypeMismatch,
                     format!("`{kind}` clause has type `{ty}` but must be `bool`"),
@@ -1622,7 +1633,7 @@ impl<'e> Checker<'e> {
             for clause in &vow.clauses {
                 if let VowClause::Requires { expr, span } = clause {
                     let ty = self.check_contract_expr(expr);
-                    if ty != Ty::Bool && ty != Ty::Never {
+                    if ty != Ty::Bool && !ty.is_unknown_or_never() {
                         self.emit_error_with_hints(
                             ErrorCode::ContractTypeMismatch,
                             format!("`requires` clause has type `{ty}` but must be `bool`"),
@@ -1659,7 +1670,7 @@ impl<'e> Checker<'e> {
             for clause in &vow.clauses {
                 if let VowClause::Ensures { expr, span } = clause {
                     let ty = self.check_contract_expr(expr);
-                    if ty != Ty::Bool && ty != Ty::Never {
+                    if ty != Ty::Bool && !ty.is_unknown_or_never() {
                         self.emit_error_with_hints(
                             ErrorCode::ContractTypeMismatch,
                             format!("`ensures` clause has type `{ty}` but must be `bool`"),
@@ -1999,6 +2010,22 @@ impl<'e> Checker<'e> {
         }
     }
 
+    /// `Option::None`, `Vec::new()` and the map constructors share the bottom
+    /// type, so coercion alone would let them stand in for any scalar. Where an
+    /// index or builtin argument expects a non-aggregate type, `Never` is
+    /// accepted only from an expression that really diverges.
+    fn never_is_not_a_value(&self, arg: &Expr, from: &Ty, to: &Ty) -> bool {
+        *from == Ty::Never
+            && !matches!(to, Ty::Applied(..) | Ty::Never | Ty::Unknown)
+            && !self.expr_diverges(arg)
+    }
+
+    /// A `Never`-typed expression that really diverges, as opposed to
+    /// `Option::None` / `Vec::new()` which share the bottom type.
+    fn is_diverging_never(&self, expr: &Expr, ty: &Ty) -> bool {
+        *ty == Ty::Never && self.expr_diverges(expr)
+    }
+
     fn call_returns_never(&self, callee: &Expr) -> bool {
         let ExprKind::Ident(name) = &callee.kind else {
             return false;
@@ -2160,7 +2187,7 @@ impl<'e> Checker<'e> {
                             expr.span,
                             hints,
                         );
-                        Ty::Never
+                        Ty::Unknown
                     }
                 }
             }
@@ -2190,8 +2217,8 @@ impl<'e> Checker<'e> {
                             self.check_integer_literal_range(rhs, &Ty::I64);
                         }
                         if lhs_ty != rhs_ty
-                            && lhs_ty != Ty::Never
-                            && rhs_ty != Ty::Never
+                            && !lhs_ty.is_unknown_or_never()
+                            && !rhs_ty.is_unknown_or_never()
                             && !operands_compatible(&lhs_ty, &rhs_ty)
                         {
                             self.emit_error_with_hints(
@@ -2250,7 +2277,7 @@ impl<'e> Checker<'e> {
                         let same_type_count_ok = own_type_count && rhs_ty == shift_ty;
                         if rhs_ty != Ty::U32
                             && !rhs_ty.is_lit_int()
-                            && rhs_ty != Ty::Never
+                            && !rhs_ty.is_unknown_or_never()
                             && !same_type_count_ok
                         {
                             let (message, hint) = if own_type_count {
@@ -2290,7 +2317,7 @@ impl<'e> Checker<'e> {
                     }
                     BinOp::Shl | BinOp::Shr => self.check_same_integer(lhs_ty, rhs_ty, expr.span),
                     BinOp::And | BinOp::Or => {
-                        if lhs_ty != Ty::Bool && lhs_ty != Ty::Never {
+                        if lhs_ty != Ty::Bool && !lhs_ty.is_unknown_or_never() {
                             self.emit_error_with_hints(
                                 ErrorCode::TypeMismatch,
                                 format!("logical operator requires `bool`, found `{lhs_ty}`"),
@@ -2298,7 +2325,7 @@ impl<'e> Checker<'e> {
                                 vec!["use `!= 0` to convert an integer to bool".to_string()],
                             );
                         }
-                        if rhs_ty != Ty::Bool && rhs_ty != Ty::Never {
+                        if rhs_ty != Ty::Bool && !rhs_ty.is_unknown_or_never() {
                             self.emit_error_with_hints(
                                 ErrorCode::TypeMismatch,
                                 format!("logical operator requires `bool`, found `{rhs_ty}`"),
@@ -2342,8 +2369,10 @@ impl<'e> Checker<'e> {
                                 ),
                                 operand.span,
                             );
-                            Ty::Unit
-                        } else if !is_numeric_or_lit_int(&operand_ty) && operand_ty != Ty::Never {
+                            Ty::Unknown
+                        } else if !is_numeric_or_lit_int(&operand_ty)
+                            && !operand_ty.is_unknown_or_never()
+                        {
                             self.emit_error(
                                 ErrorCode::TypeMismatch,
                                 format!(
@@ -2351,13 +2380,13 @@ impl<'e> Checker<'e> {
                                 ),
                                 operand.span,
                             );
-                            Ty::Unit
+                            Ty::Unknown
                         } else {
                             operand_ty
                         }
                     }
                     UnOp::Not => {
-                        if operand_ty != Ty::Bool && operand_ty != Ty::Never {
+                        if operand_ty != Ty::Bool && !operand_ty.is_unknown_or_never() {
                             self.emit_error(
                                 ErrorCode::TypeMismatch,
                                 format!("logical not requires `bool`, found `{operand_ty}`"),
@@ -2381,7 +2410,7 @@ impl<'e> Checker<'e> {
                             "function call callee must be an identifier",
                             callee.span,
                         );
-                        return Ty::Unit;
+                        return Ty::Unknown;
                     }
                 };
                 if name == "drop" && self.env.lookup_fn("drop").is_none() {
@@ -2395,10 +2424,11 @@ impl<'e> Checker<'e> {
                         for arg in args {
                             self.check_expr(arg);
                         }
-                        return Ty::Unit;
+                        return Ty::Unknown;
                     }
                     let arg_ty = self.check_expr(&args[0]);
-                    if arg_ty != Ty::Never && !crate::linear::is_linear_owner_ty(&arg_ty, &self.env)
+                    if !arg_ty.is_unknown_or_never()
+                        && !crate::linear::is_linear_owner_ty(&arg_ty, &self.env)
                     {
                         self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
@@ -2425,10 +2455,10 @@ impl<'e> Checker<'e> {
                         for arg in args {
                             self.check_expr(arg);
                         }
-                        return Ty::Unit;
+                        return Ty::Unknown;
                     }
                     let arg_ty = self.check_expr(&args[0]);
-                    if !is_supported_pin_ty(&arg_ty) && arg_ty != Ty::Never {
+                    if !is_supported_pin_ty(&arg_ty) && !arg_ty.is_unknown_or_never() {
                         self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
                             format!("pin_to_root does not support `{arg_ty}`"),
@@ -2500,10 +2530,7 @@ impl<'e> Checker<'e> {
                         for arg in args {
                             self.check_expr(arg);
                         }
-                        // Match the self-hosted checker (`compiler/checker.vow`,
-                        // undefined-function arm), which returns bottom here so a
-                        // failed call does not cascade into its consumers.
-                        return Ty::Never;
+                        return Ty::Unknown;
                     }
                 };
                 if self.env.is_extern_fn(name) {
@@ -2520,7 +2547,7 @@ impl<'e> Checker<'e> {
                     for arg in args {
                         self.check_expr(arg);
                     }
-                    return Ty::Never;
+                    return Ty::Unknown;
                 }
                 if args.len() != param_tys.len() {
                     let sig_str = param_tys
@@ -2562,13 +2589,18 @@ impl<'e> Checker<'e> {
             } => {
                 let recv_ty = self.check_expr(receiver);
                 let arg_tys: Vec<Ty> = args.iter().map(|arg| self.check_expr(arg)).collect();
+                if recv_ty.is_unknown() {
+                    return Ty::Unknown;
+                }
                 for ((arg, arg_ty), expect) in args
                     .iter()
                     .zip(arg_tys.iter())
                     .zip(method_argument_expectations(&recv_ty, method).iter())
                 {
                     self.check_contextual_integer_literal_ranges(arg, expect);
-                    if !can_assignment_coerce(arg_ty, expect) {
+                    if !can_assignment_coerce(arg_ty, expect)
+                        || self.never_is_not_a_value(arg, arg_ty, expect)
+                    {
                         self.emit_error(
                             ErrorCode::TypeMismatch,
                             format!(
@@ -2589,7 +2621,7 @@ impl<'e> Checker<'e> {
                             "`Vec::new()`, `HashMap::new()` and `BTreeMap::new()` take their element types from the annotation, for example `let m: HashMap<i64, i64> = HashMap::new();`".to_string(),
                         ],
                     );
-                    return Ty::Never;
+                    return Ty::Unknown;
                 }
                 let is_str = matches!(recv_ty, Ty::Str);
                 let is_vec = matches!(&recv_ty,
@@ -2669,34 +2701,28 @@ impl<'e> Checker<'e> {
                             expr.span,
                             hints,
                         );
-                        Ty::Unit
+                        Ty::Unknown
                     }
                 }
             }
             ExprKind::FieldAccess { base, field } => {
                 let base_ty = self.check_expr(base);
-                let struct_name = match &base_ty {
-                    Ty::Struct(n) => n.clone(),
-                    Ty::Reference(inner) => match inner.as_ref() {
-                        Ty::Struct(n) => n.clone(),
-                        _ => {
-                            self.emit_error(
-                                ErrorCode::TypeMismatch,
-                                "field access on non-struct type",
-                                expr.span,
-                            );
-                            return Ty::Unit;
-                        }
-                    },
-                    _ => {
-                        self.emit_error(
-                            ErrorCode::TypeMismatch,
-                            format!("field access on non-struct type `{base_ty}`"),
-                            expr.span,
-                        );
-                        return Ty::Unit;
-                    }
+                if base_ty.is_unknown() {
+                    return Ty::Unknown;
+                }
+                let peeled = match &base_ty {
+                    Ty::Reference(inner) => inner.as_ref(),
+                    other => other,
                 };
+                let Ty::Struct(struct_name) = peeled else {
+                    self.emit_error(
+                        ErrorCode::TypeMismatch,
+                        format!("field access on non-struct type `{}`", base_ty.user_name()),
+                        expr.span,
+                    );
+                    return Ty::Unknown;
+                };
+                let struct_name = struct_name.clone();
                 match self.env.lookup_struct(&struct_name) {
                     Some(info) => match info.fields.iter().find(|(n, _)| n == field) {
                         Some((_, ty)) => ty.clone(),
@@ -2720,7 +2746,7 @@ impl<'e> Checker<'e> {
                                 expr.span,
                                 hints,
                             );
-                            Ty::Unit
+                            Ty::Unknown
                         }
                     },
                     None => {
@@ -2729,7 +2755,7 @@ impl<'e> Checker<'e> {
                             format!("unknown struct `{struct_name}`"),
                             expr.span,
                         );
-                        Ty::Unit
+                        Ty::Unknown
                     }
                 }
             }
@@ -2737,7 +2763,9 @@ impl<'e> Checker<'e> {
                 let base_ty = self.check_expr(base);
                 let index_ty = self.check_expr(index);
                 self.check_contextual_integer_literal_ranges(index, &Ty::U64);
-                if !can_assignment_coerce(&index_ty, &Ty::U64) {
+                if !can_assignment_coerce(&index_ty, &Ty::U64)
+                    || self.never_is_not_a_value(index, &index_ty, &Ty::U64)
+                {
                     let hint = if index_ty.is_integer() {
                         "convert with `as u64`; `.len()` already returns `u64`".to_string()
                     } else {
@@ -2754,7 +2782,8 @@ impl<'e> Checker<'e> {
                     Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Struct(n) if n == "Vec") => {
                         args.first().cloned().unwrap_or(Ty::Unit)
                     }
-                    Ty::Never => Ty::Never,
+                    Ty::Unknown => Ty::Unknown,
+                    Ty::Never if self.is_diverging_never(base, &base_ty) => Ty::Never,
                     _ => {
                         self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
@@ -2768,7 +2797,7 @@ impl<'e> Checker<'e> {
                                     .to_string(),
                             ],
                         );
-                        Ty::Never
+                        Ty::Unknown
                     }
                 }
             }
@@ -2781,7 +2810,7 @@ impl<'e> Checker<'e> {
                     .collect();
                 let all_arms_supported = supported_arms.iter().all(|supported| *supported);
                 let scrutinee_supported = Self::is_enum_match_scrutinee(&scrutinee_ty);
-                if all_arms_supported && !scrutinee_supported {
+                if all_arms_supported && !scrutinee_supported && !scrutinee_ty.is_unknown() {
                     self.emit_error_with_hints(
                         ErrorCode::UnsupportedPattern,
                         format!("match scrutinee must be an enum, found `{scrutinee_ty}`"),
@@ -2855,7 +2884,7 @@ impl<'e> Checker<'e> {
                 else_branch,
             } => {
                 let cond_ty = self.check_expr(condition);
-                if cond_ty != Ty::Bool && cond_ty != Ty::Never {
+                if cond_ty != Ty::Bool && !cond_ty.is_unknown_or_never() {
                     self.emit_error_with_hints(
                         ErrorCode::TypeMismatch,
                         format!("if condition must be `bool`, found `{cond_ty}`"),
@@ -2913,6 +2942,7 @@ impl<'e> Checker<'e> {
                         args.first().cloned().unwrap_or(Ty::I64)
                     }
                     Ty::Never => Ty::Never,
+                    Ty::Unknown => Ty::Unknown,
                     _ => {
                         self.emit_error(
                             ErrorCode::TypeMismatch,
@@ -2946,7 +2976,7 @@ impl<'e> Checker<'e> {
                     let mut result_ty = Ty::Unit;
                     let mut found = false;
                     for ty in &tys {
-                        if *ty == Ty::Never {
+                        if ty.is_unknown_or_never() {
                             continue;
                         }
                         if !found {
@@ -2965,7 +2995,11 @@ impl<'e> Checker<'e> {
                             break;
                         }
                     }
-                    result_ty
+                    if !found && tys.iter().any(Ty::is_unknown) {
+                        Ty::Unknown
+                    } else {
+                        result_ty
+                    }
                 } else {
                     Ty::Unit
                 }
@@ -3062,7 +3096,7 @@ impl<'e> Checker<'e> {
                             inner.span,
                             vec![hint],
                         );
-                        Ty::Unit
+                        Ty::Unknown
                     }
                 };
                 let is_linear = crate::linear::is_linear_owner_ty(&payload_ty, &self.env);
@@ -3137,7 +3171,7 @@ impl<'e> Checker<'e> {
                         for (_, e) in fields {
                             self.check_expr(e);
                         }
-                        Ty::Unit
+                        Ty::Unknown
                     }
                     Some(info) => {
                         for (field_name, field_expr) in fields {
@@ -3250,7 +3284,10 @@ impl<'e> Checker<'e> {
                             }
                             let arg = &fields[0];
                             let arg_ty = self.check_expr(arg);
-                            if arg_ty != Ty::Str && arg_ty != Ty::Never {
+                            if arg_ty != Ty::Str
+                                && !arg_ty.is_unknown()
+                                && !self.is_diverging_never(arg, &arg_ty)
+                            {
                                 self.emit_error_with_hints(
                                     ErrorCode::TypeMismatch,
                                     format!(
@@ -3315,7 +3352,7 @@ impl<'e> Checker<'e> {
                         for e in fields {
                             self.check_expr(e);
                         }
-                        Ty::Unit
+                        Ty::Unknown
                     }
                     Some(info) => {
                         let variant = info
@@ -3380,7 +3417,7 @@ impl<'e> Checker<'e> {
                     op_span,
                     vec!["arithmetic operators require numeric operands".to_string()],
                 );
-                Ty::Unit
+                Ty::Unknown
             }
             Err(OperandError::Mismatch { lhs, rhs }) => {
                 self.emit_error_with_hints(
@@ -3389,7 +3426,7 @@ impl<'e> Checker<'e> {
                     op_span,
                     vec!["operator requires matching types".to_string()],
                 );
-                Ty::Unit
+                Ty::Unknown
             }
         }
     }
@@ -3501,7 +3538,7 @@ impl<'e> Checker<'e> {
                     op_span,
                     vec!["bitwise operators require integer operands".to_string()],
                 );
-                Ty::Unit
+                Ty::Unknown
             }
             Err(OperandError::Mismatch { lhs, rhs }) => {
                 self.emit_error_with_hints(
@@ -3510,7 +3547,7 @@ impl<'e> Checker<'e> {
                     op_span,
                     vec!["operator requires matching integer types".to_string()],
                 );
-                Ty::Unit
+                Ty::Unknown
             }
         }
     }
@@ -3706,7 +3743,7 @@ impl<'e> Checker<'e> {
             return;
         }
         if let Some(key_ty) = args.first() {
-            if is_btree && !matches!(key_ty, Ty::I64 | Ty::Never) {
+            if is_btree && !matches!(key_ty, Ty::I64 | Ty::Never | Ty::Unknown) {
                 self.emit_error(
                     ErrorCode::BTreeMapKeyTypeMustBeI64,
                     format!(
@@ -4477,7 +4514,7 @@ mod tests {
         let mut checker = Checker::new("test.vow", &mut emitter);
         checker.env.push_scope();
         let ty = checker.check_expr(&make_expr(ExprKind::Ident("x".to_string())));
-        assert_eq!(ty, Ty::Never, "error type must not cascade");
+        assert_eq!(ty, Ty::Unknown, "error type must not cascade");
         assert!(checker.has_errors());
         assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
         assert!(emitter.0[0].message.contains("undefined variable"));
@@ -5442,7 +5479,7 @@ mod tests {
             })),
             args: vec![],
         }));
-        assert_eq!(ty, Ty::Unit);
+        assert_eq!(ty, Ty::Unknown);
         assert!(checker.has_errors());
         assert!(
             emitter
@@ -5534,7 +5571,7 @@ mod tests {
             method: "to_string".to_string(),
             args: vec![],
         }));
-        assert_eq!(ty, Ty::Unit);
+        assert_eq!(ty, Ty::Unknown);
         assert!(checker.has_errors());
     }
 
@@ -6014,7 +6051,7 @@ mod tests {
         let ty = checker.check_expr(&make_expr(ExprKind::Question {
             expr: Box::new(ident("v")),
         }));
-        assert_eq!(ty, Ty::Unit);
+        assert_eq!(ty, Ty::Unknown);
         assert!(checker.has_errors());
         assert!(emitter.0[0].message.contains("return `Option`"));
     }
@@ -6032,7 +6069,7 @@ mod tests {
         let ty = checker.check_expr(&make_expr(ExprKind::Question {
             expr: Box::new(ident("v")),
         }));
-        assert_eq!(ty, Ty::Unit);
+        assert_eq!(ty, Ty::Unknown);
         assert!(checker.has_errors());
         assert!(emitter.0[0].message.contains("Result propagation"));
     }
@@ -8308,6 +8345,20 @@ mod tests {
     }
 
     #[test]
+    fn field_access_on_an_unregistered_struct_yields_one_unknown() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.env.define("g", Ty::Struct("Ghost".to_string()));
+        let ty = checker.check_expr(&make_expr(ExprKind::FieldAccess {
+            base: Box::new(ident("g")),
+            field: "x".to_string(),
+        }));
+        assert_eq!(ty, Ty::Unknown);
+        let messages: Vec<&str> = emitter.0.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(messages, vec!["unknown struct `Ghost`"]);
+    }
+
+    #[test]
     fn method_call_on_an_unresolved_collection_is_a_clear_type_mismatch() {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
@@ -8317,7 +8368,7 @@ mod tests {
             method: "insert".to_string(),
             args: vec![int_lit(), int_lit()],
         }));
-        assert_eq!(ty, Ty::Never, "the error must not cascade");
+        assert_eq!(ty, Ty::Unknown, "the error must not cascade");
         let codes: Vec<ErrorCode> = emitter.0.iter().map(|d| d.code).collect();
         assert_eq!(codes, vec![ErrorCode::TypeMismatch]);
         assert!(
@@ -8603,7 +8654,7 @@ mod tests {
         // Arithmetic wrong-class: the article ("a numeric type") is unguarded by
         // goldens, so pin it exactly.
         let (ty, diags) = numeric_operand_result(Ty::Str, Ty::Str);
-        assert_eq!(ty, Ty::Unit);
+        assert_eq!(ty, Ty::Unknown);
         assert_eq!(diags[0].code, ErrorCode::TypeMismatch);
         assert_eq!(
             diags[0].message,
@@ -8616,7 +8667,7 @@ mod tests {
 
         // Arithmetic mismatch on the post-absorb concrete types.
         let (ty, diags) = numeric_operand_result(Ty::I32, Ty::I64);
-        assert_eq!(ty, Ty::Unit);
+        assert_eq!(ty, Ty::Unknown);
         assert_eq!(
             diags[0].message,
             "arithmetic operands have different types: `i32` and `i64`"
@@ -8626,7 +8677,7 @@ mod tests {
         // Bitwise wrong-class: "an integer type" — the a/an difference from the
         // arithmetic message that a copy-paste swap would silently corrupt.
         let (ty, diags) = integer_operand_result(Ty::F64, Ty::F64);
-        assert_eq!(ty, Ty::Unit);
+        assert_eq!(ty, Ty::Unknown);
         assert_eq!(
             diags[0].message,
             "bitwise operator requires an integer type, found `f64`"
@@ -8638,7 +8689,7 @@ mod tests {
 
         // Bitwise mismatch.
         let (ty, diags) = integer_operand_result(Ty::I32, Ty::U32);
-        assert_eq!(ty, Ty::Unit);
+        assert_eq!(ty, Ty::Unknown);
         assert_eq!(
             diags[0].message,
             "bitwise operands have different types: `i32` and `u32`"
@@ -8675,10 +8726,10 @@ mod tests {
         assert!(diags.is_empty());
 
         // Mismatched classes: `check_same_numeric` already reports
-        // `TypeMismatch` and returns `Ty::Unit`, which is not a float, so the
+        // `TypeMismatch` and returns `Ty::Unknown`, which is not a float, so the
         // new float check must not also fire — no double-report.
         let (ty, diags) = checked_numeric_operand_result(Ty::F64, Ty::I64);
-        assert_eq!(ty, Ty::Unit);
+        assert_eq!(ty, Ty::Unknown);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, ErrorCode::TypeMismatch);
     }

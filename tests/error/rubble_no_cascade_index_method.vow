@@ -1,0 +1,11 @@
+// TEST: error-code UnknownMethod
+// TEST: error-count 1
+// Error-recovery rubble must not cascade: one mistake, one diagnostic.
+module RubbleNoCascadeIndexMethod
+
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    let s: String = String::from("s");
+    let x: i64 = v[s.nope()];
+    0
+}

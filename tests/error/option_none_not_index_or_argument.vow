@@ -1,0 +1,13 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 2
+// `Option::None` has the bottom type, which coerces to anything; it must still
+// be rejected where no Option/collection is expected.
+module OptionNoneNotIndexOrArgument
+
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    let s: String = String::from("s");
+    let x: i64 = v[Option::None];
+    s.push_str(Option::None);
+    0
+}
