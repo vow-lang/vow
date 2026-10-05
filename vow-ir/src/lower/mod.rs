@@ -2242,11 +2242,24 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
             // `v[i] = rhs` must evaluate `base`/`index` before `rhs` to match
             // the self-hosted lowerer's EXPR_INDEX assignment arm (#1502).
-            let index_parts = if let ExprKind::Index { base, index } = &lhs.kind {
-                Some((lower_expr(ctx, base), lower_expr(ctx, index)))
-            } else {
-                None
-            };
+            if let ExprKind::Index { base, index } = &lhs.kind {
+                let vec_ptr = lower_expr(ctx, base);
+                let idx_id = lower_expr(ctx, index);
+                let mut new_val = lower_expr(ctx, rhs);
+                if let Some(index_ty) = index_ty {
+                    new_val = lower_narrow_literal(ctx, rhs, new_val, index_ty);
+                }
+                // Index store transfers a linear RHS into the heap container.
+                ctx.emit_linear_consume_if_needed(new_val, span);
+                ctx.emit(
+                    Opcode::Call,
+                    Ty::Unit,
+                    vec![vec_ptr, idx_id, new_val],
+                    InstData::CallExtern("__vow_vec_set_val".to_string()),
+                    span,
+                );
+                return new_val;
+            }
             let mut new_val = lower_expr(ctx, rhs);
             match &lhs.kind {
                 ExprKind::Ident(name) => {
@@ -2316,22 +2329,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             span,
                         );
                     }
-                }
-                ExprKind::Index { .. } => {
-                    let (vec_ptr, idx_id) =
-                        index_parts.expect("Index arm implies index_parts is Some");
-                    if let Some(index_ty) = index_ty {
-                        new_val = lower_narrow_literal(ctx, rhs, new_val, index_ty);
-                    }
-                    // Index store transfers a linear RHS into the heap container.
-                    ctx.emit_linear_consume_if_needed(new_val, span);
-                    ctx.emit(
-                        Opcode::Call,
-                        Ty::Unit,
-                        vec![vec_ptr, idx_id, new_val],
-                        InstData::CallExtern("__vow_vec_set_val".to_string()),
-                        span,
-                    );
                 }
                 _ => {}
             }
