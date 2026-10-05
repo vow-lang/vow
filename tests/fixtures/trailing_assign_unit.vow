@@ -1,20 +1,26 @@
-// Shared fixture for the trailing-bare-assignment regression (issue #1504): both the
-// Rust lowerer (vow-ir/src/lower/mod.rs, `lower_if_trailing_assign_branch_merges_as_unit`
-// and `lower_match_arm_trailing_assign_merges_as_unit`) and the self-hosted lowerer
-// (compiler/tests/test_lower_trailing_assign_unit.vow) lower an equivalent shape and
-// assert the merge Phi feeding each function's Return is ITY_UNIT()-typed.
+// Fixture for the self-hosted IR-shape regression test
+// compiler/tests/test_lower_trailing_assign_unit.vow (issue #1504); the Rust lowerer's
+// twin tests (`lower_if_trailing_assign_branch_merges_as_unit` and
+// `lower_match_arm_trailing_assign_merges_as_unit` in vow-ir/src/lower/mod.rs) build an
+// equivalent AST shape directly rather than parsing this file.
 //
-// Each function's first branch/arm ends in a bare assignment (no `;`) to the outer
-// parameter `x`; the second branch/arm independently evaluates to `x` (an `i64`), so a
+// Each function's if/match is itself the function's only (and therefore trailing, and
+// therefore implicit-unit-return-typed) statement — not further assigned or returned —
+// so the fixture type-checks: the merge must come out `()`-typed on its own, the same
+// way the real bug surfaced (the if/match's own value, not anything downstream of it).
+// The first branch/arm ends in a bare assignment (no `;`) to the outer local `y`; a
 // lowering bug that leaks the assignment's RHS type into the merge would observe `I64`
-// instead of `UNIT` here.
+// instead of `UNIT` here. `bump_match`'s first arm is an `EnumVariant` pattern and its
+// second a `Wildcard` pattern, so both of the self-hosted match-arm lowering call sites
+// (not just the block/if ones) get exercised by an unbraced bare-assignment body.
 module TrailingAssignUnit
 
 fn bump_if(x: i64) {
+    let mut y: i64 = x;
     if x > 0 {
-        x = x + 1
+        y = y + 1
     } else {
-        x
+        y = y - 1;
     }
 }
 
@@ -24,12 +30,9 @@ enum Pick {
 }
 
 fn bump_match(p: Pick, x: i64) {
+    let mut y: i64 = x;
     match p {
-        Pick::Big => {
-            x = x + 1
-        },
-        Pick::Zero => {
-            x
-        },
+        Pick::Big => y = y + 1,
+        _ => y = y - 1,
     }
 }

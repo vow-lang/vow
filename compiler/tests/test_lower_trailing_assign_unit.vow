@@ -7,11 +7,12 @@ use parser
 use ir
 use lower
 
-// Twin of `lower_if_trailing_assign_branch_merges_as_unit` and
-// `lower_match_arm_trailing_assign_merges_as_unit` in vow-ir/src/lower/mod.rs. Both
-// lower tests/fixtures/trailing_assign_unit.vow and check that each function's Return
-// is fed directly by a Phi typed ITY_UNIT() — not the mutation-tracking Phi for the
-// reassigned parameter `x`, and not the wrong `ITY_I64()` the issue #1504 bug produces.
+// Self-hosted twin of `lower_if_trailing_assign_branch_merges_as_unit` and
+// `lower_match_arm_trailing_assign_merges_as_unit` in vow-ir/src/lower/mod.rs (those
+// build an equivalent AST shape directly rather than parsing a fixture). Lowers
+// tests/fixtures/trailing_assign_unit.vow and checks that each function's Return is fed
+// directly by a Phi typed ITY_UNIT() — not the mutation-tracking Phi for the reassigned
+// local `y`, and not the wrong `ITY_I64()` the issue #1504 bug produces.
 
 fn lower_fixture(source: String, file: String) -> IrModule {
     let arena: AstArena = arena_new();
