@@ -1,0 +1,135 @@
+module TestLowerIndexAssignEvalOrder
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+
+// Twin of `index_assign_evaluates_base_and_index_before_rhs` in
+// vow-ir/src/lower/mod.rs (#1502). Both lower
+// tests/fixtures/index_assign_eval_order.vow and assert that the
+// `__vow_vec_set_val` call's index operand (ConstI64(1)) is emitted before
+// its RHS operand (ConstI64(4242)). `compiler/lower.vow`'s EXPR_INDEX
+// assignment arm already lowers base/index before rhs, so this is a
+// regression lock, not a bug fix.
+
+fn lower_fixture(source: String, file: String) -> IrModule {
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(lex(source), arena, diag_ctx_new(), file);
+    let item_files: Vec<String> = Vec::new();
+    let mut fi: u64 = 0;
+    while fi < parsed.items.len() {
+        item_files.push(file);
+        fi = fi + 1;
+    }
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), item_files
+    )
+}
+
+fn function_named(m: IrModule, name: String) -> IrFunction {
+    let fns: Vec<IrFunction> = m.functions;
+    let mut fi: u64 = 0;
+    while fi < fns.len() {
+        let f: IrFunction = fns[fi];
+        if f.name == name {
+            return f;
+        }
+        fi = fi + 1;
+    }
+    fns[0]
+}
+
+fn first_call_with_symbol(f: IrFunction, symbol: String) -> IrInst {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: u64 = 0;
+    while bi < blocks.len() {
+        let b: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = b.insts;
+        let mut ii: u64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == symbol {
+                return inst;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    insts_first(f)
+}
+
+fn insts_first(f: IrFunction) -> IrInst {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let b: IrBlock = blocks[0];
+    let insts: Vec<IrInst> = b.insts;
+    insts[0]
+}
+
+// Position of the instruction with the given id within the function's
+// flattened (block-order) instruction list, or -1 if not found.
+fn flattened_position(f: IrFunction, id: i64) -> i64 {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: u64 = 0;
+    let mut pos: i64 = 0;
+    while bi < blocks.len() {
+        let b: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = b.insts;
+        let mut ii: u64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.id == id {
+                return pos;
+            }
+            pos = pos + 1;
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    -1
+}
+
+fn inst_with_id(f: IrFunction, id: i64) -> IrInst {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: u64 = 0;
+    while bi < blocks.len() {
+        let b: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = b.insts;
+        let mut ii: u64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.id == id {
+                return inst;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    insts_first(f)
+}
+
+fn main() -> i32 [read] {
+    let src: String = fs_read(String::from("tests/fixtures/index_assign_eval_order.vow"));
+    if src.len() == 0 { return 1; }
+    let lowered: IrModule = lower_fixture(src, String::from("index_assign_eval_order.vow"));
+    let f: IrFunction = function_named(lowered, String::from("order_probe"));
+    let call: IrInst = first_call_with_symbol(f, String::from("__vow_vec_set_val"));
+    let args: Vec<i64> = call.args;
+    let idx_id: i64 = args[1];
+    let rhs_id: i64 = args[2];
+
+    let idx_inst: IrInst = inst_with_id(f, idx_id);
+    if idx_inst.op != IOP_CONST_I64() || idx_inst.dv != 1 { return 2; }
+    let rhs_inst: IrInst = inst_with_id(f, rhs_id);
+    if rhs_inst.op != IOP_CONST_I64() || rhs_inst.dv != 4242 { return 3; }
+
+    let idx_pos: i64 = flattened_position(f, idx_id);
+    let rhs_pos: i64 = flattened_position(f, rhs_id);
+    if idx_pos < 0 || rhs_pos < 0 { return 4; }
+    if idx_pos >= rhs_pos { return 5; }
+    0
+}

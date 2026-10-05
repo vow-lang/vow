@@ -1125,6 +1125,12 @@ let val: i64 = v[0];
 v[i] = new_val;
 ```
 
+`v[i] = new_val` evaluates `v`, then `i`, then `new_val`, left to right, in both compilers. This
+order is observable whenever any of the three sub-expressions has a side effect — not only a
+declared `[io]`/`[read]`/`[write]`/`[panic]`/`[unsafe]` effect, but also a local-variable mutation
+that a sibling sub-expression later reads, such as `v[i] = { i = i + 1; 7 }`: `i` is read as its
+pre-mutation value because `i` is evaluated before `new_val`.
+
 The index expression of a `Vec` read or write must have **exactly the type `u64`**. An unsuffixed integer literal coerces to `u64` (`v[0]` needs no suffix); a literal that does not fit, such as `v[-1]` or `v[18446744073709551616]`, is a `LiteralOutOfRange` error. Any other integer type (`i8` … `i128`, `u8` … `u32`, `u128`) and any non-integer index is a `TypeMismatch` error, in both compilers; widen or convert explicitly with `as` (`v[i as u64]`). The same rule applies to the index-shaped `Vec` method argument of `Vec::truncate`, which takes exactly `u64`.
 
 The `Vec` runtime helpers take a pointer-width unsigned index, so a `u64` index is never reinterpreted as negative: an index at or beyond `v.len()` is out of bounds, including values above `i64::MAX`.
