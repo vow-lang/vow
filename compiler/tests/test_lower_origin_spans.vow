@@ -107,6 +107,25 @@ fn first_inst_with_op(f: IrFunction, op: i64) -> IrInst {
     first_inst(f)
 }
 
+fn first_call_with_symbol(f: IrFunction, symbol: String) -> IrInst {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: u64 = 0;
+    while bi < blocks.len() {
+        let b: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = b.insts;
+        let mut ii: u64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == symbol {
+                return inst;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    first_inst(f)
+}
+
 fn sample_source() -> String {
     let source: String = String::from("");
     source.push_str("module T\n");
@@ -118,6 +137,9 @@ fn sample_source() -> String {
     source.push_str("  let k: i64 = 7;\n");
     source.push_str("  let y: i64 = g(0 - 5);\n");
     source.push_str("  y + k\n");
+    source.push_str("}\n");
+    source.push_str("fn span_graph(s: String) -> i64 {\n");
+    source.push_str("  string_matches_literal_at(s, 0, \"ph\") + 1\n");
     source.push_str("}\n");
     source
 }
@@ -175,6 +197,33 @@ fn check_each_function_indexes_its_own_instructions() -> i64 {
     0
 }
 
+fn check_static_literal_helper_origins() -> i64 {
+    let source: String = sample_source();
+    let m: IrModule = lower_source(source);
+    let f: IrFunction = function_named(m, String::from("span_graph"));
+    let call: IrInst = first_call_with_symbol(
+        f, String::from("__vow_string_matches_literal_at")
+    );
+    let call_text: String = String::from("string_matches_literal_at(s, 0, \"ph\")");
+    if call.ostart != find_sub(source, call_text) { return 500; }
+    if call.olen != call_text.len() as i64 { return 501; }
+    let literal_text: String = String::from("\"ph\"");
+    let literal_start: i64 = find_sub(source, literal_text);
+    let literal_ptr: IrInst = inst_with_id(f, call.args[2]);
+    if literal_ptr.ostart != literal_start || literal_ptr.olen != literal_text.len() as i64 {
+        return 502;
+    }
+    let literal_len: IrInst = inst_with_id(f, call.args[3]);
+    if literal_len.ostart != literal_start || literal_len.olen != literal_text.len() as i64 {
+        return 503;
+    }
+    let add: IrInst = first_inst_with_op(f, IOP_WADD());
+    let outer_text: String = String::from("string_matches_literal_at(s, 0, \"ph\") + 1");
+    if add.ostart != find_sub(source, outer_text) { return 504; }
+    if add.olen != outer_text.len() as i64 { return 505; }
+    0
+}
+
 fn main() -> i32 {
     let r1: i64 = check_vow_instructions_carry_their_clause_range();
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -184,5 +233,7 @@ fn main() -> i32 {
     if r3 != 0 { return i64_to_i32_wrap(r3); }
     let r4: i64 = check_each_function_indexes_its_own_instructions();
     if r4 != 0 { return i64_to_i32_wrap(r4); }
+    let r5: i64 = check_static_literal_helper_origins();
+    if r5 != 0 { return i64_to_i32_wrap(r5); }
     0
 }

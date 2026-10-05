@@ -7,10 +7,6 @@ use parser
 use ir
 use lower
 
-fn same_bool(left: bool, right: bool) -> bool {
-    (left && right) || (!left && !right)
-}
-
 fn expect_spec(
     recv: String,
     method: String,
@@ -18,7 +14,6 @@ fn expect_spec(
     result_ty: i64,
     arg_mode: i64,
     result_tag: i64,
-    patches_span: bool,
     code: i64,
 ) -> i64 {
     let spec: i64 = builtin_method_spec(recv, method);
@@ -27,31 +22,30 @@ fn expect_spec(
     if method_spec_result_ty(spec) != result_ty { return code + 2; }
     if method_spec_arg_mode(spec) != arg_mode { return code + 3; }
     if method_spec_result_tag(spec) != result_tag { return code + 4; }
-    if !same_bool(method_spec_patches_span(spec), patches_span) { return code + 5; }
     0
 }
 
 fn check_all_rows() -> i64 {
-    let mut r: i64 = expect_spec(String::from("String"), String::from("len"), String::from("__vow_string_len"), ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 1);
-    if r == 0 { r = expect_spec(String::from("String"), String::from("push_str"), String::from("__vow_string_push_str"), ITY_UNIT(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), false, 7); }
-    if r == 0 { r = expect_spec(String::from("String"), String::from("eq"), String::from("__vow_string_eq"), ITY_BOOL(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), false, 13); }
-    if r == 0 { r = expect_spec(String::from("String"), String::from("contains"), String::from("__vow_string_contains"), ITY_BOOL(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), false, 19); }
-    if r == 0 { r = expect_spec(String::from("String"), String::from("byte_at"), String::from("__vow_string_byte_at"), ITY_I64(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), false, 25); }
-    if r == 0 { r = expect_spec(String::from("String"), String::from("push_byte"), String::from("__vow_string_push_byte"), ITY_UNIT(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), true, 31); }
-    if r == 0 { r = expect_spec(String::from("String"), String::from("clear"), String::from("__vow_string_clear"), ITY_UNIT(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 37); }
-    if r == 0 { r = expect_spec(String::from("String"), String::from("parse_i64"), String::from("__vow_string_parse_i64_opt"), ITY_PTR(), METHOD_ARG_NONE(), METHOD_TAG_OPTION(), true, 43); }
-    if r == 0 { r = expect_spec(String::from("String"), String::from("parse_u64"), String::from("__vow_string_parse_u64_opt"), ITY_PTR(), METHOD_ARG_NONE(), METHOD_TAG_OPTION(), true, 49); }
-    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("len"), String::from("__vow_map_len"), ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 55); }
-    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("get"), String::from("__vow_map_get"), ITY_PTR(), METHOD_ARG_CONSUMED_UNIT(), METHOD_TAG_OPTION(), true, 61); }
-    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("contains_key"), String::from("__vow_map_contains"), ITY_BOOL(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), false, 67); }
-    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("remove"), String::from("__vow_map_remove"), ITY_UNIT(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), false, 73); }
-    if r == 0 { r = expect_spec(String::from("BTreeMap"), String::from("len"), String::from("__vow_btreemap_len"), ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 79); }
-    if r == 0 { r = expect_spec(String::from("BTreeMap"), String::from("get"), String::from("__vow_btreemap_get"), ITY_PTR(), METHOD_ARG_CONSUMED_UNIT(), METHOD_TAG_OPTION(), true, 85); }
-    if r == 0 { r = expect_spec(String::from("BTreeMap"), String::from("contains"), String::from("__vow_btreemap_contains"), ITY_BOOL(), METHOD_ARG_CONSUMED_UNIT(), METHOD_TAG_NONE(), false, 91); }
-    if r == 0 { r = expect_spec(String::from("Widget"), String::from("len"), String::from("__vow_vec_len"), ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 97); }
-    if r == 0 { r = expect_spec(String::from(""), String::from("pop"), String::from("__vow_vec_pop"), ITY_UNIT(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 103); }
-    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("clear"), String::from("__vow_vec_clear"), ITY_UNIT(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 109); }
-    if r == 0 { r = expect_spec(String::from("String"), String::from("truncate"), String::from("__vow_vec_truncate"), ITY_UNIT(), METHOD_ARG_EXPR_ZERO(), METHOD_TAG_NONE(), false, 115); }
+    let mut r: i64 = expect_spec(String::from("String"), String::from("len"), String::from("__vow_string_len"), ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), 1);
+    if r == 0 { r = expect_spec(String::from("String"), String::from("push_str"), String::from("__vow_string_push_str"), ITY_UNIT(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), 7); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("eq"), String::from("__vow_string_eq"), ITY_BOOL(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), 13); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("contains"), String::from("__vow_string_contains"), ITY_BOOL(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), 19); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("byte_at"), String::from("__vow_string_byte_at"), ITY_I64(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), 25); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("push_byte"), String::from("__vow_string_push_byte"), ITY_UNIT(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), 31); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("clear"), String::from("__vow_string_clear"), ITY_UNIT(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), 37); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("parse_i64"), String::from("__vow_string_parse_i64_opt"), ITY_PTR(), METHOD_ARG_NONE(), METHOD_TAG_OPTION(), 43); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("parse_u64"), String::from("__vow_string_parse_u64_opt"), ITY_PTR(), METHOD_ARG_NONE(), METHOD_TAG_OPTION(), 49); }
+    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("len"), String::from("__vow_map_len"), ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), 55); }
+    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("get"), String::from("__vow_map_get"), ITY_PTR(), METHOD_ARG_CONSUMED_UNIT(), METHOD_TAG_OPTION(), 61); }
+    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("contains_key"), String::from("__vow_map_contains"), ITY_BOOL(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), 67); }
+    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("remove"), String::from("__vow_map_remove"), ITY_UNIT(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), 73); }
+    if r == 0 { r = expect_spec(String::from("BTreeMap"), String::from("len"), String::from("__vow_btreemap_len"), ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), 79); }
+    if r == 0 { r = expect_spec(String::from("BTreeMap"), String::from("get"), String::from("__vow_btreemap_get"), ITY_PTR(), METHOD_ARG_CONSUMED_UNIT(), METHOD_TAG_OPTION(), 85); }
+    if r == 0 { r = expect_spec(String::from("BTreeMap"), String::from("contains"), String::from("__vow_btreemap_contains"), ITY_BOOL(), METHOD_ARG_CONSUMED_UNIT(), METHOD_TAG_NONE(), 91); }
+    if r == 0 { r = expect_spec(String::from("Widget"), String::from("len"), String::from("__vow_vec_len"), ITY_U64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), 97); }
+    if r == 0 { r = expect_spec(String::from(""), String::from("pop"), String::from("__vow_vec_pop"), ITY_UNIT(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), 103); }
+    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("clear"), String::from("__vow_vec_clear"), ITY_UNIT(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), 109); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("truncate"), String::from("__vow_vec_truncate"), ITY_UNIT(), METHOD_ARG_EXPR_ZERO(), METHOD_TAG_NONE(), 115); }
     r
 }
 

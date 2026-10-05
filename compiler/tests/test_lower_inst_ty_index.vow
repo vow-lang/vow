@@ -1,6 +1,7 @@
 module TestLowerInstTyIndex
 
 use ast
+use parser
 use ir
 use lower
 
@@ -10,17 +11,18 @@ fn new_test_ctx() -> LowerCtx {
 
 fn check_emit_records_inst_types() -> i64 {
     let ctx: LowerCtx = new_test_ctx();
+    let origin: i64 = span_pack(0, 1);
     if lctx_inst_ty(ctx, -1) != ITY_I64() { return 1; }
     if lctx_inst_ty(ctx, 0) != ITY_I64() { return 2; }
     if ctx.inst_ty_by_id.len() != 0 { return 3; }
 
-    let first_id: i64 = lctx_emit(ctx, IOP_CONST_BOOL(), ITY_BOOL(), Vec::new(), IDATA_CONST_BOOL(), 1, 0, String::from(""));
+    let first_id: i64 = lctx_emit(ctx, IOP_CONST_BOOL(), ITY_BOOL(), Vec::new(), IDATA_CONST_BOOL(), 1, 0, String::from(""), origin);
     if first_id != 0 { return 4; }
     if ctx.inst_ty_by_id.len() != 1 { return 5; }
     if ctx.inst_ty_by_id[first_id as u64] != ITY_BOOL() { return 6; }
     if lctx_inst_ty(ctx, first_id) != ITY_BOOL() { return 7; }
 
-    let second_id: i64 = lctx_emit(ctx, IOP_CONST_F64(), ITY_F64(), Vec::new(), IDATA_CONST_F64(), 0, 0, String::from(""));
+    let second_id: i64 = lctx_emit(ctx, IOP_CONST_F64(), ITY_F64(), Vec::new(), IDATA_CONST_F64(), 0, 0, String::from(""), origin);
     if second_id != 1 { return 8; }
     if ctx.inst_ty_by_id.len() != 2 { return 9; }
     if ctx.inst_ty_by_id[second_id as u64] != ITY_F64() { return 10; }
@@ -32,10 +34,11 @@ fn check_emit_records_inst_types() -> i64 {
 
 fn check_cross_block_lookup() -> i64 {
     let ctx: LowerCtx = new_test_ctx();
-    let first_id: i64 = lctx_emit(ctx, IOP_CONST_BOOL(), ITY_BOOL(), Vec::new(), IDATA_CONST_BOOL(), 1, 0, String::from(""));
+    let origin: i64 = span_pack(0, 1);
+    let first_id: i64 = lctx_emit(ctx, IOP_CONST_BOOL(), ITY_BOOL(), Vec::new(), IDATA_CONST_BOOL(), 1, 0, String::from(""), origin);
     let next_block: i64 = lctx_new_block(ctx);
     lctx_switch_to_block(ctx, next_block);
-    let second_id: i64 = lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 42, 0, String::from(""));
+    let second_id: i64 = lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 42, 0, String::from(""), origin);
 
     if first_id != 0 { return 13; }
     if second_id != 1 { return 14; }
@@ -50,19 +53,20 @@ fn check_cross_block_lookup() -> i64 {
 
 fn check_terminated_emit_does_not_poison_index() -> i64 {
     let ctx: LowerCtx = new_test_ctx();
-    let ret_id: i64 = lctx_emit(ctx, IOP_RETURN(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""));
+    let origin: i64 = span_pack(0, 1);
+    let ret_id: i64 = lctx_emit(ctx, IOP_RETURN(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""), origin);
     if ret_id != 0 { return 20; }
     if ctx.inst_ty_by_id.len() != 1 { return 21; }
     if lctx_inst_ty(ctx, ret_id) != ITY_UNIT() { return 22; }
 
-    let skipped_id: i64 = lctx_emit(ctx, IOP_CONST_F64(), ITY_F64(), Vec::new(), IDATA_CONST_F64(), 0, 0, String::from(""));
+    let skipped_id: i64 = lctx_emit(ctx, IOP_CONST_F64(), ITY_F64(), Vec::new(), IDATA_CONST_F64(), 0, 0, String::from(""), origin);
     if skipped_id != 1 { return 23; }
     if ctx.inst_ty_by_id.len() != 1 { return 24; }
     if lctx_inst_ty(ctx, skipped_id) != ITY_I64() { return 25; }
 
     let next_block: i64 = lctx_new_block(ctx);
     lctx_switch_to_block(ctx, next_block);
-    let real_id: i64 = lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 7, 0, String::from(""));
+    let real_id: i64 = lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 7, 0, String::from(""), origin);
     if real_id != skipped_id { return 26; }
     if ctx.inst_ty_by_id.len() != 2 { return 27; }
     if ctx.inst_ty_by_id[real_id as u64] != ITY_U64() { return 28; }
