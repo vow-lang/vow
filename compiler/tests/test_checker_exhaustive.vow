@@ -58,10 +58,52 @@ fn check_exhaustive_match_has_no_errors() -> i32 [io] {
     0
 }
 
+fn check_non_exhaustive_option_match_reports_missing_none() -> i32 [io] {
+    let src: String = String::from("module OptionExhaustiveTest\nfn unwrap_or_zero(value: Option<i64>) -> i64 {\n    match value {\n        Option::Some(inner) => inner,\n    }\n}\n");
+    let dctx: DiagCtx = checked_diags(src);
+    if dctx.error_count != 1 { return 31; }
+    let d: Diagnostic = first_diag(dctx);
+    if d.code != EC_NON_EXHAUSTIVE_MATCH() { return 32; }
+    if !d.message.contains(String::from("None")) { return 33; }
+    0
+}
+
+fn check_exhaustive_option_match_has_no_errors() -> i32 [io] {
+    let src: String = String::from("module OptionExhaustiveTest\nfn unwrap_or_zero(value: Option<i64>) -> i64 {\n    match value {\n        Option::Some(inner) => inner,\n        Option::None => 0,\n    }\n}\n");
+    let dctx: DiagCtx = checked_diags(src);
+    if dctx.error_count != 0 { return 34; }
+    0
+}
+
+fn check_non_exhaustive_result_match_reports_missing_err() -> i32 [io] {
+    let src: String = String::from("module ResultExhaustiveTest\nfn unwrap_or_zero(value: Result<i64, i64>) -> i64 {\n    match value {\n        Result::Ok(inner) => inner,\n    }\n}\n");
+    let dctx: DiagCtx = checked_diags(src);
+    if dctx.error_count != 1 { return 41; }
+    let d: Diagnostic = first_diag(dctx);
+    if d.code != EC_NON_EXHAUSTIVE_MATCH() { return 42; }
+    if !d.message.contains(String::from("Err")) { return 43; }
+    0
+}
+
+fn check_exhaustive_result_match_has_no_errors() -> i32 [io] {
+    let src: String = String::from("module ResultExhaustiveTest\nfn unwrap_or_zero(value: Result<i64, i64>) -> i64 {\n    match value {\n        Result::Ok(inner) => inner,\n        Result::Err(e) => e,\n    }\n}\n");
+    let dctx: DiagCtx = checked_diags(src);
+    if dctx.error_count != 0 { return 44; }
+    0
+}
+
 fn main() -> i32 [io] {
     let r1: i32 = check_non_exhaustive_match_reports_missing_variant();
     if r1 != 0 { return r1; }
     let r2: i32 = check_wildcard_arm_suppresses_non_exhaustive();
     if r2 != 0 { return r2; }
-    check_exhaustive_match_has_no_errors()
+    let r3: i32 = check_exhaustive_match_has_no_errors();
+    if r3 != 0 { return r3; }
+    let r4: i32 = check_non_exhaustive_option_match_reports_missing_none();
+    if r4 != 0 { return r4; }
+    let r5: i32 = check_exhaustive_option_match_has_no_errors();
+    if r5 != 0 { return r5; }
+    let r6: i32 = check_non_exhaustive_result_match_reports_missing_err();
+    if r6 != 0 { return r6; }
+    check_exhaustive_result_match_has_no_errors()
 }

@@ -73,6 +73,15 @@ fn collect_bool_patterns(kind: &PatKind, has_true: &mut bool, has_false: &mut bo
     }
 }
 
+// Built-in generic enums have no EnumInfo; their variant sets are fixed.
+fn builtin_enum_variant_names(name: &str) -> Option<Vec<&'static str>> {
+    match name {
+        "Option" => Some(vec!["Some", "None"]),
+        "Result" => Some(vec!["Ok", "Err"]),
+        _ => None,
+    }
+}
+
 fn check_enum_exhaustive(
     name: &str,
     arms: &[MatchArm],
@@ -81,12 +90,14 @@ fn check_enum_exhaustive(
     file: &str,
     emitter: &mut dyn DiagnosticEmitter,
 ) {
-    let info = match env.lookup_enum(name) {
-        Some(info) => info,
-        None => return,
+    let all_variant_names: Vec<&str> = if let Some(builtin) = builtin_enum_variant_names(name) {
+        builtin
+    } else {
+        match env.lookup_enum(name) {
+            Some(info) => info.variants.iter().map(|v| v.name.as_str()).collect(),
+            None => return,
+        }
     };
-
-    let all_variant_names: Vec<&str> = info.variants.iter().map(|v| v.name.as_str()).collect();
 
     let mut covered: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
@@ -336,6 +347,95 @@ mod tests {
         assert_eq!(emitter.0.len(), 1);
         assert_eq!(emitter.0[0].code, ErrorCode::NonExhaustiveMatch);
         assert!(emitter.0[0].message.contains("Blue"));
+    }
+
+    #[test]
+    fn unregistered_enum_is_skipped() {
+        let mut emitter = TestEmitter(vec![]);
+        let env = TypeEnv::new();
+        let arms = vec![make_arm(PatKind::EnumVariant {
+            path: vec!["Red".to_string()],
+            inner: vec![],
+        })];
+        check_exhaustive(
+            &Ty::Enum("Undefined".to_string()),
+            &arms,
+            &env,
+            dummy_span(),
+            "test.vow",
+            &mut emitter,
+        );
+        assert!(emitter.0.is_empty());
+    }
+
+    #[test]
+    fn option_missing_none_variant() {
+        let mut emitter = TestEmitter(vec![]);
+        let env = TypeEnv::new();
+        let arms = vec![make_arm(PatKind::EnumVariant {
+            path: vec!["Some".to_string()],
+            inner: vec![],
+        })];
+        check_exhaustive(
+            &Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I64]),
+            &arms,
+            &env,
+            dummy_span(),
+            "test.vow",
+            &mut emitter,
+        );
+        assert_eq!(emitter.0.len(), 1);
+        assert_eq!(emitter.0[0].code, ErrorCode::NonExhaustiveMatch);
+        assert!(emitter.0[0].message.contains("None"));
+    }
+
+    #[test]
+    fn option_all_variants_covered_has_no_errors() {
+        let mut emitter = TestEmitter(vec![]);
+        let env = TypeEnv::new();
+        let arms = vec![
+            make_arm(PatKind::EnumVariant {
+                path: vec!["Some".to_string()],
+                inner: vec![],
+            }),
+            make_arm(PatKind::EnumVariant {
+                path: vec!["None".to_string()],
+                inner: vec![],
+            }),
+        ];
+        check_exhaustive(
+            &Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I64]),
+            &arms,
+            &env,
+            dummy_span(),
+            "test.vow",
+            &mut emitter,
+        );
+        assert!(emitter.0.is_empty());
+    }
+
+    #[test]
+    fn result_missing_err_variant() {
+        let mut emitter = TestEmitter(vec![]);
+        let env = TypeEnv::new();
+        let arms = vec![make_arm(PatKind::EnumVariant {
+            path: vec!["Ok".to_string()],
+            inner: vec![],
+        })];
+        check_exhaustive(
+            &Ty::Applied(
+                Box::new(Ty::Enum("Result".to_string())),
+                vec![Ty::I64, Ty::I64],
+            ),
+            &arms,
+            &env,
+            dummy_span(),
+            "test.vow",
+            &mut emitter,
+        );
+        assert_eq!(emitter.0.len(), 1);
+        assert_eq!(emitter.0[0].code, ErrorCode::NonExhaustiveMatch);
+        assert!(emitter.0[0].message.contains("Err"));
     }
 
     #[test]
