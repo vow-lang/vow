@@ -131,3 +131,91 @@ fn exhaustive_enum_match_compiles() {
     );
     assert_compiles(&src, "an exhaustive match over all variants must compile");
 }
+
+#[test]
+fn non_exhaustive_option_match_fails_build() {
+    let src = "module M\n\
+               fn unwrap_or_zero(value: Option<i64>) -> i64 {\n\
+                   match value {\n\
+                       Option::Some(inner) => inner,\n\
+                   }\n\
+               }\n\
+               fn main() -> i32 { 0 }\n";
+    let (exit, json) = build_no_verify(src);
+    assert_eq!(exit, 1, "a non-exhaustive Option match must fail the build");
+    assert_eq!(json["status"], "CompileFailed");
+    assert!(error_codes(&json).contains(&"NonExhaustiveMatch".to_string()));
+}
+
+#[test]
+fn option_wildcard_suppresses_non_exhaustive_check() {
+    let src = "module M\n\
+               fn unwrap_or_zero(value: Option<i64>) -> i64 {\n\
+                   match value {\n\
+                       Option::Some(inner) => inner,\n\
+                       _ => 0,\n\
+                   }\n\
+               }\n\
+               fn main() -> i32 { 0 }\n";
+    assert_compiles(
+        src,
+        "a trailing wildcard arm must suppress NonExhaustiveMatch for Option",
+    );
+}
+
+#[test]
+fn exhaustive_option_match_compiles() {
+    let src = "module M\n\
+               fn unwrap_or_zero(value: Option<i64>) -> i64 {\n\
+                   match value {\n\
+                       Option::Some(inner) => inner,\n\
+                       Option::None => 0,\n\
+                   }\n\
+               }\n\
+               fn main() -> i32 { 0 }\n";
+    assert_compiles(src, "an exhaustive Option match must compile");
+}
+
+#[test]
+fn non_exhaustive_result_match_fails_build() {
+    let src = "module M\n\
+               fn unwrap_or_zero(value: Result<i64, i64>) -> i64 {\n\
+                   match value {\n\
+                       Result::Ok(inner) => inner,\n\
+                   }\n\
+               }\n\
+               fn main() -> i32 { 0 }\n";
+    let (exit, json) = build_no_verify(src);
+    assert_eq!(exit, 1, "a non-exhaustive Result match must fail the build");
+    assert_eq!(json["status"], "CompileFailed");
+    assert!(error_codes(&json).contains(&"NonExhaustiveMatch".to_string()));
+}
+
+#[test]
+fn result_wildcard_suppresses_non_exhaustive_check() {
+    let src = "module M\n\
+               fn unwrap_or_zero(value: Result<i64, i64>) -> i64 {\n\
+                   match value {\n\
+                       Result::Ok(inner) => inner,\n\
+                       _ => 0,\n\
+                   }\n\
+               }\n\
+               fn main() -> i32 { 0 }\n";
+    assert_compiles(
+        src,
+        "a trailing wildcard arm must suppress NonExhaustiveMatch for Result",
+    );
+}
+
+#[test]
+fn exhaustive_result_match_compiles() {
+    let src = "module M\n\
+               fn unwrap_or_zero(value: Result<i64, i64>) -> i64 {\n\
+                   match value {\n\
+                       Result::Ok(inner) => inner,\n\
+                       Result::Err(e) => e,\n\
+                   }\n\
+               }\n\
+               fn main() -> i32 { 0 }\n";
+    assert_compiles(src, "an exhaustive Result match must compile");
+}

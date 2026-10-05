@@ -1,0 +1,12 @@
+// TEST: error-code NonExhaustiveMatch
+module MatchNonExhaustiveOption
+
+fn unwrap_or_zero(value: Option<i64>) -> i64 {
+    match value {
+        Option::Some(inner) => inner,
+    }
+}
+
+fn main() -> i32 {
+    0
+}

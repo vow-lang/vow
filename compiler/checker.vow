@@ -2328,6 +2328,22 @@ fn is_enum_match_tid(ts: TyStore, tid: i64) -> bool {
     false
 }
 
+// Built-in generic enums have no edef_* entry; their variant sets are fixed.
+fn builtin_enum_variant_names(enum_name: String) -> Vec<String> {
+    let names: Vec<String> = Vec::new();
+    if enum_name == String::from("Option") {
+        names.push(String::from("Some"));
+        names.push(String::from("None"));
+        return names;
+    }
+    if enum_name == String::from("Result") {
+        names.push(String::from("Ok"));
+        names.push(String::from("Err"));
+        return names;
+    }
+    names
+}
+
 fn check_exhaustive(e: CheckEnv, m: Module, scrutinee_tid: i64, arms_lid: i64, n_arms: i64, span: i64) {
     let a: AstArena = m.arena;
     if n_arms > 0 {
@@ -2341,8 +2357,9 @@ fn check_exhaustive(e: CheckEnv, m: Module, scrutinee_tid: i64, arms_lid: i64, n
         }
     }
     let enum_name: String = enum_name_from_tid(e.ts, scrutinee_tid);
+    let builtin_names: Vec<String> = builtin_enum_variant_names(enum_name);
     let enum_idx: i64 = env_lookup_enum(e, enum_name);
-    if enum_idx == -1 {
+    if enum_idx == -1 && builtin_names.len() == 0u64 {
         return;
     }
     let covered: Vec<String> = Vec::new();
@@ -2361,18 +2378,29 @@ fn check_exhaustive(e: CheckEnv, m: Module, scrutinee_tid: i64, arms_lid: i64, n
         }
         j = j + 1;
     }
-    let vname_lid: i64 = e.edef_vname_lids[enum_idx as u64];
-    let nv: i64 = e.edef_variant_count[enum_idx as u64];
     let missing: Vec<String> = Vec::new();
-    let mut k: i64 = 0;
-    while k < nv {
-        let vsid: i64 = ts_arg_get(e.ts, vname_lid, k);
-        let ts: TyStore = e.ts;
-        let vname: String = ts.strs[vsid as u64];
-        if !handled_variant_contains(covered, vname) {
-            missing.push(vname);
+    if builtin_names.len() > 0u64 {
+        let mut bi: u64 = 0u64;
+        while bi < builtin_names.len() {
+            let vname: String = builtin_names[bi];
+            if !handled_variant_contains(covered, vname) {
+                missing.push(vname);
+            }
+            bi = bi + 1;
         }
-        k = k + 1;
+    } else {
+        let vname_lid: i64 = e.edef_vname_lids[enum_idx as u64];
+        let nv: i64 = e.edef_variant_count[enum_idx as u64];
+        let mut k: i64 = 0;
+        while k < nv {
+            let vsid: i64 = ts_arg_get(e.ts, vname_lid, k);
+            let ts: TyStore = e.ts;
+            let vname: String = ts.strs[vsid as u64];
+            if !handled_variant_contains(covered, vname) {
+                missing.push(vname);
+            }
+            k = k + 1;
+        }
     }
     if missing.len() > 0u64 {
         let joined: String = string_join(missing, String::from(", "));
