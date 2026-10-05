@@ -115,7 +115,7 @@ fn module_has_unenforceable_contract(m: Module) -> bool {
     let mut i: u64 = 0u64;
     while i < n {
         let v: i64 = items[i];
-        if item_kind(v) == ITEM_FN() {
+        if v >= 0 && item_kind(v) == ITEM_FN() {
             let fid: i64 = item_id(v);
             if fn_is_declaration(arena, fid) && fn_vow_lid(arena, fid) != -1 {
                 return true;

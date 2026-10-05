@@ -3153,7 +3153,7 @@ rationale.
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
+| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC, and every call from a verifiable uncontracted function into a contracted function satisfies the callee's `requires` (see [Callers Without a `vow` Block](contracts.md#callers-without-a-vow-block)). "Verifiable" excludes uncontracted callers that cannot be modelled (e.g. `main() [io]`) or whose proof the verifier could not finish; each carries a `VerificationSkipped` *Note* instead, and the note does not change the status. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `LinearBorrow`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
@@ -3684,6 +3684,14 @@ execution the runtime can produce, so none is reported.
 | `requires`  | Caller | The caller passed invalid arguments                |
 | `ensures`   | Callee | The function body doesn't satisfy the postcondition|
 | `invariant` | Callee | The loop body breaks the invariant                 |
+
+### Callers Without a `vow` Block
+
+A function with no `vow` block is still a verify target when it **directly calls a function that has `requires`** and the verifier can model it (pure, only modelable operations, and no collection passed as an argument to a user function). Every parameter is nondeterministic — the equivalent of `requires: true` — and each callee `requires` is asserted at the call, so a caller that can violate it is reported `VowRequiresViolated` with `blame: "caller"`.
+
+Only the callee `requires` are obligations of such a function. Its own bounds, capacity, and checked-arithmetic checks are assumed, not asserted: a helper may rely on an invariant its callers keep, and it owes no contract of its own. A helper that forwards a parameter into a call whose `requires` it cannot establish (`fn g(x: i64) -> i64 { f(x) }` with `f` requiring `x >= 0`) is reported, and the fix is a real `requires` on `g`.
+
+A caller with effects (such as `main() [io]`) or any other non-modelable caller is **not** verified. Neither is one whose proof the verifier cannot finish (timeout, `unknown`, memory limit): with no contract of its own it has nothing to leave unproved, so the build is not failed — unlike a contracted function, whose undecided proof still fails closed. Its calls into contracted functions are reported once per function as a `VerificationSkipped` **Note** (`calls from ... were not verified: ...`, ending in `cannot be modelled`, `the verifier timed out for ...`, or `the verifier could not decide them for ...`); the build status is unaffected, and the callee `requires` is checked at runtime in `--mode debug` only.
 
 ## Clause Purity and Heap Writes
 
@@ -5302,7 +5310,7 @@ changing the source will not help.
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) A call to a user function that passes a `Vec`, `String`, map or `Option` argument is also not modelable (`Call target with a collection argument`): the model has no representation for a collection crossing a user-function boundary. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
 
 ```json
 {
@@ -5318,6 +5326,19 @@ changing the source will not help.
 **Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the function is skipped with a structured warning instead of tripping the defense-in-depth `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` that historically broke the bootstrap on every vowed struct-builder. But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke ESBMC at all (`Unverified`, exit 0).
 
 **Fix:** Refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.
+
+**Note form (uncontracted caller).** The same code also appears with `severity: "note"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed. The message ends with the reason, and the reasons need different fixes: `` `f` cannot be modelled `` (restructure `f`, or accept that it stays unverified), or `the verifier timed out for `f`` / `the verifier could not decide them for `f`` (the proof was attempted but not finished — constrain or simplify `f`, or raise the timeout):
+
+```json
+{
+  "error_code": "VerificationSkipped",
+  "severity": "note",
+  "message": "calls from `main` to contracted `divide` were not verified: `main` cannot be modelled",
+  "hints": [
+    "the callee `requires` at these call sites are checked at runtime in --mode debug only"
+  ]
+}
+```
 
 ### ArithOverflowReachable
 
@@ -8956,7 +8977,7 @@ rationale.
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
+| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC, and every call from a verifiable uncontracted function into a contracted function satisfies the callee's `requires` (see [Callers Without a `vow` Block](contracts.md#callers-without-a-vow-block)). "Verifiable" excludes uncontracted callers that cannot be modelled (e.g. `main() [io]`) or whose proof the verifier could not finish; each carries a `VerificationSkipped` *Note* instead, and the note does not change the status. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `LinearBorrow`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
@@ -9488,6 +9509,14 @@ execution the runtime can produce, so none is reported.
 | `requires`  | Caller | The caller passed invalid arguments                |
 | `ensures`   | Callee | The function body doesn't satisfy the postcondition|
 | `invariant` | Callee | The loop body breaks the invariant                 |
+
+### Callers Without a `vow` Block
+
+A function with no `vow` block is still a verify target when it **directly calls a function that has `requires`** and the verifier can model it (pure, only modelable operations, and no collection passed as an argument to a user function). Every parameter is nondeterministic — the equivalent of `requires: true` — and each callee `requires` is asserted at the call, so a caller that can violate it is reported `VowRequiresViolated` with `blame: "caller"`.
+
+Only the callee `requires` are obligations of such a function. Its own bounds, capacity, and checked-arithmetic checks are assumed, not asserted: a helper may rely on an invariant its callers keep, and it owes no contract of its own. A helper that forwards a parameter into a call whose `requires` it cannot establish (`fn g(x: i64) -> i64 { f(x) }` with `f` requiring `x >= 0`) is reported, and the fix is a real `requires` on `g`.
+
+A caller with effects (such as `main() [io]`) or any other non-modelable caller is **not** verified. Neither is one whose proof the verifier cannot finish (timeout, `unknown`, memory limit): with no contract of its own it has nothing to leave unproved, so the build is not failed — unlike a contracted function, whose undecided proof still fails closed. Its calls into contracted functions are reported once per function as a `VerificationSkipped` **Note** (`calls from ... were not verified: ...`, ending in `cannot be modelled`, `the verifier timed out for ...`, or `the verifier could not decide them for ...`); the build status is unaffected, and the callee `requires` is checked at runtime in `--mode debug` only.
 
 ## Clause Purity and Heap Writes
 
@@ -11108,7 +11137,7 @@ changing the source will not help.
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) A call to a user function that passes a `Vec`, `String`, map or `Option` argument is also not modelable (`Call target with a collection argument`): the model has no representation for a collection crossing a user-function boundary. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
 
 ```json
 {
@@ -11124,6 +11153,19 @@ changing the source will not help.
 **Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the function is skipped with a structured warning instead of tripping the defense-in-depth `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` that historically broke the bootstrap on every vowed struct-builder. But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke ESBMC at all (`Unverified`, exit 0).
 
 **Fix:** Refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.
+
+**Note form (uncontracted caller).** The same code also appears with `severity: "note"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed. The message ends with the reason, and the reasons need different fixes: `` `f` cannot be modelled `` (restructure `f`, or accept that it stays unverified), or `the verifier timed out for `f`` / `the verifier could not decide them for `f`` (the proof was attempted but not finished — constrain or simplify `f`, or raise the timeout):
+
+```json
+{
+  "error_code": "VerificationSkipped",
+  "severity": "note",
+  "message": "calls from `main` to contracted `divide` were not verified: `main` cannot be modelled",
+  "hints": [
+    "the callee `requires` at these call sites are checked at runtime in --mode debug only"
+  ]
+}
+```
 
 ### ArithOverflowReachable
 

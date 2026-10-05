@@ -121,13 +121,18 @@ fn span_end_here(p: Parser) -> i64 {
     }
 }
 
-// Length clamped to [0, 65535] to fit span_pack's 16-bit len slot.
+// Start clamped to >= 0 and length to [0, 65535] to fit span_pack's slots. The
+// true precondition is `span_start >= 0` and `p.pos <= p.tokens.len()`; it is
+// not stated as a contract because the verifier model gives every read of a
+// struct's Vec field a fresh vector, so a `requires` on `p.tokens` cannot
+// constrain the vector `span_end_here` indexes.
 fn span_pack_to_here(p: Parser, span_start: i64) -> i64 {
     let end: i64 = span_end_here(p);
-    let mut len: i64 = end - span_start;
+    let start: i64 = { if span_start < 0 { 0 } else { span_start } };
+    let mut len: i64 = end - start;
     if len < 0 { len = 0; }
     if len > 65535 { len = 65535; }
-    span_pack(span_start, len)
+    span_pack(start, len)
 }
 
 fn push_error(p: Parser, msg: String) {

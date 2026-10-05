@@ -15,14 +15,16 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 
 use vow_verify::{
-    ArithOverflowSite, ConstantValue, Encoding, Solver, SolverConfig, VerificationResult,
-    VerifyLimits, contracts_only_source, detect_constant_functions, emit_verify_c_source,
-    model_capacity_bounds, non_modelable_reason, run_c_source,
+    ArithOverflowSite, CallerRole, ConstantValue, Encoding, Solver, SolverConfig,
+    VerificationResult, VerifyLimits, caller_precondition_role, contracts_only_source,
+    detect_constant_functions, emit_verify_c_source, model_capacity_bounds, non_modelable_reason,
+    requires_callees, run_c_source,
 };
 
 use crate::cache::VerifyCache;
 use crate::verify_outcome::{
-    ArithOverflowWarning, CapacityBoundNote, SkippedFunction, VerifyOutcome, VerifyWarning,
+    ArithOverflowWarning, CapacityBoundNote, SkippedFunction, UncheckedCallsNote, VerifyOutcome,
+    VerifyWarning,
 };
 use crate::{counterexample, perfetto};
 
@@ -181,8 +183,37 @@ fn verify_one_function(
                 None => PerFuncResult::Ok,
             }
         }
-        VerificationDisposition::Complete(result) => result,
+        VerificationDisposition::Complete(result) => {
+            demote_undecided_caller(func, ir_module, result)
+        }
     }
+}
+
+/// An uncontracted caller whose proof the verifier could not finish (timeout,
+/// `unknown`, memory limit) carries no contract of its own to leave unproved, so
+/// it is reported like an unmodelable one — a non-failing note that its call
+/// sites went unchecked — rather than halting the build. Contracted functions
+/// keep the fail-closed verdict.
+fn demote_undecided_caller(
+    func: &vow_ir::Function,
+    ir_module: &vow_ir::Module,
+    result: PerFuncResult,
+) -> PerFuncResult {
+    let why = match &result {
+        PerFuncResult::Halt(VerifyOutcome::Timeout { .. }) => "timed out",
+        PerFuncResult::Halt(VerifyOutcome::Unknown { .. }) => "could not decide them",
+        _ => return result,
+    };
+    if !func.vows.is_empty() {
+        return result;
+    }
+    PerFuncResult::Warn(vec![VerifyWarning::UncheckedCalls(
+        UncheckedCallsNote::new(
+            &func.name,
+            &requires_callees(func, ir_module),
+            format!("the verifier {why} for `{}`", func.name),
+        ),
+    )])
 }
 
 /// The `ModelCapacityAssumed` note for a function that has just been proved, or
@@ -347,21 +378,35 @@ pub(crate) fn run_verification_sync(
 ) -> (VerifyOutcome, Vec<VerifyWarning>) {
     let const_fns = detect_constant_functions(ir_module);
 
-    let vowed: Vec<&vow_ir::Function> = ir_module
-        .functions
-        .iter()
-        .filter(|f| !f.vows.is_empty())
-        .collect();
+    let mut vowed: Vec<&vow_ir::Function> = Vec::new();
+    let mut unchecked: Vec<VerifyWarning> = Vec::new();
+    for f in &ir_module.functions {
+        if !f.vows.is_empty() {
+            vowed.push(f);
+            continue;
+        }
+        match caller_precondition_role(f, ir_module, &const_fns) {
+            CallerRole::Target => vowed.push(f),
+            CallerRole::Unchecked(callees) => {
+                unchecked.push(VerifyWarning::UncheckedCalls(UncheckedCallsNote::new(
+                    &f.name,
+                    &callees,
+                    format!("`{}` cannot be modelled", f.name),
+                )));
+            }
+            CallerRole::NotApplicable => {}
+        }
+    }
 
     if vowed.is_empty() {
-        return (VerifyOutcome::Proven, Vec::new());
+        return (VerifyOutcome::Proven, unchecked);
     }
 
     // Handoff origin: a flow arrow runs from here to each per-function proof.
     let verify_start = prof.map(|p| p.now_us()).unwrap_or(0);
 
     let names: Vec<&str> = vowed.iter().map(|f| f.name.as_str()).collect();
-    run_pool(jobs, prof, verify_start, &names, |idx| {
+    let (outcome, mut warnings) = run_pool(jobs, prof, verify_start, &names, |idx| {
         verify_one_function(
             vowed[idx],
             ir_module,
@@ -372,7 +417,9 @@ pub(crate) fn run_verification_sync(
             limits,
             config,
         )
-    })
+    });
+    warnings.extend(unchecked);
+    (outcome, warnings)
 }
 
 /// The pool concurrency core, independent of ESBMC.
@@ -542,8 +589,84 @@ mod tests {
                 VerifyWarning::Skipped(s) => s.function.as_str(),
                 VerifyWarning::ArithOverflow(a) => a.function.as_str(),
                 VerifyWarning::CapacityBound(n) => n.function.as_str(),
+                VerifyWarning::UncheckedCalls(u) => u.function.as_str(),
             })
             .collect()
+    }
+
+    fn unchecked(function: &str) -> PerFuncResult {
+        PerFuncResult::Warn(vec![VerifyWarning::UncheckedCalls(
+            UncheckedCallsNote::new(
+                function,
+                &["need"],
+                format!("`{function}` cannot be modelled"),
+            ),
+        )])
+    }
+
+    // #1089: an uncontracted caller whose call sites went unchecked has no
+    // contract of its own to leave unproved, so the note must not lift the
+    // outcome to SkippedNonModelable — unlike a skipped vowed function.
+    #[test]
+    fn unchecked_calls_note_is_reported_without_lifting_status() {
+        for jobs in [1, 4] {
+            let names = ["f0", "f1", "f2"];
+            let (outcome, warnings) = run_pool(jobs, None, 0, &names, |idx| {
+                if idx == 1 {
+                    unchecked("f1")
+                } else {
+                    PerFuncResult::Ok
+                }
+            });
+            assert!(matches!(outcome, VerifyOutcome::Proven), "jobs={jobs}");
+            assert_eq!(warned_functions(&warnings), vec!["f1"], "jobs={jobs}");
+            assert!(!warnings.iter().any(VerifyWarning::is_skip), "jobs={jobs}");
+        }
+    }
+
+    fn unknown(function: &str) -> PerFuncResult {
+        PerFuncResult::Halt(VerifyOutcome::Unknown {
+            function: function.to_string(),
+            reason: "gave up".to_string(),
+        })
+    }
+
+    fn func_named(name: &str, vows: bool) -> vow_ir::Function {
+        let mut f = arith_fn(0, name, "");
+        if vows {
+            f.vows.push(vow_ir::VowEntry {
+                id: vow_ir::VowId(0),
+                description: "true".to_string(),
+                blame: vow_diag::Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            });
+        }
+        f
+    }
+
+    // An undecided proof of an uncontracted caller is a note; the same verdict
+    // for a contracted function keeps failing closed.
+    #[test]
+    fn undecided_uncontracted_caller_is_demoted_but_contracted_function_halts() {
+        let module = arith_module(vec![]);
+        let shell = demote_undecided_caller(&func_named("g", false), &module, unknown("g"));
+        assert!(
+            matches!(shell, PerFuncResult::Warn(w) if matches!(&w[..], [VerifyWarning::UncheckedCalls(_)]))
+        );
+
+        let vowed = demote_undecided_caller(&func_named("g", true), &module, unknown("g"));
+        assert!(matches!(
+            vowed,
+            PerFuncResult::Halt(VerifyOutcome::Unknown { .. })
+        ));
+
+        let failed = demote_undecided_caller(&func_named("g", false), &module, halt("g"));
+        assert!(matches!(
+            failed,
+            PerFuncResult::Halt(VerifyOutcome::Failed { .. })
+        ));
     }
 
     // Every function verifies: outcome is Proven, nothing skipped. jobs=4

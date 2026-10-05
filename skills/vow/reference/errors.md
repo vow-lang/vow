@@ -793,7 +793,7 @@ changing the source will not help.
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) A call to a user function that passes a `Vec`, `String`, map or `Option` argument is also not modelable (`Call target with a collection argument`): the model has no representation for a collection crossing a user-function boundary. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
 
 ```json
 {
@@ -809,6 +809,19 @@ changing the source will not help.
 **Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the function is skipped with a structured warning instead of tripping the defense-in-depth `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` that historically broke the bootstrap on every vowed struct-builder. But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke ESBMC at all (`Unverified`, exit 0).
 
 **Fix:** Refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.
+
+**Note form (uncontracted caller).** The same code also appears with `severity: "note"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed. The message ends with the reason, and the reasons need different fixes: `` `f` cannot be modelled `` (restructure `f`, or accept that it stays unverified), or `the verifier timed out for `f`` / `the verifier could not decide them for `f`` (the proof was attempted but not finished — constrain or simplify `f`, or raise the timeout):
+
+```json
+{
+  "error_code": "VerificationSkipped",
+  "severity": "note",
+  "message": "calls from `main` to contracted `divide` were not verified: `main` cannot be modelled",
+  "hints": [
+    "the callee `requires` at these call sites are checked at runtime in --mode debug only"
+  ]
+}
+```
 
 ### ArithOverflowReachable
 

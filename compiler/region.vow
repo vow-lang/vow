@@ -630,7 +630,7 @@ fn linear_successors(blk: IrBlock) -> Vec<i64> {
     while i > 0 {
         i = i - 1;
         let inst: IrInst = blk.insts[i];
-        if iop_is_terminal(inst.op) {
+        if inst.op >= 0 && iop_is_terminal(inst.op) {
             if inst.op == IOP_BRANCH() && inst.dk == IDATA_BRANCH_TARGETS() {
                 out.push(inst.dv);
                 out.push(inst.dv2);

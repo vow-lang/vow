@@ -93,6 +93,31 @@ impl CapacityBoundNote {
     }
 }
 
+/// An uncontracted function that calls contracted functions whose `requires` at
+/// those calls were not statically checked: the verifier cannot model it (an
+/// `[io]` function such as `main`, or one with unsupported ops) or could not
+/// decide it (timeout, `unknown`, memory limit). Surfaces as a
+/// `VerificationSkipped` Note — informational, it does not lift the build
+/// status, because the caller carries no contract of its own to leave unproved.
+#[derive(Debug, Clone)]
+pub(crate) struct UncheckedCallsNote {
+    pub(crate) function: String,
+    /// Comma-separated names of the contracted callees.
+    pub(crate) callees: String,
+    /// Why the calls went unchecked, e.g. "`main` cannot be modelled".
+    pub(crate) reason: String,
+}
+
+impl UncheckedCallsNote {
+    pub(crate) fn new(function: &str, callees: &[&str], reason: String) -> Self {
+        Self {
+            function: function.to_string(),
+            callees: callees.join(", "),
+            reason,
+        }
+    }
+}
+
 /// A non-fatal finding from verifying one function. The kinds differ in
 /// consequence, not just wording: a skip means a contract went **unproved** and
 /// fails the run closed, whereas a reachable checked-arithmetic abort or a
@@ -105,6 +130,7 @@ pub(crate) enum VerifyWarning {
     Skipped(SkippedFunction),
     ArithOverflow(ArithOverflowWarning),
     CapacityBound(CapacityBoundNote),
+    UncheckedCalls(UncheckedCallsNote),
 }
 
 impl VerifyWarning {
@@ -135,6 +161,7 @@ impl VerifyWarning {
                 a.cause,
             ),
             Self::CapacityBound(n) => (2, n.function.as_str(), "", 0, 0, n.bounds.as_str()),
+            Self::UncheckedCalls(u) => (3, u.function.as_str(), "", 0, 0, u.reason.as_str()),
         }
     }
 
@@ -176,6 +203,26 @@ impl VerifyWarning {
                         .to_string(),
                     "constrain the operands in `requires` to rule the abort out, or use the \
                      wrapping operator if wrapping is intended"
+                        .to_string(),
+                ],
+            },
+            Self::UncheckedCalls(u) => Diagnostic {
+                severity: Severity::Note,
+                code: vow_diag::ErrorCode::VerificationSkipped,
+                message: format!(
+                    "calls from `{}` to contracted `{}` were not verified: {}",
+                    u.function, u.callees, u.reason
+                ),
+                primary: vow_diag::SourceLocation {
+                    file: String::new(),
+                    byte_offset: 0,
+                    byte_len: 0,
+                },
+                secondary: vec![],
+                blame: vow_diag::Blame::None,
+                hints: vec![
+                    "the callee `requires` at these call sites are checked at runtime in \
+                     --mode debug only"
                         .to_string(),
                 ],
             },

@@ -1,0 +1,19 @@
+// TEST: category caller-blame
+// Issue #1089: `main` has effects, so the verifier does not model it and its
+// call `divide(10, 0)` is not checked against `divide`'s `requires: y != 0`.
+// The run stays `Verified` — `main` carries no contract of its own to leave
+// unproved — but reports a `VerificationSkipped` Note naming the unchecked
+// calls, so the clean status is not mistaken for a proof of the call site.
+// Both compilers must emit the identical note.
+module IoCallerUncheckedNote
+
+fn divide(x: i64, y: i64) -> i64 vow {
+  requires: y != 0
+} {
+  x / y
+}
+
+fn main() -> i32 [io] {
+  print_i64(divide(10, 0));
+  0
+}
