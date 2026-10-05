@@ -3161,7 +3161,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
 
         let else_result: i64 = {
             if else_eid != -1 {
-                lower_expr(ctx, else_eid)
+                lower_value_expr(ctx, else_eid)
             } else {
                 let u_args: Vec<i64> = Vec::new();
                 lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""), origin)
@@ -4546,7 +4546,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                     ii = ii + 1;
                 }
 
-                let arm_result: i64 = lower_expr(ctx, body_eid);
+                let arm_result: i64 = lower_value_expr(ctx, body_eid);
                 let arm_reaches_merge: bool = !lctx_is_terminated(ctx);
                 lctx_pop_scope(ctx);
 
@@ -4604,7 +4604,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                     let pname: String = arena_str(a, name_sid);
                     lctx_define(ctx, pname, ptr_id);
                 }
-                let arm_result: i64 = lower_expr(ctx, body_eid);
+                let arm_result: i64 = lower_value_expr(ctx, body_eid);
                 let arm_reaches_merge2: bool = !lctx_is_terminated(ctx);
                 lctx_pop_scope(ctx);
 
@@ -5180,6 +5180,23 @@ fn lower_block(ctx: LowerCtx, bid: i64) -> i64 {
     result
 }
 
+// `Assign` is always `ITY_UNIT()` per the type checker, independent of its RHS's type
+// (checker.vow's EXPR_ASSIGN arm). `lower_expr` must keep returning the RHS id for ordinary
+// statement-position assignments, whose callers discard it — so this wrapper is only for
+// the handful of positions where an expression's lowered value is read as a block/arm result.
+fn lower_value_expr(ctx: LowerCtx, eid: i64) -> i64 {
+    let a: AstArena = ctx.arena;
+    let val: i64 = lower_expr(ctx, eid);
+    // A diverging RHS (`x = return 1`) already terminated the block; appending a
+    // ConstUnit after that terminator would violate the one-terminator-per-block
+    // invariant, and no caller reads `val` once `lctx_is_terminated` is true anyway.
+    if !lctx_is_terminated(ctx) && expr_tag(a, eid) == EXPR_ASSIGN() {
+        let u_args: Vec<i64> = Vec::new();
+        return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""), expr_span(a, eid));
+    }
+    val
+}
+
 fn lower_block_inner(ctx: LowerCtx, bid: i64) -> i64 {
     let a: AstArena = ctx.arena;
     let stmts_lid: i64 = blk_stmts(a, bid);
@@ -5211,10 +5228,10 @@ fn lower_block_inner(ctx: LowerCtx, bid: i64) -> i64 {
     if last_is_trail {
         let last_sid: i64 = list_get(a, stmts_lid, n - 1);
         let last_eid: i64 = stmt_a(a, last_sid);
-        return lower_expr(ctx, last_eid);
+        return lower_value_expr(ctx, last_eid);
     }
     if trail_eid != -1 {
-        return lower_expr(ctx, trail_eid);
+        return lower_value_expr(ctx, trail_eid);
     }
     let u_args: Vec<i64> = Vec::new();
     lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""), blk_span(a, bid))

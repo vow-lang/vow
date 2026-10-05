@@ -2068,7 +2068,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // Lower else-branch.
             ctx.switch_to_block(else_block);
             let else_val = if let Some(else_expr) = else_branch {
-                lower_expr(ctx, else_expr)
+                lower_value_expr(ctx, else_expr)
             } else {
                 ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
             };
@@ -3467,7 +3467,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                 ctx.define(name.clone(), field_val);
                             }
                         }
-                        let arm_result = lower_expr(ctx, &arm.body);
+                        let arm_result = lower_value_expr(ctx, &arm.body);
                         let arm_reaches_merge = !ctx.is_terminated();
                         ctx.pop_scope();
 
@@ -3523,7 +3523,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             ctx.emit_linear_consume_if_needed(ptr_id, span);
                             ctx.push_scope();
                         }
-                        let arm_result = lower_expr(ctx, &arm.body);
+                        let arm_result = lower_value_expr(ctx, &arm.body);
                         let arm_reaches_merge = !ctx.is_terminated();
                         ctx.pop_scope();
 
@@ -5117,6 +5117,28 @@ fn lower_block(ctx: &mut LowerCtx, block: &Block) -> InstId {
     result
 }
 
+/// `Assign` is always `Ty::Unit` per the type checker, independent of its RHS's type
+/// (`check.rs`'s `Assign` arm). `lower_expr` must keep returning the RHS id for ordinary
+/// statement-position assignments, whose callers discard it — so this wrapper is only for
+/// the handful of positions where an expression's lowered value is read as a block/arm result.
+fn lower_value_expr(ctx: &mut LowerCtx, expr: &Expr) -> InstId {
+    let val = lower_expr(ctx, expr);
+    // A diverging RHS (`x = return 1`) already terminated the block; appending a
+    // ConstUnit after that terminator would violate the one-terminator-per-block
+    // invariant, and no caller reads `val` once `is_terminated()` is true anyway.
+    if !ctx.is_terminated() && matches!(expr.kind, ExprKind::Assign { .. }) {
+        ctx.emit(
+            Opcode::ConstUnit,
+            Ty::Unit,
+            vec![],
+            InstData::None,
+            expr.span,
+        )
+    } else {
+        val
+    }
+}
+
 fn lower_block_inner(ctx: &mut LowerCtx, block: &Block) -> InstId {
     for stmt in &block.stmts {
         if ctx.is_terminated() {
@@ -5129,7 +5151,7 @@ fn lower_block_inner(ctx: &mut LowerCtx, block: &Block) -> InstId {
         // Return a sentinel — callers that care will check is_terminated().
         InstId(u32::MAX)
     } else if let Some(expr) = &block.trailing_expr {
-        lower_expr(ctx, expr)
+        lower_value_expr(ctx, expr)
     } else {
         ctx.emit(
             Opcode::ConstUnit,
@@ -8830,6 +8852,311 @@ fn parse_or_default(s: String) -> i64 {
                 InstData::PhiTarget(phi_id),
                 "Upsilon should target the Phi"
             );
+        }
+    }
+
+    #[test]
+    fn lower_block_tail_assign_is_unit_typed() {
+        let assign_expr = Expr {
+            kind: ExprKind::Assign {
+                lhs: Box::new(ident_expr("x")),
+                rhs: Box::new(Expr {
+                    kind: ExprKind::BinaryOp {
+                        op: BinOp::Add,
+                        lhs: Box::new(ident_expr("x")),
+                        rhs: Box::new(int_expr(1)),
+                    },
+                    span: sp(),
+                }),
+            },
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(assign_expr)),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "bump",
+            vec![make_param("x", i64_ty())],
+            unit_ty(),
+            body,
+            vec![],
+        );
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+        let ret = all_insts
+            .iter()
+            .find(|i| i.opcode == Opcode::Return)
+            .expect("expected Return");
+        let ret_val = ret.args[0];
+        let ret_inst = all_insts.iter().find(|i| i.id == ret_val).unwrap();
+        assert_eq!(
+            ret_inst.opcode,
+            Opcode::ConstUnit,
+            "a block's bare-assignment tail must lower to a fresh Ty::Unit value, not the RHS instruction"
+        );
+        assert_eq!(ret_inst.ty, Ty::Unit);
+    }
+
+    #[test]
+    fn lower_if_trailing_assign_branch_merges_as_unit() {
+        let assign_tail = Expr {
+            kind: ExprKind::Assign {
+                lhs: Box::new(ident_expr("x")),
+                rhs: Box::new(Expr {
+                    kind: ExprKind::BinaryOp {
+                        op: BinOp::Add,
+                        lhs: Box::new(ident_expr("x")),
+                        rhs: Box::new(int_expr(1)),
+                    },
+                    span: sp(),
+                }),
+            },
+            span: sp(),
+        };
+        let if_expr = Expr {
+            kind: ExprKind::If {
+                condition: Box::new(bool_expr(true)),
+                then_branch: Box::new(Block {
+                    stmts: vec![],
+                    trailing_expr: Some(Box::new(assign_tail)),
+                    span: sp(),
+                }),
+                else_branch: Some(Box::new(Expr {
+                    kind: ExprKind::Block(Box::new(empty_block())),
+                    span: sp(),
+                })),
+            },
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(if_expr)),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "bump",
+            vec![make_param("x", i64_ty())],
+            unit_ty(),
+            body,
+            vec![],
+        );
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+        let ret = all_insts
+            .iter()
+            .find(|i| i.opcode == Opcode::Return)
+            .expect("expected Return");
+        let ret_val = ret.args[0];
+        let phi = all_insts.iter().find(|i| i.id == ret_val).unwrap();
+        assert_eq!(
+            phi.opcode,
+            Opcode::Phi,
+            "expected the if's own result Phi to feed Return directly \
+             (not the mutation-tracking Phi for the reassigned variable)"
+        );
+        assert_eq!(
+            phi.ty,
+            Ty::Unit,
+            "if-merge must be Unit-typed when the then-branch tail is a bare assignment"
+        );
+    }
+
+    #[test]
+    fn lower_match_arm_trailing_assign_merges_as_unit() {
+        let enum_pat = |variant: &str| Pat {
+            kind: PatKind::EnumVariant {
+                path: vec!["Pick".to_string(), variant.to_string()],
+                inner: vec![],
+            },
+            span: sp(),
+        };
+        let assign_arm = Expr {
+            kind: ExprKind::Assign {
+                lhs: Box::new(ident_expr("x")),
+                rhs: Box::new(Expr {
+                    kind: ExprKind::BinaryOp {
+                        op: BinOp::Add,
+                        lhs: Box::new(ident_expr("x")),
+                        rhs: Box::new(int_expr(1)),
+                    },
+                    span: sp(),
+                }),
+            },
+            span: sp(),
+        };
+        let unit_arm = Expr {
+            kind: ExprKind::Block(Box::new(empty_block())),
+            span: sp(),
+        };
+        let match_expr = Expr {
+            kind: ExprKind::Match {
+                scrutinee: Box::new(ident_expr("p")),
+                arms: vec![
+                    MatchArm {
+                        pattern: enum_pat("Big"),
+                        body: assign_arm,
+                        span: sp(),
+                    },
+                    MatchArm {
+                        pattern: enum_pat("Zero"),
+                        body: unit_arm,
+                        span: sp(),
+                    },
+                ],
+            },
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(match_expr)),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "pick",
+            vec![
+                make_param(
+                    "p",
+                    Type::Named {
+                        name: "Pick".to_string(),
+                        span: sp(),
+                    },
+                ),
+                make_param("x", i64_ty()),
+            ],
+            unit_ty(),
+            body,
+            vec![],
+        );
+        let enum_variant_map = HashMap::from([(
+            "Pick".to_string(),
+            vec!["Big".to_string(), "Zero".to_string()],
+        )]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            enum_variant_map,
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+        let ret = all_insts
+            .iter()
+            .find(|i| i.opcode == Opcode::Return)
+            .expect("expected Return");
+        let ret_val = ret.args[0];
+        let phi = all_insts.iter().find(|i| i.id == ret_val).unwrap();
+        assert_eq!(
+            phi.opcode,
+            Opcode::Phi,
+            "expected the match's own result Phi to feed Return directly \
+             (not the mutation-tracking Phi for the reassigned variable)"
+        );
+        assert_eq!(
+            phi.ty,
+            Ty::Unit,
+            "match-merge must be Unit-typed when an arm's tail is a bare assignment"
+        );
+    }
+
+    #[test]
+    fn lower_value_expr_does_not_emit_past_a_diverging_assign_rhs() {
+        let diverging_assign = Expr {
+            kind: ExprKind::Assign {
+                lhs: Box::new(ident_expr("x")),
+                rhs: Box::new(Expr {
+                    kind: ExprKind::Return {
+                        value: Some(Box::new(int_expr(1))),
+                    },
+                    span: sp(),
+                }),
+            },
+            span: sp(),
+        };
+        let if_expr = Expr {
+            kind: ExprKind::If {
+                condition: Box::new(bool_expr(true)),
+                then_branch: Box::new(Block {
+                    stmts: vec![],
+                    trailing_expr: Some(Box::new(diverging_assign)),
+                    span: sp(),
+                }),
+                else_branch: Some(Box::new(int_expr(2))),
+            },
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(if_expr)),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "diverging_tail",
+            vec![make_param("x", i64_ty())],
+            i64_ty(),
+            body,
+            vec![],
+        );
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        for block in &func.blocks {
+            for (i, inst) in block.insts.iter().enumerate() {
+                let is_terminator = matches!(
+                    inst.opcode,
+                    Opcode::Return | Opcode::Jump | Opcode::Branch | Opcode::Unreachable
+                );
+                if is_terminator {
+                    assert_eq!(
+                        i,
+                        block.insts.len() - 1,
+                        "a terminator must be the last instruction in its block \
+                         (lower_value_expr must not emit a ConstUnit after a \
+                         diverging assignment RHS terminates the block)"
+                    );
+                }
+            }
         }
     }
 
