@@ -108,6 +108,16 @@ pub(crate) struct UncheckedCallsNote {
     pub(crate) reason: String,
 }
 
+impl UncheckedCallsNote {
+    pub(crate) fn new(function: &str, callees: &[&str], reason: String) -> Self {
+        Self {
+            function: function.to_string(),
+            callees: callees.join(", "),
+            reason,
+        }
+    }
+}
+
 /// A non-fatal finding from verifying one function. The kinds differ in
 /// consequence, not just wording: a skip means a contract went **unproved** and
 /// fails the run closed, whereas a reachable checked-arithmetic abort or a

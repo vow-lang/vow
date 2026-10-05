@@ -677,24 +677,6 @@ pub fn emit_bodyreplace_c_source(
     Some(c_src)
 }
 
-/// True when a function with no `vow` block of its own must still be verified
-/// so the preconditions of the contracted functions it calls are checked: it
-/// directly calls a module function carrying `requires`, and the verifier can
-/// model it. The `requires: true`-equivalent shell is the function with every
-/// parameter nondeterministic; each callee `requires` is asserted at the call.
-/// Effectful and otherwise non-modelable callers are not targets (see
-/// [`unchecked_precondition_callees`]). Self-hosted mirror:
-/// `compiler/verifier.vow::is_caller_precondition_target`.
-pub fn is_caller_precondition_target(
-    func: &Function,
-    module: &Module,
-    const_fns: &HashMap<FuncId, ConstantValue>,
-) -> bool {
-    func.vows.is_empty()
-        && !requires_callees(func, module).is_empty()
-        && non_modelable_reason(func, module, const_fns).is_none()
-}
-
 /// Names of the contracted (`requires`) module functions `func` calls directly,
 /// in first-call order, without duplicates.
 pub fn requires_callees<'m>(func: &Function, module: &'m Module) -> Vec<&'m str> {
@@ -714,23 +696,38 @@ pub fn requires_callees<'m>(func: &Function, module: &'m Module) -> Vec<&'m str>
     names
 }
 
-/// Callees whose `requires` go unchecked because their uncontracted caller is
-/// not a verify target: `func` has no vows, calls a contracted function, yet
-/// cannot be modelled (effects such as `[io]`, unsupported ops). Empty
-/// otherwise. Lets the driver say so instead of reporting a silent `Verified`.
-pub fn unchecked_precondition_callees<'m>(
+/// What a function with no `vow` block owes the caller-precondition check.
+pub enum CallerRole<'m> {
+    /// Calls no contracted function, or carries its own `vow` block.
+    NotApplicable,
+    /// Directly calls a contracted function and the verifier can model it: it is
+    /// verified as a `requires: true`-equivalent shell (every parameter
+    /// nondeterministic), each callee `requires` asserted at the call.
+    Target,
+    /// Directly calls contracted functions but cannot be modelled (effects such
+    /// as `[io]`, unsupported ops): their `requires` go unchecked. The names let
+    /// the driver say so instead of reporting a silent `Verified`.
+    Unchecked(Vec<&'m str>),
+}
+
+/// Classify `func` for the caller-precondition check. Self-hosted mirror:
+/// `compiler/verifier.vow::caller_precondition_role`.
+pub fn caller_precondition_role<'m>(
     func: &Function,
     module: &'m Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
-) -> Vec<&'m str> {
+) -> CallerRole<'m> {
     if !func.vows.is_empty() {
-        return Vec::new();
+        return CallerRole::NotApplicable;
     }
     let callees = requires_callees(func, module);
-    if callees.is_empty() || non_modelable_reason(func, module, const_fns).is_none() {
-        return Vec::new();
+    if callees.is_empty() {
+        CallerRole::NotApplicable
+    } else if non_modelable_reason(func, module, const_fns).is_none() {
+        CallerRole::Target
+    } else {
+        CallerRole::Unchecked(callees)
     }
-    callees
 }
 
 /// True when the function carries at least one `requires` clause — the only
@@ -1652,19 +1649,22 @@ mod tests {
         }
     }
 
+    fn role_of_second(module: &Module) -> &'static str {
+        match caller_precondition_role(&module.functions[1], module, &HashMap::new()) {
+            CallerRole::NotApplicable => "not-applicable",
+            CallerRole::Target => "target",
+            CallerRole::Unchecked(callees) if callees == ["need"] => "unchecked:need",
+            CallerRole::Unchecked(_) => "unchecked:other",
+        }
+    }
+
     #[test]
     fn pure_uncontracted_caller_of_requires_callee_is_a_target() {
         let module = module_with(vec![
             contracted_callee(0, "need"),
             caller_of(1, "ratio", vec![], 0),
         ]);
-        let consts = HashMap::new();
-        assert!(is_caller_precondition_target(
-            &module.functions[1],
-            &module,
-            &consts
-        ));
-        assert!(unchecked_precondition_callees(&module.functions[1], &module, &consts).is_empty());
+        assert_eq!(role_of_second(&module), "target");
     }
 
     #[test]
@@ -1673,16 +1673,7 @@ mod tests {
             contracted_callee(0, "need"),
             caller_of(1, "main", vec![vow_syntax::ast::Effect::IO], 0),
         ]);
-        let consts = HashMap::new();
-        assert!(!is_caller_precondition_target(
-            &module.functions[1],
-            &module,
-            &consts
-        ));
-        assert_eq!(
-            unchecked_precondition_callees(&module.functions[1], &module, &consts),
-            vec!["need"]
-        );
+        assert_eq!(role_of_second(&module), "unchecked:need");
     }
 
     #[test]
@@ -1692,13 +1683,7 @@ mod tests {
             .insts
             .retain(|i| i.opcode != Opcode::VowRequires);
         let module = module_with(vec![plain, caller_of(1, "ratio", vec![], 0)]);
-        let consts = HashMap::new();
-        assert!(!is_caller_precondition_target(
-            &module.functions[1],
-            &module,
-            &consts
-        ));
-        assert!(unchecked_precondition_callees(&module.functions[1], &module, &consts).is_empty());
+        assert_eq!(role_of_second(&module), "not-applicable");
     }
 
     #[test]
@@ -1713,11 +1698,7 @@ mod tests {
             offset: 0,
         });
         let module = module_with(vec![contracted_callee(0, "need"), caller]);
-        assert!(!is_caller_precondition_target(
-            &module.functions[1],
-            &module,
-            &HashMap::new()
-        ));
+        assert_eq!(role_of_second(&module), "not-applicable");
     }
 
     #[test]

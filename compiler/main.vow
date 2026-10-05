@@ -1080,9 +1080,8 @@ fn verify_collect_traced(esbmc_bin: String, t: TraceCtx, verify_origin: i64, h: 
     let proof_start: i64 = trace_now(t);
     trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, fi, TRACE_FLOW_START());
     trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, fi, TRACE_FLOW_END());
-    let soft_before: u64 = soft_meta.len();
     let mut proven: i64 = verify_collect_and_report(esbmc_bin, h, tmp, f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, t, dctx);
-    if proven == 0 && soft_before == 0u64 && ces.len() == 0 && demote_undecided_caller(f, ir_mod, soft_meta, dctx) {
+    if proven == 0 && demote_undecided_caller(f, ir_mod, soft_meta, dctx) {
         proven = 1;
         model_bounds[fi as u64] = String::from("");
     }

@@ -1340,7 +1340,7 @@ fn emit_inst(
                     _ => 0,
                 };
                 out.push_str(&format!(
-                    "  __ESBMC_assert(v{}, \"vow:pre:{}:{}\");\n",
+                    "  __ESBMC_assert(v{}, \"{CALLEE_PRECONDITION_LABEL}{}:{}\");\n",
                     pred, current_func_id.0, vow_id
                 ));
             } else {
@@ -2840,9 +2840,16 @@ pub fn contracts_only_source(c_src: &str) -> String {
     format!("#define {ARITH_ASSERT_SUPPRESS_MACRO} 1\n{c_src}")
 }
 
+const DEMOTED_ASSERT_MACRO: &str = "__vow_demoted_assert";
+
+/// Prefix of the assert label a callee `requires` carries at its call site
+/// (`vow:pre:<callee-func-id>:<callee-vow-id>`). Shared by the emitter and the
+/// caller-preconditions projection so the two cannot drift.
+const CALLEE_PRECONDITION_LABEL: &str = "vow:pre:";
+
 /// Project an emitted model of an uncontracted caller onto its call-site
-/// obligations alone: every `__ESBMC_assert` except a callee `requires`
-/// (`vow:pre:`) becomes an assume of the same condition.
+/// obligations alone: every `__ESBMC_assert` becomes an assume of the same
+/// condition, except a callee `requires` and the unsupported-operation trap.
 ///
 /// A function with no `vow` block is a verify target only so the preconditions
 /// of the contracted functions it calls are checked. Its own bounds, capacity
@@ -2850,14 +2857,20 @@ pub fn contracts_only_source(c_src: &str) -> String {
 /// rely on an invariant its callers keep (`src_len == src.len()`) that its
 /// all-nondeterministic shell cannot know. Demoting them to assumes — the same
 /// move [`contracts_only_source`] makes — restricts the verdict to executions
-/// that do not fault first. Self-hosted mirror:
-/// `compiler/c_emitter.vow::caller_preconditions_only_source`.
+/// that do not fault first. The trap stays an assert because it guards the
+/// model's own soundness: as `assume(0)` it would prune every path and prove
+/// the caller vacuously. Self-hosted mirror:
+/// `compiler/verifier.vow::caller_preconditions_only_source`.
 pub fn caller_preconditions_only_source(c_src: &str) -> String {
     const ASSERT: &str = "__ESBMC_assert(";
+    let kept = [
+        format!("\"{CALLEE_PRECONDITION_LABEL}"),
+        format!("\"vow:{UNSUPPORTED_OP_VOW_ID}\""),
+    ];
     let mut out = format!("#define {DEMOTED_ASSERT_MACRO}(c, m) __ESBMC_assume(c)\n");
     for line in c_src.split_inclusive('\n') {
         let body = line.trim_start();
-        if body.starts_with(ASSERT) && !is_caller_obligation_or_trap(line) {
+        if body.starts_with(ASSERT) && !kept.iter().any(|label| line.contains(label.as_str())) {
             let indent = &line[..line.len() - body.len()];
             out.push_str(indent);
             out.push_str(DEMOTED_ASSERT_MACRO);
@@ -2868,16 +2881,6 @@ pub fn caller_preconditions_only_source(c_src: &str) -> String {
         }
     }
     out
-}
-
-const DEMOTED_ASSERT_MACRO: &str = "__vow_demoted_assert";
-
-/// An assert the caller-preconditions projection must keep: a callee `requires`
-/// (`vow:pre:`) is the obligation being checked, and the unsupported-operation
-/// trap guards the model's own soundness — demoting it to `assume(0)` would
-/// prune every path and prove the caller vacuously.
-fn is_caller_obligation_or_trap(line: &str) -> bool {
-    line.contains("\"vow:pre:") || line.contains(&format!("\"vow:{UNSUPPORTED_OP_VOW_ID}\""))
 }
 
 /// Set of `(op, signedness, width)` overflow-guard helper flavors the module
