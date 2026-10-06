@@ -112,6 +112,19 @@ fn ts_make_applied(ts: TyStore, base_tid: i64, args: Vec<i64>) -> i64 {
     ty_add(ts, CTY_APPLIED(), base_tid, lid)
 }
 
+// Return the existing argument-list ID for a direct nominal application, or
+// -1 when it does not match. nominal_tag=-1 accepts either struct or enum;
+// callers retain their own arity and reference-traversal rules.
+fn ty_applied_args(ts: TyStore, tid: i64, nominal_tag: i64, name: String) -> i64 {
+    if ty_tag(ts, tid) != CTY_APPLIED() { return -1; }
+    let base: i64 = ty_a(ts, tid);
+    let tag: i64 = ty_tag(ts, base);
+    if tag != CTY_STRUCT() && tag != CTY_ENUM() { return -1; }
+    if nominal_tag != -1 && nominal_tag != tag { return -1; }
+    if ty_struct_name(ts, base) != name { return -1; }
+    ty_b(ts, tid)
+}
+
 fn tids_equal(ts: TyStore, a: i64, b: i64) -> bool {
     if a == b {
         return true;

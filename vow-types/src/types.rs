@@ -43,7 +43,28 @@ pub enum Ty {
     Unknown,
 }
 
+/// Which nominal base an applied type query accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NominalKind {
+    Struct,
+    Enum,
+}
+
 impl Ty {
+    /// Return the existing arguments of a directly applied nominal type.
+    /// Arity and reference traversal belong to the caller's separate policy.
+    pub(crate) fn applied_args(&self, kind: NominalKind, name: &str) -> Option<&[Ty]> {
+        let Ty::Applied(base, args) = self else {
+            return None;
+        };
+        let matches = match (kind, base.as_ref()) {
+            (NominalKind::Struct, Ty::Struct(base_name))
+            | (NominalKind::Enum, Ty::Enum(base_name)) => base_name == name,
+            _ => false,
+        };
+        matches.then_some(args.as_slice())
+    }
+
     pub fn is_numeric(&self) -> bool {
         self.is_integer() || self.is_float()
     }
@@ -190,6 +211,37 @@ impl fmt::Display for Ty {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn applied_args_matches_nominal_shape_without_changing_arguments() {
+        let struct_vec = Ty::Applied(Box::new(Ty::Struct("Vec".into())), vec![Ty::I64]);
+        let enum_vec = Ty::Applied(Box::new(Ty::Enum("Vec".into())), vec![Ty::U64]);
+        let empty = Ty::Applied(Box::new(Ty::Enum("Option".into())), vec![]);
+
+        assert_eq!(
+            struct_vec.applied_args(NominalKind::Struct, "Vec"),
+            Some(&[Ty::I64][..])
+        );
+        assert_eq!(
+            enum_vec.applied_args(NominalKind::Enum, "Vec"),
+            Some(&[Ty::U64][..])
+        );
+        assert_eq!(struct_vec.applied_args(NominalKind::Enum, "Vec"), None);
+        assert_eq!(enum_vec.applied_args(NominalKind::Struct, "Vec"), None);
+        assert_eq!(struct_vec.applied_args(NominalKind::Struct, "Option"), None);
+        assert_eq!(
+            empty.applied_args(NominalKind::Enum, "Option"),
+            Some(&[][..])
+        );
+        assert_eq!(
+            Ty::Reference(Box::new(struct_vec)).applied_args(NominalKind::Struct, "Vec"),
+            None
+        );
+        let nested_base = Ty::Applied(Box::new(Ty::Struct("Vec".into())), vec![Ty::I64]);
+        let nested = Ty::Applied(Box::new(nested_base), vec![Ty::U64]);
+        assert_eq!(nested.applied_args(NominalKind::Struct, "Vec"), None);
+        assert_eq!(Ty::I64.applied_args(NominalKind::Struct, "Vec"), None);
+    }
 
     #[test]
     fn user_name_spells_str_as_string_at_every_depth() {

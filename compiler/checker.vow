@@ -589,18 +589,8 @@ fn is_flat_slot_tid(ts: TyStore, tid: i64) -> bool {
 }
 
 fn is_flat_vec_tid(ts: TyStore, tid: i64) -> bool {
-    if ty_tag(ts, tid) != CTY_APPLIED() {
-        return false;
-    }
-    let base_tid: i64 = ty_a(ts, tid);
-    let base_tag: i64 = ty_tag(ts, base_tid);
-    if base_tag != CTY_STRUCT() && base_tag != CTY_ENUM() {
-        return false;
-    }
-    if ty_struct_name(ts, base_tid) != String::from("Vec") {
-        return false;
-    }
-    let args_lid: i64 = ty_b(ts, tid);
+    let args_lid: i64 = ty_applied_args(ts, tid, -1, String::from("Vec"));
+    if args_lid < 0 { return false; }
     if ts_arg_len(ts, args_lid) == 0 {
         return false;
     }
@@ -627,22 +617,19 @@ fn is_vec_raw_parts_copy_expr(a: AstArena, eid: i64) -> bool {
 // The linearity rules for one written `Vec`/`HashMap`/`BTreeMap` node, run once
 // every definition is complete. Non-recursive.
 fn recheck_collection_node(e: CheckEnv, tid: i64, span: i64) [io] {
-    let base: i64 = ty_a(e.ts, tid);
-    let base_tag: i64 = ty_tag(e.ts, base);
-    let lid: i64 = ty_b(e.ts, tid);
-    let nargs: i64 = ts_arg_len(e.ts, lid);
-    if base_tag == CTY_ENUM() && ty_struct_name(e.ts, base) == String::from("Vec") {
-        if nargs == 1 && is_linear_vec_element(e, ts_arg_get(e.ts, lid, 0)) == 1 {
-            emit_vec_linear_element_error(e, ts_arg_get(e.ts, lid, 0), span);
-        }
+    let vec_args: i64 = ty_applied_args(e.ts, tid, CTY_ENUM(), String::from("Vec"));
+    if vec_args >= 0 && ts_arg_len(e.ts, vec_args) == 1 &&
+       is_linear_vec_element(e, ts_arg_get(e.ts, vec_args, 0)) == 1 {
+        emit_vec_linear_element_error(e, ts_arg_get(e.ts, vec_args, 0), span);
     }
-    if base_tag == CTY_STRUCT() {
-        let bname: String = ty_struct_name(e.ts, base);
-        if (bname == String::from("BTreeMap") || bname == String::from("HashMap")) && nargs == 2 {
-            let vtid: i64 = ts_arg_get(e.ts, lid, 1);
-            if is_linear_ty(e, vtid) == 1 {
-                emit_map_linear_value_error(e, bname, vtid, span);
-            }
+    let tree_args: i64 = ty_applied_args(e.ts, tid, CTY_STRUCT(), String::from("BTreeMap"));
+    let map_args: i64 = ty_applied_args(e.ts, tid, CTY_STRUCT(), String::from("HashMap"));
+    let map_lid: i64 = if tree_args >= 0 { tree_args } else { map_args };
+    if map_lid >= 0 && ts_arg_len(e.ts, map_lid) == 2 {
+        let vtid: i64 = ts_arg_get(e.ts, map_lid, 1);
+        if is_linear_ty(e, vtid) == 1 {
+            let bname: String = if tree_args >= 0 { String::from("BTreeMap") } else { String::from("HashMap") };
+            emit_map_linear_value_error(e, bname, vtid, span);
         }
     }
 }
@@ -2471,14 +2458,8 @@ fn pattern_option_elem_ir_ty(ts: TyStore, tid: i64) -> i64 {
     if ty_tag(ts, tid) == CTY_REF() {
         return pattern_option_elem_ir_ty(ts, ty_a(ts, tid));
     }
-    if ty_tag(ts, tid) != CTY_APPLIED() {
-        return -1;
-    }
-    let base: i64 = ty_a(ts, tid);
-    if ty_tag(ts, base) != CTY_ENUM() || ty_struct_name(ts, base) != String::from("Option") {
-        return -1;
-    }
-    let args_lid: i64 = ty_b(ts, tid);
+    let args_lid: i64 = ty_applied_args(ts, tid, CTY_ENUM(), String::from("Option"));
+    if args_lid < 0 { return -1; }
     if ts_arg_len(ts, args_lid) == 0 {
         return -1;
     }
@@ -3309,112 +3290,111 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             emit_unknown_method(e, a, eid, mname, String::from("String"));
             return CTY_UNKNOWN();
         }
-        if recv_tag == CTY_APPLIED() {
-            let base_tid: i64 = ty_a(e.ts, recv_tid);
-            let base_tag: i64 = ty_tag(e.ts, base_tid);
-            if base_tag == CTY_ENUM() || base_tag == CTY_STRUCT() {
-                let base_name: String = ty_struct_name(e.ts, base_tid);
-                if base_name == String::from("Vec") {
-                    let hargs_lid: i64 = ty_b(e.ts, recv_tid);
-                    if mname == String::from("push") {
-                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
-                    }
-                    if mname == String::from("truncate") {
-                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_U64(), mname);
-                    }
-                    if mname == String::from("len") { return CTY_U64(); }
-                    if mname == String::from("push") { return CTY_UNIT(); }
-                    if mname == String::from("pop") { return CTY_UNIT(); }
-                    if mname == String::from("clear") { return CTY_UNIT(); }
-                    if mname == String::from("truncate") { return CTY_UNIT(); }
-                    emit_unknown_method(e, a, eid, mname, String::from("Vec"));
-                    return CTY_UNKNOWN();
-                }
-                if base_name == String::from("Option") || base_name == String::from("Result") {
-                    let hargs_lid: i64 = ty_b(e.ts, recv_tid);
-                    let inner_tid: i64 = if ts_arg_len(e.ts, hargs_lid) > 0 {
-                        ts_arg_get(e.ts, hargs_lid, 0)
-                    } else {
-                        CTY_UNIT()
-                    };
-                    if mname == String::from("unwrap") {
-                        // `unwrap` takes no arguments. Without this the lowerer
-                        // accepts them and drops them unevaluated, silently
-                        // discarding their side effects (#1108 review).
-                        if n_args > 0 {
-                            let uerr_msg: String = String::from("method `unwrap` expects 0 arguments but got ");
-                            uerr_msg.push_str(i64_to_string(n_args));
-                            env_emit_error_code(e, EC_TYPE_MISMATCH(), uerr_msg, expr_span(a, eid));
-                        }
-                        // The unwrap payload reaches IR through a FieldGet, so
-                        // it needs the same aggregate metadata `?` records.
-                        record_question_aggregate(e, eid, inner_tid);
-                        return inner_tid;
-                    }
-                    emit_unknown_method(e, a, eid, mname, base_name);
-                    return CTY_UNKNOWN();
-                }
-                if base_name == String::from("HashMap") {
-                    let hargs_lid: i64 = ty_b(e.ts, recv_tid);
-                    let val_tid: i64 = if ts_arg_len(e.ts, hargs_lid) > 1 {
-                        ts_arg_get(e.ts, hargs_lid, 1)
-                    } else {
-                        CTY_I64()
-                    };
-                    if mname == String::from("insert") {
-                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
-                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, hargs_lid, 1), mname);
-                    }
-                    if mname == String::from("get") ||
-                       mname == String::from("contains_key") ||
-                       mname == String::from("remove") {
-                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
-                    }
-                    if mname == String::from("insert") { return CTY_UNIT(); }
-                    if mname == String::from("get") {
-                        let hopt_base: i64 = ts_make_enum(e.ts, String::from("Option"));
-                        let hopt_args: Vec<i64> = Vec::new();
-                        hopt_args.push(val_tid);
-                        return ts_make_applied(e.ts, hopt_base, hopt_args);
-                    }
-                    if mname == String::from("contains_key") { return CTY_BOOL(); }
-                    if mname == String::from("len") { return CTY_U64(); }
-                    if mname == String::from("remove") { return CTY_UNIT(); }
-                    emit_unknown_method(e, a, eid, mname, String::from("HashMap"));
-                    return CTY_UNKNOWN();
-                }
-                if base_name == String::from("BTreeMap") {
-                    let bargs_lid: i64 = ty_b(e.ts, recv_tid);
-                    let bval_tid: i64 = if ts_arg_len(e.ts, bargs_lid) > 1 {
-                        ts_arg_get(e.ts, bargs_lid, 1)
-                    } else {
-                        CTY_I64()
-                    };
-                    if mname == String::from("insert") {
-                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
-                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, bargs_lid, 1), mname);
-                    }
-                    if mname == String::from("get") || mname == String::from("contains") {
-                        check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
-                    }
-                    if mname == String::from("len") { return CTY_U64(); }
-                    if mname == String::from("contains") { return CTY_BOOL(); }
-                    if mname == String::from("insert") {
-                        let opt_base: i64 = ts_make_enum(e.ts, String::from("Option"));
-                        let opt_args: Vec<i64> = Vec::new();
-                        opt_args.push(bval_tid);
-                        return ts_make_applied(e.ts, opt_base, opt_args);
-                    }
-                    if mname == String::from("get") {
-                        let opt_base: i64 = ts_make_enum(e.ts, String::from("Option"));
-                        let opt_args: Vec<i64> = Vec::new();
-                        opt_args.push(bval_tid);
-                        return ts_make_applied(e.ts, opt_base, opt_args);
-                    }
-                    emit_unknown_method(e, a, eid, mname, String::from("BTreeMap"));
-                    return CTY_UNKNOWN();
-                }
+        let vec_args: i64 = ty_applied_args(e.ts, recv_tid, -1, String::from("Vec"));
+        if vec_args >= 0 {
+            let hargs_lid: i64 = vec_args;
+            if mname == String::from("push") {
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
             }
+            if mname == String::from("truncate") {
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_U64(), mname);
+            }
+            if mname == String::from("len") { return CTY_U64(); }
+            if mname == String::from("push") { return CTY_UNIT(); }
+            if mname == String::from("pop") { return CTY_UNIT(); }
+            if mname == String::from("clear") { return CTY_UNIT(); }
+            if mname == String::from("truncate") { return CTY_UNIT(); }
+            emit_unknown_method(e, a, eid, mname, String::from("Vec"));
+            return CTY_UNKNOWN();
+        }
+        let option_args: i64 = ty_applied_args(e.ts, recv_tid, -1, String::from("Option"));
+        let result_args: i64 = ty_applied_args(e.ts, recv_tid, -1, String::from("Result"));
+        if option_args >= 0 || result_args >= 0 {
+            let hargs_lid: i64 = if option_args >= 0 { option_args } else { result_args };
+            let base_name: String = if option_args >= 0 { String::from("Option") } else { String::from("Result") };
+            let inner_tid: i64 = if ts_arg_len(e.ts, hargs_lid) > 0 {
+                ts_arg_get(e.ts, hargs_lid, 0)
+            } else {
+                CTY_UNIT()
+            };
+            if mname == String::from("unwrap") {
+                // `unwrap` takes no arguments. Without this the lowerer
+                // accepts them and drops them unevaluated, silently
+                // discarding their side effects (#1108 review).
+                if n_args > 0 {
+                    let uerr_msg: String = String::from("method `unwrap` expects 0 arguments but got ");
+                    uerr_msg.push_str(i64_to_string(n_args));
+                    env_emit_error_code(e, EC_TYPE_MISMATCH(), uerr_msg, expr_span(a, eid));
+                }
+                // The unwrap payload reaches IR through a FieldGet, so
+                // it needs the same aggregate metadata `?` records.
+                record_question_aggregate(e, eid, inner_tid);
+                return inner_tid;
+            }
+            emit_unknown_method(e, a, eid, mname, base_name);
+            return CTY_UNKNOWN();
+        }
+        let map_args: i64 = ty_applied_args(e.ts, recv_tid, -1, String::from("HashMap"));
+        if map_args >= 0 {
+            let hargs_lid: i64 = map_args;
+            let val_tid: i64 = if ts_arg_len(e.ts, hargs_lid) > 1 {
+                ts_arg_get(e.ts, hargs_lid, 1)
+            } else {
+                CTY_I64()
+            };
+            if mname == String::from("insert") {
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, hargs_lid, 1), mname);
+            }
+            if mname == String::from("get") ||
+               mname == String::from("contains_key") ||
+               mname == String::from("remove") {
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
+            }
+            if mname == String::from("insert") { return CTY_UNIT(); }
+            if mname == String::from("get") {
+                let hopt_base: i64 = ts_make_enum(e.ts, String::from("Option"));
+                let hopt_args: Vec<i64> = Vec::new();
+                hopt_args.push(val_tid);
+                return ts_make_applied(e.ts, hopt_base, hopt_args);
+            }
+            if mname == String::from("contains_key") { return CTY_BOOL(); }
+            if mname == String::from("len") { return CTY_U64(); }
+            if mname == String::from("remove") { return CTY_UNIT(); }
+            emit_unknown_method(e, a, eid, mname, String::from("HashMap"));
+            return CTY_UNKNOWN();
+        }
+        let tree_args: i64 = ty_applied_args(e.ts, recv_tid, -1, String::from("BTreeMap"));
+        if tree_args >= 0 {
+            let bargs_lid: i64 = tree_args;
+            let bval_tid: i64 = if ts_arg_len(e.ts, bargs_lid) > 1 {
+                ts_arg_get(e.ts, bargs_lid, 1)
+            } else {
+                CTY_I64()
+            };
+            if mname == String::from("insert") {
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, bargs_lid, 1), mname);
+            }
+            if mname == String::from("get") || mname == String::from("contains") {
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0), mname);
+            }
+            if mname == String::from("len") { return CTY_U64(); }
+            if mname == String::from("contains") { return CTY_BOOL(); }
+            if mname == String::from("insert") {
+                let opt_base: i64 = ts_make_enum(e.ts, String::from("Option"));
+                let opt_args: Vec<i64> = Vec::new();
+                opt_args.push(bval_tid);
+                return ts_make_applied(e.ts, opt_base, opt_args);
+            }
+            if mname == String::from("get") {
+                let opt_base: i64 = ts_make_enum(e.ts, String::from("Option"));
+                let opt_args: Vec<i64> = Vec::new();
+                opt_args.push(bval_tid);
+                return ts_make_applied(e.ts, opt_base, opt_args);
+            }
+            emit_unknown_method(e, a, eid, mname, String::from("BTreeMap"));
+            return CTY_UNKNOWN();
         }
         let uerr_msg: String = String::from("unknown method `");
         uerr_msg.push_str(mname);
@@ -3484,16 +3464,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if is_diverging_never(e, m, recv_eid, recv_tid) {
             return recv_tid;
         }
-        if ty_tag(e.ts, recv_tid) == CTY_APPLIED() {
-            let ibase_tid: i64 = ty_a(e.ts, recv_tid);
-            let ibase_tag: i64 = ty_tag(e.ts, ibase_tid);
-            if (ibase_tag == CTY_STRUCT() || ibase_tag == CTY_ENUM()) && ty_struct_name(e.ts, ibase_tid) == String::from("Vec") {
-                let hargs_lid: i64 = ty_b(e.ts, recv_tid);
-                if ts_arg_len(e.ts, hargs_lid) > 0 {
-                    return ts_arg_get(e.ts, hargs_lid, 0);
-                }
-                return CTY_UNIT();
+        let index_args: i64 = ty_applied_args(e.ts, recv_tid, -1, String::from("Vec"));
+        if index_args >= 0 {
+            if ts_arg_len(e.ts, index_args) > 0 {
+                return ts_arg_get(e.ts, index_args, 0);
             }
+            return CTY_UNIT();
         }
         let inmsg: String = String::from("index operation on non-indexable type `");
         inmsg.push_str(ty_full_display_name(e.ts, recv_tid));
