@@ -419,6 +419,16 @@ fn pattern_scalar_ir_type(ty: PatternScalarType) -> Ty {
     }
 }
 
+/// The checker-resolved scalar type for an extracted enum payload, keyed by
+/// the AST node address the checker recorded (`?`/`unwrap` expression or
+/// identifier pattern).
+fn checked_payload_ty(ctx: &LowerCtx, key: usize) -> Option<Ty> {
+    ctx.payload_scalars
+        .get(&key)
+        .copied()
+        .map(pattern_scalar_ir_type)
+}
+
 fn apply_pattern_aggregate_metadata(
     ctx: &mut LowerCtx,
     result: InstId,
@@ -3445,11 +3455,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                     .cloned();
                                 let declared_wide =
                                     declared_wide_payload_ty(ctx, enum_name, expected_tag, i);
-                                let checked_scalar = ctx
-                                    .payload_scalars
-                                    .get(&(inner_pat as *const _ as usize))
-                                    .copied()
-                                    .map(pattern_scalar_ir_type);
+                                let checked_scalar =
+                                    checked_payload_ty(ctx, inner_pat as *const _ as usize);
                                 let field_ty =
                                     if aggregate.as_ref().is_some_and(|info| info.is_linear) {
                                         Ty::LinearPtr
@@ -4041,10 +4048,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             } else if aggregate.is_some() {
                 Ty::Ptr
             } else {
-                ctx.payload_scalars
-                    .get(&(expr as *const Expr as usize))
-                    .copied()
-                    .map(pattern_scalar_ir_type)
+                checked_payload_ty(ctx, expr as *const Expr as usize)
                     .or_else(|| ctx.inst_option_elem_ty.get(&ptr_id).copied())
                     .unwrap_or(Ty::I64)
             };
@@ -4231,10 +4235,7 @@ fn lower_unwrap(ctx: &mut LowerCtx, expr: &Expr, recv_id: InstId, empty_tag: i64
     } else if aggregate.is_some() {
         Ty::Ptr
     } else {
-        ctx.payload_scalars
-            .get(&(expr as *const Expr as usize))
-            .copied()
-            .map(pattern_scalar_ir_type)
+        checked_payload_ty(ctx, expr as *const Expr as usize)
             .or_else(|| variant_payload_ty(ctx, recv_id, payload_tag))
             .or_else(|| ctx.inst_option_elem_ty.get(&recv_id).copied())
             .unwrap_or(Ty::I64)
