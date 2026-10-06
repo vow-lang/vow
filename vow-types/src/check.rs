@@ -1107,6 +1107,17 @@ impl<'e> Checker<'e> {
         )
     }
 
+    /// Records scalar and aggregate payload metadata for an extraction site
+    /// (`?`, `.unwrap()`, or an identifier pattern), keyed by its AST address.
+    fn record_payload_metadata(&mut self, key: usize, payload_ty: &Ty) {
+        if let Some(scalar) = extractable_payload_scalar_type(payload_ty) {
+            self.payload_scalars.insert(key, scalar);
+        }
+        let is_linear = crate::linear::is_linear_owner_ty(payload_ty, &self.env);
+        if let Some(info) = pattern_aggregate_info(payload_ty, is_linear) {
+            self.pattern_aggregates.insert(key, info);
+        }
+    }
     pub fn has_errors(&self) -> bool {
         self.error_count > 0
     }
@@ -2686,15 +2697,7 @@ impl<'e> Checker<'e> {
                     // The unwrap payload reaches IR through a FieldGet, so it
                     // needs the same scalar or aggregate metadata `?` records.
                     if let Some(payload_ty) = result_ty.as_ref() {
-                        if let Some(scalar) = extractable_payload_scalar_type(payload_ty) {
-                            self.payload_scalars
-                                .insert(expr as *const Expr as usize, scalar);
-                        }
-                        let is_linear = crate::linear::is_linear_owner_ty(payload_ty, &self.env);
-                        if let Some(info) = pattern_aggregate_info(payload_ty, is_linear) {
-                            self.pattern_aggregates
-                                .insert(expr as *const Expr as usize, info);
-                        }
+                        self.record_payload_metadata(expr as *const Expr as usize, payload_ty);
                     }
                 }
                 match result_ty {
@@ -3134,15 +3137,7 @@ impl<'e> Checker<'e> {
                         Ty::Unknown
                     }
                 };
-                let is_linear = crate::linear::is_linear_owner_ty(&payload_ty, &self.env);
-                if let Some(scalar) = extractable_payload_scalar_type(&payload_ty) {
-                    self.payload_scalars
-                        .insert(expr as *const Expr as usize, scalar);
-                }
-                if let Some(info) = pattern_aggregate_info(&payload_ty, is_linear) {
-                    self.pattern_aggregates
-                        .insert(expr as *const Expr as usize, info);
-                }
+                self.record_payload_metadata(expr as *const Expr as usize, &payload_ty);
                 payload_ty
             }
             ExprKind::Assign { lhs, rhs } => {
@@ -3594,15 +3589,7 @@ impl<'e> Checker<'e> {
     fn bind_arm_pattern(&mut self, pat: &Pat, scrutinee_ty: &Ty) {
         match &pat.kind {
             PatKind::Ident { name, .. } => {
-                if let Some(scalar) = extractable_payload_scalar_type(scrutinee_ty) {
-                    self.payload_scalars
-                        .insert(pat as *const Pat as usize, scalar);
-                }
-                let is_linear = crate::linear::is_linear_owner_ty(scrutinee_ty, &self.env);
-                if let Some(info) = pattern_aggregate_info(scrutinee_ty, is_linear) {
-                    self.pattern_aggregates
-                        .insert(pat as *const Pat as usize, info);
-                }
+                self.record_payload_metadata(pat as *const Pat as usize, scrutinee_ty);
                 self.env.define(name, scrutinee_ty.clone());
             }
             PatKind::Wildcard => {}
