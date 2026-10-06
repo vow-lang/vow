@@ -282,7 +282,7 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
     let lowered: IrModule = lower_module_vow(
         parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
         Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-        Vec::new(), Vec::new(), item_files
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), item_files
     );
     let mut saw_struct_limb: bool = false;
     let mut saw_enum_limb: bool = false;

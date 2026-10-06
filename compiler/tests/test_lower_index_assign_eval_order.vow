@@ -27,7 +27,7 @@ fn lower_fixture(source: String, file: String) -> IrModule {
     lower_module_vow(
         parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
         Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-        Vec::new(), Vec::new(), item_files
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), item_files
     )
 }
 

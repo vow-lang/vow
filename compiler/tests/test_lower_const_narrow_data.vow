@@ -71,7 +71,7 @@ fn check_lowered_const_data() -> i64 {
     let lowered: IrModule = lower_module_vow(
         parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
         Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-        Vec::new(), Vec::new(), item_files
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), item_files
     );
     if lowered.functions.len() != 10 { return 20; }
 
