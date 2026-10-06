@@ -222,6 +222,45 @@ fn remaining_map_and_string_helpers_forward_operands_to_cost_adapters() {
 }
 
 #[test]
+fn uncataloged_size_dependent_helper_keeps_plain_counter() {
+    let mut source = vec_sort_module();
+    let helper = &mut source.functions[0].blocks[0].insts[3];
+    helper.data = InstData::CallExtern("__vow_string_contains".into());
+
+    // __vow_string_contains scans its haystack, is size-dependent, and is
+    // deliberately outside COST_ADAPTERS for now. Falling back to the plain
+    // counter undercounts the scan, so the verdict layer must treat such
+    // counts as unverified; this pins the fallback shape it will see.
+    let instrumented = instrument_module(&source).expect("instrument uncataloged helper");
+    let instructions = &instrumented.as_module().functions[0].blocks[0].insts;
+    let extern_calls: Vec<(&str, &[InstId])> = instructions
+        .iter()
+        .filter_map(|inst| match &inst.data {
+            InstData::CallExtern(symbol) => Some((symbol.as_str(), inst.args.as_slice())),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        extern_calls,
+        vec![
+            ("__vow_perf_count", &[] as &[InstId]),
+            ("__vow_perf_count_vec_sort", &[InstId(0)]),
+            ("__vow_vec_sort", &[InstId(0)]),
+            ("__vow_perf_count", &[]),
+            ("__vow_perf_count", &[]),
+            ("__vow_string_contains", &[InstId(1), InstId(2)]),
+            ("__vow_perf_count", &[]),
+        ],
+        "an uncataloged size-dependent helper must keep the operand-free plain counter"
+    );
+    assert!(
+        validate(instrumented.as_module()).is_ok(),
+        "instrumented IR with uncataloged helper must remain valid"
+    );
+}
+
+#[test]
 fn vec_sort_call_with_unexpected_arity_is_rejected() {
     let mut source = vec_sort_module();
     source.functions[0].blocks[0].insts[1].args.push(InstId(0));
