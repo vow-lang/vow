@@ -1,4 +1,6 @@
-use vow_ir::{PatternAggregateMap, StringExprSet, lower_module_with_pattern_aggregates};
+use vow_ir::{
+    PatternAggregateMap, PayloadScalarMap, StringExprSet, lower_module_with_pattern_aggregates,
+};
 
 const FORMS_FIXTURE: &str = include_str!("../../tests/fixtures/contracts/contract_text_forms.vow");
 const FORMS_EXPECTED: &str =
@@ -26,6 +28,7 @@ fn descriptions(source: &str, file: &str) -> Vec<String> {
         &item_files,
         &StringExprSet::new(),
         PatternAggregateMap::new(),
+        PayloadScalarMap::new(),
     );
     module
         .functions

@@ -79,7 +79,7 @@ fn check_lowered_constant_and_text() -> i32 [io] {
     let lowered: IrModule = lower_module_vow(
         parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
         Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-        Vec::new(), Vec::new(), item_files
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), item_files
     );
     let expected_bits: u64 = parse_f64_bits(String::from("1.5"));
     let mut saw_const: bool = false;

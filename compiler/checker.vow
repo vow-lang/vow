@@ -2498,6 +2498,12 @@ fn pattern_scalar_ir_ty(ts: TyStore, tid: i64) -> i64 {
     -1
 }
 
+fn extractable_payload_ir_ty(ts: TyStore, tid: i64) -> i64 {
+    let scalar: i64 = pattern_scalar_ir_ty(ts, tid);
+    if scalar == ITY_I128() || scalar == ITY_U128() { return -1; }
+    scalar
+}
+
 fn pattern_variant_payload_ir_tys(ts: TyStore, tid: i64) -> Vec<i64> {
     if ty_tag(ts, tid) == CTY_REF() {
         return pattern_variant_payload_ir_tys(ts, ty_a(ts, tid));
@@ -2594,10 +2600,17 @@ fn pattern_vec_variant_payload_ty_path(ts: TyStore, tid: i64) -> Vec<Vec<i64>> {
     result
 }
 
-// Records payload aggregate metadata for an expression that extracts an
+// Records payload scalar or aggregate metadata for an expression that extracts an
 // Option/Result payload via FieldGet. Both `?` and `.unwrap()` register here;
 // the arrays are keyed by expression id, so the two never collide.
-fn record_question_aggregate(e: CheckEnv, eid: i64, payload_tid: i64) {
+fn record_extracted_payload(e: CheckEnv, eid: i64, payload_tid: i64) {
+    let scalar: i64 = extractable_payload_ir_ty(e.ts, payload_tid);
+    if scalar != -1 {
+        while e.question_scalar_tys.len() as i64 <= eid {
+            e.question_scalar_tys.push(-1);
+        }
+        e.question_scalar_tys[eid as u64] = scalar;
+    }
     let aggregate_name: String = pattern_aggregate_name(e.ts, payload_tid);
     if aggregate_name.len() == 0 {
         return;
@@ -2625,6 +2638,13 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
     if tag == PAT_IDENT() {
         let name_sid: i64 = pat_a(a, pid);
         let name: String = arena_str(a, name_sid);
+        let scalar: i64 = extractable_payload_ir_ty(e.ts, scrutinee_tid);
+        if scalar != -1 {
+            while e.pat_scalar_tys.len() as i64 <= pid {
+                e.pat_scalar_tys.push(-1);
+            }
+            e.pat_scalar_tys[pid as u64] = scalar;
+        }
         let aggregate_name: String = pattern_aggregate_name(e.ts, scrutinee_tid);
         if aggregate_name.len() > 0 {
             while e.pat_aggregate_names.len() as i64 <= pid {
@@ -3328,7 +3348,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 }
                 // The unwrap payload reaches IR through a FieldGet, so
                 // it needs the same aggregate metadata `?` records.
-                record_question_aggregate(e, eid, inner_tid);
+                record_extracted_payload(e, eid, inner_tid);
                 return inner_tid;
             }
             emit_unknown_method(e, a, eid, mname, base_name);
@@ -4002,7 +4022,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     let args_lid: i64 = ty_b(e.ts, inner_tid);
                     if ts_arg_len(e.ts, args_lid) > 0 {
                         let payload_tid: i64 = ts_arg_get(e.ts, args_lid, 0);
-                        record_question_aggregate(e, eid, payload_tid);
+                        record_extracted_payload(e, eid, payload_tid);
                         return payload_tid;
                     }
                     return CTY_UNIT();

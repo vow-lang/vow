@@ -80,6 +80,7 @@ struct LowerCtx {
     variant_payload_inst_ids: Vec<i64>,
     variant_payload_tys: Vec<Vec<i64>>,
     pat_aggregate_names: Vec<String>,
+    pat_scalar_tys: Vec<i64>,
     pat_vec_elem_paths: Vec<Vec<String>>,
     pat_vec_option_elem_ty_paths: Vec<Vec<i64>>,
     pat_vec_variant_payload_ty_paths: Vec<Vec<Vec<i64>>>,
@@ -87,6 +88,7 @@ struct LowerCtx {
     pat_variant_payload_tys: Vec<Vec<i64>>,
     pat_aggregate_linear: Vec<i64>,
     question_aggregate_names: Vec<String>,
+    question_scalar_tys: Vec<i64>,
     question_vec_elem_paths: Vec<Vec<String>>,
     question_vec_option_elem_ty_paths: Vec<Vec<i64>>,
     question_option_elem_tys: Vec<i64>,
@@ -179,6 +181,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         variant_payload_inst_ids: Vec::new(),
         variant_payload_tys: Vec::new(),
         pat_aggregate_names: Vec::new(),
+        pat_scalar_tys: Vec::new(),
         pat_vec_elem_paths: Vec::new(),
         pat_vec_option_elem_ty_paths: Vec::new(),
         pat_vec_variant_payload_ty_paths: Vec::new(),
@@ -186,6 +189,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         pat_variant_payload_tys: Vec::new(),
         pat_aggregate_linear: Vec::new(),
         question_aggregate_names: Vec::new(),
+        question_scalar_tys: Vec::new(),
         question_vec_elem_paths: Vec::new(),
         question_vec_option_elem_ty_paths: Vec::new(),
         question_option_elem_tys: Vec::new(),
@@ -955,6 +959,13 @@ fn lctx_get_pattern_variant_payload_tys(ctx: LowerCtx, pid: i64) -> Vec<i64> {
     Vec::new()
 }
 
+fn lctx_get_pattern_scalar_ty(ctx: LowerCtx, pid: i64) -> i64 {
+    if pid < ctx.pat_scalar_tys.len() as i64 {
+        return ctx.pat_scalar_tys[pid as u64];
+    }
+    -1
+}
+
 fn lctx_pattern_is_linear(ctx: LowerCtx, pid: i64) -> i64 {
     if pid < ctx.pat_aggregate_linear.len() as i64 {
         return ctx.pat_aggregate_linear[pid as u64];
@@ -967,6 +978,13 @@ fn lctx_get_question_aggregate(ctx: LowerCtx, eid: i64) -> String {
         return ctx.question_aggregate_names[eid as u64];
     }
     String::from("")
+}
+
+fn lctx_get_question_scalar_ty(ctx: LowerCtx, eid: i64) -> i64 {
+    if eid < ctx.question_scalar_tys.len() as i64 {
+        return ctx.question_scalar_tys[eid as u64];
+    }
+    -1
 }
 
 fn lctx_get_question_vec_elem_path(ctx: LowerCtx, eid: i64) -> Vec<String> {
@@ -4522,6 +4540,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                         let pname: String = arena_str(a, name_sid);
                         let aggregate_struct: String = lctx_get_pattern_aggregate(ctx, inner_pid);
                         let declared_wide: i64 = lctx_declared_wide_payload_ty(ctx, en, vn, ii);
+                        let checked_scalar: i64 = lctx_get_pattern_scalar_ty(ctx, inner_pid);
                         let field_ty: i64 = {
                             if aggregate_struct.len() > 0 && lctx_pattern_is_linear(ctx, inner_pid) == 1 {
                                 ITY_LPTR()
@@ -4529,6 +4548,8 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                                 ITY_PTR()
                             } else if declared_wide != -1 {
                                 declared_wide
+                            } else if checked_scalar != -1 {
+                                checked_scalar
                             } else if ii == 0 {
                                 payload_ty
                             } else {
@@ -4832,7 +4853,9 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             } else if aggregate_name.len() > 0 {
                 ITY_PTR()
             } else {
-                lctx_get_option_elem_ty(ctx, inner_id)
+                let checked_scalar: i64 = lctx_get_question_scalar_ty(ctx, eid);
+                if checked_scalar != -1 { checked_scalar }
+                else { lctx_get_option_elem_ty(ctx, inner_id) }
             }
         };
         let payload_args: Vec<i64> = Vec::new();
@@ -5011,15 +5034,20 @@ fn lower_unwrap(ctx: LowerCtx, eid: i64, recv_id: i64, empty_tag: i64) -> i64 {
         } else if aggregate_name.len() > 0 {
             ITY_PTR()
         } else {
-            // The unwrapped payload is the non-empty variant: `Some` (tag 1)
-            // for Option, `Ok` (tag 0) for Result. The option-elem map only
-            // ever carries an Option's width, so a wide `Result` payload needs
-            // the variant map or it loads as a truncated limb.
-            let variant_ty: i64 = lctx_variant_payload_at(ctx, recv_id, 1 - empty_tag);
-            if variant_ty != -1 {
-                variant_ty
+            let checked_scalar: i64 = lctx_get_question_scalar_ty(ctx, eid);
+            if checked_scalar != -1 {
+                checked_scalar
             } else {
-                lctx_get_option_elem_ty(ctx, recv_id)
+                // The unwrapped payload is the non-empty variant: `Some` (tag 1)
+                // for Option, `Ok` (tag 0) for Result. The option-elem map only
+                // ever carries an Option's width, so a wide `Result` payload needs
+                // the variant map or it loads as a truncated limb.
+                let variant_ty: i64 = lctx_variant_payload_at(ctx, recv_id, 1 - empty_tag);
+                if variant_ty != -1 {
+                    variant_ty
+                } else {
+                    lctx_get_option_elem_ty(ctx, recv_id)
+                }
             }
         }
     };
@@ -5704,6 +5732,7 @@ fn lower_module_vow(
     m: Module,
     str_eids: Vec<i64>,
     pat_aggregate_names: Vec<String>,
+    pat_scalar_tys: Vec<i64>,
     pat_vec_elem_paths: Vec<Vec<String>>,
     pat_vec_option_elem_ty_paths: Vec<Vec<i64>>,
     pat_vec_variant_payload_ty_paths: Vec<Vec<Vec<i64>>>,
@@ -5711,6 +5740,7 @@ fn lower_module_vow(
     pat_variant_payload_tys: Vec<Vec<i64>>,
     pat_aggregate_linear: Vec<i64>,
     question_aggregate_names: Vec<String>,
+    question_scalar_tys: Vec<i64>,
     question_vec_elem_paths: Vec<Vec<String>>,
     question_vec_option_elem_ty_paths: Vec<Vec<i64>>,
     question_option_elem_tys: Vec<i64>,
@@ -6019,6 +6049,7 @@ fn lower_module_vow(
 
     let ctx: LowerCtx = lctx_new(String::from(""), ITY_UNIT(), 0, a, str_eids);
     ctx.pat_aggregate_names = pat_aggregate_names;
+    ctx.pat_scalar_tys = pat_scalar_tys;
     ctx.pat_vec_elem_paths = pat_vec_elem_paths;
     ctx.pat_vec_option_elem_ty_paths = pat_vec_option_elem_ty_paths;
     ctx.pat_vec_variant_payload_ty_paths = pat_vec_variant_payload_ty_paths;
@@ -6026,6 +6057,7 @@ fn lower_module_vow(
     ctx.pat_variant_payload_tys = pat_variant_payload_tys;
     ctx.pat_aggregate_linear = pat_aggregate_linear;
     ctx.question_aggregate_names = question_aggregate_names;
+    ctx.question_scalar_tys = question_scalar_tys;
     ctx.question_vec_elem_paths = question_vec_elem_paths;
     ctx.question_vec_option_elem_ty_paths = question_vec_option_elem_ty_paths;
     ctx.question_option_elem_tys = question_option_elem_tys;

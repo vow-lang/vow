@@ -1,0 +1,37 @@
+// TEST: stdout "ok\n"
+// Float comparisons have a separate codegen issue (#1508), so this fixture checks
+// that each extracted value crosses a typed return or call boundary.
+module Issue1124ScalarPayloads
+
+fn identity(v: f64) -> f64 { v }
+
+fn from_inline_match() -> f64 {
+    match Option::Some(2.5) {
+        Option::Some(value) => value,
+        Option::None => 0.0,
+    }
+}
+
+fn from_result(value: Result<f64, ()>) -> f64 [panic] {
+    value.unwrap()
+}
+
+fn from_question() -> Option<f64> {
+    Option::Some(identity(Option::Some(2.5)?))
+}
+
+fn from_result_error(value: Result<(), f32>, fallback: f32) -> f32 {
+    match value {
+        Result::Ok(_) => fallback,
+        Result::Err(error) => error,
+    }
+}
+
+fn main() -> i32 [io, panic] {
+    let matched: f64 = from_inline_match();
+    let ok: Result<f64, ()> = Result::Ok(2.5);
+    let unwrapped: f64 = from_result(ok);
+    let propagated: Option<f64> = from_question();
+    print_str("ok\n");
+    0
+}

@@ -793,6 +793,7 @@ mod tests {
             &item_files,
             &crate::lower::StringExprSet::new(),
             crate::lower::PatternAggregateMap::new(),
+            crate::lower::PayloadScalarMap::new(),
         );
         let func = module
             .functions

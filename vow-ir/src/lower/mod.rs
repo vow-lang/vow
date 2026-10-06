@@ -10,7 +10,7 @@ use vow_syntax::ast::{
 };
 use vow_syntax::span::Span;
 pub use vow_types::check::{
-    PatternAggregateInfo, PatternAggregateMap, PatternScalarType, StringExprSet,
+    PatternAggregateInfo, PatternAggregateMap, PatternScalarType, PayloadScalarMap, StringExprSet,
 };
 
 use crate::types::{
@@ -1000,6 +1000,7 @@ pub(crate) struct LowerCtx {
     inst_variant_payload_tys: HashMap<InstId, Vec<Option<Ty>>>,
     // Identifier-pattern address → checker-resolved aggregate metadata.
     pattern_aggregates: Rc<PatternAggregateMap>,
+    payload_scalars: Rc<PayloadScalarMap>,
     // struct name → per-field Vec element type name (for FieldGet → Vec propagation)
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     warnings: Vec<vow_diag::Diagnostic>,
@@ -1024,6 +1025,7 @@ impl LowerCtx {
         struct_field_vec_elems: HashMap<String, Vec<String>>,
         string_exprs: StringExprSet,
         pattern_aggregates: Rc<PatternAggregateMap>,
+        payload_scalars: Rc<PayloadScalarMap>,
     ) -> Self {
         let entry = BasicBlock {
             id: BlockId(0),
@@ -1089,6 +1091,7 @@ impl LowerCtx {
             inst_option_elem_ty: HashMap::new(),
             inst_variant_payload_tys: HashMap::new(),
             pattern_aggregates,
+            payload_scalars,
             struct_field_vec_elems,
             warnings: Vec::new(),
         }
@@ -3442,6 +3445,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                     .cloned();
                                 let declared_wide =
                                     declared_wide_payload_ty(ctx, enum_name, expected_tag, i);
+                                let checked_scalar = ctx
+                                    .payload_scalars
+                                    .get(&(inner_pat as *const _ as usize))
+                                    .copied()
+                                    .map(pattern_scalar_ir_type);
                                 let field_ty =
                                     if aggregate.as_ref().is_some_and(|info| info.is_linear) {
                                         Ty::LinearPtr
@@ -3449,6 +3457,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                         Ty::Ptr
                                     } else if let Some(wide) = declared_wide {
                                         wide
+                                    } else if let Some(scalar) = checked_scalar {
+                                        scalar
                                     } else if i == 0 {
                                         payload_ty
                                     } else {
@@ -4031,9 +4041,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             } else if aggregate.is_some() {
                 Ty::Ptr
             } else {
-                ctx.inst_option_elem_ty
-                    .get(&ptr_id)
+                ctx.payload_scalars
+                    .get(&(expr as *const Expr as usize))
                     .copied()
+                    .map(pattern_scalar_ir_type)
+                    .or_else(|| ctx.inst_option_elem_ty.get(&ptr_id).copied())
                     .unwrap_or(Ty::I64)
             };
             let payload = ctx.emit(
@@ -4219,7 +4231,11 @@ fn lower_unwrap(ctx: &mut LowerCtx, expr: &Expr, recv_id: InstId, empty_tag: i64
     } else if aggregate.is_some() {
         Ty::Ptr
     } else {
-        variant_payload_ty(ctx, recv_id, payload_tag)
+        ctx.payload_scalars
+            .get(&(expr as *const Expr as usize))
+            .copied()
+            .map(pattern_scalar_ir_type)
+            .or_else(|| variant_payload_ty(ctx, recv_id, payload_tag))
             .or_else(|| ctx.inst_option_elem_ty.get(&recv_id).copied())
             .unwrap_or(Ty::I64)
     };
@@ -5179,6 +5195,7 @@ fn lower_function_with_pattern_aggregates(
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
     pattern_aggregates: &Rc<PatternAggregateMap>,
+    payload_scalars: &Rc<PayloadScalarMap>,
     const_map: &HashMap<String, (u128, Ty)>,
 ) -> (Function, Vec<String>, Vec<vow_diag::Diagnostic>) {
     let params: Vec<Ty> = fn_def
@@ -5207,6 +5224,7 @@ fn lower_function_with_pattern_aggregates(
         struct_field_vec_elems,
         string_exprs.clone(),
         Rc::clone(pattern_aggregates),
+        Rc::clone(payload_scalars),
     );
 
     ctx.enum_variant_payload_tys = enum_variant_payload_tys;
@@ -5347,6 +5365,7 @@ fn lower_function(
         struct_field_vec_elems,
         string_exprs,
         &Rc::new(PatternAggregateMap::new()),
+        &Rc::new(PayloadScalarMap::new()),
         const_map,
     )
 }
@@ -5356,6 +5375,7 @@ pub fn lower_module_with_pattern_aggregates(
     item_files: &[String],
     string_exprs: &StringExprSet,
     pattern_aggregates: PatternAggregateMap,
+    payload_scalars: PayloadScalarMap,
 ) -> Module {
     debug_assert_eq!(
         module.items.len(),
@@ -5363,6 +5383,7 @@ pub fn lower_module_with_pattern_aggregates(
         "item_files must be parallel to module.items"
     );
     let pattern_aggregates = Rc::new(pattern_aggregates);
+    let payload_scalars = Rc::new(payload_scalars);
     // Walk module.items keeping the original index so each retained FnDef
     // can be paired with its source-file path from `item_files`.
     let fn_items: Vec<(&FnDef, &str)> = module
@@ -5592,6 +5613,7 @@ pub fn lower_module_with_pattern_aggregates(
                 struct_field_vec_elems.clone(),
                 string_exprs,
                 &pattern_aggregates,
+                &payload_scalars,
                 &const_map,
             );
             func.id = FuncId(idx as u32);
@@ -6590,6 +6612,7 @@ fn unsigned_max() -> u128 {
             &item_files,
             &StringExprSet::new(),
             PatternAggregateMap::new(),
+            PayloadScalarMap::new(),
         );
 
         let signed_max = &module.functions[0];
@@ -6641,6 +6664,7 @@ fn unsigned_max() -> u128 {
             &item_files,
             &StringExprSet::new(),
             PatternAggregateMap::new(),
+            PayloadScalarMap::new(),
         )
     }
 
@@ -7750,6 +7774,7 @@ fn payload(o: Option<u8>) -> u8 [panic] {
             HashMap::new(),
             &HashSet::new(),
             &patterns,
+            &Rc::new(PayloadScalarMap::new()),
             &HashMap::new(),
         );
         (func, warnings)
@@ -8228,6 +8253,7 @@ fn parse_or_default(s: String) -> i64 {
             &item_files,
             &StringExprSet::new(),
             PatternAggregateMap::new(),
+            PayloadScalarMap::new(),
         );
         let instructions: Vec<&Inst> = module.functions[0]
             .blocks
@@ -9506,6 +9532,7 @@ fn parse_or_default(s: String) -> i64 {
             HashMap::new(),
             &HashSet::new(),
             &patterns,
+            &Rc::new(PayloadScalarMap::new()),
             &HashMap::new(),
         );
 
@@ -9639,6 +9666,7 @@ fn parse_or_default(s: String) -> i64 {
             HashMap::new(),
             &HashSet::new(),
             &patterns,
+            &Rc::new(PayloadScalarMap::new()),
             &HashMap::new(),
         );
 
@@ -9704,6 +9732,7 @@ fn parse_or_default(s: String) -> i64 {
             HashMap::new(),
             HashSet::new(),
             Rc::new(HashMap::new()),
+            Rc::new(PayloadScalarMap::new()),
         );
         let source = InstId(1);
         let nested_vec = InstId(2);
@@ -9748,6 +9777,7 @@ fn parse_or_default(s: String) -> i64 {
             HashMap::new(),
             HashSet::new(),
             Rc::new(HashMap::new()),
+            Rc::new(PayloadScalarMap::new()),
         );
         let source = InstId(10);
         let pinned = InstId(11);
@@ -9836,6 +9866,7 @@ fn parse_or_default(s: String) -> i64 {
             HashMap::new(),
             HashSet::new(),
             Rc::new(HashMap::new()),
+            Rc::new(PayloadScalarMap::new()),
         );
 
         let loop_phi = ctx.emit(Opcode::Phi, Ty::Ptr, vec![], InstData::None, sp());
@@ -9962,6 +9993,7 @@ fn parse_or_default(s: String) -> i64 {
             HashMap::new(),
             &HashSet::new(),
             &patterns,
+            &Rc::new(PayloadScalarMap::new()),
             &HashMap::new(),
         );
 

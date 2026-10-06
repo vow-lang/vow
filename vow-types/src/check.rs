@@ -45,6 +45,10 @@ pub enum PatternScalarType {
 /// keyed by the corresponding AST node address.
 pub type PatternAggregateMap = HashMap<usize, PatternAggregateInfo>;
 
+/// Checker-resolved scalar type for an extracted enum payload, keyed by the
+/// address of its `?`/`unwrap` expression or identifier pattern.
+pub type PayloadScalarMap = HashMap<usize, PatternScalarType>;
+
 fn aggregate_type_name(ty: &Ty) -> Option<String> {
     match ty {
         Ty::Str => Some("String".to_string()),
@@ -131,6 +135,11 @@ fn pattern_scalar_type(ty: &Ty) -> Option<PatternScalarType> {
         Ty::Bool => Some(PatternScalarType::Bool),
         _ => None,
     }
+}
+
+fn extractable_payload_scalar_type(ty: &Ty) -> Option<PatternScalarType> {
+    pattern_scalar_type(ty)
+        .filter(|scalar| !matches!(scalar, PatternScalarType::I128 | PatternScalarType::U128))
 }
 
 fn variant_payload_scalar_types(ty: &Ty) -> Vec<Option<PatternScalarType>> {
@@ -1007,6 +1016,7 @@ pub struct Checker<'e> {
     pub(crate) emitter: &'e mut dyn DiagnosticEmitter,
     string_exprs: StringExprSet,
     pattern_aggregates: PatternAggregateMap,
+    payload_scalars: PayloadScalarMap,
     /// Cast expressions whose value is provably non-negative in their own
     /// (signed) target type, keyed by `&Expr` address, holding `(source,
     /// target)` for the diagnostic. Populated by the `Cast` arm of
@@ -1079,6 +1089,7 @@ impl<'e> Checker<'e> {
             emitter,
             string_exprs: HashSet::new(),
             pattern_aggregates: HashMap::new(),
+            payload_scalars: HashMap::new(),
             nonneg_casts: HashMap::new(),
             in_loop: 0,
             contract_depth: 0,
@@ -1088,8 +1099,12 @@ impl<'e> Checker<'e> {
         }
     }
 
-    pub fn into_lowering_metadata(self) -> (StringExprSet, PatternAggregateMap) {
-        (self.string_exprs, self.pattern_aggregates)
+    pub fn into_lowering_metadata(self) -> (StringExprSet, PatternAggregateMap, PayloadScalarMap) {
+        (
+            self.string_exprs,
+            self.pattern_aggregates,
+            self.payload_scalars,
+        )
     }
 
     pub fn has_errors(&self) -> bool {
@@ -2669,8 +2684,12 @@ impl<'e> Checker<'e> {
                         );
                     }
                     // The unwrap payload reaches IR through a FieldGet, so it
-                    // needs the same aggregate metadata `?` records.
+                    // needs the same scalar or aggregate metadata `?` records.
                     if let Some(payload_ty) = result_ty.as_ref() {
+                        if let Some(scalar) = extractable_payload_scalar_type(payload_ty) {
+                            self.payload_scalars
+                                .insert(expr as *const Expr as usize, scalar);
+                        }
                         let is_linear = crate::linear::is_linear_owner_ty(payload_ty, &self.env);
                         if let Some(info) = pattern_aggregate_info(payload_ty, is_linear) {
                             self.pattern_aggregates
@@ -3116,6 +3135,10 @@ impl<'e> Checker<'e> {
                     }
                 };
                 let is_linear = crate::linear::is_linear_owner_ty(&payload_ty, &self.env);
+                if let Some(scalar) = extractable_payload_scalar_type(&payload_ty) {
+                    self.payload_scalars
+                        .insert(expr as *const Expr as usize, scalar);
+                }
                 if let Some(info) = pattern_aggregate_info(&payload_ty, is_linear) {
                     self.pattern_aggregates
                         .insert(expr as *const Expr as usize, info);
@@ -3571,6 +3594,10 @@ impl<'e> Checker<'e> {
     fn bind_arm_pattern(&mut self, pat: &Pat, scrutinee_ty: &Ty) {
         match &pat.kind {
             PatKind::Ident { name, .. } => {
+                if let Some(scalar) = extractable_payload_scalar_type(scrutinee_ty) {
+                    self.payload_scalars
+                        .insert(pat as *const Pat as usize, scalar);
+                }
                 let is_linear = crate::linear::is_linear_owner_ty(scrutinee_ty, &self.env);
                 if let Some(info) = pattern_aggregate_info(scrutinee_ty, is_linear) {
                     self.pattern_aggregates

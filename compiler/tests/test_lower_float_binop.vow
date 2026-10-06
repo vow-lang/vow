@@ -37,7 +37,7 @@ fn check_float_binop_data() -> i64 {
     let lowered: IrModule = lower_module_vow(
         parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
         Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-        Vec::new(), Vec::new(), item_files
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), item_files
     );
 
     if lowered.functions.len() != 1 { return 21; }

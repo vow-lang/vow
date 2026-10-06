@@ -234,7 +234,7 @@ pub(crate) fn prepare_frontend_with_root(
     let ir = match goal {
         FrontendGoal::MergedAst => None,
         FrontendGoal::LoweredIr => {
-            let (string_exprs, pattern_aggregates) =
+            let (string_exprs, pattern_aggregates, payload_scalars) =
                 lowering_metadata.expect("LoweredIr goal must preserve lowering metadata");
             let t_lower = now();
             let mut module = vow_ir::lower_module_with_pattern_aggregates(
@@ -242,6 +242,7 @@ pub(crate) fn prepare_frontend_with_root(
                 &item_files,
                 &string_exprs,
                 pattern_aggregates,
+                payload_scalars,
             );
             record("lower", t_lower);
             // Track lower-warning count so region inference does not see them
