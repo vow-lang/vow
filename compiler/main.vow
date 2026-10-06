@@ -4609,8 +4609,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("`Option<T>` has variants `Some(T)` and `None`.\n"));
     r.push_str(String::from("`Result<T, E>` has variants `Ok(T)` and `Err(E)`.\n"));
-    r.push_str(String::from("For scalar payloads supported by native aggregate codegen, `match`, `.unwrap()`,\n"));
-    r.push_str(String::from("and `?` extract the declared type, including `f32` and `f64`. The ESBMC C model still\n"));
+    r.push_str(String::from("For scalar payloads supported by native aggregate codegen, `match` and\n"));
+    r.push_str(String::from("`.unwrap()` extract the declared type, including `f32` and `f64`; `?`\n"));
+    r.push_str(String::from("currently propagates `Option` payloads only. The ESBMC C model still\n"));
     r.push_str(String::from("uses integer slots for enum payloads and does not preserve float bits on a\n"));
     r.push_str(String::from("store and load. Verification of contracts involving float enum payloads is\n"));
     r.push_str(String::from("therefore unsupported until that model represents float payloads faithfully.\n"));
@@ -10469,8 +10470,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("`Option<T>` has variants `Some(T)` and `None`.\n"));
     r.push_str(String::from("`Result<T, E>` has variants `Ok(T)` and `Err(E)`.\n"));
-    r.push_str(String::from("For scalar payloads supported by native aggregate codegen, `match`, `.unwrap()`,\n"));
-    r.push_str(String::from("and `?` extract the declared type, including `f32` and `f64`. The ESBMC C model still\n"));
+    r.push_str(String::from("For scalar payloads supported by native aggregate codegen, `match` and\n"));
+    r.push_str(String::from("`.unwrap()` extract the declared type, including `f32` and `f64`; `?`\n"));
+    r.push_str(String::from("currently propagates `Option` payloads only. The ESBMC C model still\n"));
     r.push_str(String::from("uses integer slots for enum payloads and does not preserve float bits on a\n"));
     r.push_str(String::from("store and load. Verification of contracts involving float enum payloads is\n"));
     r.push_str(String::from("therefore unsupported until that model represents float payloads faithfully.\n"));
