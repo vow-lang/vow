@@ -1054,9 +1054,11 @@ dependencies = [
 name = "vow-perf"
 version = "0.10.0"
 dependencies = [
+ "tempfile",
  "vow-codegen",
  "vow-diag",
  "vow-ir",
+ "vow-runtime",
  "vow-syntax",
 ]
 

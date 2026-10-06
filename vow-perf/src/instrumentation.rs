@@ -26,11 +26,38 @@ struct CostAdapter {
     operands: usize,
 }
 
-const COST_ADAPTERS: &[CostAdapter] = &[CostAdapter {
-    helper: "__vow_vec_sort",
-    adapter: "__vow_perf_count_vec_sort",
-    operands: 1,
-}];
+const COST_ADAPTERS: &[CostAdapter] = &[
+    CostAdapter {
+        helper: "__vow_vec_sort",
+        adapter: "__vow_perf_count_vec_sort",
+        operands: 1,
+    },
+    CostAdapter {
+        helper: "__vow_map_contains",
+        adapter: "__vow_perf_count_map_contains",
+        operands: 2,
+    },
+    CostAdapter {
+        helper: "__vow_map_get",
+        adapter: "__vow_perf_count_map_get",
+        operands: 2,
+    },
+    CostAdapter {
+        helper: "__vow_map_insert",
+        adapter: "__vow_perf_count_map_insert",
+        operands: 3,
+    },
+    CostAdapter {
+        helper: "__vow_map_remove",
+        adapter: "__vow_perf_count_map_remove",
+        operands: 2,
+    },
+    CostAdapter {
+        helper: "__vow_string_eq",
+        adapter: "__vow_perf_count_string_eq",
+        operands: 2,
+    },
+];
 
 /// A cloned IR module containing operation-counter calls.
 ///
@@ -101,9 +128,9 @@ impl std::error::Error for InstrumentationError {}
 /// helper's cost adapter, which receives the original operands; every other
 /// executable instruction uses the one-operation counter.
 ///
-/// An uncatalogued size-dependent helper still counts as one operation, so a
+/// An uncataloged size-dependent helper still counts as one operation, so a
 /// performance verdict built on these counts must fail closed as unverified
-/// when it reaches one. Completing the catalogue is tracked by #486.
+/// when it reaches one.
 ///
 /// A catalogued helper whose operand list no longer matches its cost adapter
 /// is an error rather than a degraded count: charging the one-operation counter
@@ -175,9 +202,8 @@ fn counter_for(
             .find(|entry| entry.helper == symbol.as_str()),
         _ => None,
     };
-    // Charges one operation for anything uncatalogued, including a
-    // size-dependent helper such as `__vow_map_contains`; see
-    // `instrument_module` and #486.
+    // Charges one operation for anything uncataloged. The future verdict
+    // layer must reject uncataloged size-dependent helpers as unverified.
     let Some(entry) = entry else {
         return Ok((COUNTER_SYMBOL, vec![]));
     };

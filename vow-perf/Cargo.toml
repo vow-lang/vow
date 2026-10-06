@@ -7,6 +7,8 @@ edition = "2024"
 vow-ir = { path = "../vow-ir" }
 
 [dev-dependencies]
+tempfile = "3"
 vow-codegen = { path = "../vow-codegen" }
 vow-diag = { path = "../vow-diag" }
+vow-runtime = { path = "../vow-runtime" }
 vow-syntax = { path = "../vow-syntax" }
