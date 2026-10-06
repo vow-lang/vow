@@ -3,22 +3,23 @@ use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::Blame;
 use vow_ir::{
-    BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, RegionId,
-    RegionSummary, Ty, VowEntry, VowId, decode_module, encode_module, validate,
+    BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, RegionSummary,
+    Ty, VowEntry, VowId, decode_module, encode_module, validate,
 };
 use vow_perf::{InstrumentationError, instrument_module};
-use vow_syntax::span::Span;
 
-fn instruction(id: u32, opcode: Opcode, ty: Ty, args: Vec<InstId>, data: InstData) -> Inst {
-    Inst {
-        id: InstId(id),
-        opcode,
-        ty,
-        args,
-        data,
-        origin: Span::new(0, 0),
-        region: RegionId::Root,
-    }
+mod common;
+use common::instruction;
+
+/// Project one block's extern calls to `(symbol, operands)` pairs.
+fn extern_calls(instructions: &[Inst]) -> Vec<(&str, &[InstId])> {
+    instructions
+        .iter()
+        .filter_map(|inst| match &inst.data {
+            InstData::CallExtern(symbol) => Some((symbol.as_str(), inst.args.as_slice())),
+            _ => None,
+        })
+        .collect()
 }
 
 fn production_module() -> Module {
@@ -139,13 +140,7 @@ fn vec_sort_calls_receive_size_dependent_cost_adapter() {
 
     let instrumented = instrument_module(&source).expect("instrument Vec::sort wrapper");
     let instructions = &instrumented.as_module().functions[0].blocks[0].insts;
-    let extern_calls: Vec<(&str, &[InstId])> = instructions
-        .iter()
-        .filter_map(|inst| match &inst.data {
-            InstData::CallExtern(symbol) => Some((symbol.as_str(), inst.args.as_slice())),
-            _ => None,
-        })
-        .collect();
+    let extern_calls = extern_calls(instructions);
 
     assert_eq!(
         extern_calls,
@@ -233,13 +228,7 @@ fn uncataloged_size_dependent_helper_keeps_plain_counter() {
     // counts as unverified; this pins the fallback shape it will see.
     let instrumented = instrument_module(&source).expect("instrument uncataloged helper");
     let instructions = &instrumented.as_module().functions[0].blocks[0].insts;
-    let extern_calls: Vec<(&str, &[InstId])> = instructions
-        .iter()
-        .filter_map(|inst| match &inst.data {
-            InstData::CallExtern(symbol) => Some((symbol.as_str(), inst.args.as_slice())),
-            _ => None,
-        })
-        .collect();
+    let extern_calls = extern_calls(instructions);
 
     assert_eq!(
         extern_calls,

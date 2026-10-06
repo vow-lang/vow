@@ -5014,10 +5014,9 @@ mod tests {
         assert_eq!(vec_sort_cost(5), 26);
 
         let map = VowMap {
-            ptr: std::ptr::dangling_mut(),
             len: 4,
             cap: 4,
-            owner: std::ptr::null_mut(),
+            ..make_rodata_map()
         };
         let map_ptr = &raw const map as *const u8;
         __vow_perf_counter_reset();
@@ -5037,12 +5036,8 @@ mod tests {
             "scan plus possible buffer copy"
         );
 
-        let a = VowVec {
-            ptr: std::ptr::dangling_mut(),
-            len: 4,
-            cap: 4,
-        };
-        let b = VowVec { len: 5, ..a };
+        let a = borrowed_vow_string("abcd");
+        let b = borrowed_vow_string("abcde");
         __vow_perf_counter_reset();
         unsafe { __vow_perf_count_string_eq(&raw const a as *const u8, &raw const a as *const u8) };
         assert_eq!(__vow_perf_counter_read(), 5);

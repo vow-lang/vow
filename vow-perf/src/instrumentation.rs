@@ -15,11 +15,10 @@ const COUNTER_SYMBOL: &str = "__vow_perf_count";
 /// `operands` is the helper's IR operand count. Codegen may prepend a hidden
 /// arena argument when it routes the helper, so the helper's ABI arity can
 /// exceed this. The adapter call is never routed and receives the helper's IR
-/// operands unchanged, so the adapter's parameter list must mirror the helper's
-/// *unrouted* signature. Adding a row here also requires the adapter's
-/// `extern "C"` definition in `vow-runtime` and a matching arm in both
-/// `make_extern_sig` implementations (`vow-codegen` and `vow-clif-shim`); a row
-/// on its own will not link. See #486.
+/// operands unchanged. Both `make_extern_sig` implementations (`vow-codegen`
+/// and `vow-clif-shim`) derive the adapter's parameter list from the helper's
+/// own *unrouted* signature, so adding a row only requires the adapter's
+/// `extern "C"` definition in `vow-runtime`. See #486.
 struct CostAdapter {
     helper: &'static str,
     adapter: &'static str,

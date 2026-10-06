@@ -7,11 +7,12 @@ use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::link;
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_ir::{
-    BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, RegionId,
-    RegionSummary, Ty,
+    BasicBlock, BlockId, FuncId, Function, InstData, InstId, Module, Opcode, RegionSummary, Ty,
 };
 use vow_perf::{ComplexityClass, Sample, Verdict, analyze, instrument_module};
-use vow_syntax::span::Span;
+
+mod common;
+use common::instruction;
 
 const SIZES: [u64; 6] = [16, 32, 64, 128, 256, 512];
 
@@ -43,15 +44,7 @@ fn lookup_program() -> Module {
     let mut insts = Vec::new();
     let mut emit = |opcode, ty, args, data| {
         let id = InstId(insts.len() as u32);
-        insts.push(Inst {
-            id,
-            opcode,
-            ty,
-            args,
-            data,
-            origin: Span::new(0, 0),
-            region: RegionId::Root,
-        });
+        insts.push(instruction(id.0, opcode, ty, args, data));
         id
     };
 
