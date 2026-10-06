@@ -3,22 +3,23 @@ use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::Blame;
 use vow_ir::{
-    BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, RegionId,
-    RegionSummary, Ty, VowEntry, VowId, decode_module, encode_module, validate,
+    BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, RegionSummary,
+    Ty, VowEntry, VowId, decode_module, encode_module, validate,
 };
 use vow_perf::{InstrumentationError, instrument_module};
-use vow_syntax::span::Span;
 
-fn instruction(id: u32, opcode: Opcode, ty: Ty, args: Vec<InstId>, data: InstData) -> Inst {
-    Inst {
-        id: InstId(id),
-        opcode,
-        ty,
-        args,
-        data,
-        origin: Span::new(0, 0),
-        region: RegionId::Root,
-    }
+mod common;
+use common::instruction;
+
+/// Project one block's extern calls to `(symbol, operands)` pairs.
+fn extern_calls(instructions: &[Inst]) -> Vec<(&str, &[InstId])> {
+    instructions
+        .iter()
+        .filter_map(|inst| match &inst.data {
+            InstData::CallExtern(symbol) => Some((symbol.as_str(), inst.args.as_slice())),
+            _ => None,
+        })
+        .collect()
 }
 
 fn production_module() -> Module {
@@ -90,7 +91,7 @@ fn vec_sort_module() -> Module {
             InstData::CallExtern("__vow_vec_sort".to_string()),
         ),
         instruction(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(7)),
-        // Uncatalogued size-dependent helper: it must keep the plain counter.
+        // The map scan has its own size-dependent cost adapter.
         instruction(
             3,
             Opcode::Call,
@@ -139,13 +140,7 @@ fn vec_sort_calls_receive_size_dependent_cost_adapter() {
 
     let instrumented = instrument_module(&source).expect("instrument Vec::sort wrapper");
     let instructions = &instrumented.as_module().functions[0].blocks[0].insts;
-    let extern_calls: Vec<(&str, &[InstId])> = instructions
-        .iter()
-        .filter_map(|inst| match &inst.data {
-            InstData::CallExtern(symbol) => Some((symbol.as_str(), inst.args.as_slice())),
-            _ => None,
-        })
-        .collect();
+    let extern_calls = extern_calls(instructions);
 
     assert_eq!(
         extern_calls,
@@ -154,12 +149,11 @@ fn vec_sort_calls_receive_size_dependent_cost_adapter() {
             ("__vow_perf_count_vec_sort", &[InstId(0)]),
             ("__vow_vec_sort", &[InstId(0)]),
             ("__vow_perf_count", &[]),
-            ("__vow_perf_count", &[]),
+            ("__vow_perf_count_map_contains", &[InstId(1), InstId(2)]),
             ("__vow_map_contains", &[InstId(1), InstId(2)]),
             ("__vow_perf_count", &[]),
         ],
-        "Vec::sort must count its hidden size-dependent work without changing its operand, \
-         and an uncatalogued helper must keep the plain operand-free counter"
+        "Vec::sort and HashMap::contains_key must count hidden work without changing operands"
     );
     assert!(
         validate(instrumented.as_module()).is_ok(),
@@ -171,6 +165,88 @@ fn vec_sort_calls_receive_size_dependent_cost_adapter() {
     CraneliftBackend::new()
         .compile_module(instrumented.as_module(), BuildMode::Release, TraceMode::Off)
         .expect("compile instrumented Vec::sort wrapper");
+}
+
+#[test]
+fn remaining_map_and_string_helpers_forward_operands_to_cost_adapters() {
+    for (symbol, adapter, args, ty) in [
+        (
+            "__vow_map_get",
+            "__vow_perf_count_map_get",
+            vec![InstId(1), InstId(2)],
+            Ty::Ptr,
+        ),
+        (
+            "__vow_map_insert",
+            "__vow_perf_count_map_insert",
+            vec![InstId(1), InstId(2), InstId(2)],
+            Ty::Unit,
+        ),
+        (
+            "__vow_map_remove",
+            "__vow_perf_count_map_remove",
+            vec![InstId(1), InstId(2)],
+            Ty::Unit,
+        ),
+        (
+            "__vow_string_eq",
+            "__vow_perf_count_string_eq",
+            vec![InstId(1), InstId(1)],
+            Ty::Bool,
+        ),
+    ] {
+        let mut source = vec_sort_module();
+        let helper = &mut source.functions[0].blocks[0].insts[3];
+        helper.data = InstData::CallExtern(symbol.into());
+        helper.args = args.clone();
+        helper.ty = ty;
+
+        let instrumented = instrument_module(&source).expect("instrument catalogued helper");
+        let insts = &instrumented.as_module().functions[0].blocks[0].insts;
+        let pair = insts
+            .windows(2)
+            .find(|pair| pair[1].data == InstData::CallExtern(symbol.into()))
+            .expect("helper call");
+        assert_eq!(pair[0].data, InstData::CallExtern(adapter.into()));
+        assert_eq!(pair[0].args, args, "{symbol} adapter arguments");
+        assert!(validate(instrumented.as_module()).is_ok(), "{symbol} IR");
+        CraneliftBackend::new()
+            .compile_module(instrumented.as_module(), BuildMode::Release, TraceMode::Off)
+            .unwrap_or_else(|error| panic!("{symbol} codegen: {error}"));
+    }
+}
+
+#[test]
+fn uncataloged_size_dependent_helper_keeps_plain_counter() {
+    let mut source = vec_sort_module();
+    let helper = &mut source.functions[0].blocks[0].insts[3];
+    helper.data = InstData::CallExtern("__vow_string_contains".into());
+
+    // __vow_string_contains scans its haystack, is size-dependent, and is
+    // deliberately outside COST_ADAPTERS for now. Falling back to the plain
+    // counter undercounts the scan, so the verdict layer must treat such
+    // counts as unverified; this pins the fallback shape it will see.
+    let instrumented = instrument_module(&source).expect("instrument uncataloged helper");
+    let instructions = &instrumented.as_module().functions[0].blocks[0].insts;
+    let extern_calls = extern_calls(instructions);
+
+    assert_eq!(
+        extern_calls,
+        vec![
+            ("__vow_perf_count", &[] as &[InstId]),
+            ("__vow_perf_count_vec_sort", &[InstId(0)]),
+            ("__vow_vec_sort", &[InstId(0)]),
+            ("__vow_perf_count", &[]),
+            ("__vow_perf_count", &[]),
+            ("__vow_string_contains", &[InstId(1), InstId(2)]),
+            ("__vow_perf_count", &[]),
+        ],
+        "an uncataloged size-dependent helper must keep the operand-free plain counter"
+    );
+    assert!(
+        validate(instrumented.as_module()).is_ok(),
+        "instrumented IR with uncataloged helper must remain valid"
+    );
 }
 
 #[test]

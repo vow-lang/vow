@@ -2968,6 +2968,16 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_perf_count_vec_sort" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
         }
+        // Cost adapters forward the helper's operands and return nothing, so
+        // derive their ABI from the helper's own signature instead of keeping
+        // a parallel parameter list in sync with the helper arms above.
+        s if s.starts_with("__vow_perf_count_") => {
+            sig.params = make_extern_sig(
+                &format!("__vow_{}", &s["__vow_perf_count_".len()..]),
+                obj_module,
+            )
+            .params;
+        }
         // Zero-arg, zero-return runtime aborts and hooks. Must match
         // vow-clif-shim/src/lib.rs and the vow-runtime definitions.
         "__vow_unwrap_panic"
@@ -3530,6 +3540,21 @@ mod tests {
         // The adapter is handed the sort call's own operands, so its parameter
         // list must stay identical to `__vow_vec_sort`'s.
         assert_eq!(sig.params, extern_sig("__vow_vec_sort").params);
+    }
+
+    #[test]
+    fn perf_map_and_string_cost_externs_match_helper_operands() {
+        for (adapter, helper) in [
+            ("__vow_perf_count_map_contains", "__vow_map_contains"),
+            ("__vow_perf_count_map_get", "__vow_map_get"),
+            ("__vow_perf_count_map_insert", "__vow_map_insert"),
+            ("__vow_perf_count_map_remove", "__vow_map_remove"),
+            ("__vow_perf_count_string_eq", "__vow_string_eq"),
+        ] {
+            let sig = extern_sig(adapter);
+            assert_eq!(sig.params, extern_sig(helper).params, "{adapter}");
+            assert!(sig.returns.is_empty(), "{adapter}");
+        }
     }
 
     #[test]

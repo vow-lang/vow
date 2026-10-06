@@ -15,22 +15,48 @@ const COUNTER_SYMBOL: &str = "__vow_perf_count";
 /// `operands` is the helper's IR operand count. Codegen may prepend a hidden
 /// arena argument when it routes the helper, so the helper's ABI arity can
 /// exceed this. The adapter call is never routed and receives the helper's IR
-/// operands unchanged, so the adapter's parameter list must mirror the helper's
-/// *unrouted* signature. Adding a row here also requires the adapter's
-/// `extern "C"` definition in `vow-runtime` and a matching arm in both
-/// `make_extern_sig` implementations (`vow-codegen` and `vow-clif-shim`); a row
-/// on its own will not link. See #486.
+/// operands unchanged. Both `make_extern_sig` implementations (`vow-codegen`
+/// and `vow-clif-shim`) derive the adapter's parameter list from the helper's
+/// own *unrouted* signature, so adding a row only requires the adapter's
+/// `extern "C"` definition in `vow-runtime`. See #486.
 struct CostAdapter {
     helper: &'static str,
     adapter: &'static str,
     operands: usize,
 }
 
-const COST_ADAPTERS: &[CostAdapter] = &[CostAdapter {
-    helper: "__vow_vec_sort",
-    adapter: "__vow_perf_count_vec_sort",
-    operands: 1,
-}];
+const COST_ADAPTERS: &[CostAdapter] = &[
+    CostAdapter {
+        helper: "__vow_vec_sort",
+        adapter: "__vow_perf_count_vec_sort",
+        operands: 1,
+    },
+    CostAdapter {
+        helper: "__vow_map_contains",
+        adapter: "__vow_perf_count_map_contains",
+        operands: 2,
+    },
+    CostAdapter {
+        helper: "__vow_map_get",
+        adapter: "__vow_perf_count_map_get",
+        operands: 2,
+    },
+    CostAdapter {
+        helper: "__vow_map_insert",
+        adapter: "__vow_perf_count_map_insert",
+        operands: 3,
+    },
+    CostAdapter {
+        helper: "__vow_map_remove",
+        adapter: "__vow_perf_count_map_remove",
+        operands: 2,
+    },
+    CostAdapter {
+        helper: "__vow_string_eq",
+        adapter: "__vow_perf_count_string_eq",
+        operands: 2,
+    },
+];
 
 /// A cloned IR module containing operation-counter calls.
 ///
@@ -101,9 +127,9 @@ impl std::error::Error for InstrumentationError {}
 /// helper's cost adapter, which receives the original operands; every other
 /// executable instruction uses the one-operation counter.
 ///
-/// An uncatalogued size-dependent helper still counts as one operation, so a
+/// An uncataloged size-dependent helper still counts as one operation, so a
 /// performance verdict built on these counts must fail closed as unverified
-/// when it reaches one. Completing the catalogue is tracked by #486.
+/// when it reaches one.
 ///
 /// A catalogued helper whose operand list no longer matches its cost adapter
 /// is an error rather than a degraded count: charging the one-operation counter
@@ -175,9 +201,8 @@ fn counter_for(
             .find(|entry| entry.helper == symbol.as_str()),
         _ => None,
     };
-    // Charges one operation for anything uncatalogued, including a
-    // size-dependent helper such as `__vow_map_contains`; see
-    // `instrument_module` and #486.
+    // Charges one operation for anything uncataloged. The future verdict
+    // layer must reject uncataloged size-dependent helpers as unverified.
     let Some(entry) = entry else {
         return Ok((COUNTER_SYMBOL, vec![]));
     };

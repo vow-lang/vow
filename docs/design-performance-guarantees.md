@@ -452,6 +452,13 @@ the caller-side operation plus a saturating synthetic cost with the helper's
 asymptotic growth. `__vow_vec_sort`, for example, is preceded by
 `__vow_perf_count_vec_sort(vec)`, which adds `1 + n * (2 + ceil(log2(n)))` for
 the call, input copy, sort, and output pushes.
+The first helper catalog also covers `__vow_map_contains`, `get`, and `remove`
+with `1 + map.len()`; `__vow_map_insert` with `1 + 2 * map.len()` to include a
+possible buffer copy on growth; and `__vow_string_eq` with `1 + a.len()` when
+the lengths match (otherwise `1`, because the helper returns before comparing
+bytes). These costs saturate at `u64::MAX`. The adapter sees the helper's
+original IR operands before codegen adds any hidden arena argument. Both the
+Rust backend and self-hosted Cranelift shim declare matching adapter ABIs.
 The synthetic unit is intended for growth classification rather than elapsed
 time or an exact machine-instruction total. Charging once at the call site also
 avoids atomic counter traffic inside every sort comparison. The cost is a pure
@@ -460,7 +467,11 @@ distinguish best-case from worst-case inputs *inside* a catalogued helper; an
 adapter must therefore state the helper's worst-case growth, never its average
 case. A future performance verdict must fail closed as unverified when it
 reaches a size-dependent helper without a catalogued adapter; completing that
-broader helper catalog is tracked by #486.
+broader catalog, including `__vow_btreemap_*` and multi-length string helpers,
+remains follow-up work. The current regression compiles an instrumented IR
+artifact, runs real map lookups at increasing sizes, and checks the measured
+counts through `vow_perf::analyze`; the source-level `complexity:` clause and
+`vowc perf` CLI are separate roadmap work.
 
 ### CLI Integration
 

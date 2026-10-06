@@ -321,6 +321,47 @@ pub unsafe extern "C" fn __vow_perf_count_vec_sort(vec: *const u8) {
     perf_operation_count_add(cost);
 }
 
+// HashMap uses a linear scan. Charge the full length even when the key is
+// found early, since complexity declarations cover the worst case. An insert
+// can additionally copy the whole buffer when it grows.
+unsafe fn perf_map_cost(map: *const u8, scan_multiplier: u64) {
+    let len = u64::try_from(unsafe { __vow_map_len(map) }).unwrap_or(u64::MAX);
+    perf_operation_count_add(len.saturating_mul(scan_multiplier).saturating_add(1));
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_perf_count_map_contains(map: *const u8, _key: i64) {
+    unsafe { perf_map_cost(map, 1) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_perf_count_map_get(map: *const u8, _key: i64) {
+    unsafe { perf_map_cost(map, 1) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_perf_count_map_insert(map: *const u8, _key: i64, _value: i64) {
+    unsafe { perf_map_cost(map, 2) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_perf_count_map_remove(map: *const u8, _key: i64) {
+    unsafe { perf_map_cost(map, 1) };
+}
+
+/// Equality can compare every byte only when the lengths match.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_perf_count_string_eq(a: *const u8, b: *const u8) {
+    let a_len = unsafe { __vow_string_len(a) };
+    let b_len = unsafe { __vow_string_len(b) };
+    let bytes = if a_len == b_len {
+        u64::try_from(a_len).unwrap_or(u64::MAX)
+    } else {
+        0
+    };
+    perf_operation_count_add(bytes.saturating_add(1));
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_perf_counter_reset() {
     PERF_OPERATION_COUNT.store(0, Ordering::Relaxed);
@@ -4950,7 +4991,7 @@ mod tests {
     // Every counter case shares the process-global PERF_OPERATION_COUNT, so they
     // stay in one test rather than racing across cargo's parallel test threads.
     #[test]
-    fn performance_operation_counter_attributes_vec_sort_work_and_saturates() {
+    fn performance_operation_counter_attributes_helper_work_and_saturates() {
         __vow_perf_counter_reset();
         __vow_perf_count();
         __vow_perf_count();
@@ -4972,10 +5013,54 @@ mod tests {
         // n = 5 charges 5 * (3 + 2) + 1, not the floor model's 5 * (2 + 2) + 1.
         assert_eq!(vec_sort_cost(5), 26);
 
+        let map = VowMap {
+            len: 4,
+            cap: 4,
+            ..make_rodata_map()
+        };
+        let map_ptr = &raw const map as *const u8;
+        __vow_perf_counter_reset();
+        unsafe { __vow_perf_count_map_contains(map_ptr, -1) };
+        assert_eq!(__vow_perf_counter_read(), 5);
+        __vow_perf_counter_reset();
+        unsafe { __vow_perf_count_map_get(map_ptr, -1) };
+        assert_eq!(__vow_perf_counter_read(), 5);
+        __vow_perf_counter_reset();
+        unsafe { __vow_perf_count_map_remove(map_ptr, -1) };
+        assert_eq!(__vow_perf_counter_read(), 5);
+        __vow_perf_counter_reset();
+        unsafe { __vow_perf_count_map_insert(map_ptr, -1, 0) };
+        assert_eq!(
+            __vow_perf_counter_read(),
+            9,
+            "scan plus possible buffer copy"
+        );
+
+        let a = borrowed_vow_string("abcd");
+        let b = borrowed_vow_string("abcde");
+        __vow_perf_counter_reset();
+        unsafe { __vow_perf_count_string_eq(&raw const a as *const u8, &raw const a as *const u8) };
+        assert_eq!(__vow_perf_counter_read(), 5);
+        __vow_perf_counter_reset();
+        unsafe { __vow_perf_count_string_eq(&raw const a as *const u8, &raw const b as *const u8) };
+        assert_eq!(
+            __vow_perf_counter_read(),
+            1,
+            "unequal lengths return before byte scan"
+        );
+
         #[cfg(target_pointer_width = "64")]
         {
             assert_eq!(vec_sort_cost(usize::MAX), u64::MAX);
             __vow_perf_count();
+            assert_eq!(__vow_perf_counter_read(), u64::MAX);
+
+            let huge_map = VowMap {
+                len: usize::MAX,
+                ..map
+            };
+            __vow_perf_counter_reset();
+            unsafe { __vow_perf_count_map_insert(&raw const huge_map as *const u8, 0, 0) };
             assert_eq!(__vow_perf_counter_read(), u64::MAX);
         }
 
