@@ -8,7 +8,7 @@ use vow_syntax::ast::{
 use vow_syntax::span::Span;
 
 use crate::env::{EnumInfo, FnSig, MutStatus, StructInfo, TypeEnv, VariantInfo, VariantKind};
-use crate::types::Ty;
+use crate::types::{NominalKind, Ty};
 
 /// Set of expression addresses (`*const Expr as usize`) whose resolved type is `Ty::Str`.
 pub type StringExprSet = HashSet<usize>;
@@ -240,12 +240,9 @@ fn is_flat_slot_ty(ty: &Ty) -> bool {
 }
 
 fn is_flat_vec_ty(ty: &Ty) -> bool {
-    match ty {
-        Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Struct(name) if name == "Vec") => {
-            args.first().is_some_and(is_flat_slot_ty)
-        }
-        _ => false,
-    }
+    ty.applied_args(NominalKind::Struct, "Vec")
+        .and_then(|args| args.first())
+        .is_some_and(is_flat_slot_ty)
 }
 
 fn is_supported_pin_ty(ty: &Ty) -> bool {
@@ -310,31 +307,35 @@ fn default_literal_integer_types(ty: &Ty) -> Ty {
 /// An argument is accepted when it assignment-coerces to the expected type,
 /// so unsuffixed integer literals still fit and `Never` never cascades.
 fn method_argument_expectations(receiver: &Ty, method: &str) -> Vec<Ty> {
-    match receiver {
-        Ty::Str => match method {
+    if *receiver == Ty::Str {
+        return match method {
             "push_str" | "eq" | "contains" => vec![Ty::Str],
             "byte_at" => vec![Ty::U64],
             "push_byte" => vec![Ty::U8],
             "substring" => vec![Ty::U64, Ty::U64],
             _ => vec![],
-        },
-        Ty::Applied(base, args) => match base.as_ref() {
-            Ty::Struct(name) if name == "Vec" => match method {
-                "push" => args.first().cloned().into_iter().collect(),
-                "truncate" => vec![Ty::U64],
-                _ => vec![],
-            },
-            Ty::Struct(name) if name == "HashMap" || name == "BTreeMap" => match method {
-                "insert" => args.iter().take(2).cloned().collect(),
-                "get" | "contains" | "contains_key" | "remove" => {
-                    args.first().cloned().into_iter().collect()
-                }
-                _ => vec![],
-            },
-            _ => vec![],
-        },
-        _ => vec![],
+        };
     }
+    if let Some(args) = receiver.applied_args(NominalKind::Struct, "Vec") {
+        return match method {
+            "push" => args.first().cloned().into_iter().collect(),
+            "truncate" => vec![Ty::U64],
+            _ => vec![],
+        };
+    }
+    if let Some(args) = receiver
+        .applied_args(NominalKind::Struct, "HashMap")
+        .or_else(|| receiver.applied_args(NominalKind::Struct, "BTreeMap"))
+    {
+        return match method {
+            "insert" => args.iter().take(2).cloned().collect(),
+            "get" | "contains" | "contains_key" | "remove" => {
+                args.first().cloned().into_iter().collect()
+            }
+            _ => vec![],
+        };
+    }
+    vec![]
 }
 
 /// `HashMap` keys are stored and compared as one machine word, so only types
@@ -376,8 +377,8 @@ fn map_value_supported(value: &Ty) -> bool {
 /// `Checker`.
 fn method_result_type(receiver: &Ty, method: &str) -> Option<Ty> {
     let option_of = |inner: Ty| Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![inner]);
-    match receiver {
-        Ty::Str => match method {
+    if *receiver == Ty::Str {
+        return match method {
             "len" => Some(Ty::U64),
             "byte_at" => Some(Ty::I64),
             "push_str" | "clear" | "push_byte" => Some(Ty::Unit),
@@ -386,47 +387,51 @@ fn method_result_type(receiver: &Ty, method: &str) -> Option<Ty> {
             "parse_i64" => Some(option_of(Ty::I64)),
             "parse_u64" => Some(option_of(Ty::U64)),
             _ => None,
-        },
-        Ty::Applied(base, args) => match base.as_ref() {
-            Ty::Struct(name) if name == "Vec" => match method {
-                "len" => Some(Ty::U64),
-                "push" | "pop" | "clear" | "truncate" => Some(Ty::Unit),
-                _ => None,
-            },
-            Ty::Struct(name) if name == "HashMap" => {
-                let value_ty = args.get(1).cloned().unwrap_or(Ty::I64);
-                match method {
-                    "len" => Some(Ty::U64),
-                    "insert" | "remove" => Some(Ty::Unit),
-                    "get" => Some(option_of(value_ty)),
-                    "contains_key" => Some(Ty::Bool),
-                    _ => None,
-                }
-            }
-            Ty::Struct(name) if name == "BTreeMap" => {
-                let value_ty = args.get(1).cloned().unwrap_or(Ty::I64);
-                match method {
-                    "len" => Some(Ty::U64),
-                    "insert" | "get" => Some(option_of(value_ty)),
-                    "contains" => Some(Ty::Bool),
-                    _ => None,
-                }
-            }
-            Ty::Enum(name) if name == "Option" || name == "Result" => match method {
-                "unwrap" => Some(args.first().cloned().unwrap_or(Ty::Unit)),
-                _ => None,
-            },
-            _ => None,
-        },
-        _ => None,
+        };
     }
+    if receiver.applied_args(NominalKind::Struct, "Vec").is_some() {
+        return match method {
+            "len" => Some(Ty::U64),
+            "push" | "pop" | "clear" | "truncate" => Some(Ty::Unit),
+            _ => None,
+        };
+    }
+    if let Some(args) = receiver.applied_args(NominalKind::Struct, "HashMap") {
+        let value_ty = args.get(1).cloned().unwrap_or(Ty::I64);
+        return match method {
+            "len" => Some(Ty::U64),
+            "insert" | "remove" => Some(Ty::Unit),
+            "get" => Some(option_of(value_ty)),
+            "contains_key" => Some(Ty::Bool),
+            _ => None,
+        };
+    }
+    if let Some(args) = receiver.applied_args(NominalKind::Struct, "BTreeMap") {
+        let value_ty = args.get(1).cloned().unwrap_or(Ty::I64);
+        return match method {
+            "len" => Some(Ty::U64),
+            "insert" | "get" => Some(option_of(value_ty)),
+            "contains" => Some(Ty::Bool),
+            _ => None,
+        };
+    }
+    if let Some(args) = receiver
+        .applied_args(NominalKind::Enum, "Option")
+        .or_else(|| receiver.applied_args(NominalKind::Enum, "Result"))
+    {
+        return match method {
+            "unwrap" => Some(args.first().cloned().unwrap_or(Ty::Unit)),
+            _ => None,
+        };
+    }
+    None
 }
 
 /// The builtin method names a receiver exposes, used to build the
 /// "unknown method" hint. Pure sibling of `method_result_type`.
 fn builtin_method_names(receiver: &Ty) -> &'static [&'static str] {
-    match receiver {
-        Ty::Str => &[
+    if *receiver == Ty::Str {
+        return &[
             "len",
             "push_str",
             "eq",
@@ -437,18 +442,29 @@ fn builtin_method_names(receiver: &Ty) -> &'static [&'static str] {
             "parse_i64",
             "parse_u64",
             "clear",
-        ],
-        Ty::Applied(base, _) => match base.as_ref() {
-            Ty::Struct(name) if name == "Vec" => &["len", "push", "pop", "clear", "truncate"],
-            Ty::Struct(name) if name == "HashMap" => {
-                &["len", "insert", "get", "contains_key", "remove"]
-            }
-            Ty::Struct(name) if name == "BTreeMap" => &["len", "insert", "get", "contains"],
-            Ty::Enum(name) if name == "Option" || name == "Result" => &["unwrap"],
-            _ => &[],
-        },
-        _ => &[],
+        ];
     }
+    if receiver.applied_args(NominalKind::Struct, "Vec").is_some() {
+        return &["len", "push", "pop", "clear", "truncate"];
+    }
+    if receiver
+        .applied_args(NominalKind::Struct, "HashMap")
+        .is_some()
+    {
+        return &["len", "insert", "get", "contains_key", "remove"];
+    }
+    if receiver
+        .applied_args(NominalKind::Struct, "BTreeMap")
+        .is_some()
+    {
+        return &["len", "insert", "get", "contains"];
+    }
+    if receiver.applied_args(NominalKind::Enum, "Option").is_some()
+        || receiver.applied_args(NominalKind::Enum, "Result").is_some()
+    {
+        return &["unwrap"];
+    }
+    &[]
 }
 
 fn can_assignment_coerce(from: &Ty, to: &Ty) -> bool {
@@ -729,23 +745,22 @@ enum QuestionReject {
 /// return-type cross-check) before `Result`, then the unreachable `Never`
 /// short-circuit, then the catch-all rejection.
 fn question_verdict(inner_ty: &Ty, return_ty: &Ty) -> Result<Ty, QuestionReject> {
-    match inner_ty {
-        Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option") => {
-            let returns_option = matches!(
-                return_ty,
-                Ty::Applied(ret_base, _) if matches!(ret_base.as_ref(), Ty::Enum(n) if n == "Option")
-            );
-            if !returns_option {
-                return Err(QuestionReject::OptionNeedsOptionReturn);
-            }
-            Ok(args.first().cloned().unwrap_or(Ty::Unit))
+    if let Some(args) = inner_ty.applied_args(NominalKind::Enum, "Option") {
+        if return_ty
+            .applied_args(NominalKind::Enum, "Option")
+            .is_none()
+        {
+            return Err(QuestionReject::OptionNeedsOptionReturn);
         }
-        Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Result") => {
-            Err(QuestionReject::ResultNotLowered)
+        Ok(args.first().cloned().unwrap_or(Ty::Unit))
+    } else if inner_ty.applied_args(NominalKind::Enum, "Result").is_some() {
+        Err(QuestionReject::ResultNotLowered)
+    } else {
+        match inner_ty {
+            Ty::Never => Ok(Ty::Never),
+            Ty::Unknown => Ok(Ty::Unknown),
+            _ => Err(QuestionReject::NotTryable),
         }
-        Ty::Never => Ok(Ty::Never),
-        Ty::Unknown => Ok(Ty::Unknown),
-        _ => Err(QuestionReject::NotTryable),
     }
 }
 
@@ -2778,14 +2793,14 @@ impl<'e> Checker<'e> {
                         vec![hint],
                     );
                 }
-                match &base_ty {
-                    Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Struct(n) if n == "Vec") => {
-                        args.first().cloned().unwrap_or(Ty::Unit)
-                    }
-                    Ty::Unknown => Ty::Unknown,
-                    Ty::Never if self.is_diverging_never(base, &base_ty) => Ty::Never,
-                    _ => {
-                        self.emit_error_with_hints(
+                if let Some(args) = base_ty.applied_args(NominalKind::Struct, "Vec") {
+                    args.first().cloned().unwrap_or(Ty::Unit)
+                } else {
+                    match &base_ty {
+                        Ty::Unknown => Ty::Unknown,
+                        Ty::Never if self.is_diverging_never(base, &base_ty) => Ty::Never,
+                        _ => {
+                            self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
                             format!(
                                 "index operation on non-indexable type `{}`",
@@ -2797,7 +2812,8 @@ impl<'e> Checker<'e> {
                                     .to_string(),
                             ],
                         );
-                        Ty::Unknown
+                            Ty::Unknown
+                        }
                     }
                 }
             }
@@ -3732,16 +3748,14 @@ impl<'e> Checker<'e> {
     // instead of silently comparing by pointer, duplicating a linear obligation, or
     // truncating. Non-recursive: callers own the recursion.
     fn check_map_slot_types(&mut self, ty: &Ty, span: vow_syntax::span::Span) {
-        let Ty::Applied(base, args) = ty else {
-            return;
-        };
-        let Ty::Struct(map_name) = base.as_ref() else {
+        let (map_name, args) = if let Some(args) = ty.applied_args(NominalKind::Struct, "HashMap") {
+            ("HashMap", args)
+        } else if let Some(args) = ty.applied_args(NominalKind::Struct, "BTreeMap") {
+            ("BTreeMap", args)
+        } else {
             return;
         };
         let is_btree = map_name == "BTreeMap";
-        if map_name != "HashMap" && !is_btree {
-            return;
-        }
         if let Some(key_ty) = args.first() {
             if is_btree && !matches!(key_ty, Ty::I64 | Ty::Never | Ty::Unknown) {
                 self.emit_error(
@@ -3848,13 +3862,12 @@ impl<'e> Checker<'e> {
     // Applies the per-collection rules to one resolved `Vec`/`HashMap`/`BTreeMap`
     // type. Non-recursive: `check_written_ty` owns the recursion.
     fn check_collection_slots(&mut self, ty: &Ty, span: vow_syntax::span::Span) {
-        match ty {
-            Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Struct(n) if n == "Vec") => {
-                if let Some(elem_ty) = args.first() {
-                    self.check_vec_element_ty(elem_ty, span);
-                }
+        if let Some(args) = ty.applied_args(NominalKind::Struct, "Vec") {
+            if let Some(elem_ty) = args.first() {
+                self.check_vec_element_ty(elem_ty, span);
             }
-            _ => self.check_map_slot_types(ty, span),
+        } else {
+            self.check_map_slot_types(ty, span);
         }
     }
 
