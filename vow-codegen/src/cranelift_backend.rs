@@ -2968,17 +2968,15 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_perf_count_vec_sort" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
         }
-        "__vow_perf_count_map_contains"
-        | "__vow_perf_count_map_get"
-        | "__vow_perf_count_map_remove"
-        | "__vow_perf_count_string_eq" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-        }
-        "__vow_perf_count_map_insert" => {
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
+        // Cost adapters forward the helper's operands and return nothing, so
+        // derive their ABI from the helper's own signature instead of keeping
+        // a parallel parameter list in sync with the helper arms above.
+        s if s.starts_with("__vow_perf_count_") => {
+            sig.params = make_extern_sig(
+                &format!("__vow_{}", &s["__vow_perf_count_".len()..]),
+                obj_module,
+            )
+            .params;
         }
         // Zero-arg, zero-return runtime aborts and hooks. Must match
         // vow-clif-shim/src/lib.rs and the vow-runtime definitions.
