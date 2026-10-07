@@ -1,0 +1,71 @@
+// TEST: stdout "1\n1\n1\n1\n1\n1\n1\n1\n1\n"
+module I128U128MergeWidth
+
+// If-expression-as-value: a bare-literal branch (speculatively lowered at
+// i64) merging with a genuinely i128/u128-typed branch must not produce a
+// Cranelift width mismatch between the merge Phi and either branch's
+// Upsilon, and both arms must yield the merged width's values
+// (issue #1061 steps 1 and 4; #980's bug family at 128-bit widths).
+fn id_i128(x: i128) -> i128 {
+    x
+}
+
+fn id_u128(x: u128) -> u128 {
+    x
+}
+
+fn if_i128(x: i128) -> i128 {
+    if x > 0 { 5 } else { x }
+}
+
+fn if_u128(x: u128) -> u128 {
+    if x < 10 { 3 } else { x }
+}
+
+// A bare i128::MIN literal as an if-expression branch: the call-argument
+// position lowers speculatively at i64 and re-narrows at the I128 merge; the
+// annotated let records the wide context before lowering. Both paths must
+// produce the same two's-complement value.
+fn min_branch(x: i128) -> i64 {
+    let m: i128 = -170141183460469231731687303715884105728;
+    let picked = id_i128(if x < 0 { -170141183460469231731687303715884105728 } else { x });
+    let expect: i128 = if x < 0 { -170141183460469231731687303715884105728 } else { x };
+    if picked == expect { 1 } else { 0 }
+}
+
+// A bare u128::MAX literal likewise re-narrows to a genuine U128 constant.
+fn max_branch(x: u128) -> i64 {
+    let picked = id_u128(if x > 10 { 340282366920938463463374607431768211455 } else { x });
+    let expect: u128 = if x > 10 { 340282366920938463463374607431768211455 } else { x };
+    if picked == expect { 1 } else { 0 }
+}
+
+fn main() -> i32 [io] {
+    let i_pos: i64 = if if_i128(42) == 5 { 1 } else { 0 };
+    let i_neg: i64 = if if_i128(-5) == -5 { 1 } else { 0 };
+    let u_lo: i64 = if if_u128(3) == 3 { 1 } else { 0 };
+    let u_hi: i64 = if if_u128(50) == 50 { 1 } else { 0 };
+    print_i64(i_pos);
+    print_str(String::from("\n"));
+    print_i64(i_neg);
+    print_str(String::from("\n"));
+    print_i64(u_lo);
+    print_str(String::from("\n"));
+    print_i64(u_hi);
+    print_str(String::from("\n"));
+    print_i64(min_branch(-5));
+    print_str(String::from("\n"));
+    print_i64(min_branch(7));
+    print_str(String::from("\n"));
+    print_i64(max_branch(50));
+    print_str(String::from("\n"));
+    print_i64(max_branch(3));
+    print_str(String::from("\n"));
+    // An in-range i128 shift keeps its own width through the literal-count
+    // shift path.
+    let shifted: i128 = if_i128(42) << 1;
+    let sh_ok: i64 = if shifted == 10 { 1 } else { 0 };
+    print_i64(sh_ok);
+    print_str(String::from("\n"));
+    0
+}

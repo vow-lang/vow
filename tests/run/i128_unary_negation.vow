@@ -1,0 +1,30 @@
+// TEST: stdout "1\n1\n1\n1\n"
+module I128UnaryNegation
+
+// General unary negation must lower at the operand's own width (I128
+// WrappingSub), not as an I64-result op fed an I128 operand -- the original
+// #526 Cranelift verifier crash shape, kept alive through every other seam
+// of the epic unless fixed explicitly (issue #1061 step 2).
+fn neg(x: i128) -> i128 {
+    -x
+}
+
+fn main() -> i32 [io] {
+    let neg5: i64 = if neg(5) == -5 { 1 } else { 0 };
+    print_i64(neg5);
+    print_str(String::from("\n"));
+    // Negating zero stays zero at width.
+    let neg0: i64 = if neg(0) == 0 { 1 } else { 0 };
+    print_i64(neg0);
+    print_str(String::from("\n"));
+    // Negating i128::MIN wraps in two's complement, matching i32::MIN/i64::MIN.
+    let m: i128 = -170141183460469231731687303715884105728;
+    let min_wraps: i64 = if neg(m) == m { 1 } else { 0 };
+    print_i64(min_wraps);
+    print_str(String::from("\n"));
+    // Double negation round-trips.
+    let double: i64 = if neg(neg(7)) == 7 { 1 } else { 0 };
+    print_i64(double);
+    print_str(String::from("\n"));
+    0
+}

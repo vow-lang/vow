@@ -8123,7 +8123,13 @@ fn f() -> i8 {
 
     #[test]
     fn if_expr_merge_renarrows_marker_branch_to_typed_width() {
-        for (name, expected_ty) in [("u8", Ty::U8), ("i32", Ty::I32), ("u32", Ty::U32)] {
+        for (name, expected_ty) in [
+            ("u8", Ty::U8),
+            ("i32", Ty::I32),
+            ("u32", Ty::U32),
+            ("i128", Ty::I128),
+            ("u128", Ty::U128),
+        ] {
             for marker_in_then in [true, false] {
                 let cond = Expr {
                     kind: ExprKind::BinaryOp {
@@ -8212,6 +8218,57 @@ fn f() -> i8 {
                 }
             }
         }
+    }
+
+    #[test]
+    fn match_arm_marker_renarrows_to_wide_payload_width() {
+        let module = lower_source_to_module(
+            r#"
+module WideMatchMarkerLowering
+
+fn pick(opt: Option<i128>) -> i128 {
+    match opt {
+        Option::Some(v) => v,
+        Option::None => -1,
+    }
+}
+"#,
+            "wide_match_marker.vow",
+        );
+        assert_eq!(module.functions.len(), 1);
+        let all_insts: Vec<&Inst> = module.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .collect();
+        let phis: Vec<_> = all_insts
+            .iter()
+            .filter(|i| i.opcode == Opcode::Phi)
+            .collect();
+        assert_eq!(phis.len(), 1, "expected one match-result Phi");
+        assert_eq!(phis[0].ty, Ty::I128, "match merge width");
+
+        let upsilons: Vec<_> = all_insts
+            .iter()
+            .filter(|i| i.opcode == Opcode::Upsilon && i.data == InstData::PhiTarget(phis[0].id))
+            .collect();
+        assert_eq!(upsilons.len(), 2, "expected two Upsilons feeding the Phi");
+        for up in &upsilons {
+            let producer = all_insts
+                .iter()
+                .find(|i| i.id == up.args[0])
+                .expect("upsilon argument producer");
+            assert_eq!(
+                producer.ty, phis[0].ty,
+                "upsilon argument width must match phi width"
+            );
+        }
+        // The literal-marker arm must re-narrow through a genuine I128
+        // constant, not reuse its speculative I64 value.
+        assert!(
+            all_insts.iter().any(|i| i.opcode == Opcode::ConstI128),
+            "marker arm must re-narrow to a ConstI128"
+        );
     }
 
     #[test]
