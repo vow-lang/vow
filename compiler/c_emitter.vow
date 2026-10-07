@@ -123,6 +123,8 @@ fn is_i32_narrow_intrinsic(name: String) -> bool {
     str_starts_with(name, String::from("__vow_i64_to_i32_"))
     || str_starts_with(name, String::from("__vow_u32_to_i32_"))
     || str_starts_with(name, String::from("__vow_u64_to_i32_"))
+    || str_starts_with(name, String::from("__vow_i128_to_i32_"))
+    || str_starts_with(name, String::from("__vow_u128_to_i32_"))
 }
 
 fn is_i32_numeric_intrinsic(name: String) -> bool {

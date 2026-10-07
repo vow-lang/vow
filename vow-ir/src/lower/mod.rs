@@ -136,6 +136,12 @@ fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "u64_to_i32_try" => Some(("__vow_u64_to_i32_try", Ty::Ptr)),
         "u64_to_i32_wrap" => Some(("__vow_u64_to_i32_wrap", Ty::I32)),
         "u64_to_i32_sat" => Some(("__vow_u64_to_i32_sat", Ty::I32)),
+        "i128_to_i32_try" => Some(("__vow_i128_to_i32_try", Ty::Ptr)),
+        "i128_to_i32_wrap" => Some(("__vow_i128_to_i32_wrap", Ty::I32)),
+        "i128_to_i32_sat" => Some(("__vow_i128_to_i32_sat", Ty::I32)),
+        "u128_to_i32_try" => Some(("__vow_u128_to_i32_try", Ty::Ptr)),
+        "u128_to_i32_wrap" => Some(("__vow_u128_to_i32_wrap", Ty::I32)),
+        "u128_to_i32_sat" => Some(("__vow_u128_to_i32_sat", Ty::I32)),
         "int_to_string" | "i64_to_string" => Some(("__vow_string_from_i64", Ty::Ptr)),
         "uint_to_string" => Some(("__vow_string_from_u64", Ty::Ptr)),
         "vec_sort" => Some(("__vow_vec_sort", Ty::Ptr)),
@@ -176,9 +182,15 @@ fn narrow_intrinsic_target(name: &str) -> Option<Ty> {
     }
     let supported = matches!(
         (source, target),
-        ("i16" | "u16" | "i32" | "u32" | "i64" | "u64", "i8")
-            | ("i32" | "u32" | "i64" | "u64", "i16" | "u16")
-            | ("i64" | "u64", "u32")
+        (
+            "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "i128" | "u128",
+            "i8"
+        ) | (
+            "i32" | "u32" | "i64" | "u64" | "i128" | "u128",
+            "i16" | "u16"
+        ) | ("i64" | "u64" | "i128" | "u128", "u32")
+            | ("i128", "u128")
+            | ("u128", "i128")
     );
     if !supported {
         return None;
@@ -188,6 +200,8 @@ fn narrow_intrinsic_target(name: &str) -> Option<Ty> {
         "i16" => Some(Ty::I16),
         "u16" => Some(Ty::U16),
         "u32" => Some(Ty::U32),
+        "i128" => Some(Ty::I128),
+        "u128" => Some(Ty::U128),
         _ => None,
     }
 }
@@ -242,9 +256,8 @@ fn builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
         | "u16_to_u8_try" | "u32_to_u8_try" | "u64_to_u8_try" | "u128_to_u8_try" => {
             Some(BuiltinResultTag::OptionOf(Ty::U8))
         }
-        "parse_i32" | "i64_to_i32_try" | "u32_to_i32_try" | "u64_to_i32_try" => {
-            Some(BuiltinResultTag::OptionOf(Ty::I32))
-        }
+        "parse_i32" | "i64_to_i32_try" | "u32_to_i32_try" | "u64_to_i32_try"
+        | "i128_to_i32_try" | "u128_to_i32_try" => Some(BuiltinResultTag::OptionOf(Ty::I32)),
         "parse_i64" => Some(BuiltinResultTag::OptionOf(Ty::I64)),
         _ => None,
     }
@@ -5959,16 +5972,24 @@ mod tests {
             ("u32_to_i8_try", Ty::I8),
             ("i64_to_i8_try", Ty::I8),
             ("u64_to_i8_try", Ty::I8),
+            ("i128_to_i8_try", Ty::I8),
+            ("u128_to_i8_try", Ty::I8),
             ("i32_to_i16_try", Ty::I16),
             ("u32_to_i16_try", Ty::I16),
             ("i64_to_i16_try", Ty::I16),
             ("u64_to_i16_try", Ty::I16),
+            ("i128_to_i16_try", Ty::I16),
+            ("u128_to_i16_try", Ty::I16),
             ("i32_to_u16_try", Ty::U16),
             ("u32_to_u16_try", Ty::U16),
             ("i64_to_u16_try", Ty::U16),
             ("u64_to_u16_try", Ty::U16),
+            ("i128_to_u16_try", Ty::U16),
+            ("u128_to_u16_try", Ty::U16),
             ("i64_to_u32_try", Ty::U32),
             ("u64_to_u32_try", Ty::U32),
+            ("i128_to_u32_try", Ty::U32),
+            ("u128_to_u32_try", Ty::U32),
             ("parse_i8", Ty::I8),
             ("parse_i16", Ty::I16),
             ("parse_u16", Ty::U16),
@@ -5987,6 +6008,8 @@ mod tests {
             ("i64_to_i32_try", Ty::I32),
             ("u32_to_i32_try", Ty::I32),
             ("u64_to_i32_try", Ty::I32),
+            ("i128_to_i32_try", Ty::I32),
+            ("u128_to_i32_try", Ty::I32),
         ] {
             assert_eq!(builtin_result_tag(name), Some(OptionOf(ty)), "{name}");
         }
@@ -5994,6 +6017,15 @@ mod tests {
         // narrow_intrinsic_target also parses _wrap/_sat, but only _try returns Option.
         assert_eq!(builtin_result_tag("i16_to_i8_wrap"), None);
         assert_eq!(builtin_result_tag("i32_to_i8_sat"), None);
+        // Same-type pairs are deliberately absent from the supported matrix.
+        assert_eq!(builtin_result_tag("i128_to_i128_try"), None);
+        // Same-width sign-change pairs are wrap/sat-only builtins (no _try is
+        // registered), but the generic _try classifier still maps the name —
+        // unreachable from user code without an env registration.
+        assert_eq!(
+            builtin_result_tag("i128_to_u128_try"),
+            Some(OptionOf(Ty::U128))
+        );
         assert_eq!(builtin_result_tag("definitely_not_a_builtin"), None);
         // process_* ops not covered by the StringHeap list above are untagged --
         // this is only exercisable through the catalogue now that the legacy
@@ -6321,6 +6353,11 @@ type PairView = PairAlias;
             ("i32_to_i16_sat", "__vow_i32_to_i16_sat", Ty::I16),
             ("u64_to_u16_try", "__vow_u64_to_u16_try", Ty::Ptr),
             ("i64_to_u32_wrap", "__vow_i64_to_u32_wrap", Ty::U32),
+            ("i128_to_i8_try", "__vow_i128_to_i8_try", Ty::Ptr),
+            ("i128_to_i32_try", "__vow_i128_to_i32_try", Ty::Ptr),
+            ("u128_to_i32_sat", "__vow_u128_to_i32_sat", Ty::I32),
+            ("i128_to_u128_wrap", "__vow_i128_to_u128_wrap", Ty::U128),
+            ("u128_to_i128_sat", "__vow_u128_to_i128_sat", Ty::I128),
         ];
         for (name, symbol, ty) in cases {
             assert_eq!(vow_builtin_to_runtime(name), Some((symbol.to_string(), ty)));
@@ -6330,6 +6367,8 @@ type PairView = PairAlias;
             "i8_to_i8_try",
             "i16_to_u32_wrap",
             "i64_to_i8_checked",
+            "i128_to_i128_try",
+            "u128_to_u64_wrap",
             "not_a_conversion",
         ] {
             assert_eq!(narrow_intrinsic_target(name), None, "{name}");

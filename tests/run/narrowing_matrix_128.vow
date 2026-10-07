@@ -1,0 +1,52 @@
+// TEST: stdout "127\n127\n0\n4464\n32767\n0\n2147483647\n-2147483648\n0\n5\n"
+module NarrowingMatrix128
+
+fn exercise_all_pairs() {
+    let i128_value: i128 = 5;
+    let u128_value: u128 = 5;
+
+    i128_to_i8_try(i128_value); i128_to_i8_wrap(i128_value); i128_to_i8_sat(i128_value);
+    u128_to_i8_try(u128_value); u128_to_i8_wrap(u128_value); u128_to_i8_sat(u128_value);
+
+    i128_to_i16_try(i128_value); i128_to_i16_wrap(i128_value); i128_to_i16_sat(i128_value);
+    u128_to_i16_try(u128_value); u128_to_i16_wrap(u128_value); u128_to_i16_sat(u128_value);
+
+    i128_to_u16_try(i128_value); i128_to_u16_wrap(i128_value); i128_to_u16_sat(i128_value);
+    u128_to_u16_try(u128_value); u128_to_u16_wrap(u128_value); u128_to_u16_sat(u128_value);
+
+    i128_to_u32_try(i128_value); i128_to_u32_wrap(i128_value); i128_to_u32_sat(i128_value);
+    u128_to_u32_try(u128_value); u128_to_u32_wrap(u128_value); u128_to_u32_sat(u128_value);
+
+    i128_to_i32_try(i128_value); i128_to_i32_wrap(i128_value); i128_to_i32_sat(i128_value);
+    u128_to_i32_try(u128_value); u128_to_i32_wrap(u128_value); u128_to_i32_sat(u128_value);
+
+    i128_to_u128_wrap(i128_value); i128_to_u128_sat(i128_value);
+    u128_to_i128_wrap(u128_value); u128_to_i128_sat(u128_value);
+}
+
+fn main() -> i32 [io] {
+    exercise_all_pairs();
+    print_i64(i128_to_i8_sat(200i128) as i64);
+    print_str(String::from("\n"));
+    print_i64(u128_to_i8_sat(300u128) as i64);
+    print_str(String::from("\n"));
+    print_i64(i128_to_u16_sat(-1i128) as i64);
+    print_str(String::from("\n"));
+    print_i64(u128_to_i16_wrap(70000u128) as i64);
+    print_str(String::from("\n"));
+    print_i64(u128_to_i16_sat(70000u128) as i64);
+    print_str(String::from("\n"));
+    print_i64(i128_to_u32_sat(-1i128) as i64);
+    print_str(String::from("\n"));
+    print_i64(u128_to_i32_sat(5000000000u128) as i64);
+    print_str(String::from("\n"));
+    print_i64(i128_to_i32_sat(-5000000000i128) as i64);
+    print_str(String::from("\n"));
+    // The same-width results cannot narrow to i64 via `as`; their values here
+    // are byte-representable, so print them through the u8 intrinsic family.
+    print_i64(u128_to_u8_wrap(i128_to_u128_sat(-1i128) as u128) as i64);
+    print_str(String::from("\n"));
+    print_i64(u128_to_u8_wrap(u128_to_i128_sat(5u128) as u128) as i64);
+    print_str(String::from("\n"));
+    0
+}
