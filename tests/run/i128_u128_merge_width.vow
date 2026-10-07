@@ -1,19 +1,14 @@
 // TEST: stdout "1\n1\n1\n1\n1\n1\n1\n1\n1\n"
 module I128U128MergeWidth
 
-// If-expression-as-value: a bare-literal branch (speculatively lowered at
-// i64) merging with a genuinely i128/u128-typed branch must not produce a
-// Cranelift width mismatch between the merge Phi and either branch's
-// Upsilon, and both arms must yield the merged width's values
-// (issue #1061 steps 1 and 4; #980's bug family at 128-bit widths).
-fn id_i128(x: i128) -> i128 {
-    x
-}
-
-fn id_u128(x: u128) -> u128 {
-    x
-}
-
+// If-expression-as-value: a bare-literal branch merging with a genuinely
+// i128/u128-typed branch must not produce a Cranelift width mismatch between
+// the merge Phi and either branch's Upsilon, and both arms must yield the
+// merged width's values (issue #1061 steps 1 and 4; #980's bug family at
+// 128-bit widths). An unannotated-let init reaches the merge with no
+// recorded wide context: its branches lower speculatively at i64 and are
+// re-narrowed once the merge width is known. Annotated-let inits and
+// return-position shapes record the wide context before lowering.
 fn if_i128(x: i128) -> i128 {
     if x > 0 { 5 } else { x }
 }
@@ -22,20 +17,19 @@ fn if_u128(x: u128) -> u128 {
     if x < 10 { 3 } else { x }
 }
 
-// A bare i128::MIN literal as an if-expression branch: the call-argument
-// position lowers speculatively at i64 and re-narrows at the I128 merge; the
-// annotated let records the wide context before lowering. Both paths must
-// produce the same two's-complement value.
+// A bare i128::MIN literal as an if-expression branch, picked through an
+// unannotated let: the branches lower speculatively at i64 and re-narrow at
+// the I128 merge. The annotated `expect` let records the wide context before
+// lowering. Both paths must agree on the two's-complement value.
 fn min_branch(x: i128) -> i64 {
-    let m: i128 = -170141183460469231731687303715884105728;
-    let picked = id_i128(if x < 0 { -170141183460469231731687303715884105728 } else { x });
+    let picked = if x < 0 { -170141183460469231731687303715884105728 } else { x };
     let expect: i128 = if x < 0 { -170141183460469231731687303715884105728 } else { x };
     if picked == expect { 1 } else { 0 }
 }
 
 // A bare u128::MAX literal likewise re-narrows to a genuine U128 constant.
 fn max_branch(x: u128) -> i64 {
-    let picked = id_u128(if x > 10 { 340282366920938463463374607431768211455 } else { x });
+    let picked = if x > 10 { 340282366920938463463374607431768211455 } else { x };
     let expect: u128 = if x > 10 { 340282366920938463463374607431768211455 } else { x };
     if picked == expect { 1 } else { 0 }
 }
