@@ -332,27 +332,80 @@ fn is_string_model_creator(name: &str) -> bool {
         )
 }
 
-fn vec_model_receiver_arg(name: &str) -> Option<usize> {
-    match name {
-        "__vow_vec_push_val" | "__vow_vec_get_val" | "__vow_vec_len" | "__vow_vec_pop"
-        | "__vow_vec_set_val" => Some(0),
-        "__vow_vec_push_in_arena"
-        | "__vow_vec_push_val_in_arena"
-        | "__vow_vec_reserve_in_arena" => Some(1),
-        _ => None,
-    }
+#[derive(Clone, Copy)]
+enum ModelArgRole {
+    Receiver,
+    SecondString,
+    VecValue,
+    Operand(usize),
 }
 
-/// Argument index of the value being stored into `__vow_vec_t::data[]` for
-/// vec store-ops.  `__vow_vec_get_val` reads from `data[]` into the call's
-/// *result* id; callers handle it via the result id instead and this
-/// function returns `None` for that case.
-fn vec_op_value_arg(name: &str) -> Option<usize> {
-    match name {
-        "__vow_vec_push_val" => Some(1),
-        "__vow_vec_push_val_in_arena" => Some(2),
-        "__vow_vec_set_val" => Some(2),
-        _ => None,
+/// Positions in the runtime call's IR arguments. Logical operands exclude the
+/// opaque arena pointer. Only known collection operations have a layout.
+fn model_arg_index(name: &str, role: ModelArgRole) -> Option<usize> {
+    if !is_known_builtin(name)
+        || !(name.starts_with("__vow_vec_")
+            || name.starts_with("__vow_string_")
+            || name.starts_with("__vow_map_"))
+    {
+        return None;
+    }
+    let offset = usize::from(name.ends_with("_in_arena"));
+    match role {
+        ModelArgRole::Operand(index) => Some(offset + index),
+        ModelArgRole::Receiver => {
+            let has_receiver = matches!(
+                name,
+                "__vow_vec_push_val"
+                    | "__vow_vec_get_val"
+                    | "__vow_vec_len"
+                    | "__vow_vec_pop"
+                    | "__vow_vec_set_val"
+                    | "__vow_vec_push_in_arena"
+                    | "__vow_vec_push_val_in_arena"
+                    | "__vow_vec_reserve_in_arena"
+                    | "__vow_string_push_str_in_arena"
+                    | "__vow_string_push_byte_in_arena"
+                    | "__vow_string_substr_in_arena"
+                    | "__vow_string_substring_in_arena"
+                    | "__vow_string_push_str"
+                    | "__vow_string_push_byte"
+                    | "__vow_string_substr"
+                    | "__vow_string_substring"
+                    | "__vow_string_clone"
+                    | "__vow_string_pin_to_root"
+                    | "__vow_string_len"
+                    | "__vow_string_clear"
+                    | "__vow_string_byte_at"
+                    | "__vow_string_eq"
+                    | "__vow_string_contains"
+                    | "__vow_string_matches_literal_at"
+                    | "__vow_string_print"
+                    | "__vow_string_clone_in_arena"
+                    | "__vow_map_insert_in_arena"
+                    | "__vow_map_remove_in_arena"
+                    | "__vow_map_get_in_arena"
+                    | "__vow_map_insert"
+                    | "__vow_map_remove"
+                    | "__vow_map_get"
+                    | "__vow_map_contains"
+                    | "__vow_map_len"
+            );
+            has_receiver.then_some(offset)
+        }
+        ModelArgRole::SecondString => matches!(
+            name,
+            "__vow_string_push_str_in_arena"
+                | "__vow_string_push_str"
+                | "__vow_string_eq"
+                | "__vow_string_contains"
+        )
+        .then_some(offset + 1),
+        ModelArgRole::VecValue => match name {
+            "__vow_vec_push_val" | "__vow_vec_push_val_in_arena" => Some(offset + 1),
+            "__vow_vec_set_val" => Some(2),
+            _ => None,
+        },
     }
 }
 
@@ -418,7 +471,7 @@ fn vec_op_carries_non_scalar(
             option_vars,
         );
     }
-    if let Some(arg_idx) = vec_op_value_arg(name)
+    if let Some(arg_idx) = model_arg_index(name, ModelArgRole::VecValue)
         && let Some(arg) = inst.args.get(arg_idx)
     {
         return is_structured_value_id(
@@ -433,51 +486,8 @@ fn vec_op_carries_non_scalar(
     false
 }
 
-fn string_model_receiver_arg(name: &str) -> Option<usize> {
-    match name {
-        "__vow_string_push_str_in_arena"
-        | "__vow_string_push_byte_in_arena"
-        | "__vow_string_substr_in_arena"
-        | "__vow_string_substring_in_arena" => Some(1),
-        "__vow_string_push_str"
-        | "__vow_string_push_byte"
-        | "__vow_string_substr"
-        | "__vow_string_substring"
-        | "__vow_string_clone"
-        | "__vow_string_pin_to_root"
-        | "__vow_string_len"
-        | "__vow_string_clear"
-        | "__vow_string_byte_at"
-        | "__vow_string_eq"
-        | "__vow_string_contains"
-        | "__vow_string_matches_literal_at"
-        | "__vow_string_print" => Some(0),
-        "__vow_string_clone_in_arena" => Some(1),
-        _ => None,
-    }
-}
-
-fn string_model_extra_arg(name: &str) -> Option<usize> {
-    match name {
-        "__vow_string_push_str_in_arena" => Some(2),
-        "__vow_string_push_str" | "__vow_string_eq" | "__vow_string_contains" => Some(1),
-        _ => None,
-    }
-}
-
 fn is_map_model_creator(name: &str) -> bool {
     matches!(name, "__vow_map_new" | "__vow_map_new_in_arena")
-}
-
-fn map_model_receiver_arg(name: &str) -> Option<usize> {
-    match name {
-        "__vow_map_insert_in_arena" | "__vow_map_remove_in_arena" | "__vow_map_get_in_arena" => {
-            Some(1)
-        }
-        "__vow_map_insert" | "__vow_map_remove" | "__vow_map_get" | "__vow_map_contains"
-        | "__vow_map_len" => Some(0),
-        _ => None,
-    }
 }
 
 fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u32> {
@@ -496,12 +506,11 @@ fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u
                     vars.insert(inst.id.0);
                 }
                 if name.starts_with(prefix) {
-                    let receiver_arg = if prefix == "__vow_vec_" {
-                        vec_model_receiver_arg(name)
-                    } else if prefix == "__vow_string_" {
-                        string_model_receiver_arg(name)
-                    } else if prefix == "__vow_map_" {
-                        map_model_receiver_arg(name)
+                    let receiver_arg = if prefix == "__vow_vec_"
+                        || prefix == "__vow_string_"
+                        || prefix == "__vow_map_"
+                    {
+                        model_arg_index(name, ModelArgRole::Receiver)
                     } else {
                         Some(0)
                     };
@@ -511,7 +520,7 @@ fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u
                         vars.insert(arg.0);
                     }
                     if prefix == "__vow_string_"
-                        && let Some(arg_idx) = string_model_extra_arg(name)
+                        && let Some(arg_idx) = model_arg_index(name, ModelArgRole::SecondString)
                         && let Some(arg) = inst.args.get(arg_idx)
                     {
                         vars.insert(arg.0);
@@ -1519,11 +1528,8 @@ fn emit_inst(
                         out.push_str(&format!("  v{id} = v{source};\n"));
                     }
                     "__vow_vec_push_val" | "__vow_vec_push_val_in_arena" => {
-                        let (vec_arg, val_arg) = if name == "__vow_vec_push_val_in_arena" {
-                            (1, 2)
-                        } else {
-                            (0, 1)
-                        };
+                        let vec_arg = model_arg_index(name, ModelArgRole::Receiver).unwrap();
+                        let val_arg = model_arg_index(name, ModelArgRole::VecValue).unwrap();
                         let vec = inst.args[vec_arg].0;
                         let val = inst.args[val_arg].0;
                         let vec_max = limits.vec_max;
@@ -1533,7 +1539,8 @@ fn emit_inst(
                         ));
                     }
                     "__vow_vec_push_in_arena" => {
-                        let vec = inst.args[1].0;
+                        let vec =
+                            inst.args[model_arg_index(name, ModelArgRole::Receiver).unwrap()].0;
                         let vec_max = limits.vec_max;
                         out.push_str(&format!(
                             "  __ESBMC_assert(v{vec}.len < {vec_max}, \"vec capacity\");\n\
@@ -1588,7 +1595,7 @@ fn emit_inst(
                     "__vow_string_new" | "__vow_string_new_in_arena" => {
                         emit_raw_parts_len(
                             inst,
-                            usize::from(name == "__vow_string_new_in_arena"),
+                            model_arg_index(name, ModelArgRole::Operand(0)).unwrap(),
                             ModelBoundKind::String,
                             limits,
                             inst_by_id,
@@ -1628,11 +1635,7 @@ fn emit_inst(
                     "__vow_string_clone"
                     | "__vow_string_clone_in_arena"
                     | "__vow_string_pin_to_root" => {
-                        let source_arg = if name == "__vow_string_clone_in_arena" {
-                            1
-                        } else {
-                            0
-                        };
+                        let source_arg = model_arg_index(name, ModelArgRole::Operand(0)).unwrap();
                         let source = inst.args[source_arg].0;
                         out.push_str(&format!("  v{id} = v{source};\n"));
                     }
@@ -1650,11 +1653,8 @@ fn emit_inst(
                         emit_nondet_string_len(id, limits.string_max, out);
                     }
                     "__vow_string_push_str" | "__vow_string_push_str_in_arena" => {
-                        let (dest_arg, src_arg) = if name == "__vow_string_push_str_in_arena" {
-                            (1, 2)
-                        } else {
-                            (0, 1)
-                        };
+                        let dest_arg = model_arg_index(name, ModelArgRole::Receiver).unwrap();
+                        let src_arg = model_arg_index(name, ModelArgRole::SecondString).unwrap();
                         let dest = inst.args[dest_arg].0;
                         let src = inst.args[src_arg].0;
                         let string_max = limits.string_max;
@@ -1665,11 +1665,8 @@ fn emit_inst(
                         emit_string_eq_invalidate(dest, eq_pairs, out);
                     }
                     "__vow_string_push_byte" | "__vow_string_push_byte_in_arena" => {
-                        let (s_arg, byte_arg) = if name == "__vow_string_push_byte_in_arena" {
-                            (1, 2)
-                        } else {
-                            (0, 1)
-                        };
+                        let s_arg = model_arg_index(name, ModelArgRole::Operand(0)).unwrap();
+                        let byte_arg = model_arg_index(name, ModelArgRole::Operand(1)).unwrap();
                         let s = inst.args[s_arg].0;
                         let byte = inst.args[byte_arg].0;
                         let string_max = limits.string_max;
@@ -1764,12 +1761,9 @@ fn emit_inst(
                         }
                     }
                     "__vow_string_substr" | "__vow_string_substr_in_arena" => {
-                        let (s_arg, start_arg, len_arg) = if name == "__vow_string_substr_in_arena"
-                        {
-                            (1, 2, 3)
-                        } else {
-                            (0, 1, 2)
-                        };
+                        let s_arg = model_arg_index(name, ModelArgRole::Operand(0)).unwrap();
+                        let start_arg = model_arg_index(name, ModelArgRole::Operand(1)).unwrap();
+                        let len_arg = model_arg_index(name, ModelArgRole::Operand(2)).unwrap();
                         let s = inst.args[s_arg].0;
                         let start = inst.args[start_arg].0;
                         let len = inst.args[len_arg].0;
@@ -1792,12 +1786,9 @@ fn emit_inst(
                         );
                     }
                     "__vow_string_substring" | "__vow_string_substring_in_arena" => {
-                        let (s_arg, start_arg, end_arg) =
-                            if name == "__vow_string_substring_in_arena" {
-                                (1, 2, 3)
-                            } else {
-                                (0, 1, 2)
-                            };
+                        let s_arg = model_arg_index(name, ModelArgRole::Operand(0)).unwrap();
+                        let start_arg = model_arg_index(name, ModelArgRole::Operand(1)).unwrap();
+                        let end_arg = model_arg_index(name, ModelArgRole::Operand(2)).unwrap();
                         let s = inst.args[s_arg].0;
                         let start = inst.args[start_arg].0;
                         let end = inst.args[end_arg].0;
@@ -1881,24 +1872,11 @@ fn emit_inst(
         }
 
         // HashMap operations — modeled as abstract struct with len + keys/vals arrays
-        Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_map_")) =>
-        {
+        Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_map_")) => {
             if let InstData::CallExtern(ref name) = inst.data {
-                // _in_arena variants share their bodies with the root forms;
-                // they accept an extra leading arena pointer that the verifier
-                // C model ignores (arenas are opaque).
-                let arena_offset = if matches!(
-                    name.as_str(),
-                    "__vow_map_new_in_arena"
-                        | "__vow_map_insert_in_arena"
-                        | "__vow_map_remove_in_arena"
-                        | "__vow_map_get_in_arena"
-                ) {
-                    1
-                } else {
-                    0
+                let arg = |i: usize| {
+                    inst.args[model_arg_index(name, ModelArgRole::Operand(i)).unwrap()].0
                 };
-                let arg = |i: usize| inst.args[arena_offset + i].0;
                 match name.as_str() {
                     "__vow_map_new" | "__vow_map_new_in_arena" => {
                         out.push_str(&format!("  v{id}.len = 0;\n"));
@@ -3384,6 +3362,45 @@ mod tests {
         BasicBlock, BlockId, FuncId, InstId, Module, RegionId, RegionSummary, VowEntry, VowId,
     };
     use vow_syntax::span::Span;
+
+    #[test]
+    fn model_arg_index_covers_collection_roles_and_arena_shift() {
+        use ModelArgRole::{Operand, Receiver, SecondString, VecValue};
+
+        assert_eq!(model_arg_index("__vow_vec_push_val", Receiver), Some(0));
+        assert_eq!(
+            model_arg_index("__vow_vec_push_val_in_arena", Receiver),
+            Some(1)
+        );
+        assert_eq!(
+            model_arg_index("__vow_vec_push_val_in_arena", VecValue),
+            Some(2)
+        );
+        assert_eq!(model_arg_index("__vow_vec_set_val", VecValue), Some(2));
+        assert_eq!(model_arg_index("__vow_vec_get_val", VecValue), None);
+        assert_eq!(
+            model_arg_index("__vow_string_push_str", SecondString),
+            Some(1)
+        );
+        assert_eq!(
+            model_arg_index("__vow_string_push_str_in_arena", SecondString),
+            Some(2)
+        );
+        assert_eq!(
+            model_arg_index("__vow_string_substr_in_arena", Operand(2)),
+            Some(3)
+        );
+        assert_eq!(
+            model_arg_index("__vow_map_insert_in_arena", Receiver),
+            Some(1)
+        );
+        assert_eq!(
+            model_arg_index("__vow_map_insert_in_arena", Operand(2)),
+            Some(3)
+        );
+        assert_eq!(model_arg_index("__vow_map_new_in_arena", Receiver), None);
+        assert_eq!(model_arg_index("__vow_unknown_in_arena", Operand(0)), None);
+    }
 
     fn sp() -> Span {
         Span::new(0, 0)

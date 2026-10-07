@@ -253,13 +253,73 @@ fn verifier_c_func_name(f: IrFunction) -> String {
     cemit_str2(String::from("vow_user_fn_"), i64_to_string(f.id))
 }
 
-// Returns the args[] index of the value stored into __vow_vec_t::data[] for
-// vec store-ops. Returns -1 when the op is __vow_vec_get_val (the relevant id
-// is then inst.id, not an arg) or when the op is not one of these.
-fn vec_op_value_arg(name: String) -> i64 {
-    if name == String::from("__vow_vec_push_val") { return 1; }
-    if name == String::from("__vow_vec_push_val_in_arena") { return 2; }
-    if name == String::from("__vow_vec_set_val") { return 2; }
+fn CARG_RECEIVER() -> i64 { 0 }
+fn CARG_SECOND_STRING() -> i64 { 1 }
+fn CARG_VEC_VALUE() -> i64 { 2 }
+fn CARG_OPERAND(index: i64) -> i64 { 3 + index }
+
+// Positions in the runtime call's IR arguments. Logical operands exclude the
+// opaque arena pointer. Only known collection operations have a layout.
+fn model_arg_index(name: String, role: i64) -> i64 {
+    if !is_known_builtin(name)
+        || !(str_starts_with(name, String::from("__vow_vec_"))
+            || str_starts_with(name, String::from("__vow_string_"))
+            || str_starts_with(name, String::from("__vow_map_"))) {
+        return -1;
+    }
+    let offset: i64 = if str_ends_with(name, String::from("_in_arena")) { 1 } else { 0 };
+    if role >= CARG_OPERAND(0) && role <= CARG_OPERAND(3) {
+        return offset + role - CARG_OPERAND(0);
+    }
+    if role == CARG_VEC_VALUE() {
+        if name == String::from("__vow_vec_push_val")
+            || name == String::from("__vow_vec_push_val_in_arena") { return offset + 1; }
+        if name == String::from("__vow_vec_set_val") { return 2; }
+        return -1;
+    }
+    if role == CARG_SECOND_STRING() {
+        if name == String::from("__vow_string_push_str_in_arena")
+            || name == String::from("__vow_string_push_str")
+            || name == String::from("__vow_string_eq")
+            || name == String::from("__vow_string_contains") { return offset + 1; }
+        return -1;
+    }
+    if role == CARG_RECEIVER() {
+        if name == String::from("__vow_vec_push_val")
+            || name == String::from("__vow_vec_get_val")
+            || name == String::from("__vow_vec_len")
+            || name == String::from("__vow_vec_pop")
+            || name == String::from("__vow_vec_set_val")
+            || name == String::from("__vow_vec_push_in_arena")
+            || name == String::from("__vow_vec_push_val_in_arena")
+            || name == String::from("__vow_vec_reserve_in_arena")
+            || name == String::from("__vow_string_push_str_in_arena")
+            || name == String::from("__vow_string_push_byte_in_arena")
+            || name == String::from("__vow_string_substr_in_arena")
+            || name == String::from("__vow_string_substring_in_arena")
+            || name == String::from("__vow_string_push_str")
+            || name == String::from("__vow_string_push_byte")
+            || name == String::from("__vow_string_substr")
+            || name == String::from("__vow_string_substring")
+            || name == String::from("__vow_string_clone")
+            || name == String::from("__vow_string_clone_in_arena")
+            || name == String::from("__vow_string_pin_to_root")
+            || name == String::from("__vow_string_len")
+            || name == String::from("__vow_string_clear")
+            || name == String::from("__vow_string_byte_at")
+            || name == String::from("__vow_string_eq")
+            || name == String::from("__vow_string_contains")
+            || name == String::from("__vow_string_matches_literal_at")
+            || name == String::from("__vow_string_print")
+            || name == String::from("__vow_map_insert_in_arena")
+            || name == String::from("__vow_map_remove_in_arena")
+            || name == String::from("__vow_map_get_in_arena")
+            || name == String::from("__vow_map_insert")
+            || name == String::from("__vow_map_remove")
+            || name == String::from("__vow_map_get")
+            || name == String::from("__vow_map_contains")
+            || name == String::from("__vow_map_len") { return offset; }
+    }
     -1
 }
 
@@ -295,7 +355,7 @@ fn vec_op_carries_non_scalar(name: String, inst: IrInst, vec_vars: Vec<i64>, str
     if name == String::from("__vow_vec_get_val") {
         return is_structured_value_id(inst.id, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars);
     }
-    let arg_idx: i64 = vec_op_value_arg(name);
+    let arg_idx: i64 = model_arg_index(name, CARG_VEC_VALUE());
     if arg_idx < 0 {
         return false;
     }
@@ -880,60 +940,6 @@ fn is_map_model_constructor(name: String) -> bool {
     || name == String::from("__vow_map_new_in_arena")
 }
 
-fn map_model_receiver_arg(name: String) -> i64 {
-    if name == String::from("__vow_map_insert_in_arena") { return 1; }
-    if name == String::from("__vow_map_remove_in_arena") { return 1; }
-    if name == String::from("__vow_map_get_in_arena") { return 1; }
-    if name == String::from("__vow_map_insert") { return 0; }
-    if name == String::from("__vow_map_remove") { return 0; }
-    if name == String::from("__vow_map_get") { return 0; }
-    if name == String::from("__vow_map_contains") { return 0; }
-    if name == String::from("__vow_map_len") { return 0; }
-    -1
-}
-
-fn vec_model_receiver_arg(name: String) -> i64 {
-    if name == String::from("__vow_vec_push_val") { return 0; }
-    if name == String::from("__vow_vec_get_val") { return 0; }
-    if name == String::from("__vow_vec_len") { return 0; }
-    if name == String::from("__vow_vec_pop") { return 0; }
-    if name == String::from("__vow_vec_set_val") { return 0; }
-    if name == String::from("__vow_vec_push_in_arena") { return 1; }
-    if name == String::from("__vow_vec_push_val_in_arena") { return 1; }
-    if name == String::from("__vow_vec_reserve_in_arena") { return 1; }
-    -1
-}
-
-fn string_model_receiver_arg(name: String) -> i64 {
-    if name == String::from("__vow_string_push_str_in_arena") { return 1; }
-    if name == String::from("__vow_string_push_byte_in_arena") { return 1; }
-    if name == String::from("__vow_string_substr_in_arena") { return 1; }
-    if name == String::from("__vow_string_substring_in_arena") { return 1; }
-    if name == String::from("__vow_string_push_str") { return 0; }
-    if name == String::from("__vow_string_push_byte") { return 0; }
-    if name == String::from("__vow_string_substr") { return 0; }
-    if name == String::from("__vow_string_substring") { return 0; }
-    if name == String::from("__vow_string_clone") { return 0; }
-    if name == String::from("__vow_string_clone_in_arena") { return 1; }
-    if name == String::from("__vow_string_pin_to_root") { return 0; }
-    if name == String::from("__vow_string_len") { return 0; }
-    if name == String::from("__vow_string_clear") { return 0; }
-    if name == String::from("__vow_string_byte_at") { return 0; }
-    if name == String::from("__vow_string_eq") { return 0; }
-    if name == String::from("__vow_string_contains") { return 0; }
-    if name == String::from("__vow_string_matches_literal_at") { return 0; }
-    if name == String::from("__vow_string_print") { return 0; }
-    -1
-}
-
-fn string_model_extra_arg(name: String) -> i64 {
-    if name == String::from("__vow_string_push_str_in_arena") { return 2; }
-    if name == String::from("__vow_string_push_str") { return 1; }
-    if name == String::from("__vow_string_eq") { return 1; }
-    if name == String::from("__vow_string_contains") { return 1; }
-    -1
-}
-
 fn detect_const_fns(m: IrModule) -> Vec<i64> {
     let result: Vec<i64> = Vec::new();
     let fns: Vec<IrFunction> = m.functions;
@@ -1063,21 +1069,17 @@ fn collect_modelled_vars(f: IrFunction, constructor: String, prefix: String) -> 
                 if str_starts_with(ds, prefix) {
                     let iargs: Vec<i64> = inst.args;
                     let receiver_arg: i64 = {
-                        if prefix == String::from("__vow_vec_") {
-                            vec_model_receiver_arg(ds)
-                        } else if prefix == String::from("__vow_string_") {
-                            string_model_receiver_arg(ds)
-                        } else if prefix == String::from("__vow_map_") {
-                            map_model_receiver_arg(ds)
-                        } else {
-                            0
-                        }
+                        if prefix == String::from("__vow_vec_")
+                            || prefix == String::from("__vow_string_")
+                            || prefix == String::from("__vow_map_") {
+                            model_arg_index(ds, CARG_RECEIVER())
+                        } else { 0 }
                     };
                     if receiver_arg >= 0 && iargs.len() as i64 > receiver_arg {
                         vec_insert_i64(vars, iargs[receiver_arg as u64]);
                     }
                     if prefix == String::from("__vow_string_") {
-                        let extra_arg: i64 = string_model_extra_arg(ds);
+                        let extra_arg: i64 = model_arg_index(ds, CARG_SECOND_STRING());
                         if extra_arg >= 0 && iargs.len() as i64 > extra_arg {
                             vec_insert_i64(vars, iargs[extra_arg as u64]);
                         }
@@ -1987,8 +1989,8 @@ fn emit_vec_op(out: String, inst: IrInst, inst_ty_by_id: Vec<i64>, const_value_b
     }
     if ds == String::from("__vow_vec_push_val")
        || ds == String::from("__vow_vec_push_val_in_arena") {
-        let vec_arg: i64 = { if ds == String::from("__vow_vec_push_val_in_arena") { 1 } else { 0 } };
-        let val_arg: i64 = { if ds == String::from("__vow_vec_push_val_in_arena") { 2 } else { 1 } };
+        let vec_arg: i64 = model_arg_index(ds, CARG_RECEIVER());
+        let val_arg: i64 = model_arg_index(ds, CARG_VEC_VALUE());
         let vec: i64 = iargs[vec_arg as u64];
         let val: i64 = iargs[val_arg as u64];
         let vs: String = i64_to_string(vec);
@@ -2001,7 +2003,7 @@ fn emit_vec_op(out: String, inst: IrInst, inst_ty_by_id: Vec<i64>, const_value_b
         return;
     }
     if ds == String::from("__vow_vec_push_in_arena") {
-        let vec: i64 = iargs[1];
+        let vec: i64 = iargs[model_arg_index(ds, CARG_RECEIVER()) as u64];
         let vs: String = i64_to_string(vec);
         out.push_str(str5(String::from("  __ESBMC_assert(v"), vs,
             String::from(".len < "), i64_to_string(vec_max), String::from(", \"vec capacity\");\n")));
@@ -2208,7 +2210,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
     let iargs: Vec<i64> = inst.args;
 
     if ds == String::from("__vow_string_new") || ds == String::from("__vow_string_new_in_arena") {
-        let ptr_pos: i64 = if ds == String::from("__vow_string_new_in_arena") { 1 } else { 0 };
+        let ptr_pos: i64 = model_arg_index(ds, CARG_OPERAND(0));
         emit_raw_parts_len(out, inst, ptr_pos, MB_STRING(), string_max, inst_ty_by_id, const_value_by_id);
         return;
     }
@@ -2243,7 +2245,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
         return;
     }
     if ds == String::from("__vow_string_clone") || ds == String::from("__vow_string_clone_in_arena") || ds == String::from("__vow_string_pin_to_root") {
-        let src_idx: i64 = if ds == String::from("__vow_string_clone_in_arena") { 1 } else { 0 };
+        let src_idx: i64 = model_arg_index(ds, CARG_OPERAND(0));
         let src: i64 = iargs[src_idx as u64];
         out.push_str(str5(String::from("  v"), i64_to_string(id),
             String::from(" = v"), i64_to_string(src), String::from(";\n")));
@@ -2276,8 +2278,8 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
         return;
     }
     if ds == String::from("__vow_string_push_str") || ds == String::from("__vow_string_push_str_in_arena") {
-        let dest: i64 = if ds == String::from("__vow_string_push_str_in_arena") { iargs[1] } else { iargs[0] };
-        let src: i64 = if ds == String::from("__vow_string_push_str_in_arena") { iargs[2] } else { iargs[1] };
+        let dest: i64 = iargs[model_arg_index(ds, CARG_RECEIVER()) as u64];
+        let src: i64 = iargs[model_arg_index(ds, CARG_SECOND_STRING()) as u64];
         let dests: String = i64_to_string(dest);
         let srcs: String = i64_to_string(src);
         out.push_str(str7(String::from("  __ESBMC_assert(v"), dests,
@@ -2290,8 +2292,8 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
         return;
     }
     if ds == String::from("__vow_string_push_byte") || ds == String::from("__vow_string_push_byte_in_arena") {
-        let s: i64 = if ds == String::from("__vow_string_push_byte_in_arena") { iargs[1] } else { iargs[0] };
-        let byte: i64 = if ds == String::from("__vow_string_push_byte_in_arena") { iargs[2] } else { iargs[1] };
+        let s: i64 = iargs[model_arg_index(ds, CARG_OPERAND(0)) as u64];
+        let byte: i64 = iargs[model_arg_index(ds, CARG_OPERAND(1)) as u64];
         let ss: String = i64_to_string(s);
         out.push_str(str5(String::from("  __ESBMC_assert(v"), ss,
             String::from(".len < "), i64_to_string(string_max), String::from(", \"string capacity\");\n")));
@@ -2424,9 +2426,9 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
         return;
     }
     if ds == String::from("__vow_string_substr") || ds == String::from("__vow_string_substr_in_arena") {
-        let s: i64 = if ds == String::from("__vow_string_substr_in_arena") { iargs[1] } else { iargs[0] };
-        let start: i64 = if ds == String::from("__vow_string_substr_in_arena") { iargs[2] } else { iargs[1] };
-        let len: i64 = if ds == String::from("__vow_string_substr_in_arena") { iargs[3] } else { iargs[2] };
+        let s: i64 = iargs[model_arg_index(ds, CARG_OPERAND(0)) as u64];
+        let start: i64 = iargs[model_arg_index(ds, CARG_OPERAND(1)) as u64];
+        let len: i64 = iargs[model_arg_index(ds, CARG_OPERAND(2)) as u64];
         let ss: String = i64_to_string(s);
         let starts: String = i64_to_string(start);
         let lens: String = i64_to_string(len);
@@ -2447,9 +2449,9 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
         return;
     }
     if ds == String::from("__vow_string_substring") || ds == String::from("__vow_string_substring_in_arena") {
-        let s2: i64 = if ds == String::from("__vow_string_substring_in_arena") { iargs[1] } else { iargs[0] };
-        let start2: i64 = if ds == String::from("__vow_string_substring_in_arena") { iargs[2] } else { iargs[1] };
-        let end2: i64 = if ds == String::from("__vow_string_substring_in_arena") { iargs[3] } else { iargs[2] };
+        let s2: i64 = iargs[model_arg_index(ds, CARG_OPERAND(0)) as u64];
+        let start2: i64 = iargs[model_arg_index(ds, CARG_OPERAND(1)) as u64];
+        let end2: i64 = iargs[model_arg_index(ds, CARG_OPERAND(2)) as u64];
         let ss2: String = i64_to_string(s2);
         let starts2: String = i64_to_string(start2);
         let ends2: String = i64_to_string(end2);
@@ -2505,15 +2507,8 @@ fn emit_map_op(out: String, inst: IrInst, hashmap_max: i64) {
     let ds: String = inst.ds;
     let iargs: Vec<i64> = inst.args;
 
-    // _in_arena variants share their bodies with the root forms; the leading
-    // arena pointer is opaque to the verifier and is consumed via arg_offset.
-    let arg_offset: u64 = {
-        if ds == String::from("__vow_map_new_in_arena") { 1 }
-        else if ds == String::from("__vow_map_insert_in_arena") { 1 }
-        else if ds == String::from("__vow_map_remove_in_arena") { 1 }
-        else if ds == String::from("__vow_map_get_in_arena") { 1 }
-        else { 0 }
-    };
+    // The leading arena pointer is opaque to the verifier.
+    let arg_offset: u64 = model_arg_index(ds, CARG_OPERAND(0)) as u64;
 
     if ds == String::from("__vow_map_new") || ds == String::from("__vow_map_new_in_arena") {
         let ids: String = i64_to_string(id);

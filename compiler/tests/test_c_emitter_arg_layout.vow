@@ -1,0 +1,19 @@
+module TestCEmitterArgLayout
+
+use c_emitter
+
+fn main() -> i32 {
+    if model_arg_index(String::from("__vow_vec_push_val"), CARG_RECEIVER()) != 0 { return 1; }
+    if model_arg_index(String::from("__vow_vec_push_val_in_arena"), CARG_RECEIVER()) != 1 { return 2; }
+    if model_arg_index(String::from("__vow_vec_push_val_in_arena"), CARG_VEC_VALUE()) != 2 { return 3; }
+    if model_arg_index(String::from("__vow_vec_set_val"), CARG_VEC_VALUE()) != 2 { return 4; }
+    if model_arg_index(String::from("__vow_vec_get_val"), CARG_VEC_VALUE()) != -1 { return 5; }
+    if model_arg_index(String::from("__vow_string_push_str"), CARG_SECOND_STRING()) != 1 { return 6; }
+    if model_arg_index(String::from("__vow_string_push_str_in_arena"), CARG_SECOND_STRING()) != 2 { return 7; }
+    if model_arg_index(String::from("__vow_string_substr_in_arena"), CARG_OPERAND(2)) != 3 { return 8; }
+    if model_arg_index(String::from("__vow_map_insert_in_arena"), CARG_RECEIVER()) != 1 { return 9; }
+    if model_arg_index(String::from("__vow_map_insert_in_arena"), CARG_OPERAND(2)) != 3 { return 10; }
+    if model_arg_index(String::from("__vow_map_new_in_arena"), CARG_RECEIVER()) != -1 { return 11; }
+    if model_arg_index(String::from("__vow_unknown_in_arena"), CARG_OPERAND(0)) != -1 { return 12; }
+    0
+}
