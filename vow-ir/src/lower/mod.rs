@@ -8236,11 +8236,7 @@ fn pick(opt: Option<i128>) -> i128 {
             "wide_match_marker.vow",
         );
         assert_eq!(module.functions.len(), 1);
-        let all_insts: Vec<&Inst> = module.functions[0]
-            .blocks
-            .iter()
-            .flat_map(|block| &block.insts)
-            .collect();
+        let all_insts: Vec<&Inst> = insts_of(&module.functions[0]);
         let phis: Vec<_> = all_insts
             .iter()
             .filter(|i| i.opcode == Opcode::Phi)
