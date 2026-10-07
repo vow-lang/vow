@@ -1,0 +1,93 @@
+module TestLowerWideMatchMarker
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+
+// Twin of match_arm_marker_renarrows_to_wide_payload_width in
+// vow-ir/src/lower/mod.rs: a literal-marker match arm merging with a genuinely
+// 128-bit-typed payload arm must re-narrow its Upsilon to the merge width.
+
+fn lower_pick() -> IrModule {
+    let source: String = String::from("module WideMatchMarkerLowering\nfn pick(opt: Option<i128>) -> i128 {\n    match opt {\n        Option::Some(v) => v,\n        Option::None => -1,\n    }\n}\n");
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, diag_ctx_new(), String::from("wide_match_marker.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    item_files.push(String::from("wide_match_marker.vow"));
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), item_files
+    )
+}
+fn all_insts(m: IrModule) -> Vec<IrInst> {
+    let function: IrFunction = m.functions[0];
+    let out: Vec<IrInst> = Vec::new();
+    let mut block_index: u64 = 0;
+    while block_index < function.blocks.len() {
+        let block: IrBlock = function.blocks[block_index];
+        let mut inst_index: u64 = 0;
+        while inst_index < block.insts.len() {
+            out.push(block.insts[inst_index]);
+            inst_index = inst_index + 1;
+        }
+        block_index = block_index + 1;
+    }
+    out
+}
+
+fn producer_is_i128(insts: Vec<IrInst>, producer_id: i64) -> bool {
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        if insts[i].id == producer_id { return insts[i].ty == ITY_I128(); }
+        i = i + 1;
+    }
+    false
+}
+
+// Returns 0 when every merge assertion holds: exactly one Phi, typed I128;
+// both Upsilons targeting it carry I128-typed producers; and the marker arm
+// re-narrowed through a genuine I128 constant rather than its speculative
+// I64 value. Returns 2 (phi/upsilon shape) or 3 (missing ConstI128).
+fn wide_merge_assertions(insts: Vec<IrInst>) -> i64 {
+    let mut phi_id: i64 = -1;
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        let inst: IrInst = insts[i];
+        if inst.op == IOP_PHI() {
+            if phi_id != -1 || inst.ty != ITY_I128() { return 2; }
+            phi_id = inst.id;
+        }
+        i = i + 1;
+    }
+    if phi_id == -1 { return 2; }
+    let mut upsilon_count: i64 = 0;
+    i = 0;
+    while i < insts.len() {
+        let inst: IrInst = insts[i];
+        if inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET() && inst.dv == phi_id {
+            upsilon_count = upsilon_count + 1;
+            if inst.args.len() == 0 { return 2; }
+            if !producer_is_i128(insts, inst.args[0]) { return 2; }
+        }
+        i = i + 1;
+    }
+    if upsilon_count != 2 { return 2; }
+    i = 0;
+    while i < insts.len() {
+        if insts[i].op == IOP_CONST_I128() { return 0; }
+        i = i + 1;
+    }
+    3
+}
+
+fn main() -> i32 {
+    let m: IrModule = lower_pick();
+    if m.functions.len() != 1 { return 1; }
+    i64_to_i32_wrap(wide_merge_assertions(all_insts(m)))
+}
