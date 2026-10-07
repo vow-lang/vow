@@ -2976,6 +2976,110 @@ define_unsigned_to_unsigned!(
     u32
 );
 
+define_signed_to_signed!(
+    __vow_i128_to_i32_try,
+    __vow_i128_to_i32_try_in_arena,
+    __vow_i128_to_i32_wrap,
+    __vow_i128_to_i32_sat,
+    i128,
+    i32
+);
+define_unsigned_to_signed!(
+    __vow_u128_to_i32_try,
+    __vow_u128_to_i32_try_in_arena,
+    __vow_u128_to_i32_wrap,
+    __vow_u128_to_i32_sat,
+    u128,
+    i32
+);
+define_signed_to_signed!(
+    __vow_i128_to_i8_try,
+    __vow_i128_to_i8_try_in_arena,
+    __vow_i128_to_i8_wrap,
+    __vow_i128_to_i8_sat,
+    i128,
+    i8
+);
+define_unsigned_to_signed!(
+    __vow_u128_to_i8_try,
+    __vow_u128_to_i8_try_in_arena,
+    __vow_u128_to_i8_wrap,
+    __vow_u128_to_i8_sat,
+    u128,
+    i8
+);
+define_signed_to_signed!(
+    __vow_i128_to_i16_try,
+    __vow_i128_to_i16_try_in_arena,
+    __vow_i128_to_i16_wrap,
+    __vow_i128_to_i16_sat,
+    i128,
+    i16
+);
+define_unsigned_to_signed!(
+    __vow_u128_to_i16_try,
+    __vow_u128_to_i16_try_in_arena,
+    __vow_u128_to_i16_wrap,
+    __vow_u128_to_i16_sat,
+    u128,
+    i16
+);
+define_signed_to_unsigned!(
+    __vow_i128_to_u16_try,
+    __vow_i128_to_u16_try_in_arena,
+    __vow_i128_to_u16_wrap,
+    __vow_i128_to_u16_sat,
+    i128,
+    u16
+);
+define_unsigned_to_unsigned!(
+    __vow_u128_to_u16_try,
+    __vow_u128_to_u16_try_in_arena,
+    __vow_u128_to_u16_wrap,
+    __vow_u128_to_u16_sat,
+    u128,
+    u16
+);
+define_signed_to_unsigned!(
+    __vow_i128_to_u32_try,
+    __vow_i128_to_u32_try_in_arena,
+    __vow_i128_to_u32_wrap,
+    __vow_i128_to_u32_sat,
+    i128,
+    u32
+);
+define_unsigned_to_unsigned!(
+    __vow_u128_to_u32_try,
+    __vow_u128_to_u32_try_in_arena,
+    __vow_u128_to_u32_wrap,
+    __vow_u128_to_u32_sat,
+    u128,
+    u32
+);
+// The same-width sign-change pairs expose `_wrap`/`_sat` only: `_try` would
+// return `Option<i128>`/`Option<u128>`, and 128-bit enum payloads are not
+// supported yet (epic #526 — an aggregate field slot is 8 bytes), so there is
+// no representable option cell for a try conversion to fill.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_u128_to_i128_wrap(value: u128) -> i128 {
+    value as i128
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_u128_to_i128_sat(value: u128) -> i128 {
+    value.min(i128::MAX as u128) as i128
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_i128_to_u128_wrap(value: i128) -> u128 {
+    value as u128
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_i128_to_u128_sat(value: i128) -> u128 {
+    value.max(0) as u128
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_add_sat_u8(a: u8, b: u8) -> u8 {
     a.saturating_add(b)

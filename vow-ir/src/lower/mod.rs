@@ -136,6 +136,12 @@ fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "u64_to_i32_try" => Some(("__vow_u64_to_i32_try", Ty::Ptr)),
         "u64_to_i32_wrap" => Some(("__vow_u64_to_i32_wrap", Ty::I32)),
         "u64_to_i32_sat" => Some(("__vow_u64_to_i32_sat", Ty::I32)),
+        "i128_to_i32_try" => Some(("__vow_i128_to_i32_try", Ty::Ptr)),
+        "i128_to_i32_wrap" => Some(("__vow_i128_to_i32_wrap", Ty::I32)),
+        "i128_to_i32_sat" => Some(("__vow_i128_to_i32_sat", Ty::I32)),
+        "u128_to_i32_try" => Some(("__vow_u128_to_i32_try", Ty::Ptr)),
+        "u128_to_i32_wrap" => Some(("__vow_u128_to_i32_wrap", Ty::I32)),
+        "u128_to_i32_sat" => Some(("__vow_u128_to_i32_sat", Ty::I32)),
         "int_to_string" | "i64_to_string" => Some(("__vow_string_from_i64", Ty::Ptr)),
         "uint_to_string" => Some(("__vow_string_from_u64", Ty::Ptr)),
         "vec_sort" => Some(("__vow_vec_sort", Ty::Ptr)),
@@ -176,9 +182,15 @@ fn narrow_intrinsic_target(name: &str) -> Option<Ty> {
     }
     let supported = matches!(
         (source, target),
-        ("i16" | "u16" | "i32" | "u32" | "i64" | "u64", "i8")
-            | ("i32" | "u32" | "i64" | "u64", "i16" | "u16")
-            | ("i64" | "u64", "u32")
+        (
+            "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "i128" | "u128",
+            "i8"
+        ) | (
+            "i32" | "u32" | "i64" | "u64" | "i128" | "u128",
+            "i16" | "u16"
+        ) | ("i64" | "u64" | "i128" | "u128", "u32")
+            | ("i128", "u128")
+            | ("u128", "i128")
     );
     if !supported {
         return None;
@@ -188,6 +200,8 @@ fn narrow_intrinsic_target(name: &str) -> Option<Ty> {
         "i16" => Some(Ty::I16),
         "u16" => Some(Ty::U16),
         "u32" => Some(Ty::U32),
+        "i128" => Some(Ty::I128),
+        "u128" => Some(Ty::U128),
         _ => None,
     }
 }
@@ -242,9 +256,8 @@ fn builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
         | "u16_to_u8_try" | "u32_to_u8_try" | "u64_to_u8_try" | "u128_to_u8_try" => {
             Some(BuiltinResultTag::OptionOf(Ty::U8))
         }
-        "parse_i32" | "i64_to_i32_try" | "u32_to_i32_try" | "u64_to_i32_try" => {
-            Some(BuiltinResultTag::OptionOf(Ty::I32))
-        }
+        "parse_i32" | "i64_to_i32_try" | "u32_to_i32_try" | "u64_to_i32_try"
+        | "i128_to_i32_try" | "u128_to_i32_try" => Some(BuiltinResultTag::OptionOf(Ty::I32)),
         "parse_i64" => Some(BuiltinResultTag::OptionOf(Ty::I64)),
         _ => None,
     }

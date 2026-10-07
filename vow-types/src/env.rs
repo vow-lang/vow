@@ -397,7 +397,13 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
 
     // 32-bit narrowing conversions: `<source>_to_i32_<mode>`.
     sigs.push(def("parse_i32", vec![Ty::Str], option_ty(Ty::I32), &[]));
-    for (source_name, source_ty) in [("i64", Ty::I64), ("u32", Ty::U32), ("u64", Ty::U64)] {
+    for (source_name, source_ty) in [
+        ("i64", Ty::I64),
+        ("u32", Ty::U32),
+        ("u64", Ty::U64),
+        ("i128", Ty::I128),
+        ("u128", Ty::U128),
+    ] {
         for (mode, return_ty) in [
             ("try", option_ty(Ty::I32)),
             ("wrap", Ty::I32),
@@ -425,6 +431,8 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
                 ("u32", Ty::U32),
                 ("i64", Ty::I64),
                 ("u64", Ty::U64),
+                ("i128", Ty::I128),
+                ("u128", Ty::U128),
             ],
         ),
         (
@@ -435,6 +443,8 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
                 ("u32", Ty::U32),
                 ("i64", Ty::I64),
                 ("u64", Ty::U64),
+                ("i128", Ty::I128),
+                ("u128", Ty::U128),
             ],
         ),
         (
@@ -445,9 +455,20 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
                 ("u32", Ty::U32),
                 ("i64", Ty::I64),
                 ("u64", Ty::U64),
+                ("i128", Ty::I128),
+                ("u128", Ty::U128),
             ],
         ),
-        ("u32", Ty::U32, vec![("i64", Ty::I64), ("u64", Ty::U64)]),
+        (
+            "u32",
+            Ty::U32,
+            vec![
+                ("i64", Ty::I64),
+                ("u64", Ty::U64),
+                ("i128", Ty::I128),
+                ("u128", Ty::U128),
+            ],
+        ),
     ] {
         sigs.push(def(
             &format!("parse_{target_name}"),
@@ -471,6 +492,27 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
         }
     }
 
+    // 128-bit same-width sign-change conversions: `<source>_to_<target>_<mode>`.
+    // `i128`/`u128` are the widest integer types, so the only sources whose
+    // values can fail to fit are the opposite signedness at the same width.
+    // Only `_wrap`/`_sat` are registered: `_try` would return
+    // `Option<i128>`/`Option<u128>`, and 128-bit enum payloads are not
+    // supported yet (epic #526 — an aggregate field slot is 8 bytes), so a
+    // `_try` variant would lower to an uncompilable aggregate until that
+    // seam lands.
+    for (source_name, source_ty, target_name, target_ty) in [
+        ("i128", Ty::I128, "u128", Ty::U128),
+        ("u128", Ty::U128, "i128", Ty::I128),
+    ] {
+        for (mode, return_ty) in [("wrap", target_ty.clone()), ("sat", target_ty.clone())] {
+            sigs.push(def(
+                &format!("{source_name}_to_{target_name}_{mode}"),
+                vec![source_ty.clone()],
+                return_ty,
+                &[],
+            ));
+        }
+    }
     sigs
 }
 
@@ -870,6 +912,23 @@ fs_write(Str, Str) -> I64 [Write]
 gzip_write_file(Str, Str) -> I64 [IO]
 hex_decode(Str) -> Applied(Struct("Vec"), [U8]) []
 hex_encode(Applied(Struct("Vec"), [U8])) -> Str []
+i128_to_i16_sat(I128) -> I16 []
+i128_to_i16_try(I128) -> Applied(Enum("Option"), [I16]) []
+i128_to_i16_wrap(I128) -> I16 []
+i128_to_i32_sat(I128) -> I32 []
+i128_to_i32_try(I128) -> Applied(Enum("Option"), [I32]) []
+i128_to_i32_wrap(I128) -> I32 []
+i128_to_i8_sat(I128) -> I8 []
+i128_to_i8_try(I128) -> Applied(Enum("Option"), [I8]) []
+i128_to_i8_wrap(I128) -> I8 []
+i128_to_u128_sat(I128) -> U128 []
+i128_to_u128_wrap(I128) -> U128 []
+i128_to_u16_sat(I128) -> U16 []
+i128_to_u16_try(I128) -> Applied(Enum("Option"), [U16]) []
+i128_to_u16_wrap(I128) -> U16 []
+i128_to_u32_sat(I128) -> U32 []
+i128_to_u32_try(I128) -> Applied(Enum("Option"), [U32]) []
+i128_to_u32_wrap(I128) -> U32 []
 i128_to_u8_sat(I128) -> U8 []
 i128_to_u8_try(I128) -> Applied(Enum("Option"), [U8]) []
 i128_to_u8_wrap(I128) -> U8 []
@@ -956,6 +1015,23 @@ sub_sat_u8(U8, U8) -> U8 []
 time_micros() -> I64 [IO]
 time_unix() -> I64 [IO]
 time_unix_ms() -> I64 [IO]
+u128_to_i128_sat(U128) -> I128 []
+u128_to_i128_wrap(U128) -> I128 []
+u128_to_i16_sat(U128) -> I16 []
+u128_to_i16_try(U128) -> Applied(Enum("Option"), [I16]) []
+u128_to_i16_wrap(U128) -> I16 []
+u128_to_i32_sat(U128) -> I32 []
+u128_to_i32_try(U128) -> Applied(Enum("Option"), [I32]) []
+u128_to_i32_wrap(U128) -> I32 []
+u128_to_i8_sat(U128) -> I8 []
+u128_to_i8_try(U128) -> Applied(Enum("Option"), [I8]) []
+u128_to_i8_wrap(U128) -> I8 []
+u128_to_u16_sat(U128) -> U16 []
+u128_to_u16_try(U128) -> Applied(Enum("Option"), [U16]) []
+u128_to_u16_wrap(U128) -> U16 []
+u128_to_u32_sat(U128) -> U32 []
+u128_to_u32_try(U128) -> Applied(Enum("Option"), [U32]) []
+u128_to_u32_wrap(U128) -> U32 []
 u128_to_u8_sat(U128) -> U8 []
 u128_to_u8_try(U128) -> Applied(Enum("Option"), [U8]) []
 u128_to_u8_wrap(U128) -> U8 []

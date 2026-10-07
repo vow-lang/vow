@@ -1559,24 +1559,38 @@ fn new_narrow_intrinsic_target(name: String) -> i64 {
        lower_is_narrow_intrinsic(name, String::from("i32_to_i8")) ||
        lower_is_narrow_intrinsic(name, String::from("u32_to_i8")) ||
        lower_is_narrow_intrinsic(name, String::from("i64_to_i8")) ||
-       lower_is_narrow_intrinsic(name, String::from("u64_to_i8")) {
+       lower_is_narrow_intrinsic(name, String::from("u64_to_i8")) ||
+       lower_is_narrow_intrinsic(name, String::from("i128_to_i8")) ||
+       lower_is_narrow_intrinsic(name, String::from("u128_to_i8")) {
         return ITY_I8();
     }
     if lower_is_narrow_intrinsic(name, String::from("i32_to_i16")) ||
        lower_is_narrow_intrinsic(name, String::from("u32_to_i16")) ||
        lower_is_narrow_intrinsic(name, String::from("i64_to_i16")) ||
-       lower_is_narrow_intrinsic(name, String::from("u64_to_i16")) {
+       lower_is_narrow_intrinsic(name, String::from("u64_to_i16")) ||
+       lower_is_narrow_intrinsic(name, String::from("i128_to_i16")) ||
+       lower_is_narrow_intrinsic(name, String::from("u128_to_i16")) {
         return ITY_I16();
     }
     if lower_is_narrow_intrinsic(name, String::from("i32_to_u16")) ||
        lower_is_narrow_intrinsic(name, String::from("u32_to_u16")) ||
        lower_is_narrow_intrinsic(name, String::from("i64_to_u16")) ||
-       lower_is_narrow_intrinsic(name, String::from("u64_to_u16")) {
+       lower_is_narrow_intrinsic(name, String::from("u64_to_u16")) ||
+       lower_is_narrow_intrinsic(name, String::from("i128_to_u16")) ||
+       lower_is_narrow_intrinsic(name, String::from("u128_to_u16")) {
         return ITY_U16();
     }
     if lower_is_narrow_intrinsic(name, String::from("i64_to_u32")) ||
-       lower_is_narrow_intrinsic(name, String::from("u64_to_u32")) {
+       lower_is_narrow_intrinsic(name, String::from("u64_to_u32")) ||
+       lower_is_narrow_intrinsic(name, String::from("i128_to_u32")) ||
+       lower_is_narrow_intrinsic(name, String::from("u128_to_u32")) {
         return ITY_U32();
+    }
+    if lower_is_narrow_intrinsic(name, String::from("i128_to_u128")) {
+        return ITY_U128();
+    }
+    if lower_is_narrow_intrinsic(name, String::from("u128_to_i128")) {
+        return ITY_I128();
     }
     -1
 }
@@ -1621,7 +1635,8 @@ fn builtin_result_tag(name: String) -> i64 {
         return ITY_U8();
     }
     if name == String::from("parse_i32") || name == String::from("i64_to_i32_try") ||
-       name == String::from("u32_to_i32_try") || name == String::from("u64_to_i32_try") {
+       name == String::from("u32_to_i32_try") || name == String::from("u64_to_i32_try") ||
+       name == String::from("i128_to_i32_try") || name == String::from("u128_to_i32_try") {
         return ITY_I32();
     }
     if name == String::from("parse_i64") { return ITY_I64(); }
@@ -1907,6 +1922,12 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("u64_to_i32_try") { return String::from("__vow_u64_to_i32_try"); }
     if name == String::from("u64_to_i32_wrap") { return String::from("__vow_u64_to_i32_wrap"); }
     if name == String::from("u64_to_i32_sat") { return String::from("__vow_u64_to_i32_sat"); }
+    if name == String::from("i128_to_i32_try") { return String::from("__vow_i128_to_i32_try"); }
+    if name == String::from("i128_to_i32_wrap") { return String::from("__vow_i128_to_i32_wrap"); }
+    if name == String::from("i128_to_i32_sat") { return String::from("__vow_i128_to_i32_sat"); }
+    if name == String::from("u128_to_i32_try") { return String::from("__vow_u128_to_i32_try"); }
+    if name == String::from("u128_to_i32_wrap") { return String::from("__vow_u128_to_i32_wrap"); }
+    if name == String::from("u128_to_i32_sat") { return String::from("__vow_u128_to_i32_sat"); }
     if name == String::from("int_to_string") { return String::from("__vow_string_from_i64"); }
     if name == String::from("uint_to_string") { return String::from("__vow_string_from_u64"); }
     if name == String::from("i64_to_string") { return String::from("__vow_string_from_i64"); }
@@ -1963,7 +1984,8 @@ fn builtin_ret_ty(name: String) -> i64 {
        name == String::from("i64_to_u8_try") || name == String::from("i128_to_u8_try") || name == String::from("u16_to_u8_try") ||
        name == String::from("u32_to_u8_try") || name == String::from("u64_to_u8_try") || name == String::from("u128_to_u8_try") ||
        name == String::from("parse_i32") || name == String::from("i64_to_i32_try") ||
-       name == String::from("u32_to_i32_try") || name == String::from("u64_to_i32_try") {
+       name == String::from("u32_to_i32_try") || name == String::from("u64_to_i32_try") ||
+       name == String::from("i128_to_i32_try") || name == String::from("u128_to_i32_try") {
         return ITY_PTR();
     }
     if name == String::from("i16_to_u8_wrap") || name == String::from("i16_to_u8_sat") ||
@@ -1979,7 +2001,9 @@ fn builtin_ret_ty(name: String) -> i64 {
     }
     if name == String::from("i64_to_i32_wrap") || name == String::from("i64_to_i32_sat") ||
        name == String::from("u32_to_i32_wrap") || name == String::from("u32_to_i32_sat") ||
-       name == String::from("u64_to_i32_wrap") || name == String::from("u64_to_i32_sat") {
+       name == String::from("u64_to_i32_wrap") || name == String::from("u64_to_i32_sat") ||
+       name == String::from("i128_to_i32_wrap") || name == String::from("i128_to_i32_sat") ||
+       name == String::from("u128_to_i32_wrap") || name == String::from("u128_to_i32_sat") {
         return ITY_I32();
     }
     if name == String::from("int_to_string") { return ITY_PTR(); }
