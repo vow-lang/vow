@@ -1554,6 +1554,21 @@ fn lower_is_narrow_intrinsic(name: String, stem: String) -> bool {
 }
 
 fn new_narrow_intrinsic_target(name: String) -> i64 {
+    // Allocation-free pre-gate: every narrowing-intrinsic name is
+    // `<source>_to_<target>_{try,wrap,sat}` — the longest current names
+    // (`u128_to_i128_wrap`, 12-byte stem + 5-byte `_wrap`) are 17 bytes, the
+    // shortest (`i16_to_i8_try`) 13; the source starts 'i'/'u' with a width
+    // digit ('1'/'3'/'6') second. The stem probes below each allocate ~9
+    // strings per miss, and this function runs for every builtin and user
+    // call site (builtin_ret_ty, builtin_result_tag, builtin_to_extern), so
+    // reject the common non-narrowing case before any String is built.
+    // Widen the bounds when a new width or mode name joins the matrix.
+    let n: u64 = name.len();
+    if n < 13 || n > 17 { return -1; }
+    let b0: i64 = name.byte_at(0);
+    if b0 != 105 && b0 != 117 { return -1; }
+    let b1: i64 = name.byte_at(1);
+    if b1 != 49 && b1 != 51 && b1 != 54 { return -1; }
     if lower_is_narrow_intrinsic(name, String::from("i16_to_i8")) ||
        lower_is_narrow_intrinsic(name, String::from("u16_to_i8")) ||
        lower_is_narrow_intrinsic(name, String::from("i32_to_i8")) ||
