@@ -5081,6 +5081,144 @@ mod tests {
         assert_eq!(__vow_u64_to_u32_sat(u64::from(u32::MAX) + 1), u32::MAX);
     }
 
+    /// The seam-5a (issue #1060) widening of the narrowing matrix: i128/u128
+    /// sources into every sub-64-bit target, plus the same-width sign-change
+    /// pairs (wrap/sat only — no try exists for 128-bit option payloads).
+    /// Every helper is exercised in its fitting, overflowing, and saturating
+    /// regimes so the invocation sites read as covered.
+    #[test]
+    fn wide_source_narrowing_distinguishes_try_wrap_and_saturate() {
+        // i128 sources, signed targets.
+        assert_eq!(unsafe { option_parts(__vow_i128_to_i8_try(127)) }, (1, 127));
+        assert_eq!(
+            unsafe { option_parts(__vow_i128_to_i8_try(-128)) },
+            (1, -128)
+        );
+        assert_eq!(unsafe { option_parts(__vow_i128_to_i8_try(128)) }, (0, 0));
+        assert_eq!(unsafe { option_parts(__vow_i128_to_i8_try(-129)) }, (0, 0));
+        assert_eq!(__vow_i128_to_i8_wrap(130), -126);
+        assert_eq!(__vow_i128_to_i8_sat(200), i8::MAX);
+        assert_eq!(__vow_i128_to_i8_sat(-200), i8::MIN);
+
+        assert_eq!(
+            unsafe { option_parts(__vow_i128_to_i16_try(32767)) },
+            (1, 32767)
+        );
+        assert_eq!(
+            unsafe { option_parts(__vow_i128_to_i16_try(32768)) },
+            (0, 0)
+        );
+        assert_eq!(
+            unsafe { option_parts(__vow_i128_to_i16_try(-32769)) },
+            (0, 0)
+        );
+        assert_eq!(__vow_i128_to_i16_wrap(32769), -32767);
+        assert_eq!(__vow_i128_to_i16_sat(40000), i16::MAX);
+        assert_eq!(__vow_i128_to_i16_sat(-40000), i16::MIN);
+
+        assert_eq!(
+            unsafe { option_parts(__vow_i128_to_i32_try(2147483647)) },
+            (1, 2147483647)
+        );
+        assert_eq!(
+            unsafe { option_parts(__vow_i128_to_i32_try(2147483648)) },
+            (0, 0)
+        );
+        assert_eq!(
+            unsafe { option_parts(__vow_i128_to_i32_try(-2147483649)) },
+            (0, 0)
+        );
+        assert_eq!(__vow_i128_to_i32_wrap(2147483649), -2147483647);
+        assert_eq!(__vow_i128_to_i32_sat(5000000000), i32::MAX);
+        assert_eq!(__vow_i128_to_i32_sat(-5000000000), i32::MIN);
+
+        // i128 sources, unsigned targets.
+        assert_eq!(
+            unsafe { option_parts(__vow_i128_to_u16_try(65535)) },
+            (1, 65535)
+        );
+        assert_eq!(unsafe { option_parts(__vow_i128_to_u16_try(-1)) }, (0, 0));
+        assert_eq!(
+            unsafe { option_parts(__vow_i128_to_u16_try(65536)) },
+            (0, 0)
+        );
+        assert_eq!(__vow_i128_to_u16_wrap(-1), u16::MAX);
+        assert_eq!(__vow_i128_to_u16_sat(-1), 0);
+        assert_eq!(__vow_i128_to_u16_sat(70000), u16::MAX);
+
+        assert_eq!(
+            unsafe { option_parts(__vow_i128_to_u32_try(4294967295)) },
+            (1, 4294967295)
+        );
+        assert_eq!(unsafe { option_parts(__vow_i128_to_u32_try(-1)) }, (0, 0));
+        assert_eq!(
+            unsafe { option_parts(__vow_i128_to_u32_try(4294967296)) },
+            (0, 0)
+        );
+        assert_eq!(__vow_i128_to_u32_wrap(-1), u32::MAX);
+        assert_eq!(__vow_i128_to_u32_sat(-1), 0);
+        assert_eq!(__vow_i128_to_u32_sat(5000000000), u32::MAX);
+
+        // u128 sources.
+        assert_eq!(unsafe { option_parts(__vow_u128_to_i8_try(127)) }, (1, 127));
+        assert_eq!(unsafe { option_parts(__vow_u128_to_i8_try(128)) }, (0, 0));
+        assert_eq!(__vow_u128_to_i8_wrap(255), -1);
+        assert_eq!(__vow_u128_to_i8_sat(300), i8::MAX);
+
+        assert_eq!(
+            unsafe { option_parts(__vow_u128_to_i16_try(32767)) },
+            (1, 32767)
+        );
+        assert_eq!(
+            unsafe { option_parts(__vow_u128_to_i16_try(32768)) },
+            (0, 0)
+        );
+        assert_eq!(__vow_u128_to_i16_wrap(65535), -1);
+        assert_eq!(__vow_u128_to_i16_sat(40000), i16::MAX);
+
+        assert_eq!(
+            unsafe { option_parts(__vow_u128_to_i32_try(2147483647)) },
+            (1, 2147483647)
+        );
+        assert_eq!(
+            unsafe { option_parts(__vow_u128_to_i32_try(2147483648)) },
+            (0, 0)
+        );
+        assert_eq!(__vow_u128_to_i32_wrap(4294967295), -1);
+        assert_eq!(__vow_u128_to_i32_sat(5000000000), i32::MAX);
+
+        assert_eq!(
+            unsafe { option_parts(__vow_u128_to_u16_try(65535)) },
+            (1, 65535)
+        );
+        assert_eq!(
+            unsafe { option_parts(__vow_u128_to_u16_try(65536)) },
+            (0, 0)
+        );
+        assert_eq!(__vow_u128_to_u16_wrap(65536), 0);
+        assert_eq!(__vow_u128_to_u16_sat(70000), u16::MAX);
+
+        assert_eq!(
+            unsafe { option_parts(__vow_u128_to_u32_try(4294967295)) },
+            (1, 4294967295)
+        );
+        assert_eq!(
+            unsafe { option_parts(__vow_u128_to_u32_try(4294967296)) },
+            (0, 0)
+        );
+        assert_eq!(__vow_u128_to_u32_wrap(4294967296), 0);
+        assert_eq!(__vow_u128_to_u32_sat(5000000000), u32::MAX);
+
+        // Same-width sign-change pairs expose wrap/sat only — a 128-bit option
+        // payload is unrepresentable, so no _try variant exists.
+        assert_eq!(__vow_u128_to_i128_wrap(u128::MAX), -1);
+        assert_eq!(__vow_u128_to_i128_sat(i128::MAX as u128 + 1), i128::MAX);
+
+        assert_eq!(__vow_i128_to_u128_wrap(-1), u128::MAX);
+        assert_eq!(__vow_i128_to_u128_sat(-1), 0);
+        assert_eq!(__vow_i128_to_u128_sat(5), 5);
+    }
+
     fn vec_sort_cost(len: usize) -> u64 {
         let vec = VowVec {
             ptr: std::ptr::dangling_mut(),
