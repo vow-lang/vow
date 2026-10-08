@@ -363,10 +363,6 @@ fn mk_field_get(id: i64, base: i64) -> IrInst {
     ir_inst_new(id, IOP_FIELD_GET(), ITY_I64(), args, IDATA_FIELD(), 0, 0, String::from(""))
 }
 
-fn mk_jump(id: i64, target: i64) -> IrInst {
-    ir_inst_new(id, IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), target, 0, String::from(""))
-}
-
 fn mk_return_unit(id: i64) -> IrInst {
     ir_inst_new(id, IOP_RETURN(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""))
 }
@@ -388,7 +384,7 @@ fn infer_one(funcs: Vec<IrFunction>) -> IrModule {
 fn holder_around_outer_container(returns_outer: bool) -> i64 {
     let b0: Vec<IrInst> = Vec::new();
     b0.push(mk_inst_call_extern(10, ITY_PTR(), Vec::new(), String::from("__vow_vec_new_val")));
-    b0.push(mk_jump(20, 1));
+    b0.push(mk_inst_jump(20, 1));
     let b1: Vec<IrInst> = Vec::new();
     b1.push(mk_region_alloc(11));
     b1.push(mk_field_set(12, 11, 10));
@@ -428,7 +424,7 @@ fn check_effect_target_holder_widens_to_container_region() -> i64 {
 fn check_holder_without_store_effect_stays_block_local() -> i64 {
     let b0: Vec<IrInst> = Vec::new();
     b0.push(mk_inst_call_extern(10, ITY_PTR(), Vec::new(), String::from("__vow_vec_new_val")));
-    b0.push(mk_jump(20, 1));
+    b0.push(mk_inst_jump(20, 1));
     let b1: Vec<IrInst> = Vec::new();
     b1.push(mk_region_alloc(11));
     b1.push(mk_field_set(12, 11, 10));
@@ -447,7 +443,7 @@ fn check_holder_without_store_effect_stays_block_local() -> i64 {
 fn check_effect_target_projection_widens_its_base() -> i64 {
     let b0: Vec<IrInst> = Vec::new();
     b0.push(mk_inst_call_extern(10, ITY_PTR(), Vec::new(), String::from("__vow_vec_new_val")));
-    b0.push(mk_jump(20, 1));
+    b0.push(mk_inst_jump(20, 1));
     let b1: Vec<IrInst> = Vec::new();
     b1.push(mk_region_alloc(11));
     b1.push(mk_field_set(12, 11, 10));

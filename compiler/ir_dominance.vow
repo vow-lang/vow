@@ -375,7 +375,6 @@ fn ir_non_dominating_read(f: IrFunction) -> String {
                         }
                     };
                     if !ok {
-                        let ub: IrBlock = f.blocks[bi];
                         let dbid: i64 = {
                             if db >= 0 {
                                 let dblk: IrBlock = f.blocks[db as u64];
@@ -384,7 +383,7 @@ fn ir_non_dominating_read(f: IrFunction) -> String {
                                 -1
                             }
                         };
-                        return dom_violation(inst.id, ub.id, d, dbid);
+                        return dom_violation(inst.id, blk.id, d, dbid);
                     }
                     ai = ai + 1;
                 }
