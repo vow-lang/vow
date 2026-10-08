@@ -1,6 +1,7 @@
 module CEmitter
 
 use ir
+use ir_dominance
 use const_fold
 use ir_printer
 use verifier_ids
@@ -386,6 +387,9 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
     if f.effects != 0 {
         return false;
     }
+    if ir_non_dominating_read(f).len() > 0 {
+        return false;
+    }
 
     let vec_vars: Vec<i64> = collect_vec_vars(f);
     let string_vars: Vec<i64> = collect_string_vars(f);
@@ -594,6 +598,16 @@ fn non_modelable_reason(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>) 
             String::from("function `"),
             f.name,
             String::from("` has effects; the verifier model is restricted to pure functions"),
+        );
+    }
+    let dominance: String = ir_non_dominating_read(f);
+    if dominance.len() > 0 {
+        return str5(
+            String::from("function `"),
+            f.name,
+            String::from("` is not modelable in the verifier ("),
+            dominance,
+            String::from(")"),
         );
     }
     let cache_ids: Vec<i64> = Vec::new();
