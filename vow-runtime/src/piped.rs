@@ -11,7 +11,7 @@
 
 use super::{
     NEXT_PROCESS_HANDLE, PROCESS_MAP, ProcessState, VowArena, VowVec, alloc_bytes_string,
-    decode_process_command, process_map_init, sanitize_on_read, with_root_arena,
+    decode_process_command, process_map_init, sanitize_on_read, spawn_drain, with_root_arena,
 };
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -25,9 +25,9 @@ use std::time::{Duration, Instant};
 const CHUNK_BYTES: usize = 64 * 1024;
 const CHANNEL_CHUNKS: usize = 16;
 
-pub(crate) const READ_LINE: i64 = 0;
-pub(crate) const READ_EOF: i64 = 1;
-pub(crate) const READ_TIMEOUT: i64 = 2;
+const READ_LINE: i64 = 0;
+const READ_EOF: i64 = 1;
+const READ_TIMEOUT: i64 = 2;
 const READ_UNKNOWN: i64 = -1;
 
 /// Stdout forwarder and stderr collector of one piped child.
@@ -148,7 +148,7 @@ pub(crate) fn start(cmd: &str, args: &[String]) -> i64 {
         Ok(child) => child,
         Err(_) => return -1,
     };
-    let (Some(stdin), Some(stdout), Some(mut stderr)) =
+    let (Some(stdin), Some(stdout), Some(stderr)) =
         (child.stdin.take(), child.stdout.take(), child.stderr.take())
     else {
         let _ = child.kill();
@@ -156,11 +156,7 @@ pub(crate) fn start(cmd: &str, args: &[String]) -> i64 {
         return -1;
     };
     let (rx, stdout_thread) = spawn_stdout_reader(stdout);
-    let stderr_thread = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr.read_to_end(&mut buf);
-        buf
-    });
+    let stderr_thread = spawn_drain(Some(stderr));
     let piped = Arc::new(PipedChild {
         stdin: Mutex::new(Some(stdin)),
         stdout: Mutex::new(StdoutReader {

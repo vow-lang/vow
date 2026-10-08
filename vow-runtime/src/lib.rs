@@ -4096,6 +4096,20 @@ pub unsafe extern "C" fn __vow_process_start(cmd_ptr: i64, args_ptr: i64) -> i64
     }
 }
 
+/// Collects a child's whole pipe on a background thread so the child never
+/// blocks on a full pipe; a pipe already claimed elsewhere yields no bytes.
+fn spawn_drain(
+    pipe: Option<impl std::io::Read + Send + 'static>,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut r) = pipe {
+            let _ = r.read_to_end(&mut buf);
+        }
+        buf
+    })
+}
+
 /// `Child::wait_with_output` for any handle. A piped child (see `piped.rs`)
 /// has its stdin closed first, so a child waiting for EOF can finish, and its
 /// stdout drained before the wait, so a chatty child nobody read cannot block
@@ -4205,23 +4219,8 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
         ProcessState::Running(mut child) => {
             // Take stdout/stderr handles and spawn reader threads to prevent
             // pipe buffer deadlock when the child writes >64KB before exiting.
-            use std::io::Read;
-            let stdout_handle = child.stdout.take();
-            let stderr_handle = child.stderr.take();
-            let stdout_thread = std::thread::spawn(move || {
-                let mut buf = Vec::new();
-                if let Some(mut r) = stdout_handle {
-                    let _ = r.read_to_end(&mut buf);
-                }
-                buf
-            });
-            let stderr_thread = std::thread::spawn(move || {
-                let mut buf = Vec::new();
-                if let Some(mut r) = stderr_handle {
-                    let _ = r.read_to_end(&mut buf);
-                }
-                buf
-            });
+            let stdout_thread = spawn_drain(child.stdout.take());
+            let stderr_thread = spawn_drain(child.stderr.take());
 
             // Drop the lock during polling so other process operations aren't blocked.
             drop(guard);
@@ -4255,11 +4254,11 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
 
             match result {
                 Ok(exit_code) => {
-                    let mut stdout = stdout_thread.join().unwrap_or_default();
-                    let mut stderr = stderr_thread.join().unwrap_or_default();
-                    if let Some(captured) = piped::release(handle) {
-                        (stdout, stderr) = captured;
-                    }
+                    let joined = (
+                        stdout_thread.join().unwrap_or_default(),
+                        stderr_thread.join().unwrap_or_default(),
+                    );
+                    let (stdout, stderr) = piped::release(handle).unwrap_or(joined);
                     map.insert(handle, ProcessState::Completed { stdout, stderr });
                     exit_code
                 }
@@ -4268,11 +4267,11 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
                     // then join reader threads to reclaim their buffers.
                     let _ = child.kill();
                     let _ = child.wait();
-                    let mut stdout = stdout_thread.join().unwrap_or_default();
-                    let mut stderr = stderr_thread.join().unwrap_or_default();
-                    if let Some(captured) = piped::release(handle) {
-                        (stdout, stderr) = captured;
-                    }
+                    let joined = (
+                        stdout_thread.join().unwrap_or_default(),
+                        stderr_thread.join().unwrap_or_default(),
+                    );
+                    let (stdout, stderr) = piped::release(handle).unwrap_or(joined);
                     map.insert(handle, ProcessState::Completed { stdout, stderr });
                     code
                 }
@@ -4300,7 +4299,6 @@ pub const VOW_PROC_STILL_RUNNING: i64 = -999_999;
 /// persistent reader threads (POLL_READERS) so a verbose child cannot deadlock.
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_process_poll_wait(handle: i64, ms: i64) -> i64 {
-    use std::io::Read;
     let mut guard = PROCESS_MAP.lock().unwrap();
     let map = process_map_init(&mut guard);
     let mut child = match map.remove(&handle) {
@@ -4318,23 +4316,10 @@ pub extern "C" fn __vow_process_poll_wait(handle: i64, ms: i64) -> i64 {
         let mut rguard = POLL_READERS.lock().unwrap();
         let readers = rguard.get_or_insert_with(HashMap::new);
         if let std::collections::hash_map::Entry::Vacant(e) = readers.entry(handle) {
-            let stdout_handle = child.stdout.take();
-            let stderr_handle = child.stderr.take();
-            let stdout_thread = std::thread::spawn(move || {
-                let mut buf = Vec::new();
-                if let Some(mut r) = stdout_handle {
-                    let _ = r.read_to_end(&mut buf);
-                }
-                buf
-            });
-            let stderr_thread = std::thread::spawn(move || {
-                let mut buf = Vec::new();
-                if let Some(mut r) = stderr_handle {
-                    let _ = r.read_to_end(&mut buf);
-                }
-                buf
-            });
-            e.insert((stdout_thread, stderr_thread));
+            e.insert((
+                spawn_drain(child.stdout.take()),
+                spawn_drain(child.stderr.take()),
+            ));
         }
     }
 
@@ -4368,17 +4353,10 @@ pub extern "C" fn __vow_process_poll_wait(handle: i64, ms: i64) -> i64 {
                 .unwrap()
                 .as_mut()
                 .and_then(|m| m.remove(&handle));
-            let (stdout, stderr) = match (piped::release(handle), readers) {
-                (Some(captured), Some((so, se))) => {
-                    let _ = so.join();
-                    let _ = se.join();
-                    captured
-                }
-                (_, Some((so, se))) => {
-                    (so.join().unwrap_or_default(), se.join().unwrap_or_default())
-                }
-                (_, None) => (Vec::new(), Vec::new()),
-            };
+            let joined = readers.map_or_else(Default::default, |(so, se)| {
+                (so.join().unwrap_or_default(), se.join().unwrap_or_default())
+            });
+            let (stdout, stderr) = piped::release(handle).unwrap_or(joined);
             map.insert(handle, ProcessState::Completed { stdout, stderr });
             exit_code
         }
