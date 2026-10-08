@@ -29,18 +29,17 @@ if you need the PR number — do not assume one. Stay on branch
 - Do not modify operational labels in the `sym:*` namespace.
 - If you genuinely cannot make progress (e.g. the failure requires a
   product decision), post a `gh pr comment` on the PR explaining what
-  blocked you, then **write `BLOCKED.md` in the workspace root**
-  (uncommitted) with the same explanation and exit 0. A Bash tool call's
-  `exit 1` only ends that subshell, not the provider session, so it cannot
-  make `provider_success` false — exiting non-zero here would silently
-  return the FSM to `wait_for_pr`, which would observe the same failing PR
-  signals and route straight back into this state, an infinite loop.
-  Writing `BLOCKED.md` is what the FSM actually gates this state's advance
-  on. Do not self-apply `sym:human-needed`.
+  blocked you, then end with a `blocked` claim carrying the same
+  explanation. A Bash tool call's `exit 1` only ends that subshell, not the
+  provider session — ending without a `blocked` claim would silently return
+  the FSM to `wait_for_pr`, which would observe the same failing PR signals
+  and route straight back into this state, an infinite loop. The final
+  claim is what the FSM actually gates this state's advance on. Do not
+  self-apply `sym:human-needed`.
 
 ## Exit
 
-Exit 0 once the local quality gate passes and you have pushed the fix, and
-no `BLOCKED.md` exists in the workspace. The orchestrator will re-enter the
+Once the local quality gate passes and you have pushed the fix, end with a
+`success` claim. The orchestrator will re-enter the
 wait state, re-check the PR, and either loop back here, advance to merge,
 or terminate based on the next PR signal snapshot.
