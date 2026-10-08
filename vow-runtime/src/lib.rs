@@ -1276,6 +1276,21 @@ unsafe fn arena_grow_map_buffers<const N: usize>(
     }
 }
 
+/// Release the chunk of a backing that is unreachable from here on, if it was
+/// the sole resident of an oversized chunk.
+///
+/// Cheap fast-skip: if the predicate is false, the backing was necessarily
+/// placed in a normal chunk by `__vow_arena_alloc` (the oversized new-chunk
+/// path requires it to be true), so the O(N) chain walk is skipped. When it is
+/// true the backing *may* be in an oversized chunk (it could also have been
+/// placed via the fast path into a shared normal chunk if room was available);
+/// the chain walker's `chunk_is_oversized` check is the authoritative answer.
+unsafe fn arena_release_abandoned(arena: *mut VowArena, ptr: *mut u8, size: usize, align: usize) {
+    if size > OVERSIZED_THRESHOLD || size + (align - 1) > CHUNK_PAYLOAD {
+        unsafe { arena_try_free_oversized_chunk(arena, ptr) };
+    }
+}
+
 /// Grow a backing buffer that lives in `arena`. Implements the spec §7.2
 /// zero-copy fast path: try `__vow_arena_try_extend` first; if the backing
 /// is the most recent allocation in the chunk and the new size still fits,
@@ -1303,22 +1318,7 @@ unsafe fn arena_grow_backing(
     let new_ptr = unsafe { __vow_arena_alloc(arena, new_size, align) };
     if old_size > 0 {
         unsafe { std::ptr::copy_nonoverlapping(ptr, new_ptr, old_size) };
-        // Old backing is unreachable from here on. Release its chunk if
-        // it was the sole resident of an oversized chunk.
-        //
-        // Cheap fast-skip: if this predicate is false, the backing was
-        // necessarily placed in a normal chunk by __vow_arena_alloc (the
-        // oversized new-chunk path requires it to be true). Calling
-        // arena_try_free_oversized_chunk when false would only walk the
-        // chain to find chunk_is_oversized == false and bail, so we skip
-        // the O(N) walk. When the predicate is true the backing *may* be
-        // in an oversized chunk (it could also have been placed via the
-        // fast path into a shared normal chunk if room was available);
-        // the chain walker's `chunk_is_oversized` check is the
-        // authoritative answer.
-        if old_size > OVERSIZED_THRESHOLD || old_size + (align - 1) > CHUNK_PAYLOAD {
-            unsafe { arena_try_free_oversized_chunk(arena, ptr) };
-        }
+        unsafe { arena_release_abandoned(arena, ptr, old_size, align) };
     }
     unsafe { std::ptr::write_bytes(new_ptr.add(old_size), 0, new_size - old_size) };
     new_ptr
@@ -4489,6 +4489,15 @@ unsafe fn map_find<'a>(m: *const VowMap, key: i64) -> Option<(&'a [[i64; 2]], us
     Some((slots, found))
 }
 
+/// Allocate a table of `cap` slots in `arena`, zeroed so every control byte
+/// reads `MAP_CTRL_EMPTY`.
+unsafe fn map_alloc_table(arena: *mut VowArena, cap: usize) -> *mut u8 {
+    let bytes = map_buffer_bytes(cap);
+    let ptr = unsafe { __vow_arena_alloc(arena, bytes, 8) };
+    unsafe { std::ptr::write_bytes(ptr, 0, bytes) };
+    ptr
+}
+
 /// Allocate a zeroed table of `new_cap` slots in the map's owner arena and move
 /// every entry across, then release the old buffer when it had a chunk to
 /// itself. Growth belongs to the owner arena (see `with_map_owner`).
@@ -4496,9 +4505,7 @@ unsafe fn map_grow(m: &mut VowMap) {
     let (old_ptr, old_cap) = (m.ptr, m.cap);
     let new_cap = old_cap * 2;
     let rehash = |arena: *mut VowArena| {
-        let bytes = map_buffer_bytes(new_cap);
-        let new_ptr = unsafe { __vow_arena_alloc(arena, bytes, 8) };
-        unsafe { std::ptr::write_bytes(new_ptr, 0, bytes) };
+        let new_ptr = unsafe { map_alloc_table(arena, new_cap) };
         let (old_slots, old_ctrl) = unsafe { map_table(old_ptr, old_cap) };
         let (new_slots, new_ctrl) = unsafe { map_table(new_ptr, new_cap) };
         for (entry, &state) in old_slots.iter().zip(old_ctrl.iter()) {
@@ -4511,9 +4518,7 @@ unsafe fn map_grow(m: &mut VowMap) {
             new_slots[slot] = *entry;
             new_ctrl[slot] = MAP_CTRL_FULL;
         }
-        if map_buffer_bytes(old_cap) > OVERSIZED_THRESHOLD {
-            unsafe { arena_try_free_oversized_chunk(arena, old_ptr) };
-        }
+        unsafe { arena_release_abandoned(arena, old_ptr, map_buffer_bytes(old_cap), 8) };
         new_ptr
     };
     let new_ptr = unsafe { with_map_owner(m.owner, rehash) };
@@ -4528,9 +4533,7 @@ pub unsafe extern "C" fn __vow_map_new_in_arena(arena: *mut VowArena) -> *mut u8
     }
     let header_ptr =
         unsafe { __vow_arena_alloc(arena, std::mem::size_of::<VowMap>(), 8) } as *mut VowMap;
-    let buf_size = map_buffer_bytes(MAP_INITIAL_CAP);
-    let buf_ptr = unsafe { __vow_arena_alloc(arena, buf_size, 8) };
-    unsafe { std::ptr::write_bytes(buf_ptr, 0, buf_size) };
+    let buf_ptr = unsafe { map_alloc_table(arena, MAP_INITIAL_CAP) };
     unsafe {
         (*header_ptr).ptr = buf_ptr;
         (*header_ptr).len = 0;
@@ -4651,7 +4654,6 @@ pub unsafe extern "C" fn __vow_map_remove(map: *mut u8, key: i64) {
         }
     }
     ctrl[hole] = MAP_CTRL_EMPTY;
-    slots[hole] = [0, 0];
     m.len -= 1;
 }
 
@@ -4674,15 +4676,17 @@ pub extern "C" fn __vow_hash_u64(x: u64) -> u64 {
 pub unsafe extern "C" fn __vow_hash_str(s: *const u8) -> u64 {
     const FNV_OFFSET_BASIS: u64 = 0xCBF2_9CE4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01B3;
-    if s.is_null() {
-        return FNV_OFFSET_BASIS;
-    }
-    sanitize_on_read(s as usize, 0);
-    let v = unsafe { &*(s as *const VowVec) };
-    if v.len == 0 {
-        return FNV_OFFSET_BASIS;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let bytes: &[u8] = if s.is_null() {
+        &[]
+    } else {
+        sanitize_on_read(s as usize, 0);
+        let v = unsafe { &*(s as *const VowVec) };
+        if v.len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(v.ptr, v.len) }
+        }
+    };
     bytes.iter().fold(FNV_OFFSET_BASIS, |h, &b| {
         (h ^ u64::from(b)).wrapping_mul(FNV_PRIME)
     })
@@ -7710,11 +7714,7 @@ mod tests {
     }
 
     fn hash_of(text: &[u8]) -> u64 {
-        let v = VowVec {
-            ptr: text.as_ptr() as *mut u8,
-            len: text.len(),
-            cap: VOW_CAP_RODATA,
-        };
+        let v = borrowed_vow_string(std::str::from_utf8(text).unwrap());
         unsafe { __vow_hash_str(&raw const v as *const u8) }
     }
 
