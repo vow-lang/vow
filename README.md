@@ -27,6 +27,10 @@ build/vowc verify examples/divide.vow              # verify contracts only
 build/vowc build --mode debug examples/divide.vow  # runtime vow checks
 ```
 
+### Verification prerequisites
+
+Verification needs `bitwuzla` on `PATH`, alongside ESBMC. The release is pinned, with per-platform SHA-256 checksums, in `.github/actions/install-bitwuzla/action.yml`; CI installs it through that action. Prebuilt archives exist for Linux x86_64, Linux arm64 and macOS arm64 only. On macOS also run `brew install gmp mpfr`, since the binary links Homebrew's copies. Check the install with `bitwuzla --version`.
+
 ## Development checks
 
 Install the pinned repository hooks once per checkout:

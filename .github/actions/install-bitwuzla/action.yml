@@ -1,0 +1,155 @@
+name: Install Bitwuzla
+description: Restore or install a checksum-verified Bitwuzla release
+
+# ─── The Bitwuzla pin ─────────────────────────────────────────────────
+#
+# Single source of truth. The native verifier (epic #1398) shells out to
+# `bitwuzla`, which must be on PATH at exactly this release; workflows call
+# this action without a version so a bump is one edit here.
+#
+# `version` and the platform checksums move together: each checksum is of
+# the release archive for that exact version, and it is part of the cache
+# key, so a rotation forces a fresh download and re-verify even if the
+# version is unchanged. Pin a numbered release, never the rolling tag: the
+# assets behind a rolling tag change under a fixed URL. To bump:
+#
+#   curl -fsSLO https://github.com/bitwuzla/bitwuzla/releases/download/<N>/Bitwuzla-Linux-x86_64-static.zip
+#   curl -fsSLO https://github.com/bitwuzla/bitwuzla/releases/download/<N>/Bitwuzla-Linux-arm64-static.zip
+#   curl -fsSLO https://github.com/bitwuzla/bitwuzla/releases/download/<N>/Bitwuzla-macOS-arm64-static.zip
+#   sha256sum Bitwuzla-Linux-x86_64-static.zip
+#   sha256sum Bitwuzla-Linux-arm64-static.zip
+#   shasum -a 256 Bitwuzla-macOS-arm64-static.zip
+#
+# Upstream publishes no macOS x86_64 archive, so that platform is unsupported.
+inputs:
+  version:
+    description: Bitwuzla release version
+    required: false
+    default: "0.9.1"
+  sha256:
+    description: SHA-256 checksum of the Linux x86_64 release archive
+    required: false
+    default: 057f1546ae2068df57beb178f3eeab1678f0e5f0c378787a05b7bb294617c9c6
+  sha256-macos:
+    description: SHA-256 checksum of the macOS ARM64 release archive
+    required: false
+    default: 86a6fb1af2b7cdaf3f7807662ab679088113bbf3e55d243597f98d826bcb7511
+  sha256-linux-arm64:
+    description: SHA-256 checksum of the Linux ARM64 release archive
+    required: false
+    default: f2e9f77b5f5c5d6a7bbb2c0fbea096952f61f9fd5d387f0a06fd235f2ec0d3a1
+
+runs:
+  using: composite
+  steps:
+    - name: Select Bitwuzla archive
+      id: select
+      shell: bash
+      env:
+        BITWUZLA_SHA256_LINUX: ${{ inputs.sha256 }}
+        BITWUZLA_SHA256_MACOS: ${{ inputs.sha256-macos }}
+        BITWUZLA_SHA256_LINUX_ARM64: ${{ inputs.sha256-linux-arm64 }}
+      run: |
+        case "$RUNNER_OS/$RUNNER_ARCH" in
+          Linux/X64)
+            bitwuzla_zip=Bitwuzla-Linux-x86_64-static.zip
+            bitwuzla_sha256="$BITWUZLA_SHA256_LINUX"
+            ;;
+          Linux/ARM64)
+            bitwuzla_zip=Bitwuzla-Linux-arm64-static.zip
+            bitwuzla_sha256="$BITWUZLA_SHA256_LINUX_ARM64"
+            ;;
+          macOS/ARM64)
+            bitwuzla_zip=Bitwuzla-macOS-arm64-static.zip
+            bitwuzla_sha256="$BITWUZLA_SHA256_MACOS"
+            ;;
+          *)
+            echo "no Bitwuzla pin for runner platform $RUNNER_OS/$RUNNER_ARCH" >&2
+            exit 1
+            ;;
+        esac
+        echo "zip=$bitwuzla_zip" >> "$GITHUB_OUTPUT"
+        echo "sha256=$bitwuzla_sha256" >> "$GITHUB_OUTPUT"
+
+    - name: Validate inputs
+      shell: bash
+      env:
+        BITWUZLA_VERSION: ${{ inputs.version }}
+        BITWUZLA_SHA256: ${{ steps.select.outputs.sha256 }}
+      run: |
+        if [[ -z "$BITWUZLA_VERSION" ]]; then
+          echo "version input must not be empty" >&2
+          exit 1
+        fi
+        if [[ -z "$BITWUZLA_SHA256" ]]; then
+          echo "sha256 input must not be empty" >&2
+          exit 1
+        fi
+
+    - name: Cache Bitwuzla
+      id: cache-bitwuzla
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/bitwuzla
+        key: bitwuzla-${{ inputs.version }}-${{ steps.select.outputs.sha256 }}-${{ runner.os }}-${{ runner.arch }}
+
+    - name: Install Bitwuzla
+      if: steps.cache-bitwuzla.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        BITWUZLA_VERSION: ${{ inputs.version }}
+        BITWUZLA_SHA256: ${{ steps.select.outputs.sha256 }}
+        BITWUZLA_ZIP: ${{ steps.select.outputs.zip }}
+      run: |
+        BITWUZLA_URL="https://github.com/bitwuzla/bitwuzla/releases/download/$BITWUZLA_VERSION/$BITWUZLA_ZIP"
+
+        curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+          -o "/tmp/$BITWUZLA_ZIP" "$BITWUZLA_URL"
+
+        if command -v sha256sum >/dev/null 2>&1; then
+          echo "$BITWUZLA_SHA256  /tmp/$BITWUZLA_ZIP" | sha256sum --check --strict -
+        else
+          echo "$BITWUZLA_SHA256  /tmp/$BITWUZLA_ZIP" | shasum -a 256 --check --strict -
+        fi
+
+        unzip -q "/tmp/$BITWUZLA_ZIP" -d ~/bitwuzla
+        rm "/tmp/$BITWUZLA_ZIP"
+
+    # The macOS static archive still links Homebrew's gmp and mpfr by
+    # absolute path (/opt/homebrew/opt/...) and aborts at dyld load time
+    # without them. This runs on a cache hit too: the cache holds the
+    # binary, not the dylibs.
+    - name: Install Bitwuzla runtime dependencies (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew install gmp mpfr
+
+    # Locate the binary rather than assuming where it sits, so a layout
+    # change in a future release fails here instead of as a missing command
+    # in whichever job runs first.
+    - name: Add Bitwuzla to PATH
+      shell: bash
+      run: |
+        bitwuzla_bin="$(find "$HOME/bitwuzla" -type f -path '*/bin/bitwuzla' -print -quit)"
+        if [[ -z "$bitwuzla_bin" ]]; then
+          echo "::error::no bitwuzla found under $HOME/bitwuzla" >&2
+          find "$HOME/bitwuzla" -maxdepth 3 >&2
+          exit 1
+        fi
+        chmod +x "$bitwuzla_bin"
+        dirname "$bitwuzla_bin" >> "$GITHUB_PATH"
+
+    # Fail here, at install time, rather than in the first job that needs
+    # the solver. The printed version must match the pin so a mislabelled
+    # archive cannot pass.
+    - name: Verify Bitwuzla runs
+      shell: bash
+      env:
+        BITWUZLA_VERSION: ${{ inputs.version }}
+      run: |
+        reported="$(bitwuzla --version)"
+        echo "$reported"
+        if [[ "$reported" != *"$BITWUZLA_VERSION"* ]]; then
+          echo "::error::bitwuzla reports '$reported', expected $BITWUZLA_VERSION" >&2
+          exit 1
+        fi

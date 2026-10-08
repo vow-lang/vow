@@ -33,6 +33,8 @@ jobs:
           tool: cargo-mutants
       - name: Install ESBMC
         uses: ./.github/actions/install-esbmc
+      - name: Install Bitwuzla
+        uses: ./.github/actions/install-bitwuzla
       - name: Baseline build and tests
         run: |
           cargo build --all

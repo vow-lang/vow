@@ -94,6 +94,9 @@ jobs:
       - name: Install ESBMC
         if: matrix.verify
         uses: ./.github/actions/install-esbmc
+      - name: Install Bitwuzla
+        if: matrix.verify
+        uses: ./.github/actions/install-bitwuzla
       - name: Build Rust artifacts
         run: cargo build --all --release
       - name: Bootstrap compiler
