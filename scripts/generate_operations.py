@@ -36,6 +36,7 @@ RETURN_TOKENS = {
     "unit": {"rust_ty": "Ty::Unit", "ity_const": "ITY_UNIT()", "clif_ret": None},
     "i64": {"rust_ty": "Ty::I64", "ity_const": "ITY_I64()", "clif_ret": "types::I64"},
     "ptr": {"rust_ty": "Ty::Ptr", "ity_const": "ITY_PTR()", "clif_ret": "types::I64"},
+    "u64": {"rust_ty": "Ty::U64", "ity_const": "ITY_U64()", "clif_ret": "types::I64"},
     "bool": {
         "rust_ty": "Ty::Bool",
         "ity_const": "ITY_BOOL()",

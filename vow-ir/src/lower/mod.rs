@@ -64,6 +64,8 @@ fn catalogue_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "process_kill" => Some(("__vow_process_kill", Ty::I64)),
         "process_stdout_for" => Some(("__vow_process_stdout_for", Ty::Ptr)),
         "process_stderr_for" => Some(("__vow_process_stderr_for", Ty::Ptr)),
+        "hash_u64" => Some(("__vow_hash_u64", Ty::U64)),
+        "hash_str" => Some(("__vow_hash_str", Ty::U64)),
         _ => None,
     }
 }
@@ -6299,6 +6301,8 @@ type PairView = PairAlias;
             ("hex_decode", "__vow_hex_decode", Ty::Ptr),
             ("parse_f64_bits", "__vow_parse_f64_bits", Ty::U64),
             ("format_f64_bits", "__vow_format_f64_bits", Ty::Ptr),
+            ("hash_u64", "__vow_hash_u64", Ty::U64),
+            ("hash_str", "__vow_hash_str", Ty::U64),
             ("args", "__vow_args", Ty::Ptr),
             ("stdin_read", "__vow_stdin_read", Ty::Ptr),
             ("stdin_read_line", "__vow_stdin_read_line", Ty::Ptr),
