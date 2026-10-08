@@ -88,6 +88,8 @@ When implementing changes across Vow compilers, always modify BOTH the Rust comp
 
 This applies to behaviour-preserving refactors and unattended architecture-deepening runs too. "Rust-only, so no new drift" is not an exemption: the self-hosted compiler is the primary one, and a Rust-only refactor widens the gap between the two. If a change cannot be expressed in Vow (no generics, traits, or closures), do not land the Rust half alone — drop or re-scope the change. Earlier Rust-only landings are outstanding debt, not precedent.
 
+**Scoped exception: the native verifier.** The checker of epic #1398 (`compiler/vc_*.vow`, `vowc verify-worker`) lives only in the self-hosted compiler; it gets no Rust twin and no parity requirement. This exempts the verifier and nothing else: the lexer, parser, type checker, lowering, codegen, runtime builtins and non-verifier CLI surface stay dual-compiler, and a Rust-only or Vow-only change outside the verifier remains drift debt. Once the seed lands, Rust stage 0 will delegate verification to a pinned seed `vowc verify` (`scripts/seed.toml`). Bootstrap's fixed point then guards codegen only, and Stage 1 verification depends on the seed pin, so a "green locally" claim must record the seed pin as well as the head SHA. Until the first native release is pinned, ESBMC and `c_emitter.{rs,vow}` stay in stage 0 and the C parity rule below applies unchanged. See [ADR-2026-10-08-1421](docs/adr/2026-10-08-1421-verifier-lives-only-in-compiler.md).
+
 ## Bootstrap Commands (Rust Stage 0)
 
 These Rust workspace commands build the stage 0 bootstrap compiler only. For day-to-day development, use `build/vowc` (see below).
@@ -387,7 +389,7 @@ Before claiming a directive is "never parsed by any harness," grep `tests/*.sh` 
 
 ## Verifier C Parity
 
-`vow-verify/src/c_emitter.rs` and `compiler/c_emitter.vow` must hand ESBMC **byte-identical C** for the same program. `python3 scripts/parity.py c RUST_BIN SELF_BIN FIXTURE...` proves it: it puts a fake `esbmc` first on `PATH`, runs `verify` with each compiler, and diffs the set of distinct C sources recorded per function (`scripts/parity_c.py`; no real solver needed). `scripts/full_test.sh` Section 2c runs it over every `tests/verify*/` fixture, so any change to either emitter, to the lowering feeding it, or to a model helper that is not mirrored in the other compiler fails CI. To see the C itself, call `parity_c.capture(binary, fixture, shim_dir, capture_dir)` (see `scripts/parity_c.py`), or set `VOW_VERIFY_DEBUG=1` on the Rust compiler (it writes `/tmp/vow-verify-debug/<fn>.c`).
+`vow-verify/src/c_emitter.rs` and `compiler/c_emitter.vow` must hand ESBMC **byte-identical C** for the same program. This rule stays in force until both emitters are deleted (epic #1398, P6). `python3 scripts/parity.py c RUST_BIN SELF_BIN FIXTURE...` proves it: it puts a fake `esbmc` first on `PATH`, runs `verify` with each compiler, and diffs the set of distinct C sources recorded per function (`scripts/parity_c.py`; no real solver needed). `scripts/full_test.sh` Section 2c runs it over every `tests/verify*/` fixture, so any change to either emitter, to the lowering feeding it, or to a model helper that is not mirrored in the other compiler fails CI. To see the C itself, call `parity_c.capture(binary, fixture, shim_dir, capture_dir)` (see `scripts/parity_c.py`), or set `VOW_VERIFY_DEBUG=1` on the Rust compiler (it writes `/tmp/vow-verify-debug/<fn>.c`).
 
 ### Memory bounds
 
