@@ -131,7 +131,7 @@ fn lookup_program() -> Module {
 }
 
 #[test]
-fn map_lookup_hidden_probe_accepts_constant_and_rejects_linear() {
+fn map_lookup_hidden_probe_charge_is_constant_in_the_map_size() {
     let runtime = runtime_archive();
     let dir = TempDir::new().expect("temporary executable directory");
     let instrumented = instrument_module(&lookup_program()).expect("instrument lookup program");

@@ -1495,8 +1495,10 @@ root placement (`pin_to_root`) is a visible source operation.
 
 ### 7.1. Growth strategy
 
-`Vec<T>`, `HashMap<K, V>`, and `String` grow by allocating a new
-larger backing in the same arena as the current backing and copying.
+`Vec<T>` and `String` grow by allocating a new larger backing in the same
+arena as the current backing and copying. `HashMap<K, V>` grows by allocating a
+larger table in the same arena and rehashing every entry into it (§3.3, HashMap
+runtime allocation API).
 
 **A container grows in the arena that owns it.** A mutable runtime descriptor
 records its owning arena in a private word (`VOW_CAP_RUNTIME_OWNED`, §7.2.1);
@@ -1552,8 +1554,11 @@ boundary.
 
 ### 7.2. Zero-copy extension
 
-Growth MUST attempt `__vow_arena_try_extend` before falling back to
-fresh allocation. For the "build up one buffer" pattern where the
+`Vec` and `String` growth MUST attempt `__vow_arena_try_extend` before falling
+back to fresh allocation. `HashMap` growth is exempt: its control bytes follow
+the slots at an offset that depends on the slot count, so a table cannot be
+extended in place and every growth allocates and rehashes. For the "build up
+one buffer" pattern where the
 container's backing is the most recent allocation in the arena,
 extension succeeds and growth is O(1) amortized with no copy and no
 orphaned backing.

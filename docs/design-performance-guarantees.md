@@ -453,10 +453,15 @@ asymptotic growth. `__vow_vec_sort`, for example, is preceded by
 `__vow_perf_count_vec_sort(vec)`, which adds `1 + n * (2 + ceil(log2(n)))` for
 the call, input copy, sort, and output pushes.
 The first helper catalog also covers `__vow_map_contains`, `get`, and `remove`
-with `1 + map.len()`; `__vow_map_insert` with `1 + 2 * map.len()` to include a
-possible buffer copy on growth; and `__vow_string_eq` with `1 + a.len()` when
-the lengths match (otherwise `1`, because the helper returns before comparing
-bytes). These costs saturate at `u64::MAX`. The adapter sees the helper's
+with a constant `2`; `__vow_map_insert` with a constant `3` (the call, one probe
+sequence, and the amortised share of rehashing on growth), all independent of
+`map.len()` because `HashMap` is a hash table; and `__vow_string_eq` with
+`1 + a.len()` when the lengths match (otherwise `1`, because the helper returns
+before comparing bytes). The `HashMap` charges are a deliberate carve-out from
+the worst-case rule below: they model expected cost, not an adversarial one. The
+table's hash is seedless, so keys chosen to collide can lengthen probe chains,
+and a single growing `insert` rehashes every entry, which the constant charge
+does not reflect. These costs saturate at `u64::MAX`. The adapter sees the helper's
 original IR operands before codegen adds any hidden arena argument. Both the
 Rust backend and self-hosted Cranelift shim declare matching adapter ABIs.
 The synthetic unit is intended for growth classification rather than elapsed
@@ -465,7 +470,7 @@ avoids atomic counter traffic inside every sort comparison. The cost is a pure
 function of the input size, so the Step 4 adversarial-input search cannot
 distinguish best-case from worst-case inputs *inside* a catalogued helper; an
 adapter must therefore state the helper's worst-case growth, never its average
-case. A future performance verdict must fail closed as unverified when it
+case (the `HashMap` helpers above are the one exception). A future performance verdict must fail closed as unverified when it
 reaches a size-dependent helper without a catalogued adapter; completing that
 broader catalog, including `__vow_btreemap_*` and multi-length string helpers,
 remains follow-up work. The current regression compiles an instrumented IR

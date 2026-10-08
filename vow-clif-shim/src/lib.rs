@@ -4289,6 +4289,26 @@ mod tests {
     }
 
     // Coverage-parity twin of vow-codegen's
+    // `catalogue_hash_externs_take_and_return_one_i64` -- both crates get the
+    // same generated `catalogue_extern_sig` block.
+    #[test]
+    fn catalogue_hash_externs_take_and_return_one_i64() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        let module_ctx = unsafe { &*(ctx as *const ModuleContext) };
+
+        for sym in ["__vow_hash_u64", "__vow_hash_str"] {
+            let sig = make_extern_sig(sym, &module_ctx.obj_module);
+            assert_eq!(sig.params.len(), 1, "{sym}");
+            assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
+            assert_eq!(sig.returns.len(), 1, "{sym}");
+            assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
+        }
+
+        unsafe { __vow_clif_destroy(ctx) };
+    }
+
+    // Coverage-parity twin of vow-codegen's
     // `process_extern_sigs_come_from_the_operation_catalogue` -- both crates
     // get the same generated `catalogue_extern_sig` block.
     #[test]

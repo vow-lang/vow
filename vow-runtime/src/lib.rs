@@ -1128,8 +1128,8 @@ pub unsafe extern "C" fn __vow_arena_try_extend(
 // is not the current (tail) chunk, unlink it from the chain and libc::free
 // it; decrement the arena's retained bytes and the global memory counters.
 //
-// Used by `arena_grow_backing` after a growth that allocated into a new
-// chunk: the prior backing is now unreachable, and if it was the sole
+// Used by `arena_grow_backing` and `map_grow` after a growth that allocated
+// into a new chunk: the prior backing is now unreachable, and if it was the sole
 // allocation in its (oversized) chunk we can return that memory to libc
 // immediately rather than waiting for arena close. This fixes issue #391
 // (long-lived Vec/String/HashMap grow-then-truncate accumulating committed
@@ -1248,24 +1248,32 @@ unsafe fn with_root_arena<R>(f: impl FnOnce(*mut VowArena) -> R) -> R {
     f(&raw mut __vow_root_arena)
 }
 
-/// Grow a map backing buffer in the arena recorded in the map header, not the
-/// arena the entry point was handed: a map reached through a struct field or a
-/// `Vec` element has no provable region. A root-owned map takes the root lock
-/// unless this thread already holds it; all `ptrs` grow under one acquisition.
+/// Run `f` against the arena recorded in a map header, not the arena the entry
+/// point was handed: a map reached through a struct field or a `Vec` element has
+/// no provable region. A root-owned map takes the root lock unless this thread
+/// already holds it, so everything `f` allocates happens under one acquisition.
+unsafe fn with_map_owner<R>(owner: *mut VowArena, f: impl FnOnce(*mut VowArena) -> R) -> R {
+    if owner.is_null() {
+        null_arena_trap("map growth");
+    }
+    if !arena_is_root(owner) || ROOT_LOCK_HELD.with(Cell::get) {
+        return f(owner);
+    }
+    unsafe { with_root_arena(f) }
+}
+
+/// Grow map backing buffers in the map's owner arena; all `ptrs` grow together.
 unsafe fn arena_grow_map_buffers<const N: usize>(
     owner: *mut VowArena,
     ptrs: [*mut u8; N],
     old_size: usize,
     new_size: usize,
 ) -> [*mut u8; N] {
-    if owner.is_null() {
-        null_arena_trap("map growth");
+    unsafe {
+        with_map_owner(owner, |arena| {
+            ptrs.map(|p| arena_grow_backing(arena, p, old_size, new_size, 8))
+        })
     }
-    let grow = |arena| ptrs.map(|p| unsafe { arena_grow_backing(arena, p, old_size, new_size, 8) });
-    if !arena_is_root(owner) || ROOT_LOCK_HELD.with(Cell::get) {
-        return grow(owner);
-    }
-    unsafe { with_root_arena(grow) }
 }
 
 /// Grow a backing buffer that lives in `arena`. Implements the spec §7.2
@@ -4440,6 +4448,17 @@ unsafe fn map_table<'a>(ptr: *mut u8, cap: usize) -> (MapSlots<'a>, MapCtrl<'a>)
     }
 }
 
+/// `map_table` for lookups: shared slices, so readers never hold `&mut` to a
+/// buffer another reader may be probing.
+unsafe fn map_table_ref<'a>(ptr: *const u8, cap: usize) -> (&'a [[i64; 2]], &'a [u8]) {
+    unsafe {
+        (
+            std::slice::from_raw_parts(ptr as *const [i64; 2], cap),
+            std::slice::from_raw_parts(ptr.add(cap * MAP_SLOT_BYTES), cap),
+        )
+    }
+}
+
 /// `Ok(slot)` holding `key`, or `Err(slot)` of the empty slot that ends its
 /// probe sequence.
 fn map_probe(slots: &[[i64; 2]], ctrl: &[u8], key: i64) -> Result<usize, usize> {
@@ -4460,25 +4479,20 @@ fn map_probe(slots: &[[i64; 2]], ctrl: &[u8], key: i64) -> Result<usize, usize> 
 
 /// The slot holding `key`, if bound. An empty map has no table to probe, which
 /// also covers rodata descriptors whose `cap` is a marker, not a slot count.
-unsafe fn map_find<'a>(m: *const VowMap, key: i64) -> Option<(MapSlots<'a>, MapCtrl<'a>, usize)> {
+unsafe fn map_find<'a>(m: *const VowMap, key: i64) -> Option<(&'a [[i64; 2]], usize)> {
     let m = unsafe { &*m };
     if m.len == 0 {
         return None;
     }
-    let (slots, ctrl) = unsafe { map_table(m.ptr, m.cap) };
+    let (slots, ctrl) = unsafe { map_table_ref(m.ptr, m.cap) };
     let found = map_probe(slots, ctrl, key).ok()?;
-    Some((slots, ctrl, found))
+    Some((slots, found))
 }
 
 /// Allocate a zeroed table of `new_cap` slots in the map's owner arena and move
 /// every entry across, then release the old buffer when it had a chunk to
-/// itself. The owner arena is used whatever arena the caller named: a map
-/// reached through a struct field or a `Vec` element has no provable region. A
-/// root-owned map takes the root lock unless this thread already holds it.
+/// itself. Growth belongs to the owner arena (see `with_map_owner`).
 unsafe fn map_grow(m: &mut VowMap) {
-    if m.owner.is_null() {
-        null_arena_trap("map growth");
-    }
     let (old_ptr, old_cap) = (m.ptr, m.cap);
     let new_cap = old_cap * 2;
     let rehash = |arena: *mut VowArena| {
@@ -4502,11 +4516,7 @@ unsafe fn map_grow(m: &mut VowMap) {
         }
         new_ptr
     };
-    let new_ptr = if !arena_is_root(m.owner) || ROOT_LOCK_HELD.with(Cell::get) {
-        rehash(m.owner)
-    } else {
-        unsafe { with_root_arena(rehash) }
-    };
+    let new_ptr = unsafe { with_map_owner(m.owner, rehash) };
     m.ptr = new_ptr;
     m.cap = new_cap;
 }
@@ -4549,24 +4559,22 @@ pub unsafe extern "C" fn __vow_map_insert_in_arena(
     if m.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("HashMap::insert");
     }
-    let (slots, ctrl) = unsafe { map_table(m.ptr, m.cap) };
-    let slot = match map_probe(slots, ctrl, key) {
+    let (mut slots, mut ctrl) = unsafe { map_table(m.ptr, m.cap) };
+    let mut slot = match map_probe(slots, ctrl, key) {
         Ok(slot) => {
             slots[slot][1] = val;
             return;
         }
         Err(slot) => slot,
     };
-    let (slots, ctrl, slot) = if (m.len + 1) * 4 > m.cap * 3 {
+    if (m.len + 1) * 4 > m.cap * 3 {
         unsafe { map_grow(m) };
-        let (slots, ctrl) = unsafe { map_table(m.ptr, m.cap) };
-        let Err(slot) = map_probe(slots, ctrl, key) else {
+        (slots, ctrl) = unsafe { map_table(m.ptr, m.cap) };
+        let Err(grown_slot) = map_probe(slots, ctrl, key) else {
             unreachable!("the key was absent before growth")
         };
-        (slots, ctrl, slot)
-    } else {
-        (slots, ctrl, slot)
-    };
+        slot = grown_slot;
+    }
     slots[slot] = [key, val];
     ctrl[slot] = MAP_CTRL_FULL;
     m.len += 1;
@@ -4592,8 +4600,7 @@ pub unsafe extern "C" fn __vow_map_get_in_arena(
     map: *const u8,
     key: i64,
 ) -> *mut u8 {
-    let value =
-        unsafe { map_find(map as *const VowMap, key) }.map(|(slots, _, slot)| slots[slot][1]);
+    let value = unsafe { map_find(map as *const VowMap, key) }.map(|(slots, slot)| slots[slot][1]);
     unsafe { alloc_option_in_arena(arena, "HashMap::get", value) }
 }
 
@@ -4625,9 +4632,10 @@ pub unsafe extern "C" fn __vow_map_remove(map: *mut u8, key: i64) {
     if m.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("HashMap::remove");
     }
-    let Some((slots, ctrl, found)) = (unsafe { map_find(m, key) }) else {
+    let Some((_, found)) = (unsafe { map_find(m, key) }) else {
         return;
     };
+    let (slots, ctrl) = unsafe { map_table(m.ptr, m.cap) };
     let mask = m.cap - 1;
     let mut hole = found;
     let mut next = found;
