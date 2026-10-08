@@ -131,7 +131,7 @@ fn lookup_program() -> Module {
 }
 
 #[test]
-fn map_lookup_hidden_scan_rejects_constant_and_accepts_linear() {
+fn map_lookup_hidden_probe_accepts_constant_and_rejects_linear() {
     let runtime = runtime_archive();
     let dir = TempDir::new().expect("temporary executable directory");
     let instrumented = instrument_module(&lookup_program()).expect("instrument lookup program");
@@ -163,15 +163,16 @@ fn map_lookup_hidden_scan_rejects_constant_and_accepts_linear() {
         .map(|(&size, operations)| Sample::new(size, operations))
         .collect();
     assert_eq!(
-        analyze(ComplexityClass::Linear, &samples).unwrap().verdict,
-        Verdict::Pass,
-        "linear lookup must pass: {samples:?}"
-    );
-    assert_eq!(
         analyze(ComplexityClass::Constant, &samples)
             .unwrap()
             .verdict,
-        Verdict::Fail,
-        "constant lookup must fail: {samples:?}"
+        Verdict::Pass,
+        "hashed lookup is constant and must pass: {samples:?}"
+    );
+    assert!(
+        samples
+            .windows(2)
+            .all(|w| w[0].operations == w[1].operations),
+        "a hashed lookup charge must not depend on the map size: {samples:?}"
     );
 }
