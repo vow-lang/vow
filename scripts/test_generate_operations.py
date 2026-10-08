@@ -304,7 +304,26 @@ PROCESS_OPS = [
     },
 ]
 
-KNOWN_OPS = PRINT_OPS + FS_STDIN_ARGS_STDERR_OPS + PROCESS_OPS
+HASH_OPS = [
+    {
+        "name": "hash_u64",
+        "runtime_symbol": "__vow_hash_u64",
+        "params": ["u64"],
+        "return": "u64",
+        "doc_signature": "fn(x: u64) -> u64",
+        "effects": "[]",
+    },
+    {
+        "name": "hash_str",
+        "runtime_symbol": "__vow_hash_str",
+        "params": ["ptr"],
+        "return": "u64",
+        "doc_signature": "fn(s: String) -> u64",
+        "effects": "[]",
+    },
+]
+
+KNOWN_OPS = PRINT_OPS + FS_STDIN_ARGS_STDERR_OPS + PROCESS_OPS + HASH_OPS
 
 
 class LoadCatalogueTest(unittest.TestCase):

@@ -2497,6 +2497,16 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
             sig.returns.push(AbiParam::new(types::I64));
             true
         }
+        "__vow_hash_u64" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_hash_str" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
         _ => false,
     }
 }
@@ -3588,6 +3598,20 @@ mod tests {
             assert_eq!(sig.params.len(), 1, "{sym}");
             assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
             assert!(sig.returns.is_empty(), "{sym}");
+        }
+    }
+
+    // Coverage-parity twin of vow-clif-shim's
+    // `catalogue_hash_externs_take_and_return_one_i64` -- both crates get the
+    // same generated `catalogue_extern_sig` block.
+    #[test]
+    fn catalogue_hash_externs_take_and_return_one_i64() {
+        for sym in ["__vow_hash_u64", "__vow_hash_str"] {
+            let sig = extern_sig(sym);
+            assert_eq!(sig.params.len(), 1, "{sym}");
+            assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
+            assert_eq!(sig.returns.len(), 1, "{sym}");
+            assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
         }
     }
 

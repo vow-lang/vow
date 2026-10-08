@@ -454,7 +454,7 @@ corresponding explicit-arena primitive with `&__vow_root_arena`.
 `__vow_map_get` is a root wrapper too: it returns a fresh `Option<V>`
 (tag 1 and the stored value, or tag 0 for a missing key) allocated in the
 arena, never a default value. `__vow_map_remove` is **not** a root wrapper — it performs an in-place
-linear-scan removal that never touches the arena, so the relationship
+backward-shift removal that never touches the arena, so the relationship
 inverts: `__vow_map_remove_in_arena` traps on a null arena and then
 delegates to `__vow_map_remove` directly. The non-allocating accessors
 (`__vow_map_contains`, `__vow_map_len`) read the map in place and never
@@ -474,21 +474,39 @@ void* __vow_map_get_in_arena(struct VowArena* arena, const void* map,
 
 Every explicit-arena HashMap entry traps with
 `RuntimeInvariantViolation` and `reason = "null arena"` before
-dereferencing a null arena pointer. The bucket array and the map
-header are both allocated in the supplied arena: a fresh `HashMap`
-allocates a 32-byte header (backing pointer, length, capacity and the owning
-arena) plus an initial 8-entry × 16-byte backing.
-Growth on `insert` uses the shared arena grow path — first
-`__vow_arena_try_extend` against the current backing, then
-`__vow_arena_alloc` + memcpy on fallback — and the new bucket array
-lives in the same arena as the header. `__vow_map_remove_in_arena` is
+dereferencing a null arena pointer. The table and the map header are both
+allocated in the supplied arena: a fresh `HashMap` allocates a 32-byte header
+(backing pointer, live-entry count, slot count and the owning arena) plus an
+initial 8-slot table of 8 × 17 bytes.
+
+The table is an open-addressing hash table with linear probing. `cap` is the
+slot count, always a power of two; the single backing buffer holds `cap`
+16-byte `(key, val)` slots followed by `cap` control bytes (0 empty, 1 full).
+Every `i64` is a legal key, so occupancy cannot live in a key sentinel. The
+load factor stays at or below 3/4, so every probe reaches an empty slot, and
+`insert` of a new key doubles `cap` first when that bound would be exceeded.
+`remove` shifts later cluster members back over the hole (backward-shift
+deletion) instead of leaving a tombstone, so `len` is the only load measure and
+lookup cost never degrades after churn. The key hash is the `hash_u64` mixer
+(SplitMix64's output function) with no per-process seed: tables, and therefore
+compiled programs, are reproducible, at the price that adversarially chosen keys
+can lengthen probe chains. Slot order is unspecified and unobservable (there is
+no iteration API).
+
+Growth cannot extend the buffer in place, because the control bytes follow the
+slots and their offset depends on `cap`. `insert` instead allocates a zeroed
+table of twice the slots in the owning arena, rehashes every entry into it, and
+releases the old buffer when it occupied an oversized chunk of its own (the
+`arena_try_free_oversized_chunk` path `Vec` growth uses). A smaller old buffer
+stays in its chunk until the arena closes; the abandoned buffers form a
+geometric series, so the total waste is bounded by the size of the final
+table. `__vow_map_remove_in_arena` is
 exposed for ABI symmetry with the other in-arena forms; the operation
 itself never allocates and the arena pointer is consumed only for the
 null-arena trap, then ignored.
 
-The runtime stores each key and each value in one 64-bit slot, with an
-O(n) linear-scan backing (matching the existing root-region
-implementation). Keys compare by value, so a `HashMap` key must be an
+The runtime stores each key and each value in one 64-bit slot, in the hash
+table above (expected O(1) `insert`, `get`, `contains_key` and `remove`). Keys compare by value, so a `HashMap` key must be an
 integer of at most 64 bits or `bool`, and a map value may not be
 `i128`/`u128`/`f32`/`f64` (nor, for `HashMap`, linear). The type checker
 rejects a `HashMap` key or any map value outside those sets with
@@ -1477,8 +1495,10 @@ root placement (`pin_to_root`) is a visible source operation.
 
 ### 7.1. Growth strategy
 
-`Vec<T>`, `HashMap<K, V>`, and `String` grow by allocating a new
-larger backing in the same arena as the current backing and copying.
+`Vec<T>` and `String` grow by allocating a new larger backing in the same
+arena as the current backing and copying. `HashMap<K, V>` grows by allocating a
+larger table in the same arena and rehashing every entry into it (§3.3, HashMap
+runtime allocation API).
 
 **A container grows in the arena that owns it.** A mutable runtime descriptor
 records its owning arena in a private word (`VOW_CAP_RUNTIME_OWNED`, §7.2.1);
@@ -1534,8 +1554,11 @@ boundary.
 
 ### 7.2. Zero-copy extension
 
-Growth MUST attempt `__vow_arena_try_extend` before falling back to
-fresh allocation. For the "build up one buffer" pattern where the
+`Vec` and `String` growth MUST attempt `__vow_arena_try_extend` before falling
+back to fresh allocation. `HashMap` growth is exempt: its control bytes follow
+the slots at an offset that depends on the slot count, so a table cannot be
+extended in place and every growth allocates and rehashes. For the "build up
+one buffer" pattern where the
 container's backing is the most recent allocation in the arena,
 extension succeeds and growth is O(1) amortized with no copy and no
 orphaned backing.

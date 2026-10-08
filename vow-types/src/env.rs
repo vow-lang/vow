@@ -241,6 +241,8 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
         def("hex_decode", vec![Ty::Str], vec_ty(Ty::U8), &[]),
         def("parse_f64_bits", vec![Ty::Str], Ty::U64, &[]),
         def("format_f64_bits", vec![Ty::U64], Ty::Str, &[]),
+        def("hash_u64", vec![Ty::U64], Ty::U64, &[]),
+        def("hash_str", vec![Ty::Str], Ty::U64, &[]),
         def("eprintln_str", vec![Ty::Str], Ty::Unit, &[Effect::IO]),
         def("args", vec![], vec_ty(Ty::Str), &[Effect::Read]),
         def("stdin_read", vec![], Ty::Str, &[Effect::Read]),
@@ -910,6 +912,8 @@ fs_rename(Str, Str) -> I64 [IO]
 fs_status(I64) -> I64 [Read]
 fs_write(Str, Str) -> I64 [Write]
 gzip_write_file(Str, Str) -> I64 [IO]
+hash_str(Str) -> U64 []
+hash_u64(U64) -> U64 []
 hex_decode(Str) -> Applied(Struct("Vec"), [U8]) []
 hex_encode(Applied(Struct("Vec"), [U8])) -> Str []
 i128_to_i16_sat(I128) -> I16 []

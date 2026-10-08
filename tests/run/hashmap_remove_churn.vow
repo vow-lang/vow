@@ -1,0 +1,83 @@
+// TEST: stdout "checksum=80320000\nfinal_len=0\nprobe_misses=0\n"
+// Repeated insert/remove cycles over the same keys: removal must leave no
+// residue (a lookup after any number of cycles still finds exactly the live
+// keys) and the table must keep working at the same size round after round.
+module HashMapRemoveChurn
+
+fn insert_all(m: HashMap<i64, i64>, n: i64, round: i64) {
+    let mut k: i64 = 0;
+    while k < n {
+        m.insert(k, k + round);
+        k = k + 1;
+    }
+}
+
+fn remove_evens(m: HashMap<i64, i64>, n: i64) {
+    let mut k: i64 = 0;
+    while k < n {
+        m.remove(k);
+        k = k + 2;
+    }
+}
+
+fn remove_all(m: HashMap<i64, i64>, n: i64) {
+    let mut k: i64 = 0;
+    while k < n {
+        m.remove(k);
+        k = k + 1;
+    }
+}
+
+fn reinsert_evens(m: HashMap<i64, i64>, n: i64, round: i64) {
+    let mut k: i64 = 0;
+    while k < n {
+        m.insert(k, k * 3 + round);
+        k = k + 2;
+    }
+}
+
+fn sum_from(m: HashMap<i64, i64>, start: i64, n: i64) -> i64 [panic] {
+    let mut total: i64 = 0;
+    let mut k: i64 = start;
+    while k < n {
+        total = total + m.get(k).unwrap();
+        k = k + 2;
+    }
+    total
+}
+
+fn evens_present(m: HashMap<i64, i64>, n: i64) -> u64 {
+    let mut found: u64 = 0;
+    let mut k: i64 = 0;
+    while k < n {
+        if m.contains_key(k) { found = found + 1; }
+        k = k + 2;
+    }
+    found
+}
+
+fn main() -> i32 [io, panic] {
+    let n: i64 = 2000;
+    let m: HashMap<i64, i64> = HashMap::new();
+    let mut checksum: i64 = 0;
+    let mut misses: u64 = 0;
+    let mut round: i64 = 0;
+    while round < 20 {
+        insert_all(m, n, round);
+        remove_evens(m, n);
+        misses = misses + evens_present(m, n);
+        checksum = checksum + sum_from(m, 1, n);
+        reinsert_evens(m, n, round);
+        checksum = checksum + sum_from(m, 0, n);
+        remove_all(m, n);
+        round = round + 1;
+    }
+    print_str(String::from("checksum="));
+    print_i64(checksum);
+    print_str(String::from("\nfinal_len="));
+    print_u64(m.len());
+    print_str(String::from("\nprobe_misses="));
+    print_u64(misses);
+    print_str(String::from("\n"));
+    0
+}

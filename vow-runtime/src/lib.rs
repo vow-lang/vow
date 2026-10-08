@@ -321,32 +321,30 @@ pub unsafe extern "C" fn __vow_perf_count_vec_sort(vec: *const u8) {
     perf_operation_count_add(cost);
 }
 
-// HashMap uses a linear scan. Charge the full length even when the key is
-// found early, since complexity declarations cover the worst case. An insert
-// can additionally copy the whole buffer when it grows.
-unsafe fn perf_map_cost(map: *const u8, scan_multiplier: u64) {
-    let len = u64::try_from(unsafe { __vow_map_len(map) }).unwrap_or(u64::MAX);
-    perf_operation_count_add(len.saturating_mul(scan_multiplier).saturating_add(1));
+// HashMap is a hash table with expected O(1) probing, so each operation is
+// charged a constant independent of the map length: the call plus one probe
+// sequence, and for an insert the amortised share of rehashing on growth.
+const PERF_MAP_LOOKUP_COST: u64 = 2;
+const PERF_MAP_INSERT_COST: u64 = 3;
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_perf_count_map_contains(_map: *const u8, _key: i64) {
+    perf_operation_count_add(PERF_MAP_LOOKUP_COST);
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_perf_count_map_contains(map: *const u8, _key: i64) {
-    unsafe { perf_map_cost(map, 1) };
+pub unsafe extern "C" fn __vow_perf_count_map_get(_map: *const u8, _key: i64) {
+    perf_operation_count_add(PERF_MAP_LOOKUP_COST);
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_perf_count_map_get(map: *const u8, _key: i64) {
-    unsafe { perf_map_cost(map, 1) };
+pub unsafe extern "C" fn __vow_perf_count_map_insert(_map: *const u8, _key: i64, _value: i64) {
+    perf_operation_count_add(PERF_MAP_INSERT_COST);
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_perf_count_map_insert(map: *const u8, _key: i64, _value: i64) {
-    unsafe { perf_map_cost(map, 2) };
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_perf_count_map_remove(map: *const u8, _key: i64) {
-    unsafe { perf_map_cost(map, 1) };
+pub unsafe extern "C" fn __vow_perf_count_map_remove(_map: *const u8, _key: i64) {
+    perf_operation_count_add(PERF_MAP_LOOKUP_COST);
 }
 
 /// Equality can compare every byte only when the lengths match.
@@ -1130,8 +1128,8 @@ pub unsafe extern "C" fn __vow_arena_try_extend(
 // is not the current (tail) chunk, unlink it from the chain and libc::free
 // it; decrement the arena's retained bytes and the global memory counters.
 //
-// Used by `arena_grow_backing` after a growth that allocated into a new
-// chunk: the prior backing is now unreachable, and if it was the sole
+// Used by `arena_grow_backing` and `map_grow` after a growth that allocated
+// into a new chunk: the prior backing is now unreachable, and if it was the sole
 // allocation in its (oversized) chunk we can return that memory to libc
 // immediately rather than waiting for arena close. This fixes issue #391
 // (long-lived Vec/String/HashMap grow-then-truncate accumulating committed
@@ -1250,24 +1248,47 @@ unsafe fn with_root_arena<R>(f: impl FnOnce(*mut VowArena) -> R) -> R {
     f(&raw mut __vow_root_arena)
 }
 
-/// Grow a map backing buffer in the arena recorded in the map header, not the
-/// arena the entry point was handed: a map reached through a struct field or a
-/// `Vec` element has no provable region. A root-owned map takes the root lock
-/// unless this thread already holds it; all `ptrs` grow under one acquisition.
+/// Run `f` against the arena recorded in a map header, not the arena the entry
+/// point was handed: a map reached through a struct field or a `Vec` element has
+/// no provable region. A root-owned map takes the root lock unless this thread
+/// already holds it, so everything `f` allocates happens under one acquisition.
+unsafe fn with_map_owner<R>(owner: *mut VowArena, f: impl FnOnce(*mut VowArena) -> R) -> R {
+    if owner.is_null() {
+        null_arena_trap("map growth");
+    }
+    if !arena_is_root(owner) || ROOT_LOCK_HELD.with(Cell::get) {
+        return f(owner);
+    }
+    unsafe { with_root_arena(f) }
+}
+
+/// Grow map backing buffers in the map's owner arena; all `ptrs` grow together.
 unsafe fn arena_grow_map_buffers<const N: usize>(
     owner: *mut VowArena,
     ptrs: [*mut u8; N],
     old_size: usize,
     new_size: usize,
 ) -> [*mut u8; N] {
-    if owner.is_null() {
-        null_arena_trap("map growth");
+    unsafe {
+        with_map_owner(owner, |arena| {
+            ptrs.map(|p| arena_grow_backing(arena, p, old_size, new_size, 8))
+        })
     }
-    let grow = |arena| ptrs.map(|p| unsafe { arena_grow_backing(arena, p, old_size, new_size, 8) });
-    if !arena_is_root(owner) || ROOT_LOCK_HELD.with(Cell::get) {
-        return grow(owner);
+}
+
+/// Release the chunk of a backing that is unreachable from here on, if it was
+/// the sole resident of an oversized chunk.
+///
+/// Cheap fast-skip: if the predicate is false, the backing was necessarily
+/// placed in a normal chunk by `__vow_arena_alloc` (the oversized new-chunk
+/// path requires it to be true), so the O(N) chain walk is skipped. When it is
+/// true the backing *may* be in an oversized chunk (it could also have been
+/// placed via the fast path into a shared normal chunk if room was available);
+/// the chain walker's `chunk_is_oversized` check is the authoritative answer.
+unsafe fn arena_release_abandoned(arena: *mut VowArena, ptr: *mut u8, size: usize, align: usize) {
+    if size > OVERSIZED_THRESHOLD || size + (align - 1) > CHUNK_PAYLOAD {
+        unsafe { arena_try_free_oversized_chunk(arena, ptr) };
     }
-    unsafe { with_root_arena(grow) }
 }
 
 /// Grow a backing buffer that lives in `arena`. Implements the spec §7.2
@@ -1297,22 +1318,7 @@ unsafe fn arena_grow_backing(
     let new_ptr = unsafe { __vow_arena_alloc(arena, new_size, align) };
     if old_size > 0 {
         unsafe { std::ptr::copy_nonoverlapping(ptr, new_ptr, old_size) };
-        // Old backing is unreachable from here on. Release its chunk if
-        // it was the sole resident of an oversized chunk.
-        //
-        // Cheap fast-skip: if this predicate is false, the backing was
-        // necessarily placed in a normal chunk by __vow_arena_alloc (the
-        // oversized new-chunk path requires it to be true). Calling
-        // arena_try_free_oversized_chunk when false would only walk the
-        // chain to find chunk_is_oversized == false and bail, so we skip
-        // the O(N) walk. When the predicate is true the backing *may* be
-        // in an oversized chunk (it could also have been placed via the
-        // fast path into a shared normal chunk if room was available);
-        // the chain walker's `chunk_is_oversized` check is the
-        // authoritative answer.
-        if old_size > OVERSIZED_THRESHOLD || old_size + (align - 1) > CHUNK_PAYLOAD {
-            unsafe { arena_try_free_oversized_chunk(arena, ptr) };
-        }
+        unsafe { arena_release_abandoned(arena, ptr, old_size, align) };
     }
     unsafe { std::ptr::write_bytes(new_ptr.add(old_size), 0, new_size - old_size) };
     new_ptr
@@ -4373,8 +4379,25 @@ pub extern "C" fn __vow_process_kill(handle: i64) -> i64 {
 }
 
 // ---------------------------------------------------------------------------
-// HashMap runtime (open VowVec of (key:i64, val:i64) pairs — O(n) scan MVP)
+// HashMap runtime — open-addressing hash table with linear probing
 // ---------------------------------------------------------------------------
+//
+// `cap` is the slot count (a power of two, at least `MAP_INITIAL_CAP`) and
+// `len` the number of live entries. The single backing buffer, allocated in the
+// owner arena, holds `cap` 16-byte `(key, val)` slots followed by `cap` control
+// bytes (`MAP_CTRL_EMPTY` / `MAP_CTRL_FULL`). Every `i64` is a legal key, so
+// occupancy lives in the separate control bytes rather than in a key sentinel.
+//
+// The load factor never exceeds 3/4, so a probe always reaches an empty slot.
+// Removal shifts the following cluster members back instead of leaving
+// tombstones, which keeps lookup cost independent of earlier deletions. Growth
+// doubles `cap` into a fresh owner-arena buffer; the old one is returned to
+// libc when it occupied its own oversized chunk and is otherwise reclaimed with
+// the arena (a geometric series, bounded by the final buffer size).
+//
+// The hash is deterministic (`hash_mix_u64`, the `hash_u64` builtin): no
+// per-process seed, so compiled programs and the compiler's own fixed point are
+// reproducible. The map exposes no iteration order.
 
 #[repr(C)]
 pub struct VowMap {
@@ -4385,8 +4408,123 @@ pub struct VowMap {
     pub owner: *mut VowArena,
 }
 
-const MAP_ENTRY_BYTES: usize = 16;
+const MAP_SLOT_BYTES: usize = 16;
 const MAP_INITIAL_CAP: usize = 8;
+const MAP_CTRL_EMPTY: u8 = 0;
+const MAP_CTRL_FULL: u8 = 1;
+
+#[cfg(test)]
+thread_local! {
+    static MAP_PROBES: Cell<u64> = const { Cell::new(0) };
+}
+
+const fn map_buffer_bytes(cap: usize) -> usize {
+    cap * (MAP_SLOT_BYTES + 1)
+}
+
+/// SplitMix64 output function applied to the state `x`. Bijective on `u64`.
+const fn hash_mix_u64(x: u64) -> u64 {
+    let mut z = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Slot where probing for `key` starts in a table of `mask + 1` slots.
+fn map_ideal_slot(key: i64, mask: usize) -> usize {
+    hash_mix_u64(key as u64) as usize & mask
+}
+
+type MapSlots<'a> = &'a mut [[i64; 2]];
+type MapCtrl<'a> = &'a mut [u8];
+
+/// The slots and control bytes of the table `ptr` holds `cap` slots of.
+unsafe fn map_table<'a>(ptr: *mut u8, cap: usize) -> (MapSlots<'a>, MapCtrl<'a>) {
+    unsafe {
+        (
+            std::slice::from_raw_parts_mut(ptr as *mut [i64; 2], cap),
+            std::slice::from_raw_parts_mut(ptr.add(cap * MAP_SLOT_BYTES), cap),
+        )
+    }
+}
+
+/// `map_table` for lookups: shared slices, so readers never hold `&mut` to a
+/// buffer another reader may be probing.
+unsafe fn map_table_ref<'a>(ptr: *const u8, cap: usize) -> (&'a [[i64; 2]], &'a [u8]) {
+    unsafe {
+        (
+            std::slice::from_raw_parts(ptr as *const [i64; 2], cap),
+            std::slice::from_raw_parts(ptr.add(cap * MAP_SLOT_BYTES), cap),
+        )
+    }
+}
+
+/// `Ok(slot)` holding `key`, or `Err(slot)` of the empty slot that ends its
+/// probe sequence.
+fn map_probe(slots: &[[i64; 2]], ctrl: &[u8], key: i64) -> Result<usize, usize> {
+    let mask = slots.len() - 1;
+    let mut i = map_ideal_slot(key, mask);
+    loop {
+        #[cfg(test)]
+        MAP_PROBES.with(|probes| probes.set(probes.get() + 1));
+        if ctrl[i] == MAP_CTRL_EMPTY {
+            return Err(i);
+        }
+        if slots[i][0] == key {
+            return Ok(i);
+        }
+        i = (i + 1) & mask;
+    }
+}
+
+/// The slot holding `key`, if bound. An empty map has no table to probe, which
+/// also covers rodata descriptors whose `cap` is a marker, not a slot count.
+unsafe fn map_find<'a>(m: *const VowMap, key: i64) -> Option<(&'a [[i64; 2]], usize)> {
+    let m = unsafe { &*m };
+    if m.len == 0 {
+        return None;
+    }
+    let (slots, ctrl) = unsafe { map_table_ref(m.ptr, m.cap) };
+    let found = map_probe(slots, ctrl, key).ok()?;
+    Some((slots, found))
+}
+
+/// Allocate a table of `cap` slots in `arena`, zeroed so every control byte
+/// reads `MAP_CTRL_EMPTY`.
+unsafe fn map_alloc_table(arena: *mut VowArena, cap: usize) -> *mut u8 {
+    let bytes = map_buffer_bytes(cap);
+    let ptr = unsafe { __vow_arena_alloc(arena, bytes, 8) };
+    unsafe { std::ptr::write_bytes(ptr, 0, bytes) };
+    ptr
+}
+
+/// Allocate a zeroed table of `new_cap` slots in the map's owner arena and move
+/// every entry across, then release the old buffer when it had a chunk to
+/// itself. Growth belongs to the owner arena (see `with_map_owner`).
+unsafe fn map_grow(m: &mut VowMap) {
+    let (old_ptr, old_cap) = (m.ptr, m.cap);
+    let new_cap = old_cap * 2;
+    let rehash = |arena: *mut VowArena| {
+        let new_ptr = unsafe { map_alloc_table(arena, new_cap) };
+        let (old_slots, old_ctrl) = unsafe { map_table(old_ptr, old_cap) };
+        let (new_slots, new_ctrl) = unsafe { map_table(new_ptr, new_cap) };
+        for (entry, &state) in old_slots.iter().zip(old_ctrl.iter()) {
+            if state != MAP_CTRL_FULL {
+                continue;
+            }
+            let Err(slot) = map_probe(new_slots, new_ctrl, entry[0]) else {
+                unreachable!("a rehashed key is unique")
+            };
+            new_slots[slot] = *entry;
+            new_ctrl[slot] = MAP_CTRL_FULL;
+        }
+        unsafe { arena_release_abandoned(arena, old_ptr, map_buffer_bytes(old_cap), 8) };
+        new_ptr
+    };
+    let new_ptr = unsafe { with_map_owner(m.owner, rehash) };
+    m.ptr = new_ptr;
+    m.cap = new_cap;
+}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_map_new_in_arena(arena: *mut VowArena) -> *mut u8 {
@@ -4395,9 +4533,7 @@ pub unsafe extern "C" fn __vow_map_new_in_arena(arena: *mut VowArena) -> *mut u8
     }
     let header_ptr =
         unsafe { __vow_arena_alloc(arena, std::mem::size_of::<VowMap>(), 8) } as *mut VowMap;
-    let buf_size = MAP_INITIAL_CAP * MAP_ENTRY_BYTES;
-    let buf_ptr = unsafe { __vow_arena_alloc(arena, buf_size, 8) };
-    unsafe { std::ptr::write_bytes(buf_ptr, 0, buf_size) };
+    let buf_ptr = unsafe { map_alloc_table(arena, MAP_INITIAL_CAP) };
     unsafe {
         (*header_ptr).ptr = buf_ptr;
         (*header_ptr).len = 0;
@@ -4426,24 +4562,24 @@ pub unsafe extern "C" fn __vow_map_insert_in_arena(
     if m.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("HashMap::insert");
     }
-    let entries = unsafe { std::slice::from_raw_parts_mut(m.ptr as *mut i64, m.len * 2) };
-    for i in 0..m.len {
-        if entries[i * 2] == key {
-            entries[i * 2 + 1] = val;
+    let (mut slots, mut ctrl) = unsafe { map_table(m.ptr, m.cap) };
+    let mut slot = match map_probe(slots, ctrl, key) {
+        Ok(slot) => {
+            slots[slot][1] = val;
             return;
         }
+        Err(slot) => slot,
+    };
+    if (m.len + 1) * 4 > m.cap * 3 {
+        unsafe { map_grow(m) };
+        (slots, ctrl) = unsafe { map_table(m.ptr, m.cap) };
+        let Err(grown_slot) = map_probe(slots, ctrl, key) else {
+            unreachable!("the key was absent before growth")
+        };
+        slot = grown_slot;
     }
-    if m.len == m.cap {
-        let old_size = m.cap * MAP_ENTRY_BYTES;
-        let new_cap = m.cap * 2;
-        let new_size = new_cap * MAP_ENTRY_BYTES;
-        let [new_ptr] = unsafe { arena_grow_map_buffers(m.owner, [m.ptr], old_size, new_size) };
-        m.ptr = new_ptr;
-        m.cap = new_cap;
-    }
-    let entries = unsafe { std::slice::from_raw_parts_mut(m.ptr as *mut i64, (m.len + 1) * 2) };
-    entries[m.len * 2] = key;
-    entries[m.len * 2 + 1] = val;
+    slots[slot] = [key, val];
+    ctrl[slot] = MAP_CTRL_FULL;
     m.len += 1;
 }
 
@@ -4467,11 +4603,7 @@ pub unsafe extern "C" fn __vow_map_get_in_arena(
     map: *const u8,
     key: i64,
 ) -> *mut u8 {
-    let m = unsafe { &*(map as *const VowMap) };
-    let entries = unsafe { std::slice::from_raw_parts(m.ptr as *const i64, m.len * 2) };
-    let value = (0..m.len)
-        .find(|&i| entries[i * 2] == key)
-        .map(|i| entries[i * 2 + 1]);
+    let value = unsafe { map_find(map as *const VowMap, key) }.map(|(slots, slot)| slots[slot][1]);
     unsafe { alloc_option_in_arena(arena, "HashMap::get", value) }
 }
 
@@ -4482,14 +4614,7 @@ pub unsafe extern "C" fn __vow_map_get(map: *const u8, key: i64) -> *mut u8 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_map_contains(map: *const u8, key: i64) -> bool {
-    let m = unsafe { &*(map as *const VowMap) };
-    let entries = unsafe { std::slice::from_raw_parts(m.ptr as *const i64, m.len * 2) };
-    for i in 0..m.len {
-        if entries[i * 2] == key {
-            return true;
-        }
-    }
-    false
+    unsafe { map_find(map as *const VowMap, key) }.is_some()
 }
 
 #[unsafe(no_mangle)]
@@ -4502,30 +4627,69 @@ pub unsafe extern "C" fn __vow_map_remove_in_arena(arena: *mut VowArena, map: *m
     unsafe { __vow_map_remove(map, key) };
 }
 
+/// Remove `key` by backward-shift deletion: each later member of the cluster
+/// whose probe path crosses the hole moves into it, so no tombstone is left.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_map_remove(map: *mut u8, key: i64) {
     let m = unsafe { &mut *(map as *mut VowMap) };
     if m.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("HashMap::remove");
     }
-    let entries = unsafe { std::slice::from_raw_parts_mut(m.ptr as *mut i64, m.len * 2) };
-    for i in 0..m.len {
-        if entries[i * 2] == key {
-            let last = m.len - 1;
-            if i != last {
-                entries[i * 2] = entries[last * 2];
-                entries[i * 2 + 1] = entries[last * 2 + 1];
-            }
-            m.len -= 1;
-            return;
+    let Some((_, found)) = (unsafe { map_find(m, key) }) else {
+        return;
+    };
+    let (slots, ctrl) = unsafe { map_table(m.ptr, m.cap) };
+    let mask = m.cap - 1;
+    let mut hole = found;
+    let mut next = found;
+    loop {
+        next = (next + 1) & mask;
+        if ctrl[next] == MAP_CTRL_EMPTY {
+            break;
+        }
+        let ideal = map_ideal_slot(slots[next][0], mask);
+        if next.wrapping_sub(ideal) & mask >= next.wrapping_sub(hole) & mask {
+            slots[hole] = slots[next];
+            hole = next;
         }
     }
+    ctrl[hole] = MAP_CTRL_EMPTY;
+    m.len -= 1;
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_map_len(map: *const u8) -> usize {
     let m = unsafe { &*(map as *const VowMap) };
     m.len
+}
+
+/// `hash_u64`: a deterministic bijective 64-bit mixer (SplitMix64 output
+/// function), the same one that places `HashMap` keys.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_hash_u64(x: u64) -> u64 {
+    hash_mix_u64(x)
+}
+
+/// `hash_str`: FNV-1a (64-bit) over the string's bytes. A null string hashes
+/// like the empty string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_hash_str(s: *const u8) -> u64 {
+    const FNV_OFFSET_BASIS: u64 = 0xCBF2_9CE4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01B3;
+    let bytes: &[u8] = if s.is_null() {
+        &[]
+    } else {
+        sanitize_on_read(s as usize, 0);
+        let v = unsafe { &*(s as *const VowVec) };
+        if v.len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(v.ptr, v.len) }
+        }
+    };
+    bytes.iter().fold(FNV_OFFSET_BASIS, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(FNV_PRIME)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -5255,28 +5419,30 @@ mod tests {
         // n = 5 charges 5 * (3 + 2) + 1, not the floor model's 5 * (2 + 2) + 1.
         assert_eq!(vec_sort_cost(5), 26);
 
-        let map = VowMap {
-            len: 4,
-            cap: 4,
-            ..make_rodata_map()
-        };
-        let map_ptr = &raw const map as *const u8;
-        __vow_perf_counter_reset();
-        unsafe { __vow_perf_count_map_contains(map_ptr, -1) };
-        assert_eq!(__vow_perf_counter_read(), 5);
-        __vow_perf_counter_reset();
-        unsafe { __vow_perf_count_map_get(map_ptr, -1) };
-        assert_eq!(__vow_perf_counter_read(), 5);
-        __vow_perf_counter_reset();
-        unsafe { __vow_perf_count_map_remove(map_ptr, -1) };
-        assert_eq!(__vow_perf_counter_read(), 5);
-        __vow_perf_counter_reset();
-        unsafe { __vow_perf_count_map_insert(map_ptr, -1, 0) };
-        assert_eq!(
-            __vow_perf_counter_read(),
-            9,
-            "scan plus possible buffer copy"
-        );
+        for len in [0usize, 4, 4096] {
+            let map = VowMap {
+                len,
+                cap: 4,
+                ..make_rodata_map()
+            };
+            let map_ptr = &raw const map as *const u8;
+            __vow_perf_counter_reset();
+            unsafe { __vow_perf_count_map_contains(map_ptr, -1) };
+            assert_eq!(__vow_perf_counter_read(), 2);
+            __vow_perf_counter_reset();
+            unsafe { __vow_perf_count_map_get(map_ptr, -1) };
+            assert_eq!(__vow_perf_counter_read(), 2);
+            __vow_perf_counter_reset();
+            unsafe { __vow_perf_count_map_remove(map_ptr, -1) };
+            assert_eq!(__vow_perf_counter_read(), 2);
+            __vow_perf_counter_reset();
+            unsafe { __vow_perf_count_map_insert(map_ptr, -1, 0) };
+            assert_eq!(
+                __vow_perf_counter_read(),
+                3,
+                "the charge must not scale with the map length"
+            );
+        }
 
         let a = borrowed_vow_string("abcd");
         let b = borrowed_vow_string("abcde");
@@ -5295,14 +5461,6 @@ mod tests {
         {
             assert_eq!(vec_sort_cost(usize::MAX), u64::MAX);
             __vow_perf_count();
-            assert_eq!(__vow_perf_counter_read(), u64::MAX);
-
-            let huge_map = VowMap {
-                len: usize::MAX,
-                ..map
-            };
-            __vow_perf_counter_reset();
-            unsafe { __vow_perf_count_map_insert(&raw const huge_map as *const u8, 0, 0) };
             assert_eq!(__vow_perf_counter_read(), u64::MAX);
         }
 
@@ -6084,16 +6242,18 @@ mod tests {
                 "the call arena only receives Option cells"
             );
 
-            let owner_cursor = owner.cursor;
-            unsafe { (ops.insert_root)(map, n, n * 10) };
+            let (owner_cursor, owner_retained) = (owner.cursor, owner.retained_bytes);
+            for i in n..2 * n {
+                unsafe { (ops.insert_root)(map, i, i * 10) };
+            }
             assert!(
-                owner.cursor > owner_cursor,
+                owner.cursor != owner_cursor || owner.retained_bytes > owner_retained,
                 "root-wrapper growth of an owned map still lands in the owner"
             );
 
             unsafe { __vow_arena_close(&mut call) };
-            assert_eq!(unsafe { (ops.len)(map) }, n as usize + 1);
-            for i in 0..=n {
+            assert_eq!(unsafe { (ops.len)(map) }, 2 * n as usize);
+            for i in 0..2 * n {
                 let hit = unsafe { (ops.get)(&mut owner, map, i) };
                 assert_eq!(option_pair(hit), (1, i * 10));
             }
@@ -7348,6 +7508,229 @@ mod tests {
         }
 
         unsafe { __vow_arena_close(&mut a) };
+    }
+
+    fn map_probes() -> u64 {
+        MAP_PROBES.with(Cell::get)
+    }
+
+    fn map_header(m: *mut u8) -> &'static VowMap {
+        unsafe { &*(m as *const VowMap) }
+    }
+
+    fn assert_map_invariants(m: *mut u8) {
+        let header = map_header(m);
+        assert!(header.cap.is_power_of_two() && header.cap >= MAP_INITIAL_CAP);
+        assert!(header.len * 4 <= header.cap * 3, "load factor above 3/4");
+        let (_, ctrl) = unsafe { map_table(header.ptr, header.cap) };
+        let full = ctrl.iter().filter(|&&c| c == MAP_CTRL_FULL).count();
+        assert_eq!(full, header.len, "control bytes disagree with len");
+    }
+
+    #[test]
+    fn map_probes_stay_short_for_structured_keys() {
+        for stride in [1i64, 1 << 20, 1 << 32] {
+            let mut a = empty_arena_header();
+            unsafe { __vow_arena_open(&mut a) };
+            let m = unsafe { __vow_map_new_in_arena(&mut a) };
+            let n = 100_000i64;
+            let before = map_probes();
+            for i in 0..n {
+                unsafe { __vow_map_insert_in_arena(&mut a, m, i * stride, i) };
+            }
+            for i in 0..n {
+                assert!(unsafe { __vow_map_contains(m, i * stride) });
+            }
+            let ops = (n * 2) as u64;
+            let probes = map_probes() - before;
+            assert!(
+                probes < ops * 4,
+                "stride {stride}: {probes} probes for {ops} operations"
+            );
+            assert_map_invariants(m);
+            unsafe { __vow_arena_close(&mut a) };
+        }
+    }
+
+    #[test]
+    fn map_lookup_probe_cost_does_not_grow_with_len() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let m = unsafe { __vow_map_new_in_arena(&mut a) };
+        let mut per_size = Vec::new();
+        for size in [1_000i64, 100_000] {
+            for i in map_header(m).len as i64..size {
+                unsafe { __vow_map_insert_in_arena(&mut a, m, i, i) };
+            }
+            let before = map_probes();
+            for i in size..size + 1_000 {
+                assert!(!unsafe { __vow_map_contains(m, i) });
+            }
+            per_size.push(map_probes() - before);
+        }
+        assert!(
+            per_size[1] < per_size[0] * 4 + 64,
+            "miss probes grew with len: {per_size:?}"
+        );
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn map_growth_keeps_every_key_and_the_load_bound() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let m = unsafe { __vow_map_new_in_arena(&mut a) };
+        let mut caps = vec![MAP_INITIAL_CAP];
+        for i in 0..5_000i64 {
+            unsafe { __vow_map_insert_in_arena(&mut a, m, i * 7 - 2_000, i) };
+            assert_map_invariants(m);
+            if map_header(m).cap != *caps.last().unwrap() {
+                caps.push(map_header(m).cap);
+            }
+        }
+        assert!(caps.windows(2).all(|w| w[1] == w[0] * 2), "{caps:?}");
+        assert!(caps.len() > 6, "several doublings expected: {caps:?}");
+        for i in 0..5_000i64 {
+            assert_eq!(map_get_pair(&mut a, m, i * 7 - 2_000), (1, i));
+        }
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn map_treats_every_i64_as_an_ordinary_key() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let m = unsafe { __vow_map_new_in_arena(&mut a) };
+        let keys = [0i64, -1, 1, i64::MIN, i64::MAX];
+        for (i, &k) in keys.iter().enumerate() {
+            unsafe { __vow_map_insert_in_arena(&mut a, m, k, i as i64 + 100) };
+        }
+        assert_eq!(unsafe { __vow_map_len(m) }, keys.len());
+        for (i, &k) in keys.iter().enumerate() {
+            assert_eq!(map_get_pair(&mut a, m, k), (1, i as i64 + 100));
+        }
+        unsafe { __vow_map_remove(m, i64::MIN) };
+        assert!(!unsafe { __vow_map_contains(m, i64::MIN) });
+        assert!(unsafe { __vow_map_contains(m, i64::MAX) });
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn map_overwrite_keeps_len_and_missing_remove_is_a_noop() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let m = unsafe { __vow_map_new_in_arena(&mut a) };
+        unsafe { __vow_map_remove(m, 9) };
+        assert_eq!(unsafe { __vow_map_len(m) }, 0);
+        for round in 0..3 {
+            unsafe { __vow_map_insert_in_arena(&mut a, m, 4, round) };
+            assert_eq!(unsafe { __vow_map_len(m) }, 1);
+            assert_eq!(map_get_pair(&mut a, m, 4), (1, round));
+        }
+        unsafe { __vow_map_remove(m, 9) };
+        assert_eq!(unsafe { __vow_map_len(m) }, 1);
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    /// Keys that all start probing at slot `slot` of a table with `mask + 1`
+    /// slots, in ascending order.
+    fn keys_colliding_at(slot: usize, mask: usize, count: usize) -> Vec<i64> {
+        (0i64..)
+            .filter(|&k| map_ideal_slot(k, mask) == slot)
+            .take(count)
+            .collect()
+    }
+
+    #[test]
+    fn map_remove_in_a_forced_cluster_keeps_later_members_findable() {
+        for removed in 0..5 {
+            let mut a = empty_arena_header();
+            unsafe { __vow_arena_open(&mut a) };
+            let m = unsafe { __vow_map_new_in_arena(&mut a) };
+            let mask = MAP_INITIAL_CAP - 1;
+            // Five colliding keys wrapping around the end of the table stay
+            // below the growth threshold and form one cluster.
+            let keys = keys_colliding_at(mask - 1, mask, 5);
+            for &k in &keys {
+                unsafe { __vow_map_insert_in_arena(&mut a, m, k, k * 3) };
+            }
+            assert_eq!(map_header(m).cap, MAP_INITIAL_CAP);
+            unsafe { __vow_map_remove(m, keys[removed]) };
+            assert_map_invariants(m);
+            for (i, &k) in keys.iter().enumerate() {
+                if i == removed {
+                    assert!(!unsafe { __vow_map_contains(m, k) });
+                } else {
+                    assert_eq!(map_get_pair(&mut a, m, k), (1, k * 3), "key {i}");
+                }
+            }
+            unsafe { __vow_map_insert_in_arena(&mut a, m, keys[removed], -5) };
+            assert_eq!(map_get_pair(&mut a, m, keys[removed]), (1, -5));
+            assert_map_invariants(m);
+            unsafe { __vow_arena_close(&mut a) };
+        }
+    }
+
+    #[test]
+    fn map_remove_churn_leaves_no_tombstones() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let m = unsafe { __vow_map_new_in_arena(&mut a) };
+        let cap_after_fill = {
+            for i in 0..1_000i64 {
+                unsafe { __vow_map_insert_in_arena(&mut a, m, i, i) };
+            }
+            map_header(m).cap
+        };
+        for round in 0..50i64 {
+            for i in 0..1_000i64 {
+                unsafe { __vow_map_remove(m, i) };
+            }
+            assert_eq!(unsafe { __vow_map_len(m) }, 0);
+            for i in 0..1_000i64 {
+                unsafe { __vow_map_insert_in_arena(&mut a, m, i, i + round) };
+            }
+            assert_map_invariants(m);
+        }
+        assert_eq!(map_header(m).cap, cap_after_fill, "churn must not grow");
+        let before = map_probes();
+        for i in 1_000..2_000i64 {
+            assert!(!unsafe { __vow_map_contains(m, i) });
+        }
+        assert!(map_probes() - before < 1_000 * 8);
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn hash_u64_matches_splitmix64_and_is_deterministic() {
+        assert_eq!(__vow_hash_u64(0), 0xE220_A839_7B1D_CDAF);
+        assert_eq!(__vow_hash_u64(1), 0x910A_2DEC_8902_5CC1);
+        assert_eq!(__vow_hash_u64(0x9E37_79B9_7F4A_7C15), 0x6E78_9E6A_A1B9_65F4);
+        assert_eq!(__vow_hash_u64(u64::MAX), hash_mix_u64(u64::MAX));
+        assert_eq!(__vow_hash_u64(12345), __vow_hash_u64(12345));
+        let distinct: std::collections::HashSet<u64> =
+            (0u64..10_000).map(|x| __vow_hash_u64(x)).collect();
+        assert_eq!(distinct.len(), 10_000, "mixer must be injective");
+    }
+
+    fn hash_of(text: &[u8]) -> u64 {
+        let v = borrowed_vow_string(std::str::from_utf8(text).unwrap());
+        unsafe { __vow_hash_str(&raw const v as *const u8) }
+    }
+
+    #[test]
+    fn hash_str_matches_fnv1a_vectors() {
+        assert_eq!(hash_of(b""), 0xCBF2_9CE4_8422_2325);
+        assert_eq!(hash_of(b"a"), 0xAF63_DC4C_8601_EC8C);
+        assert_eq!(hash_of(b"foobar"), 0x8594_4171_F739_67E8);
+        assert_eq!(
+            unsafe { __vow_hash_str(std::ptr::null()) },
+            0xCBF2_9CE4_8422_2325
+        );
+        assert_ne!(hash_of("é".as_bytes()), hash_of(b"e"));
+        assert_ne!(hash_of(b"ab"), hash_of(b"ba"));
+        assert_eq!(hash_of(b"ab\0"), hash_of(b"ab\0"));
+        assert_ne!(hash_of(b"ab\0"), hash_of(b"ab"));
     }
 
     #[test]

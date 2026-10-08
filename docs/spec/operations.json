@@ -267,6 +267,22 @@
       "doc_signature": "fn(pid: i64) -> String",
       "effects": "[io]",
       "arena_routing": "heap_fresh"
+    },
+    {
+      "name": "hash_u64",
+      "runtime_symbol": "__vow_hash_u64",
+      "params": ["u64"],
+      "return": "u64",
+      "doc_signature": "fn(x: u64) -> u64",
+      "effects": "[]"
+    },
+    {
+      "name": "hash_str",
+      "runtime_symbol": "__vow_hash_str",
+      "params": ["ptr"],
+      "return": "u64",
+      "doc_signature": "fn(s: String) -> u64",
+      "effects": "[]"
     }
   ],
   "arena_routes": [

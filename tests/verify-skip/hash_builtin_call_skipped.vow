@@ -1,0 +1,24 @@
+// TEST: category unverifiable
+module HashBuiltinCallSkipped
+
+// `hash_u64` and `hash_str` are unmodeled externs: the verifier has no model of
+// their results. A function that calls one is Skipped (fail-closed) instead of
+// being "proven" against an invented nondeterministic hash. `bucket`'s
+// postcondition is true for the real hash, but nothing is claimed about it.
+fn bucket(key: u64, buckets: u64) -> u64 vow {
+  requires: buckets > 0
+  ensures: result < buckets
+} {
+  hash_u64(key) % buckets
+}
+
+fn digest_is_stable(a: String) -> bool vow {
+  ensures: result
+} {
+  hash_str(a) == hash_str(a)
+}
+
+fn main() -> i32 [io] {
+  print_u64(bucket(7, 16));
+  0
+}

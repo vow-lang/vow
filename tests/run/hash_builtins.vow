@@ -1,0 +1,39 @@
+// TEST: stdout "u64(0)=16294208416658607535\nu64(1)=10451216379200822465\nu64(max)=16490336266968443936\nstr()=14695981039346656037\nstr(a)=12638187200555641996\nstr(foobar)=9625390261332436968\nstr(utf8)=775207407765167617\nstable=true\ndistinct=true\nbyte_order=true\n"
+// hash_u64 is SplitMix64's output function and hash_str is 64-bit FNV-1a, so
+// their results are fixed, reproducible constants. Both are pure: they are
+// called here from functions with an empty effect set.
+module HashBuiltins
+
+fn mix(x: u64) -> u64 {
+    hash_u64(x)
+}
+
+fn digest(s: String) -> u64 {
+    hash_str(s)
+}
+
+fn show(label: String, v: u64) [io] {
+    print_str(label);
+    print_u64(v);
+    print_str(String::from("\n"));
+}
+
+fn show_flag(label: String, ok: bool) [io] {
+    print_str(label);
+    if ok { print_str(String::from("true")); } else { print_str(String::from("false")); }
+    print_str(String::from("\n"));
+}
+
+fn main() -> i32 [io] {
+    show(String::from("u64(0)="), mix(0));
+    show(String::from("u64(1)="), mix(1));
+    show(String::from("u64(max)="), mix(18446744073709551615));
+    show(String::from("str()="), digest(String::from("")));
+    show(String::from("str(a)="), digest(String::from("a")));
+    show(String::from("str(foobar)="), digest(String::from("foobar")));
+    show(String::from("str(utf8)="), digest(String::from("é")));
+    show_flag(String::from("stable="), mix(12345) == mix(12345) && digest(String::from("hello")) == digest(String::from("hello")));
+    show_flag(String::from("distinct="), mix(1) != mix(2) && digest(String::from("ab")) != digest(String::from("abc")));
+    show_flag(String::from("byte_order="), digest(String::from("ab")) != digest(String::from("ba")));
+    0
+}
