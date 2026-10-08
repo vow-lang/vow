@@ -269,6 +269,47 @@
       "arena_routing": "heap_fresh"
     },
     {
+      "name": "process_start_piped",
+      "runtime_symbol": "__vow_process_start_piped",
+      "params": ["ptr", "ptr"],
+      "return": "i64",
+      "doc_signature": "fn(cmd: String, args: Vec<String>) -> i64",
+      "effects": "[io]"
+    },
+    {
+      "name": "process_write_stdin",
+      "runtime_symbol": "__vow_process_write_stdin",
+      "params": ["i64", "ptr"],
+      "return": "i64",
+      "doc_signature": "fn(pid: i64, data: String) -> i64",
+      "effects": "[io]"
+    },
+    {
+      "name": "process_close_stdin",
+      "runtime_symbol": "__vow_process_close_stdin",
+      "params": ["i64"],
+      "return": "i64",
+      "doc_signature": "fn(pid: i64) -> i64",
+      "effects": "[io]"
+    },
+    {
+      "name": "process_read_line",
+      "runtime_symbol": "__vow_process_read_line",
+      "params": ["i64", "i64"],
+      "return": "ptr",
+      "doc_signature": "fn(pid: i64, timeout_ms: i64) -> String",
+      "effects": "[io]",
+      "arena_routing": "heap_fresh"
+    },
+    {
+      "name": "process_read_status",
+      "runtime_symbol": "__vow_process_read_status",
+      "params": ["i64"],
+      "return": "i64",
+      "doc_signature": "fn(pid: i64) -> i64",
+      "effects": "[io]"
+    },
+    {
       "name": "hash_u64",
       "runtime_symbol": "__vow_hash_u64",
       "params": ["u64"],
@@ -347,6 +388,7 @@
     "__vow_process_get_stderr",
     "__vow_process_stdout_for",
     "__vow_process_stderr_for",
+    "__vow_process_read_line",
     "__vow_map_new",
     "__vow_btreemap_new",
     "__vow_string_new",

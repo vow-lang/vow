@@ -2497,6 +2497,34 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
             sig.returns.push(AbiParam::new(types::I64));
             true
         }
+        "__vow_process_start_piped" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_write_stdin" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_close_stdin" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_read_line" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_process_read_status" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
         "__vow_hash_u64" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
@@ -3638,6 +3666,8 @@ mod tests {
             "__vow_process_kill",
             "__vow_process_stdout_for",
             "__vow_process_stderr_for",
+            "__vow_process_close_stdin",
+            "__vow_process_read_status",
         ];
         for sym in one_param_returns_i64 {
             let sig = extern_sig(sym);
@@ -3652,6 +3682,9 @@ mod tests {
             "__vow_process_start",
             "__vow_process_wait_timeout",
             "__vow_process_poll_wait",
+            "__vow_process_start_piped",
+            "__vow_process_write_stdin",
+            "__vow_process_read_line",
         ];
         for sym in two_params_return_i64 {
             let sig = extern_sig(sym);

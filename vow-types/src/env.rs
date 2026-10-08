@@ -280,6 +280,26 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
         def("process_stdout_for", vec![Ty::I64], Ty::Str, &[Effect::IO]),
         def("process_stderr_for", vec![Ty::I64], Ty::Str, &[Effect::IO]),
         def(
+            "process_start_piped",
+            vec![Ty::Str, vec_ty(Ty::Str)],
+            Ty::I64,
+            &[Effect::IO],
+        ),
+        def(
+            "process_write_stdin",
+            vec![Ty::I64, Ty::Str],
+            Ty::I64,
+            &[Effect::IO],
+        ),
+        def("process_close_stdin", vec![Ty::I64], Ty::I64, &[Effect::IO]),
+        def(
+            "process_read_line",
+            vec![Ty::I64, Ty::I64],
+            Ty::Str,
+            &[Effect::IO],
+        ),
+        def("process_read_status", vec![Ty::I64], Ty::I64, &[Effect::IO]),
+        def(
             "__vow_clif_create",
             vec![Ty::I64, Ty::I64],
             Ty::I64,
@@ -991,17 +1011,22 @@ print_i64(I64) -> Unit [IO]
 print_str(Str) -> Unit [IO]
 print_u64(U64) -> Unit [IO]
 proc_sample() -> Str [IO]
+process_close_stdin(I64) -> I64 [IO]
 process_exit(I64) -> Never [IO]
 process_get_stderr() -> Str [IO]
 process_get_stdout() -> Str [IO]
 process_kill(I64) -> I64 [IO]
 process_poll_wait(I64, I64) -> I64 [IO]
+process_read_line(I64, I64) -> Str [IO]
+process_read_status(I64) -> I64 [IO]
 process_run(Str, Applied(Struct("Vec"), [Str])) -> I64 [IO]
 process_start(Str, Applied(Struct("Vec"), [Str])) -> I64 [IO]
+process_start_piped(Str, Applied(Struct("Vec"), [Str])) -> I64 [IO]
 process_stderr_for(I64) -> Str [IO]
 process_stdout_for(I64) -> Str [IO]
 process_wait(I64) -> I64 [IO]
 process_wait_timeout(I64, I64) -> I64 [IO]
+process_write_stdin(I64, Str) -> I64 [IO]
 stdin_read() -> Str [Read]
 stdin_read_line() -> Str [Read]
 stdin_ready() -> Bool [Read]

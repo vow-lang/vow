@@ -64,6 +64,11 @@ fn catalogue_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "process_kill" => Some(("__vow_process_kill", Ty::I64)),
         "process_stdout_for" => Some(("__vow_process_stdout_for", Ty::Ptr)),
         "process_stderr_for" => Some(("__vow_process_stderr_for", Ty::Ptr)),
+        "process_start_piped" => Some(("__vow_process_start_piped", Ty::I64)),
+        "process_write_stdin" => Some(("__vow_process_write_stdin", Ty::I64)),
+        "process_close_stdin" => Some(("__vow_process_close_stdin", Ty::I64)),
+        "process_read_line" => Some(("__vow_process_read_line", Ty::Ptr)),
+        "process_read_status" => Some(("__vow_process_read_status", Ty::I64)),
         "hash_u64" => Some(("__vow_hash_u64", Ty::U64)),
         "hash_str" => Some(("__vow_hash_str", Ty::U64)),
         _ => None,
@@ -76,6 +81,7 @@ fn catalogue_builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
         "process_get_stderr" => Some(BuiltinResultTag::StringHeap),
         "process_stdout_for" => Some(BuiltinResultTag::StringHeap),
         "process_stderr_for" => Some(BuiltinResultTag::StringHeap),
+        "process_read_line" => Some(BuiltinResultTag::StringHeap),
         _ => None,
     }
 }
@@ -5954,6 +5960,7 @@ mod tests {
             "process_get_stderr",
             "process_stdout_for",
             "process_stderr_for",
+            "process_read_line",
             "proc_sample",
         ] {
             assert_eq!(builtin_result_tag(name), Some(StringHeap), "{name}");
@@ -6322,6 +6329,11 @@ type PairView = PairAlias;
             ("process_kill", "__vow_process_kill", Ty::I64),
             ("process_stdout_for", "__vow_process_stdout_for", Ty::Ptr),
             ("process_stderr_for", "__vow_process_stderr_for", Ty::Ptr),
+            ("process_start_piped", "__vow_process_start_piped", Ty::I64),
+            ("process_write_stdin", "__vow_process_write_stdin", Ty::I64),
+            ("process_close_stdin", "__vow_process_close_stdin", Ty::I64),
+            ("process_read_line", "__vow_process_read_line", Ty::Ptr),
+            ("process_read_status", "__vow_process_read_status", Ty::I64),
             ("__vow_clif_create", "__vow_clif_create", Ty::I64),
             ("__vow_clif_add_string", "__vow_clif_add_string", Ty::Unit),
             (

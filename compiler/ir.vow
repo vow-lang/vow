@@ -697,6 +697,9 @@ fn fresh_arena_base_extern(sym: String) -> bool {
             return sym == String::from("__vow_string_substring");
         }
     }
+    if n == 23 {
+        return sym == String::from("__vow_process_read_line");
+    }
     if n == 24 {
         let c0: i64 = sym.byte_at(17);
         if c0 == 95 {

@@ -3520,6 +3520,11 @@ mod tests {
             "__vow_process_run",
             "__vow_process_get_stdout",
             "__vow_process_wait",
+            "__vow_process_start_piped",
+            "__vow_process_write_stdin",
+            "__vow_process_close_stdin",
+            "__vow_process_read_line",
+            "__vow_process_read_status",
         ] {
             assert!(!is_known_builtin(sym), "{sym}");
         }
