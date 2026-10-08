@@ -54,6 +54,15 @@ fn check_process_ret_tys() -> i64 {
     r
 }
 
+fn check_hash_ops() -> i64 {
+    let mut r: i64 = expect_extern(String::from("hash_u64"), String::from("__vow_hash_u64"), 60);
+    if r == 0 { r = expect_extern(String::from("hash_str"), String::from("__vow_hash_str"), 61); }
+    if r == 0 { r = expect_ret_ty(String::from("hash_u64"), ITY_U64(), 62); }
+    if r == 0 { r = expect_ret_ty(String::from("hash_str"), ITY_U64(), 63); }
+    if r == 0 && builtin_result_tag(String::from("hash_str")) != BRT_NONE() { r = 64; }
+    r
+}
+
 // The StringHeap-tagged process_* names are already pinned by
 // check_string_rows in test_lower_builtin_result_tag.vow; this only covers
 // the untagged ones, which aren't asserted anywhere else.
@@ -69,5 +78,6 @@ fn main() -> i32 {
     if r == 0 { r = check_process_externs(); }
     if r == 0 { r = check_process_ret_tys(); }
     if r == 0 { r = check_process_result_tags(); }
+    if r == 0 { r = check_hash_ops(); }
     i64_to_i32_wrap(r)
 }
