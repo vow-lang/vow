@@ -23,7 +23,7 @@ fn verdict_code(f: IrFunction, want_bad: bool, code: i64) -> i64 {
         return code;
     }
     if is_bad && !msg.contains(SKIP_IR_NON_DOMINATING_READ()) {
-        return code + 500;
+        return code + 100;
     }
     0
 }
@@ -88,10 +88,10 @@ fn check_empty_function() -> i64 {
 fn check_diamond_good() -> i64 {
     let then_i: Vec<IrInst> = insts();
     then_i.push(mk_inst_const_i64(10, 5));
-    then_i.push(mk_inst_upsilon(11, 10, 40));
+    then_i.push(mk_inst_upsilon(11, 10, 41));
     let else_i: Vec<IrInst> = insts();
     else_i.push(mk_inst_const_i64(12, 6));
-    else_i.push(mk_inst_upsilon(13, 12, 40));
+    else_i.push(mk_inst_upsilon(13, 12, 41));
     let merge_i: Vec<IrInst> = insts();
     merge_i.push(mk_inst_phi(41, ITY_I64()));
     merge_i.push(mk_inst_add(42, 0, 41));
@@ -367,6 +367,11 @@ fn check_lowered_match() -> i64 [io] {
     expect_lowered_clean(src, 83)
 }
 
+fn check_lowered_control_flow() -> i64 [io] {
+    let src: String = String::from("fn lp(n: i64) -> i64 { let mut i: i64 = 0; let mut s: i64 = 0; loop { if i >= n { break; } i = i + 1; if i == 3 { continue; } s = s + i; } s }\nfn er(a: i64) -> i64 { if a > 0 { return 1; } let mut x: i64 = 0; if a < -5 { x = 2; } else { return 3; } x }\nfn nl(n: i64) -> i64 { let mut t: i64 = 0; let mut i: i64 = 0; while i < n { let mut j: i64 = 0; loop { if j >= i { break; } t = t + j; j = j + 1; } i = i + 1; } t }\nfn mr(e: i64) -> i64 { let v: i64 = if e > 0 { e } else { return 0; }; v + 1 }\nfn main() -> i32 { 0 }\n");
+    expect_lowered_clean(src, 84)
+}
+
 fn main() -> i32 [io] {
     let mut r: i64 = check_straight_line();
     if r == 0 { r = check_use_before_def(); }
@@ -389,5 +394,6 @@ fn main() -> i32 [io] {
     if r == 0 { r = check_lowered_loops(); }
     if r == 0 { r = check_lowered_short_circuit(); }
     if r == 0 { r = check_lowered_match(); }
+    if r == 0 { r = check_lowered_control_flow(); }
     i64_to_i32_wrap(r)
 }
