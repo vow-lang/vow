@@ -1,0 +1,137 @@
+// TEST: stdout "strided=4501500\nstrided_miss=0\nstrided_len=3000\nafter_remove_len=2000\nafter_remove_sum=3002000\nremoved_present=0\nnegative=1001000\nu8_len=256\nu8_sum=5559680\ni32_edges=true\n"
+// Keys that share all their low bits, negative keys, narrow integer keys and
+// removal from the middle of dense clusters must all stay reachable: the
+// table may not assume keys are spread by their low bits.
+module HashMapCollisions
+
+fn fill_strided(m: HashMap<i64, i64>, n: u64, stride: i64) {
+    let mut i: u64 = 0;
+    while i < n {
+        m.insert((i as i64) * stride, (i as i64) + 1);
+        i = i + 1;
+    }
+}
+
+fn strided_sum(m: HashMap<i64, i64>, n: u64, stride: i64) -> i64 [panic] {
+    let mut total: i64 = 0;
+    let mut i: u64 = 0;
+    while i < n {
+        total = total + m.get((i as i64) * stride).unwrap();
+        i = i + 1;
+    }
+    total
+}
+
+fn strided_misses(m: HashMap<i64, i64>, n: u64, stride: i64) -> u64 {
+    let mut found: u64 = 0;
+    let mut i: u64 = 0;
+    while i < n {
+        if m.contains_key((i as i64) * stride + 1) { found = found + 1; }
+        i = i + 1;
+    }
+    found
+}
+
+fn remove_every_third(m: HashMap<i64, i64>, n: u64, stride: i64) {
+    let mut i: u64 = 0;
+    while i < n {
+        m.remove((i as i64) * stride);
+        i = i + 3;
+    }
+}
+
+fn surviving_sum(m: HashMap<i64, i64>, n: u64, stride: i64) -> i64 [panic] {
+    let mut total: i64 = 0;
+    let mut i: u64 = 0;
+    while i < n {
+        if i % 3 != 0 { total = total + m.get((i as i64) * stride).unwrap(); }
+        i = i + 1;
+    }
+    total
+}
+
+fn removed_present(m: HashMap<i64, i64>, n: u64, stride: i64) -> u64 {
+    let mut found: u64 = 0;
+    let mut i: u64 = 0;
+    while i < n {
+        if m.contains_key((i as i64) * stride) { found = found + 1; }
+        i = i + 3;
+    }
+    found
+}
+
+fn negative_sum() -> i64 [panic] {
+    let m: HashMap<i64, i64> = HashMap::new();
+    let mut i: i64 = 1;
+    while i <= 1000 {
+        m.insert(0 - i, i * 2);
+        i = i + 1;
+    }
+    let mut total: i64 = 0;
+    let mut j: i64 = 1;
+    while j <= 1000 {
+        total = total + m.get(0 - j).unwrap();
+        j = j + 1;
+    }
+    total
+}
+
+fn u8_keys() -> i64 [io, panic] {
+    let m: HashMap<u8, i64> = HashMap::new();
+    let mut i: i64 = 0;
+    while i < 256 {
+        m.insert(i64_to_u8_wrap(i), i * i);
+        i = i + 1;
+    }
+    let mut total: i64 = 0;
+    let mut j: i64 = 0;
+    while j < 256 {
+        total = total + m.get(i64_to_u8_wrap(j)).unwrap();
+        j = j + 1;
+    }
+    print_str(String::from("u8_len="));
+    print_u64(m.len());
+    print_str(String::from("\n"));
+    total
+}
+
+fn i32_edges() -> bool [panic] {
+    let m: HashMap<i32, i64> = HashMap::new();
+    let lo: i32 = -2147483648;
+    let hi: i32 = 2147483647;
+    m.insert(lo, 1);
+    m.insert(hi, 2);
+    m.insert(0, 3);
+    m.insert(-1, 4);
+    m.get(lo).unwrap() == 1 && m.get(hi).unwrap() == 2 && m.get(0).unwrap() == 3 && m.get(-1).unwrap() == 4 && m.len() == 4
+}
+
+fn main() -> i32 [io, panic] {
+    let stride: i64 = 1048576;
+    let n: u64 = 3000;
+    let m: HashMap<i64, i64> = HashMap::new();
+    fill_strided(m, n, stride);
+    print_str(String::from("strided="));
+    print_i64(strided_sum(m, n, stride));
+    print_str(String::from("\nstrided_miss="));
+    print_u64(strided_misses(m, n, stride));
+    print_str(String::from("\nstrided_len="));
+    print_u64(m.len());
+    remove_every_third(m, n, stride);
+    print_str(String::from("\nafter_remove_len="));
+    print_u64(m.len());
+    print_str(String::from("\nafter_remove_sum="));
+    print_i64(surviving_sum(m, n, stride));
+    print_str(String::from("\nremoved_present="));
+    print_u64(removed_present(m, n, stride));
+    print_str(String::from("\nnegative="));
+    print_i64(negative_sum());
+    print_str(String::from("\n"));
+    let total: i64 = u8_keys();
+    print_str(String::from("u8_sum="));
+    print_i64(total);
+    print_str(String::from("\ni32_edges="));
+    if i32_edges() { print_str(String::from("true")); } else { print_str(String::from("false")); }
+    print_str(String::from("\n"));
+    0
+}

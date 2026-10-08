@@ -1,0 +1,84 @@
+// TEST: stdout "len=50000\nsum=3749925000\nmiss=0\nbuilt_len=20000\nbuilt_sum=399980000\nstruct_len=15000\nstruct_sum=112507500\ngrown_len=40000\ngrown_sum=799980000\n"
+// A map doubles its table many times while it grows: past the initial table
+// every key must stay reachable, whether the map is built in the same
+// function, returned from a callee, held in a struct field, or grown by a
+// callee on behalf of its caller (growth belongs to the map's own region).
+module HashMapGrowth
+
+struct Registry {
+    index: HashMap<i64, i64>,
+    count: u64,
+}
+
+fn fill(m: HashMap<i64, i64>, from: i64, to: i64, scale: i64) {
+    let mut k: i64 = from;
+    while k < to {
+        m.insert(k, k * scale);
+        k = k + 1;
+    }
+}
+
+fn sum_range(m: HashMap<i64, i64>, from: i64, to: i64) -> i64 [panic] {
+    let mut total: i64 = 0;
+    let mut k: i64 = from;
+    while k < to {
+        total = total + m.get(k).unwrap();
+        k = k + 1;
+    }
+    total
+}
+
+fn count_present(m: HashMap<i64, i64>, from: i64, to: i64) -> u64 {
+    let mut found: u64 = 0;
+    let mut k: i64 = from;
+    while k < to {
+        if m.contains_key(k) { found = found + 1; }
+        k = k + 1;
+    }
+    found
+}
+
+fn build(n: i64, scale: i64) -> HashMap<i64, i64> {
+    let m: HashMap<i64, i64> = HashMap::new();
+    fill(m, 0, n, scale);
+    m
+}
+
+fn register(r: Registry, n: i64) {
+    let idx: HashMap<i64, i64> = r.index;
+    let mut k: i64 = 0;
+    while k < n {
+        idx.insert(k, k + 1);
+        k = k + 1;
+    }
+}
+
+fn line(label: String, v: i64) [io] {
+    print_str(label);
+    print_i64(v);
+    print_str(String::from("\n"));
+}
+
+fn main() -> i32 [io, panic] {
+    let m: HashMap<i64, i64> = HashMap::new();
+    fill(m, 0, 50000, 3);
+    line(String::from("len="), m.len() as i64);
+    line(String::from("sum="), sum_range(m, 0, 50000));
+    line(String::from("miss="), count_present(m, 50000, 100000) as i64);
+
+    let built: HashMap<i64, i64> = build(20000, 2);
+    line(String::from("built_len="), built.len() as i64);
+    line(String::from("built_sum="), sum_range(built, 0, 20000));
+
+    let r: Registry = Registry { index: HashMap::new(), count: 15000 };
+    register(r, 15000);
+    let idx: HashMap<i64, i64> = r.index;
+    line(String::from("struct_len="), idx.len() as i64);
+    line(String::from("struct_sum="), sum_range(idx, 0, 15000));
+
+    let grown: HashMap<i64, i64> = build(1000, 1);
+    fill(grown, 1000, 40000, 1);
+    line(String::from("grown_len="), grown.len() as i64);
+    line(String::from("grown_sum="), sum_range(grown, 0, 40000));
+    0
+}

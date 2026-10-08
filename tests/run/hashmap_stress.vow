@@ -1,0 +1,48 @@
+// TEST: stdout "inserted=300000\nhit_sum=44999850000\nmisses=0\nremoved_len=0\n"
+// End-to-end sanity gate for amortised O(1) operations: 300000 inserts, as
+// many lookups and as many removals finish in a fraction of a second. A
+// linear-scan table needs ~10^11 key comparisons here and would trip the
+// harness timeout. The deterministic complexity gate is the probe-count test
+// in vow-runtime; wall-clock is not the assertion.
+module HashMapStress
+
+fn key_of(i: u64) -> i64 {
+    (i as i64) * 2654435761
+}
+
+fn main() -> i32 [io, panic] {
+    let n: u64 = 300000;
+    let m: HashMap<i64, i64> = HashMap::new();
+    let mut i: u64 = 0;
+    while i < n {
+        m.insert(key_of(i), i as i64);
+        i = i + 1;
+    }
+    print_str(String::from("inserted="));
+    print_u64(m.len());
+    let mut sum: i64 = 0;
+    let mut j: u64 = 0;
+    while j < n {
+        sum = sum + m.get(key_of(j)).unwrap();
+        j = j + 1;
+    }
+    print_str(String::from("\nhit_sum="));
+    print_i64(sum);
+    let mut absent: u64 = 0;
+    let mut a: u64 = 0;
+    while a < n {
+        if m.contains_key(key_of(a) + 1) { absent = absent + 1; }
+        a = a + 1;
+    }
+    print_str(String::from("\nmisses="));
+    print_u64(absent);
+    let mut r: u64 = 0;
+    while r < n {
+        m.remove(key_of(r));
+        r = r + 1;
+    }
+    print_str(String::from("\nremoved_len="));
+    print_u64(m.len());
+    print_str(String::from("\n"));
+    0
+}

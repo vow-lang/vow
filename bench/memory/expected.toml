@@ -96,6 +96,11 @@ file = "programs/alloc_loop_hashmap_get.vow"
 max_rss_kb = 7012
 expected = "pass"
 
+[alloc_loop_hashmap_growth]
+file = "programs/alloc_loop_hashmap_growth.vow"
+max_rss_kb = 58884
+expected = "pass"
+
 [alloc_loop_map]
 file = "programs/alloc_loop_map.vow"
 max_rss_kb = 6984
