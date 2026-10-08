@@ -397,6 +397,9 @@ fn fresh_arena_base_extern(sym: String) -> bool {
     if n == 10 {
         return sym == String::from("__vow_args");
     }
+    if n == 12 {
+        return sym == String::from("__vow_getenv");
+    }
     if n == 13 {
         let c0: i64 = sym.byte_at(10);
         if c0 == 101 {
@@ -426,6 +429,9 @@ fn fresh_arena_base_extern(sym: String) -> bool {
         if c0 == 110 {
             return sym == String::from("__vow_hex_encode");
         }
+        if c0 == 112 {
+            return sym == String::from("__vow_mktemp_dir");
+        }
         if c0 == 115 {
             return sym == String::from("__vow_fs_listdir");
         }
@@ -434,6 +440,9 @@ fn fresh_arena_base_extern(sym: String) -> bool {
         let c0: i64 = sym.byte_at(13);
         if c0 == 106 {
             return sym == String::from("__vow_string_join");
+        }
+        if c0 == 111 {
+            return sym == String::from("__vow_path_lookup");
         }
         if c0 == 116 {
             return sym == String::from("__vow_string_trim");

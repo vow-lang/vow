@@ -1,0 +1,35 @@
+// TEST: category unverifiable
+module EnvBuiltinCallSkipped
+
+// `getenv`, `path_lookup`, `mktemp_dir` and `fs_read_status` read or change
+// state outside the program, so they carry effects and have no verifier model.
+// A contracted function that calls one is Skipped (fail-closed) rather than
+// "proven" against an invented result.
+fn home_is_not_negative() -> i64 [read] vow {
+  ensures: result >= 0
+} {
+  getenv(String::from("HOME")).len() as i64
+}
+
+fn found_is_not_negative(name: String) -> i64 [read] vow {
+  ensures: result >= 0
+} {
+  path_lookup(name).len() as i64
+}
+
+fn scratch_is_not_negative() -> i64 [io] vow {
+  ensures: result >= 0
+} {
+  mktemp_dir(String::from("vow")).len() as i64
+}
+
+fn status_is_at_least_minus_one() -> i64 [read] vow {
+  ensures: result >= 0 - 1
+} {
+  fs_read_status()
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

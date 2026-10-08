@@ -1,0 +1,33 @@
+// TEST: stdout "ok\n"
+module PathLookupBasic
+
+fn fail(msg: String) -> i32 [io] {
+    print_str(msg);
+    print_str(String::from("\n"));
+    1
+}
+
+fn main() -> i32 [read, io] {
+    let sh: String = path_lookup(String::from("sh"));
+    if sh.len() == 0 {
+        return fail(String::from("sh"));
+    }
+    if fs_exists(sh) != 1 {
+        return fail(String::from("sh-exists"));
+    }
+    if path_lookup(String::from("no-such-binary-1404")).len() != 0 {
+        return fail(String::from("missing"));
+    }
+    if path_lookup(String::from("")).len() != 0 {
+        return fail(String::from("empty"));
+    }
+    let direct: String = path_lookup(sh);
+    if direct != sh {
+        return fail(String::from("absolute"));
+    }
+    if path_lookup(String::from("tests/fixtures/fs_stream_lines.txt")).len() != 0 {
+        return fail(String::from("not-executable"));
+    }
+    print_str(String::from("ok\n"));
+    0
+}

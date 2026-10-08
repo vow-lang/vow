@@ -1,0 +1,25 @@
+// TEST: stdout "ok\n"
+module GetenvBasic
+
+fn fail(msg: String) -> i32 [io] {
+    print_str(msg);
+    print_str(String::from("\n"));
+    1
+}
+
+fn main() -> i32 [read, io] {
+    if getenv(String::from("PATH")).len() == 0 {
+        return fail(String::from("path"));
+    }
+    if getenv(String::from("VOW_TEST_DEFINITELY_UNSET_1404")).len() != 0 {
+        return fail(String::from("unset"));
+    }
+    if getenv(String::from("")).len() != 0 {
+        return fail(String::from("empty-name"));
+    }
+    if getenv(String::from("PATH=x")).len() != 0 {
+        return fail(String::from("equals-name"));
+    }
+    print_str(String::from("ok\n"));
+    0
+}

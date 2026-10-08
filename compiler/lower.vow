@@ -1835,6 +1835,10 @@ fn catalogue_builtin_to_extern(name: String) -> String {
     if name == String::from("process_stderr_for") { return String::from("__vow_process_stderr_for"); }
     if name == String::from("hash_u64") { return String::from("__vow_hash_u64"); }
     if name == String::from("hash_str") { return String::from("__vow_hash_str"); }
+    if name == String::from("fs_read_status") { return String::from("__vow_fs_read_status"); }
+    if name == String::from("getenv") { return String::from("__vow_getenv"); }
+    if name == String::from("path_lookup") { return String::from("__vow_path_lookup"); }
+    if name == String::from("mktemp_dir") { return String::from("__vow_mktemp_dir"); }
     return String::from("");
 }
 
@@ -1874,6 +1878,10 @@ fn catalogue_builtin_ret_ty(name: String) -> i64 {
     if name == String::from("process_stderr_for") { return ITY_PTR(); }
     if name == String::from("hash_u64") { return ITY_U64(); }
     if name == String::from("hash_str") { return ITY_U64(); }
+    if name == String::from("fs_read_status") { return ITY_I64(); }
+    if name == String::from("getenv") { return ITY_PTR(); }
+    if name == String::from("path_lookup") { return ITY_PTR(); }
+    if name == String::from("mktemp_dir") { return ITY_PTR(); }
     return -1;
 }
 
@@ -1882,6 +1890,9 @@ fn catalogue_builtin_result_tag(name: String) -> i64 {
     if name == String::from("process_get_stderr") { return BRT_STRING(); }
     if name == String::from("process_stdout_for") { return BRT_STRING(); }
     if name == String::from("process_stderr_for") { return BRT_STRING(); }
+    if name == String::from("getenv") { return BRT_STRING(); }
+    if name == String::from("path_lookup") { return BRT_STRING(); }
+    if name == String::from("mktemp_dir") { return BRT_STRING(); }
     return BRT_NONE();
 }
 // GENERATE:OPERATIONS:END

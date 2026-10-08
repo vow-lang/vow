@@ -3438,6 +3438,25 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
             sig.returns.push(AbiParam::new(types::I64));
             true
         }
+        "__vow_fs_read_status" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_getenv" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_path_lookup" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_mktemp_dir" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
         _ => false,
     }
 }
@@ -3526,6 +3545,9 @@ const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[
     ("__vow_fs_listdir", "__vow_fs_listdir_in_arena"),
     ("__vow_stdin_read", "__vow_stdin_read_in_arena"),
     ("__vow_args", "__vow_args_in_arena"),
+    ("__vow_getenv", "__vow_getenv_in_arena"),
+    ("__vow_path_lookup", "__vow_path_lookup_in_arena"),
+    ("__vow_mktemp_dir", "__vow_mktemp_dir_in_arena"),
     (
         "__vow_process_get_stdout",
         "__vow_process_get_stdout_in_arena",

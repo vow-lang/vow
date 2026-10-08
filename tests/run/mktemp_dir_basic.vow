@@ -1,0 +1,58 @@
+// TEST: stdout "ok\n"
+module MktempDirBasic
+
+fn fail(msg: String) -> i32 [io] {
+    print_str(msg);
+    print_str(String::from("\n"));
+    1
+}
+
+fn main() -> i32 [read, io, write] {
+    let a: String = mktemp_dir(String::from("vow-1404"));
+    let b: String = mktemp_dir(String::from("vow-1404"));
+    if a.len() == 0 || b.len() == 0 {
+        return fail(String::from("create"));
+    }
+    if a == b {
+        return fail(String::from("unique"));
+    }
+    if fs_is_dir(a) != 1 {
+        return fail(String::from("is-dir"));
+    }
+    let tmpdir: String = getenv(String::from("TMPDIR"));
+    let base: String = if tmpdir.len() == 0 { String::from("/tmp") } else { tmpdir };
+    if a.substring(0, base.len()) != base {
+        return fail(String::from("base"));
+    }
+    if !a.contains(String::from("vow-1404.")) {
+        return fail(String::from("prefix"));
+    }
+
+    let file: String = String::from("");
+    file.push_str(a);
+    file.push_str(String::from("/probe.txt"));
+    if fs_write(file, String::from("x")) != 0 {
+        return fail(String::from("write"));
+    }
+    if fs_read(file) != String::from("x") {
+        return fail(String::from("read"));
+    }
+    if fs_remove(file) != 0 {
+        return fail(String::from("remove-file"));
+    }
+    if fs_remove_dir(a) != 0 {
+        return fail(String::from("remove-a"));
+    }
+    if fs_remove_dir(b) != 0 {
+        return fail(String::from("remove-b"));
+    }
+
+    if mktemp_dir(String::from("a/b")).len() != 0 {
+        return fail(String::from("slash"));
+    }
+    if mktemp_dir(String::from("")).len() != 0 {
+        return fail(String::from("empty"));
+    }
+    print_str(String::from("ok\n"));
+    0
+}

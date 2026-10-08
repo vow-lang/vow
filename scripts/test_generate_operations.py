@@ -323,7 +323,45 @@ HASH_OPS = [
     },
 ]
 
-KNOWN_OPS = PRINT_OPS + FS_STDIN_ARGS_STDERR_OPS + PROCESS_OPS + HASH_OPS
+ENV_OPS = [
+    {
+        "name": "fs_read_status",
+        "runtime_symbol": "__vow_fs_read_status",
+        "params": [],
+        "return": "i64",
+        "doc_signature": "fn() -> i64",
+        "effects": "[read]",
+    },
+    {
+        "name": "getenv",
+        "runtime_symbol": "__vow_getenv",
+        "params": ["ptr"],
+        "return": "ptr",
+        "doc_signature": "fn(name: String) -> String",
+        "effects": "[read]",
+        "arena_routing": "heap_fresh",
+    },
+    {
+        "name": "path_lookup",
+        "runtime_symbol": "__vow_path_lookup",
+        "params": ["ptr"],
+        "return": "ptr",
+        "doc_signature": "fn(name: String) -> String",
+        "effects": "[read]",
+        "arena_routing": "heap_fresh",
+    },
+    {
+        "name": "mktemp_dir",
+        "runtime_symbol": "__vow_mktemp_dir",
+        "params": ["ptr"],
+        "return": "ptr",
+        "doc_signature": "fn(prefix: String) -> String",
+        "effects": "[io]",
+        "arena_routing": "heap_fresh",
+    },
+]
+
+KNOWN_OPS = PRINT_OPS + FS_STDIN_ARGS_STDERR_OPS + PROCESS_OPS + HASH_OPS + ENV_OPS
 
 
 class LoadCatalogueTest(unittest.TestCase):
@@ -681,6 +719,17 @@ class RealCatalogueProcessOpsTest(unittest.TestCase):
             "process_stderr_for",
         ]:
             self.assertIn(name, names)
+
+    def test_env_ops_present_with_expected_shape(self):
+        ops = {o["name"]: o for o in go.load_catalogue(REPO_ROOT)}
+        self.assertEqual(ops["fs_read_status"]["return"], "i64")
+        self.assertEqual(ops["fs_read_status"]["params"], [])
+        for name in ["getenv", "path_lookup", "mktemp_dir"]:
+            self.assertEqual(ops[name]["return"], "ptr")
+            self.assertEqual(ops[name]["params"], ["ptr"])
+            self.assertEqual(ops[name]["arena_routing"], "heap_fresh")
+            self.assertEqual(ops[name]["runtime_symbol"], f"__vow_{name}")
+        self.assertNotIn("arena_routing", ops["fs_read_status"])
 
     def test_real_catalogue_projections_are_up_to_date(self):
         ops = go.load_catalogue(REPO_ROOT)
