@@ -104,16 +104,16 @@ runs:
         BITWUZLA_URL="https://github.com/bitwuzla/bitwuzla/releases/download/$BITWUZLA_VERSION/$BITWUZLA_ZIP"
 
         curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-          -o "/tmp/$BITWUZLA_ZIP" "$BITWUZLA_URL"
+          -o "$RUNNER_TEMP/$BITWUZLA_ZIP" "$BITWUZLA_URL"
 
         if command -v sha256sum >/dev/null 2>&1; then
-          echo "$BITWUZLA_SHA256  /tmp/$BITWUZLA_ZIP" | sha256sum --check --strict -
+          echo "$BITWUZLA_SHA256  $RUNNER_TEMP/$BITWUZLA_ZIP" | sha256sum --check --strict -
         else
-          echo "$BITWUZLA_SHA256  /tmp/$BITWUZLA_ZIP" | shasum -a 256 --check --strict -
+          echo "$BITWUZLA_SHA256  $RUNNER_TEMP/$BITWUZLA_ZIP" | shasum -a 256 --check --strict -
         fi
 
-        unzip -q "/tmp/$BITWUZLA_ZIP" -d ~/bitwuzla
-        rm "/tmp/$BITWUZLA_ZIP"
+        unzip -q "$RUNNER_TEMP/$BITWUZLA_ZIP" -d ~/bitwuzla
+        rm "$RUNNER_TEMP/$BITWUZLA_ZIP"
 
     # The macOS static archive still links Homebrew's gmp and mpfr by
     # absolute path (/opt/homebrew/opt/...) and aborts at dyld load time
@@ -122,6 +122,9 @@ runs:
     - name: Install Bitwuzla runtime dependencies (macOS)
       if: runner.os == 'macOS'
       shell: bash
+      env:
+        HOMEBREW_NO_AUTO_UPDATE: "1"
+        HOMEBREW_NO_INSTALL_CLEANUP: "1"
       run: brew install gmp mpfr
 
     # Locate the binary rather than assuming where it sits, so a layout

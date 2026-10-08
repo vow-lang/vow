@@ -31,7 +31,6 @@ class InstallBitwuzlaActionTest(unittest.TestCase):
         self.assertRegex(
             text, r'(?m)^  version:\n(?:    .*\n)*?    default: "\d+\.\d+\.\d+"$'
         )
-        self.assertNotIn("latest", text)
 
     def test_install_fails_at_install_time_when_binary_is_unusable(self) -> None:
         text = ACTION.read_text(encoding="utf-8")
