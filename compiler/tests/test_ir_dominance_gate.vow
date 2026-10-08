@@ -1,0 +1,110 @@
+module TestIrDominanceGate
+
+use ir
+use c_emitter
+use verifier
+use tests.builders
+
+// Function whose only instruction reads an operand that has no definition.
+fn bad_function(id: i64, name: String) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_return(1, 7));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(id, name, Vec::new(), ITY_I64(), blocks)
+}
+
+fn good_function(id: i64, name: String) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 1));
+    insts.push(mk_inst_return(1, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(id, name, Vec::new(), ITY_I64(), blocks)
+}
+
+// Uncontracted caller of `callee_id`, which carries a `requires` instruction.
+fn caller_of(id: i64, name: String, callee_id: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_call_target(0, ITY_I64(), Vec::new(), callee_id));
+    insts.push(mk_inst_return(1, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(id, name, Vec::new(), ITY_I64(), blocks)
+}
+
+fn contracted_callee(id: i64, name: String) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 1));
+    let req_args: Vec<i64> = Vec::new();
+    req_args.push(0);
+    insts.push(ir_inst_new(1, IOP_VOW_REQ(), ITY_UNIT(), req_args, IDATA_NONE(), 0, 0, String::from("")));
+    insts.push(mk_inst_return(2, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(id, name, Vec::new(), ITY_I64(), blocks)
+}
+
+fn module_of(a: IrFunction, b: IrFunction) -> IrModule {
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(a);
+    funcs.push(b);
+    mk_module(funcs)
+}
+
+fn check_reason_names_code() -> i64 {
+    let bad: IrFunction = bad_function(1, String::from("bad"));
+    let m: IrModule = module_of(bad, good_function(2, String::from("good")));
+    let none: Vec<i64> = Vec::new();
+    let reason: String = non_modelable_reason(bad, m, none);
+    if !reason.contains(String::from("ir-non-dominating-read")) { return 1; }
+    if !reason.contains(String::from("function `bad` is not modelable in the verifier")) { return 2; }
+    if non_modelable_reason(m.functions[1], m, none).len() != 0 { return 3; }
+    0
+}
+
+fn check_caller_of_bad_callee_is_non_modelable() -> i64 {
+    let bad: IrFunction = bad_function(1, String::from("bad"));
+    let caller: IrFunction = caller_of(2, String::from("caller"), 1);
+    let m: IrModule = module_of(bad, caller);
+    let none: Vec<i64> = Vec::new();
+    let reason: String = non_modelable_reason(caller, m, none);
+    if reason.len() == 0 { return 10; }
+    if !reason.contains(String::from("`bad`")) { return 11; }
+    0
+}
+
+fn check_effects_reason_wins() -> i64 {
+    let bad: IrFunction = bad_function(1, String::from("bad"));
+    bad.effects = 1;
+    let m: IrModule = module_of(bad, good_function(2, String::from("good")));
+    let none: Vec<i64> = Vec::new();
+    let reason: String = non_modelable_reason(bad, m, none);
+    if !reason.contains(String::from("has effects")) { return 20; }
+    if reason.contains(String::from("ir-non-dominating-read")) { return 21; }
+    0
+}
+
+fn check_caller_precondition_role() -> i64 {
+    let callee: IrFunction = contracted_callee(1, String::from("g"));
+    let ok_caller: IrFunction = caller_of(2, String::from("ok_caller"), 1);
+    let none: Vec<i64> = Vec::new();
+    if caller_precondition_role(ok_caller, module_of(callee, ok_caller), none) != 1 { return 30; }
+
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_call_target(0, ITY_I64(), Vec::new(), 1));
+    insts.push(mk_inst_return(1, 9));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let bad_caller: IrFunction = mk_function(3, String::from("bad_caller"), Vec::new(), ITY_I64(), blocks);
+    if caller_precondition_role(bad_caller, module_of(callee, bad_caller), none) != 2 { return 31; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_reason_names_code();
+    if r == 0 { r = check_caller_of_bad_callee_is_non_modelable(); }
+    if r == 0 { r = check_effects_reason_wins(); }
+    if r == 0 { r = check_caller_precondition_role(); }
+    i64_to_i32_wrap(r)
+}
