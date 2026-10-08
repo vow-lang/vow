@@ -283,6 +283,41 @@
       "return": "u64",
       "doc_signature": "fn(s: String) -> u64",
       "effects": "[]"
+    },
+    {
+      "name": "fs_read_status",
+      "runtime_symbol": "__vow_fs_read_status",
+      "params": [],
+      "return": "i64",
+      "doc_signature": "fn() -> i64",
+      "effects": "[read]"
+    },
+    {
+      "name": "getenv",
+      "runtime_symbol": "__vow_getenv",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(name: String) -> String",
+      "effects": "[read]",
+      "arena_routing": "heap_fresh"
+    },
+    {
+      "name": "path_lookup",
+      "runtime_symbol": "__vow_path_lookup",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(name: String) -> String",
+      "effects": "[read]",
+      "arena_routing": "heap_fresh"
+    },
+    {
+      "name": "mktemp_dir",
+      "runtime_symbol": "__vow_mktemp_dir",
+      "params": ["ptr"],
+      "return": "ptr",
+      "doc_signature": "fn(prefix: String) -> String",
+      "effects": "[io]",
+      "arena_routing": "heap_fresh"
     }
   ],
   "arena_routes": [
@@ -343,6 +378,9 @@
     "__vow_fs_listdir",
     "__vow_stdin_read",
     "__vow_args",
+    "__vow_getenv",
+    "__vow_path_lookup",
+    "__vow_mktemp_dir",
     "__vow_process_get_stdout",
     "__vow_process_get_stderr",
     "__vow_process_stdout_for",

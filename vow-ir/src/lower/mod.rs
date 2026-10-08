@@ -66,6 +66,10 @@ fn catalogue_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "process_stderr_for" => Some(("__vow_process_stderr_for", Ty::Ptr)),
         "hash_u64" => Some(("__vow_hash_u64", Ty::U64)),
         "hash_str" => Some(("__vow_hash_str", Ty::U64)),
+        "fs_read_status" => Some(("__vow_fs_read_status", Ty::I64)),
+        "getenv" => Some(("__vow_getenv", Ty::Ptr)),
+        "path_lookup" => Some(("__vow_path_lookup", Ty::Ptr)),
+        "mktemp_dir" => Some(("__vow_mktemp_dir", Ty::Ptr)),
         _ => None,
     }
 }
@@ -76,6 +80,9 @@ fn catalogue_builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
         "process_get_stderr" => Some(BuiltinResultTag::StringHeap),
         "process_stdout_for" => Some(BuiltinResultTag::StringHeap),
         "process_stderr_for" => Some(BuiltinResultTag::StringHeap),
+        "getenv" => Some(BuiltinResultTag::StringHeap),
+        "path_lookup" => Some(BuiltinResultTag::StringHeap),
+        "mktemp_dir" => Some(BuiltinResultTag::StringHeap),
         _ => None,
     }
 }
@@ -5955,6 +5962,9 @@ mod tests {
             "process_stdout_for",
             "process_stderr_for",
             "proc_sample",
+            "getenv",
+            "path_lookup",
+            "mktemp_dir",
         ] {
             assert_eq!(builtin_result_tag(name), Some(StringHeap), "{name}");
         }
@@ -6322,6 +6332,10 @@ type PairView = PairAlias;
             ("process_kill", "__vow_process_kill", Ty::I64),
             ("process_stdout_for", "__vow_process_stdout_for", Ty::Ptr),
             ("process_stderr_for", "__vow_process_stderr_for", Ty::Ptr),
+            ("fs_read_status", "__vow_fs_read_status", Ty::I64),
+            ("getenv", "__vow_getenv", Ty::Ptr),
+            ("path_lookup", "__vow_path_lookup", Ty::Ptr),
+            ("mktemp_dir", "__vow_mktemp_dir", Ty::Ptr),
             ("__vow_clif_create", "__vow_clif_create", Ty::I64),
             ("__vow_clif_add_string", "__vow_clif_add_string", Ty::Unit),
             (
