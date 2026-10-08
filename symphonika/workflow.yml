@@ -15,23 +15,28 @@ workflow:
         provider: claude
         prompt: prompts/plan.md
       transitions:
-        # A blocked pass writes BLOCKED.md instead of relying on a non-zero
-        # exit code -- exiting non-zero from a Bash tool call only ends that
-        # subshell, not the provider session, so provider_success reads true
-        # regardless (issue #730, ADR-2026-09-10-1630). Ordered before the
-        # success transition below: a run that commits real plan progress
-        # and then hits a blocker later in the same turn must still route to
-        # failed, not coast into implement on branch_advanced_since_attempt_start.
+        # The pass ends with a structured claim as its final message
+        # (schema-enforced on Claude/Codex). A blocked pass claims "blocked"
+        # instead of relying on a non-zero exit code -- exiting non-zero from
+        # a Bash tool call only ends that subshell, not the provider session,
+        # so provider_success reads true regardless (issue #730,
+        # ADR-2026-10-02-1909). Ordered before the success transition below: a
+        # run that commits real plan progress and then hits a blocker later in
+        # the same turn must still route to failed, not coast into implement
+        # on branch_advanced_since_attempt_start.
         - to: failed
           when:
-            artifact_exists: BLOCKED.md
-        # artifact_exists probes the Run Workspace for the plan file itself, so
-        # a planner that commits something other than a plan cannot pass.
+            claim_status: blocked
+        # Advance needs a positive success claim, so a missing or malformed
+        # claim falls through to failed. artifact_exists probes the Run
+        # Workspace for the plan file itself, so a planner that commits
+        # something other than a plan cannot pass.
         # branch_advanced_since_attempt_start is false unless this run added a
         # commit, so a resumed attempt cannot coast on a PLAN.md an earlier
         # attempt left in the workspace.
         - to: implement
           when:
+            claim_status: success
             provider_success: true
             artifact_exists: PLAN.md
             branch_advanced_since_attempt_start: true
@@ -43,12 +48,12 @@ workflow:
         provider: claude
         prompt: prompts/impl.md
       transitions:
-        # Same BLOCKED.md gate as plan above, ordered first for the same
-        # reason: a partial-commit turn that then hits a blocker must not
-        # coast into wait_for_pr_open on branch_ahead_of_base alone.
+        # Same claim gate as plan above, ordered first for the same reason: a
+        # partial-commit turn that then hits a blocker must not coast into
+        # wait_for_pr_open on branch_ahead_of_base alone.
         - to: failed
           when:
-            artifact_exists: BLOCKED.md
+            claim_status: blocked
         # branch_ahead_of_base alone would be satisfied by the plan commit
         # already on the branch, so require this run to advance HEAD too.
         # This only proves the agent committed something -- it says nothing
@@ -60,6 +65,7 @@ workflow:
         # the identical state for the same reason (issue #730, #1255).
         - to: wait_for_pr_open
           when:
+            claim_status: success
             provider_success: true
             branch_ahead_of_base: true
             branch_advanced_since_attempt_start: true
@@ -82,12 +88,12 @@ workflow:
         - to: merged
           when:
             pr_merged: true
-        - to: code_review_fix
-          when:
-            pr_open: true
         - to: failed
           when:
             pr_open: false
+        - to: code_review_fix
+          when:
+            pr_open: true
 
     code_review_fix:
       action:
@@ -95,15 +101,18 @@ workflow:
         provider: claude
         prompt: prompts/code-review-fix.md
       transitions:
-        # A blocked pass (no open PR to review, etc.) writes BLOCKED.md
+        # A blocked pass (no open PR to review, etc.) claims "blocked"
         # instead of relying on a non-zero exit code -- exiting non-zero
         # from a Bash tool call only ends that subshell, not the provider
         # session, so provider_success reads true regardless (issue #730).
+        # Advance needs a positive success claim, so a missing or malformed
+        # claim falls through to failed.
         - to: failed
           when:
-            artifact_exists: BLOCKED.md
+            claim_status: blocked
         - to: simplify
           when:
+            claim_status: success
             provider_success: true
         - to: failed
 
@@ -115,9 +124,10 @@ workflow:
       transitions:
         - to: failed
           when:
-            artifact_exists: BLOCKED.md
+            claim_status: blocked
         - to: wait_for_pr
           when:
+            claim_status: success
             provider_success: true
         - to: failed
 
@@ -162,9 +172,10 @@ workflow:
       transitions:
         - to: failed
           when:
-            artifact_exists: BLOCKED.md
+            claim_status: blocked
         - to: wait_for_pr
           when:
+            claim_status: success
             provider_success: true
         - to: failed
 
@@ -176,9 +187,10 @@ workflow:
       transitions:
         - to: failed
           when:
-            artifact_exists: BLOCKED.md
+            claim_status: blocked
         - to: wait_for_pr
           when:
+            claim_status: success
             provider_success: true
         - to: failed
 
