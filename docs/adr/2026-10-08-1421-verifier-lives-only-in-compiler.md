@@ -43,9 +43,8 @@ byte-identical C rule (`scripts/parity.py c`) keeps the two emitters in step.
 4. **Transitional state.** ESBMC and `c_emitter.{rs,vow}` stay in stage 0 and the
    byte-identical C parity rule continues unchanged, including after the first
    native-verifier release is pinned, until both emitters are deleted in P6. The
-   pair-comparison docs
-   (`docs/equivalence/`, the `equivalence-review` command) are updated then, not
-   here.
+   pair-comparison docs (`docs/equivalence/`, the `equivalence-review` command)
+   are updated then, not here.
 
 ## Bootstrap guarantee
 

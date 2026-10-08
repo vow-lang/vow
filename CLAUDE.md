@@ -142,10 +142,11 @@ actual final tree is verified by CI can be *after* it has already merged.
 For migration-epic (#1104/#1116) seam PRs and any other PR whose checklist asserts a green
 `scripts/bootstrap.sh` run, re-run `scripts/bootstrap.sh --skip-cargo --no-cache` against the PR's
 actual final head SHA — after the last push, not an earlier commit you happened to be looking at —
-immediately before ticking that checklist box, and record the checked SHA in the checklist line. Once Stage 1 verification is delegated to a pinned seed (see
-"Scoped exception: the native verifier" above), record the `scripts/seed.toml` pin there too. A
-checklist claim written against an earlier commit and never re-checked after later commits land is
-not a green run of the tree that actually merges.
+immediately before ticking that checklist box, and record the checked SHA in the checklist line. Once
+Stage 1 verification is delegated to a pinned seed (see "Scoped exception: the native verifier"
+above), record the `scripts/seed.toml` pin there too. A checklist claim written against an earlier
+commit and never re-checked after later commits land is not a green run of the tree that actually
+merges.
 
 `--no-cache` here is cheap defense in depth, not a fix for a confirmed cache bug: `VerifyCache`
 (`vow/src/cache.rs`) only ever persists `FAILED` verdicts, never `PROVEN` — a stale cache entry can
