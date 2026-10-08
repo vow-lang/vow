@@ -789,6 +789,176 @@ pub(crate) fn verifier_c_func_name(func: &Function) -> String {
 /// Check whether a function can be precisely modeled in the C emitter.
 /// Modelable functions are pure (no effects) and use only opcodes that the
 /// C emitter handles without resorting to `__VERIFIER_nondet`.
+struct ModelFacts {
+    vec_vars: HashSet<u32>,
+    string_vars: HashSet<u32>,
+    hashmap_vars: HashSet<u32>,
+    btreemap_vars: HashSet<u32>,
+    option_vars: HashSet<u32>,
+    wide_vars: HashSet<u32>,
+}
+
+impl ModelFacts {
+    fn new(func: &Function) -> Self {
+        Self {
+            vec_vars: collect_typed_vars(func, "__vow_vec_new", "__vow_vec_"),
+            string_vars: collect_typed_vars(func, "__vow_string_new", "__vow_string_"),
+            hashmap_vars: collect_typed_vars(func, "__vow_map_new", "__vow_map_"),
+            btreemap_vars: collect_typed_vars(func, "__vow_btreemap_new", "__vow_btreemap_"),
+            option_vars: collect_option_vars(func),
+            wide_vars: collect_wide_vars(func),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModelIssue {
+    Unsupported,
+    Wide,
+    UnknownExtern,
+    NonScalarExtern,
+    StructuredTarget,
+    NonModelableTarget,
+    InvalidCall,
+}
+
+// The gate and the skip diagnostic share this instruction policy. The caller
+// owns the recursion cache; formatting happens only for a rejected function.
+fn modelability_issue(
+    inst: &Inst,
+    facts: &ModelFacts,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+    cache: &mut HashMap<FuncId, bool>,
+) -> Option<ModelIssue> {
+    match inst.opcode {
+        Opcode::ConstI32
+        | Opcode::ConstI64
+        | Opcode::ConstF32
+        | Opcode::ConstF64
+        | Opcode::ConstBool
+        | Opcode::ConstUnit
+        | Opcode::ConstStr
+        | Opcode::GetArg
+        | Opcode::WrappingAdd
+        | Opcode::WrappingSub
+        | Opcode::WrappingMul
+        | Opcode::WrappingDiv
+        | Opcode::WrappingRem
+        | Opcode::Eq
+        | Opcode::Ne
+        | Opcode::Lt
+        | Opcode::Le
+        | Opcode::Gt
+        | Opcode::Ge
+        | Opcode::BitAnd
+        | Opcode::BitOr
+        | Opcode::BitXor
+        | Opcode::Shl
+        | Opcode::Shr
+        | Opcode::IntCast
+        | Opcode::AddF32
+        | Opcode::AddF64
+        | Opcode::SubF32
+        | Opcode::SubF64
+        | Opcode::MulF32
+        | Opcode::MulF64
+        | Opcode::DivF32
+        | Opcode::DivF64
+        | Opcode::EqF32
+        | Opcode::EqF64
+        | Opcode::NeF32
+        | Opcode::NeF64
+        | Opcode::LtF32
+        | Opcode::LtF64
+        | Opcode::LeF32
+        | Opcode::LeF64
+        | Opcode::GtF32
+        | Opcode::GtF64
+        | Opcode::GeF32
+        | Opcode::GeF64
+        | Opcode::Not
+        | Opcode::And
+        | Opcode::Or
+        | Opcode::ConstU64
+        | Opcode::ConstU8
+        | Opcode::VowRequires
+        | Opcode::VowEnsures
+        | Opcode::VowInvariant
+        | Opcode::ComplexityDescriptor
+        | Opcode::Branch
+        | Opcode::Jump
+        | Opcode::Return
+        | Opcode::Unreachable
+        | Opcode::Phi
+        | Opcode::Upsilon
+        | Opcode::RegionOpen
+        | Opcode::RegionClose
+        | Opcode::RegionAlloc
+        | Opcode::LinearConsume
+        | Opcode::DebugCall => None,
+        Opcode::Call => match &inst.data {
+            InstData::CallExtern(name) => {
+                if !is_known_builtin(name) {
+                    Some(ModelIssue::UnknownExtern)
+                } else if vec_op_carries_non_scalar(
+                    name,
+                    inst,
+                    &facts.vec_vars,
+                    &facts.string_vars,
+                    &facts.hashmap_vars,
+                    &facts.btreemap_vars,
+                    &facts.option_vars,
+                ) {
+                    Some(ModelIssue::NonScalarExtern)
+                } else {
+                    None
+                }
+            }
+            InstData::CallTarget(fid) => {
+                if passes_structured_arg(
+                    inst,
+                    &facts.vec_vars,
+                    &facts.string_vars,
+                    &facts.hashmap_vars,
+                    &facts.btreemap_vars,
+                    &facts.option_vars,
+                ) {
+                    Some(ModelIssue::StructuredTarget)
+                } else if const_fns.contains_key(fid)
+                    || module
+                        .functions
+                        .iter()
+                        .find(|f| f.id == *fid)
+                        .is_some_and(|callee| is_modelable(callee, module, const_fns, cache))
+                {
+                    None
+                } else {
+                    Some(ModelIssue::NonModelableTarget)
+                }
+            }
+            _ => Some(ModelIssue::InvalidCall),
+        },
+        Opcode::FieldGet | Opcode::FieldSet => {
+            field_access_is_wide(inst, &facts.wide_vars).then_some(ModelIssue::Wide)
+        }
+        Opcode::CheckedAdd
+        | Opcode::CheckedSub
+        | Opcode::CheckedMul
+        | Opcode::CheckedDiv
+        | Opcode::CheckedRem => checked_integer_type(inst)
+            .is_none()
+            .then_some(ModelIssue::Wide),
+        Opcode::RemF32
+        | Opcode::RemF64
+        | Opcode::ConstI128
+        | Opcode::ConstU128
+        | Opcode::Load
+        | Opcode::Store
+        | Opcode::LinearBorrow => Some(ModelIssue::Unsupported),
+    }
+}
+
 pub fn is_modelable(
     func: &Function,
     module: &Module,
@@ -808,141 +978,10 @@ pub fn is_modelable(
         return false;
     }
 
-    let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
-    let string_vars = collect_typed_vars(func, "__vow_string_new", "__vow_string_");
-    let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
-    let btreemap_vars = collect_typed_vars(func, "__vow_btreemap_new", "__vow_btreemap_");
-    let option_vars = collect_option_vars(func);
-    let wide_vars = collect_wide_vars(func);
-
+    let facts = ModelFacts::new(func);
     for block in &func.blocks {
         for inst in &block.insts {
-            let ok = match inst.opcode {
-                Opcode::ConstI32
-                | Opcode::ConstI64
-                | Opcode::ConstF32
-                | Opcode::ConstF64
-                | Opcode::ConstBool
-                | Opcode::ConstUnit
-                | Opcode::ConstStr
-                | Opcode::GetArg
-                | Opcode::WrappingAdd
-                | Opcode::WrappingSub
-                | Opcode::WrappingMul
-                | Opcode::WrappingDiv
-                | Opcode::WrappingRem
-                | Opcode::Eq
-                | Opcode::Ne
-                | Opcode::Lt
-                | Opcode::Le
-                | Opcode::Gt
-                | Opcode::Ge
-                | Opcode::BitAnd
-                | Opcode::BitOr
-                | Opcode::BitXor
-                | Opcode::Shl
-                | Opcode::Shr
-                | Opcode::IntCast
-                | Opcode::AddF32
-                | Opcode::AddF64
-                | Opcode::SubF32
-                | Opcode::SubF64
-                | Opcode::MulF32
-                | Opcode::MulF64
-                | Opcode::DivF32
-                | Opcode::DivF64
-                | Opcode::EqF32
-                | Opcode::EqF64
-                | Opcode::NeF32
-                | Opcode::NeF64
-                | Opcode::LtF32
-                | Opcode::LtF64
-                | Opcode::LeF32
-                | Opcode::LeF64
-                | Opcode::GtF32
-                | Opcode::GtF64
-                | Opcode::GeF32
-                | Opcode::GeF64
-                | Opcode::Not
-                | Opcode::And
-                | Opcode::Or
-                | Opcode::ConstU64
-                | Opcode::ConstU8
-                | Opcode::VowRequires
-                | Opcode::VowEnsures
-                | Opcode::VowInvariant
-                | Opcode::ComplexityDescriptor
-                | Opcode::Branch
-                | Opcode::Jump
-                | Opcode::Return
-                | Opcode::Unreachable
-                | Opcode::Phi
-                | Opcode::Upsilon
-                | Opcode::RegionOpen
-                | Opcode::RegionClose => true,
-
-                Opcode::Call => match &inst.data {
-                    InstData::CallExtern(name) => {
-                        is_known_builtin(name)
-                            && !vec_op_carries_non_scalar(
-                                name,
-                                inst,
-                                &vec_vars,
-                                &string_vars,
-                                &hashmap_vars,
-                                &btreemap_vars,
-                                &option_vars,
-                            )
-                    }
-                    // A collection passed across a user-function boundary has no
-                    // model: the callee's `Ptr` parameter is an `int64_t`, but the
-                    // caller's value is a model struct.
-                    InstData::CallTarget(fid) => {
-                        !passes_structured_arg(
-                            inst,
-                            &vec_vars,
-                            &string_vars,
-                            &hashmap_vars,
-                            &btreemap_vars,
-                            &option_vars,
-                        ) && (const_fns.contains_key(fid)
-                            || module.functions.iter().find(|f| f.id == *fid).is_some_and(
-                                |callee| is_modelable(callee, module, const_fns, cache),
-                            ))
-                    }
-                    _ => false,
-                },
-
-                // Collection/Option field reads have dedicated models; all other
-                // FieldGets are user-struct slot reads under the heap model,
-                // as are field writes. Only 128-bit accesses fall outside it.
-                Opcode::FieldGet | Opcode::FieldSet => !field_access_is_wide(inst, &wide_vars),
-
-                // User-struct heap model: allocation is a slot op.
-                Opcode::RegionAlloc => true,
-
-                // #585: a checked operator aborts on overflow, and the model
-                // only reproduces that abort for the widths
-                // `emit_checked_arith` has a guard for. 128-bit sites fail
-                // closed here (reported `Skipped`) rather than silently
-                // reverting to the wrapping model.
-                Opcode::CheckedAdd
-                | Opcode::CheckedSub
-                | Opcode::CheckedMul
-                | Opcode::CheckedDiv
-                | Opcode::CheckedRem => checked_integer_type(inst).is_some(),
-
-                Opcode::RemF32
-                | Opcode::RemF64
-                | Opcode::ConstI128
-                | Opcode::ConstU128
-                | Opcode::Load
-                | Opcode::Store
-                | Opcode::LinearBorrow => false,
-
-                Opcode::LinearConsume | Opcode::DebugCall => true,
-            };
-            if !ok {
+            if modelability_issue(inst, &facts, module, const_fns, cache).is_some() {
                 return false;
             }
         }
@@ -990,76 +1029,41 @@ fn first_unsupported_opcode(
     module: &Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
 ) -> Option<String> {
-    let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
-    let string_vars = collect_typed_vars(func, "__vow_string_new", "__vow_string_");
-    let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
-    let btreemap_vars = collect_typed_vars(func, "__vow_btreemap_new", "__vow_btreemap_");
-    let option_vars = collect_option_vars(func);
-    let wide_vars = collect_wide_vars(func);
+    let facts = ModelFacts::new(func);
+    let mut cache = HashMap::new();
     for block in &func.blocks {
         for inst in &block.insts {
-            match inst.opcode {
-                Opcode::RemF32
-                | Opcode::RemF64
-                | Opcode::ConstI128
-                | Opcode::ConstU128
-                | Opcode::Load
-                | Opcode::Store
-                | Opcode::LinearBorrow => return Some(format!("{:?}", inst.opcode)),
-                Opcode::CheckedAdd
-                | Opcode::CheckedSub
-                | Opcode::CheckedMul
-                | Opcode::CheckedDiv
-                | Opcode::CheckedRem
-                    if checked_integer_type(inst).is_none() =>
-                {
-                    return Some(format!("{:?} at 128-bit width", inst.opcode));
-                }
-                Opcode::FieldGet | Opcode::FieldSet if field_access_is_wide(inst, &wide_vars) => {
-                    return Some(format!("{:?} at 128-bit width", inst.opcode));
-                }
-                Opcode::Call => match &inst.data {
-                    InstData::CallExtern(name) => {
-                        if !is_known_builtin(name) {
-                            return Some(format!("Call extern `{name}`"));
+            if let Some(issue) = modelability_issue(inst, &facts, module, const_fns, &mut cache) {
+                let name = match issue {
+                    ModelIssue::Unsupported => format!("{:?}", inst.opcode),
+                    ModelIssue::Wide => format!("{:?} at 128-bit width", inst.opcode),
+                    ModelIssue::UnknownExtern => match &inst.data {
+                        InstData::CallExtern(name) => format!("Call extern `{name}`"),
+                        _ => unreachable!(),
+                    },
+                    ModelIssue::NonScalarExtern => match &inst.data {
+                        InstData::CallExtern(name) => {
+                            format!("Call extern `{name}` with non-scalar element")
                         }
-                        if vec_op_carries_non_scalar(
-                            name,
-                            inst,
-                            &vec_vars,
-                            &string_vars,
-                            &hashmap_vars,
-                            &btreemap_vars,
-                            &option_vars,
-                        ) {
-                            return Some(format!("Call extern `{name}` with non-scalar element"));
-                        }
+                        _ => unreachable!(),
+                    },
+                    ModelIssue::StructuredTarget => {
+                        "Call target with a collection argument".to_string()
                     }
-                    InstData::CallTarget(fid) => {
-                        if passes_structured_arg(
-                            inst,
-                            &vec_vars,
-                            &string_vars,
-                            &hashmap_vars,
-                            &btreemap_vars,
-                            &option_vars,
-                        ) {
-                            return Some("Call target with a collection argument".to_string());
+                    ModelIssue::NonModelableTarget => match &inst.data {
+                        InstData::CallTarget(fid) => {
+                            let target = module
+                                .functions
+                                .iter()
+                                .find(|f| f.id == *fid)
+                                .map_or_else(|| format!("FuncId({})", fid.0), |f| f.name.clone());
+                            format!("Call target `{target}`")
                         }
-                        if !const_fns.contains_key(fid) {
-                            if let Some(callee) = module.functions.iter().find(|f| f.id == *fid) {
-                                let mut cache = HashMap::new();
-                                if !is_modelable(callee, module, const_fns, &mut cache) {
-                                    return Some(format!("Call target `{}`", callee.name));
-                                }
-                            } else {
-                                return Some(format!("Call target `FuncId({})`", fid.0));
-                            }
-                        }
-                    }
-                    _ => return Some(format!("Call ({:?})", inst.data)),
-                },
-                _ => {}
+                        _ => unreachable!(),
+                    },
+                    ModelIssue::InvalidCall => format!("Call ({:?})", inst.data),
+                };
+                return Some(name);
             }
         }
     }
@@ -3668,6 +3672,47 @@ mod tests {
     // 128-bit checked arithmetic has no guard, so it must fail closed as
     // non-modelable (reported `Skipped`) rather than silently fall back to the
     // wrapping model. `ConstI128` already set this precedent.
+    #[test]
+    fn modelability_issue_classifies_instruction_policy() {
+        let (f, m) = one_block_func_module(
+            "issue_policy",
+            Ty::I64,
+            vec![
+                inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                inst(
+                    1,
+                    Opcode::CheckedAdd,
+                    Ty::I128,
+                    vec![0, 0],
+                    InstData::Integer(IntegerType::I128),
+                ),
+                inst(2, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let facts = ModelFacts::new(&f);
+        let mut cache = HashMap::new();
+        assert_eq!(
+            modelability_issue(
+                &f.blocks[0].insts[0],
+                &facts,
+                &m,
+                &HashMap::new(),
+                &mut cache
+            ),
+            None
+        );
+        assert_eq!(
+            modelability_issue(
+                &f.blocks[0].insts[1],
+                &facts,
+                &m,
+                &HashMap::new(),
+                &mut cache
+            ),
+            Some(ModelIssue::Wide)
+        );
+    }
+
     #[test]
     fn checked_arithmetic_at_128_bits_is_not_modelable() {
         for ty in [Ty::I128, Ty::U128] {

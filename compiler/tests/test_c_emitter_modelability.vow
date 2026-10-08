@@ -1,0 +1,27 @@
+module TestCEmitterModelability
+
+use ir
+use c_emitter
+use tests.builders
+
+fn main() -> i32 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 1));
+    let args: Vec<i64> = Vec::new();
+    args.push(0);
+    args.push(0);
+    insts.push(ir_inst_new(1, IOP_CADD(), ITY_I128(), args, IDATA_NONE(), 0, 0, String::from("")));
+    insts.push(mk_inst_return(2, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let f: IrFunction = mk_function(0, String::from("issue_policy"), Vec::new(), ITY_I64(), blocks);
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(f);
+    let m: IrModule = mk_module(funcs);
+    let facts: ModelFacts = model_facts(f);
+    let cache_ids: Vec<i64> = Vec::new();
+    let cache_vals: Vec<i64> = Vec::new();
+    if modelability_issue(insts[0], facts, m, Vec::new(), cache_ids, cache_vals) != MCI_OK() { return 1; }
+    if modelability_issue(insts[1], facts, m, Vec::new(), cache_ids, cache_vals) != MCI_WIDE() { return 2; }
+    0
+}
