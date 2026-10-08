@@ -1,0 +1,112 @@
+// TEST: stdout "got:alpha\ngot:beta\ngot:gamma\neof\nwait-ok\ntimeout\nkilled\nbroken-pipe\nexited\n"
+module ProcessInteractiveLines
+
+fn sh_args(script: String) -> Vec<String> {
+    let args: Vec<String> = Vec::new();
+    args.push(String::from("-c"));
+    args.push(script);
+    args
+}
+
+fn exchange(pid: i64, text: String) -> i64 [io] {
+    if process_write_stdin(pid, text) != 0 {
+        return 1;
+    }
+    let line: String = process_read_line(pid, 5000);
+    if process_read_status(pid) != 0 {
+        return 2;
+    }
+    print_str(line);
+    0
+}
+
+fn interactive_echo() -> i64 [io] {
+    let pid: i64 = process_start_piped(String::from("sh"), sh_args(String::from("while read l; do echo got:$l; done")));
+    if pid < 0 {
+        return 1;
+    }
+    if exchange(pid, String::from("alpha\n")) != 0 {
+        return 2;
+    }
+    if exchange(pid, String::from("beta\n")) != 0 {
+        return 3;
+    }
+    if exchange(pid, String::from("gamma\n")) != 0 {
+        return 4;
+    }
+    if process_close_stdin(pid) != 0 {
+        return 5;
+    }
+    let tail: String = process_read_line(pid, 5000);
+    if tail.len() != 0u64 {
+        return 6;
+    }
+    if process_read_status(pid) != 1 {
+        return 7;
+    }
+    print_str(String::from("eof\n"));
+    if process_wait(pid) != 0 {
+        return 8;
+    }
+    print_str(String::from("wait-ok\n"));
+    0
+}
+
+fn silent_child_times_out() -> i64 [io] {
+    let pid: i64 = process_start_piped(String::from("sh"), sh_args(String::from("cat > /dev/null")));
+    if pid < 0 {
+        return 1;
+    }
+    let line: String = process_read_line(pid, 50);
+    if line.len() != 0u64 {
+        return 2;
+    }
+    if process_read_status(pid) != 2 {
+        return 3;
+    }
+    print_str(String::from("timeout\n"));
+    if process_kill(pid) != 0 {
+        return 4;
+    }
+    print_str(String::from("killed\n"));
+    0
+}
+
+fn write_to_exited_child() -> i64 [io] {
+    let pid: i64 = process_start_piped(String::from("sh"), sh_args(String::from("exit 0")));
+    if pid < 0 {
+        return 1;
+    }
+    let line: String = process_read_line(pid, 5000);
+    if process_read_status(pid) != 1 {
+        return 2;
+    }
+    let mut rc: i64 = 0;
+    let mut tries: i64 = 0;
+    while rc == 0 && tries < 1000 {
+        rc = process_write_stdin(pid, String::from("late\n"));
+        tries = tries + 1;
+    }
+    if rc != -1 {
+        return 3;
+    }
+    if process_wait(pid) != 0 {
+        return 4;
+    }
+    print_str(String::from("broken-pipe\n"));
+    print_str(String::from("exited\n"));
+    0
+}
+
+fn main() -> i32 [io] {
+    if interactive_echo() != 0 {
+        return 1;
+    }
+    if silent_child_times_out() != 0 {
+        return 2;
+    }
+    if write_to_exited_child() != 0 {
+        return 3;
+    }
+    0
+}

@@ -36,6 +36,11 @@ fn check_process_externs() -> i64 {
     if r == 0 { r = expect_extern(String::from("process_kill"), String::from("__vow_process_kill"), 18); }
     if r == 0 { r = expect_extern(String::from("process_stdout_for"), String::from("__vow_process_stdout_for"), 19); }
     if r == 0 { r = expect_extern(String::from("process_stderr_for"), String::from("__vow_process_stderr_for"), 20); }
+    if r == 0 { r = expect_extern(String::from("process_start_piped"), String::from("__vow_process_start_piped"), 21); }
+    if r == 0 { r = expect_extern(String::from("process_write_stdin"), String::from("__vow_process_write_stdin"), 22); }
+    if r == 0 { r = expect_extern(String::from("process_close_stdin"), String::from("__vow_process_close_stdin"), 23); }
+    if r == 0 { r = expect_extern(String::from("process_read_line"), String::from("__vow_process_read_line"), 24); }
+    if r == 0 { r = expect_extern(String::from("process_read_status"), String::from("__vow_process_read_status"), 25); }
     r
 }
 
@@ -51,6 +56,11 @@ fn check_process_ret_tys() -> i64 {
     if r == 0 { r = expect_ret_ty(String::from("process_kill"), ITY_I64(), 38); }
     if r == 0 { r = expect_ret_ty(String::from("process_stdout_for"), ITY_PTR(), 39); }
     if r == 0 { r = expect_ret_ty(String::from("process_stderr_for"), ITY_PTR(), 40); }
+    if r == 0 { r = expect_ret_ty(String::from("process_start_piped"), ITY_I64(), 41); }
+    if r == 0 { r = expect_ret_ty(String::from("process_write_stdin"), ITY_I64(), 42); }
+    if r == 0 { r = expect_ret_ty(String::from("process_close_stdin"), ITY_I64(), 43); }
+    if r == 0 { r = expect_ret_ty(String::from("process_read_line"), ITY_PTR(), 44); }
+    if r == 0 { r = expect_ret_ty(String::from("process_read_status"), ITY_I64(), 45); }
     r
 }
 

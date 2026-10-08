@@ -2029,6 +2029,10 @@ pub const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[
         "__vow_process_stderr_for",
         "__vow_process_stderr_for_in_arena",
     ),
+    (
+        "__vow_process_read_line",
+        "__vow_process_read_line_in_arena",
+    ),
     ("__vow_map_new", "__vow_map_new_in_arena"),
     ("__vow_btreemap_new", "__vow_btreemap_new_in_arena"),
     ("__vow_string_new", "__vow_string_new_in_arena"),

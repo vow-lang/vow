@@ -302,6 +302,47 @@ PROCESS_OPS = [
         "effects": "[io]",
         "arena_routing": "heap_fresh",
     },
+    {
+        "name": "process_start_piped",
+        "runtime_symbol": "__vow_process_start_piped",
+        "params": ["ptr", "ptr"],
+        "return": "i64",
+        "doc_signature": "fn(cmd: String, args: Vec<String>) -> i64",
+        "effects": "[io]",
+    },
+    {
+        "name": "process_write_stdin",
+        "runtime_symbol": "__vow_process_write_stdin",
+        "params": ["i64", "ptr"],
+        "return": "i64",
+        "doc_signature": "fn(pid: i64, data: String) -> i64",
+        "effects": "[io]",
+    },
+    {
+        "name": "process_close_stdin",
+        "runtime_symbol": "__vow_process_close_stdin",
+        "params": ["i64"],
+        "return": "i64",
+        "doc_signature": "fn(pid: i64) -> i64",
+        "effects": "[io]",
+    },
+    {
+        "name": "process_read_line",
+        "runtime_symbol": "__vow_process_read_line",
+        "params": ["i64", "i64"],
+        "return": "ptr",
+        "doc_signature": "fn(pid: i64, timeout_ms: i64) -> String",
+        "effects": "[io]",
+        "arena_routing": "heap_fresh",
+    },
+    {
+        "name": "process_read_status",
+        "runtime_symbol": "__vow_process_read_status",
+        "params": ["i64"],
+        "return": "i64",
+        "doc_signature": "fn(pid: i64) -> i64",
+        "effects": "[io]",
+    },
 ]
 
 HASH_OPS = [
@@ -702,7 +743,7 @@ class RealCatalogueProcessOpsTest(unittest.TestCase):
         self.assertEqual(op["runtime_symbol"], "__vow_process_get_stdout")
         self.assertEqual(op["arena_routing"], "heap_fresh")
 
-    def test_all_eleven_process_ops_present(self):
+    def test_all_process_ops_present(self):
         ops = go.load_catalogue(REPO_ROOT)
         names = {o["name"] for o in ops}
         for name in [
@@ -717,6 +758,11 @@ class RealCatalogueProcessOpsTest(unittest.TestCase):
             "process_kill",
             "process_stdout_for",
             "process_stderr_for",
+            "process_start_piped",
+            "process_write_stdin",
+            "process_close_stdin",
+            "process_read_line",
+            "process_read_status",
         ]:
             self.assertIn(name, names)
 
@@ -1406,7 +1452,7 @@ class CheckRuntimeExportsTest(unittest.TestCase):
         )
         self.assertEqual(
             self._check(text),
-            ["vow-runtime/src/lib.rs: does not define '__vow_map_get'"],
+            ["vow-runtime/src: does not define '__vow_map_get'"],
         )
 
     def test_missing_variant_is_reported(self):
