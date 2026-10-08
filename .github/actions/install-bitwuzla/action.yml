@@ -82,7 +82,7 @@ runs:
           exit 1
         fi
         if [[ -z "$BITWUZLA_SHA256" ]]; then
-          echo "sha256 input must not be empty" >&2
+          echo "sha256 input for $RUNNER_OS/$RUNNER_ARCH must not be empty" >&2
           exit 1
         fi
 

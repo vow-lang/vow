@@ -45,7 +45,6 @@ INSTALL_ESBMC_ACTION = (
 INSTALL_BITWUZLA_ACTION = (
     REPO_ROOT / ".github" / "actions" / "install-bitwuzla" / "action.yml"
 )
-CARGO_MUTANTS_WORKFLOW = WORKFLOWS / "cargo-mutants.yml"
 FULL_TEST_SCRIPT = REPO_ROOT / "scripts" / "full_test.sh"
 
 # A top-level job key: exactly two spaces, a name, a colon, end of line.
@@ -265,25 +264,27 @@ class BitwuzlaPinTest(unittest.TestCase):
     the pin living only in that action's file.
     """
 
-    INSTALLING_WORKFLOWS = (
-        BOOTSTRAP_WORKFLOW,
-        CI_WORKFLOW,
-        FULL_TEST_WORKFLOW,
-        PROMOTED_FIXTURES_WORKFLOW,
-        EQUIVALENCE_WORKFLOW,
-        CARGO_MUTANTS_WORKFLOW,
-        RELEASE_WORKFLOW,
-    )
+    # arena-verify.yml proves a standalone C harness with ESBMC alone; it never
+    # runs native verification, so it is the one deliberate exemption.
+    ESBMC_ONLY_WORKFLOWS = ("arena-verify.yml",)
     INSTALL_ESBMC_STEP = "uses: ./.github/actions/install-esbmc"
     INSTALL_BITWUZLA_STEP = "uses: ./.github/actions/install-bitwuzla"
 
     def test_every_job_installing_esbmc_installs_bitwuzla(self) -> None:
-        for workflow in self.INSTALLING_WORKFLOWS:
-            for name, job in job_blocks(workflow.read_text(encoding="utf-8")).items():
+        checked = 0
+        for workflow in sorted(WORKFLOWS.glob("*.yml")):
+            if workflow.name in self.ESBMC_ONLY_WORKFLOWS:
+                continue
+            text = workflow.read_text(encoding="utf-8")
+            if self.INSTALL_ESBMC_STEP not in text:
+                continue
+            for name, job in job_blocks(text).items():
                 if self.INSTALL_ESBMC_STEP not in job:
                     continue
+                checked += 1
                 with self.subTest(workflow=workflow.name, job=name):
                     self.assertIn(self.INSTALL_BITWUZLA_STEP, job)
+        self.assertGreater(checked, 0)
 
     def test_release_installs_bitwuzla_only_where_it_verifies(self) -> None:
         text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
@@ -293,6 +294,7 @@ class BitwuzlaPinTest(unittest.TestCase):
             r"- name: Install Bitwuzla\n\s+if: matrix\.verify\n"
             r"\s+uses: \./\.github/actions/install-bitwuzla",
         )
+        self.assertEqual(1, text.count(self.INSTALL_BITWUZLA_STEP))
 
     def test_platform_coverage_matches_the_esbmc_action(self) -> None:
         bitwuzla = set(
@@ -309,6 +311,7 @@ class BitwuzlaPinTest(unittest.TestCase):
             r'(?m)^  version:\n(?:    .*\n)*?    default: "([^"]+)"$', action_text
         )
         self.assertIsNotNone(pin)
+        version = pin.group(1)
         hashes = re.findall(r"(?m)^    default: ([0-9a-f]{64})$", action_text)
         self.assertEqual(3, len(hashes))
 
@@ -317,6 +320,7 @@ class BitwuzlaPinTest(unittest.TestCase):
             with self.subTest(workflow=workflow.name):
                 for needle in hashes:
                     self.assertNotIn(needle, text)
+                self.assertNotRegex(text, rf"bitwuzla[^\n]*{re.escape(version)}")
                 self.assertNotRegex(
                     text,
                     r"install-bitwuzla\n(?:\s+with:)",
