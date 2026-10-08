@@ -47,7 +47,7 @@ Every verification-related flag in `docs/spec/cli.md`, for `build`, `verify`,
 | `--no-verify` | build | kept, text changed | "Skip ESBMC static verification" becomes "skip static verification". Result is still `Unverified`. |
 | `--verify` | contracts, test | kept, text changed | Same wording change. |
 | `--no-cache` | build, verify, contracts | kept | Still disables the verification-result cache and, for `--no-verify` builds, the compile-object cache. The native cache key is the canonical sliced query plus the Bitwuzla pin (P4). |
-| `--timeout <N>` | build, verify | **changed** | Seconds, per function. Remains the only user-facing resource knob. The default is one fixed 300 s; the 30 s `--encoding auto` special case goes away with `--encoding`. `--timeout 0` stays "kill immediately". Enforced by killing the `verify-worker` process group (D11). Expiry yields `timeout`. |
+| `--timeout <N>` | build, verify, contracts | **changed** | Seconds, per function. Remains the only user-facing resource knob. The default is one fixed 300 s; the 30 s `--encoding auto` special case goes away with `--encoding`. `--timeout 0` stays "kill immediately". Enforced by killing the `verify-worker` process group (D11). Expiry yields `timeout`. Both compilers already accept it on `contracts`, but `docs/spec/cli.md` does not list it there; P3 documents it. |
 | `--timeout <ms>` | test | kept, unrelated | Per-test execution timeout in milliseconds, unrelated to the verification `--timeout` despite the shared name. `test --verify` gets no separate verification-timeout knob. |
 | `--verify-jobs <N>` | build, verify, contracts, test | kept | Caps concurrent `verify-worker` subprocesses (was ESBMC processes). Default `num_cpus/2`. Still a no-op for `contracts`. |
 | `--replay-cex` | build, verify | kept | Semantics unchanged; "after ESBMC reports" becomes "after the verifier reports". The P5 oracle requires it. |
@@ -55,7 +55,7 @@ Every verification-related flag in `docs/spec/cli.md`, for `build`, `verify`,
 | `--max-k-step <N>` | build, verify, contracts, test | **removed** | The bound is internal (D5). |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | build, verify, contracts | **removed** | Bitwuzla only (D2). |
 | `--encoding <bv\|ir\|auto>` | build, verify, contracts | **removed** | Fixed-width bit-vectors only (D2, D7). |
-| `VOW_VERIFY_DEBUG` (Rust driver env) | env | removed with `c_emitter.rs` | The native replacement (retained `.smt2` under `VOW_CACHE_DIR`, perfetto) is decided in the P1 solver-driver child. |
+| `VOW_VERIFY_DEBUG` (Rust driver env) | env | removed with the ESBMC driver (`vow-verify/src/esbmc.rs` reads it; the self-hosted driver never wired it) | The native replacement (retained `.smt2` under `VOW_CACHE_DIR`, perfetto) is decided in the P1 solver-driver child. |
 | `VOW_VERIFY_RUN_MEMLIMIT_RSS` (test-only env) | env | removed with ESBMC | Not part of the CLI contract. |
 | `verify-worker` subcommand, `--worker-entry` | internal | not CLI contract | Output and flags are unstable. |
 
@@ -68,8 +68,16 @@ Not verification-related, therefore out of scope for this classification:
 and is **rejected with a usage error under `--backend native`**. The error names
 the flag and says the bound or choice is now internal. Silently ignoring a bound
 the user set would let a run look tuned when it is not, and an agent could then
-raise `--max-k-step` expecting a proof that no longer depends on it. The flags
-are deleted from the parser at P6, together with `--backend esbmc`.
+raise `--max-k-step` expecting a proof that no longer depends on it.
+
+At P6 each removed flag is replaced by an explicit rejection that names it,
+together with `--backend esbmc`; it is not simply deleted from the parser. The
+self-hosted driver validates no flags: `get_source_path` and
+`get_source_path_sub` in `compiler/main.vow` hard-code the value-taking flags,
+so once `--max-k-step` leaves that list `vowc build f.vow --max-k-step 50` takes
+`50` as the source path instead of reporting the flag. The same lists must gain
+`--backend` in P1, or `vowc build f.vow --backend native` takes `native` as the
+source path.
 
 The Rust stage 0 `vow` delegates verification to the pinned seed `vowc` (D1), so
 it inherits whatever surface the seed has and keeps parsing the removed flags
@@ -88,7 +96,13 @@ Kept without change:
 - **Contract-clause `status`** (`vow contracts --verify`): `proven`, `failed`,
   `unknown`, `timeout`, `error`, `not_verified`, `skipped`, `vacuous`.
 - **JSON schemas**: `build-result`, `counterexample`, `diagnostic` and
-  `contracts-result`. Changes are additive only (see section 4).
+  `contracts-result`. Changes are additive only (see section 4), apart from the
+  P6 removals under **Removed** and **Retired** below, which delete an enum
+  value (`proven-ir`) and a diagnostic code (`ModelCapacityAssumed`). The child
+  that first emits `reason_code` (P1) declares it in the schemas in the same
+  change, not at P3: `diagnostic.schema.json` and `contracts-result.schema.json`
+  set `additionalProperties: false`, so a strict validator rejects an undeclared
+  field.
 - **Blame** (`Caller` for `requires`, `Callee` for `ensures`/`invariant`) and
   `vow_id`. Both are stable across backends: a given contract keeps the same
   `vow_id` and blame whichever verifier produced the verdict.
@@ -104,8 +118,12 @@ Removed:
   weaker-encoding proof to label. The enum value is deleted at P6 from
   `docs/spec/schemas/contracts-result.schema.json` and its copy under
   `skills/vow/schemas/`, from `vow/src/contracts.rs` and the embedded copies in
-  `compiler/main.vow`, and from `docs/verifier-discipline.md`. Until then the
-  native backend never emits it. Its exit-code rule ("every contract is `proven`
+  `compiler/main.vow`, and from `docs/verifier-discipline.md`. No compiler emits
+  it as a clause status today: the Rust `resolve_clause_status` reports a
+  `ProvenIr` result as `proven`, and `compiler/main.vow` only counts the string
+  in the summary. It survives as a declared value in the spec and schemas. Under
+  `--backend esbmc` an IR-fallback proof is still reported as plain `proven`;
+  this ADR does not change that. Its exit-code rule ("every contract is `proven`
   or `proven-ir`") reduces to "every contract is `proven`".
 
 Retired:
@@ -135,11 +153,21 @@ opcode or builtin name); `detail` is never part of the enumerated set.
 | `recursion-unsupported` | The function is directly or mutually recursive in the inlined call graph (D10). | Permanent here; modular verification is a separate decision. |
 | `float-rem-unsupported` | The body uses `RemF32` or `RemF64` (D7). | Until codegen defines float `%`. |
 | `ir-non-dominating-read` | The dominance validator rejects the IR (D13). | Kept as a defensive gate after the lowerer fix. |
-| `unmodeled-builtin` | An extern call whose `verifier_model` in `docs/spec/operations.json` is `unmodeled` or absent (D10). `detail` is the builtin. | Shrinks as builtins are modelled. |
-| `unsupported-opcode` | An opcode absent from `compiler/vc_ops.vow` (today `Load`, `Store`, `LinearBorrow`). `detail` is the opcode (D10). | Shrinks. |
+| `unmodeled-builtin` | An extern call whose runtime symbol has no entry with `verifier_model: known` in `docs/spec/operations.json`: the entry is absent or says `unmodeled` (D10). `detail` is the builtin. | Shrinks as builtins are modelled. |
+| `unsupported-opcode` | An opcode absent from `compiler/vc_ops.vow`, a module the `vc_ops` child introduces (today `Load`, `Store`, `LinearBorrow`). `detail` is the opcode (D10). | Shrinks. |
 | `non-modelable-callee` | An inlined callee is itself `Skipped`. `detail` carries the callee's code. | Permanent. |
 | `reserved-verifier-symbol` | The function name collides with a reserved checker symbol. | Permanent; the reserved set is fixed in P1. |
 | `wide-aggregate-field` | `FieldGet`/`FieldSet` at 128-bit width. | Transitional: removed when the 128-bit aggregate work (D12) lands. |
+
+**Prerequisite for `unmodeled-builtin`.** Absent stays fail-closed, so the gate
+can only be enabled once the catalogue says which builtins are modelled. Today
+`docs/spec/operations.json` has 33 entries, none with `verifier_model`, keyed by
+Vow builtin `name`. The gate sees runtime symbols, and the `__vow_vec_*`,
+`__vow_string_*` and `__vow_map_*` symbols it accepts today (`is_known_builtin`)
+are not in the catalogue at all. Before the gate is turned on, the P1 child must
+look the call up by `runtime_symbol` and backfill `verifier_model: known` for
+every pure builtin the native model covers. Without that backfill every function
+that touches a collection would be `Skipped` and exit 1.
 
 **Not `Skipped`.** Each of these has its own status, so the `Skipped` gate stays
 meaningful:
@@ -159,14 +187,26 @@ with a non-scalar Vec element, and calls that pass a collection to a user
 function (D6).
 
 **Carrying the code.** The code is an additive optional field `reason_code` on
-the `VerificationSkipped` diagnostic and on the `skipped` contract-clause
-status. Old consumers ignore it; the `message` text stays human-readable and is
-**not** a contract. Encoding the code as a message prefix was rejected because
-agents would then parse prose.
+the Warning-severity `VerificationSkipped` diagnostic that lifts the build to
+`Skipped`, and a sibling field on the contract entry object when its `status` is
+`skipped` (`status` itself stays a plain string). Old consumers that do not
+validate against the schemas ignore it (see section 3 for the schema change); the
+`message` text stays human-readable and is **not** a contract. Encoding the code
+as a message prefix was rejected because agents would then parse prose.
+
+**Open gap: other `VerificationSkipped` emissions.** The same diagnostic code is
+also emitted as a Note for calls from an uncontracted caller that went unchecked
+(`UncheckedCallsNote` in `vow/src/verify_outcome.rs`): the caller cannot be
+modelled, or the verifier timed out or could not decide for it. The self-hosted
+`test --verify` also reports a `contract_skipped` entry with a fixed
+`VerificationSkipped` message. Timeout and undecided are not `Skipped` reasons
+above, so this ADR assigns no `reason_code` to those emissions. The P1 child must
+either amend this list for them or leave the field absent on them.
 
 **The list is closed.** Adding a code requires amending this ADR. A function
 that fits no row is a verifier bug, not a new `Skipped` reason. Until a row
-exists the build must report the failure (`error`) instead of skipping, so the
+exists the build must report the failure as an `error` (`VerifyFailed` with
+`verify_status: "error"`; clause status `error`) instead of skipping, so the
 gate cannot be widened silently.
 
 ### 5. Timeline
@@ -176,7 +216,7 @@ gate cannot be widened silently.
 | P1 | `--backend` added (default `esbmc`). Native rejects the removed flags. `reason_code` introduced. |
 | P3 | `docs/spec` and the skill are rewritten to this surface; `generate_help.py` is rerun. |
 | P5 | Default flips to `native`. `--backend esbmc` is the opt-out. `--replay-cex` joins the oracle. |
-| P6 | `--backend esbmc`, `--solver`, `--max-k-step`, `--encoding` and `proven-ir` are deleted; `ModelCapacityAssumed` is retired. |
+| P6 | `--backend esbmc`, `--solver`, `--max-k-step` and `--encoding` become explicit rejections (section 2); `proven-ir` is deleted; `ModelCapacityAssumed` is retired. |
 
 ## Why this meets the language-design criteria
 
@@ -197,9 +237,9 @@ gate cannot be widened silently.
 - Scripts and CI that pass `--max-k-step`, `--solver` or `--encoding` keep
   working under `--backend esbmc` and break on `--backend native`, loudly. They
   must drop the flags before the P5 flip.
-- Tooling that reads the `proven-ir` status or the `ModelCapacityAssumed` note
-  can drop that handling once P6 lands. The native backend never produces
-  either.
+- Tooling that handles the `proven-ir` status value or the `ModelCapacityAssumed`
+  note can drop that handling once P6 lands. The native backend never produces
+  either, and no compiler emits `proven-ir` as a clause status today.
 - Agents get a machine-readable `reason_code` for `Skipped` and a finite set to
   handle.
 - The reason table is derived from the two `non_modelable_reason`
