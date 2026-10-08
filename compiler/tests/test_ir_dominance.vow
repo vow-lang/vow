@@ -1,6 +1,11 @@
 module TestIrDominance
 
+use lexer
+use ast
+use diag
+use parser
 use ir
+use lower
 use ir_dominance
 use tests.builders
 
@@ -11,7 +16,7 @@ fn fn_of(blocks: Vec<IrBlock>) -> IrFunction {
 fn insts() -> Vec<IrInst> { Vec::new() }
 
 // Returns 0 when the verdict matches `want_bad`, otherwise `code`.
-fn expect(f: IrFunction, want_bad: bool, code: i64) -> i64 {
+fn verdict_code(f: IrFunction, want_bad: bool, code: i64) -> i64 {
     let msg: String = ir_non_dominating_read(f);
     let is_bad: bool = msg.len() > 0;
     if is_bad != want_bad {
@@ -49,7 +54,7 @@ fn check_straight_line() -> i64 {
     b.push(mk_inst_return(2, 1));
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, b));
-    expect(fn_of(blocks), false, 1)
+    verdict_code(fn_of(blocks), false, 1)
 }
 
 fn check_use_before_def() -> i64 {
@@ -59,7 +64,7 @@ fn check_use_before_def() -> i64 {
     b.push(mk_inst_return(2, 1));
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, b));
-    expect(fn_of(blocks), true, 2)
+    verdict_code(fn_of(blocks), true, 2)
 }
 
 fn check_undefined_operand() -> i64 {
@@ -67,17 +72,17 @@ fn check_undefined_operand() -> i64 {
     b.push(mk_inst_return(1, 7));
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, b));
-    let r: i64 = expect(fn_of(blocks), true, 3);
+    let r: i64 = verdict_code(fn_of(blocks), true, 3);
     if r != 0 { return r; }
     let b2: Vec<IrInst> = insts();
     b2.push(mk_inst_return(1, -1));
     let blocks2: Vec<IrBlock> = Vec::new();
     blocks2.push(mk_block(0, b2));
-    expect(fn_of(blocks2), true, 4)
+    verdict_code(fn_of(blocks2), true, 4)
 }
 
 fn check_empty_function() -> i64 {
-    expect(fn_of(Vec::new()), false, 5)
+    verdict_code(fn_of(Vec::new()), false, 5)
 }
 
 fn check_diamond_good() -> i64 {
@@ -91,7 +96,7 @@ fn check_diamond_good() -> i64 {
     merge_i.push(mk_inst_phi(41, ITY_I64()));
     merge_i.push(mk_inst_add(42, 0, 41));
     let f: IrFunction = diamond(then_i, else_i, merge_i);
-    expect(f, false, 10)
+    verdict_code(f, false, 10)
 }
 
 fn check_sibling_read() -> i64 {
@@ -99,7 +104,7 @@ fn check_sibling_read() -> i64 {
     then_i.push(mk_inst_const_i64(10, 5));
     let else_i: Vec<IrInst> = insts();
     else_i.push(mk_inst_add(12, 10, 0));
-    expect(diamond(then_i, else_i, insts()), true, 11)
+    verdict_code(diamond(then_i, else_i, insts()), true, 11)
 }
 
 fn check_merge_reads_branch_only_def() -> i64 {
@@ -107,7 +112,7 @@ fn check_merge_reads_branch_only_def() -> i64 {
     then_i.push(mk_inst_const_i64(10, 5));
     let merge_i: Vec<IrInst> = insts();
     merge_i.push(mk_inst_add(42, 10, 0));
-    expect(diamond(then_i, insts(), merge_i), true, 12)
+    verdict_code(diamond(then_i, insts(), merge_i), true, 12)
 }
 
 // else arm returns, so the then-arm def dominates the merge-like block.
@@ -127,7 +132,7 @@ fn check_returning_arm_keeps_dominance() -> i64 {
     blocks.push(mk_block(1, b1));
     blocks.push(mk_block(2, b2));
     blocks.push(mk_block(3, b3));
-    expect(fn_of(blocks), false, 13)
+    verdict_code(fn_of(blocks), false, 13)
 }
 
 // preheader(0) -> header(1) <-> body(2); header -> exit(3)
@@ -164,19 +169,19 @@ fn for_each_push(dst: Vec<IrInst>, src: Vec<IrInst>) {
 }
 
 fn check_loop_good() -> i64 {
-    expect(loop_fn(insts(), insts(), insts()), false, 20)
+    verdict_code(loop_fn(insts(), insts(), insts()), false, 20)
 }
 
 fn check_loop_body_def_read_in_exit() -> i64 {
     let exit_i: Vec<IrInst> = insts();
     exit_i.push(mk_inst_add(31, 20, 0));
-    expect(loop_fn(insts(), insts(), exit_i), true, 21)
+    verdict_code(loop_fn(insts(), insts(), exit_i), true, 21)
 }
 
 fn check_loop_body_def_read_in_header() -> i64 {
     let header_i: Vec<IrInst> = insts();
     header_i.push(mk_inst_add(12, 20, 0));
-    expect(loop_fn(insts(), header_i, insts()), true, 22)
+    verdict_code(loop_fn(insts(), header_i, insts()), true, 22)
 }
 
 // Short-circuit shape: entry branch -> rhs / short -> merge(phi)
@@ -204,9 +209,9 @@ fn short_circuit(merge_reads: i64) -> IrFunction {
 }
 
 fn check_short_circuit() -> i64 {
-    let r: i64 = expect(short_circuit(40), false, 30);
+    let r: i64 = verdict_code(short_circuit(40), false, 30);
     if r != 0 { return r; }
-    expect(short_circuit(10), true, 31)
+    verdict_code(short_circuit(10), true, 31)
 }
 
 // Match chain: test0 -> arm0 | test1 -> arm1 | arm2 ; arms jump to merge.
@@ -234,11 +239,11 @@ fn match_fn(arm1_reads: i64, merge_reads: i64) -> IrFunction {
 }
 
 fn check_match() -> i64 {
-    let r: i64 = expect(match_fn(0, 0), false, 40);
+    let r: i64 = verdict_code(match_fn(0, 0), false, 40);
     if r != 0 { return r; }
-    let r2: i64 = expect(match_fn(10, 0), true, 41);
+    let r2: i64 = verdict_code(match_fn(10, 0), true, 41);
     if r2 != 0 { return r2; }
-    expect(match_fn(0, 10), true, 42)
+    verdict_code(match_fn(0, 10), true, 42)
 }
 
 fn check_unreachable_blocks() -> i64 {
@@ -251,7 +256,7 @@ fn check_unreachable_blocks() -> i64 {
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, b0));
     blocks.push(mk_block(1, dead));
-    let r: i64 = expect(fn_of(blocks), false, 50);
+    let r: i64 = verdict_code(fn_of(blocks), false, 50);
     if r != 0 { return r; }
     let c0: Vec<IrInst> = insts();
     c0.push(mk_inst_jump(1, 2));
@@ -264,7 +269,7 @@ fn check_unreachable_blocks() -> i64 {
     blocks2.push(mk_block(0, c0));
     blocks2.push(mk_block(1, dead2));
     blocks2.push(mk_block(2, c2));
-    expect(fn_of(blocks2), true, 51)
+    verdict_code(fn_of(blocks2), true, 51)
 }
 
 fn check_vow_and_upsilon_operands() -> i64 {
@@ -275,14 +280,14 @@ fn check_vow_and_upsilon_operands() -> i64 {
     b0.push(mk_inst_return(2, 1));
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, b0));
-    let r: i64 = expect(fn_of(blocks), true, 60);
+    let r: i64 = verdict_code(fn_of(blocks), true, 60);
     if r != 0 { return r; }
     let c0: Vec<IrInst> = insts();
     c0.push(mk_inst_upsilon(1, 9, 3));
     c0.push(mk_inst_return(2, 1));
     let blocks2: Vec<IrBlock> = Vec::new();
     blocks2.push(mk_block(0, c0));
-    expect(fn_of(blocks2), true, 61)
+    verdict_code(fn_of(blocks2), true, 61)
 }
 
 fn check_dangling_branch_target() -> i64 {
@@ -291,7 +296,7 @@ fn check_dangling_branch_target() -> i64 {
     b0.push(mk_inst_branch(1, 0, 7, 99));
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, b0));
-    expect(fn_of(blocks), false, 70)
+    verdict_code(fn_of(blocks), false, 70)
 }
 
 fn check_non_contiguous_block_ids() -> i64 {
@@ -303,10 +308,66 @@ fn check_non_contiguous_block_ids() -> i64 {
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(7, b0));
     blocks.push(mk_block(50, b1));
-    expect(fn_of(blocks), false, 71)
+    verdict_code(fn_of(blocks), false, 71)
 }
 
-fn main() -> i32 {
+fn lower_fixture(source: String, file: String) -> IrModule {
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(lex(source), arena, diag_ctx_new(), file);
+    let item_files: Vec<String> = Vec::new();
+    let mut fi: u64 = 0;
+    while fi < parsed.items.len() {
+        item_files.push(file);
+        fi = fi + 1;
+    }
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), item_files
+    )
+}
+
+// 0 when every lowered function is well-formed; otherwise `code` plus the
+// offending message on stderr.
+fn expect_lowered_clean(source: String, code: i64) -> i64 [io] {
+    let m: IrModule = lower_fixture(source, String::from("dom.vow"));
+    let mut i: u64 = 0;
+    while i < m.functions.len() {
+        let f: IrFunction = m.functions[i];
+        let msg: String = ir_non_dominating_read(f);
+        if msg.len() > 0 {
+            print_str(f.name);
+            print_str(String::from(": "));
+            print_str(msg);
+            print_str(String::from("\n"));
+            return code;
+        }
+        i = i + 1;
+    }
+    0
+}
+
+fn check_lowered_if_else() -> i64 [io] {
+    let src: String = String::from("fn f(a: i64, b: i64) -> i64 { let mut x: i64 = 0; if a > b { x = a; } else { x = b; } x }\nfn g(a: i64) -> i64 { if a > 0 { 1 } else { 2 } }\nfn main() -> i32 { 0 }\n");
+    expect_lowered_clean(src, 80)
+}
+
+fn check_lowered_loops() -> i64 [io] {
+    let src: String = String::from("fn w(n: i64) -> i64 { let mut i: i64 = 0; let mut s: i64 = 0; while i < n { s = s + i; i = i + 1; } s }\nfn r(n: i64) -> i64 { let mut s: i64 = 0; for i in 0..n { s = s + i; } s }\nfn main() -> i32 { 0 }\n");
+    expect_lowered_clean(src, 81)
+}
+
+fn check_lowered_short_circuit() -> i64 [io] {
+    let src: String = String::from("fn a(x: i64, y: i64) -> bool { x > 0 && y > 0 }\nfn o(x: i64, y: i64) -> bool { x > 0 || y > 0 }\nfn c(x: i64, y: i64) -> i64 { if x > 0 && (y > 0 || x > 5) { 1 } else { 0 } }\nfn main() -> i32 { 0 }\n");
+    expect_lowered_clean(src, 82)
+}
+
+fn check_lowered_match() -> i64 [io] {
+    let src: String = String::from("enum E { A, B, C }\nfn m(e: E) -> i64 { match e { E::A => 1, E::B => 2, E::C => 3 } }\nfn main() -> i32 { 0 }\n");
+    expect_lowered_clean(src, 83)
+}
+
+fn main() -> i32 [io] {
     let mut r: i64 = check_straight_line();
     if r == 0 { r = check_use_before_def(); }
     if r == 0 { r = check_undefined_operand(); }
@@ -324,5 +385,9 @@ fn main() -> i32 {
     if r == 0 { r = check_vow_and_upsilon_operands(); }
     if r == 0 { r = check_dangling_branch_target(); }
     if r == 0 { r = check_non_contiguous_block_ids(); }
+    if r == 0 { r = check_lowered_if_else(); }
+    if r == 0 { r = check_lowered_loops(); }
+    if r == 0 { r = check_lowered_short_circuit(); }
+    if r == 0 { r = check_lowered_match(); }
     i64_to_i32_wrap(r)
 }
