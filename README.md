@@ -27,6 +27,10 @@ build/vowc verify examples/divide.vow              # verify contracts only
 build/vowc build --mode debug examples/divide.vow  # runtime vow checks
 ```
 
+### Verification prerequisites
+
+The native verifier (epic #1398) shells out to `bitwuzla`, which must be on `PATH` at the pinned release alongside ESBMC. Today's `vowc verify` still runs on ESBMC alone, but CI already installs both. The release is pinned, with per-platform SHA-256 checksums, in `.github/actions/install-bitwuzla/action.yml`; CI installs it through that action. Prebuilt archives exist for Linux x86_64, Linux arm64 and macOS arm64 only. The binary links GMP and MPFR dynamically: on macOS run `brew install gmp mpfr` (it uses Homebrew's copies), and on Debian or Ubuntu run `apt install libgmp10 libmpfr6` if they are missing. Check the install with `bitwuzla --version`.
+
 ## Development checks
 
 Install the pinned repository hooks once per checkout:

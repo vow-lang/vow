@@ -42,6 +42,9 @@ RELEASE_WORKFLOW = WORKFLOWS / "release.yml"
 INSTALL_ESBMC_ACTION = (
     REPO_ROOT / ".github" / "actions" / "install-esbmc" / "action.yml"
 )
+INSTALL_BITWUZLA_ACTION = (
+    REPO_ROOT / ".github" / "actions" / "install-bitwuzla" / "action.yml"
+)
 FULL_TEST_SCRIPT = REPO_ROOT / "scripts" / "full_test.sh"
 
 # A top-level job key: exactly two spaces, a name, a colon, end of line.
@@ -251,6 +254,77 @@ class ReleaseWorkflowTest(unittest.TestCase):
         actual_arms = set(CASE_ARM.findall(action_text))
 
         self.assertEqual(expected_arms, actual_arms)
+
+
+class BitwuzlaPinTest(unittest.TestCase):
+    """Every job that installs ESBMC also installs the pinned Bitwuzla.
+
+    The native verifier (epic #1398) needs `bitwuzla` on PATH at the pinned
+    release, so a job that can verify must get it from the same action, with
+    the pin living only in that action's file.
+    """
+
+    # arena-verify.yml proves a standalone C harness with ESBMC alone; it never
+    # runs native verification, so it is the one deliberate exemption.
+    ESBMC_ONLY_WORKFLOWS = ("arena-verify.yml",)
+    INSTALL_ESBMC_STEP = "uses: ./.github/actions/install-esbmc"
+    INSTALL_BITWUZLA_STEP = "uses: ./.github/actions/install-bitwuzla"
+
+    def test_every_job_installing_esbmc_installs_bitwuzla(self) -> None:
+        checked = 0
+        for workflow in sorted(WORKFLOWS.glob("*.yml")):
+            if workflow.name in self.ESBMC_ONLY_WORKFLOWS:
+                continue
+            text = workflow.read_text(encoding="utf-8")
+            if self.INSTALL_ESBMC_STEP not in text:
+                continue
+            for name, job in job_blocks(text).items():
+                if self.INSTALL_ESBMC_STEP not in job:
+                    continue
+                checked += 1
+                with self.subTest(workflow=workflow.name, job=name):
+                    self.assertIn(self.INSTALL_BITWUZLA_STEP, job)
+        self.assertGreater(checked, 0)
+
+    def test_release_installs_bitwuzla_only_where_it_verifies(self) -> None:
+        text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertRegex(
+            text,
+            r"- name: Install Bitwuzla\n\s+if: matrix\.verify\n"
+            r"\s+uses: \./\.github/actions/install-bitwuzla",
+        )
+        self.assertEqual(1, text.count(self.INSTALL_BITWUZLA_STEP))
+
+    def test_platform_coverage_matches_the_esbmc_action(self) -> None:
+        bitwuzla = set(
+            CASE_ARM.findall(INSTALL_BITWUZLA_ACTION.read_text(encoding="utf-8"))
+        )
+        esbmc = set(CASE_ARM.findall(INSTALL_ESBMC_ACTION.read_text(encoding="utf-8")))
+
+        self.assertTrue(bitwuzla)
+        self.assertEqual(esbmc, bitwuzla)
+
+    def test_pin_lives_only_in_the_action(self) -> None:
+        action_text = INSTALL_BITWUZLA_ACTION.read_text(encoding="utf-8")
+        pin = re.search(
+            r'(?m)^  version:\n(?:    .*\n)*?    default: "([^"]+)"$', action_text
+        )
+        self.assertIsNotNone(pin)
+        version = pin.group(1)
+        hashes = re.findall(r"(?m)^    default: ([0-9a-f]{64})$", action_text)
+        self.assertEqual(3, len(hashes))
+
+        for workflow in sorted(WORKFLOWS.glob("*.yml")):
+            text = workflow.read_text(encoding="utf-8")
+            with self.subTest(workflow=workflow.name):
+                for needle in hashes:
+                    self.assertNotIn(needle, text)
+                self.assertNotRegex(text, rf"bitwuzla[^\n]*{re.escape(version)}")
+                self.assertNotRegex(
+                    text,
+                    r"install-bitwuzla\n(?:\s+with:)",
+                )
 
 
 class FullTestWorkflowTest(unittest.TestCase):

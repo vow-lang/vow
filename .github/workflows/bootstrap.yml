@@ -73,6 +73,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install ESBMC
         uses: ./.github/actions/install-esbmc
+      - name: Install Bitwuzla
+        uses: ./.github/actions/install-bitwuzla
       - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
         run: scripts/bootstrap.sh --stage3-no-verify
       - name: Compiler test suite, both compilers (equivalence tier 1)
@@ -117,6 +119,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install ESBMC
         uses: ./.github/actions/install-esbmc
+      - name: Install Bitwuzla
+        uses: ./.github/actions/install-bitwuzla
       - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
         run: scripts/bootstrap.sh --stage3-no-verify
 
@@ -138,5 +142,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install ESBMC
         uses: ./.github/actions/install-esbmc
+      - name: Install Bitwuzla
+        uses: ./.github/actions/install-bitwuzla
       - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
         run: scripts/bootstrap.sh --stage3-no-verify

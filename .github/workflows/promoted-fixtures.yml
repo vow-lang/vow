@@ -42,6 +42,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install ESBMC
         uses: ./.github/actions/install-esbmc
+      - name: Install Bitwuzla
+        uses: ./.github/actions/install-bitwuzla
       - name: Rust and self-hosted promoted fixture parity
         run: |
           # The harness exits non-zero for any parity failure. The floor catches
