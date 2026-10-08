@@ -18,7 +18,7 @@ use std::io::{Read, Write};
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError, sync_channel};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -36,8 +36,42 @@ type Threads = (JoinHandle<()>, JoinHandle<Vec<u8>>);
 struct StdoutReader {
     rx: Receiver<Vec<u8>>,
     pending: Vec<u8>,
+    head: usize,
     eof: bool,
     status: i64,
+}
+
+impl StdoutReader {
+    fn buffered(&self) -> &[u8] {
+        &self.pending[self.head..]
+    }
+
+    /// Appends `chunk`, first dropping the consumed prefix once it is at
+    /// least half the buffer, so consuming a line never shifts the rest.
+    fn push(&mut self, chunk: &[u8]) {
+        if self.head > 0 && self.head * 2 >= self.pending.len() {
+            self.pending.drain(..self.head);
+            self.head = 0;
+        }
+        self.pending.extend_from_slice(chunk);
+    }
+
+    fn take(&mut self, len: usize) -> Vec<u8> {
+        let taken = self.pending[self.head..self.head + len].to_vec();
+        self.head += len;
+        if self.head == self.pending.len() {
+            self.pending.clear();
+            self.head = 0;
+        }
+        taken
+    }
+
+    fn take_all(&mut self) -> Vec<u8> {
+        let mut all = std::mem::take(&mut self.pending);
+        all.drain(..self.head);
+        self.head = 0;
+        all
+    }
 }
 
 pub(crate) struct PipedChild {
@@ -54,11 +88,31 @@ pub(crate) fn lookup(handle: i64) -> Option<Arc<PipedChild>> {
     PIPED_MAP.lock().unwrap().as_ref()?.get(&handle).cloned()
 }
 
-fn ignore_sigpipe() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
-    });
+/// Writes `data` with SIGPIPE blocked on this thread, so a child that stopped
+/// reading yields `EPIPE` instead of killing the program. The process-wide
+/// disposition is left alone: ignoring it globally would also keep a program
+/// alive after its own stdout consumer (`| head`) has gone away.
+fn write_shielded(stdin: &mut ChildStdin, data: &[u8]) -> bool {
+    let mut sigpipe: libc::sigset_t = unsafe { std::mem::zeroed() };
+    let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::sigemptyset(&mut sigpipe);
+        libc::sigaddset(&mut sigpipe, libc::SIGPIPE);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &sigpipe, &mut previous);
+    }
+    let written = stdin.write_all(data).and_then(|()| stdin.flush()).is_ok();
+    unsafe {
+        if libc::sigismember(&previous, libc::SIGPIPE) != 1 {
+            let mut pending: libc::sigset_t = std::mem::zeroed();
+            libc::sigpending(&mut pending);
+            if libc::sigismember(&pending, libc::SIGPIPE) == 1 {
+                let mut signal = 0;
+                libc::sigwait(&sigpipe, &mut signal);
+            }
+        }
+        libc::pthread_sigmask(libc::SIG_SETMASK, &previous, std::ptr::null_mut());
+    }
+    written
 }
 
 fn spawn_stdout_reader(
@@ -84,7 +138,6 @@ fn spawn_stdout_reader(
 /// Spawns `cmd` with all three standard streams piped and registers it under a
 /// fresh process handle; `-1` if the command cannot be started.
 pub(crate) fn start(cmd: &str, args: &[String]) -> i64 {
-    ignore_sigpipe();
     let mut child = match Command::new(cmd)
         .args(args)
         .stdin(Stdio::piped())
@@ -113,6 +166,7 @@ pub(crate) fn start(cmd: &str, args: &[String]) -> i64 {
         stdout: Mutex::new(StdoutReader {
             rx,
             pending: Vec::new(),
+            head: 0,
             eof: false,
             status: READ_LINE,
         }),
@@ -139,10 +193,7 @@ impl PipedChild {
         let Some(stdin) = guard.as_mut() else {
             return -1;
         };
-        match stdin.write_all(data).and_then(|()| stdin.flush()) {
-            Ok(()) => 0,
-            Err(_) => -1,
-        }
+        if write_shielded(stdin, data) { 0 } else { -1 }
     }
 
     /// Moves every chunk the reader thread has already produced into the
@@ -151,7 +202,7 @@ impl PipedChild {
         let mut r = self.stdout.lock().unwrap();
         loop {
             match r.rx.try_recv() {
-                Ok(chunk) => r.pending.extend_from_slice(&chunk),
+                Ok(chunk) => r.push(&chunk),
                 Err(TryRecvError::Empty) => return,
                 Err(TryRecvError::Disconnected) => {
                     r.eof = true;
@@ -165,7 +216,7 @@ impl PipedChild {
     pub(crate) fn drain_to_eof(&self) {
         let mut r = self.stdout.lock().unwrap();
         while let Ok(chunk) = r.rx.recv() {
-            r.pending.extend_from_slice(&chunk);
+            r.push(&chunk);
         }
         r.eof = true;
     }
@@ -179,15 +230,15 @@ impl PipedChild {
         let mut r = self.stdout.lock().unwrap();
         let mut scanned = 0;
         loop {
-            if let Some(off) = r.pending[scanned..].iter().position(|&b| b == b'\n') {
+            if let Some(off) = r.buffered()[scanned..].iter().position(|&b| b == b'\n') {
                 r.status = READ_LINE;
-                return r.pending.drain(..scanned + off + 1).collect();
+                return r.take(scanned + off + 1);
             }
-            scanned = r.pending.len();
+            scanned = r.buffered().len();
             if r.eof {
                 if scanned > 0 {
                     r.status = READ_LINE;
-                    return std::mem::take(&mut r.pending);
+                    return r.take(scanned);
                 }
                 r.status = READ_EOF;
                 return Vec::new();
@@ -199,7 +250,7 @@ impl PipedChild {
                 }
             };
             match received {
-                Ok(chunk) => r.pending.extend_from_slice(&chunk),
+                Ok(chunk) => r.push(&chunk),
                 Err(RecvTimeoutError::Timeout) => {
                     r.status = READ_TIMEOUT;
                     return Vec::new();
@@ -216,7 +267,7 @@ pub(crate) fn release(handle: i64) -> Option<(Vec<u8>, Vec<u8>)> {
     let piped = PIPED_MAP.lock().unwrap().as_mut()?.remove(&handle)?;
     piped.close_stdin();
     piped.drain_to_eof();
-    let stdout = std::mem::take(&mut piped.stdout.lock().unwrap().pending);
+    let stdout = piped.stdout.lock().unwrap().take_all();
     let stderr = match piped.threads.lock().unwrap().take() {
         Some((out, err)) => {
             let _ = out.join();
@@ -386,6 +437,16 @@ mod tests {
     }
 
     #[test]
+    fn many_lines_across_chunks_arrive_in_order() {
+        let h = start_sh("seq 1 60000");
+        for expected in 1..=60000 {
+            assert_eq!(read(h, 20_000), (format!("{expected}\n"), READ_LINE));
+        }
+        assert_eq!(read(h, 20_000), (String::new(), READ_EOF));
+        assert_eq!(__vow_process_wait(h), 0);
+    }
+
+    #[test]
     fn error_paths_return_minus_one() {
         assert_eq!(write(-5, "x"), -1);
         assert_eq!(__vow_process_close_stdin(-5), -1);
@@ -409,9 +470,15 @@ mod tests {
     fn write_to_an_exited_child_fails_instead_of_raising_sigpipe() {
         let h = start_sh("exit 0");
         assert_eq!(read(h, 5000), (String::new(), READ_EOF));
-        let _ = __vow_process_poll_wait(h, 2000);
+        assert!(
+            lookup(h).is_some(),
+            "the handle must still be live so the write reaches the pipe"
+        );
         let big = "x".repeat(1 << 20);
-        assert_eq!(write(h, &big), -1);
+        let inherited = unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+        let rc = write(h, &big);
+        unsafe { libc::signal(libc::SIGPIPE, inherited) };
+        assert_eq!(rc, -1);
         assert_eq!(__vow_process_wait(h), 0);
     }
 
