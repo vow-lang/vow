@@ -25,7 +25,9 @@ byte-identical C rule (`scripts/parity.py c`) keeps the two emitters in step.
 1. **The checker exists only in the self-hosted compiler.** There is no Rust port
    of it and no parity requirement for it. The exception covers the verifier
    alone: the checker, SMT encoder, solver driver, counterexample mapping and the
-   worker subprocess (`compiler/vc_*.vow`, `vowc verify-worker`).
+   worker subprocess (`compiler/vc_*.vow`, `vowc verify-worker`), plus the dominance
+   validator (D13), which exists only to feed the checker and so lives in
+   `compiler/` only.
 2. **The Rust stage 0 delegates verification to a pinned seed.** `vow verify` and
    `vow build` will shell out to a seed `vowc verify`. The seed is a released
    `vowc` binary pinned in `scripts/seed.toml` (version, per-platform URL,
@@ -37,13 +39,11 @@ byte-identical C rule (`scripts/parity.py c`) keeps the two emitters in step.
    codegen, runtime builtins, and CLI flags and diagnostics outside the verifier
    stay dual-compiler. Enabling work such as `HashMap`, `getenv`/`mktemp` and
    `fs_read` error reporting keeps landing in both compilers wherever the Rust
-   compiler also compiles it. The dominance validator (D13) lives in `compiler/`
-   only, because it exists to feed the verifier. This is the author's reading of
-   D13 and the epic's "Enabling work" list; a reviewer who reads it differently
-   should say so on the PR.
-4. **Transitional state.** Until the first native-verifier release is pinned, ESBMC
-   and `c_emitter.{rs,vow}` stay in stage 0 and the byte-identical C parity rule
-   continues unchanged. They are deleted in P6, and the pair-comparison docs
+   compiler also compiles it.
+4. **Transitional state.** ESBMC and `c_emitter.{rs,vow}` stay in stage 0 and the
+   byte-identical C parity rule continues unchanged, including after the first
+   native-verifier release is pinned, until both emitters are deleted in P6. The
+   pair-comparison docs
    (`docs/equivalence/`, the `equivalence-review` command) are updated then, not
    here.
 
@@ -59,7 +59,7 @@ verifiers see the same tree. The fixed point is a codegen guarantee only;
 verification does not change codegen, which is why `--no-verify` runs still give a
 meaningful fixed point.
 
-**After the seed lands (P6).**
+**After the seed lands.**
 
 - Stage 1 verification is performed by the pinned seed `vowc verify`, not by Rust
   code. The Rust stage 0 contributes no verification logic.
@@ -97,9 +97,10 @@ This changes no language surface, so criteria 2 and 3 do not apply.
 - **A Rust twin of the checker.** Duplicates the verification surface, adds a
   parity burden that grows with the checker, and keeps the Rust-side C model the
   epic is deleting.
-- **Stage 0 skips verification (`--no-verify` at Stage 1).** Silently lowers the
-  guarantee and conflicts with the fail-closed principle. The pinned seed keeps
-  Stage 1 verified.
+- **Stage 0 skips verification (`--no-verify` at Stage 1).** Makes an unverified
+  Stage 1 the norm even when a seed is available, which conflicts with the
+  fail-closed principle. The pinned seed keeps Stage 1 verified; the no-seed
+  fallback is the degraded mode above, reported as `Unverified`.
 - **Linking or embedding the self-hosted checker into the Rust binary.** Needs an
   FFI or build cycle between the two compilers. (This is the author's
   reconstruction of why it was not chosen.)
@@ -110,6 +111,10 @@ This changes no language surface, so criteria 2 and 3 do not apply.
   The "Rust-only is not an exemption" rule stays in force for everything else.
 - A change that touches both the verifier and a dual-compiler component lands the
   dual-compiler part in both compilers and the verifier part in `compiler/` only.
+- The first issue that adds `compiler/vc_*.vow` must also exempt those files and
+  their tests from the Rust-versus-self-hosted comparisons (`vow test compiler/`
+  parity in `bootstrap.yml`, the equivalence ledger and sweep); this ADR does not
+  wire that.
 - The seed, `scripts/seed.toml`, `--backend native` and `vowc verify-worker` do
   not exist yet. Later issues in epic #1398 introduce them; this ADR records the
   decision they implement. Verification semantics are covered by #1400 and the CLI

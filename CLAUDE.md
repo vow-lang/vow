@@ -88,7 +88,7 @@ When implementing changes across Vow compilers, always modify BOTH the Rust comp
 
 This applies to behaviour-preserving refactors and unattended architecture-deepening runs too. "Rust-only, so no new drift" is not an exemption: the self-hosted compiler is the primary one, and a Rust-only refactor widens the gap between the two. If a change cannot be expressed in Vow (no generics, traits, or closures), do not land the Rust half alone — drop or re-scope the change. Earlier Rust-only landings are outstanding debt, not precedent.
 
-**Scoped exception: the native verifier.** The checker of epic #1398 (`compiler/vc_*.vow`, `vowc verify-worker`) lives only in the self-hosted compiler; it gets no Rust twin and no parity requirement. This exempts the verifier and nothing else: the lexer, parser, type checker, lowering, codegen, runtime builtins and non-verifier CLI surface stay dual-compiler, and a Rust-only or Vow-only change outside the verifier remains drift debt. Once the seed lands, Rust stage 0 will delegate verification to a pinned seed `vowc verify` (`scripts/seed.toml`). Bootstrap's fixed point then guards codegen only, and Stage 1 verification depends on the seed pin, so a "green locally" claim must record the seed pin as well as the head SHA. Until the first native release is pinned, ESBMC and `c_emitter.{rs,vow}` stay in stage 0 and the C parity rule below applies unchanged. See [ADR-2026-10-08-1421](docs/adr/2026-10-08-1421-verifier-lives-only-in-compiler.md).
+**Scoped exception: the native verifier.** The checker of epic #1398 (`compiler/vc_*.vow`, `vowc verify-worker`) lives only in the self-hosted compiler; it gets no Rust twin and no parity requirement. The dominance validator, which exists only to feed it, is exempt on the same terms. This exempts the verifier and nothing else: the lexer, parser, type checker, lowering, codegen, runtime builtins and non-verifier CLI surface stay dual-compiler, and a Rust-only or Vow-only change outside the verifier remains drift debt. Once the seed lands, Rust stage 0 will delegate verification to a pinned seed `vowc verify` (`scripts/seed.toml`). Bootstrap's fixed point then guards codegen only, and Stage 1 verification depends on the seed pin, so a "green locally" claim must record the seed pin as well as the head SHA. ESBMC and `c_emitter.{rs,vow}` stay in stage 0 and the C parity rule below applies unchanged until both emitters are deleted (epic #1398, P6). See [ADR-2026-10-08-1421](docs/adr/2026-10-08-1421-verifier-lives-only-in-compiler.md).
 
 ## Bootstrap Commands (Rust Stage 0)
 
@@ -142,7 +142,8 @@ actual final tree is verified by CI can be *after* it has already merged.
 For migration-epic (#1104/#1116) seam PRs and any other PR whose checklist asserts a green
 `scripts/bootstrap.sh` run, re-run `scripts/bootstrap.sh --skip-cargo --no-cache` against the PR's
 actual final head SHA — after the last push, not an earlier commit you happened to be looking at —
-immediately before ticking that checklist box, and record the checked SHA in the checklist line. A
+immediately before ticking that checklist box, and record the checked SHA in the checklist line. Once Stage 1 verification is delegated to a pinned seed (see
+"Scoped exception: the native verifier" above), record the `scripts/seed.toml` pin there too. A
 checklist claim written against an earlier commit and never re-checked after later commits land is
 not a green run of the tree that actually merges.
 
