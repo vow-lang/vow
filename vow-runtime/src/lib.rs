@@ -3602,20 +3602,12 @@ fn fs_read_outcome(path: &str) -> Result<Vec<u8>, i64> {
     std::fs::read(path).map_err(|e| fs_read_status_of(&e))
 }
 
-/// File contents for `fs_read`, or the status code of the failure; records
-/// the status for `fs_read_status` and takes no arena lock.
+/// File contents for `fs_read`, or `None` on any error; records the failure
+/// status for `fs_read_status` and takes no arena lock.
 unsafe fn fs_read_bytes(path_ptr: *const u8) -> Option<Vec<u8>> {
-    let outcome = if path_ptr.is_null() {
-        Err(FS_READ_INVALID_PATH)
-    } else {
-        sanitize_on_read(path_ptr as usize, 0);
-        let v = unsafe { &*(path_ptr as *const VowVec) };
-        let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
-        match std::str::from_utf8(bytes) {
-            Ok(path) => fs_read_outcome(path),
-            Err(_) => Err(FS_READ_INVALID_PATH),
-        }
-    };
+    let outcome = unsafe { vow_str_arg(path_ptr) }
+        .ok_or(FS_READ_INVALID_PATH)
+        .and_then(fs_read_outcome);
     let (status, data) = match outcome {
         Ok(data) => (FS_READ_OK, Some(data)),
         Err(status) => (status, None),
@@ -3678,11 +3670,9 @@ fn getenv_value(name: &str) -> String {
 
 fn is_executable_file(path: &std::path::Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
-    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
-        return false;
-    };
     path.metadata().is_ok_and(|m| m.is_file())
-        && unsafe { libc::access(c_path.as_ptr(), libc::X_OK) } == 0
+        && std::ffi::CString::new(path.as_os_str().as_bytes())
+            .is_ok_and(|c_path| unsafe { libc::access(c_path.as_ptr(), libc::X_OK) } == 0)
 }
 
 /// Resolve `name` like `command -v` minus shell builtins and aliases: a name
@@ -3690,7 +3680,7 @@ fn is_executable_file(path: &std::path::Path) -> bool {
 /// searched in order (an empty entry means the current directory). An unset
 /// `PATH` (`None`) searches nothing; it is not the same as an empty one.
 fn path_lookup_in(path_var: Option<&std::ffi::OsStr>, name: &str) -> String {
-    if name.is_empty() || name.contains('\0') {
+    if name.is_empty() {
         return String::new();
     }
     if name.contains('/') {
@@ -3723,7 +3713,7 @@ fn path_lookup_in(path_var: Option<&std::ffi::OsStr>, name: &str) -> String {
 /// Create `<base>/<prefix>.XXXXXXXXXX` with `mkdtemp` (atomic, mode 0700) and
 /// return its path, or `""` if the prefix is unusable or creation fails.
 fn mktemp_dir_in(base: &str, prefix: &str) -> String {
-    if prefix.is_empty() || prefix.contains('/') || prefix.contains('\0') || base.contains('\0') {
+    if prefix.is_empty() || prefix.contains('/') || prefix.contains('\0') {
         return String::new();
     }
     let base = base.trim_end_matches('/');
@@ -3734,7 +3724,7 @@ fn mktemp_dir_in(base: &str, prefix: &str) -> String {
         return String::new();
     }
     template.pop();
-    String::from_utf8(template).unwrap_or_default()
+    String::from_utf8(template).expect("mkdtemp template is UTF-8")
 }
 
 fn tmpdir_base() -> String {
@@ -3751,9 +3741,8 @@ unsafe fn getenv_string(name_ptr: *const u8) -> String {
 }
 
 unsafe fn path_lookup_string(name_ptr: *const u8) -> String {
-    let path_var = std::env::var_os("PATH");
     unsafe { vow_str_arg(name_ptr) }
-        .map(|name| path_lookup_in(path_var.as_deref(), name))
+        .map(|name| path_lookup_in(std::env::var_os("PATH").as_deref(), name))
         .unwrap_or_default()
 }
 
