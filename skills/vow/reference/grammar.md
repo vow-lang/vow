@@ -1323,6 +1323,10 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 | `fs_open`        | `fn(path: String) -> i64`                  | `[read]`   |
 | `fs_read_line`   | `fn(handle: i64) -> String`                | `[read]`   |
 | `fs_status`      | `fn(handle: i64) -> i64`                   | `[read]`   |
+| `fs_read_status` | `fn() -> i64`                              | `[read]`   |
+| `getenv`         | `fn(name: String) -> String`               | `[read]`   |
+| `path_lookup`    | `fn(name: String) -> String`               | `[read]`   |
+| `mktemp_dir`     | `fn(prefix: String) -> String`             | `[io]`     |
 | `fs_close`       | `fn(handle: i64) -> i64`                   | `[read]`   |
 | `fs_write`       | `fn(path: String, data: String) -> i64`    | `[write]`  |
 | `fs_exists`      | `fn(path: String) -> i64`                  | `[read]`   |
@@ -1477,7 +1481,15 @@ A hash is **not** an identity: distinct strings can collide. To key a `HashMap` 
 
 **`args` semantics:** `args()` returns all process arguments including the program name at index 0 (matching C `argv` and Rust `std::env::args()` conventions). For `./my_program foo bar`, `args()` returns `["./my_program", "foo", "bar"]`. Use `args[1]` onward for user-supplied arguments. The Vec is empty only if the OS provides no arguments (unusual). Returns an empty String element if an argument is empty (`""`). Non-UTF-8 arguments are included as-is (byte content preserved).
 
-**`fs_read` semantics:** `fs_read(path)` opens the file at `path`, reads its entire contents, and returns a String. Returns `""` (empty String) on any error (file not found, permission denied, I/O error, non-UTF-8 path). Does not block on regular files. Callers should check `result.len() == 0` to detect failure.
+**`fs_read` semantics:** `fs_read(path)` opens the file at `path`, reads its entire contents, and returns a String. Returns `""` (empty String) on any error (file not found, permission denied, I/O error, non-UTF-8 path). Does not block on regular files. An empty result is ambiguous on its own, because an empty file also reads as `""`; call `fs_read_status()` immediately after `fs_read` to tell the two apart.
+
+**`fs_read_status` semantics:** `fs_read_status()` reports the outcome of the calling thread's most recent `fs_read`: `0` ok (including an empty file), `1` not found, `2` permission denied, `3` any other I/O error (a directory, a read error), `4` invalid path (null, non-UTF-8, or containing a NUL byte), and `-1` if the thread has not called `fs_read` yet. The status is thread-local, so concurrent threads do not race; read it on the same thread, immediately after the `fs_read` it describes, because the next `fs_read` overwrites it. Other `fs_*` builtins do not touch it.
+
+**`getenv` semantics:** `getenv(name)` returns the value of environment variable `name`, or `""` when the variable is unset, its name is empty or contains `=` or a NUL byte, or its name or value is not valid UTF-8. An unset variable and a variable set to the empty string are not distinguished.
+
+**`path_lookup` semantics:** `path_lookup(name)` resolves an executable the way `command -v` does, minus shell builtins and aliases. A `name` containing `/` is tested directly and returned unchanged when it is a regular file with an execute bit; otherwise each entry of `$PATH` is searched in order (an empty entry means the current directory) and the first `<entry>/<name>` that is an executable regular file is returned. Returns `""` when nothing matches, `name` is empty, or `$PATH` is unset and `name` contains no `/`.
+
+**`mktemp_dir` semantics:** `mktemp_dir(prefix)` atomically creates a new directory `<tmp>/<prefix>.XXXXXXXXXX` with mode `0700` and returns its path, where `<tmp>` is `$TMPDIR` (trailing `/` stripped) or `/tmp` when `$TMPDIR` is unset or empty. Returns `""` when `prefix` is empty or contains `/` or a NUL byte, or when creation fails. The caller owns the directory and must remove it (`fs_remove` its files, then `fs_remove_dir`).
 
 **Streaming file input:** `fs_open(path)` opens a file for incremental reading and returns a positive handle, or `-1` on path/open error. `fs_read_line(handle)` reads one line from the current cursor and returns it as a String, including the trailing newline when present. It returns `""` at EOF, for an invalid handle, or after a read error. A blank line is returned as `"\n"`, so newline-delimited callers can distinguish a real blank line from EOF by content. After `fs_read_line(handle)` returns `""`, call `fs_status(handle)` to distinguish EOF from error: `0` means the handle is open with no EOF/error state, `1` means EOF, and `-1` means invalid handle or read error. `fs_status(handle)` reports the result of the most recent `fs_read_line(handle)` call on that open handle; read it immediately after a `""` return because later reads may update it. `fs_close(handle)` releases the handle and returns `0` on success or `-1` for an invalid/already-closed handle. Long-running programs must close handles they no longer need. All streaming handle operations use the `[read]` effect, including `fs_close`, because closing a read handle releases read-stream state and does not mutate filesystem contents. The current runtime stores streaming handles in one process-global table, and `fs_read_line` holds that table lock while it reads the next line. This keeps the API simple for single-stream file processing, but it is not intended for latency-sensitive concurrent reads from multiple slow handles.
 

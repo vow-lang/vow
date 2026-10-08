@@ -73,6 +73,19 @@ fn check_hash_ops() -> i64 {
     r
 }
 
+fn check_env_ops() -> i64 {
+    let mut r: i64 = expect_extern(String::from("fs_read_status"), String::from("__vow_fs_read_status"), 70);
+    if r == 0 { r = expect_extern(String::from("getenv"), String::from("__vow_getenv"), 71); }
+    if r == 0 { r = expect_extern(String::from("path_lookup"), String::from("__vow_path_lookup"), 72); }
+    if r == 0 { r = expect_extern(String::from("mktemp_dir"), String::from("__vow_mktemp_dir"), 73); }
+    if r == 0 { r = expect_ret_ty(String::from("fs_read_status"), ITY_I64(), 74); }
+    if r == 0 { r = expect_ret_ty(String::from("getenv"), ITY_PTR(), 75); }
+    if r == 0 { r = expect_ret_ty(String::from("path_lookup"), ITY_PTR(), 76); }
+    if r == 0 { r = expect_ret_ty(String::from("mktemp_dir"), ITY_PTR(), 77); }
+    if r == 0 && builtin_result_tag(String::from("fs_read_status")) != BRT_NONE() { r = 78; }
+    r
+}
+
 // The StringHeap-tagged process_* names are already pinned by
 // check_string_rows in test_lower_builtin_result_tag.vow; this only covers
 // the untagged ones, which aren't asserted anywhere else.
@@ -89,5 +102,6 @@ fn main() -> i32 {
     if r == 0 { r = check_process_ret_tys(); }
     if r == 0 { r = check_process_result_tags(); }
     if r == 0 { r = check_hash_ops(); }
+    if r == 0 { r = check_env_ops(); }
     i64_to_i32_wrap(r)
 }

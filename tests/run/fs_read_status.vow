@@ -1,0 +1,50 @@
+// TEST: stdout "ok\n"
+module FsReadStatus
+
+fn fail(msg: String) -> i32 [io] {
+    print_str(msg);
+    print_str(String::from("\n"));
+    1
+}
+
+fn main() -> i32 [read, io] {
+    let full: String = fs_read(String::from("tests/fixtures/fs_stream_lines.txt"));
+    if full.len() == 0 {
+        return fail(String::from("full-empty"));
+    }
+    if fs_read_status() != 0 {
+        return fail(String::from("full-status"));
+    }
+
+    let empty: String = fs_read(String::from("tests/fixtures/fs_read_empty.txt"));
+    if empty.len() != 0 {
+        return fail(String::from("empty-nonempty"));
+    }
+    if fs_read_status() != 0 {
+        return fail(String::from("empty-status"));
+    }
+
+    let missing: String = fs_read(String::from("tests/fixtures/fs_read_missing.txt"));
+    if missing.len() != 0 {
+        return fail(String::from("missing-nonempty"));
+    }
+    if fs_read_status() != 1 {
+        return fail(String::from("missing-status"));
+    }
+
+    let dir: String = fs_read(String::from("tests/fixtures"));
+    if dir.len() != 0 {
+        return fail(String::from("dir-nonempty"));
+    }
+    if fs_read_status() != 3 {
+        return fail(String::from("dir-status"));
+    }
+
+    let again: String = fs_read(String::from("tests/fixtures/fs_read_empty.txt"));
+    if again.len() != 0 || fs_read_status() != 0 {
+        return fail(String::from("status-reset"));
+    }
+
+    print_str(String::from("ok\n"));
+    0
+}

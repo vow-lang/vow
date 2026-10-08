@@ -168,6 +168,10 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
         def("fs_open", vec![Ty::Str], Ty::I64, &[Effect::Read]),
         def("fs_read_line", vec![Ty::I64], Ty::Str, &[Effect::Read]),
         def("fs_status", vec![Ty::I64], Ty::I64, &[Effect::Read]),
+        def("fs_read_status", vec![], Ty::I64, &[Effect::Read]),
+        def("getenv", vec![Ty::Str], Ty::Str, &[Effect::Read]),
+        def("path_lookup", vec![Ty::Str], Ty::Str, &[Effect::Read]),
+        def("mktemp_dir", vec![Ty::Str], Ty::Str, &[Effect::IO]),
         def("fs_close", vec![Ty::I64], Ty::I64, &[Effect::Read]),
         def(
             "fs_write",
@@ -926,11 +930,13 @@ fs_mkdir(Str) -> I64 [IO]
 fs_open(Str) -> I64 [Read]
 fs_read(Str) -> Str [Read]
 fs_read_line(I64) -> Str [Read]
+fs_read_status() -> I64 [Read]
 fs_remove(Str) -> I64 [IO]
 fs_remove_dir(Str) -> I64 [IO]
 fs_rename(Str, Str) -> I64 [IO]
 fs_status(I64) -> I64 [Read]
 fs_write(Str, Str) -> I64 [Write]
+getenv(Str) -> Str [Read]
 gzip_write_file(Str, Str) -> I64 [IO]
 hash_str(Str) -> U64 []
 hash_u64(U64) -> U64 []
@@ -997,6 +1003,7 @@ int_to_string(I64) -> Str []
 memory_alloc_count_since_start() -> U64 [IO]
 memory_peak_bytes() -> U64 [IO]
 memory_root_arena_bytes() -> U64 [IO]
+mktemp_dir(Str) -> Str [IO]
 mul_sat_u8(U8, U8) -> U8 []
 num_cpus() -> I64 [IO]
 parse_f64_bits(Str) -> U64 []
@@ -1007,6 +1014,7 @@ parse_i8(Str) -> Applied(Enum("Option"), [I8]) []
 parse_u16(Str) -> Applied(Enum("Option"), [U16]) []
 parse_u32(Str) -> Applied(Enum("Option"), [U32]) []
 parse_u8(Str) -> Applied(Enum("Option"), [U8]) []
+path_lookup(Str) -> Str [Read]
 print_i64(I64) -> Unit [IO]
 print_str(Str) -> Unit [IO]
 print_u64(U64) -> Unit [IO]

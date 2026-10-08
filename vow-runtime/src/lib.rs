@@ -3577,15 +3577,52 @@ pub unsafe extern "C" fn __vow_format_f64_bits(bits: u64) -> *mut u8 {
 // File I/O runtime
 // ---------------------------------------------------------------------------
 
-/// File contents for `fs_read`, or `None` on any error; takes no arena lock.
-unsafe fn fs_read_bytes(path_ptr: *const u8) -> Option<Vec<u8>> {
-    if path_ptr.is_null() {
-        return None;
+const FS_READ_OK: i64 = 0;
+const FS_READ_NOT_FOUND: i64 = 1;
+const FS_READ_PERMISSION_DENIED: i64 = 2;
+const FS_READ_IO_ERROR: i64 = 3;
+const FS_READ_INVALID_PATH: i64 = 4;
+const FS_READ_NONE: i64 = -1;
+
+thread_local! {
+    static LAST_FS_READ_STATUS: std::cell::Cell<i64> = const { std::cell::Cell::new(FS_READ_NONE) };
+}
+
+fn fs_read_status_of(err: &std::io::Error) -> i64 {
+    match err.kind() {
+        std::io::ErrorKind::NotFound => FS_READ_NOT_FOUND,
+        std::io::ErrorKind::PermissionDenied => FS_READ_PERMISSION_DENIED,
+        _ => FS_READ_IO_ERROR,
     }
-    sanitize_on_read(path_ptr as usize, 0);
-    let v = unsafe { &*(path_ptr as *const VowVec) };
-    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
-    std::fs::read(std::str::from_utf8(bytes).ok()?).ok()
+}
+
+fn fs_read_outcome(path: &str) -> Result<Vec<u8>, i64> {
+    if path.contains('\0') {
+        return Err(FS_READ_INVALID_PATH);
+    }
+    std::fs::read(path).map_err(|e| fs_read_status_of(&e))
+}
+
+/// File contents for `fs_read`, or `None` on any error; records the failure
+/// status for `fs_read_status` and takes no arena lock.
+unsafe fn fs_read_bytes(path_ptr: *const u8) -> Option<Vec<u8>> {
+    let outcome = unsafe { vow_str_arg(path_ptr) }
+        .ok_or(FS_READ_INVALID_PATH)
+        .and_then(fs_read_outcome);
+    let (status, data) = match outcome {
+        Ok(data) => (FS_READ_OK, Some(data)),
+        Err(status) => (status, None),
+    };
+    LAST_FS_READ_STATUS.with(|c| c.set(status));
+    data
+}
+
+/// Outcome of this thread's most recent `fs_read`: 0 ok (including an empty
+/// file), 1 not found, 2 permission denied, 3 other I/O error, 4 invalid
+/// path, -1 if the thread has not called `fs_read` yet.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_fs_read_status() -> i64 {
+    LAST_FS_READ_STATUS.with(|c| c.get())
 }
 
 unsafe fn alloc_fs_read_result(arena: *mut VowArena, data: Option<Vec<u8>>) -> *mut u8 {
@@ -3607,6 +3644,161 @@ pub unsafe extern "C" fn __vow_fs_read_in_arena(
 pub unsafe extern "C" fn __vow_fs_read(path_ptr: *const u8) -> *mut u8 {
     let data = unsafe { fs_read_bytes(path_ptr) };
     unsafe { with_root_arena(|arena| alloc_fs_read_result(arena, data)) }
+}
+
+// ---------------------------------------------------------------------------
+// Environment and executable lookup
+// ---------------------------------------------------------------------------
+
+/// The UTF-8 contents of a Vow String argument, or `None` for a null or
+/// non-UTF-8 string.
+unsafe fn vow_str_arg<'a>(ptr: *const u8) -> Option<&'a str> {
+    if ptr.is_null() {
+        return None;
+    }
+    sanitize_on_read(ptr as usize, 0);
+    let v = unsafe { &*(ptr as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    std::str::from_utf8(bytes).ok()
+}
+
+fn getenv_value(name: &str) -> String {
+    if name.is_empty() || name.contains('=') || name.contains('\0') {
+        return String::new();
+    }
+    std::env::var(name).unwrap_or_default()
+}
+
+fn is_executable_file(path: &std::path::Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    path.metadata().is_ok_and(|m| m.is_file())
+        && std::ffi::CString::new(path.as_os_str().as_bytes())
+            .is_ok_and(|c_path| unsafe { libc::access(c_path.as_ptr(), libc::X_OK) } == 0)
+}
+
+/// Resolve `name` like `command -v` minus shell builtins and aliases: a name
+/// containing `/` is tested directly, otherwise each `path_var` entry is
+/// searched in order (an empty entry means the current directory). An unset
+/// `PATH` (`None`) searches nothing; it is not the same as an empty one.
+fn path_lookup_in(path_var: Option<&std::ffi::OsStr>, name: &str) -> String {
+    if name.is_empty() {
+        return String::new();
+    }
+    if name.contains('/') {
+        let direct = std::path::Path::new(name);
+        return if is_executable_file(direct) {
+            name.to_string()
+        } else {
+            String::new()
+        };
+    }
+    let Some(path_var) = path_var else {
+        return String::new();
+    };
+    for dir in std::env::split_paths(path_var) {
+        let dir = if dir.as_os_str().is_empty() {
+            std::path::PathBuf::from(".")
+        } else {
+            dir
+        };
+        let candidate = dir.join(name);
+        if let Some(found) = candidate.to_str()
+            && is_executable_file(&candidate)
+        {
+            return found.to_string();
+        }
+    }
+    String::new()
+}
+
+/// Create `<base>/<prefix>.XXXXXXXXXX` with `mkdtemp` (atomic, mode 0700) and
+/// return its path, or `""` if the prefix is unusable or creation fails.
+fn mktemp_dir_in(base: &str, prefix: &str) -> String {
+    if prefix.is_empty() || prefix.contains('/') || prefix.contains('\0') {
+        return String::new();
+    }
+    let base = base.trim_end_matches('/');
+    let mut template = format!("{base}/{prefix}.XXXXXXXXXX").into_bytes();
+    template.push(0);
+    let created = unsafe { libc::mkdtemp(template.as_mut_ptr() as *mut libc::c_char) };
+    if created.is_null() {
+        return String::new();
+    }
+    template.pop();
+    String::from_utf8(template).expect("mkdtemp template is UTF-8")
+}
+
+fn tmpdir_base() -> String {
+    match std::env::var("TMPDIR") {
+        Ok(dir) if !dir.is_empty() => dir,
+        _ => "/tmp".to_string(),
+    }
+}
+
+unsafe fn getenv_string(name_ptr: *const u8) -> String {
+    unsafe { vow_str_arg(name_ptr) }
+        .map(getenv_value)
+        .unwrap_or_default()
+}
+
+unsafe fn path_lookup_string(name_ptr: *const u8) -> String {
+    unsafe { vow_str_arg(name_ptr) }
+        .map(|name| path_lookup_in(std::env::var_os("PATH").as_deref(), name))
+        .unwrap_or_default()
+}
+
+unsafe fn mktemp_dir_string(prefix_ptr: *const u8) -> String {
+    unsafe { vow_str_arg(prefix_ptr) }
+        .map(|prefix| mktemp_dir_in(&tmpdir_base(), prefix))
+        .unwrap_or_default()
+}
+
+/// `getenv`: the value of an environment variable, `""` if unset or unusable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_getenv_in_arena(
+    arena: *mut VowArena,
+    name_ptr: *const u8,
+) -> *mut u8 {
+    let value = unsafe { getenv_string(name_ptr) };
+    unsafe { alloc_bytes_string(arena, value.as_bytes()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_getenv(name_ptr: *const u8) -> *mut u8 {
+    let value = unsafe { getenv_string(name_ptr) };
+    unsafe { with_root_arena(|arena| alloc_bytes_string(arena, value.as_bytes())) }
+}
+
+/// `path_lookup`: absolute-or-relative path of an executable, `""` if none.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_path_lookup_in_arena(
+    arena: *mut VowArena,
+    name_ptr: *const u8,
+) -> *mut u8 {
+    let found = unsafe { path_lookup_string(name_ptr) };
+    unsafe { alloc_bytes_string(arena, found.as_bytes()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_path_lookup(name_ptr: *const u8) -> *mut u8 {
+    let found = unsafe { path_lookup_string(name_ptr) };
+    unsafe { with_root_arena(|arena| alloc_bytes_string(arena, found.as_bytes())) }
+}
+
+/// `mktemp_dir`: a fresh private directory under `$TMPDIR` (or `/tmp`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_mktemp_dir_in_arena(
+    arena: *mut VowArena,
+    prefix_ptr: *const u8,
+) -> *mut u8 {
+    let dir = unsafe { mktemp_dir_string(prefix_ptr) };
+    unsafe { alloc_bytes_string(arena, dir.as_bytes()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_mktemp_dir(prefix_ptr: *const u8) -> *mut u8 {
+    let dir = unsafe { mktemp_dir_string(prefix_ptr) };
+    unsafe { with_root_arena(|arena| alloc_bytes_string(arena, dir.as_bytes())) }
 }
 
 #[unsafe(no_mangle)]
@@ -6001,6 +6193,223 @@ mod tests {
 
         assert!(unsafe { (*ap).cursor } > before);
         unsafe { __vow_arena_close(ap) };
+    }
+
+    #[test]
+    fn fs_read_status_reports_each_outcome() {
+        let dir = std::env::temp_dir().join(format!("vow_fs_status_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let empty = dir.join("empty.txt");
+        let full = dir.join("full.txt");
+        std::fs::write(&empty, "").unwrap();
+        std::fs::write(&full, "x").unwrap();
+        let path_arg = |p: &std::path::Path| {
+            let s = p.to_str().unwrap().to_string();
+            unsafe { __vow_string_new(s.as_ptr().cast(), s.len()) }
+        };
+        let read_status = |arg: *const u8| {
+            let text = vow_text(unsafe { __vow_fs_read(arg) });
+            (text, __vow_fs_read_status())
+        };
+        std::thread::spawn(|| assert_eq!(__vow_fs_read_status(), FS_READ_NONE))
+            .join()
+            .unwrap();
+        assert_eq!(read_status(path_arg(&full)), ("x".to_string(), FS_READ_OK));
+        assert_eq!(read_status(path_arg(&empty)), (String::new(), FS_READ_OK));
+        assert_eq!(
+            read_status(path_arg(&dir.join("missing"))),
+            (String::new(), FS_READ_NOT_FOUND)
+        );
+        assert_eq!(
+            read_status(path_arg(&dir)),
+            (String::new(), FS_READ_IO_ERROR)
+        );
+        assert_eq!(
+            read_status(std::ptr::null()),
+            (String::new(), FS_READ_INVALID_PATH)
+        );
+        let bad = unsafe { __vow_string_new([0xffu8, 0xfe].as_ptr().cast(), 2) };
+        assert_eq!(read_status(bad), (String::new(), FS_READ_INVALID_PATH));
+        let nul = unsafe { __vow_string_new(b"a\0b".as_ptr().cast(), 3) };
+        assert_eq!(read_status(nul), (String::new(), FS_READ_INVALID_PATH));
+        assert_eq!(
+            fs_read_status_of(&std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            FS_READ_PERMISSION_DENIED
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn fs_read_status_is_per_thread() {
+        let missing = unsafe { __vow_string_new(c"/nonexistent/x".as_ptr(), 14) };
+        let _ = unsafe { __vow_fs_read(missing) };
+        assert_eq!(__vow_fs_read_status(), FS_READ_NOT_FOUND);
+        std::thread::spawn(|| assert_eq!(__vow_fs_read_status(), FS_READ_NONE))
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn getenv_value_rejects_unusable_names() {
+        assert_eq!(getenv_value(""), "");
+        assert_eq!(getenv_value("A=B"), "");
+        assert_eq!(getenv_value("A\0B"), "");
+        assert_eq!(getenv_value("VOW_TEST_DEFINITELY_UNSET_1404"), "");
+        assert!(!getenv_value("PATH").is_empty());
+    }
+
+    #[test]
+    fn getenv_externs_return_vow_strings() {
+        let name = unsafe { __vow_string_new(c"PATH".as_ptr(), 4) };
+        assert_eq!(
+            vow_text(unsafe { __vow_getenv(name) }),
+            getenv_value("PATH")
+        );
+        assert_eq!(vow_text(unsafe { __vow_getenv(std::ptr::null()) }), "");
+        let mut a = empty_arena_header();
+        let ap: *mut VowArena = &mut a;
+        unsafe { __vow_arena_open(ap) };
+        let name = unsafe { __vow_string_new_in_arena(ap, c"PATH".as_ptr(), 4) };
+        assert_eq!(
+            vow_text(unsafe { __vow_getenv_in_arena(ap, name) }),
+            getenv_value("PATH")
+        );
+        unsafe { __vow_arena_close(ap) };
+    }
+
+    fn make_exec(path: &std::path::Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[test]
+    fn path_lookup_in_searches_in_order_and_checks_exec_bit() {
+        let root = std::env::temp_dir().join(format!("vow_path_lookup_{}", std::process::id()));
+        let (d1, d2) = (root.join("d1"), root.join("d2"));
+        std::fs::create_dir_all(&d1).unwrap();
+        std::fs::create_dir_all(&d2).unwrap();
+        make_exec(&d1.join("tool"), 0o644);
+        make_exec(&d2.join("tool"), 0o755);
+        make_exec(&d1.join("both"), 0o755);
+        make_exec(&d2.join("both"), 0o755);
+        std::fs::create_dir_all(d1.join("adir")).unwrap();
+        let path_var = std::env::join_paths([&d1, &d2]).unwrap();
+        let pv = Some(path_var.as_os_str());
+        assert_eq!(
+            path_lookup_in(pv, "tool"),
+            d2.join("tool").to_str().unwrap()
+        );
+        assert_eq!(
+            path_lookup_in(pv, "both"),
+            d1.join("both").to_str().unwrap()
+        );
+        assert_eq!(path_lookup_in(pv, "adir"), "");
+        assert_eq!(path_lookup_in(pv, "nope"), "");
+        assert_eq!(path_lookup_in(pv, ""), "");
+        assert_eq!(path_lookup_in(pv, "a\0b"), "");
+        let direct = d2.join("tool");
+        assert_eq!(
+            path_lookup_in(Some(std::ffi::OsStr::new("")), direct.to_str().unwrap()),
+            direct.to_str().unwrap()
+        );
+        assert_eq!(
+            path_lookup_in(None, direct.to_str().unwrap()),
+            direct.to_str().unwrap()
+        );
+        assert_eq!(path_lookup_in(None, "tool"), "");
+        assert_eq!(path_lookup_in(pv, d1.join("tool").to_str().unwrap()), "");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn path_lookup_in_resolves_an_empty_entry_against_the_cwd() {
+        let probe = format!("vow_cwd_probe_{}", std::process::id());
+        make_exec(std::path::Path::new(&probe), 0o755);
+        let found = path_lookup_in(Some(std::ffi::OsStr::new(":/nonexistent")), &probe);
+        let _ = std::fs::remove_file(&probe);
+        assert_eq!(found, format!("./{probe}"));
+    }
+
+    #[test]
+    fn path_lookup_in_skips_non_utf8_candidates() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = std::env::temp_dir().join(format!("vow_path_non_utf8_{}", std::process::id()));
+        let bad = root.join(std::ffi::OsStr::from_bytes(b"d\xff"));
+        let good = root.join("good");
+        if std::fs::create_dir_all(&bad).is_err() {
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        }
+        std::fs::create_dir_all(&good).unwrap();
+        make_exec(&bad.join("tool"), 0o755);
+        make_exec(&good.join("tool"), 0o755);
+        let path_var = std::env::join_paths([&bad, &good]).unwrap();
+        assert_eq!(
+            path_lookup_in(Some(path_var.as_os_str()), "tool"),
+            good.join("tool").to_str().unwrap()
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn path_lookup_externs_return_vow_strings() {
+        let sh = unsafe { __vow_string_new(c"sh".as_ptr(), 2) };
+        assert!(vow_text(unsafe { __vow_path_lookup(sh) }).ends_with("/sh"));
+        assert_eq!(vow_text(unsafe { __vow_path_lookup(std::ptr::null()) }), "");
+        let mut a = empty_arena_header();
+        let ap: *mut VowArena = &mut a;
+        unsafe { __vow_arena_open(ap) };
+        let sh = unsafe { __vow_string_new_in_arena(ap, c"sh".as_ptr(), 2) };
+        assert!(vow_text(unsafe { __vow_path_lookup_in_arena(ap, sh) }).ends_with("/sh"));
+        unsafe { __vow_arena_close(ap) };
+    }
+
+    #[test]
+    fn mktemp_dir_in_creates_private_unique_directories() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("vow_mktemp_{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let base_s = format!("{}//", base.to_str().unwrap());
+        let a = mktemp_dir_in(&base_s, "pre");
+        let b = mktemp_dir_in(&base_s, "pre");
+        assert_ne!(a, b);
+        for d in [&a, &b] {
+            assert!(
+                d.starts_with(&format!("{}/pre.", base.to_str().unwrap())),
+                "{d}"
+            );
+            let meta = std::fs::metadata(d).unwrap();
+            assert!(meta.is_dir());
+            assert_eq!(meta.permissions().mode() & 0o777, 0o700);
+        }
+        assert_eq!(mktemp_dir_in(&base_s, ""), "");
+        assert_eq!(mktemp_dir_in(&base_s, "a/b"), "");
+        assert_eq!(mktemp_dir_in(&base_s, "a\0b"), "");
+        assert_eq!(mktemp_dir_in("/nonexistent-vow-1404", "pre"), "");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn mktemp_dir_externs_create_and_report_failure() {
+        let prefix = unsafe { __vow_string_new(c"vow-1404".as_ptr(), 8) };
+        let dir = vow_text(unsafe { __vow_mktemp_dir(prefix) });
+        assert!(std::fs::metadata(&dir).unwrap().is_dir());
+        std::fs::remove_dir(&dir).unwrap();
+        let mut a = empty_arena_header();
+        let ap: *mut VowArena = &mut a;
+        unsafe { __vow_arena_open(ap) };
+        let prefix = unsafe { __vow_string_new_in_arena(ap, c"vow-1404".as_ptr(), 8) };
+        let dir = vow_text(unsafe { __vow_mktemp_dir_in_arena(ap, prefix) });
+        assert!(std::fs::metadata(&dir).unwrap().is_dir());
+        std::fs::remove_dir(&dir).unwrap();
+        unsafe { __vow_arena_close(ap) };
+        assert_eq!(vow_text(unsafe { __vow_mktemp_dir(std::ptr::null()) }), "");
+    }
+
+    #[test]
+    fn tmpdir_base_is_never_empty() {
+        assert!(!tmpdir_base().is_empty());
     }
 
     #[test]

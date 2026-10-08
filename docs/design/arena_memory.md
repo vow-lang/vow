@@ -570,9 +570,9 @@ its `--check` verifies the runtime defines every symbol:
 - `String` results: the string constructors and transformers (`string_new`,
   `from_cstr`, `clone`, `substr`, `substring`, `from_i64`, `from_u64`, `trim`,
   `to_upper`, `to_lower`, `replace`, `join`), `fs_read`, `fs_read_line`,
-  `stdin_read`, `hex_encode`, `format_f64_bits`, `process_get_stdout`,
-  `process_get_stderr`, `process_stdout_for`, `process_stderr_for` and
-  `process_read_line`.
+  `stdin_read`, `getenv`, `path_lookup`, `mktemp_dir`, `hex_encode`,
+  `format_f64_bits`, `process_get_stdout`, `process_get_stderr`,
+  `process_stdout_for`, `process_stderr_for` and `process_read_line`.
 - `Vec` results: `String::split`, `vec_sort`, `hex_decode`, `fs_listdir` and
   `args` (the strings inside `fs_listdir`, `args` and `split` are allocated in
   the same arena as the vector).

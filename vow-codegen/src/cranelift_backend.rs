@@ -2535,6 +2535,25 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
             sig.returns.push(AbiParam::new(types::I64));
             true
         }
+        "__vow_fs_read_status" => {
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_getenv" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_path_lookup" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_mktemp_dir" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
         _ => false,
     }
 }
@@ -3738,6 +3757,7 @@ mod tests {
 
         let no_params_return_i64 = [
             "__vow_args",
+            "__vow_fs_read_status",
             "__vow_stdin_read",
             "__vow_stdin_read_line",
             "__vow_stdin_ready",

@@ -31,6 +31,9 @@ fn check_string_rows() -> i64 {
     if r == 0 { r = expect_tag(String::from("process_stderr_for"), BRT_STRING(), 19); }
     if r == 0 { r = expect_tag(String::from("process_read_line"), BRT_STRING(), 95); }
     if r == 0 { r = expect_tag(String::from("proc_sample"), BRT_STRING(), 20); }
+    if r == 0 { r = expect_tag(String::from("getenv"), BRT_STRING(), 95); }
+    if r == 0 { r = expect_tag(String::from("path_lookup"), BRT_STRING(), 96); }
+    if r == 0 { r = expect_tag(String::from("mktemp_dir"), BRT_STRING(), 97); }
     r
 }
 

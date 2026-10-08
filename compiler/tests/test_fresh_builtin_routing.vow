@@ -26,9 +26,13 @@ fn check_fresh_table_lookup() -> i64 {
     if !fresh_arena_base_extern(String::from("__vow_fs_listdir")) { return 12; }
     if !fresh_arena_base_extern(String::from("__vow_args")) { return 13; }
     if !fresh_arena_base_extern(String::from("__vow_process_stderr_for")) { return 14; }
-    if !fresh_arena_base_extern(String::from("__vow_process_read_line")) { return 36; }
-    if fresh_arena_base_extern(String::from("__vow_process_read_status")) { return 37; }
-    if fresh_arena_base_extern(String::from("__vow_process_write_stdin")) { return 38; }
+    if !fresh_arena_base_extern(String::from("__vow_getenv")) { return 36; }
+    if !fresh_arena_base_extern(String::from("__vow_path_lookup")) { return 37; }
+    if !fresh_arena_base_extern(String::from("__vow_mktemp_dir")) { return 38; }
+    if fresh_arena_base_extern(String::from("__vow_fs_read_status")) { return 39; }
+    if !fresh_arena_base_extern(String::from("__vow_process_read_line")) { return 40; }
+    if fresh_arena_base_extern(String::from("__vow_process_read_status")) { return 41; }
+    if fresh_arena_base_extern(String::from("__vow_process_write_stdin")) { return 42; }
     if !fresh_arena_base_extern(String::from("__vow_i128_to_i32_try")) { return 34; }
     if fresh_arena_base_extern(String::from("__vow_i128_to_u128_wrap")) { return 35; }
     if fresh_arena_base_extern(String::from("__vow_i64_to_u8_wrap")) { return 15; }
