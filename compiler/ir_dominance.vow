@@ -51,6 +51,12 @@ fn dom_block_id_table(f: IrFunction) -> Vec<i64> {
     table
 }
 
+// Same set as `iop_is_terminal`, without its contract: calling a contracted
+// function would make this pass a caller-precondition verify target.
+fn dom_is_terminal(op: i64) -> bool {
+    op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_RETURN() || op == IOP_UNREACHABLE()
+}
+
 // Successors of block `bi` as block indices: out[2*bi] and out[2*bi+1], -1 when absent.
 // Mirrors `linear_successors` (region.vow): lowering appends Upsilons after the
 // terminator, so the last terminal is found by scanning backward.
@@ -64,7 +70,7 @@ fn dom_successors(f: IrFunction, id_to_idx: Vec<i64>) -> Vec<i64> {
         while i > 0 {
             i = i - 1;
             let inst: IrInst = blk.insts[i];
-            if inst.op >= 0 && iop_is_terminal(inst.op) {
+            if dom_is_terminal(inst.op) {
                 if inst.op == IOP_BRANCH() && inst.dk == IDATA_BRANCH_TARGETS() {
                     out[bi * 2] = dom_block_index(id_to_idx, inst.dv);
                     out[bi * 2 + 1] = dom_block_index(id_to_idx, inst.dv2);
