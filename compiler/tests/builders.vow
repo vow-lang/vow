@@ -71,3 +71,30 @@ fn mk_module(funcs: Vec<IrFunction>) -> IrModule {
     }
     m
 }
+
+fn mk_inst_branch(id: i64, cond_id: i64, then_block: i64, else_block: i64) -> IrInst {
+    let args: Vec<i64> = Vec::new();
+    args.push(cond_id);
+    ir_inst_new(id, IOP_BRANCH(), ITY_UNIT(), args, IDATA_BRANCH_TARGETS(), then_block, else_block, String::from(""))
+}
+
+fn mk_inst_jump(id: i64, target_block: i64) -> IrInst {
+    ir_inst_new(id, IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), target_block, 0, String::from(""))
+}
+
+fn mk_inst_phi(id: i64, ty: i64) -> IrInst {
+    ir_inst_new(id, IOP_PHI(), ty, Vec::new(), IDATA_NONE(), 0, 0, String::from(""))
+}
+
+fn mk_inst_upsilon(id: i64, value_id: i64, phi_id: i64) -> IrInst {
+    let args: Vec<i64> = Vec::new();
+    args.push(value_id);
+    ir_inst_new(id, IOP_UPSILON(), ITY_UNIT(), args, IDATA_PHI_TARGET(), phi_id, 0, String::from(""))
+}
+
+fn mk_inst_add(id: i64, a: i64, b: i64) -> IrInst {
+    let args: Vec<i64> = Vec::new();
+    args.push(a);
+    args.push(b);
+    ir_inst_new(id, IOP_WADD(), ITY_I64(), args, IDATA_NONE(), 0, 0, String::from(""))
+}

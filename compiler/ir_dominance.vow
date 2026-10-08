@@ -1,0 +1,391 @@
+module IrDominance
+
+use ir
+
+// Well-formedness pass for the self-hosted IR: every value read must be
+// dominated by its definition. The verifier's C model declares locals at the
+// top of each function and assumes this holds; a read whose definition does
+// not dominate it (e.g. a sibling-branch read, #1407) would model an
+// uninitialised value, so the verifier gate treats such a function as
+// non-modelable instead.
+
+fn SKIP_IR_NON_DOMINATING_READ() -> String { String::from("ir-non-dominating-read") }
+
+fn dom_fill(n: u64, v: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < n {
+        out.push(v);
+        i = i + 1;
+    }
+    out
+}
+
+// Index of the block with the given id, or -1 (unknown or out of table range).
+fn dom_block_index(id_to_idx: Vec<i64>, id: i64) -> i64 {
+    if id < 0 || id >= id_to_idx.len() as i64 {
+        return -1;
+    }
+    id_to_idx[id as u64]
+}
+
+fn dom_block_id_table(f: IrFunction) -> Vec<i64> {
+    let mut max_id: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        if blk.id > max_id {
+            max_id = blk.id;
+        }
+        bi = bi + 1;
+    }
+    let table: Vec<i64> = dom_fill((max_id + 1) as u64, -1);
+    bi = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        if blk.id >= 0 && table[blk.id as u64] < 0 {
+            table[blk.id as u64] = bi as i64;
+        }
+        bi = bi + 1;
+    }
+    table
+}
+
+// Successors of block `bi` as block indices: out[2*bi] and out[2*bi+1], -1 when absent.
+// Mirrors `linear_successors` (region.vow): lowering appends Upsilons after the
+// terminator, so the last terminal is found by scanning backward.
+fn dom_successors(f: IrFunction, id_to_idx: Vec<i64>) -> Vec<i64> {
+    let nb: u64 = f.blocks.len();
+    let out: Vec<i64> = dom_fill(nb * 2, -1);
+    let mut bi: u64 = 0;
+    while bi < nb {
+        let blk: IrBlock = f.blocks[bi];
+        let mut i: u64 = blk.insts.len();
+        while i > 0 {
+            i = i - 1;
+            let inst: IrInst = blk.insts[i];
+            if inst.op >= 0 && iop_is_terminal(inst.op) {
+                if inst.op == IOP_BRANCH() && inst.dk == IDATA_BRANCH_TARGETS() {
+                    out[bi * 2] = dom_block_index(id_to_idx, inst.dv);
+                    out[bi * 2 + 1] = dom_block_index(id_to_idx, inst.dv2);
+                } else if inst.op == IOP_JUMP() && inst.dk == IDATA_JUMP_TARGET() {
+                    out[bi * 2] = dom_block_index(id_to_idx, inst.dv);
+                }
+                i = 0;
+            }
+        }
+        bi = bi + 1;
+    }
+    out
+}
+
+// Reverse-postorder number of each block reachable from block 0 (entry gets 0),
+// -1 for unreachable blocks. Iterative DFS.
+fn dom_rpo_numbers(nb: u64, succ: Vec<i64>) -> Vec<i64> {
+    let post: Vec<i64> = Vec::new();
+    let seen: Vec<i64> = dom_fill(nb, 0);
+    let cursor: Vec<i64> = dom_fill(nb, 0);
+    let stack: Vec<i64> = Vec::new();
+    stack.push(0);
+    seen[0] = 1;
+    while stack.len() > 0 {
+        let b: i64 = stack[stack.len() - 1];
+        let k: i64 = cursor[b as u64];
+        if k < 2 {
+            cursor[b as u64] = k + 1;
+            let s: i64 = succ[(b * 2 + k) as u64];
+            if s >= 0 && seen[s as u64] == 0 {
+                seen[s as u64] = 1;
+                stack.push(s);
+            }
+        } else {
+            post.push(b);
+            stack.pop();
+        }
+    }
+    let rpo: Vec<i64> = dom_fill(nb, -1);
+    let np: i64 = post.len() as i64;
+    let mut i: i64 = 0;
+    while i < np {
+        rpo[post[i as u64] as u64] = np - 1 - i;
+        i = i + 1;
+    }
+    rpo
+}
+
+// Reachable blocks in reverse postorder.
+fn dom_rpo_order(rpo: Vec<i64>) -> Vec<i64> {
+    let mut count: i64 = 0;
+    let mut i: u64 = 0;
+    while i < rpo.len() {
+        if rpo[i] >= 0 {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    let order: Vec<i64> = dom_fill(count as u64, -1);
+    i = 0;
+    while i < rpo.len() {
+        if rpo[i] >= 0 {
+            order[rpo[i] as u64] = i as i64;
+        }
+        i = i + 1;
+    }
+    order
+}
+
+// Predecessors of every reachable block in CSR form: preds_off has nb+1
+// entries; the predecessors of b are preds[preds_off[b] .. preds_off[b+1]].
+fn dom_pred_offsets(nb: u64, succ: Vec<i64>, rpo: Vec<i64>) -> Vec<i64> {
+    let off: Vec<i64> = dom_fill(nb + 1, 0);
+    let mut b: u64 = 0;
+    while b < nb {
+        if rpo[b] >= 0 {
+            let mut k: u64 = 0;
+            while k < 2 {
+                let s: i64 = succ[b * 2 + k];
+                if s >= 0 {
+                    off[(s + 1) as u64] = off[(s + 1) as u64] + 1;
+                }
+                k = k + 1;
+            }
+        }
+        b = b + 1;
+    }
+    let mut i: u64 = 1;
+    while i <= nb {
+        off[i] = off[i] + off[i - 1];
+        i = i + 1;
+    }
+    off
+}
+
+fn dom_pred_list(nb: u64, succ: Vec<i64>, rpo: Vec<i64>, off: Vec<i64>) -> Vec<i64> {
+    let preds: Vec<i64> = dom_fill(off[nb] as u64, -1);
+    let fill: Vec<i64> = dom_fill(nb, 0);
+    let mut b: u64 = 0;
+    while b < nb {
+        if rpo[b] >= 0 {
+            let mut k: u64 = 0;
+            while k < 2 {
+                let s: i64 = succ[b * 2 + k];
+                if s >= 0 {
+                    preds[(off[s as u64] + fill[s as u64]) as u64] = b as i64;
+                    fill[s as u64] = fill[s as u64] + 1;
+                }
+                k = k + 1;
+            }
+        }
+        b = b + 1;
+    }
+    preds
+}
+
+fn dom_intersect(idom: Vec<i64>, rpo: Vec<i64>, a0: i64, b0: i64) -> i64 {
+    let mut a: i64 = a0;
+    let mut b: i64 = b0;
+    while a != b {
+        while rpo[a as u64] > rpo[b as u64] {
+            a = idom[a as u64];
+        }
+        while rpo[b as u64] > rpo[a as u64] {
+            b = idom[b as u64];
+        }
+    }
+    a
+}
+
+// Cooper–Harvey–Kennedy immediate dominators over reachable blocks; the entry
+// is its own idom, unreachable blocks keep -1.
+fn dom_idoms(nb: u64, rpo: Vec<i64>, order: Vec<i64>, off: Vec<i64>, preds: Vec<i64>) -> Vec<i64> {
+    let idom: Vec<i64> = dom_fill(nb, -1);
+    idom[0] = 0;
+    let mut changed: bool = true;
+    while changed {
+        changed = false;
+        let mut oi: u64 = 1;
+        while oi < order.len() {
+            let b: i64 = order[oi];
+            let mut new_idom: i64 = -1;
+            let mut pi: i64 = off[b as u64];
+            while pi < off[(b + 1) as u64] {
+                let p: i64 = preds[pi as u64];
+                if idom[p as u64] >= 0 {
+                    if new_idom < 0 {
+                        new_idom = p;
+                    } else {
+                        new_idom = dom_intersect(idom, rpo, p, new_idom);
+                    }
+                }
+                pi = pi + 1;
+            }
+            if new_idom != idom[b as u64] {
+                idom[b as u64] = new_idom;
+                changed = true;
+            }
+            oi = oi + 1;
+        }
+    }
+    idom
+}
+
+// Entry/exit numbers of an iterative DFS over the dominator tree, packed as
+// [tin(0..nb), tout(0..nb)] so `a` dominates `b` iff tin[a] <= tin[b] && tout[b] <= tout[a].
+fn dom_tree_numbers(nb: u64, idom: Vec<i64>, order: Vec<i64>) -> Vec<i64> {
+    let first_child: Vec<i64> = dom_fill(nb, -1);
+    let next_sib: Vec<i64> = dom_fill(nb, -1);
+    let mut oi: u64 = 1;
+    while oi < order.len() {
+        let b: i64 = order[oi];
+        let p: i64 = idom[b as u64];
+        next_sib[b as u64] = first_child[p as u64];
+        first_child[p as u64] = b;
+        oi = oi + 1;
+    }
+    let nums: Vec<i64> = dom_fill(nb * 2, -1);
+    let stack: Vec<i64> = Vec::new();
+    let mut clock: i64 = 0;
+    stack.push(0);
+    nums[0] = clock;
+    clock = clock + 1;
+    while stack.len() > 0 {
+        let b: i64 = stack[stack.len() - 1];
+        let c: i64 = first_child[b as u64];
+        if c >= 0 {
+            first_child[b as u64] = next_sib[c as u64];
+            nums[c as u64] = clock;
+            clock = clock + 1;
+            stack.push(c);
+        } else {
+            nums[nb + b as u64] = clock;
+            clock = clock + 1;
+            stack.pop();
+        }
+    }
+    nums
+}
+
+fn dom_dominates(nums: Vec<i64>, nb: u64, a: i64, b: i64) -> bool {
+    nums[a as u64] <= nums[b as u64] && nums[nb + b as u64] <= nums[nb + a as u64]
+}
+
+fn dom_max_inst_id(f: IrFunction) -> i64 {
+    let mut max_id: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id > max_id {
+                max_id = inst.id;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    max_id
+}
+
+fn dom_violation(use_inst: i64, use_block: i64, def: i64, def_block: i64) -> String {
+    let msg: String = SKIP_IR_NON_DOMINATING_READ();
+    msg.push_str(String::from(": inst %"));
+    msg.push_str(i64_to_string(use_inst));
+    msg.push_str(String::from(" in block "));
+    msg.push_str(i64_to_string(use_block));
+    msg.push_str(String::from(" reads %"));
+    msg.push_str(i64_to_string(def));
+    if def_block >= 0 {
+        msg.push_str(String::from(" (defined in block "));
+        msg.push_str(i64_to_string(def_block));
+        msg.push_str(String::from(", which does not dominate the use)"));
+    } else {
+        msg.push_str(String::from(" (no definition)"));
+    }
+    msg
+}
+
+// "" when every value read in reachable code is dominated by its definition,
+// otherwise one sentence (starting with the reason code) naming the first
+// offending read in block/instruction order. Reads in unreachable blocks are
+// ignored; a reachable read of a value defined in an unreachable block is not.
+fn ir_non_dominating_read(f: IrFunction) -> String {
+    let nb: u64 = f.blocks.len();
+    if nb == 0 {
+        return String::from("");
+    }
+    let id_to_idx: Vec<i64> = dom_block_id_table(f);
+    let succ: Vec<i64> = dom_successors(f, id_to_idx);
+    let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
+    let order: Vec<i64> = dom_rpo_order(rpo);
+    let off: Vec<i64> = dom_pred_offsets(nb, succ, rpo);
+    let preds: Vec<i64> = dom_pred_list(nb, succ, rpo, off);
+    let idom: Vec<i64> = dom_idoms(nb, rpo, order, off, preds);
+    let nums: Vec<i64> = dom_tree_numbers(nb, idom, order);
+
+    let ndefs: u64 = (dom_max_inst_id(f) + 1) as u64;
+    let def_block: Vec<i64> = dom_fill(ndefs, -1);
+    let def_pos: Vec<i64> = dom_fill(ndefs, -1);
+    let mut bi: u64 = 0;
+    while bi < nb {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id >= 0 && def_block[inst.id as u64] < 0 {
+                def_block[inst.id as u64] = bi as i64;
+                def_pos[inst.id as u64] = ii as i64;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+
+    bi = 0;
+    while bi < nb {
+        if rpo[bi] >= 0 {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                let args: Vec<i64> = inst.args;
+                let mut ai: u64 = 0;
+                while ai < args.len() {
+                    let d: i64 = args[ai];
+                    let db: i64 = {
+                        if d >= 0 && d < ndefs as i64 {
+                            def_block[d as u64]
+                        } else {
+                            -1
+                        }
+                    };
+                    let ok: bool = {
+                        if db < 0 {
+                            false
+                        } else if db == bi as i64 {
+                            def_pos[d as u64] < ii as i64
+                        } else {
+                            rpo[db as u64] >= 0 && dom_dominates(nums, nb, db, bi as i64)
+                        }
+                    };
+                    if !ok {
+                        let ub: IrBlock = f.blocks[bi];
+                        let dbid: i64 = {
+                            if db >= 0 {
+                                let dblk: IrBlock = f.blocks[db as u64];
+                                dblk.id
+                            } else {
+                                -1
+                            }
+                        };
+                        return dom_violation(inst.id, ub.id, d, dbid);
+                    }
+                    ai = ai + 1;
+                }
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}
