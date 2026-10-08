@@ -3,8 +3,9 @@ module EnvBuiltinCallSkipped
 
 // `getenv`, `path_lookup`, `mktemp_dir` and `fs_read_status` read or change
 // state outside the program, so they carry effects and have no verifier model.
-// A contracted function that calls one is Skipped (fail-closed) rather than
-// "proven" against an invented result.
+// A contracted function that calls one must declare an effect, and the verifier
+// model is restricted to pure functions, so it is Skipped (fail-closed) rather
+// than "proven" against an invented result.
 fn home_is_not_negative() -> i64 [read] vow {
   ensures: result >= 0
 } {

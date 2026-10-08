@@ -3596,6 +3596,9 @@ fn fs_read_status_of(err: &std::io::Error) -> i64 {
 }
 
 fn fs_read_outcome(path: &str) -> Result<Vec<u8>, i64> {
+    if path.contains('\0') {
+        return Err(FS_READ_INVALID_PATH);
+    }
     std::fs::read(path).map_err(|e| fs_read_status_of(&e))
 }
 
@@ -3684,8 +3687,9 @@ fn is_executable_file(path: &std::path::Path) -> bool {
 
 /// Resolve `name` like `command -v` minus shell builtins and aliases: a name
 /// containing `/` is tested directly, otherwise each `path_var` entry is
-/// searched in order (an empty entry means the current directory).
-fn path_lookup_in(path_var: &std::ffi::OsStr, name: &str) -> String {
+/// searched in order (an empty entry means the current directory). An unset
+/// `PATH` (`None`) searches nothing; it is not the same as an empty one.
+fn path_lookup_in(path_var: Option<&std::ffi::OsStr>, name: &str) -> String {
     if name.is_empty() || name.contains('\0') {
         return String::new();
     }
@@ -3697,6 +3701,9 @@ fn path_lookup_in(path_var: &std::ffi::OsStr, name: &str) -> String {
             String::new()
         };
     }
+    let Some(path_var) = path_var else {
+        return String::new();
+    };
     for dir in std::env::split_paths(path_var) {
         let dir = if dir.as_os_str().is_empty() {
             std::path::PathBuf::from(".")
@@ -3704,8 +3711,10 @@ fn path_lookup_in(path_var: &std::ffi::OsStr, name: &str) -> String {
             dir
         };
         let candidate = dir.join(name);
-        if is_executable_file(&candidate) {
-            return candidate.to_string_lossy().into_owned();
+        if let Some(found) = candidate.to_str()
+            && is_executable_file(&candidate)
+        {
+            return found.to_string();
         }
     }
     String::new()
@@ -3742,9 +3751,9 @@ unsafe fn getenv_string(name_ptr: *const u8) -> String {
 }
 
 unsafe fn path_lookup_string(name_ptr: *const u8) -> String {
-    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    let path_var = std::env::var_os("PATH");
     unsafe { vow_str_arg(name_ptr) }
-        .map(|name| path_lookup_in(&path_var, name))
+        .map(|name| path_lookup_in(path_var.as_deref(), name))
         .unwrap_or_default()
 }
 
@@ -6207,6 +6216,8 @@ mod tests {
         );
         let bad = unsafe { __vow_string_new([0xffu8, 0xfe].as_ptr().cast(), 2) };
         assert_eq!(read_status(bad), (String::new(), FS_READ_INVALID_PATH));
+        let nul = unsafe { __vow_string_new(b"a\0b".as_ptr().cast(), 3) };
+        assert_eq!(read_status(nul), (String::new(), FS_READ_INVALID_PATH));
         assert_eq!(
             fs_read_status_of(&std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
             FS_READ_PERMISSION_DENIED
@@ -6270,34 +6281,61 @@ mod tests {
         make_exec(&d2.join("both"), 0o755);
         std::fs::create_dir_all(d1.join("adir")).unwrap();
         let path_var = std::env::join_paths([&d1, &d2]).unwrap();
+        let pv = Some(path_var.as_os_str());
         assert_eq!(
-            path_lookup_in(&path_var, "tool"),
+            path_lookup_in(pv, "tool"),
             d2.join("tool").to_str().unwrap()
         );
         assert_eq!(
-            path_lookup_in(&path_var, "both"),
+            path_lookup_in(pv, "both"),
             d1.join("both").to_str().unwrap()
         );
-        assert_eq!(path_lookup_in(&path_var, "adir"), "");
-        assert_eq!(path_lookup_in(&path_var, "nope"), "");
-        assert_eq!(path_lookup_in(&path_var, ""), "");
-        assert_eq!(path_lookup_in(&path_var, "a\0b"), "");
+        assert_eq!(path_lookup_in(pv, "adir"), "");
+        assert_eq!(path_lookup_in(pv, "nope"), "");
+        assert_eq!(path_lookup_in(pv, ""), "");
+        assert_eq!(path_lookup_in(pv, "a\0b"), "");
         let direct = d2.join("tool");
         assert_eq!(
-            path_lookup_in(std::ffi::OsStr::new(""), direct.to_str().unwrap()),
+            path_lookup_in(Some(std::ffi::OsStr::new("")), direct.to_str().unwrap()),
             direct.to_str().unwrap()
         );
         assert_eq!(
-            path_lookup_in(&path_var, d1.join("tool").to_str().unwrap()),
-            ""
+            path_lookup_in(None, direct.to_str().unwrap()),
+            direct.to_str().unwrap()
         );
+        assert_eq!(path_lookup_in(None, "tool"), "");
+        assert_eq!(path_lookup_in(pv, d1.join("tool").to_str().unwrap()), "");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
-    fn path_lookup_in_treats_empty_entry_as_cwd() {
-        let found = path_lookup_in(std::ffi::OsStr::new(":/bin:/usr/bin"), "sh");
-        assert!(found.ends_with("/sh"), "{found}");
+    fn path_lookup_in_resolves_an_empty_entry_against_the_cwd() {
+        let probe = format!("vow_cwd_probe_{}", std::process::id());
+        make_exec(std::path::Path::new(&probe), 0o755);
+        let found = path_lookup_in(Some(std::ffi::OsStr::new(":/nonexistent")), &probe);
+        let _ = std::fs::remove_file(&probe);
+        assert_eq!(found, format!("./{probe}"));
+    }
+
+    #[test]
+    fn path_lookup_in_skips_non_utf8_candidates() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = std::env::temp_dir().join(format!("vow_path_non_utf8_{}", std::process::id()));
+        let bad = root.join(std::ffi::OsStr::from_bytes(b"d\xff"));
+        let good = root.join("good");
+        if std::fs::create_dir_all(&bad).is_err() {
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        }
+        std::fs::create_dir_all(&good).unwrap();
+        make_exec(&bad.join("tool"), 0o755);
+        make_exec(&good.join("tool"), 0o755);
+        let path_var = std::env::join_paths([&bad, &good]).unwrap();
+        assert_eq!(
+            path_lookup_in(Some(path_var.as_os_str()), "tool"),
+            good.join("tool").to_str().unwrap()
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
