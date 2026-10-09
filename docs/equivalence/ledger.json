@@ -79,6 +79,15 @@
       "rust_error_codes": ["LinearTypeViolation"],
       "self_hosted_error_codes": ["RegionLinear"]
     },
+    "tests/error/linear_loop_outer_consume.vow": {
+      "first_seen": "2026-10-09",
+      "observable": "error_code",
+      "status": "expected",
+      "note": "Rust emits one LinearTypeViolation (type checker); self-hosted emits LinearTypeViolation (already consumed) plus RegionLinear (region inference). Self-hosted has no AST linear tracker.",
+      "issue": 588,
+      "rust_error_codes": ["LinearTypeViolation"],
+      "self_hosted_error_codes": ["LinearTypeViolation", "RegionLinear"]
+    },
     "tests/error/linear_match_mutation_phi_leak.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
