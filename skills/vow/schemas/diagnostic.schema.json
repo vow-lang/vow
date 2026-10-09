@@ -48,7 +48,8 @@
         "VerificationSkipped",
         "ArithOverflowReachable",
         "VerifierAssertionUnattributed",
-        "ModelCapacityAssumed"
+        "ModelCapacityAssumed",
+        "VerifierBug"
       ],
       "description": "Machine-readable error code"
     },

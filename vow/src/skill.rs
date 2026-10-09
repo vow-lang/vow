@@ -3010,7 +3010,7 @@ Opt-in; the default stays `esbmc`. Implemented only by the self-hosted `vowc`: t
 - **Proof obligations.** One query per `ensures` clause and per `/` or `%` site, in IR order; a `requires` is an assumption only for the obligations after it. `/` and `%` follow the language: a zero divisor aborts, and signed `MIN / -1` aborts for `/` (`MIN % -1` is `0`). Each abort is its own obligation, reported with the unattributed vow id `4294967293` and blame `none`, violation text `division or remainder by zero` or `signed division overflow (MIN / -1)`. A function with no obligation is `Verified` without a solver call.
 - **Verdict divergence from ESBMC.** The ESBMC model does not check `MIN / -1` for `/`, so `examples/divide.vow` (`requires: y != 0`, body `x / y`) is `VerifyFailed` under `--backend native` (counterexample `x = i64::MIN`, `y = -1`) while ESBMC proves it.
 - **Solver.** `bitwuzla` is resolved from `PATH`; one self-contained `.smt2` per obligation is written to a private temp directory (removed on every path) and run as a child process. Only `unsat` is a proof. `unknown` is `verify_status: "unknown"`; a solver that outlives its budget is killed (`"timeout"`); a non-zero exit, `[error]` output, an unrecognised answer or an unparsable model is `"error"`. If `bitwuzla` is not on `PATH` and a function needs it, the result is `VerifyFailed` with `verify_status: "tool_not_found"` and no counterexample (ESBMC is not consulted). A module in which every function is `Skipped` needs no solver. The binary is not version- or hash-checked yet.
-- **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function across all of its solver runs; `--timeout 0` is an immediate `timeout` without spawning the solver. `--no-cache` and `--verify-jobs` are accepted and have no effect (the native driver is sequential and uncached). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--replay-cex` and `--perfetto` work as for ESBMC.
+- **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function across all of its solver runs; `--timeout 0` is an immediate `timeout` without spawning the solver. `--no-cache` and `--verify-jobs` are accepted and have no effect (the native driver is sequential and uncached). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--perfetto` works as for ESBMC. `--replay-cex` also replays the division and remainder abort counterexamples and reports a counterexample that does not reproduce as a `VerifierBug` diagnostic (see "Counterexample replay" below).
 
 ### `vow contracts`
 
@@ -3420,6 +3420,8 @@ the structured diagnostics documented under [Runtime Errors](errors.md#runtime-e
 
 `replay`/`replay_reason` are present on a counterexample only when `--replay-cex` was passed.
 
+**Native backend.** Under `vowc verify --backend native` the replay contract is stricter, because the native model is meant to be checked against the runtime rather than trusted. The counterexamples for a division or remainder abort (zero divisor; signed `MIN / -1`), which carry the reserved unattributed `vow_id` and blame `none`, are replayed instead of skipped: the harness calls the function with the counterexample's inputs and the replay is `"confirmed"` when the program aborts with `ArithmeticOverflow` (exit status `134`). The runtime envelope names the abort kind but not the site, so this confirms the kind of failure for those inputs, not which operation raised it. A native counterexample whose replay ends `"diverged"` or `"aborted"` additionally yields one [`VerifierBug`](errors.md#verifierbug) error diagnostic: the model and the runtime disagree, so the defect is in the verifier. `"skipped"` never ran and is not reported as a verifier bug. The `status` and exit code are unchanged. The ESBMC backend keeps skipping the unattributed ids.
+
 ## Contracts Output JSON
 
 `vow contracts` emits a single JSON object to stdout. Schema: [`schemas/contracts-result.schema.json`](schemas/contracts-result.schema.json).
@@ -3823,7 +3825,7 @@ tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.
 
 `vow verify --replay-cex` (also `vow build --replay-cex`) cross-checks a counterexample against the executable's runtime semantics. After ESBMC reports a violation, Vow maps the symbolic assignment to concrete Vow inputs, builds a `--mode debug` harness that calls the failing function with them, and checks whether the runtime `VowViolation` matches — **same `vow_id` and same blame**.
 
-This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's C model (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope.
+This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's C model (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope. Under `--backend native` the replay is also the oracle for the native checker: a counterexample that does not reproduce is reported as a `VerifierBug` diagnostic.
 
 ## Integer Contracts
 
@@ -5502,6 +5504,24 @@ The structured counterexample's `violation` field carries the stable property de
 
 **Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
 
+### VerifierBug
+
+**Phase:** Verification (self-hosted `vowc verify --backend native --replay-cex` only)
+**Meaning:** Under the native backend, a counterexample did not replay: the `--mode debug` harness built from its concrete inputs did not reproduce the predicted `VowViolation` (same `vow_id` and blame) or, for a division or remainder abort, the predicted `ArithmeticOverflow` abort. The counterexample's `replay` is `"diverged"` or `"aborted"` and `replay_reason` says why. A `"skipped"` replay (a harness limitation such as an unsupported parameter type) never ran and is not reported. The verifier model and the runtime disagree, so this is a defect in the verifier, not in the program. One diagnostic is emitted per such counterexample; the `status` stays `VerifyFailed` and the exit code stays 1.
+
+```json
+{
+  "error_code": "VerifierBug",
+  "severity": "error",
+  "message": "native verifier counterexample for `rem` did not replay (diverged: harness exited cleanly; the predicted ArithmeticOverflow abort did not occur)",
+  "hints": [
+    "a counterexample that does not reproduce at runtime is a bug in the verifier model; report it"
+  ]
+}
+```
+
+**Fix:** Report the function, its counterexample `values` and `replay_reason` as a verifier bug. Do not weaken the contract to avoid the counterexample on the strength of this diagnostic alone.
+
 ### ModelCapacityAssumed
 
 **Phase:** Verification (Note; the build status stays `Verified`)
@@ -7035,7 +7055,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "VerificationSkipped",
         "ArithOverflowReachable",
         "VerifierAssertionUnattributed",
-        "ModelCapacityAssumed"
+        "ModelCapacityAssumed",
+        "VerifierBug"
       ],
       "description": "Machine-readable error code"
     },
@@ -8927,7 +8948,7 @@ Opt-in; the default stays `esbmc`. Implemented only by the self-hosted `vowc`: t
 - **Proof obligations.** One query per `ensures` clause and per `/` or `%` site, in IR order; a `requires` is an assumption only for the obligations after it. `/` and `%` follow the language: a zero divisor aborts, and signed `MIN / -1` aborts for `/` (`MIN % -1` is `0`). Each abort is its own obligation, reported with the unattributed vow id `4294967293` and blame `none`, violation text `division or remainder by zero` or `signed division overflow (MIN / -1)`. A function with no obligation is `Verified` without a solver call.
 - **Verdict divergence from ESBMC.** The ESBMC model does not check `MIN / -1` for `/`, so `examples/divide.vow` (`requires: y != 0`, body `x / y`) is `VerifyFailed` under `--backend native` (counterexample `x = i64::MIN`, `y = -1`) while ESBMC proves it.
 - **Solver.** `bitwuzla` is resolved from `PATH`; one self-contained `.smt2` per obligation is written to a private temp directory (removed on every path) and run as a child process. Only `unsat` is a proof. `unknown` is `verify_status: "unknown"`; a solver that outlives its budget is killed (`"timeout"`); a non-zero exit, `[error]` output, an unrecognised answer or an unparsable model is `"error"`. If `bitwuzla` is not on `PATH` and a function needs it, the result is `VerifyFailed` with `verify_status: "tool_not_found"` and no counterexample (ESBMC is not consulted). A module in which every function is `Skipped` needs no solver. The binary is not version- or hash-checked yet.
-- **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function across all of its solver runs; `--timeout 0` is an immediate `timeout` without spawning the solver. `--no-cache` and `--verify-jobs` are accepted and have no effect (the native driver is sequential and uncached). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--replay-cex` and `--perfetto` work as for ESBMC.
+- **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function across all of its solver runs; `--timeout 0` is an immediate `timeout` without spawning the solver. `--no-cache` and `--verify-jobs` are accepted and have no effect (the native driver is sequential and uncached). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--perfetto` works as for ESBMC. `--replay-cex` also replays the division and remainder abort counterexamples and reports a counterexample that does not reproduce as a `VerifierBug` diagnostic (see "Counterexample replay" below).
 
 ### `vow contracts`
 
@@ -9337,6 +9358,8 @@ the structured diagnostics documented under [Runtime Errors](errors.md#runtime-e
 
 `replay`/`replay_reason` are present on a counterexample only when `--replay-cex` was passed.
 
+**Native backend.** Under `vowc verify --backend native` the replay contract is stricter, because the native model is meant to be checked against the runtime rather than trusted. The counterexamples for a division or remainder abort (zero divisor; signed `MIN / -1`), which carry the reserved unattributed `vow_id` and blame `none`, are replayed instead of skipped: the harness calls the function with the counterexample's inputs and the replay is `"confirmed"` when the program aborts with `ArithmeticOverflow` (exit status `134`). The runtime envelope names the abort kind but not the site, so this confirms the kind of failure for those inputs, not which operation raised it. A native counterexample whose replay ends `"diverged"` or `"aborted"` additionally yields one [`VerifierBug`](errors.md#verifierbug) error diagnostic: the model and the runtime disagree, so the defect is in the verifier. `"skipped"` never ran and is not reported as a verifier bug. The `status` and exit code are unchanged. The ESBMC backend keeps skipping the unattributed ids.
+
 ## Contracts Output JSON
 
 `vow contracts` emits a single JSON object to stdout. Schema: [`schemas/contracts-result.schema.json`](schemas/contracts-result.schema.json).
@@ -9741,7 +9764,7 @@ tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.
 
 `vow verify --replay-cex` (also `vow build --replay-cex`) cross-checks a counterexample against the executable's runtime semantics. After ESBMC reports a violation, Vow maps the symbolic assignment to concrete Vow inputs, builds a `--mode debug` harness that calls the failing function with them, and checks whether the runtime `VowViolation` matches — **same `vow_id` and same blame**.
 
-This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's C model (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope.
+This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's C model (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope. Under `--backend native` the replay is also the oracle for the native checker: a counterexample that does not reproduce is reported as a `VerifierBug` diagnostic.
 
 ## Integer Contracts
 
@@ -11422,6 +11445,24 @@ The structured counterexample's `violation` field carries the stable property de
 
 **Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
 
+### VerifierBug
+
+**Phase:** Verification (self-hosted `vowc verify --backend native --replay-cex` only)
+**Meaning:** Under the native backend, a counterexample did not replay: the `--mode debug` harness built from its concrete inputs did not reproduce the predicted `VowViolation` (same `vow_id` and blame) or, for a division or remainder abort, the predicted `ArithmeticOverflow` abort. The counterexample's `replay` is `"diverged"` or `"aborted"` and `replay_reason` says why. A `"skipped"` replay (a harness limitation such as an unsupported parameter type) never ran and is not reported. The verifier model and the runtime disagree, so this is a defect in the verifier, not in the program. One diagnostic is emitted per such counterexample; the `status` stays `VerifyFailed` and the exit code stays 1.
+
+```json
+{
+  "error_code": "VerifierBug",
+  "severity": "error",
+  "message": "native verifier counterexample for `rem` did not replay (diverged: harness exited cleanly; the predicted ArithmeticOverflow abort did not occur)",
+  "hints": [
+    "a counterexample that does not reproduce at runtime is a bug in the verifier model; report it"
+  ]
+}
+```
+
+**Fix:** Report the function, its counterexample `values` and `replay_reason` as a verifier bug. Do not weaken the contract to avoid the counterexample on the strength of this diagnostic alone.
+
 ### ModelCapacityAssumed
 
 **Phase:** Verification (Note; the build status stays `Verified`)
@@ -12949,7 +12990,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "VerificationSkipped",
         "ArithOverflowReachable",
         "VerifierAssertionUnattributed",
-        "ModelCapacityAssumed"
+        "ModelCapacityAssumed",
+        "VerifierBug"
       ],
       "description": "Machine-readable error code"
     },
