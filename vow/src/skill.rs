@@ -5010,11 +5010,13 @@ fn make_point(x: i64, y: i64) -> Point vow {
 
 **Phase:** Type Checker
 **Meaning:** A linear owner value is used in a way that is immediately invalid,
-such as consuming it twice, consuming it inside a loop that may execute more
-than once, or consuming it after only some control-flow paths already consumed
-it. The error also rejects a struct field whose type owns a linear obligation,
-because field access has no move-out semantics and repeated reads could expose
-that obligation more than once. Linear owners include `linear struct` values and owned enum,
+such as consuming it twice, consuming a value declared outside a loop from
+inside that loop (it may execute more than once), or consuming it after only
+some control-flow paths already consumed it. A value declared inside the loop
+body and consumed there is fresh each iteration and is accepted. The error also
+rejects a struct field whose type owns a linear obligation, because field
+access has no move-out semantics and repeated reads could expose that
+obligation more than once. Linear owners include `linear struct` values and owned enum,
 `Option`, or `Result` wrappers that transitively contain one; matching such a
 wrapper consumes it and transfers the obligation to the selected payload. An
 unbound `_` catchall also violates the rule while any unhandled enum variant can
@@ -11038,11 +11040,13 @@ fn make_point(x: i64, y: i64) -> Point vow {
 
 **Phase:** Type Checker
 **Meaning:** A linear owner value is used in a way that is immediately invalid,
-such as consuming it twice, consuming it inside a loop that may execute more
-than once, or consuming it after only some control-flow paths already consumed
-it. The error also rejects a struct field whose type owns a linear obligation,
-because field access has no move-out semantics and repeated reads could expose
-that obligation more than once. Linear owners include `linear struct` values and owned enum,
+such as consuming it twice, consuming a value declared outside a loop from
+inside that loop (it may execute more than once), or consuming it after only
+some control-flow paths already consumed it. A value declared inside the loop
+body and consumed there is fresh each iteration and is accepted. The error also
+rejects a struct field whose type owns a linear obligation, because field
+access has no move-out semantics and repeated reads could expose that
+obligation more than once. Linear owners include `linear struct` values and owned enum,
 `Option`, or `Result` wrappers that transitively contain one; matching such a
 wrapper consumes it and transfers the obligation to the selected payload. An
 unbound `_` catchall also violates the rule while any unhandled enum variant can

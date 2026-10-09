@@ -1,0 +1,22 @@
+// TEST: error-code LinearTypeViolation
+module LinearLoopOuterConsume
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn close(h: Handle) -> i64 {
+    let fd: i64 = h.fd;
+    drop(h);
+    fd
+}
+
+fn main() -> i32 {
+    let h: Handle = Handle { fd: 1 };
+    let mut i: i64 = 0;
+    while i < 3 {
+        let r: i64 = close(h);
+        i = i + 1;
+    }
+    0
+}

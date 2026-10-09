@@ -1,0 +1,41 @@
+// TEST: stdout "3\n3\n"
+module LinearLoopLocalConsume
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn open(fd: i64) -> Handle {
+    Handle { fd: fd }
+}
+
+fn close(h: Handle) -> i64 {
+    let fd: i64 = h.fd;
+    drop(h);
+    fd
+}
+
+fn main() -> i32 [io] {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 3 {
+        let h: Handle = open(i);
+        total = total + close(h);
+        i = i + 1;
+    }
+    print_i64(total);
+    print_str("\n");
+    let mut n: i64 = 0;
+    let mut sum: i64 = 0;
+    loop {
+        let h: Handle = open(n);
+        sum = sum + close(h);
+        n = n + 1;
+        if n == 3 {
+            break;
+        }
+    }
+    print_i64(sum);
+    print_str("\n");
+    0
+}
