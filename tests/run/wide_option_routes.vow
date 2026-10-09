@@ -1,0 +1,78 @@
+// TEST: stdout "171 5\n171 5\n171 5\n171 5\n171 6\n171 5\n171 5\n171 5\n171 5\n171 5\n171 5\n"
+module WideOptionRoutes
+
+// Every route below hands a 128-bit Option payload to a reader that did not
+// build it in the same function. A reader that lost the payload width would
+// load only the low limb, so each result prints both limbs and the high limb
+// is non-zero.
+struct Holder {
+    o: Option<u128>,
+}
+
+fn seed() -> u128 {
+    3154393236604333326341
+}
+
+fn hi_byte(v: u128) -> u8 {
+    u128_to_u8_wrap(v >> 64)
+}
+
+fn lo_byte(v: u128) -> u8 {
+    u128_to_u8_wrap(v)
+}
+
+fn show(v: u128) -> () [io] {
+    print_i64(hi_byte(v) as i64);
+    print_str(" ");
+    print_i64(lo_byte(v) as i64);
+    print_str("\n");
+}
+
+fn wide_or_zero(o: Option<u128>) -> u128 {
+    match o {
+        Option::Some(w) => { w },
+        Option::None => { 0 },
+    }
+}
+
+fn make(x: u128) -> Option<u128> {
+    Option::Some(x)
+}
+
+fn pick(flag: bool, a: u128, b: u128) -> Option<u128> {
+    let o: Option<u128> = if flag { Option::Some(a) } else { Option::Some(b) };
+    o
+}
+
+fn question(o: Option<u128>) -> Option<u128> {
+    let w: u128 = o?;
+    Option::Some(w)
+}
+
+fn main() -> () [io, panic] {
+    show(wide_or_zero(Option::Some(seed())));
+
+    show(wide_or_zero(make(seed())));
+
+    let v: Vec<Option<u128>> = Vec::new();
+    v.push(Option::Some(seed()));
+    show(wide_or_zero(v[0]));
+
+    let h: Holder = Holder { o: Option::Some(seed()) };
+    show(wide_or_zero(h.o));
+
+    show(wide_or_zero(pick(true, seed() + 1, 0)));
+
+    show(wide_or_zero(pick(false, 0, seed())));
+
+    let nested: Option<Option<u128>> = Option::Some(Option::Some(seed()));
+    match nested {
+        Option::Some(inner) => { show(wide_or_zero(inner)); },
+        Option::None => { print_str("none\n"); },
+    }
+
+    show(h.o.unwrap());
+    show(v[0].unwrap());
+    show(wide_or_zero(question(make(seed()))));
+    show(wide_or_zero(question(h.o)));
+}

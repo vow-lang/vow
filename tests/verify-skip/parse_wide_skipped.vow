@@ -1,0 +1,29 @@
+// TEST: category unverifiable
+module ParseWideSkipped
+
+// The verifier's Option model is {int64_t tag; int64_t payload;}, which cannot
+// hold a 128-bit payload. parse_i128 / parse_u128 must therefore stay unknown to
+// the C emitter so a contract over their result is skipped rather than reported
+// Verified against a 64-bit model of a 128-bit value.
+fn parsed_is_non_negative(s: String) -> i64 vow {
+  ensures: result >= 0
+} {
+    match parse_i128(s) {
+        Option::Some(v) => { if v < 0 { 0 } else { 1 } },
+        Option::None => { 0 },
+    }
+}
+
+fn parsed_unsigned(s: String) -> i64 vow {
+  ensures: result >= 0
+} {
+    match parse_u128(s) {
+        Option::Some(v) => { if v == 0 { 0 } else { 1 } },
+        Option::None => { 0 },
+    }
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

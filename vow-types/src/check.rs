@@ -137,11 +137,6 @@ fn pattern_scalar_type(ty: &Ty) -> Option<PatternScalarType> {
     }
 }
 
-fn extractable_payload_scalar_type(ty: &Ty) -> Option<PatternScalarType> {
-    pattern_scalar_type(ty)
-        .filter(|scalar| !matches!(scalar, PatternScalarType::I128 | PatternScalarType::U128))
-}
-
 fn variant_payload_scalar_types(ty: &Ty) -> Vec<Option<PatternScalarType>> {
     match ty {
         Ty::Reference(inner) => variant_payload_scalar_types(inner),
@@ -1110,7 +1105,7 @@ impl<'e> Checker<'e> {
     /// Records scalar and aggregate payload metadata for an extraction site
     /// (`?`, `.unwrap()`, or an identifier pattern), keyed by its AST address.
     fn record_payload_metadata(&mut self, key: usize, payload_ty: &Ty) {
-        if let Some(scalar) = extractable_payload_scalar_type(payload_ty) {
+        if let Some(scalar) = pattern_scalar_type(payload_ty) {
             self.payload_scalars.insert(key, scalar);
         }
         let is_linear = crate::linear::is_linear_owner_ty(payload_ty, &self.env);

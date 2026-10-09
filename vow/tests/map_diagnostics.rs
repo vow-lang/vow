@@ -63,7 +63,6 @@ const DIRECTIVE_FIXTURES: &[&str] = &[
     "hashmap_key_unsupported.vow",
     "map_value_unsupported.vow",
     "hashmap_value_linear.vow",
-    "hashmap_value_option_u128.vow",
     "map_value_linear_forward_ref.vow",
     "hashmap_new_unannotated.vow",
     "btreemap_new_unannotated.vow",

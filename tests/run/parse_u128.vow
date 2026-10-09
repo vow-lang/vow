@@ -1,0 +1,56 @@
+// TEST: stdout "T\nT\nT\nN\nN\nT\nT\nT\nN\nN\nN\nN\nN\nN\n171 5\n"
+module ParseU128
+
+fn show_eq(value: Option<u128>, want: u128) [io] {
+    match value {
+        Option::Some(v) => {
+            if v == want {
+                print_str(String::from("T\n"));
+            } else {
+                print_str(String::from("F\n"));
+            }
+        },
+        Option::None => print_str(String::from("N\n")),
+    }
+}
+
+fn show_none(value: Option<u128>) [io] {
+    match value {
+        Option::Some(v) => print_str(String::from("S\n")),
+        Option::None => print_str(String::from("N\n")),
+    }
+}
+
+fn u128_max() -> u128 {
+    340282366920938463463374607431768211455
+}
+
+fn main() -> i32 [io] {
+    show_eq(parse_u128(String::from("0")), 0);
+    show_eq(parse_u128(String::from("340282366920938463463374607431768211455")), u128_max());
+    show_eq(parse_u128(String::from("18446744073709551616")), 18446744073709551616);
+    show_none(parse_u128(String::from("340282366920938463463374607431768211456")));
+    show_none(parse_u128(String::from("-1")));
+
+    show_eq(parse_u128(String::from("  42  ")), 42);
+    show_eq(parse_u128(String::from("+7")), 7);
+    show_eq(parse_u128(String::from("0007")), 7);
+    // Unlike a signed type, an unsigned parse rejects any '-', including "-0".
+    show_none(parse_u128(String::from("-0")));
+    show_none(parse_u128(String::from("")));
+    show_none(parse_u128(String::from("+")));
+    show_none(parse_u128(String::from("-")));
+    show_none(parse_u128(String::from("abc")));
+    show_none(parse_u128(String::from("1 2")));
+
+    match parse_u128(String::from("3154393236604333326341")) {
+        Option::Some(v) => {
+            print_i64(u128_to_u8_wrap(v >> 64) as i64);
+            print_str(String::from(" "));
+            print_i64(u128_to_u8_wrap(v) as i64);
+            print_str(String::from("\n"));
+        },
+        Option::None => print_str(String::from("N\n")),
+    }
+    0
+}

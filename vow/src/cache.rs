@@ -26,8 +26,9 @@ const VERIFY_CACHE_FAILURE_HEADER: &str = "FAILED v3";
 // struct-literal and enum/Option/Result payload construction, plus
 // locally-constructed annotated Option/Result locals now tagging their
 // element type for post-extraction reads, all make pre-cutover objects
-// unsafe to reuse.
-const COMPILE_CACHE_ABI_VERSION: &str = "static-string-arena-slot-utf8-lexer-narrow-unary-match-aggregate-wide-guard-index-u64-literal-narrow-context-v9";
+// unsafe to reuse. So does the two-slot layout for 128-bit enum payloads
+// (#1543), which changes enum allocation sizes and later payload slot indices.
+const COMPILE_CACHE_ABI_VERSION: &str = "static-string-arena-slot-utf8-lexer-narrow-unary-match-aggregate-wide-guard-index-u64-literal-narrow-context-wide-slot-v10";
 
 pub struct CompileCache {
     dir: PathBuf,
@@ -849,6 +850,25 @@ mod tests {
             "Release",
             "Off",
             "static-string-arena-slot-utf8-lexer-narrow-unary-match-aggregate-wide-guard-index-u64-literal-v8",
+        )
+        .unwrap();
+        let current_key = CompileCache::cache_key(&deps, "Release", "Off").unwrap();
+
+        assert_ne!(legacy_key, current_key);
+    }
+
+    #[test]
+    fn compile_cache_key_invalidates_pre_wide_slot_objects() {
+        let dir = TempDir::new().unwrap();
+        let a = dir.path().join("a.vow");
+        std::fs::write(&a, "module A").unwrap();
+
+        let deps = DependencyManifest::from_paths(vec![a]);
+        let legacy_key = CompileCache::cache_key_with_abi_seed(
+            &deps,
+            "Release",
+            "Off",
+            "static-string-arena-slot-utf8-lexer-narrow-unary-match-aggregate-wide-guard-index-u64-literal-narrow-context-v9",
         )
         .unwrap();
         let current_key = CompileCache::cache_key(&deps, "Release", "Off").unwrap();

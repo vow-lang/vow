@@ -1,0 +1,37 @@
+// TEST: stdout "171 5\n0 0\n"
+module I128EnumPayloadParam
+
+// The scrutinee is a parameter, so nothing in this function tells lowering how
+// wide the payload is -- only the declaration does. Both limbs are read back, so
+// a read that dropped to the low limb fails on the high-limb column.
+enum Wide {
+    Value(i128),
+    Empty,
+}
+
+fn hi_byte(v: i128) -> u8 {
+    u128_to_u8_wrap((v as u128) >> 64)
+}
+
+fn lo_byte(v: i128) -> u8 {
+    u128_to_u8_wrap(v as u128)
+}
+
+fn payload(w: Wide) -> i128 {
+    match w {
+        Wide::Value(v) => { v },
+        Wide::Empty => { 0 },
+    }
+}
+
+fn show(v: i128) -> () [io] {
+    print_i64(hi_byte(v) as i64);
+    print_str(" ");
+    print_i64(lo_byte(v) as i64);
+    print_str("\n");
+}
+
+fn main() -> () [io] {
+    show(payload(Wide::Value(3154393236604333326341)));
+    show(payload(Wide::Empty));
+}

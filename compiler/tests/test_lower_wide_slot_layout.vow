@@ -1,0 +1,90 @@
+module TestLowerWideSlotLayout
+
+use frontend
+use clif
+use ir
+
+// Twin of wide_enum_payload_shifts_later_slots_and_grows_allocation in
+// vow-ir/src/lower/mod.rs: an i128 payload takes two 8-byte slots, so later
+// payloads move up one slot and the enum allocation grows with it.
+
+fn lower_layout() -> IrModule [io] {
+    let lowered: LoweredFrontend = frontend_lower_path_with_root(
+        String::from("tests/fixtures/wide_slot_layout.vow"), String::from("")
+    );
+    lowered.ir_mod
+}
+
+fn insts_of(m: IrModule, name: String) -> Vec<IrInst> {
+    let out: Vec<IrInst> = Vec::new();
+    let mut fi: u64 = 0;
+    while fi < m.functions.len() {
+        let function: IrFunction = m.functions[fi];
+        if function.name == name {
+            let mut bi: u64 = 0;
+            while bi < function.blocks.len() {
+                let block: IrBlock = function.blocks[bi];
+                let mut ii: u64 = 0;
+                while ii < block.insts.len() {
+                    out.push(block.insts[ii]);
+                    ii = ii + 1;
+                }
+                bi = bi + 1;
+            }
+        }
+        fi = fi + 1;
+    }
+    out
+}
+
+// tag + 1 + 2 + 1 payload slots + guard slot = 6 slots = 48 bytes.
+fn alloc_size_is_48(insts: Vec<IrInst>) -> bool {
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        if insts[i].op == IOP_REGION_ALLOC() { return insts[i].dv == 48; }
+        i = i + 1;
+    }
+    false
+}
+
+// FieldSet slots, in order: tag 0, a 1, b 2 (two slots), c 4.
+fn stored_slots_match(insts: Vec<IrInst>) -> bool {
+    let want: Vec<i64> = Vec::new();
+    want.push(0);
+    want.push(1);
+    want.push(2);
+    want.push(4);
+    let mut seen: u64 = 0;
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        if insts[i].op == IOP_FIELD_SET() && (insts[i].dk == IDATA_FIELD() || insts[i].dk == IDATA_WIDE_SLOT()) {
+            if seen >= want.len() { return false; }
+            if insts[i].dv != want[seen] { return false; }
+            // Only the i128 payload (slot 2) goes through the two-slot marker.
+            if (insts[i].dk == IDATA_WIDE_SLOT()) != (insts[i].dv == 2) { return false; }
+            seen = seen + 1;
+        }
+        i = i + 1;
+    }
+    seen == want.len()
+}
+
+fn reads_slot_4(insts: Vec<IrInst>) -> bool {
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        if insts[i].op == IOP_FIELD_GET() && insts[i].dk == IDATA_FIELD() && insts[i].dv == 4 {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn main() -> i32 [io] {
+    let m: IrModule = lower_layout();
+    let make: Vec<IrInst> = insts_of(m, String::from("make"));
+    if !alloc_size_is_48(make) { return 1; }
+    if !stored_slots_match(make) { return 2; }
+    if !reads_slot_4(insts_of(m, String::from("third"))) { return 3; }
+    0
+}

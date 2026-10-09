@@ -448,27 +448,62 @@ fn main() -> () [io] {
     print_i64(u128_to_u8_wrap((got as u128) >> 64) as i64);
 }
 "#,
-        "128-bit struct fields and enum payloads",
+        "128-bit struct fields",
         "128-bit struct fields",
     );
 }
 
+/// 128-bit enum payloads occupy two consecutive slots, so the high limb must
+/// survive a store/load round trip and the narrow payload after the wide one
+/// must not overlap it.
 #[test]
-fn wide_enum_payloads_fail_closed_instead_of_truncating() {
-    assert_build_fails_closed(
-        "wide_enum",
+fn wide_enum_payloads_round_trip_both_limbs() {
+    ensure_runtime_archive();
+    let dir = tempfile::TempDir::new().unwrap();
+    let source_path = dir.path().join("wide_enum.vow");
+    let output_path = dir.path().join("wide_enum");
+    fs::write(
+        &source_path,
         r#"module WideEnum
-enum E { V(i128) }
-fn main() -> i32 {
-    let value: E = E::V(3154393236604333326336);
-    match value {
-        E::V(_) => { 0 },
+enum E { V(i64, u128, i64), Empty }
+fn pick(e: E) -> u128 {
+    match e {
+        E::V(a, w, c) => { w + (a as u128) + (c as u128) },
+        E::Empty => { 0 },
     }
 }
+fn main() -> () [io] {
+    let r: u128 = pick(E::V(1, 340282366920938463463374607431768211454, 0));
+    print_i64(u128_to_u8_wrap(r >> 120) as i64);
+    print_str(" ");
+    print_i64(u128_to_u8_wrap(r) as i64);
+}
 "#,
-        "128-bit struct fields and enum payloads",
-        "128-bit enum payloads",
+    )
+    .unwrap();
+
+    let output = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            source_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "build failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run compiled program");
+    assert_eq!(run.status.code(), Some(0), "program aborted");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "255 255");
 }
 
 /// Division, remainder, and checked multiply on 128-bit operands have no

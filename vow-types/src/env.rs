@@ -426,6 +426,8 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
 
     // 32-bit narrowing conversions: `<source>_to_i32_<mode>`.
     sigs.push(def("parse_i32", vec![Ty::Str], option_ty(Ty::I32), &[]));
+    sigs.push(def("parse_i128", vec![Ty::Str], option_ty(Ty::I128), &[]));
+    sigs.push(def("parse_u128", vec![Ty::Str], option_ty(Ty::U128), &[]));
     for (source_name, source_ty) in [
         ("i64", Ty::I64),
         ("u32", Ty::U32),
@@ -524,11 +526,8 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
     // 128-bit same-width sign-change conversions: `<source>_to_<target>_<mode>`.
     // `i128`/`u128` are the widest integer types, so the only sources whose
     // values can fail to fit are the opposite signedness at the same width.
-    // Only `_wrap`/`_sat` are registered: `_try` would return
-    // `Option<i128>`/`Option<u128>`, and 128-bit enum payloads are not
-    // supported yet (epic #526 — an aggregate field slot is 8 bytes), so a
-    // `_try` variant would lower to an uncompilable aggregate until that
-    // seam lands.
+    // Only `_wrap`/`_sat` are registered; a `_try` variant returning
+    // `Option<i128>`/`Option<u128>` is not part of this family.
     for (source_name, source_ty, target_name, target_ty) in [
         ("i128", Ty::I128, "u128", Ty::U128),
         ("u128", Ty::U128, "i128", Ty::I128),
@@ -1012,10 +1011,12 @@ mktemp_dir(Str) -> Str [IO]
 mul_sat_u8(U8, U8) -> U8 []
 num_cpus() -> I64 [IO]
 parse_f64_bits(Str) -> U64 []
+parse_i128(Str) -> Applied(Enum("Option"), [I128]) []
 parse_i16(Str) -> Applied(Enum("Option"), [I16]) []
 parse_i32(Str) -> Applied(Enum("Option"), [I32]) []
 parse_i64(Str) -> Applied(Enum("Option"), [I64]) []
 parse_i8(Str) -> Applied(Enum("Option"), [I8]) []
+parse_u128(Str) -> Applied(Enum("Option"), [U128]) []
 parse_u16(Str) -> Applied(Enum("Option"), [U16]) []
 parse_u32(Str) -> Applied(Enum("Option"), [U32]) []
 parse_u8(Str) -> Applied(Enum("Option"), [U8]) []

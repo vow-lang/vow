@@ -1,0 +1,21 @@
+module WideSlotLayout
+
+enum Mix {
+    V(i64, i128, i64),
+    Empty,
+}
+
+fn make(a: i64, b: i128, c: i64) -> Mix {
+    Mix::V(a, b, c)
+}
+
+fn third(m: Mix) -> i64 {
+    match m {
+        Mix::V(x, y, z) => { z },
+        Mix::Empty => { 0 },
+    }
+}
+
+fn main() -> i32 {
+    0
+}
