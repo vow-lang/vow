@@ -1,0 +1,18 @@
+module MutatedInBranch
+
+fn abs_value(x: i64) -> i64 vow {
+  requires: x > -9223372036854775807
+  ensures: result >= 0
+  ensures: result == x || result == 0 - x
+} {
+  let mut r: i64 = x;
+  if x < 0 {
+    r = 0 - x;
+  }
+  r
+}
+
+fn main() -> i32 [io] {
+  print_i64(abs_value(-3));
+  0
+}

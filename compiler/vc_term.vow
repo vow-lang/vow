@@ -30,11 +30,13 @@ fn VC_OP_BVSGE() -> i64 { 13 }
 fn VC_OP_NOT() -> i64 { 14 }
 fn VC_OP_AND() -> i64 { 15 }
 fn VC_OP_OR() -> i64 { 16 }
+fn VC_OP_ITE() -> i64 { 17 }
 
 struct VcArena {
     kinds: Vec<i64>,
     a: Vec<i64>,
     b: Vec<i64>,
+    c: Vec<i64>,
     aux: Vec<i64>,
     strs: Vec<String>,
 }
@@ -44,16 +46,18 @@ fn vc_arena_new() -> VcArena {
         kinds: Vec::new(),
         a: Vec::new(),
         b: Vec::new(),
+        c: Vec::new(),
         aux: Vec::new(),
         strs: Vec::new(),
     }
 }
 
-fn vc_arena_push(ar: VcArena, kind: i64, a: i64, b: i64, aux: i64) -> i64 {
+fn vc_arena_push(ar: VcArena, kind: i64, a: i64, b: i64, c: i64, aux: i64) -> i64 {
     let id: i64 = ar.kinds.len() as i64;
     ar.kinds.push(kind);
     ar.a.push(a);
     ar.b.push(b);
+    ar.c.push(c);
     ar.aux.push(aux);
     id
 }
@@ -61,22 +65,52 @@ fn vc_arena_push(ar: VcArena, kind: i64, a: i64, b: i64, aux: i64) -> i64 {
 fn vc_tm_var(ar: VcArena, name: String) -> i64 {
     let si: i64 = ar.strs.len() as i64;
     ar.strs.push(name);
-    vc_arena_push(ar, VC_T_VAR(), -1, -1, si)
+    vc_arena_push(ar, VC_T_VAR(), -1, -1, -1, si)
 }
 
 fn vc_tm_bv_const(ar: VcArena, value: i64) -> i64 {
-    vc_arena_push(ar, VC_T_BV(), -1, -1, value)
+    vc_arena_push(ar, VC_T_BV(), -1, -1, -1, value)
 }
 
 fn vc_tm_bool_const(ar: VcArena, value: bool) -> i64 {
     let flag: i64 = { if value { 1 } else { 0 } };
-    vc_arena_push(ar, VC_T_BOOL(), -1, -1, flag)
+    vc_arena_push(ar, VC_T_BOOL(), -1, -1, -1, flag)
 }
 
 fn vc_tm_app1(ar: VcArena, op: i64, x: i64) -> i64 {
-    vc_arena_push(ar, VC_T_APP(), x, -1, op)
+    vc_arena_push(ar, VC_T_APP(), x, -1, -1, op)
 }
 
 fn vc_tm_app2(ar: VcArena, op: i64, x: i64, y: i64) -> i64 {
-    vc_arena_push(ar, VC_T_APP(), x, y, op)
+    vc_arena_push(ar, VC_T_APP(), x, y, -1, op)
+}
+
+fn vc_tm_app3(ar: VcArena, op: i64, x: i64, y: i64, z: i64) -> i64 {
+    vc_arena_push(ar, VC_T_APP(), x, y, z, op)
+}
+
+fn vc_tm_is_true(ar: VcArena, t: i64) -> bool {
+    ar.kinds[t as u64] == VC_T_BOOL() && ar.aux[t as u64] == 1
+}
+
+fn vc_tm_is_false(ar: VcArena, t: i64) -> bool {
+    ar.kinds[t as u64] == VC_T_BOOL() && ar.aux[t as u64] == 0
+}
+
+// Boolean constructors that fold the constant `true`, so a path condition that
+// is trivially true never reaches the query text.
+fn vc_tm_and(ar: VcArena, a: i64, b: i64) -> i64 {
+    if vc_tm_is_true(ar, a) { return b; }
+    if vc_tm_is_true(ar, b) { return a; }
+    vc_tm_app2(ar, VC_OP_AND(), a, b)
+}
+
+fn vc_tm_or(ar: VcArena, a: i64, b: i64) -> i64 {
+    if vc_tm_is_true(ar, a) || vc_tm_is_true(ar, b) { return vc_tm_bool_const(ar, true); }
+    vc_tm_app2(ar, VC_OP_OR(), a, b)
+}
+
+fn vc_tm_implies(ar: VcArena, premise: i64, t: i64) -> i64 {
+    if vc_tm_is_true(ar, premise) { return t; }
+    vc_tm_app2(ar, VC_OP_OR(), vc_tm_app1(ar, VC_OP_NOT(), premise), t)
 }

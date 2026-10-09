@@ -1,0 +1,27 @@
+// TEST: counterexample-fn "clamp"
+// TEST: counterexample-vow-id 3
+// TEST: counterexample-blame callee
+// TEST: counterexample-violation "ensures result < hi"
+module NestedClampWrongBound
+
+fn clamp(x: i64, lo: i64, hi: i64) -> i64 vow {
+  requires: lo <= hi
+  ensures: result >= lo
+  ensures: result <= hi
+  ensures: result < hi
+} {
+  if x < lo {
+    lo
+  } else {
+    if x > hi {
+      hi
+    } else {
+      x
+    }
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(clamp(5, 0, 10));
+  0
+}

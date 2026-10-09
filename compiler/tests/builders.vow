@@ -98,3 +98,17 @@ fn mk_inst_add(id: i64, a: i64, b: i64) -> IrInst {
     args.push(b);
     ir_inst_new(id, IOP_WADD(), ITY_I64(), args, IDATA_NONE(), 0, 0, String::from(""))
 }
+
+fn mk_inst_const_bool(id: i64, v: i64) -> IrInst {
+    ir_inst_new(id, IOP_CONST_BOOL(), ITY_BOOL(), Vec::new(), IDATA_CONST_BOOL(), v, 0, String::from(""))
+}
+
+fn mk_inst_unreachable(id: i64) -> IrInst {
+    ir_inst_new(id, IOP_UNREACHABLE(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""))
+}
+
+fn mk_params1() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    p
+}

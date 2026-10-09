@@ -111,6 +111,7 @@ fn vc_op_symbol(op: i64) -> String {
     if op == VC_OP_NOT() { return String::from("not"); }
     if op == VC_OP_AND() { return String::from("and"); }
     if op == VC_OP_OR() { return String::from("or"); }
+    if op == VC_OP_ITE() { return String::from("ite"); }
     String::from("vc-unmapped-operator")
 }
 
@@ -147,6 +148,11 @@ fn vc_term_text(ar: VcArena, t: i64) -> String {
     if rhs >= 0 {
         out.push_str(String::from(" "));
         out.push_str(vc_term_text(ar, rhs));
+    }
+    let third: i64 = ar.c[t as u64];
+    if third >= 0 {
+        out.push_str(String::from(" "));
+        out.push_str(vc_term_text(ar, third));
     }
     out.push_str(String::from(")"));
     out

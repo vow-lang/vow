@@ -87,14 +87,19 @@ SKIPPED_ONLY="$TMP_ROOT/skipped.vow"
 cat > "$SKIPPED_ONLY" <<'SRC'
 module Skipped
 
-fn pick(x: i64) -> i64 vow {
-  ensures: result >= 0
+fn count(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == n
 } {
-  if x > 0 { x } else { 0 }
+  let mut i: i64 = 0;
+  while i < n {
+    i = i + 1;
+  }
+  i
 }
 
 fn main() -> i32 [io] {
-  print_i64(pick(1));
+  print_i64(count(1));
   0
 }
 SRC
@@ -250,6 +255,58 @@ RUN_OUT=$(PATH="$EMPTY_DIR" TMPDIR="$SCRATCH" "$VOWC_BIN" verify --no-cache --ba
 expect "no-claims status" "$(field "$RUN_OUT" status)" "Verified"
 expect "no-claims exit" "$RUN_RC" "0"
 expect "no-claims needs no solver" "$(field "$RUN_OUT" verify_status)" ""
+
+# branches: the query grows with the number of changed names, not with the
+# number of paths. N sequential (2^N paths) and N nested (N+1 paths) `if`s each
+# update one name; the single ensures claim's query must have one `ite` per
+# changed name and be about twice as large for 2N as for N.
+stress_source() {
+    local shape="$1" n="$2" i
+    echo "module Stress"
+    echo
+    echo "fn bump(x: i64) -> i64 vow {"
+    echo "  ensures: result == result"
+    echo "} {"
+    echo "  let mut acc: i64 = x;"
+    if [ "$shape" = sequential ]; then
+        for ((i = 1; i <= n; i++)); do
+            echo "  if x > $i { acc = acc + 1; }"
+        done
+    else
+        for ((i = 1; i <= n; i++)); do
+            echo "  if x > $i { acc = acc + 1;"
+        done
+        for ((i = 1; i <= n; i++)); do
+            echo "  }"
+        done
+    fi
+    echo "  acc"
+    echo "}"
+    echo
+    echo "fn main() -> i32 [io] {"
+    echo "  print_i64(bump(1));"
+    echo "  0"
+    echo "}"
+}
+query_size_for() {
+    local shape="$1" n="$2" src="$TMP_ROOT/stress_${1}_${2}.vow"
+    stress_source "$shape" "$n" > "$src"
+    run_native unsat "$src"
+    expect "$shape $n status" "$(field "$RUN_OUT" status)" "Verified"
+    expect "$shape $n queries" "$(queries)" "1"
+    local ites
+    ites=$(grep -o '(ite ' "$BW_DIR/q.1.smt2" | wc -l | tr -d ' ')
+    expect "$shape $n ite count" "$ites" "$n"
+    wc -c < "$BW_DIR/q.1.smt2" | tr -d ' '
+}
+for shape in sequential nested; do
+    small=$(query_size_for "$shape" 10)
+    large=$(query_size_for "$shape" 20)
+    if [ -z "$small" ] || [ -z "$large" ] || [ "$large" -gt $((small * 3)) ]; then
+        fail "$shape query size is not linear: ${small:-?} bytes at 10, ${large:-?} at 20"
+    fi
+done
+no_leftovers "stress"
 
 # --replay-cex: a counterexample the runtime reproduces is `confirmed`; one it
 # does not is a verifier bug. The fake solver answers b = 0 (a real divide-by-zero)

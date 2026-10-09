@@ -1,0 +1,197 @@
+module VcCfg
+
+use ir
+use ir_dominance
+
+// Control-flow shape the native symbolic executor can walk: every reachable
+// block ends in exactly one Branch/Jump/Return, the reachable graph is acyclic,
+// and each Phi is fed by exactly one Upsilon in every reachable predecessor.
+// That last rule is what lets the executor read a Phi as "the value the edge
+// we arrived by supplied" without simulating Upsilon ordering. The result is
+// the detail of an `unsupported-opcode` skip, or "" when the shape is
+// accepted. `tys` is the table from `vc_ty_table`, indexed by instruction id.
+
+// `Unreachable` ends the dead merge block of an `if` whose arms both return.
+// It is fine there, because the executor never walks a block the entry cannot
+// reach; a reachable one would need a "this path aborts" obligation.
+fn vc_reachable_unreachable_detail(f: IrFunction, rpo: Vec<i64>) -> String {
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let last: IrInst = blk.insts[blk.insts.len() - 1];
+        if rpo[bi] >= 0 && last.op == IOP_UNREACHABLE() {
+            return opcode_name(last.op);
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}
+
+fn vc_terminator_detail(f: IrFunction, succ: Vec<i64>) -> String {
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let n: u64 = blk.insts.len();
+        if n == 0 {
+            return String::from("empty basic block");
+        }
+        let mut ii: u64 = 0;
+        while ii < n {
+            let inst: IrInst = blk.insts[ii];
+            if dom_is_terminal(inst.op) != (ii + 1 == n) {
+                return String::from("block does not end in a single terminator");
+            }
+            ii = ii + 1;
+        }
+        let last: IrInst = blk.insts[n - 1];
+        if last.op == IOP_BRANCH() && (succ[bi * 2] < 0 || succ[bi * 2 + 1] < 0) {
+            return String::from("branch to an unknown block");
+        }
+        if last.op == IOP_JUMP() && succ[bi * 2] < 0 {
+            return String::from("jump to an unknown block");
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}
+
+fn vc_back_edge_detail(nb: u64, succ: Vec<i64>, rpo: Vec<i64>) -> String {
+    let mut b: u64 = 0;
+    while b < nb {
+        if rpo[b] >= 0 {
+            let mut k: u64 = 0;
+            while k < 2 {
+                let s: i64 = succ[b * 2 + k];
+                if s >= 0 && rpo[s as u64] <= rpo[b] {
+                    return String::from("loop (back edge in the control-flow graph)");
+                }
+                k = k + 1;
+            }
+        }
+        b = b + 1;
+    }
+    String::from("")
+}
+
+// Block index defining each Phi, indexed by instruction id; -1 elsewhere.
+fn vc_phi_blocks(f: IrFunction, rpo: Vec<i64>, n_ids: u64) -> Vec<i64> {
+    let out: Vec<i64> = dom_fill(n_ids, -1);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        if rpo[bi] >= 0 {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_PHI() && inst.id >= 0 && (inst.id as u64) < n_ids {
+                    out[inst.id as u64] = bi as i64;
+                }
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+    out
+}
+
+fn vc_phi_head_detail(f: IrFunction, rpo: Vec<i64>) -> String {
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        if rpo[bi] >= 0 {
+            let blk: IrBlock = f.blocks[bi];
+            let mut in_head: bool = true;
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_PHI() {
+                    if !in_head {
+                        return String::from("Phi after the head of its block");
+                    }
+                    if bi == 0 {
+                        return String::from("Phi in the entry block");
+                    }
+                } else {
+                    in_head = false;
+                }
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}
+
+// Upsilons of block `q`: each must feed a Phi of a successor, with the Phi's
+// type, at most once; afterwards every successor Phi must have been fed.
+fn vc_upsilon_detail(f: IrFunction, tys: Vec<i64>, succ: Vec<i64>, rpo: Vec<i64>, phi_blk: Vec<i64>) -> String {
+    let n_ids: u64 = tys.len();
+    let stamp: Vec<i64> = dom_fill(n_ids, -1);
+    let mut q: u64 = 0;
+    while q < f.blocks.len() {
+        if rpo[q] >= 0 {
+            let blk: IrBlock = f.blocks[q];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_UPSILON() {
+                    let p: i64 = inst.dv;
+                    if p < 0 || p >= n_ids as i64 || phi_blk[p as u64] < 0 {
+                        return String::from("Upsilon to an unknown Phi");
+                    }
+                    if inst.args[0] < 0 || inst.args[0] >= n_ids as i64 || tys[inst.args[0] as u64] != tys[p as u64] {
+                        return String::from("Upsilon type differs from its Phi");
+                    }
+                    let m: i64 = phi_blk[p as u64];
+                    if succ[q * 2] != m && succ[q * 2 + 1] != m {
+                        return String::from("Upsilon outside a predecessor of its Phi");
+                    }
+                    if stamp[p as u64] == q as i64 {
+                        return String::from("two Upsilons for one Phi in a block");
+                    }
+                    stamp[p as u64] = q as i64;
+                }
+                ii = ii + 1;
+            }
+            let mut k: u64 = 0;
+            while k < 2 {
+                let m: i64 = succ[q * 2 + k];
+                if m >= 0 {
+                    let mb: IrBlock = f.blocks[m as u64];
+                    let mut pi: u64 = 0;
+                    let mut scanning: bool = true;
+                    while scanning && pi < mb.insts.len() {
+                        let pinst: IrInst = mb.insts[pi];
+                        if pinst.op == IOP_PHI() {
+                            if stamp[pinst.id as u64] != q as i64 {
+                                return String::from("Phi input missing from a predecessor");
+                            }
+                            pi = pi + 1;
+                        } else {
+                            scanning = false;
+                        }
+                    }
+                }
+                k = k + 1;
+            }
+        }
+        q = q + 1;
+    }
+    String::from("")
+}
+
+fn vc_cfg_detail(f: IrFunction, tys: Vec<i64>) -> String {
+    let nb: u64 = f.blocks.len();
+    let id_to_idx: Vec<i64> = dom_block_id_table(f);
+    let succ: Vec<i64> = dom_successors(f, id_to_idx);
+    let t: String = vc_terminator_detail(f, succ);
+    if t.len() > 0 { return t; }
+    let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
+    let b: String = vc_back_edge_detail(nb, succ, rpo);
+    if b.len() > 0 { return b; }
+    let u: String = vc_reachable_unreachable_detail(f, rpo);
+    if u.len() > 0 { return u; }
+    let h: String = vc_phi_head_detail(f, rpo);
+    if h.len() > 0 { return h; }
+    let phi_blk: Vec<i64> = vc_phi_blocks(f, rpo, tys.len());
+    vc_upsilon_detail(f, tys, succ, rpo, phi_blk)
+}

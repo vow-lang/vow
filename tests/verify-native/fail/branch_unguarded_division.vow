@@ -1,0 +1,20 @@
+// TEST: counterexample-fn "share"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame none
+// TEST: counterexample-violation "division or remainder by zero"
+module BranchUnguardedDivision
+
+fn share(x: i64, y: i64) -> i64 vow {
+  requires: x >= 0
+} {
+  if y > 0 {
+    x / y
+  } else {
+    x / (y + 1)
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(share(10, 3));
+  0
+}

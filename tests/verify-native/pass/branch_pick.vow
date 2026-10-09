@@ -1,6 +1,4 @@
-// TEST: category unverifiable
-// TEST: skip-reason unsupported-opcode
-module BranchSkipped
+module BranchPick
 
 fn pick(x: i64) -> i64 vow {
   ensures: result >= 0

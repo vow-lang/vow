@@ -1,0 +1,25 @@
+module SequentialUpdates
+
+fn bump(x: i64) -> i64 vow {
+  requires: x >= 0
+  requires: x <= 1000
+  ensures: result >= x
+  ensures: result <= x + 3
+} {
+  let mut acc: i64 = x;
+  if x > 10 {
+    acc = acc + 1;
+  }
+  if x > 20 {
+    acc = acc + 1;
+  }
+  if x > 30 {
+    acc = acc + 1;
+  }
+  acc
+}
+
+fn main() -> i32 [io] {
+  print_i64(bump(25));
+  0
+}

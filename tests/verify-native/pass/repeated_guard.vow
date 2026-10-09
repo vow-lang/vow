@@ -1,0 +1,21 @@
+module RepeatedGuard
+
+fn both(x: i64) -> i64 vow {
+  ensures: result >= 0
+} {
+  let positive: bool = x > 0;
+  if positive {
+    if positive {
+      x
+    } else {
+      0 - 1
+    }
+  } else {
+    0
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(both(4));
+  0
+}
