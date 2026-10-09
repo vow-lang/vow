@@ -131,11 +131,16 @@ fn check_block(
     file: &str,
     emitter: &mut dyn DiagnosticEmitter,
 ) {
+    let mut shadowed = vec![];
     for stmt in &block.stmts {
-        check_stmt(stmt, tracker, env, file, emitter);
+        shadowed.extend(check_stmt(stmt, tracker, env, file, emitter));
     }
     if let Some(expr) = &block.trailing_expr {
         check_expr(expr, tracker, env, file, emitter, true);
+    }
+    // A non-linear `let` shadow ends with its block; the outer consumed value is again the one in scope.
+    for (name, state) in shadowed {
+        tracker.vars.entry(name).or_insert(state);
     }
 }
 
@@ -145,7 +150,7 @@ fn check_stmt(
     env: &TypeEnv,
     file: &str,
     emitter: &mut dyn DiagnosticEmitter,
-) {
+) -> Vec<(String, ConsumeState)> {
     match stmt {
         Stmt::Let {
             pattern,
@@ -154,10 +159,11 @@ fn check_stmt(
             span,
         } => {
             check_expr(init, tracker, env, file, emitter, true);
-            register_pattern_linear(pattern, ty.as_ref(), env, tracker, *span);
+            register_pattern_linear(pattern, ty.as_ref(), env, tracker, *span)
         }
         Stmt::Expr { expr, .. } => {
             check_expr(expr, tracker, env, file, emitter, true);
+            vec![]
         }
     }
 }
@@ -168,18 +174,27 @@ fn register_pattern_linear(
     env: &TypeEnv,
     tracker: &mut LinearTracker,
     span: Span,
-) {
-    if let PatKind::Ident { name, .. } = &pat.kind {
-        let is_linear = ty_ann.map(|t| is_linear_ast_type(t, env)).unwrap_or(false);
-        if is_linear {
-            tracker
-                .vars
-                .insert(name.clone(), ConsumeState::Available(span));
-        } else if matches!(tracker.vars.get(name), Some(ConsumeState::Consumed(_))) {
-            // The tracker is name-keyed: a non-linear rebinding must not leave a stale consumed entry that a later assignment would re-arm.
-            tracker.vars.remove(name);
+) -> Vec<(String, ConsumeState)> {
+    if let PatKind::Ident { name, .. } = &pat.kind
+        && ty_ann.is_some_and(|t| is_linear_ast_type(t, env))
+    {
+        tracker
+            .vars
+            .insert(name.clone(), ConsumeState::Available(span));
+        return vec![];
+    }
+    // The tracker is name-keyed: a non-linear rebinding must not leave a stale consumed entry that a later assignment would re-arm.
+    let mut names = vec![];
+    collect_pattern_binding_names(pat, &mut names);
+    let mut removed = vec![];
+    for name in names {
+        if matches!(tracker.vars.get(&name), Some(ConsumeState::Consumed(_)))
+            && let Some(state) = tracker.vars.remove(&name)
+        {
+            removed.push((name, state));
         }
     }
+    removed
 }
 
 fn check_expr(
@@ -238,23 +253,14 @@ fn check_expr(
             condition, body, ..
         } => {
             check_expr(condition, tracker, env, file, emitter, false);
-            let was_in_loop = tracker.in_loop;
-            tracker.in_loop = true;
-            check_block(body, tracker, env, file, emitter);
-            tracker.in_loop = was_in_loop;
+            check_loop_body(body, true, tracker, env, file, emitter);
         }
         ExprKind::ForEach { iterable, body, .. } => {
             check_expr(iterable, tracker, env, file, emitter, false);
-            let was_in_loop = tracker.in_loop;
-            tracker.in_loop = true;
-            check_block(body, tracker, env, file, emitter);
-            tracker.in_loop = was_in_loop;
+            check_loop_body(body, true, tracker, env, file, emitter);
         }
         ExprKind::Loop { body, .. } => {
-            let was_in_loop = tracker.in_loop;
-            tracker.in_loop = true;
-            check_block(body, tracker, env, file, emitter);
-            tracker.in_loop = was_in_loop;
+            check_loop_body(body, false, tracker, env, file, emitter);
         }
         ExprKind::Block(block) => check_block(block, tracker, env, file, emitter),
         ExprKind::Assign { lhs, rhs } => {
@@ -309,6 +315,37 @@ fn check_expr(
         }
         ExprKind::Cast { expr: inner, .. } => {
             check_expr(inner, tracker, env, file, emitter, consume);
+        }
+    }
+}
+
+fn check_loop_body(
+    body: &Block,
+    may_skip: bool,
+    tracker: &mut LinearTracker,
+    env: &TypeEnv,
+    file: &str,
+    emitter: &mut dyn DiagnosticEmitter,
+) {
+    let consumed_before: Vec<(String, Span)> = if may_skip {
+        tracker
+            .vars
+            .iter()
+            .filter_map(|(name, state)| {
+                state_may_be_consumed(Some(state)).map(|span| (name.clone(), span))
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+    let was_in_loop = tracker.in_loop;
+    tracker.in_loop = true;
+    check_block(body, tracker, env, file, emitter);
+    tracker.in_loop = was_in_loop;
+    // A body that may run zero times cannot unconditionally re-arm a value consumed before the loop.
+    for (name, span) in consumed_before {
+        if matches!(tracker.vars.get(&name), Some(ConsumeState::Available(_))) {
+            tracker.vars.insert(name, ConsumeState::MaybeConsumed(span));
         }
     }
 }
@@ -1715,5 +1752,102 @@ mod tests {
         );
 
         assert!(diags.is_empty(), "Got: {diags:?}");
+    }
+
+    fn while_expr(stmts: Vec<Stmt>) -> Expr {
+        Expr {
+            kind: ExprKind::While {
+                condition: Box::new(Expr {
+                    kind: ExprKind::Lit(Lit::Bool(true)),
+                    span: dummy_span(),
+                }),
+                vow: None,
+                body: Box::new(Block {
+                    stmts,
+                    trailing_expr: None,
+                    span: dummy_span(),
+                }),
+            },
+            span: dummy_span(),
+        }
+    }
+
+    #[test]
+    fn test_tuple_let_shadow_over_consumed_linear_not_rearmed() {
+        let tuple_let = Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Tuple(vec![
+                    Pat {
+                        kind: PatKind::Ident {
+                            name: "h".to_string(),
+                            is_mut: true,
+                        },
+                        span: dummy_span(),
+                    },
+                    Pat {
+                        kind: PatKind::Ident {
+                            name: "y".to_string(),
+                            is_mut: false,
+                        },
+                        span: dummy_span(),
+                    },
+                ]),
+                span: dummy_span(),
+            },
+            ty: None,
+            init: Box::new(ident_expr("zero")),
+            span: dummy_span(),
+        };
+        let diags = run_linear(
+            vec![
+                let_local("h", named_type("FileHandle"), "open"),
+                consume_stmt(),
+                tuple_let,
+                assign_stmt("h", "one"),
+            ],
+            None,
+        );
+
+        assert!(diags.is_empty(), "Got: {diags:?}");
+    }
+
+    #[test]
+    fn test_assign_in_while_after_consume_is_maybe_consumed_after_loop() {
+        let diags = run_linear(
+            vec![
+                let_local("h", named_type("FileHandle"), "open"),
+                consume_stmt(),
+                expr_stmt(while_expr(vec![assign_stmt("h", "open")])),
+                consume_stmt(),
+            ],
+            None,
+        );
+
+        assert_eq!(diags.len(), 2, "Got: {diags:?}");
+        assert!(diags[0].message.contains("may already be consumed"));
+    }
+
+    #[test]
+    fn test_inner_block_shadow_does_not_forget_outer_consumed_linear() {
+        let inner = expr_stmt(Expr {
+            kind: ExprKind::Block(Box::new(Block {
+                stmts: vec![let_local("h", named_type("i64"), "zero")],
+                trailing_expr: None,
+                span: dummy_span(),
+            })),
+            span: dummy_span(),
+        });
+        let diags = run_linear(
+            vec![
+                let_local("h", named_type("FileHandle"), "open"),
+                consume_stmt(),
+                inner,
+                consume_stmt(),
+            ],
+            None,
+        );
+
+        assert_eq!(diags.len(), 1, "Got: {diags:?}");
+        assert!(diags[0].message.contains("already consumed"));
     }
 }
