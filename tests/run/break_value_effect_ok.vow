@@ -1,0 +1,25 @@
+// TEST: exit 0
+//
+// Issue #636: an effectful call inside a `break` value is allowed from an
+// effectful caller, and a pure `break` value is still accepted in a pure fn.
+module break_value_effect_ok
+
+fn g() -> i64 [io] {
+    41
+}
+
+fn pure_break() -> i64 {
+    loop {
+        break 1 + 2;
+    }
+}
+
+fn main() -> i32 [io] {
+    let v: i64 = loop {
+        break g();
+    };
+    if v + pure_break() == 44 {
+        return 0;
+    }
+    1
+}
