@@ -358,7 +358,7 @@ overflows aborts and therefore never returns, so it cannot witness a violated
 counterexample into a proof. Whether such an aborting execution is *reachable* is
 reported separately, as an
 [`ArithOverflowReachable`](errors.md#arithoverflowreachable) warning, so a proof
-never hides a program that can die at the operator. Widths `i8`/`u8` through
+never hides a program that can die at the operator. Checked operators do not require the `[panic]` effect (see [Effect Types](#effect-types)). Widths `i8`/`u8` through
 `i64`/`u64` are modelled; 128-bit checked arithmetic is reported `Skipped`
 (fail-closed) rather than modelled as wrapping. See
 [`verifier-discipline.md`](../verifier-discipline.md).
@@ -1234,6 +1234,8 @@ Effects are explicit. Every function declares which side effects it may perform.
 | `unsafe` | Unsafe operations (FFI, raw memory)  |
 
 Each effect is independent — `io` is not a superset of `read` or `write`.
+
+`.unwrap()` requires `[panic]`. Out-of-bounds indexing, the checked operators (`+! -! *! /! %!`) and the `/`, `%` zero-divisor traps do not: their aborts are verification obligations of pure functions, and declaring an effect would remove the function from the verifier model.
 
 ### Propagation
 

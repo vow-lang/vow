@@ -1,0 +1,27 @@
+// TEST: exit 0
+//
+// Issue #622: out-of-bounds indexing, checked arithmetic and division traps
+// are not gated by `[panic]`; only `.unwrap()` is. Pure functions may use them
+// (and stay in the verifier model).
+module IndexCheckedArithNoPanicEffect
+
+fn pick(v: Vec<i64>, i: u64) -> i64 {
+    v[i]
+}
+
+fn arith(a: i64, b: i64) -> i64 {
+    let s: i64 = a +! b;
+    let d: i64 = s -! b;
+    let m: i64 = d *! 2;
+    let q: i64 = m /! 2;
+    let r: i64 = q %! 7;
+    r + (a / 1) + (b % 5)
+}
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::new();
+    v.push(3);
+    if pick(v, 0u64) != 3 { return 1; }
+    if arith(10, 4) != 17 { return 2; }
+    0
+}

@@ -1752,7 +1752,7 @@ overflows aborts and therefore never returns, so it cannot witness a violated
 counterexample into a proof. Whether such an aborting execution is *reachable* is
 reported separately, as an
 [`ArithOverflowReachable`](errors.md#arithoverflowreachable) warning, so a proof
-never hides a program that can die at the operator. Widths `i8`/`u8` through
+never hides a program that can die at the operator. Checked operators do not require the `[panic]` effect (see [Effect Types](#effect-types)). Widths `i8`/`u8` through
 `i64`/`u64` are modelled; 128-bit checked arithmetic is reported `Skipped`
 (fail-closed) rather than modelled as wrapping. See
 [`verifier-discipline.md`](../verifier-discipline.md).
@@ -2628,6 +2628,8 @@ Effects are explicit. Every function declares which side effects it may perform.
 | `unsafe` | Unsafe operations (FFI, raw memory)  |
 
 Each effect is independent — `io` is not a superset of `read` or `write`.
+
+`.unwrap()` requires `[panic]`. Out-of-bounds indexing, the checked operators (`+! -! *! /! %!`) and the `/`, `%` zero-divisor traps do not: their aborts are verification obligations of pure functions, and declaring an effect would remove the function from the verifier model.
 
 ### Propagation
 
@@ -3854,7 +3856,7 @@ fn safe_add(a: i64, b: i64) -> i64 vow {
 }
 ```
 
-`a +! b` aborts rather than wraps, so every execution that *returns* satisfies both postconditions, for every non-negative `a` and `b`. The verifier models that abort, so no bound is needed. Writing `requires: a <= 4611686018427387903` instead would be the [verification-driven bound](#verification-driven-bounds-anti-pattern) anti-pattern wearing a semantic disguise: it excludes inputs the function handles correctly (it aborts, which is a defined outcome) purely to make wrapping unreachable.
+`a +! b` aborts rather than wraps, so every execution that *returns* satisfies both postconditions, for every non-negative `a` and `b`. The verifier models that abort, so no bound is needed. Neither `+!` nor indexing requires a `[panic]` effect: a function with any effect is not modelable, so gating them would remove exactly these functions from verification (see [Effect Types](grammar.md#effect-types)). Writing `requires: a <= 4611686018427387903` instead would be the [verification-driven bound](#verification-driven-bounds-anti-pattern) anti-pattern wearing a semantic disguise: it excludes inputs the function handles correctly (it aborts, which is a defined outcome) purely to make wrapping unreachable.
 
 A range bound earns its place when it excludes inputs the function genuinely has no answer for — `requires: x > -9223372036854775807` on `abs`, whose result is not representable at `i64::MIN` under any operator.
 
@@ -5583,6 +5585,8 @@ number parser; a default `double` parser silently rounds it.
 
 ### ArithmeticOverflow
 
+Not gated by `[panic]`: checked operators are modelled as aborting in pure functions.
+
 **When:** A checked arithmetic operator (`+!`, `-!`, `*!`, `/!`, `%!`)
 overflows at runtime; or checked or unchecked division/remainder encounters a
 zero divisor; or signed `/` or `/!` evaluates `MIN / -1`.
@@ -5617,6 +5621,8 @@ The abort is emitted in every build mode, release included, so this cannot be
 deferred to a debug run.
 
 ### IndexOutOfBounds
+
+Not gated by `[panic]`: the abort is a verification obligation of the (pure) indexing function.
 
 **When:** A `Vec` index access (`v[i]` or `v[i] = val`) uses an index outside `0..v.len()`.
 
@@ -7689,7 +7695,7 @@ overflows aborts and therefore never returns, so it cannot witness a violated
 counterexample into a proof. Whether such an aborting execution is *reachable* is
 reported separately, as an
 [`ArithOverflowReachable`](errors.md#arithoverflowreachable) warning, so a proof
-never hides a program that can die at the operator. Widths `i8`/`u8` through
+never hides a program that can die at the operator. Checked operators do not require the `[panic]` effect (see [Effect Types](#effect-types)). Widths `i8`/`u8` through
 `i64`/`u64` are modelled; 128-bit checked arithmetic is reported `Skipped`
 (fail-closed) rather than modelled as wrapping. See
 [`verifier-discipline.md`](../verifier-discipline.md).
@@ -8565,6 +8571,8 @@ Effects are explicit. Every function declares which side effects it may perform.
 | `unsafe` | Unsafe operations (FFI, raw memory)  |
 
 Each effect is independent — `io` is not a superset of `read` or `write`.
+
+`.unwrap()` requires `[panic]`. Out-of-bounds indexing, the checked operators (`+! -! *! /! %!`) and the `/`, `%` zero-divisor traps do not: their aborts are verification obligations of pure functions, and declaring an effect would remove the function from the verifier model.
 
 ### Propagation
 
@@ -9793,7 +9801,7 @@ fn safe_add(a: i64, b: i64) -> i64 vow {
 }
 ```
 
-`a +! b` aborts rather than wraps, so every execution that *returns* satisfies both postconditions, for every non-negative `a` and `b`. The verifier models that abort, so no bound is needed. Writing `requires: a <= 4611686018427387903` instead would be the [verification-driven bound](#verification-driven-bounds-anti-pattern) anti-pattern wearing a semantic disguise: it excludes inputs the function handles correctly (it aborts, which is a defined outcome) purely to make wrapping unreachable.
+`a +! b` aborts rather than wraps, so every execution that *returns* satisfies both postconditions, for every non-negative `a` and `b`. The verifier models that abort, so no bound is needed. Neither `+!` nor indexing requires a `[panic]` effect: a function with any effect is not modelable, so gating them would remove exactly these functions from verification (see [Effect Types](grammar.md#effect-types)). Writing `requires: a <= 4611686018427387903` instead would be the [verification-driven bound](#verification-driven-bounds-anti-pattern) anti-pattern wearing a semantic disguise: it excludes inputs the function handles correctly (it aborts, which is a defined outcome) purely to make wrapping unreachable.
 
 A range bound earns its place when it excludes inputs the function genuinely has no answer for — `requires: x > -9223372036854775807` on `abs`, whose result is not representable at `i64::MIN` under any operator.
 
@@ -11524,6 +11532,8 @@ number parser; a default `double` parser silently rounds it.
 
 ### ArithmeticOverflow
 
+Not gated by `[panic]`: checked operators are modelled as aborting in pure functions.
+
 **When:** A checked arithmetic operator (`+!`, `-!`, `*!`, `/!`, `%!`)
 overflows at runtime; or checked or unchecked division/remainder encounters a
 zero divisor; or signed `/` or `/!` evaluates `MIN / -1`.
@@ -11558,6 +11568,8 @@ The abort is emitted in every build mode, release included, so this cannot be
 deferred to a debug run.
 
 ### IndexOutOfBounds
+
+Not gated by `[panic]`: the abort is a verification obligation of the (pure) indexing function.
 
 **When:** A `Vec` index access (`v[i]` or `v[i] = val`) uses an index outside `0..v.len()`.
 

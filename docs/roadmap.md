@@ -396,10 +396,11 @@ Options:
 
 **Trigger: agent needs to reason about which functions can panic.**
 
-`[Panic]` effect exists in the grammar but no builtins are annotated with it.
-Division by zero, array out-of-bounds, and `.unwrap()` are all silent panic
-sources. Completing the effect system would let agents statically reason about
-failure modes.
+`[panic]` is scoped to `.unwrap()` (ADR-2026-10-09-0900): indexing, checked
+arithmetic and `/ %` traps are verifier-modelled obligations of pure functions
+and deliberately do not require it. Follow-up trigger: a second panic-producing
+builtin, at which point `.unwrap()` detection should move from a method-name
+match to a resolved builtin identity.
 
 ### 24.4 Linear type enforcement
 
