@@ -231,12 +231,12 @@ fn skill_json() -> String {
       "options": [
         {
           "form": "-o, --output <path>",
-          "description": "Output executable path (default: source without .vow extension)",
+          "description": "Output executable path (default: build/<stem>)",
           "short": "-o",
           "long": "--output",
           "value_name": "path",
           "value_kind": "path",
-          "default": "source without .vow extension"
+          "default": "build/<stem>"
         },
         {
           "form": "--mode <debug|release|profile|sanitize>",
@@ -736,7 +736,7 @@ fn skill_json() -> String {
     }
   },
   "build_options": {
-    "-o, --output <path>": "Output executable path (default: source without .vow extension)",
+    "-o, --output <path>": "Output executable path (default: build/<stem>)",
     "--mode <debug|release|profile|sanitize>": "Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking (default: release)",
     "--no-verify": "Skip ESBMC static verification",
     "--dump-ir": "Print IR text to stdout and exit (no JSON output, no codegen)",
@@ -1161,7 +1161,7 @@ USAGE
   vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)
 
 BUILD OPTIONS
-  -o, --output <path>     Output executable path (default: source without .vow extension)
+  -o, --output <path>     Output executable path (default: build/<stem>)
   --mode <debug|release|profile|sanitize>  Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking (default: release)
   --no-verify             Skip ESBMC static verification
   --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)
