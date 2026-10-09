@@ -493,6 +493,13 @@ fn check_wide_constant(id: i64, op: i64, ty: i64, dk: i64, lo: i64, hi: i64,
     0
 }
 
+fn check_malformed_wide_constant_fails_closed() -> i64 {
+    let m: IrModule = wide_const_function(18, IOP_CONST_I128(), ITY_I128(), IDATA_NONE(), 0, 0);
+    let c: String = emit_c_module(m, 16, 16, 16, 16);
+    if !c.contains(String::from("/* opcode ConstI128 not modelled */")) { return 76; }
+    0
+}
+
 fn check_wide_constants_are_modelable() -> i64 {
     let i128_max: String = String::from("v0 = (__int128)((((unsigned __int128)9223372036854775807ULL) << 64) | (unsigned __int128)18446744073709551615ULL);");
     let i128_min: String = String::from("v0 = (__int128)((((unsigned __int128)9223372036854775808ULL) << 64) | (unsigned __int128)0ULL);");
@@ -502,6 +509,7 @@ fn check_wide_constants_are_modelable() -> i64 {
     if r == 0 { r = check_wide_constant(15, IOP_CONST_I128(), ITY_I128(), IDATA_CONST_I128(), 0, -9223372036854775807 - 1, i128_min, 67); }
     if r == 0 { r = check_wide_constant(16, IOP_CONST_U128(), ITY_U128(), IDATA_CONST_U128(), -1, -1, u128_max, 70); }
     if r == 0 { r = check_wide_constant(17, IOP_CONST_U128(), ITY_U128(), IDATA_CONST_U128(), 1, 0, u128_one, 73); }
+    if r == 0 { r = check_malformed_wide_constant_fails_closed(); }
     r
 }
 

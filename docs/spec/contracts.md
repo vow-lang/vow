@@ -500,9 +500,10 @@ ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
 ## 128-bit Integer Contracts
 
 `i128`/`u128` literals work in contracts and bodies. The verifier builds each
-literal from its two 64-bit limbs, so every value is exact (`i128::MIN`,
-`i128::MAX` and `u128::MAX` included) and a counterexample reports the full
-128-bit value:
+literal from its two 64-bit limbs, so under the bit-vector encoding every
+value is exact (`i128::MIN`, `i128::MAX` and `u128::MAX` included) and a
+counterexample reports the full 128-bit value. A proof from the `--encoding ir`
+timeout fallback is reported as `ProvenIr` and is weaker:
 
 ```vow
 fn at_least_one(x: u128) -> u128

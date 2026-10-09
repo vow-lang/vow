@@ -390,7 +390,9 @@ whether the read goes through a `match` arm or `.unwrap()`. Do not store
 These are backend gaps, not language rules; the type checker accepts all of
 these at 128-bit width. Verification is a separate matter: 128-bit literals
 (in a body or in `requires`/`ensures`/`invariant`) are verifiable, and are
-modelled exactly, `i128::MIN`, `i128::MAX` and `u128::MAX` included. A
+modelled exactly under the bit-vector encoding, `i128::MIN`, `i128::MAX` and
+`u128::MAX` included; a proof obtained by the `--encoding ir` timeout fallback
+is reported as `ProvenIr` and is weaker. A
 contracted function that reads or writes a 128-bit aggregate field is reported
 `Skipped`, with `FieldGet at 128-bit width` or `FieldSet at 128-bit width`,
 rather than being modelled through the verifier's 8-byte heap slot.

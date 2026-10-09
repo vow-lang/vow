@@ -1784,7 +1784,9 @@ whether the read goes through a `match` arm or `.unwrap()`. Do not store
 These are backend gaps, not language rules; the type checker accepts all of
 these at 128-bit width. Verification is a separate matter: 128-bit literals
 (in a body or in `requires`/`ensures`/`invariant`) are verifiable, and are
-modelled exactly, `i128::MIN`, `i128::MAX` and `u128::MAX` included. A
+modelled exactly under the bit-vector encoding, `i128::MIN`, `i128::MAX` and
+`u128::MAX` included; a proof obtained by the `--encoding ir` timeout fallback
+is reported as `ProvenIr` and is weaker. A
 contracted function that reads or writes a 128-bit aggregate field is reported
 `Skipped`, with `FieldGet at 128-bit width` or `FieldSet at 128-bit width`,
 rather than being modelled through the verifier's 8-byte heap slot.
@@ -4147,9 +4149,10 @@ ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
 ## 128-bit Integer Contracts
 
 `i128`/`u128` literals work in contracts and bodies. The verifier builds each
-literal from its two 64-bit limbs, so every value is exact (`i128::MIN`,
-`i128::MAX` and `u128::MAX` included) and a counterexample reports the full
-128-bit value:
+literal from its two 64-bit limbs, so under the bit-vector encoding every
+value is exact (`i128::MIN`, `i128::MAX` and `u128::MAX` included) and a
+counterexample reports the full 128-bit value. A proof from the `--encoding ir`
+timeout fallback is reported as `ProvenIr` and is weaker:
 
 ```vow
 fn at_least_one(x: u128) -> u128
@@ -7694,7 +7697,9 @@ whether the read goes through a `match` arm or `.unwrap()`. Do not store
 These are backend gaps, not language rules; the type checker accepts all of
 these at 128-bit width. Verification is a separate matter: 128-bit literals
 (in a body or in `requires`/`ensures`/`invariant`) are verifiable, and are
-modelled exactly, `i128::MIN`, `i128::MAX` and `u128::MAX` included. A
+modelled exactly under the bit-vector encoding, `i128::MIN`, `i128::MAX` and
+`u128::MAX` included; a proof obtained by the `--encoding ir` timeout fallback
+is reported as `ProvenIr` and is weaker. A
 contracted function that reads or writes a 128-bit aggregate field is reported
 `Skipped`, with `FieldGet at 128-bit width` or `FieldSet at 128-bit width`,
 rather than being modelled through the verifier's 8-byte heap slot.
@@ -10059,9 +10064,10 @@ ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
 ## 128-bit Integer Contracts
 
 `i128`/`u128` literals work in contracts and bodies. The verifier builds each
-literal from its two 64-bit limbs, so every value is exact (`i128::MIN`,
-`i128::MAX` and `u128::MAX` included) and a counterexample reports the full
-128-bit value:
+literal from its two 64-bit limbs, so under the bit-vector encoding every
+value is exact (`i128::MIN`, `i128::MAX` and `u128::MAX` included) and a
+counterexample reports the full 128-bit value. A proof from the `--encoding ir`
+timeout fallback is reported as `ProvenIr` and is weaker:
 
 ```vow
 fn at_least_one(x: u128) -> u128

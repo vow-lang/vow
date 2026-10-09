@@ -1,0 +1,52 @@
+// TEST: category callee-blame
+module WideLiteralArithmetic
+
+fn add_one(x: u128) -> u128 vow {
+    requires: x < 340282366920938463463374607431768211455u128,
+    ensures: result == x + 1u128
+} {
+    x + 1u128
+}
+
+fn halve(x: u128) -> u128 vow {
+    ensures: result <= x,
+    ensures: result == x / 2u128
+} {
+    x / 2u128
+}
+
+fn shift_in_range(x: u128, n: u32) -> u128 vow {
+    requires: n < 128u32,
+    ensures: result == x << n
+} {
+    x << n
+}
+
+fn mask_low_64(x: u128) -> u128 vow {
+    ensures: result <= 18446744073709551615u128
+} {
+    x & 18446744073709551615u128
+}
+
+fn count_to_three() -> u128 vow {
+    ensures: result == 3u128
+} {
+    let mut i: u128 = 0u128;
+    while i < 3u128
+    vow {
+        invariant: i <= 3u128
+    }
+    {
+        i = i + 1u128;
+    }
+    i
+}
+
+fn main() -> i32 [io] {
+    add_one(1u128);
+    halve(10u128);
+    shift_in_range(1u128, 3u32);
+    mask_low_64(5u128);
+    count_to_three();
+    0
+}

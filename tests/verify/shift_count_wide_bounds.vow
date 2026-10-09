@@ -19,8 +19,25 @@ fn shift_u64(value: u64, count: u64) -> u64 vow {
     value >> count
 }
 
+fn shift_i128(value: i128, count: i128) -> i128 vow {
+    requires: count >= 0i128,
+    requires: count < 128i128
+    ensures: result == value >> count
+} {
+    value >> count
+}
+
+fn shift_u128(value: u128, count: u128) -> u128 vow {
+    requires: count < 128u128
+    ensures: result == value >> count
+} {
+    value >> count
+}
+
 fn main() -> i32 {
     shift_i64(0, 0);
     shift_u64(0, 0);
+    shift_i128(0i128, 0i128);
+    shift_u128(0u128, 0u128);
     0
 }
