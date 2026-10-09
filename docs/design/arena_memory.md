@@ -347,6 +347,8 @@ void* __vow_string_substr(const void* string, uint64_t start, uint64_t len);
 void* __vow_string_substring(const void* string, uint64_t start, uint64_t end);
 void* __vow_string_from_i64(int64_t value);
 void* __vow_string_from_u64(uint64_t value);
+void* __vow_string_from_i128(__int128 value);
+void* __vow_string_from_u128(unsigned __int128 value);
 void* __vow_string_split(const void* haystack, const void* separator);
 void* __vow_string_trim(const void* string);
 void* __vow_string_to_upper(const void* string);
@@ -390,6 +392,10 @@ void* __vow_string_from_i64_in_arena(struct VowArena* arena,
                                      int64_t value);
 void* __vow_string_from_u64_in_arena(struct VowArena* arena,
                                      uint64_t value);
+void* __vow_string_from_i128_in_arena(struct VowArena* arena,
+                                      __int128 value);
+void* __vow_string_from_u128_in_arena(struct VowArena* arena,
+                                      unsigned __int128 value);
 void* __vow_string_split_in_arena(struct VowArena* arena,
                                   const void* haystack,
                                   const void* separator);
@@ -568,7 +574,7 @@ its `--check` verifies the runtime defines every symbol:
 - `Option` cells: the `parse_*_opt` family, `HashMap::get`, `BTreeMap::get` and
   `BTreeMap::insert`, and every `<src>_to_<tgt>_try` narrowing conversion.
 - `String` results: the string constructors and transformers (`string_new`,
-  `from_cstr`, `clone`, `substr`, `substring`, `from_i64`, `from_u64`, `trim`,
+  `from_cstr`, `clone`, `substr`, `substring`, `from_i64`, `from_u64`, `from_i128`, `from_u128`, `trim`,
   `to_upper`, `to_lower`, `replace`, `join`), `fs_read`, `fs_read_line`,
   `stdin_read`, `getenv`, `path_lookup`, `mktemp_dir`, `hex_encode`,
   `format_f64_bits`, `process_get_stdout`, `process_get_stderr`,

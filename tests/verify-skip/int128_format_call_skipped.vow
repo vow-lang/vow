@@ -1,0 +1,25 @@
+// TEST: category unverifiable
+module Int128FormatCallSkipped
+
+// `int128_to_string` and `uint128_to_string` are unmodeled externs: the
+// verifier has no model of their results. A function that calls one is Skipped
+// (fail-closed) instead of being "proven" against an invented nondeterministic
+// string. The postconditions hold for the real formatter (a decimal rendering
+// of any value is at least one byte), but nothing is claimed about it.
+fn render_signed(v: i128) -> String vow {
+  ensures: result.len() > 0
+} {
+  int128_to_string(v)
+}
+
+fn render_unsigned(v: u128) -> String vow {
+  ensures: result.len() > 0
+} {
+  uint128_to_string(v)
+}
+
+fn main() -> i32 [io] {
+  print_str(render_signed(-1i128));
+  print_str(render_unsigned(1u128));
+  0
+}

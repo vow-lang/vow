@@ -944,6 +944,8 @@ fn skill_json() -> String {
       "int_to_string": "fn(v: i64) -> String []",
       "uint_to_string": "fn(v: u64) -> String []",
       "i64_to_string": "fn(v: i64) -> String (alias of int_to_string) []",
+      "int128_to_string": "fn(v: i128) -> String []",
+      "uint128_to_string": "fn(v: u128) -> String []",
       "vec_sort": "fn(v: Vec<i64>) -> Vec<i64> []",
       "time_unix": "fn() -> i64 [io]",
       "time_unix_ms": "fn() -> i64 [io]",
@@ -1257,7 +1259,7 @@ LANGUAGE SUMMARY
 TYPES     : i8  i16  i32  i64  i128  u8  u16  u32  u64  u128  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>  BTreeMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
 BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []   drop: fn(value: L) -> () for a linear owner L []   print_str: fn(s: String) -> () [io]
-            print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_read_status: fn() -> i64 [read]   getenv: fn(name: String) -> String [read]   path_lookup: fn(name: String) -> String [read]   mktemp_dir: fn(prefix: String) -> String [io]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_remove_dir_all: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: u64, len: u64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: u64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   hash_u64: fn(x: u64) -> u64 []   hash_str: fn(s: String) -> u64 []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_poll_wait: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]   process_start_piped: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_write_stdin: fn(pid: i64, data: String) -> i64 [io]   process_close_stdin: fn(pid: i64) -> i64 [io]   process_read_line: fn(pid: i64, timeout_ms: i64) -> String [io]   process_read_status: fn(pid: i64) -> i64 [io]
+            print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_read_status: fn() -> i64 [read]   getenv: fn(name: String) -> String [read]   path_lookup: fn(name: String) -> String [read]   mktemp_dir: fn(prefix: String) -> String [io]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_remove_dir_all: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: u64, len: u64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: u64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   int128_to_string: fn(v: i128) -> String []   uint128_to_string: fn(v: u128) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   hash_u64: fn(x: u64) -> u64 []   hash_str: fn(s: String) -> u64 []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_poll_wait: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]   process_start_piped: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_write_stdin: fn(pid: i64, data: String) -> i64 [io]   process_close_stdin: fn(pid: i64) -> i64 [io]   process_read_line: fn(pid: i64, timeout_ms: i64) -> String [io]   process_read_status: fn(pid: i64) -> i64 [io]
 METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/String::from_raw_parts_copy/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   BTreeMap: BTreeMap::new/insert/get/contains/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! ?
@@ -1996,20 +1998,29 @@ For the `u8` target, the available narrowing source types are `i16`, `i32`,
 forms, for example `u16_to_u8_try`, `u16_to_u8_wrap`, and `u16_to_u8_sat`.
 
 For the `i32` target, the available narrowing source types are `i64`, `u32`,
-and `u64`, each providing all three forms: `i64_to_i32_try`/`_wrap`/`_sat`,
-`u32_to_i32_try`/`_wrap`/`_sat`, and `u64_to_i32_try`/`_wrap`/`_sat`.
+`u64`, `i128`, and `u128`, each providing all three forms:
+`i64_to_i32_try`/`_wrap`/`_sat`, `u32_to_i32_try`/`_wrap`/`_sat`,
+`u64_to_i32_try`/`_wrap`/`_sat`, `i128_to_i32_try`/`_wrap`/`_sat`, and
+`u128_to_i32_try`/`_wrap`/`_sat`.
 
 The remaining executable sub-64-bit targets expose these complete families:
 
 | Target | Narrowing source types |
 |--------|------------------------|
-| `i8`   | `i16`, `u16`, `i32`, `u32`, `i64`, `u64` |
-| `i16`  | `i32`, `u32`, `i64`, `u64` |
-| `u16`  | `i32`, `u32`, `i64`, `u64` |
-| `u32`  | `i64`, `u64` |
+| `i8`   | `i16`, `u16`, `i32`, `u32`, `i64`, `u64`, `i128`, `u128` |
+| `i16`  | `i32`, `u32`, `i64`, `u64`, `i128`, `u128` |
+| `u16`  | `i32`, `u32`, `i64`, `u64`, `i128`, `u128` |
+| `u32`  | `i64`, `u64`, `i128`, `u128` |
 
 Every listed source/target pair provides `_try`, `_wrap`, and `_sat`. Same-width
 signedness changes use `as`; they are bit reinterpretations, not narrowing.
+
+`i128` and `u128` appear in these tables only as sources: they are the widest
+integer types, so no other width narrows into them. The one conversion between
+them is the same-width sign change, which has `i128_to_u128_wrap`/`_sat` and
+`u128_to_i128_wrap`/`_sat` (no `_try`, because 128-bit enum payloads are not
+supported yet). There is no `i128`/`u128` to `i64`/`u64` narrowing family; use
+`int128_to_string`/`uint128_to_string` to observe a full 128-bit value.
 
 No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The
 operands must already have the same type. The compiler does not coerce
@@ -2750,13 +2761,21 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 #### Conversion
 
-**Formatting** uses two baselines; widen via `as` for narrower types:
+**Formatting** uses four baselines; widen via `as` for narrower types. The
+128-bit formatters exist because most 128-bit values do not fit `i64`/`u64`, so
+they cannot be formatted by narrowing first:
 
-| Function         | Signature                                  | Effects    |
-|------------------|--------------------------------------------|------------|
-| `int_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
-| `uint_to_string` | `fn(v: u64) -> String`                     | `[]`       |
-| `i64_to_string`  | `fn(v: i64) -> String` (alias of `int_to_string`) | `[]` |
+| Function            | Signature                                  | Effects    |
+|---------------------|--------------------------------------------|------------|
+| `int_to_string`     | `fn(v: i64) -> String`                     | `[]`       |
+| `uint_to_string`    | `fn(v: u64) -> String`                     | `[]`       |
+| `i64_to_string`     | `fn(v: i64) -> String` (alias of `int_to_string`) | `[]` |
+| `int128_to_string`  | `fn(v: i128) -> String`                    | `[]`       |
+| `uint128_to_string` | `fn(v: u128) -> String`                    | `[]`       |
+
+The 128-bit formatters render the full decimal value (`i128::MIN` is 40
+characters, `u128::MAX` is 39). The verifier has no model of their result, so a
+function that calls one is reported `Skipped` rather than proven.
 
 ```vow
 let small: u8 = 42;
@@ -7912,20 +7931,29 @@ For the `u8` target, the available narrowing source types are `i16`, `i32`,
 forms, for example `u16_to_u8_try`, `u16_to_u8_wrap`, and `u16_to_u8_sat`.
 
 For the `i32` target, the available narrowing source types are `i64`, `u32`,
-and `u64`, each providing all three forms: `i64_to_i32_try`/`_wrap`/`_sat`,
-`u32_to_i32_try`/`_wrap`/`_sat`, and `u64_to_i32_try`/`_wrap`/`_sat`.
+`u64`, `i128`, and `u128`, each providing all three forms:
+`i64_to_i32_try`/`_wrap`/`_sat`, `u32_to_i32_try`/`_wrap`/`_sat`,
+`u64_to_i32_try`/`_wrap`/`_sat`, `i128_to_i32_try`/`_wrap`/`_sat`, and
+`u128_to_i32_try`/`_wrap`/`_sat`.
 
 The remaining executable sub-64-bit targets expose these complete families:
 
 | Target | Narrowing source types |
 |--------|------------------------|
-| `i8`   | `i16`, `u16`, `i32`, `u32`, `i64`, `u64` |
-| `i16`  | `i32`, `u32`, `i64`, `u64` |
-| `u16`  | `i32`, `u32`, `i64`, `u64` |
-| `u32`  | `i64`, `u64` |
+| `i8`   | `i16`, `u16`, `i32`, `u32`, `i64`, `u64`, `i128`, `u128` |
+| `i16`  | `i32`, `u32`, `i64`, `u64`, `i128`, `u128` |
+| `u16`  | `i32`, `u32`, `i64`, `u64`, `i128`, `u128` |
+| `u32`  | `i64`, `u64`, `i128`, `u128` |
 
 Every listed source/target pair provides `_try`, `_wrap`, and `_sat`. Same-width
 signedness changes use `as`; they are bit reinterpretations, not narrowing.
+
+`i128` and `u128` appear in these tables only as sources: they are the widest
+integer types, so no other width narrows into them. The one conversion between
+them is the same-width sign change, which has `i128_to_u128_wrap`/`_sat` and
+`u128_to_i128_wrap`/`_sat` (no `_try`, because 128-bit enum payloads are not
+supported yet). There is no `i128`/`u128` to `i64`/`u64` narrowing family; use
+`int128_to_string`/`uint128_to_string` to observe a full 128-bit value.
 
 No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The
 operands must already have the same type. The compiler does not coerce
@@ -8666,13 +8694,21 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 #### Conversion
 
-**Formatting** uses two baselines; widen via `as` for narrower types:
+**Formatting** uses four baselines; widen via `as` for narrower types. The
+128-bit formatters exist because most 128-bit values do not fit `i64`/`u64`, so
+they cannot be formatted by narrowing first:
 
-| Function         | Signature                                  | Effects    |
-|------------------|--------------------------------------------|------------|
-| `int_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
-| `uint_to_string` | `fn(v: u64) -> String`                     | `[]`       |
-| `i64_to_string`  | `fn(v: i64) -> String` (alias of `int_to_string`) | `[]` |
+| Function            | Signature                                  | Effects    |
+|---------------------|--------------------------------------------|------------|
+| `int_to_string`     | `fn(v: i64) -> String`                     | `[]`       |
+| `uint_to_string`    | `fn(v: u64) -> String`                     | `[]`       |
+| `i64_to_string`     | `fn(v: i64) -> String` (alias of `int_to_string`) | `[]` |
+| `int128_to_string`  | `fn(v: i128) -> String`                    | `[]`       |
+| `uint128_to_string` | `fn(v: u128) -> String`                    | `[]`       |
+
+The 128-bit formatters render the full decimal value (`i128::MIN` is 40
+characters, `u128::MAX` is 39). The verifier has no model of their result, so a
+function that calls one is reported `Skipped` rather than proven.
 
 ```vow
 let small: u8 = 42;

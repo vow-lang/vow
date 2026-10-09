@@ -34,6 +34,8 @@ fn check_string_rows() -> i64 {
     if r == 0 { r = expect_tag(String::from("getenv"), BRT_STRING(), 95); }
     if r == 0 { r = expect_tag(String::from("path_lookup"), BRT_STRING(), 96); }
     if r == 0 { r = expect_tag(String::from("mktemp_dir"), BRT_STRING(), 97); }
+    if r == 0 { r = expect_tag(String::from("int128_to_string"), BRT_STRING(), 98); }
+    if r == 0 { r = expect_tag(String::from("uint128_to_string"), BRT_STRING(), 99); }
     r
 }
 

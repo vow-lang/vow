@@ -1,0 +1,38 @@
+// TEST: stdout "-170141183460469231731687303715884105728\n340282366920938463463374607431768211455\n-5|7\n3\n"
+module I128ToStringEscape
+
+fn render_signed(v: i128) -> String {
+    int128_to_string(v)
+}
+
+fn render_unsigned(v: u128) -> String {
+    uint128_to_string(v)
+}
+
+fn render_pair(a: i128, b: u128) -> String {
+    let left: String = int128_to_string(a);
+    left.push_str("|");
+    left.push_str(uint128_to_string(b));
+    left
+}
+
+fn collect(a: i128, b: u128) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    out.push(int128_to_string(a));
+    out.push(uint128_to_string(b));
+    out.push(render_pair(-5i128, 7u128));
+    out
+}
+
+fn main() -> i32 [io] {
+    print_str(render_signed(-170141183460469231731687303715884105727i128 - 1i128));
+    print_str("\n");
+    print_str(render_unsigned(340282366920938463463374607431768211455u128));
+    print_str("\n");
+    let parts: Vec<String> = collect(1i128, 2u128);
+    print_str(parts[2]);
+    print_str("\n");
+    print_i64(parts.len() as i64);
+    print_str("\n");
+    0
+}
