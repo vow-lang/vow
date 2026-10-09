@@ -1,0 +1,14 @@
+// TEST: replay-skipped 128-bit parameter
+// TEST: counterexample-fn "keep"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame callee
+// TEST: counterexample-violation "ensures result < 9223372036854775808"
+// TEST: counterexample-value x 9223372036854775808
+module U128LiteralAboveI64Max
+
+fn keep(x: u128) -> u128 vow {
+  requires: x == 9223372036854775808
+  ensures: result < 9223372036854775808
+} {
+  x
+}

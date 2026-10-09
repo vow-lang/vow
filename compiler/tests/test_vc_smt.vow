@@ -8,15 +8,15 @@ fn check_golden_script() -> i64 {
     let s: SmtScript = vc_script_new();
     vc_script_set_logic(s, String::from("QF_BV"));
     vc_script_set_option(s, String::from(":produce-models"), String::from("true"));
-    vc_script_declare_const(s, String::from("p0"), VC_SORT_BV64());
-    vc_script_declare_const(s, String::from("p1"), VC_SORT_BV64());
+    vc_script_declare_const(s, String::from("p0"), 64);
+    vc_script_declare_const(s, String::from("p1"), 64);
     let p0: i64 = vc_tm_var(ar, String::from("p0"));
     let p1: i64 = vc_tm_var(ar, String::from("p1"));
     let sum: i64 = vc_tm_app2(ar, VC_OP_BVADD(), p0, p1);
-    vc_script_define_fun(s, String::from("v2"), VC_SORT_BV64(), sum);
+    vc_script_define_fun(s, String::from("v2"), 64, sum);
     let v2: i64 = vc_tm_var(ar, String::from("v2"));
     let q: i64 = vc_tm_app2(ar, VC_OP_BVSDIV(), v2, p1);
-    vc_script_define_fun(s, String::from("v3"), VC_SORT_BV64(), q);
+    vc_script_define_fun(s, String::from("v3"), 64, q);
     let v3: i64 = vc_tm_var(ar, String::from("v3"));
     let lt: i64 = vc_tm_app2(ar, VC_OP_BVSLT(), v3, p0);
     vc_script_define_fun(s, String::from("v4"), VC_SORT_BOOL(), lt);
@@ -46,12 +46,12 @@ fn check_golden_script() -> i64 {
 fn check_constants() -> i64 {
     let ar: VcArena = vc_arena_new();
     let s: SmtScript = vc_script_new();
-    vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_bv_const(ar, -1), vc_tm_bv_const(ar, 7)));
-    vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_bv_const(ar, -9223372036854775807 - 1), vc_tm_bv_const(ar, 9223372036854775807)));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_bv(ar, 64, -1, 0), vc_tm_bv(ar, 64, 7, 0)));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_bv(ar, 64, -9223372036854775807 - 1, 0), vc_tm_bv(ar, 64, 9223372036854775807, 0)));
     vc_script_assert(s, vc_tm_bool_const(ar, true));
     vc_script_assert(s, vc_tm_bool_const(ar, false));
-    let want: String = String::from("(assert (= (_ bv18446744073709551615 64) (_ bv7 64)))\n");
-    want.push_str(String::from("(assert (= (_ bv9223372036854775808 64) (_ bv9223372036854775807 64)))\n"));
+    let want: String = String::from("(assert (= #xffffffffffffffff #x0000000000000007))\n");
+    want.push_str(String::from("(assert (= #x8000000000000000 #x7fffffffffffffff))\n"));
     want.push_str(String::from("(assert true)\n"));
     want.push_str(String::from("(assert false)\n"));
     if vc_smt_render(ar, s) != want { return 10; }
@@ -75,6 +75,21 @@ fn check_every_operator_has_a_symbol() -> i64 {
     ops.push(VC_OP_BVSGE());
     ops.push(VC_OP_AND());
     ops.push(VC_OP_OR());
+    ops.push(VC_OP_BVUDIV());
+    ops.push(VC_OP_BVUREM());
+    ops.push(VC_OP_BVULT());
+    ops.push(VC_OP_BVULE());
+    ops.push(VC_OP_BVUGT());
+    ops.push(VC_OP_BVUGE());
+    ops.push(VC_OP_BVSHL());
+    ops.push(VC_OP_BVLSHR());
+    ops.push(VC_OP_BVASHR());
+    ops.push(VC_OP_BVSADDO());
+    ops.push(VC_OP_BVUADDO());
+    ops.push(VC_OP_BVSSUBO());
+    ops.push(VC_OP_BVUSUBO());
+    ops.push(VC_OP_BVSMULO());
+    ops.push(VC_OP_BVUMULO());
     let syms: Vec<String> = Vec::new();
     syms.push(String::from("bvsub"));
     syms.push(String::from("bvmul"));
@@ -88,6 +103,21 @@ fn check_every_operator_has_a_symbol() -> i64 {
     syms.push(String::from("bvsge"));
     syms.push(String::from("and"));
     syms.push(String::from("or"));
+    syms.push(String::from("bvudiv"));
+    syms.push(String::from("bvurem"));
+    syms.push(String::from("bvult"));
+    syms.push(String::from("bvule"));
+    syms.push(String::from("bvugt"));
+    syms.push(String::from("bvuge"));
+    syms.push(String::from("bvshl"));
+    syms.push(String::from("bvlshr"));
+    syms.push(String::from("bvashr"));
+    syms.push(String::from("bvsaddo"));
+    syms.push(String::from("bvuaddo"));
+    syms.push(String::from("bvssubo"));
+    syms.push(String::from("bvusubo"));
+    syms.push(String::from("bvsmulo"));
+    syms.push(String::from("bvumulo"));
     let mut i: u64 = 0;
     while i < ops.len() {
         let s: SmtScript = vc_script_new();
@@ -136,9 +166,37 @@ fn check_unmapped_operator_is_not_a_known_symbol() -> i64 {
     0
 }
 
+fn check_widths_and_extensions() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let s: SmtScript = vc_script_new();
+    vc_script_declare_const(s, String::from("p0"), 8);
+    vc_script_declare_const(s, String::from("p1"), 128);
+    let x8: i64 = vc_tm_var(ar, String::from("p0"));
+    let x128: i64 = vc_tm_var(ar, String::from("p1"));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), x8, vc_tm_bv(ar, 8, -2, 0)));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_BVULT(), x128, vc_tm_bv(ar, 128, 1, -9223372036854775807 - 1)));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_BVULE(), vc_tm_ext(ar, VC_EXT_SIGN(), 120, x8), x128));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_ext(ar, VC_EXT_ZERO(), 24, x8), vc_tm_bv(ar, 32, 255, 0)));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_ext(ar, VC_EXT_LOW(), 16, x128), vc_tm_bv(ar, 16, 65535, 0)));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_BVASHR(), x8, x8));
+    vc_script_assert(s, vc_tm_app1(ar, VC_OP_NOT(), vc_tm_app2(ar, VC_OP_BVSMULO(), x8, x8)));
+    let want: String = String::from("(declare-const p0 (_ BitVec 8))\n");
+    want.push_str(String::from("(declare-const p1 (_ BitVec 128))\n"));
+    want.push_str(String::from("(assert (= p0 #xfe))\n"));
+    want.push_str(String::from("(assert (bvult p1 #x80000000000000000000000000000001))\n"));
+    want.push_str(String::from("(assert (bvule ((_ sign_extend 120) p0) p1))\n"));
+    want.push_str(String::from("(assert (= ((_ zero_extend 24) p0) #x000000ff))\n"));
+    want.push_str(String::from("(assert (= ((_ extract 15 0) p1) #xffff))\n"));
+    want.push_str(String::from("(assert (bvashr p0 p0))\n"));
+    want.push_str(String::from("(assert (not (bvsmulo p0 p0)))\n"));
+    if vc_smt_render(ar, s) != want { return 90; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_golden_script();
     if r == 0 { r = check_constants(); }
+    if r == 0 { r = check_widths_and_extensions(); }
     if r == 0 { r = check_every_operator_has_a_symbol(); }
     if r == 0 { r = check_prefix_is_independent(); }
     if r == 0 { r = check_get_value_without_names_is_omitted(); }

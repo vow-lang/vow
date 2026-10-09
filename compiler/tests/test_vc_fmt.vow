@@ -1,0 +1,46 @@
+module TestVcFmt
+
+use ir
+use vc_fmt
+
+fn check_narrow_types() -> i64 {
+    if vc_format_int(ITY_U8(), 255, 0) != String::from("255") { return 1; }
+    if vc_format_int(ITY_I8(), 255, 0) != String::from("-1") { return 2; }
+    if vc_format_int(ITY_I8(), 128, 0) != String::from("-128") { return 3; }
+    if vc_format_int(ITY_I8(), 127, 0) != String::from("127") { return 4; }
+    if vc_format_int(ITY_U16(), 65535, 0) != String::from("65535") { return 5; }
+    if vc_format_int(ITY_I16(), 32768, 0) != String::from("-32768") { return 6; }
+    if vc_format_int(ITY_U32(), 4294967295, 0) != String::from("4294967295") { return 7; }
+    if vc_format_int(ITY_I32(), 2147483648, 0) != String::from("-2147483648") { return 8; }
+    if vc_format_int(ITY_I32(), 0, 0) != String::from("0") { return 9; }
+    0
+}
+
+fn check_64_bit() -> i64 {
+    if vc_format_int(ITY_I64(), -1, 0) != String::from("-1") { return 10; }
+    if vc_format_int(ITY_U64(), -1, 0) != String::from("18446744073709551615") { return 11; }
+    if vc_format_int(ITY_U64(), -9223372036854775807 - 1, 0) != String::from("9223372036854775808") { return 12; }
+    if vc_format_int(ITY_I64(), -9223372036854775807 - 1, 0) != String::from("-9223372036854775808") { return 13; }
+    0
+}
+
+fn check_128_bit() -> i64 {
+    if vc_format_int(ITY_U128(), 0, 0) != String::from("0") { return 20; }
+    if vc_format_int(ITY_U128(), 7, 0) != String::from("7") { return 21; }
+    if vc_format_int(ITY_U128(), -1, -1) != String::from("340282366920938463463374607431768211455") { return 22; }
+    if vc_format_int(ITY_I128(), -1, -1) != String::from("-1") { return 23; }
+    if vc_format_int(ITY_I128(), 0, -9223372036854775807 - 1) != String::from("-170141183460469231731687303715884105728") { return 24; }
+    if vc_format_int(ITY_I128(), -1, 9223372036854775807) != String::from("170141183460469231731687303715884105727") { return 25; }
+    if vc_format_int(ITY_U128(), 0, 1) != String::from("18446744073709551616") { return 26; }
+    if vc_format_int(ITY_I128(), 0, -1) != String::from("-18446744073709551616") { return 27; }
+    if vc_format_int(ITY_U128(), 1000000000, 0) != String::from("1000000000") { return 28; }
+    if vc_format_int(ITY_U128(), 1000000001, 0) != String::from("1000000001") { return 29; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_narrow_types();
+    if r == 0 { r = check_64_bit(); }
+    if r == 0 { r = check_128_bit(); }
+    i64_to_i32_wrap(r)
+}

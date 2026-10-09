@@ -1,0 +1,12 @@
+// TEST: counterexample-fn "bump"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame callee
+// TEST: counterexample-violation "ensures result > 100"
+module CheckedAddContractFalse
+
+fn bump(x: i64) -> i64 vow {
+  requires: x > 0
+  ensures: result > 100
+} {
+  x +! 1
+}

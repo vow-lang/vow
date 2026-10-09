@@ -1,0 +1,13 @@
+// TEST: replay-skipped shift-count obligation
+// TEST: counterexample-fn "shift"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame none
+// TEST: counterexample-violation "shift amount exceeds the operand's bit width"
+module ShiftCountNegative
+
+fn shift(x: i64, n: i64) -> i64 vow {
+  requires: n < 64
+  ensures: result == result
+} {
+  x >> n
+}

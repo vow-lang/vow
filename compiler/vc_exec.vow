@@ -3,29 +3,38 @@ module VcExec
 use ir
 use vc_term
 use vc_smt
+use vc_int
 use vc_gate
 use vc_flow
 use ir_dominance
 
-// Symbolic execution of an acyclic i64/Bool function (one that
+// Symbolic execution of an acyclic integer/Bool function (one that
 // `vc_skip_reason` accepts) into proof obligations. Blocks are walked in
 // reverse postorder (`vc_flow` holds the path conditions and merges). Each IR
 // value becomes a `define-fun`; each `requires` is an assumption for the claims
-// that follow it; each `ensures` and each division/remainder abort condition is
-// a claim, in walk order. A claim is only asked on the paths that reach it: its
-// query asserts the block's path condition next to the negated goal, and an
+// that follow it. A claim is only asked on the paths that reach it: its query
+// asserts the block's path condition next to the negated goal, and an
 // assumption made in a block is the implication `path condition => assumption`.
-// SMT division is total, so the aborts the language specifies (zero divisor;
-// signed MIN / -1 for `/`) are separate claims, and a later claim always
-// assumes the guards of earlier ones on its path: an aborting run never
-// reaches it.
+// SMT division and shifts are total, so the aborts the language specifies are
+// separate claims, and a later claim always assumes the guards of earlier ones
+// on its path: an aborting run never reaches it. Two kinds of abort:
+//
+//   hard  wrapping `/`, `%` (zero divisor, signed MIN / -1) and a shift count
+//         outside `0 <= count < width`: a counterexample fails the function.
+//   soft  checked `+! -! *! /! %!`: the language aborts on overflow, so the
+//         contract is judged on returning runs only. A counterexample to a soft
+//         claim is not a failure; it means the abort is reachable and the
+//         driver reports it as an `ArithOverflowReachable` warning.
 
 fn VC_CLAIM_ENSURES() -> i64 { 0 }
 fn VC_CLAIM_DIV_ZERO() -> i64 { 1 }
 fn VC_CLAIM_DIV_OVERFLOW() -> i64 { 2 }
+fn VC_CLAIM_SHIFT_COUNT() -> i64 { 3 }
+fn VC_CLAIM_ARITH() -> i64 { 4 }
 
 fn VC_LABEL_DIV_ZERO() -> String { String::from("division by zero") }
 fn VC_LABEL_DIV_OVERFLOW() -> String { String::from("division overflow") }
+fn VC_LABEL_SHIFT_COUNT() -> String { String::from("integer shift count") }
 
 // One shared command list (`header`) and one append-only assumption list serve
 // every claim: claim `k` is the first `header_lens[k]` header commands, the
@@ -38,11 +47,15 @@ struct VcClaims {
     kinds: Vec<i64>,
     vow_ids: Vec<i64>,
     labels: Vec<String>,
+    ostarts: Vec<i64>,
+    olens: Vec<i64>,
     negated_goals: Vec<i64>,
     header_lens: Vec<i64>,
     assumed_lens: Vec<i64>,
     model_names: Vec<String>,
     model_params: Vec<i64>,
+    model_tys: Vec<i64>,
+    model_widths: Vec<i64>,
 }
 
 fn vc_value_name(id: i64) -> String {
@@ -57,36 +70,13 @@ fn vc_param_name(k: i64) -> String {
     out
 }
 
-fn vc_smt_op(op: i64) -> i64 {
-    if op == IOP_WADD() { return VC_OP_BVADD(); }
-    if op == IOP_WSUB() { return VC_OP_BVSUB(); }
-    if op == IOP_WMUL() { return VC_OP_BVMUL(); }
-    if op == IOP_WDIV() { return VC_OP_BVSDIV(); }
-    if op == IOP_WREM() { return VC_OP_BVSREM(); }
-    if op == IOP_BITAND() { return VC_OP_BVAND(); }
-    if op == IOP_BITOR() { return VC_OP_BVOR(); }
-    if op == IOP_BITXOR() { return VC_OP_BVXOR(); }
-    if op == IOP_EQ() { return VC_OP_EQ(); }
-    if op == IOP_NE() { return VC_OP_DISTINCT(); }
-    if op == IOP_LT() { return VC_OP_BVSLT(); }
-    if op == IOP_LE() { return VC_OP_BVSLE(); }
-    if op == IOP_GT() { return VC_OP_BVSGT(); }
-    if op == IOP_GE() { return VC_OP_BVSGE(); }
-    if op == IOP_AND() { return VC_OP_AND(); }
-    if op == IOP_OR() { return VC_OP_OR(); }
-    -1
-}
-
-fn vc_sort_of(ty: i64) -> i64 {
-    if ty == ITY_BOOL() { return VC_SORT_BOOL(); }
-    VC_SORT_BV64()
-}
-
-fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, pc: i64, goal: i64) {
+fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, pc: i64, goal: i64, ostart: i64, olen: i64) {
     let hdr: SmtScript = cs.header;
     cs.kinds.push(kind);
     cs.vow_ids.push(vow_id);
     cs.labels.push(label);
+    cs.ostarts.push(ostart);
+    cs.olens.push(olen);
     let ar: VcArena = cs.arena;
     let negated: i64 = vc_tm_app1(ar, VC_OP_NOT(), goal);
     cs.negated_goals.push(vc_tm_and(ar, pc, negated));
@@ -96,6 +86,13 @@ fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, pc: i64, go
 
 fn vc_assume(cs: VcClaims, pc: i64, t: i64) {
     cs.assumed.push(vc_tm_implies(cs.arena, pc, t));
+}
+
+// A claim that `goal` holds on the paths reaching `inst`, then the assumption
+// that it does.
+fn vc_guard(cs: VcClaims, kind: i64, label: String, pc: i64, goal: i64, inst: IrInst) {
+    vc_add_claim(cs, kind, -1, label, pc, goal, inst.ostart, inst.olen);
+    vc_assume(cs, pc, goal);
 }
 
 // The self-contained query that decides claim `k`.
@@ -121,35 +118,86 @@ struct VcWalk {
     var_of: Vec<i64>,
     def_of: Vec<i64>,
     tys: Vec<i64>,
+    lits: Vec<i64>,
+    dvs: Vec<i64>,
 }
 
 fn vc_define(w: VcWalk, inst: IrInst, t: i64) {
     let cs: VcClaims = w.cs;
     let ar: VcArena = cs.arena;
-    vc_script_define_fun(cs.header, vc_value_name(inst.id), vc_sort_of(inst.ty), t);
+    vc_script_define_fun(cs.header, vc_value_name(inst.id), vc_ty_sort(inst.ty), t);
     w.def_of[inst.id as u64] = t;
     w.var_of[inst.id as u64] = vc_tm_var(ar, vc_value_name(inst.id));
 }
 
-fn vc_arith_claims(w: VcWalk, inst: IrInst, pc: i64) {
+// The term for an operand read at type `at`: an `i64` literal against another
+// integer type is rebuilt at that type, sign-extended into the high limb only
+// for a signed `at` (the checker has range-checked it, so an unsigned type never
+// sees a negative literal).
+fn vc_operand_at(w: VcWalk, at: i64, id: i64) -> i64 {
+    let term: i64 = w.var_of[id as u64];
+    if w.tys[id as u64] == at || w.lits[id as u64] != 1 { return term; }
+    let mut hi: i64 = 0;
+    if vc_ty_signed(at) { hi = w.dvs[id as u64] >> 63; }
+    vc_int_const(w.cs.arena, at, w.dvs[id as u64], hi)
+}
+
+// Value of an arithmetic/bitwise instruction, plus its abort guards.
+fn vc_exec_arith(w: VcWalk, inst: IrInst, pc: i64) -> i64 {
     let cs: VcClaims = w.cs;
     let ar: VcArena = cs.arena;
+    let op: i64 = inst.op;
+    let ty: i64 = inst.ty;
+    let signed: bool = vc_ty_signed(ty);
+    let a: i64 = vc_operand_at(w, ty, inst.args[0]);
+    let b: i64 = vc_operand_at(w, ty, inst.args[1]);
+    let value: i64 = vc_tm_app2(ar, vc_arith_smt_op(op, signed), a, b);
+    if op == IOP_WDIV() || op == IOP_WREM() || op == IOP_CDIV() || op == IOP_CREM() {
+        let soft: bool = op == IOP_CDIV() || op == IOP_CREM();
+        let zero_kind: i64 = { if soft { VC_CLAIM_ARITH() } else { VC_CLAIM_DIV_ZERO() } };
+        let zero_label: String = { if soft { VC_CAUSE_DIV_ZERO() } else { VC_LABEL_DIV_ZERO() } };
+        vc_guard(cs, zero_kind, zero_label, pc, vc_div_nonzero(ar, ty, b), inst);
+        if (op == IOP_WDIV() || op == IOP_CDIV()) && signed {
+            let ovf_kind: i64 = { if soft { VC_CLAIM_ARITH() } else { VC_CLAIM_DIV_OVERFLOW() } };
+            let ovf_label: String = { if soft { VC_CAUSE_DIV_OVERFLOW() } else { VC_LABEL_DIV_OVERFLOW() } };
+            vc_guard(cs, ovf_kind, ovf_label, pc, vc_div_no_overflow(ar, ty, a, b), inst);
+        }
+    } else if vc_is_checked_addsubmul(op) {
+        vc_guard(cs, VC_CLAIM_ARITH(), vc_checked_cause(op), pc, vc_no_overflow(ar, op, signed, a, b), inst);
+    }
+    value
+}
+
+// Value of a defined, non-control instruction.
+fn vc_exec_value(w: VcWalk, inst: IrInst, pc: i64) -> i64 {
+    let cs: VcClaims = w.cs;
+    let ar: VcArena = cs.arena;
+    let op: i64 = inst.op;
+    if vc_is_const_int_op(op) {
+        let mut hi: i64 = 0;
+        if inst.ty == ITY_I128() || inst.ty == ITY_U128() { hi = inst.dv2; }
+        return vc_int_const(ar, inst.ty, inst.dv, hi);
+    }
+    if op == IOP_CONST_BOOL() { return vc_tm_bool_const(ar, inst.dv != 0); }
+    if op == IOP_GET_ARG() { return vc_tm_var(ar, vc_param_name(inst.dv)); }
+    if op == IOP_NOT() { return vc_tm_app1(ar, VC_OP_NOT(), w.var_of[inst.args[0] as u64]); }
+    if op == IOP_INT_CAST() { return vc_cast(ar, inst.dv, inst.ty, w.var_of[inst.args[0] as u64]); }
     let lhs: i64 = w.var_of[inst.args[0] as u64];
     let rhs: i64 = w.var_of[inst.args[1] as u64];
-    let zero: i64 = vc_tm_bv_const(ar, 0);
-    let nonzero: i64 = vc_tm_app2(ar, VC_OP_DISTINCT(), rhs, zero);
-    vc_add_claim(cs, VC_CLAIM_DIV_ZERO(), -1, VC_LABEL_DIV_ZERO(), pc, nonzero);
-    vc_assume(cs, pc, nonzero);
-    if inst.op == IOP_WDIV() {
-        let min: i64 = vc_tm_bv_const(ar, -9223372036854775807 - 1);
-        let minus_one: i64 = vc_tm_bv_const(ar, -1);
-        let hits_min: i64 = vc_tm_app2(ar, VC_OP_EQ(), lhs, min);
-        let by_minus_one: i64 = vc_tm_app2(ar, VC_OP_EQ(), rhs, minus_one);
-        let overflow: i64 = vc_tm_app2(ar, VC_OP_AND(), hits_min, by_minus_one);
-        let no_overflow: i64 = vc_tm_app1(ar, VC_OP_NOT(), overflow);
-        vc_add_claim(cs, VC_CLAIM_DIV_OVERFLOW(), -1, VC_LABEL_DIV_OVERFLOW(), pc, no_overflow);
-        vc_assume(cs, pc, no_overflow);
+    if op == IOP_SHL() || op == IOP_SHR() {
+        let count_ty: i64 = w.tys[inst.args[1] as u64];
+        vc_guard(cs, VC_CLAIM_SHIFT_COUNT(), VC_LABEL_SHIFT_COUNT(), pc, vc_shift_count_ok(ar, inst.ty, count_ty, rhs), inst);
+        return vc_shift(ar, op, inst.ty, count_ty, lhs, rhs);
     }
+    if op == IOP_AND() { return vc_tm_app2(ar, VC_OP_AND(), lhs, rhs); }
+    if op == IOP_OR() { return vc_tm_app2(ar, VC_OP_OR(), lhs, rhs); }
+    if vc_is_cmp_op(op) {
+        let at: i64 = vc_cmp_operand_ty(inst, w.tys, w.lits);
+        let a: i64 = vc_operand_at(w, at, inst.args[0]);
+        let b: i64 = vc_operand_at(w, at, inst.args[1]);
+        return vc_tm_app2(ar, vc_cmp_smt_op(op, vc_ty_signed(at)), a, b);
+    }
+    vc_exec_arith(w, inst, pc)
 }
 
 // Outcome of branching on `cond_id` at a block with path condition `pc` and
@@ -206,10 +254,10 @@ fn vc_walk_branch(w: VcWalk, inst: IrInst, bi: u64, then_idx: i64, else_idx: i64
 
 fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     let cs: VcClaims = w.cs;
-    let ar: VcArena = cs.arena;
     let fl: VcFlow = w.fl;
     let pc: i64 = fl.block_pc[bi];
     let op: i64 = inst.op;
+    if inst.id >= 0 { w.dvs[inst.id as u64] = inst.dv; }
     // Unit carries no value: a Unit constant, Phi or Upsilon defines nothing.
     if op == IOP_CONST_UNIT() || (op == IOP_PHI() && inst.ty == ITY_UNIT()) {
         return;
@@ -217,33 +265,20 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     if op == IOP_UPSILON() && w.tys[inst.args[0] as u64] == ITY_UNIT() {
         return;
     }
-    if op == IOP_CONST_I64() {
-        vc_define(w, inst, vc_tm_bv_const(ar, inst.dv));
-    } else if op == IOP_CONST_BOOL() {
-        vc_define(w, inst, vc_tm_bool_const(ar, inst.dv != 0));
-    } else if op == IOP_GET_ARG() {
-        vc_define(w, inst, vc_tm_var(ar, vc_param_name(inst.dv)));
-    } else if op == IOP_NOT() {
-        vc_define(w, inst, vc_tm_app1(ar, VC_OP_NOT(), w.var_of[inst.args[0] as u64]));
-    } else if op == IOP_PHI() {
-        vc_define(w, inst, vc_flow_phi_value(fl, ar, bi, inst.id));
+    if op == IOP_PHI() {
+        vc_define(w, inst, vc_flow_phi_value(fl, cs.arena, bi, inst.id));
     } else if op == IOP_UPSILON() {
         vc_flow_add_upsilon(fl, inst.dv, bi as i64, w.var_of[inst.args[0] as u64]);
     } else if op == IOP_VOW_REQ() {
         vc_assume(cs, pc, w.var_of[inst.args[0] as u64]);
     } else if op == IOP_VOW_ENS() {
-        vc_add_claim(cs, VC_CLAIM_ENSURES(), inst.dv, String::from(""), pc, w.var_of[inst.args[0] as u64]);
+        vc_add_claim(cs, VC_CLAIM_ENSURES(), inst.dv, String::from(""), pc, w.var_of[inst.args[0] as u64], inst.ostart, inst.olen);
     } else if op == IOP_JUMP() {
         vc_flow_add_edge(fl, succ[bi * 2] as u64, bi as i64, pc, fl.block_foff[bi], fl.block_flen[bi]);
     } else if op == IOP_BRANCH() {
         vc_walk_branch(w, inst, bi, succ[bi * 2], succ[bi * 2 + 1]);
-    } else if op != IOP_RETURN() {
-        let lhs: i64 = w.var_of[inst.args[0] as u64];
-        let rhs: i64 = w.var_of[inst.args[1] as u64];
-        if op == IOP_WDIV() || op == IOP_WREM() {
-            vc_arith_claims(w, inst, pc);
-        }
-        vc_define(w, inst, vc_tm_app2(ar, vc_smt_op(op), lhs, rhs));
+    } else if op != IOP_RETURN() && op != IOP_UNREACHABLE() {
+        vc_define(w, inst, vc_exec_value(w, inst, pc));
     }
 }
 
@@ -259,20 +294,26 @@ fn vc_claims(f: IrFunction) -> VcClaims {
         kinds: Vec::new(),
         vow_ids: Vec::new(),
         labels: Vec::new(),
+        ostarts: Vec::new(),
+        olens: Vec::new(),
         negated_goals: Vec::new(),
         header_lens: Vec::new(),
         assumed_lens: Vec::new(),
         model_names: Vec::new(),
         model_params: Vec::new(),
+        model_tys: Vec::new(),
+        model_widths: Vec::new(),
     };
     vc_script_set_logic(hdr, String::from("QF_BV"));
     vc_script_set_option(hdr, String::from(":produce-models"), String::from("true"));
     let mut pi: u64 = 0;
     while pi < f.params.len() {
-        if f.params[pi] == ITY_I64() {
-            vc_script_declare_const(hdr, vc_param_name(pi as i64), VC_SORT_BV64());
+        if vc_ty_is_int(f.params[pi]) {
+            vc_script_declare_const(hdr, vc_param_name(pi as i64), vc_ty_sort(f.params[pi]));
             cs.model_names.push(vc_param_name(pi as i64));
             cs.model_params.push(pi as i64);
+            cs.model_tys.push(f.params[pi]);
+            cs.model_widths.push(vc_ty_bits(f.params[pi]));
         }
         pi = pi + 1;
     }
@@ -285,6 +326,8 @@ fn vc_claims(f: IrFunction) -> VcClaims {
         var_of: dom_fill(tys.len(), -1),
         def_of: dom_fill(tys.len(), -1),
         tys: tys,
+        lits: vc_literal_table(f, tys),
+        dvs: dom_fill(tys.len(), 0),
     };
     let id_to_idx: Vec<i64> = dom_block_id_table(f);
     let succ: Vec<i64> = dom_successors(f, id_to_idx);

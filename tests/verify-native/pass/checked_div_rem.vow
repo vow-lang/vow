@@ -1,0 +1,21 @@
+module CheckedDivRem
+
+fn halve(x: u16, d: u16) -> u16 vow {
+  requires: d > 0
+  ensures: result <= x
+} {
+  x /! d
+}
+
+fn rest(x: i8, d: i8) -> i8 vow {
+  requires: d > 0
+  ensures: result < d
+} {
+  x %! d
+}
+
+fn main() -> i32 [io] {
+  print_i64(halve(9, 2) as i64);
+  print_i64(rest(9, 2) as i64);
+  0
+}

@@ -14,14 +14,21 @@ fn VC_ANS_ERROR() -> i64 { 3 }
 fn VC_ANS_TIMEOUT() -> i64 { 4 }
 fn VC_ANS_NOT_FOUND() -> i64 { 5 }
 
+// A parsed bit-vector literal: `value` is the low 64 bits, `high` the next 64.
 struct VcParsed {
     ok: i64,
     value: i64,
+    high: i64,
 }
 
 struct VcModel {
     ok: i64,
     values: Vec<i64>,
+    highs: Vec<i64>,
+}
+
+fn vc_parsed_bad() -> VcParsed {
+    VcParsed { ok: 0, value: 0, high: 0 }
 }
 
 fn vc_first_line(s: String) -> String {
@@ -62,10 +69,14 @@ fn vc_value_end_ok(out: String, i: u64) -> bool {
     is_ws(b) || b == 41
 }
 
-fn vc_parse_radix_value(out: String, start: u64, base: u64, want_digits: u64) -> VcParsed {
+// `want_digits` digits of `bits` bits each, starting at `start`, accumulated
+// into a 128-bit value. The literal must end at whitespace, `)` or the end.
+fn vc_parse_radix_value(out: String, start: u64, bits: u64, want_digits: u64) -> VcParsed {
     let n: u64 = out.len();
+    let base: u64 = 1u64 << bits;
     let mut j: u64 = start;
-    let mut acc: u64 = 0;
+    let mut lo: u64 = 0;
+    let mut hi: u64 = 0;
     let mut digits: u64 = 0;
     let mut going: bool = true;
     while j < n && going {
@@ -73,45 +84,50 @@ fn vc_parse_radix_value(out: String, start: u64, base: u64, want_digits: u64) ->
         if d < 0 {
             going = false;
         } else {
-            acc = acc * base + d as u64;
+            hi = (hi << bits) | (lo >> (64u64 - bits));
+            lo = (lo << bits) | d as u64;
             digits = digits + 1;
             j = j + 1;
         }
     }
     if digits != want_digits || !vc_value_end_ok(out, j) {
-        return VcParsed { ok: 0, value: 0 };
+        return vc_parsed_bad();
     }
-    VcParsed { ok: 1, value: acc as i64 }
+    VcParsed { ok: 1, value: lo as i64, high: hi as i64 }
 }
 
-// `(_ bv<N> 64)` starting at the opening parenthesis.
-fn vc_parse_bv_app(out: String, start: u64) -> VcParsed {
+// `(_ bv<N> W)` starting at the opening parenthesis, for W up to 64 bits.
+fn vc_parse_bv_app(out: String, start: u64, width: i64) -> VcParsed {
     let prefix: String = String::from("(_ bv");
     let n: u64 = out.len();
     let plen: u64 = prefix.len();
-    if start + plen > n || out.substring(start, start + plen) != prefix {
-        return VcParsed { ok: 0, value: 0 };
+    if width > 64 || start + plen > n || out.substring(start, start + plen) != prefix {
+        return vc_parsed_bad();
     }
     let mut j: u64 = start + plen;
     while j < n && out.byte_at(j) >= 48 && out.byte_at(j) <= 57 {
         j = j + 1;
     }
     if j == start + plen {
-        return VcParsed { ok: 0, value: 0 };
+        return vc_parsed_bad();
     }
-    let tail: String = String::from(" 64)");
+    let tail: String = String::from(" ");
+    tail.push_str(i64_to_string(width));
+    tail.push_str(String::from(")"));
     if j + tail.len() > n || out.substring(j, j + tail.len()) != tail {
-        return VcParsed { ok: 0, value: 0 };
+        return vc_parsed_bad();
     }
     match out.substring(start + plen, j).parse_u64() {
-        Option::Some(v) => VcParsed { ok: 1, value: v as i64 },
-        Option::None => VcParsed { ok: 0, value: 0 },
+        Option::Some(v) => VcParsed { ok: 1, value: v as i64, high: 0 },
+        Option::None => vc_parsed_bad(),
     }
 }
 
-// A 64-bit bit-vector literal at `pos` (after optional whitespace): `#b`, `#x`
-// or `(_ bvN 64)`, read as a two's-complement i64.
-fn vc_parse_value_at(out: String, pos: u64) -> VcParsed {
+// A `width`-bit bit-vector literal at `pos` (after optional whitespace):
+// `#b` with `width` digits, `#x` with `width / 4` digits, or `(_ bvN width)`
+// for widths up to 64. Anything else, including a literal of another width,
+// is not ok.
+fn vc_parse_value_at(out: String, pos: u64, width: i64) -> VcParsed {
     let n: u64 = out.len();
     let mut i: u64 = pos;
     while i < n && is_ws(out.byte_at(i)) {
@@ -119,20 +135,22 @@ fn vc_parse_value_at(out: String, pos: u64) -> VcParsed {
     }
     if i + 2 < n && out.byte_at(i) == 35 {
         let kind: i64 = out.byte_at(i + 1);
-        if kind == 98 { return vc_parse_radix_value(out, i + 2, 2, 64); }
-        if kind == 120 { return vc_parse_radix_value(out, i + 2, 16, 16); }
-        return VcParsed { ok: 0, value: 0 };
+        if kind == 98 { return vc_parse_radix_value(out, i + 2, 1, width as u64); }
+        if kind == 120 { return vc_parse_radix_value(out, i + 2, 4, (width / 4) as u64); }
+        return vc_parsed_bad();
     }
     if i < n && out.byte_at(i) == 40 {
-        return vc_parse_bv_app(out, i);
+        return vc_parse_bv_app(out, i, width);
     }
-    VcParsed { ok: 0, value: 0 }
+    vc_parsed_bad()
 }
 
-// Values for `names`, in order, from a `get-value` answer. Every name must be
-// present with a well-formed 64-bit value; otherwise `ok` is 0.
-fn vc_parse_model(out: String, names: Vec<String>) -> VcModel {
+// Values for `names`, in order, from a `get-value` answer; `widths[k]` is the
+// declared width of `names[k]`. Every name must be present with a well-formed
+// value of that width; otherwise `ok` is 0.
+fn vc_parse_model(out: String, names: Vec<String>, widths: Vec<i64>) -> VcModel {
     let values: Vec<i64> = Vec::new();
+    let highs: Vec<i64> = Vec::new();
     let mut ok: i64 = 1;
     let mut k: u64 = 0;
     while k < names.len() {
@@ -143,14 +161,16 @@ fn vc_parse_model(out: String, names: Vec<String>) -> VcModel {
         if at < 0 {
             ok = 0;
             values.push(0);
+            highs.push(0);
         } else {
-            let p: VcParsed = vc_parse_value_at(out, at as u64 + key.len());
+            let p: VcParsed = vc_parse_value_at(out, at as u64 + key.len(), widths[k]);
             if p.ok == 0 { ok = 0; }
             values.push(p.value);
+            highs.push(p.high);
         }
         k = k + 1;
     }
-    VcModel { ok: ok, values: values }
+    VcModel { ok: ok, values: values, highs: highs }
 }
 
 // ---------------------------------------------------------------------------
@@ -160,15 +180,16 @@ fn vc_parse_model(out: String, names: Vec<String>) -> VcModel {
 struct VcSolverAnswer {
     verdict: i64,
     values: Vec<i64>,
+    highs: Vec<i64>,
     raw: String,
 }
 
-fn vc_answer(verdict: i64, values: Vec<i64>, raw: String) -> VcSolverAnswer {
-    VcSolverAnswer { verdict: verdict, values: values, raw: raw }
+fn vc_answer(verdict: i64, values: Vec<i64>, highs: Vec<i64>, raw: String) -> VcSolverAnswer {
+    VcSolverAnswer { verdict: verdict, values: values, highs: highs, raw: raw }
 }
 
 fn vc_answer_plain(verdict: i64, raw: String) -> VcSolverAnswer {
-    vc_answer(verdict, Vec::new(), raw)
+    vc_answer(verdict, Vec::new(), Vec::new(), raw)
 }
 
 // Path of the `bitwuzla` executable on $PATH, or "".
@@ -178,7 +199,7 @@ fn vc_solver_locate() -> String [read] {
 
 // Classify a finished solver run. `exit_code` is the child's exit status;
 // -2 is the runtime's watchdog kill and -1 a spawn failure or a signal.
-fn vc_classify_run(exit_code: i64, stdout: String, stderr: String, names: Vec<String>) -> VcSolverAnswer {
+fn vc_classify_run(exit_code: i64, stdout: String, stderr: String, names: Vec<String>, widths: Vec<i64>) -> VcSolverAnswer {
     let raw: String = String::from(stdout);
     raw.push_str(stderr);
     if exit_code == -2 { return vc_answer_plain(VC_ANS_TIMEOUT(), raw); }
@@ -186,15 +207,15 @@ fn vc_classify_run(exit_code: i64, stdout: String, stderr: String, names: Vec<St
     if stderr.contains(String::from("[error]")) { return vc_answer_plain(VC_ANS_ERROR(), raw); }
     let verdict: i64 = vc_parse_check_sat(stdout);
     if verdict != VC_ANS_SAT() { return vc_answer_plain(verdict, raw); }
-    let model: VcModel = vc_parse_model(stdout, names);
+    let model: VcModel = vc_parse_model(stdout, names, widths);
     if model.ok == 0 { return vc_answer_plain(VC_ANS_ERROR(), raw); }
-    vc_answer(VC_ANS_SAT(), model.values, raw)
+    vc_answer(VC_ANS_SAT(), model.values, model.highs, raw)
 }
 
 fn vc_solver_args(file: String) -> Vec<String> {
     let args: Vec<String> = Vec::new();
     args.push(String::from("--bv-output-format"));
-    args.push(String::from("10"));
+    args.push(String::from("2"));
     args.push(file);
     args
 }
@@ -204,7 +225,7 @@ fn vc_solver_args(file: String) -> Vec<String> {
 // non-positive budget is a timeout without spawning. The query lives in a
 // private temp directory that is removed on every path, and the child's
 // process-table entry is always evicted.
-fn vc_solver_check(bin: String, query: String, names: Vec<String>, budget_ms: i64) -> VcSolverAnswer [io, read, write] {
+fn vc_solver_check(bin: String, query: String, names: Vec<String>, widths: Vec<i64>, budget_ms: i64) -> VcSolverAnswer [io, read, write] {
     if budget_ms <= 0 {
         return vc_answer_plain(VC_ANS_TIMEOUT(), String::from("time budget exhausted"));
     }
@@ -231,5 +252,5 @@ fn vc_solver_check(bin: String, query: String, names: Vec<String>, budget_ms: i6
     process_kill(handle);
     fs_remove(file);
     fs_remove_dir(dir);
-    vc_classify_run(exit_code, stdout, stderr, names)
+    vc_classify_run(exit_code, stdout, stderr, names, widths)
 }

@@ -1,0 +1,32 @@
+module ContractLiterals
+
+fn inc(x: u64) -> u64 vow {
+  ensures: result == x + 1
+} {
+  x + 1
+}
+
+fn below_half(x: u64) -> u64 vow {
+  requires: x < 4611686018427387904
+  ensures: result <= 9223372036854775808
+} {
+  x
+}
+
+fn small_neg(x: i8) -> i8 vow {
+  requires: x > -5
+  ensures: result >= -4
+} {
+  x
+}
+
+fn mask(x: u32) -> u32 vow {
+  ensures: result <= 255
+} {
+  x & 255
+}
+
+fn main() -> i32 [io] {
+  print_u64(inc(1u64));
+  0
+}

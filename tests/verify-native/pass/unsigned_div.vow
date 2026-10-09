@@ -1,0 +1,13 @@
+module UnsignedDiv
+
+fn quotient(x: u32, y: u32) -> u32 vow {
+  requires: y > 0
+  ensures: result <= x
+} {
+  x / y
+}
+
+fn main() -> i32 [io] {
+  print_i64(quotient(9, 2) as i64);
+  0
+}

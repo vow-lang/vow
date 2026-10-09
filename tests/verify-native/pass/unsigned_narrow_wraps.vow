@@ -1,0 +1,19 @@
+module UnsignedNarrowWraps
+
+fn inc(x: u8) -> u8 vow {
+  ensures: result == x + 1
+} {
+  x + 1
+}
+
+fn mul_low(x: u16, y: u16) -> u16 vow {
+  ensures: result == y * x
+} {
+  x * y
+}
+
+fn main() -> i32 [io] {
+  print_i64(inc(255) as i64);
+  print_i64(mul_low(3, 5) as i64);
+  0
+}

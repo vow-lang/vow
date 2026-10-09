@@ -4,14 +4,22 @@ module VcTerm
 // referred to by index; there is no hash-consing or simplification. All SMT
 // text is produced by `vc_smt`, which maps the operator codes below to
 // symbols.
+//
+// A sort code is the bit-vector width (8, 16, 32, 64, 128), or 0 for Bool.
+// A bit-vector constant holds its width in `a` and its low and high 64-bit
+// limbs in `aux` and `b`; bits above the width are ignored.
 
 fn VC_SORT_BOOL() -> i64 { 0 }
-fn VC_SORT_BV64() -> i64 { 1 }
 
 fn VC_T_VAR() -> i64 { 0 }
 fn VC_T_BV() -> i64 { 1 }
 fn VC_T_BOOL() -> i64 { 2 }
 fn VC_T_APP() -> i64 { 3 }
+fn VC_T_EXT() -> i64 { 4 }
+
+fn VC_EXT_ZERO() -> i64 { 0 }
+fn VC_EXT_SIGN() -> i64 { 1 }
+fn VC_EXT_LOW() -> i64 { 2 }
 
 fn VC_OP_BVADD() -> i64 { 0 }
 fn VC_OP_BVSUB() -> i64 { 1 }
@@ -31,6 +39,21 @@ fn VC_OP_NOT() -> i64 { 14 }
 fn VC_OP_AND() -> i64 { 15 }
 fn VC_OP_OR() -> i64 { 16 }
 fn VC_OP_ITE() -> i64 { 17 }
+fn VC_OP_BVUDIV() -> i64 { 18 }
+fn VC_OP_BVUREM() -> i64 { 19 }
+fn VC_OP_BVULT() -> i64 { 20 }
+fn VC_OP_BVULE() -> i64 { 21 }
+fn VC_OP_BVUGT() -> i64 { 22 }
+fn VC_OP_BVUGE() -> i64 { 23 }
+fn VC_OP_BVSHL() -> i64 { 24 }
+fn VC_OP_BVLSHR() -> i64 { 25 }
+fn VC_OP_BVASHR() -> i64 { 26 }
+fn VC_OP_BVSADDO() -> i64 { 27 }
+fn VC_OP_BVUADDO() -> i64 { 28 }
+fn VC_OP_BVSSUBO() -> i64 { 29 }
+fn VC_OP_BVUSUBO() -> i64 { 30 }
+fn VC_OP_BVSMULO() -> i64 { 31 }
+fn VC_OP_BVUMULO() -> i64 { 32 }
 
 struct VcArena {
     kinds: Vec<i64>,
@@ -68,8 +91,9 @@ fn vc_tm_var(ar: VcArena, name: String) -> i64 {
     vc_arena_push(ar, VC_T_VAR(), -1, -1, -1, si)
 }
 
-fn vc_tm_bv_const(ar: VcArena, value: i64) -> i64 {
-    vc_arena_push(ar, VC_T_BV(), -1, -1, -1, value)
+// A bit-vector constant of `width` bits from its two 64-bit limbs.
+fn vc_tm_bv(ar: VcArena, width: i64, lo: i64, hi: i64) -> i64 {
+    vc_arena_push(ar, VC_T_BV(), width, hi, -1, lo)
 }
 
 fn vc_tm_bool_const(ar: VcArena, value: bool) -> i64 {
@@ -113,4 +137,10 @@ fn vc_tm_or(ar: VcArena, a: i64, b: i64) -> i64 {
 fn vc_tm_implies(ar: VcArena, premise: i64, t: i64) -> i64 {
     if vc_tm_is_true(ar, premise) { return t; }
     vc_tm_app2(ar, VC_OP_OR(), vc_tm_app1(ar, VC_OP_NOT(), premise), t)
+}
+
+// `zero_extend`/`sign_extend` by `amount` bits, or (`VC_EXT_LOW`) the low
+// `amount` bits of `x`.
+fn vc_tm_ext(ar: VcArena, kind: i64, amount: i64, x: i64) -> i64 {
+    vc_arena_push(ar, VC_T_EXT(), x, amount, -1, kind)
 }

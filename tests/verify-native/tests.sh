@@ -41,8 +41,13 @@ case "$FAKE_BW_MODE" in
         [ "$FAKE_BW_MODE" = sat_zero ] && val=0
         echo sat
         echo "("
-        grep -o '^(declare-const p[0-9]*' "$file" | sed 's/(declare-const //' | while read -r name; do
-            echo "  ($name (_ bv$val 64))"
+        grep -o '^(declare-const p[0-9]* (_ BitVec [0-9]*)' "$file" \
+            | sed -E 's/\(declare-const (p[0-9]+) \(_ BitVec ([0-9]+)\)/\1 \2/' | while read -r name width; do
+            if [ "$width" -gt 64 ]; then
+                printf '  (%s #x%0*x)\n' "$name" $((width / 4)) "$val"
+            else
+                echo "  ($name (_ bv$val $width))"
+            fi
         done
         echo ")"
         ;;
@@ -63,6 +68,21 @@ fn keep(x: i64) -> i64 vow {
 
 fn main() -> i32 [io] {
   print_i64(keep(1));
+  0
+}
+SRC
+
+WIDE_CLAIM="$TMP_ROOT/wide.vow"
+cat > "$WIDE_CLAIM" <<'SRC'
+module Wide
+
+fn keep(x: u128, y: i8) -> u128 vow {
+  ensures: result == x
+} {
+  x
+}
+
+fn main() -> i32 [io] {
   0
 }
 SRC
@@ -159,7 +179,7 @@ for q in "$BW_DIR"/q.*.smt2; do
     grep -q '^(check-sat)$' "$q" || fail "$q has no check-sat"
     grep -q '^(set-option :produce-models true)$' "$q" || fail "$q lacks produce-models"
 done
-grep -q -- '--bv-output-format 10' "$BW_DIR/args" || fail "solver not run with --bv-output-format 10"
+grep -q -- '--bv-output-format 2' "$BW_DIR/args" || fail "solver not run with --bv-output-format 2"
 while read -r p; do
     if [ -e "$p" ]; then fail "query file $p still exists"; fi
 done < "$BW_DIR/paths"
@@ -186,6 +206,12 @@ no_leftovers "sat"
 run_native sat "$ONE_CLAIM"
 expect "ensures vow id" "$(field "$RUN_OUT" counterexamples.0.vow_id)" "0"
 expect "ensures blame" "$(field "$RUN_OUT" counterexamples.0.blame)" "callee"
+
+# models are read per declared width: a 128-bit and an 8-bit parameter.
+run_native sat "$WIDE_CLAIM"
+expect "wide model status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "128-bit model value" "$(field "$RUN_OUT" counterexamples.0.values.x)" "7"
+expect "8-bit model value" "$(field "$RUN_OUT" counterexamples.0.values.y)" "7"
 
 # anything that is not a clean verdict is never a proof.
 run_native unknown "$ONE_CLAIM"

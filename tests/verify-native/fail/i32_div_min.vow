@@ -1,0 +1,14 @@
+// TEST: replay-skipped i32 parameter
+// TEST: counterexample-fn "divide"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame none
+// TEST: counterexample-violation "signed division overflow (MIN / -1)"
+// TEST: counterexample-value x -2147483648
+// TEST: counterexample-value y -1
+module I32DivMin
+
+fn divide(x: i32, y: i32) -> i32 vow {
+  requires: y != 0
+} {
+  x / y
+}

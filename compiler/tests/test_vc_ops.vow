@@ -34,7 +34,11 @@ fn check_classes_are_disjoint() -> i64 {
 
 fn check_known_classes() -> i64 {
     if vc_op_model(IOP_WADD()) != VC_OPM_MODELED() { return 600; }
-    if vc_op_model(IOP_CADD()) != VC_OPM_UNSUPPORTED() { return 601; }
+    if vc_op_model(IOP_LOAD()) != VC_OPM_UNSUPPORTED() { return 601; }
+    if vc_op_model(IOP_CADD()) != VC_OPM_MODELED() { return 607; }
+    if vc_op_model(IOP_SHL()) != VC_OPM_MODELED() { return 608; }
+    if vc_op_model(IOP_INT_CAST()) != VC_OPM_MODELED() { return 609; }
+    if vc_op_model(IOP_CONST_U128()) != VC_OPM_MODELED() { return 610; }
     if vc_op_model(IOP_CALL()) != VC_OPM_CALL() { return 602; }
     if vc_op_model(IOP_FIELD_SET()) != VC_OPM_FIELD() { return 603; }
     if vc_op_model(IOP_REM_F32()) != VC_OPM_FLOAT_REM() { return 604; }

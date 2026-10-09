@@ -8,36 +8,52 @@ use vc_exec
 use vc_cex
 
 // Native verification of one function inside the subset accepted by
-// `vc_skip_reason`: every claim is decided by its own solver run, in IR order,
-// and the first claim that is not `unsat` decides the result. `unsat` is the
-// only outcome that counts as proof. `timeout_ms` is the budget for the whole
-// function; each claim gets what is left of it. The solver is looked up only
-// when there is a claim to decide: a function without obligations is proven
-// without one.
+// `vc_skip_reason`: every claim is decided by its own solver run, in IR order.
+// A hard claim that is not `unsat` decides the result; `unsat` is the only
+// outcome that counts as proof. A soft claim (a checked operator's abort) never
+// fails the function: `sat` records that the abort is reachable, `unsat` that it
+// is not, and only an undecided run (unknown, timeout, error) stops the check.
+// `timeout_ms` is the budget for the whole function; each claim gets what is
+// left of it. The solver is looked up only when there is a claim to decide: a
+// function without obligations is proven without one.
+
+// A verdict plus the reachable checked-arithmetic aborts found on the way. The
+// sites are meaningful only when the result is `proven`.
+struct VcOutcome {
+    result: VerifyResult,
+    sites: Vec<ParsedArithSite>,
+}
+
+fn vc_bare_outcome(result: VerifyResult) -> VcOutcome {
+    VcOutcome { result: result, sites: Vec::new() }
+}
 
 fn vc_check_claim(bin: String, cs: VcClaims, k: u64, budget_ms: i64) -> VcSolverAnswer [io, read, write] {
     let query: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
-    vc_solver_check(bin, query, cs.model_names, budget_ms)
+    vc_solver_check(bin, query, cs.model_names, cs.model_widths, budget_ms)
 }
 
-fn vc_verify_function(f: IrFunction, timeout_ms: i64) -> VerifyResult [io, read, write] {
+fn vc_verify_function(f: IrFunction, timeout_ms: i64) -> VcOutcome [io, read, write] {
     let cs: VcClaims = vc_claims(f);
     if cs.kinds.len() == 0 {
-        return vc_proven_result();
+        return vc_bare_outcome(vc_proven_result());
     }
     let bin: String = vc_solver_locate();
     if bin.len() == 0 {
-        return vc_claim_result(f, cs, 0, vc_answer_plain(VC_ANS_NOT_FOUND(), String::from("Bitwuzla not found")));
+        return vc_bare_outcome(vc_claim_result(f, cs, 0, vc_answer_plain(VC_ANS_NOT_FOUND(), String::from("Bitwuzla not found"))));
     }
+    let sites: Vec<ParsedArithSite> = Vec::new();
     let started: i64 = time_micros();
     let mut k: u64 = 0;
     while k < cs.kinds.len() {
         let spent_ms: i64 = (time_micros() - started) / 1000;
         let ans: VcSolverAnswer = vc_check_claim(bin, cs, k, timeout_ms - spent_ms);
-        if ans.verdict != VC_ANS_UNSAT() {
-            return vc_claim_result(f, cs, k, ans);
+        if cs.kinds[k] == VC_CLAIM_ARITH() && ans.verdict == VC_ANS_SAT() {
+            sites.push(ParsedArithSite { cause: cs.labels[k], owner: f.id, ostart: cs.ostarts[k], olen: cs.olens[k] });
+        } else if ans.verdict != VC_ANS_UNSAT() {
+            return vc_bare_outcome(vc_claim_result(f, cs, k, ans));
         }
         k = k + 1;
     }
-    vc_proven_result()
+    VcOutcome { result: vc_proven_result(), sites: sites }
 }
