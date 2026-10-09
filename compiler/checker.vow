@@ -4397,6 +4397,9 @@ fn compute_may_write_table(e: CheckEnv, m: Module, fids: Vec<i64>) [io] {
     }
 }
 
+// Panic sites are builtin aborts the verifier cannot model: `.unwrap()` only.
+// Index, checked-arithmetic and `/ %` aborts are verifier-modelled obligations
+// of pure functions and deliberately not sites (docs/adr/2026-10-09-0900-panic-effect-scope.md).
 fn collect_calls_in_expr(e: CheckEnv, m: Module, eid: i64, calls: Vec<String>) [io] {
     let a: AstArena = m.arena;
     let tag: i64 = expr_tag(a, eid);
@@ -4593,7 +4596,11 @@ fn check_effects_fn(e: CheckEnv, m: Module, fid: i64) [io] {
         let cname: String = calls[i];
         if cname == String::from("__unwrap__") {
             if !has_eff_bit(declared_eff, eff_panic) {
-                env_emit_error(e, String::from(".unwrap() requires [panic] effect"), fn_span(a, fid));
+                let fname: String = arena_str(a, fn_name_sid(a, fid));
+                let hint: String = String::from("add 'Panic' to `");
+                hint.push_str(fname);
+                hint.push_str(String::from("`'s effect list, or use `?` to propagate the error instead"));
+                env_emit_error_code_hint(e, EC_EFFECT_VIOLATION(), String::from(".unwrap() requires [panic] effect"), fn_span(a, fid), hint);
             }
         } else {
             let fidx: i64 = env_lookup_fn(e, cname);

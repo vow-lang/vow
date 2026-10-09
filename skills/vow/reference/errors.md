@@ -927,6 +927,8 @@ number parser; a default `double` parser silently rounds it.
 
 ### ArithmeticOverflow
 
+Not gated by `[panic]`: checked operators are modelled as aborting in pure functions.
+
 **When:** A checked arithmetic operator (`+!`, `-!`, `*!`, `/!`, `%!`)
 overflows at runtime; or checked or unchecked division/remainder encounters a
 zero divisor; or signed `/` or `/!` evaluates `MIN / -1`.
@@ -961,6 +963,8 @@ The abort is emitted in every build mode, release included, so this cannot be
 deferred to a debug run.
 
 ### IndexOutOfBounds
+
+Not gated by `[panic]`: the abort is a verification obligation of the (pure) indexing function.
 
 **When:** A `Vec` index access (`v[i]` or `v[i] = val`) uses an index outside `0..v.len()`.
 

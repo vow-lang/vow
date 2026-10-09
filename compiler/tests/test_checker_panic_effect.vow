@@ -1,0 +1,75 @@
+module TestCheckerPanicEffect
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use checker
+use env
+
+fn checked_diags(source: String) -> DiagCtx [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("panic_effect.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < parsed.items.len() {
+        item_files.push(String::from("panic_effect.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("panic_effect.vow"));
+    check_module(check_env, parsed, item_files);
+    dctx
+}
+
+fn probe_source(effects: String, body: String) -> String {
+    let src: String = String::from("module PanicEffect\nfn probe(v: Vec<i64>, o: Option<i64>, i: u64, a: i64, b: i64) -> i64 ");
+    src.push_str(effects);
+    src.push_str(String::from(" { "));
+    src.push_str(body);
+    src.push_str(String::from(" }"));
+    src
+}
+
+fn check_unwrap_requires_panic() -> i32 [io] {
+    let pure_fn: DiagCtx = checked_diags(probe_source(String::from(""), String::from("o.unwrap()")));
+    if pure_fn.error_count != 1 { return 1; }
+    let panicking: DiagCtx = checked_diags(probe_source(String::from("[panic]"), String::from("o.unwrap()")));
+    if panicking.error_count != 0 { return 2; }
+    0
+}
+
+fn check_index_does_not_require_panic() -> i32 [io] {
+    let dctx: DiagCtx = checked_diags(probe_source(String::from(""), String::from("v[i]")));
+    if dctx.error_count != 0 { return 11; }
+    0
+}
+
+fn check_aborting_ops_do_not_require_panic() -> i32 [io] {
+    let add: DiagCtx = checked_diags(probe_source(String::from(""), String::from("a +! b")));
+    if add.error_count != 0 { return 21; }
+    let sub: DiagCtx = checked_diags(probe_source(String::from(""), String::from("a -! b")));
+    if sub.error_count != 0 { return 22; }
+    let mul: DiagCtx = checked_diags(probe_source(String::from(""), String::from("a *! b")));
+    if mul.error_count != 0 { return 23; }
+    let div: DiagCtx = checked_diags(probe_source(String::from(""), String::from("a /! b")));
+    if div.error_count != 0 { return 24; }
+    let rem: DiagCtx = checked_diags(probe_source(String::from(""), String::from("a %! b")));
+    if rem.error_count != 0 { return 25; }
+    let plain_div: DiagCtx = checked_diags(probe_source(String::from(""), String::from("a / b")));
+    if plain_div.error_count != 0 { return 26; }
+    let plain_rem: DiagCtx = checked_diags(probe_source(String::from(""), String::from("a % b")));
+    if plain_rem.error_count != 0 { return 27; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let r1: i32 = check_unwrap_requires_panic();
+    if r1 != 0 { return r1; }
+    let r2: i32 = check_index_does_not_require_panic();
+    if r2 != 0 { return r2; }
+    check_aborting_ops_do_not_require_panic()
+}
