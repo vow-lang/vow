@@ -43,23 +43,26 @@ fn check_float_compares(
     0
 }
 
-fn check_float_compare_data() -> i64 {
-    let source: String = String::from(
-        "module FloatCompare\nfn lt(a: f64, b: f64) -> bool { a < b }"
-    );
+fn check_lowered_float_inst(
+    source: String,
+    file: String,
+    op: i64,
+    ty: i64,
+    base: i64,
+) -> i64 {
     let arena: AstArena = arena_new();
     let parsed: Module = parse_module_into(
-        lex(source), arena, diag_ctx_new(), String::from("float_compare.vow")
+        lex(source), arena, diag_ctx_new(), file
     );
     let item_files: Vec<String> = Vec::new();
-    item_files.push(String::from("float_compare.vow"));
+    item_files.push(file);
     let lowered: IrModule = lower_module_vow(
         parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
         Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
         Vec::new(), Vec::new(), Vec::new(), Vec::new(), item_files
     );
 
-    if lowered.functions.len() != 1 { return 61; }
+    if lowered.functions.len() != 1 { return base + 1; }
     let function: IrFunction = lowered.functions[0];
     let mut block_index: u64 = 0;
     while block_index < function.blocks.len() {
@@ -67,54 +70,17 @@ fn check_float_compare_data() -> i64 {
         let mut inst_index: u64 = 0;
         while inst_index < block.insts.len() {
             let inst: IrInst = block.insts[inst_index];
-            if inst.op == IOP_LT_F64() {
-                if inst.ty != ITY_BOOL() { return 62; }
-                if inst.dk != IDATA_NONE() { return 63; }
-                if inst.dv != 0 || inst.dv2 != 0 { return 64; }
+            if inst.op == op {
+                if inst.ty != ty { return base + 2; }
+                if inst.dk != IDATA_NONE() { return base + 3; }
+                if inst.dv != 0 || inst.dv2 != 0 { return base + 4; }
                 return 0;
             }
             inst_index = inst_index + 1;
         }
         block_index = block_index + 1;
     }
-    65
-}
-
-fn check_float_binop_data() -> i64 {
-    let source: String = String::from(
-        "module FloatArithmetic\nfn add(a: f64, b: f64) -> f64 { a + b }"
-    );
-    let arena: AstArena = arena_new();
-    let parsed: Module = parse_module_into(
-        lex(source), arena, diag_ctx_new(), String::from("float_arithmetic.vow")
-    );
-    let item_files: Vec<String> = Vec::new();
-    item_files.push(String::from("float_arithmetic.vow"));
-    let lowered: IrModule = lower_module_vow(
-        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-        Vec::new(), Vec::new(), Vec::new(), Vec::new(), item_files
-    );
-
-    if lowered.functions.len() != 1 { return 21; }
-    let function: IrFunction = lowered.functions[0];
-    let mut block_index: u64 = 0;
-    while block_index < function.blocks.len() {
-        let block: IrBlock = function.blocks[block_index];
-        let mut inst_index: u64 = 0;
-        while inst_index < block.insts.len() {
-            let inst: IrInst = block.insts[inst_index];
-            if inst.op == IOP_ADD_F64() {
-                if inst.ty != ITY_F64() { return 22; }
-                if inst.dk != IDATA_NONE() { return 23; }
-                if inst.dv != 0 || inst.dv2 != 0 { return 24; }
-                return 0;
-            }
-            inst_index = inst_index + 1;
-        }
-        block_index = block_index + 1;
-    }
-    25
+    base + 5
 }
 
 fn main() -> i32 {
@@ -158,9 +124,21 @@ fn main() -> i32 {
     );
     if f64_cmp != 0 { return i64_to_i32_wrap(f64_cmp + 40); }
     if binop_opcode(BINOP_LT(), ITY_I64()) != IOP_LT() { return 50; }
-    let data_result: i64 = check_float_binop_data();
+    let data_result: i64 = check_lowered_float_inst(
+        String::from("module FloatArithmetic\nfn add(a: f64, b: f64) -> f64 { a + b }"),
+        String::from("float_arithmetic.vow"),
+        IOP_ADD_F64(),
+        ITY_F64(),
+        20,
+    );
     if data_result != 0 { return i64_to_i32_wrap(data_result); }
-    let cmp_data_result: i64 = check_float_compare_data();
+    let cmp_data_result: i64 = check_lowered_float_inst(
+        String::from("module FloatCompare\nfn lt(a: f64, b: f64) -> bool { a < b }"),
+        String::from("float_compare.vow"),
+        IOP_LT_F64(),
+        ITY_BOOL(),
+        60,
+    );
     if cmp_data_result != 0 { return i64_to_i32_wrap(cmp_data_result); }
     0
 }
