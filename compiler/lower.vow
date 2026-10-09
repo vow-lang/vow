@@ -2861,6 +2861,16 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
         // Short-circuit evaluation for && and ||
         if op == BINOP_AND() || op == BINOP_OR() {
             let lhs_id: i64 = lower_expr(ctx, lhs_eid);
+
+            // Variables the RHS assigns are defined on the RHS path only, so
+            // each one is merged through its own Phi, as for `if`.
+            let mut_names: Vec<String> = Vec::new();
+            collect_assigned_in_expr(ctx, rhs_eid, mut_names);
+            let mutated: ScopedVars = lctx_in_scope_vars(ctx, mut_names);
+            let mutations: Vec<String> = mutated.names;
+            let saved_mut_vals: Vec<i64> = mutated.vals;
+            let nmut: u64 = mutations.len();
+
             let rhs_block: i64 = lctx_new_block(ctx);
             let short_block: i64 = lctx_new_block(ctx);
             let merge_block: i64 = lctx_new_block(ctx);
@@ -2877,18 +2887,42 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             // RHS block: evaluate RHS, Upsilon, Jump to merge.
             lctx_switch_to_block(ctx, rhs_block);
             let rhs_id: i64 = lower_expr(ctx, rhs_eid);
+            let rhs_mut_vals: Vec<i64> = Vec::new();
+            let mut_up_rhs: Vec<i64> = Vec::new();
+            let mut rmi: u64 = 0;
+            while rmi < nmut {
+                let rhs_mut_val: i64 = lctx_lookup(ctx, mutations[rmi]);
+                rhs_mut_vals.push(rhs_mut_val);
+                let up_args: Vec<i64> = Vec::new();
+                up_args.push(rhs_mut_val);
+                mut_up_rhs.push(lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""), origin));
+                rmi = rmi + 1;
+            }
             let rhs_up_args: Vec<i64> = Vec::new();
             rhs_up_args.push(rhs_id);
             let rhs_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), rhs_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""), origin);
             let rhs_up_block: i64 = ctx.current_block;
             let rhs_jmp_args: Vec<i64> = Vec::new();
             lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), rhs_jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""), origin);
+            let mut ami: u64 = 0;
+            while ami < nmut {
+                lctx_assign(ctx, mutations[ami], saved_mut_vals[ami]);
+                ami = ami + 1;
+            }
 
             // Short-circuit block: produce false (&&) or true (||), Upsilon, Jump
             lctx_switch_to_block(ctx, short_block);
             let short_val_i: i64 = if op == BINOP_OR() { 1 } else { 0 };
             let short_val_args: Vec<i64> = Vec::new();
             let short_val: i64 = lctx_emit(ctx, IOP_CONST_BOOL(), ITY_BOOL(), short_val_args, IDATA_CONST_BOOL(), short_val_i, 0, String::from(""), origin);
+            let mut_up_short: Vec<i64> = Vec::new();
+            let mut smi: u64 = 0;
+            while smi < nmut {
+                let up_args: Vec<i64> = Vec::new();
+                up_args.push(saved_mut_vals[smi]);
+                mut_up_short.push(lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""), origin));
+                smi = smi + 1;
+            }
             let short_up_args: Vec<i64> = Vec::new();
             short_up_args.push(short_val);
             let short_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), short_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""), origin);
@@ -2896,8 +2930,25 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let short_jmp_args: Vec<i64> = Vec::new();
             lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), short_jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""), origin);
 
-            // Merge block: Phi
+            // Merge block: one Phi per assigned variable, then the result Phi.
             lctx_switch_to_block(ctx, merge_block);
+            let mut mmi: u64 = 0;
+            while mmi < nmut {
+                let mphi_ty: i64 = merge_phi_ty(
+                    lctx_inst_ty(ctx, rhs_mut_vals[mmi]),
+                    lctx_inst_ty(ctx, saved_mut_vals[mmi]),
+                );
+                let mphi_args: Vec<i64> = Vec::new();
+                let mphi_id: i64 = lctx_emit(ctx, IOP_PHI(), mphi_ty, mphi_args, IDATA_NONE(), 0, 0, String::from(""), origin);
+                let mphi_sources: Vec<i64> = Vec::new();
+                mphi_sources.push(rhs_mut_vals[mmi]);
+                mphi_sources.push(saved_mut_vals[mmi]);
+                lctx_merge_compatible_aggregate_metadata(ctx, mphi_sources, mphi_id);
+                backpatch_upsilon(ctx, rhs_up_block, mut_up_rhs[mmi], mphi_id);
+                backpatch_upsilon(ctx, short_up_block, mut_up_short[mmi], mphi_id);
+                lctx_assign(ctx, mutations[mmi], mphi_id);
+                mmi = mmi + 1;
+            }
             let phi_args: Vec<i64> = Vec::new();
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_BOOL(), phi_args, IDATA_NONE(), 0, 0, String::from(""), origin);
             backpatch_upsilon(ctx, rhs_up_block, rhs_up_id, phi_id);

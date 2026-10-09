@@ -1705,6 +1705,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // Short-circuit evaluation for && and ||
             if *op == BinOp::And || *op == BinOp::Or {
                 let lhs_id = lower_expr(ctx, lhs);
+
+                // Variables the RHS assigns are defined on the RHS path only, so
+                // each one is merged through its own Phi, as for `if`.
+                let mut rhs_assigned = vec![];
+                collect_assigned_in_expr(rhs, &mut HashSet::new(), &mut rhs_assigned);
+                let mutations = ctx.in_scope_vars(rhs_assigned);
+
                 let rhs_block = ctx.new_block();
                 let short_block = ctx.new_block();
                 let merge_block = ctx.new_block();
@@ -1730,6 +1737,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 // RHS block: evaluate RHS and feed it into the merge Phi.
                 ctx.switch_to_block(rhs_block);
                 let rhs_id = lower_expr(ctx, rhs);
+                let rhs_mut_vals: Vec<InstId> = mutations
+                    .iter()
+                    .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
+                    .collect();
+                let rhs_mut_upsilons: Vec<InstId> = rhs_mut_vals
+                    .iter()
+                    .map(|&val| emit_pending_upsilon(ctx, val, span))
+                    .collect();
                 let rhs_upsilon = ctx.emit(
                     Opcode::Upsilon,
                     Ty::Unit,
@@ -1745,6 +1760,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::JumpTarget(merge_block),
                     span,
                 );
+                for (name, pre_id) in &mutations {
+                    ctx.assign(name, *pre_id);
+                }
 
                 // Short-circuit block: produce constant false (&&) or true (||)
                 ctx.switch_to_block(short_block);
@@ -1755,6 +1773,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::ConstBool(*op == BinOp::Or),
                     span,
                 );
+                let short_mut_upsilons: Vec<InstId> = mutations
+                    .iter()
+                    .map(|&(_, pre_id)| emit_pending_upsilon(ctx, pre_id, span))
+                    .collect();
                 let short_upsilon = ctx.emit(
                     Opcode::Upsilon,
                     Ty::Unit,
@@ -1771,8 +1793,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 );
 
-                // Merge block: Phi collects the result
+                // Merge block: one Phi per assigned variable, then the result Phi.
                 ctx.switch_to_block(merge_block);
+                for (i, (name, pre_id)) in mutations.iter().enumerate() {
+                    let phi_ty = merge_phi_ty(ctx.inst_ty(rhs_mut_vals[i]), ctx.inst_ty(*pre_id));
+                    let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
+                    merge_compatible_aggregate_metadata(ctx, &[rhs_mut_vals[i], *pre_id], phi_id);
+                    backpatch_upsilon(ctx, rhs_upsilon_block, rhs_mut_upsilons[i], phi_id);
+                    backpatch_upsilon(ctx, short_upsilon_block, short_mut_upsilons[i], phi_id);
+                    ctx.assign(name, phi_id);
+                }
                 let phi = ctx.emit(Opcode::Phi, Ty::Bool, vec![], InstData::None, span);
                 backpatch_upsilon(ctx, rhs_upsilon_block, rhs_upsilon, phi);
                 backpatch_upsilon(ctx, short_upsilon_block, short_upsilon, phi);
@@ -7461,6 +7491,149 @@ fn sum(v: Vec<i64>) -> i64 {
                 .unwrap_or_else(|| panic!("fixture function `{name}`"));
             assert_eq!(carried_markers(func), markers, "carried by `{name}`");
         }
+    }
+
+    /// Block ids whose every path from the entry passes through them, per block
+    /// (iterative set-based dominators; only reachable blocks get an entry).
+    fn dominators(func: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
+        let mut succs: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
+        for block in &func.blocks {
+            let out = succs.entry(block.id).or_default();
+            for inst in &block.insts {
+                match &inst.data {
+                    InstData::BranchTargets {
+                        then_block,
+                        else_block,
+                    } => out.extend([*then_block, *else_block]),
+                    InstData::JumpTarget(target) => out.push(*target),
+                    _ => {}
+                }
+            }
+        }
+        let entry = func.blocks[0].id;
+        let mut reachable = HashSet::from([entry]);
+        let mut work = vec![entry];
+        while let Some(b) = work.pop() {
+            for &t in &succs[&b] {
+                if reachable.insert(t) {
+                    work.push(t);
+                }
+            }
+        }
+        let mut doms: HashMap<BlockId, HashSet<BlockId>> = reachable
+            .iter()
+            .map(|&b| {
+                (
+                    b,
+                    if b == entry {
+                        HashSet::from([b])
+                    } else {
+                        reachable.clone()
+                    },
+                )
+            })
+            .collect();
+        loop {
+            let mut changed = false;
+            for &b in reachable.iter().filter(|&&b| b != entry) {
+                let mut new: Option<HashSet<BlockId>> = None;
+                for (&p, outs) in &succs {
+                    if reachable.contains(&p) && outs.contains(&b) {
+                        new = Some(match new {
+                            None => doms[&p].clone(),
+                            Some(acc) => acc.intersection(&doms[&p]).copied().collect(),
+                        });
+                    }
+                }
+                let mut new = new.unwrap_or_default();
+                new.insert(b);
+                if new != doms[&b] {
+                    doms.insert(b, new);
+                    changed = true;
+                }
+            }
+            if !changed {
+                return doms;
+            }
+        }
+    }
+
+    /// Operands whose defining instruction does not dominate the use.
+    fn non_dominating_reads(func: &Function) -> Vec<(InstId, InstId)> {
+        let doms = dominators(func);
+        let mut def_site: HashMap<InstId, (BlockId, usize)> = HashMap::new();
+        for block in &func.blocks {
+            for (idx, inst) in block.insts.iter().enumerate() {
+                def_site.insert(inst.id, (block.id, idx));
+            }
+        }
+        let mut bad = vec![];
+        for block in func.blocks.iter().filter(|b| doms.contains_key(&b.id)) {
+            for (idx, inst) in block.insts.iter().enumerate() {
+                for arg in &inst.args {
+                    let Some(&(def_block, def_idx)) = def_site.get(arg) else {
+                        continue;
+                    };
+                    let dominated = if def_block == block.id {
+                        def_idx < idx
+                    } else {
+                        doms[&block.id].contains(&def_block)
+                    };
+                    if !dominated {
+                        bad.push((inst.id, *arg));
+                    }
+                }
+            }
+        }
+        bad
+    }
+
+    /// A variable assigned in the right-hand side of `&&` / `||` is defined on
+    /// the RHS path only, so a read after the merge must go through a Phi. The
+    /// self-hosted twin is `compiler/tests/test_lower_short_circuit_assign.vow`
+    /// (it uses the dominance validator); both read
+    /// `tests/fixtures/short_circuit_assign.vow`.
+    #[test]
+    fn short_circuit_rhs_assignment_reaches_merge_through_phi() {
+        let fixture = include_str!("../../../tests/fixtures/short_circuit_assign.vow");
+        let module = lower_source_to_module(fixture, "short_circuit_assign.vow");
+        assert!(!module.functions.is_empty(), "fixture has functions");
+        for func in &module.functions {
+            assert_eq!(
+                non_dominating_reads(func),
+                vec![],
+                "non-dominating reads in `{}`",
+                func.name
+            );
+        }
+        let phis = |name: &str| {
+            let func = module.functions.iter().find(|f| f.name == name).unwrap();
+            insts_of(func)
+                .iter()
+                .filter(|i| i.opcode == Opcode::Phi)
+                .count()
+        };
+        for name in ["and_rhs_assign", "or_rhs_assign", "if_cond_assign"] {
+            let func = module.functions.iter().find(|f| f.name == name).unwrap();
+            let insts = insts_of(func);
+            let add = insts
+                .iter()
+                .find(|i| i.opcode == Opcode::WrappingAdd)
+                .unwrap_or_else(|| panic!("`x + ..` in `{name}`"));
+            let x = insts.iter().find(|i| i.id == add.args[0]).unwrap();
+            assert_eq!(
+                x.opcode,
+                Opcode::Phi,
+                "`x` read after the merge in `{name}`"
+            );
+        }
+        assert!(phis("and_rhs_assign") >= 2, "result Phi plus `x` Phi");
+        assert!(phis("or_rhs_assign") >= 2, "result Phi plus `x` Phi");
+        assert!(phis("if_cond_assign") >= 2, "result Phi plus `x` Phi");
+        assert!(
+            phis("nested_assign") >= 5,
+            "three result Phis plus `x`, `y`"
+        );
     }
 
     /// `v[i] = rhs` must evaluate `base`/`index` before `rhs` (issue #1502):

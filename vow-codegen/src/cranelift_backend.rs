@@ -2243,6 +2243,21 @@ fn compile_ir_function(
         builder.ins().call(arena_init_ref, &[arena_addr]);
     }
 
+    // Phi values are block params, defined once the blocks exist. Register them
+    // before emitting any block: a block laid out before the merge block that
+    // defines a Phi (a loop body whose condition contains `a && { x = ..; b }`)
+    // still reads that Phi through dominance.
+    for ir_block in &ir_func.blocks {
+        if let Some(phi_ids) = phi_data.block_phis.get(&ir_block.id) {
+            let params = builder.block_params(block_map[&ir_block.id]).to_vec();
+            for (i, &phi_id) in phi_ids.iter().enumerate() {
+                if let Some(&v) = params.get(i) {
+                    value_map.insert(phi_id, v);
+                }
+            }
+        }
+    }
+
     // Emit each block
     let mut first_block = true;
     for ir_block in &ir_func.blocks {
@@ -2251,16 +2266,6 @@ fn compile_ir_function(
             builder.switch_to_block(cl_block);
         }
         first_block = false;
-
-        // Populate value_map with Phi block param values
-        if let Some(phi_ids) = phi_data.block_phis.get(&ir_block.id) {
-            let params = builder.block_params(cl_block).to_vec();
-            for (i, &phi_id) in phi_ids.iter().enumerate() {
-                if let Some(&v) = params.get(i) {
-                    value_map.insert(phi_id, v);
-                }
-            }
-        }
 
         let mut lctx = LowerCtx {
             value_map: &mut value_map,

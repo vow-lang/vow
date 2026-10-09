@@ -1,0 +1,53 @@
+module TestIrDominanceCorpus
+
+use frontend
+use clif
+use ir
+use ir_dominance
+
+// Durable sweep for #1407: the lowerer must never emit a value read whose
+// definition does not dominate it. Lowers the self-hosted compiler itself and
+// representative test programs, and checks every function with the dominance
+// validator. The verifier gate skips offenders (`ir-non-dominating-read`), so
+// without this sweep a lowerer regression would silently shrink verified code.
+
+// Name of the first function with a non-dominating read, or "" when clean.
+fn first_offender(path: String, root: String) -> String [io] {
+    let lowered: LoweredFrontend = frontend_lower_path_with_root(path, root);
+    let m: IrModule = lowered.ir_mod;
+    if m.functions.len() == 0 {
+        return String::from("<no functions lowered>");
+    }
+    let mut fi: u64 = 0;
+    while fi < m.functions.len() {
+        let f: IrFunction = m.functions[fi];
+        if ir_non_dominating_read(f).len() > 0 {
+            return f.name;
+        }
+        fi = fi + 1;
+    }
+    String::from("")
+}
+
+fn check(path: String, root: String) -> bool [io] {
+    let bad: String = first_offender(path, root);
+    if bad.len() > 0 {
+        print_str(String::from("non-dominating read in "));
+        print_str(bad);
+        print_str(String::from(" ("));
+        print_str(path);
+        print_str(String::from(")\n"));
+        return false;
+    }
+    true
+}
+
+fn main() -> i32 [io] {
+    let mut failed: i32 = 0;
+    if !check(String::from("compiler/main.vow"), String::from("compiler")) { failed = failed + 1; }
+    if !check(String::from("tests/fixtures/short_circuit_assign.vow"), String::from("")) { failed = failed + 1; }
+    if !check(String::from("tests/fixtures/loop_carried_scope.vow"), String::from("")) { failed = failed + 1; }
+    if !check(String::from("tests/run/short_circuit_assign.vow"), String::from("")) { failed = failed + 1; }
+    if !check(String::from("tests/run/match_merge_with_mutation.vow"), String::from("")) { failed = failed + 1; }
+    failed
+}
