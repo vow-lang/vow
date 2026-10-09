@@ -127,7 +127,8 @@ fn check_linear_types(func: &Function, errors: &mut Vec<ValidationError>) {
 }
 
 // Operands resolve against the whole function: SSA values cross blocks via
-// dominance and Upsilon. Dominance itself is checked elsewhere.
+// dominance and Upsilon. This validator does not check dominance or in-block
+// def-before-use ordering; only the self-hosted compiler's ir_dominance does.
 fn validate_block(
     block: &BasicBlock,
     defs: &HashMap<InstId, Ty>,
