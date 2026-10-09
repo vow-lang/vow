@@ -32,26 +32,23 @@ fn vc_script_new() -> SmtScript {
     }
 }
 
-fn vc_script_copy(s: SmtScript) -> SmtScript {
-    let out: SmtScript = vc_script_new();
-    let mut i: u64 = 0;
-    while i < s.kinds.len() {
-        out.kinds.push(s.kinds[i]);
-        out.names.push(s.names[i]);
-        out.vals.push(s.vals[i]);
-        out.sorts.push(s.sorts[i]);
-        out.terms.push(s.terms[i]);
-        i = i + 1;
-    }
-    out
-}
-
 fn vc_script_push(s: SmtScript, kind: i64, name: String, val: String, sort: i64, term: i64) {
     s.kinds.push(kind);
     s.names.push(name);
     s.vals.push(val);
     s.sorts.push(sort);
     s.terms.push(term);
+}
+
+// An independent script holding the first `n` commands of `s`.
+fn vc_script_prefix(s: SmtScript, n: u64) -> SmtScript {
+    let out: SmtScript = vc_script_new();
+    let mut i: u64 = 0;
+    while i < n && i < s.kinds.len() {
+        vc_script_push(out, s.kinds[i], s.names[i], s.vals[i], s.sorts[i], s.terms[i]);
+        i = i + 1;
+    }
+    out
 }
 
 fn vc_script_set_logic(s: SmtScript, logic: String) {
@@ -78,7 +75,12 @@ fn vc_script_check_sat(s: SmtScript) {
     vc_script_push(s, VC_CMD_CHECK_SAT(), String::from(""), String::from(""), 0, -1);
 }
 
+// SMT-LIB's `get-value` takes at least one term, so a query with nothing to
+// read back carries no `get-value` command.
 fn vc_script_get_value(s: SmtScript, names: Vec<String>) {
+    if names.len() == 0 {
+        return;
+    }
     let joined: String = String::from("");
     let mut i: u64 = 0;
     while i < names.len() {
@@ -108,7 +110,8 @@ fn vc_op_symbol(op: i64) -> String {
     if op == VC_OP_BVSGE() { return String::from("bvsge"); }
     if op == VC_OP_NOT() { return String::from("not"); }
     if op == VC_OP_AND() { return String::from("and"); }
-    String::from("or")
+    if op == VC_OP_OR() { return String::from("or"); }
+    String::from("vc-unmapped-operator")
 }
 
 fn vc_sort_text(sort: i64) -> String {

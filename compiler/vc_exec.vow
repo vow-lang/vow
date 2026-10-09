@@ -20,12 +20,20 @@ fn VC_CLAIM_DIV_OVERFLOW() -> i64 { 2 }
 fn VC_LABEL_DIV_ZERO() -> String { String::from("division by zero") }
 fn VC_LABEL_DIV_OVERFLOW() -> String { String::from("division overflow") }
 
+// One shared command list (`header`) and one append-only assumption list serve
+// every claim: claim `k` is the first `header_lens[k]` header commands, the
+// first `assumed_lens[k]` assumptions and its negated goal. Queries are built
+// on demand by `vc_claim_script`, so memory stays linear in the function size.
 struct VcClaims {
     arena: VcArena,
+    header: SmtScript,
+    assumed: Vec<i64>,
     kinds: Vec<i64>,
     vow_ids: Vec<i64>,
     labels: Vec<String>,
-    scripts: Vec<SmtScript>,
+    negated_goals: Vec<i64>,
+    header_lens: Vec<i64>,
+    assumed_lens: Vec<i64>,
     model_names: Vec<String>,
     model_params: Vec<i64>,
 }
@@ -58,7 +66,8 @@ fn vc_smt_op(op: i64) -> i64 {
     if op == IOP_GT() { return VC_OP_BVSGT(); }
     if op == IOP_GE() { return VC_OP_BVSGE(); }
     if op == IOP_AND() { return VC_OP_AND(); }
-    VC_OP_OR()
+    if op == IOP_OR() { return VC_OP_OR(); }
+    -1
 }
 
 fn vc_sort_of(ty: i64) -> i64 {
@@ -66,36 +75,50 @@ fn vc_sort_of(ty: i64) -> i64 {
     VC_SORT_BV64()
 }
 
-fn vc_add_claim(cs: VcClaims, hdr: SmtScript, assumed: Vec<i64>, kind: i64, vow_id: i64, label: String, goal: i64) {
-    let ar: VcArena = cs.arena;
-    let s: SmtScript = vc_script_copy(hdr);
-    let mut i: u64 = 0;
-    while i < assumed.len() {
-        vc_script_assert(s, assumed[i]);
-        i = i + 1;
-    }
-    vc_script_assert(s, vc_tm_app1(ar, VC_OP_NOT(), goal));
-    vc_script_check_sat(s);
-    vc_script_get_value(s, cs.model_names);
+fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, goal: i64) {
+    let hdr: SmtScript = cs.header;
     cs.kinds.push(kind);
     cs.vow_ids.push(vow_id);
     cs.labels.push(label);
-    cs.scripts.push(s);
+    cs.negated_goals.push(vc_tm_app1(cs.arena, VC_OP_NOT(), goal));
+    cs.header_lens.push(hdr.kinds.len() as i64);
+    cs.assumed_lens.push(cs.assumed.len() as i64);
+}
+
+// The self-contained query that decides claim `k`.
+fn vc_claim_script(cs: VcClaims, k: u64) -> SmtScript {
+    let hdr: SmtScript = cs.header;
+    let s: SmtScript = vc_script_prefix(hdr, cs.header_lens[k] as u64);
+    let na: u64 = cs.assumed_lens[k] as u64;
+    let mut i: u64 = 0;
+    while i < na {
+        vc_script_assert(s, cs.assumed[i]);
+        i = i + 1;
+    }
+    vc_script_assert(s, cs.negated_goals[k]);
+    vc_script_check_sat(s);
+    vc_script_get_value(s, cs.model_names);
+    s
 }
 
 // Obligations for a function inside the native subset, in IR order.
 fn vc_claims(f: IrFunction) -> VcClaims {
     let ar: VcArena = vc_arena_new();
+    let hdr: SmtScript = vc_script_new();
+    let assumed: Vec<i64> = Vec::new();
     let cs: VcClaims = VcClaims {
         arena: ar,
+        header: hdr,
+        assumed: assumed,
         kinds: Vec::new(),
         vow_ids: Vec::new(),
         labels: Vec::new(),
-        scripts: Vec::new(),
+        negated_goals: Vec::new(),
+        header_lens: Vec::new(),
+        assumed_lens: Vec::new(),
         model_names: Vec::new(),
         model_params: Vec::new(),
     };
-    let hdr: SmtScript = vc_script_new();
     vc_script_set_logic(hdr, String::from("QF_BV"));
     vc_script_set_option(hdr, String::from(":produce-models"), String::from("true"));
     let mut pi: u64 = 0;
@@ -115,7 +138,6 @@ fn vc_claims(f: IrFunction) -> VcClaims {
         var_of.push(-1);
         k = k + 1;
     }
-    let assumed: Vec<i64> = Vec::new();
     let zero: i64 = vc_tm_bv_const(ar, 0);
     let min: i64 = vc_tm_bv_const(ar, -9223372036854775807 - 1);
     let minus_one: i64 = vc_tm_bv_const(ar, -1);
@@ -137,21 +159,21 @@ fn vc_claims(f: IrFunction) -> VcClaims {
         } else if op == IOP_VOW_REQ() {
             assumed.push(var_of[inst.args[0] as u64]);
         } else if op == IOP_VOW_ENS() {
-            vc_add_claim(cs, hdr, assumed, VC_CLAIM_ENSURES(), inst.dv, String::from(""), var_of[inst.args[0] as u64]);
+            vc_add_claim(cs, VC_CLAIM_ENSURES(), inst.dv, String::from(""), var_of[inst.args[0] as u64]);
         } else if op != IOP_RETURN() {
             let lhs: i64 = var_of[inst.args[0] as u64];
             let rhs: i64 = var_of[inst.args[1] as u64];
             defined = vc_tm_app2(ar, vc_smt_op(op), lhs, rhs);
             if op == IOP_WDIV() || op == IOP_WREM() {
                 let nonzero: i64 = vc_tm_app2(ar, VC_OP_DISTINCT(), rhs, zero);
-                vc_add_claim(cs, hdr, assumed, VC_CLAIM_DIV_ZERO(), -1, VC_LABEL_DIV_ZERO(), nonzero);
+                vc_add_claim(cs, VC_CLAIM_DIV_ZERO(), -1, VC_LABEL_DIV_ZERO(), nonzero);
                 assumed.push(nonzero);
                 if op == IOP_WDIV() {
                     let hits_min: i64 = vc_tm_app2(ar, VC_OP_EQ(), lhs, min);
                     let by_minus_one: i64 = vc_tm_app2(ar, VC_OP_EQ(), rhs, minus_one);
                     let overflow: i64 = vc_tm_app2(ar, VC_OP_AND(), hits_min, by_minus_one);
                     let no_overflow: i64 = vc_tm_app1(ar, VC_OP_NOT(), overflow);
-                    vc_add_claim(cs, hdr, assumed, VC_CLAIM_DIV_OVERFLOW(), -1, VC_LABEL_DIV_OVERFLOW(), no_overflow);
+                    vc_add_claim(cs, VC_CLAIM_DIV_OVERFLOW(), -1, VC_LABEL_DIV_OVERFLOW(), no_overflow);
                     assumed.push(no_overflow);
                 }
             }

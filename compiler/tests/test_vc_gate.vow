@@ -146,6 +146,16 @@ fn check_bool_param() -> i64 {
     0
 }
 
+fn check_get_arg_must_match_param_type() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_return(1, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_BOOL());
+    if vc_skip_reason(one_block(String::from("m"), p, ITY_I64(), i)) != String::from("unsupported-opcode: GetArg[i64]") { return 45; }
+    0
+}
+
 fn check_unsigned_compare_names_operand_type() -> i64 {
     let i: Vec<IrInst> = Vec::new();
     i.push(ir_inst_new(0, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 1, 0, String::from("")));
@@ -187,6 +197,7 @@ fn main() -> i32 {
     if r == 0 { r = check_multi_block(); }
     if r == 0 { r = check_op_details(); }
     if r == 0 { r = check_bool_param(); }
+    if r == 0 { r = check_get_arg_must_match_param_type(); }
     if r == 0 { r = check_unsigned_compare_names_operand_type(); }
     if r == 0 { r = check_non_dominating_read(); }
     if r == 0 { r = check_shape(); }

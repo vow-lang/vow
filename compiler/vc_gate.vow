@@ -82,7 +82,8 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>) -> bool {
     if op == IOP_CONST_I64() { return inst.ty == ITY_I64() && n == 0; }
     if op == IOP_CONST_BOOL() { return inst.ty == ITY_BOOL() && n == 0; }
     if op == IOP_GET_ARG() {
-        return inst.ty == ITY_I64() && n == 0 && inst.dv >= 0 && inst.dv < f.params.len() as i64;
+        return inst.ty == ITY_I64() && n == 0 && inst.dv >= 0 && inst.dv < f.params.len() as i64
+            && f.params[inst.dv as u64] == ITY_I64();
     }
     if vc_is_arith_op(op) {
         return inst.ty == ITY_I64() && n == 2 && t0 == ITY_I64() && t1 == ITY_I64();

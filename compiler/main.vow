@@ -1612,6 +1612,11 @@ fn native_report_result(f: IrFunction, ir_mod: IrModule, path: String, vr: Verif
         record_soft_fail(soft_meta, String::from("unknown"), String::from("the solver answered unknown"), f.name);
         return 0;
     }
+    if st == VERIFY_NOT_FOUND() {
+        eprintln_str(String::from("error: Bitwuzla not found; install Bitwuzla to run native verification"));
+        record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("Bitwuzla not found"), f.name);
+        return 0;
+    }
     let detail: String = {
         if vr.raw_output.len() > 0 { vr.raw_output } else { String::from("unrecognized Bitwuzla outcome") }
     };
@@ -1644,8 +1649,6 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
     let soft_meta: Vec<String> = Vec::new();
     let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
     let timeout_ms: i64 = watchdog_ms_for(get_flag_arg(argv, "--timeout"));
-    let mut solver_bin: String = String::from("");
-    let mut solver_probed: bool = false;
     let mut all_proven: bool = true;
     let mut any_skipped: bool = false;
     let t_verify: i64 = trace_now(tctx);
@@ -1658,20 +1661,10 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
                 native_skip_function(f, reason, dctx);
                 any_skipped = true;
             } else {
-                if !solver_probed {
-                    solver_bin = vc_solver_locate();
-                    solver_probed = true;
-                }
-                if solver_bin.len() == 0 {
-                    eprintln_str(String::from("error: Bitwuzla not found; install Bitwuzla to run native verification"));
-                    record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("Bitwuzla not found"), f.name);
+                eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
+                let vr: VerifyResult = vc_verify_function(f, timeout_ms);
+                if native_report_result(f, ir_mod, path, vr, ces, soft_meta) == 0 {
                     all_proven = false;
-                } else {
-                    eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
-                    let vr: VerifyResult = vc_verify_function(solver_bin, f, timeout_ms);
-                    if native_report_result(f, ir_mod, path, vr, ces, soft_meta) == 0 {
-                        all_proven = false;
-                    }
                 }
             }
         }

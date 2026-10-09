@@ -1,9 +1,9 @@
 module VcSolver
 
-// Bitwuzla verdict and model parsing for the native verifier. Everything here
-// is pure; the child-process driver is appended by the slice that spawns the
-// solver. Anything that is not a recognised verdict, or a `sat` whose model is
-// unparsable or incomplete, is `VC_ANS_ERROR` -- never `unsat`.
+// Bitwuzla verdict and model parsing for the native verifier, followed by the
+// child-process driver (`vc_solver_check`). The parsers are pure. Anything that
+// is not a recognised verdict, or a `sat` whose model is unparsable or
+// incomplete, is `VC_ANS_ERROR` -- never `unsat`.
 
 fn VC_ANS_SAT() -> i64 { 0 }
 fn VC_ANS_UNSAT() -> i64 { 1 }

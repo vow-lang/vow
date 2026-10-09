@@ -34,7 +34,7 @@ case "$FAKE_BW_MODE" in
     unknown) echo unknown ;;
     garbage) echo "what is this" ;;
     exit1) echo "[error] boom" >&2; exit 1 ;;
-    hang) exec sleep 29 ;;
+    hang) echo $$ > "$FAKE_BW_DIR/pid"; exec sleep 29 ;;
     sat_empty) printf 'sat\n(\n)\n' ;;
     sat)
         echo sat
@@ -198,9 +198,18 @@ run_native hang "$ONE_CLAIM" --timeout 1
 elapsed=$(( $(date +%s) - start ))
 expect "hang verify_status" "$(field "$RUN_OUT" verify_status)" "timeout"
 if [ "$elapsed" -gt 10 ]; then fail "hang took ${elapsed}s with --timeout 1"; fi
-if pgrep -f "sleep 29" >/dev/null 2>&1; then
-    fail "hung solver child was not reaped"
-    pkill -f "sleep 29" || true
+hung_pid=$(cat "$BW_DIR/pid" 2>/dev/null || true)
+if [ -n "$hung_pid" ]; then
+    hung_state=$(ps -p "$hung_pid" -o stat= 2>/dev/null | tr -d ' ' || true)
+    case "$hung_state" in
+        ""|Z*) ;;
+        *)
+            fail "hung solver child $hung_pid was not killed"
+            kill "$hung_pid" 2>/dev/null || true
+            ;;
+    esac
+else
+    fail "fake solver did not record its pid"
 fi
 no_leftovers "hang"
 
@@ -222,6 +231,23 @@ RUN_RC=0
 RUN_OUT=$(PATH="$EMPTY_DIR" TMPDIR="$SCRATCH" "$VOWC_BIN" verify --no-cache --backend native "$SKIPPED_ONLY" 2>/dev/null) || RUN_RC=$?
 expect "all-skipped status" "$(field "$RUN_OUT" status)" "Skipped"
 expect "all-skipped needs no solver" "$(field "$RUN_OUT" verify_status)" ""
+
+# a function with no obligation is proven without a solver, so it needs no Bitwuzla.
+NO_CLAIMS="$TMP_ROOT/noclaims.vow"
+cat > "$NO_CLAIMS" <<'SRC'
+module NoClaims
+
+fn positive(x: i64) -> i64 vow {
+  requires: x > 0
+} {
+  x
+}
+SRC
+RUN_RC=0
+RUN_OUT=$(PATH="$EMPTY_DIR" TMPDIR="$SCRATCH" "$VOWC_BIN" verify --no-cache --backend native "$NO_CLAIMS" 2>/dev/null) || RUN_RC=$?
+expect "no-claims status" "$(field "$RUN_OUT" status)" "Verified"
+expect "no-claims exit" "$RUN_RC" "0"
+expect "no-claims needs no solver" "$(field "$RUN_OUT" verify_status)" ""
 
 # flag handling.
 usage_error() {

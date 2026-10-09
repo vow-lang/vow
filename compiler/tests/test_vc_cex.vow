@@ -12,17 +12,20 @@ use tests.builders
 fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
     let cs: VcClaims = VcClaims {
         arena: vc_arena_new(),
+        header: vc_script_new(),
+        assumed: Vec::new(),
         kinds: Vec::new(),
         vow_ids: Vec::new(),
         labels: Vec::new(),
-        scripts: Vec::new(),
+        negated_goals: Vec::new(),
+        header_lens: Vec::new(),
+        assumed_lens: Vec::new(),
         model_names: Vec::new(),
         model_params: Vec::new(),
     };
     cs.kinds.push(kind);
     cs.vow_ids.push(vow_id);
     cs.labels.push(label);
-    cs.scripts.push(vc_script_new());
     cs.model_names.push(String::from("p0"));
     cs.model_names.push(String::from("p1"));
     cs.model_params.push(0);

@@ -38,7 +38,7 @@ fn one_block(name: String, params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> Ir
 }
 
 fn query(cs: VcClaims, k: u64) -> String {
-    vc_smt_render(cs.arena, cs.scripts[k])
+    vc_smt_render(cs.arena, vc_claim_script(cs, k))
 }
 
 fn count_of(hay: String, needle: String) -> i64 {
@@ -70,7 +70,7 @@ fn check_divide_with_requires() -> i64 {
     let f: IrFunction = divide_with_requires(IOP_WDIV());
     if vc_skip_reason(f).len() != 0 { return 1; }
     let cs: VcClaims = vc_claims(f);
-    if cs.scripts.len() != 2 { return 2; }
+    if cs.kinds.len() != 2 { return 2; }
     if cs.kinds[0] != VC_CLAIM_DIV_ZERO() { return 3; }
     if cs.kinds[1] != VC_CLAIM_DIV_OVERFLOW() { return 4; }
     if cs.vow_ids[0] != -1 { return 5; }
@@ -85,7 +85,7 @@ fn check_divide_with_requires() -> i64 {
 
 fn check_rem_has_only_zero_claim() -> i64 {
     let cs: VcClaims = vc_claims(divide_with_requires(IOP_WREM()));
-    if cs.scripts.len() != 1 { return 10; }
+    if cs.kinds.len() != 1 { return 10; }
     if cs.kinds[0] != VC_CLAIM_DIV_ZERO() { return 11; }
     0
 }
@@ -105,7 +105,7 @@ fn check_ensures_claim_golden() -> i64 {
     p.push(ITY_I64());
     let f: IrFunction = one_block(String::from("twice"), p, ITY_I64(), i);
     let cs: VcClaims = vc_claims(f);
-    if cs.scripts.len() != 1 { return 20; }
+    if cs.kinds.len() != 1 { return 20; }
     if cs.kinds[0] != VC_CLAIM_ENSURES() { return 21; }
     if cs.vow_ids[0] != 1 { return 22; }
     let want: String = String::from("(set-logic QF_BV)\n");
@@ -134,7 +134,7 @@ fn check_requires_only_has_no_claims() -> i64 {
     let p: Vec<i64> = Vec::new();
     p.push(ITY_I64());
     let cs: VcClaims = vc_claims(one_block(String::from("r"), p, ITY_I64(), i));
-    if cs.scripts.len() != 0 { return 30; }
+    if cs.kinds.len() != 0 { return 30; }
     0
 }
 
@@ -146,13 +146,15 @@ fn check_second_division_assumes_first() -> i64 {
     i.push(mk_inst(3, IOP_WREM(), ITY_I64(), args2(2, 1)));
     i.push(mk_inst_return(4, 3));
     let cs: VcClaims = vc_claims(one_block(String::from("dd"), params2(), ITY_I64(), i));
-    if cs.scripts.len() != 3 { return 40; }
+    if cs.kinds.len() != 3 { return 40; }
     if cs.kinds[2] != VC_CLAIM_DIV_ZERO() { return 41; }
     let q: String = query(cs, 2);
     if count_of(q, String::from("(assert (distinct v1 (_ bv0 64)))")) != 1 { return 42; }
     if !q.contains(String::from("(assert (not (and (= v0 ")) { return 43; }
     let first: String = query(cs, 0);
     if first.contains(String::from("(assert (distinct v1")) { return 44; }
+    if first.contains(String::from("(define-fun v2 ")) { return 45; }
+    if !query(cs, 2).contains(String::from("(define-fun v2 ")) { return 46; }
     0
 }
 
@@ -167,7 +169,7 @@ fn check_division_in_requires_is_positional() -> i64 {
     i.push(mk_vow(5, IOP_VOW_REQ(), 4, 0));
     i.push(mk_inst_return(6, 0));
     let cs: VcClaims = vc_claims(one_block(String::from("rq"), params2(), ITY_I64(), i));
-    if cs.scripts.len() != 1 { return 50; }
+    if cs.kinds.len() != 1 { return 50; }
     if query(cs, 0).contains(String::from("(assert v4)")) { return 51; }
     0
 }
@@ -183,7 +185,7 @@ fn check_names_are_internal() -> i64 {
     let f: IrFunction = one_block(String::from("evil"), p, ITY_I64(), i);
     f.param_names[0] = String::from("x\"; (assert false)");
     let cs: VcClaims = vc_claims(f);
-    if cs.scripts.len() != 1 { return 60; }
+    if cs.kinds.len() != 1 { return 60; }
     let q: String = query(cs, 0);
     if q.contains(String::from("assert false")) { return 61; }
     if q.contains(String::from("evil")) { return 62; }
@@ -206,7 +208,7 @@ fn check_bool_operators() -> i64 {
     if !q.contains(String::from("(define-fun v2 () Bool (not v1))\n")) { return 70; }
     if !q.contains(String::from("(define-fun v3 () Bool (or v1 v2))\n")) { return 71; }
     if !q.contains(String::from("(define-fun v4 () Bool (and v3 v1))\n")) { return 72; }
-    if !q.contains(String::from("(get-value ())\n")) { return 73; }
+    if q.contains(String::from("get-value")) { return 73; }
     0
 }
 

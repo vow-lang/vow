@@ -101,14 +101,38 @@ fn check_every_operator_has_a_symbol() -> i64 {
     0
 }
 
-fn check_copy_is_independent() -> i64 {
+fn check_prefix_is_independent() -> i64 {
     let ar: VcArena = vc_arena_new();
     let s: SmtScript = vc_script_new();
     vc_script_check_sat(s);
-    let c: SmtScript = vc_script_copy(s);
+    vc_script_set_logic(s, String::from("QF_BV"));
+    let c: SmtScript = vc_script_prefix(s, 1);
     vc_script_check_sat(c);
-    if vc_smt_render(ar, s) != String::from("(check-sat)\n") { return 40; }
+    if vc_smt_render(ar, s) != String::from("(check-sat)\n(set-logic QF_BV)\n") { return 40; }
     if vc_smt_render(ar, c) != String::from("(check-sat)\n(check-sat)\n") { return 41; }
+    if vc_smt_render(ar, vc_script_prefix(s, 99)) != vc_smt_render(ar, s) { return 42; }
+    let empty: SmtScript = vc_script_prefix(s, 0);
+    if empty.kinds.len() != 0 { return 43; }
+    0
+}
+
+fn check_get_value_without_names_is_omitted() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let s: SmtScript = vc_script_new();
+    vc_script_check_sat(s);
+    vc_script_get_value(s, Vec::new());
+    if vc_smt_render(ar, s) != String::from("(check-sat)\n") { return 50; }
+    0
+}
+
+fn check_unmapped_operator_is_not_a_known_symbol() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let x: i64 = vc_tm_var(ar, String::from("x"));
+    let s: SmtScript = vc_script_new();
+    vc_script_assert(s, vc_tm_app2(ar, -1, x, x));
+    let got: String = vc_smt_render(ar, s);
+    if got.contains(String::from("(or ")) || got.contains(String::from("(and ")) { return 60; }
+    if !got.contains(String::from("vc-unmapped-operator")) { return 61; }
     0
 }
 
@@ -116,6 +140,8 @@ fn main() -> i32 {
     let mut r: i64 = check_golden_script();
     if r == 0 { r = check_constants(); }
     if r == 0 { r = check_every_operator_has_a_symbol(); }
-    if r == 0 { r = check_copy_is_independent(); }
+    if r == 0 { r = check_prefix_is_independent(); }
+    if r == 0 { r = check_get_value_without_names_is_omitted(); }
+    if r == 0 { r = check_unmapped_operator_is_not_a_known_symbol(); }
     i64_to_i32_wrap(r)
 }
