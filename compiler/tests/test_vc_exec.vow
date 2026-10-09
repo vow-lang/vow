@@ -212,16 +212,6 @@ fn check_bool_operators() -> i64 {
     0
 }
 
-fn mk_const_bool(id: i64, v: i64) -> IrInst {
-    ir_inst_new(id, IOP_CONST_BOOL(), ITY_BOOL(), Vec::new(), IDATA_CONST_BOOL(), v, 0, String::from(""))
-}
-
-fn params1() -> Vec<i64> {
-    let p: Vec<i64> = Vec::new();
-    p.push(ITY_I64());
-    p
-}
-
 // pick(x): ensures result >= 0 over `if x > 0 { x } else { 0 }`.
 fn pick_function() -> IrFunction {
     let a: Vec<IrInst> = Vec::new();
@@ -247,7 +237,7 @@ fn pick_function() -> IrFunction {
     blocks.push(mk_block(1, t));
     blocks.push(mk_block(2, e));
     blocks.push(mk_block(3, m));
-    mk_function(1, String::from("pick"), params1(), ITY_I64(), blocks)
+    mk_function(1, String::from("pick"), mk_params1(), ITY_I64(), blocks)
 }
 
 fn check_diamond_phi_is_ite() -> i64 {
@@ -283,7 +273,7 @@ fn check_early_return_claims_carry_path_condition() -> i64 {
     blocks.push(mk_block(0, a));
     blocks.push(mk_block(1, neg));
     blocks.push(mk_block(2, pos));
-    let f: IrFunction = mk_function(1, String::from("early"), params1(), ITY_I64(), blocks);
+    let f: IrFunction = mk_function(1, String::from("early"), mk_params1(), ITY_I64(), blocks);
     if vc_skip_reason(f).len() != 0 { return 90; }
     let cs: VcClaims = vc_claims(f);
     if cs.kinds.len() != 2 { return 91; }
@@ -300,21 +290,21 @@ fn check_early_return_claims_carry_path_condition() -> i64 {
 fn check_constant_guard_prunes_dead_arm() -> i64 {
     let a: Vec<IrInst> = Vec::new();
     a.push(mk_inst_arg(0, ITY_I64(), 0));
-    a.push(mk_const_bool(1, 1));
+    a.push(mk_inst_const_bool(1, 1));
     a.push(mk_inst_branch(2, 1, 1, 2));
     let t: Vec<IrInst> = Vec::new();
-    t.push(mk_const_bool(3, 1));
+    t.push(mk_inst_const_bool(3, 1));
     t.push(mk_vow(4, IOP_VOW_ENS(), 3, 0));
     t.push(mk_inst_return(5, 0));
     let e: Vec<IrInst> = Vec::new();
-    e.push(mk_const_bool(6, 0));
+    e.push(mk_inst_const_bool(6, 0));
     e.push(mk_vow(7, IOP_VOW_ENS(), 6, 1));
     e.push(mk_inst_return(8, 0));
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, a));
     blocks.push(mk_block(1, t));
     blocks.push(mk_block(2, e));
-    let cs: VcClaims = vc_claims(mk_function(1, String::from("k"), params1(), ITY_I64(), blocks));
+    let cs: VcClaims = vc_claims(mk_function(1, String::from("k"), mk_params1(), ITY_I64(), blocks));
     if cs.kinds.len() != 1 { return 100; }
     if cs.vow_ids[0] != 0 { return 101; }
     0
@@ -334,7 +324,7 @@ fn check_repeated_guard_prunes_inner_else() -> i64 {
     inner_then.push(mk_vow(6, IOP_VOW_ENS(), 2, 0));
     inner_then.push(mk_inst_return(7, 0));
     let inner_else: Vec<IrInst> = Vec::new();
-    inner_else.push(mk_const_bool(8, 0));
+    inner_else.push(mk_inst_const_bool(8, 0));
     inner_else.push(mk_vow(9, IOP_VOW_ENS(), 8, 1));
     inner_else.push(mk_inst_return(10, 0));
     let blocks: Vec<IrBlock> = Vec::new();
@@ -343,7 +333,7 @@ fn check_repeated_guard_prunes_inner_else() -> i64 {
     blocks.push(mk_block(2, outer_else));
     blocks.push(mk_block(3, inner_then));
     blocks.push(mk_block(4, inner_else));
-    let cs: VcClaims = vc_claims(mk_function(1, String::from("rep"), params1(), ITY_I64(), blocks));
+    let cs: VcClaims = vc_claims(mk_function(1, String::from("rep"), mk_params1(), ITY_I64(), blocks));
     if cs.kinds.len() != 1 { return 110; }
     if cs.vow_ids[0] != 0 { return 111; }
     0
@@ -422,7 +412,7 @@ fn stress_function(n: i64) -> IrFunction {
     cur.push(mk_vow(id + 1, IOP_VOW_ENS(), id, 0));
     cur.push(mk_inst_return(id + 2, acc));
     blocks.push(mk_block(3 * n, cur));
-    mk_function(1, String::from("stress"), params1(), ITY_I64(), blocks)
+    mk_function(1, String::from("stress"), mk_params1(), ITY_I64(), blocks)
 }
 
 // The query grows with the number of changed names and edges, not with the
@@ -466,7 +456,7 @@ fn check_nested_else_edge_is_one_name() -> i64 {
     blocks.push(mk_block(2, outer_else));
     blocks.push(mk_block(3, inner_then));
     blocks.push(mk_block(4, inner_else));
-    let cs: VcClaims = vc_claims(mk_function(1, String::from("nest"), params1(), ITY_I64(), blocks));
+    let cs: VcClaims = vc_claims(mk_function(1, String::from("nest"), mk_params1(), ITY_I64(), blocks));
     if cs.kinds.len() != 1 { return 140; }
     let q: String = query(cs, 0);
     if count_of(q, String::from("() Bool (and v2 (not v3)))\n")) != 1 { return 141; }

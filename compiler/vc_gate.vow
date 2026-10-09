@@ -57,6 +57,28 @@ fn vc_ty_table(f: IrFunction) -> Vec<i64> {
     tys
 }
 
+// Types a Phi may carry. Unit is accepted for the statement-position `if`,
+// whose arms each feed a Unit Phi; the executor models no value for it.
+fn vc_is_merge_ty(ty: i64) -> bool {
+    ty == ITY_I64() || ty == ITY_BOOL() || ty == ITY_UNIT()
+}
+
+// `Unreachable` ends the dead merge block of an `if` whose arms both return.
+// It is fine there, because the executor never walks a block the entry cannot
+// reach; a reachable one would need a "this path aborts" obligation.
+fn vc_reachable_unreachable_detail(f: IrFunction, rpo: Vec<i64>) -> String {
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let last: IrInst = blk.insts[blk.insts.len() - 1];
+        if rpo[bi] >= 0 && last.op == IOP_UNREACHABLE() {
+            return opcode_name(last.op);
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}
+
 fn vc_arg_ty(tys: Vec<i64>, inst: IrInst, k: u64) -> i64 {
     if k >= inst.args.len() { return -1; }
     let id: i64 = inst.args[k];

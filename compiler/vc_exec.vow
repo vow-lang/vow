@@ -89,22 +89,13 @@ fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, pc: i64, go
     cs.labels.push(label);
     let ar: VcArena = cs.arena;
     let negated: i64 = vc_tm_app1(ar, VC_OP_NOT(), goal);
-    if vc_tm_is_true(ar, pc) {
-        cs.negated_goals.push(negated);
-    } else {
-        cs.negated_goals.push(vc_tm_app2(ar, VC_OP_AND(), pc, negated));
-    }
+    cs.negated_goals.push(vc_tm_and(ar, pc, negated));
     cs.header_lens.push(hdr.kinds.len() as i64);
     cs.assumed_lens.push(cs.assumed.len() as i64);
 }
 
 fn vc_assume(cs: VcClaims, pc: i64, t: i64) {
-    let ar: VcArena = cs.arena;
-    if vc_tm_is_true(ar, pc) {
-        cs.assumed.push(t);
-    } else {
-        cs.assumed.push(vc_tm_app2(ar, VC_OP_OR(), vc_tm_app1(ar, VC_OP_NOT(), pc), t));
-    }
+    cs.assumed.push(vc_tm_implies(cs.arena, pc, t));
 }
 
 // The self-contained query that decides claim `k`.
@@ -175,38 +166,42 @@ fn vc_branch_outcome(w: VcWalk, cond_id: i64, foff: i64, flen: i64) -> i64 {
     -1
 }
 
-// Registers the edge of `branch` to block `dst` taken when the condition
-// evaluates to `polarity`, unless the path already decided the other outcome.
-fn vc_branch_edge(w: VcWalk, bi: u64, pc: i64, foff: i64, flen: i64, cond_id: i64, outcome: i64, dst: i64, polarity: bool) {
-    let want: i64 = { if polarity { 1 } else { 0 } };
-    if outcome >= 0 && outcome != want {
-        return;
-    }
+// Registers the edge of the branch at the end of block `bi` to block `dst`,
+// taken when the condition evaluates to `polarity`. With a decided condition
+// the edge keeps the block's path condition; otherwise it is conjoined with the
+// outcome, which is also recorded as a fact for the blocks it leads to.
+fn vc_branch_edge(w: VcWalk, bi: u64, cond_id: i64, outcome: bool, decided: bool, dst: i64) {
     let cs: VcClaims = w.cs;
     let ar: VcArena = cs.arena;
     let fl: VcFlow = w.fl;
     let hdr: SmtScript = cs.header;
-    let c: i64 = w.var_of[cond_id as u64];
+    let pc: i64 = fl.block_pc[bi];
     let mut ec: i64 = pc;
-    let mut off: i64 = foff;
-    let mut len: i64 = flen;
-    if outcome < 0 {
-        if polarity {
+    let mut off: i64 = fl.block_foff[bi];
+    let mut len: i64 = fl.block_flen[bi];
+    if !decided {
+        let c: i64 = w.var_of[cond_id as u64];
+        if outcome {
             ec = vc_flow_and(fl, ar, hdr, pc, c);
         } else {
             ec = vc_flow_and_not(fl, ar, hdr, pc, c);
         }
-        off = vc_flow_extend_facts(fl, foff, flen, vc_flow_fact_lit(cond_id, polarity));
-        len = vc_flow_extended_len(flen);
+        off = vc_flow_extend_facts(fl, off, len, vc_flow_fact_lit(cond_id, outcome));
+        len = fl.pool.len() as i64 - off;
     }
     vc_flow_add_edge(fl, dst as u64, bi as i64, ec, off, len);
 }
 
-fn vc_walk_branch(w: VcWalk, inst: IrInst, bi: u64, pc: i64, foff: i64, flen: i64, then_idx: i64, else_idx: i64) {
+fn vc_walk_branch(w: VcWalk, inst: IrInst, bi: u64, then_idx: i64, else_idx: i64) {
+    let fl: VcFlow = w.fl;
     let cond_id: i64 = inst.args[0];
-    let outcome: i64 = vc_branch_outcome(w, cond_id, foff, flen);
-    vc_branch_edge(w, bi, pc, foff, flen, cond_id, outcome, then_idx, true);
-    vc_branch_edge(w, bi, pc, foff, flen, cond_id, outcome, else_idx, false);
+    let known: i64 = vc_branch_outcome(w, cond_id, fl.block_foff[bi], fl.block_flen[bi]);
+    if known != 0 {
+        vc_branch_edge(w, bi, cond_id, true, known == 1, then_idx);
+    }
+    if known != 1 {
+        vc_branch_edge(w, bi, cond_id, false, known == 0, else_idx);
+    }
 }
 
 fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
@@ -241,7 +236,7 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     } else if op == IOP_JUMP() {
         vc_flow_add_edge(fl, succ[bi * 2] as u64, bi as i64, pc, fl.block_foff[bi], fl.block_flen[bi]);
     } else if op == IOP_BRANCH() {
-        vc_walk_branch(w, inst, bi, pc, fl.block_foff[bi], fl.block_flen[bi], succ[bi * 2], succ[bi * 2 + 1]);
+        vc_walk_branch(w, inst, bi, succ[bi * 2], succ[bi * 2 + 1]);
     } else if op != IOP_RETURN() {
         let lhs: i64 = w.var_of[inst.args[0] as u64];
         let rhs: i64 = w.var_of[inst.args[1] as u64];

@@ -74,16 +74,6 @@ fn check_effects() -> i64 {
     0
 }
 
-fn params1() -> Vec<i64> {
-    let p: Vec<i64> = Vec::new();
-    p.push(ITY_I64());
-    p
-}
-
-fn mk_const_bool(id: i64, v: i64) -> IrInst {
-    ir_inst_new(id, IOP_CONST_BOOL(), ITY_BOOL(), Vec::new(), IDATA_CONST_BOOL(), v, 0, String::from(""))
-}
-
 // pick(x): if x > x { x } else { x }, joined through a Phi.
 fn diamond(feed_else: bool) -> IrFunction {
     let a: Vec<IrInst> = Vec::new();
@@ -106,7 +96,7 @@ fn diamond(feed_else: bool) -> IrFunction {
     blocks.push(mk_block(1, t));
     blocks.push(mk_block(2, e));
     blocks.push(mk_block(3, m));
-    mk_function(1, String::from("pick"), params1(), ITY_I64(), blocks)
+    mk_function(1, String::from("pick"), mk_params1(), ITY_I64(), blocks)
 }
 
 fn check_branches_accepted() -> i64 {
@@ -133,7 +123,7 @@ fn check_loop_rejected() -> i64 {
     blocks.push(mk_block(0, a));
     blocks.push(mk_block(1, b));
     blocks.push(mk_block(2, c));
-    let f: IrFunction = mk_function(1, String::from("lp"), params1(), ITY_I64(), blocks);
+    let f: IrFunction = mk_function(1, String::from("lp"), mk_params1(), ITY_I64(), blocks);
     if vc_skip_reason(f) != String::from("unsupported-opcode: loop (back edge in the control-flow graph)") { return 22; }
     0
 }
@@ -148,13 +138,9 @@ fn check_branch_to_unknown_block() -> i64 {
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, a));
     blocks.push(mk_block(1, b));
-    let f: IrFunction = mk_function(1, String::from("ub"), params1(), ITY_I64(), blocks);
+    let f: IrFunction = mk_function(1, String::from("ub"), mk_params1(), ITY_I64(), blocks);
     if vc_skip_reason(f) != String::from("unsupported-opcode: branch to an unknown block") { return 23; }
     0
-}
-
-fn mk_unreachable(id: i64) -> IrInst {
-    ir_inst_new(id, IOP_UNREACHABLE(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""))
 }
 
 // Both arms return, so the merge block (ending in Unreachable) has no
@@ -173,13 +159,13 @@ fn both_arms_return(dead_merge: bool) -> IrFunction {
         e.push(mk_inst_jump(4, 3));
     }
     let m: Vec<IrInst> = Vec::new();
-    m.push(mk_unreachable(5));
+    m.push(mk_inst_unreachable(5));
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, a));
     blocks.push(mk_block(1, t));
     blocks.push(mk_block(2, e));
     blocks.push(mk_block(3, m));
-    mk_function(1, String::from("ret2"), params1(), ITY_I64(), blocks)
+    mk_function(1, String::from("ret2"), mk_params1(), ITY_I64(), blocks)
 }
 
 fn check_unreachable_terminator() -> i64 {

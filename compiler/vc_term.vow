@@ -96,3 +96,21 @@ fn vc_tm_is_true(ar: VcArena, t: i64) -> bool {
 fn vc_tm_is_false(ar: VcArena, t: i64) -> bool {
     ar.kinds[t as u64] == VC_T_BOOL() && ar.aux[t as u64] == 0
 }
+
+// Boolean constructors that fold the constant `true`, so a path condition that
+// is trivially true never reaches the query text.
+fn vc_tm_and(ar: VcArena, a: i64, b: i64) -> i64 {
+    if vc_tm_is_true(ar, a) { return b; }
+    if vc_tm_is_true(ar, b) { return a; }
+    vc_tm_app2(ar, VC_OP_AND(), a, b)
+}
+
+fn vc_tm_or(ar: VcArena, a: i64, b: i64) -> i64 {
+    if vc_tm_is_true(ar, a) || vc_tm_is_true(ar, b) { return vc_tm_bool_const(ar, true); }
+    vc_tm_app2(ar, VC_OP_OR(), a, b)
+}
+
+fn vc_tm_implies(ar: VcArena, premise: i64, t: i64) -> i64 {
+    if vc_tm_is_true(ar, premise) { return t; }
+    vc_tm_app2(ar, VC_OP_OR(), vc_tm_app1(ar, VC_OP_NOT(), premise), t)
+}

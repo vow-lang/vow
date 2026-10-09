@@ -58,7 +58,7 @@ def main(argv):
         return 2
     vowc, fixtures = argv[1], argv[2:]
     compared = skipped = 0
-    mismatches = []
+    mismatches = unexcused = 0
     for fixture in fixtures:
         native = run(vowc, fixture, ["--backend", "native"])
         if native == "Skipped":
@@ -71,16 +71,15 @@ def main(argv):
             name = fixture.rsplit("/", 1)[-1]
             known = KNOWN_DIVERGENCES.get(name)
             note = known[2] if known and known[:2] == (esbmc, native) else None
-            mismatches.append((fixture, esbmc, native, note))
+            mismatches += 1
+            unexcused += note is None
             tag = "known divergence" if note else "MISMATCH"
             print(
                 f"{tag}: {fixture}: esbmc={esbmc} native={native}"
                 + (f" ({note})" if note else "")
             )
-    print(
-        f"compared {compared}, native-skipped {skipped}, mismatches {len(mismatches)}"
-    )
-    return 1 if any(note is None for *_, note in mismatches) else 0
+    print(f"compared {compared}, native-skipped {skipped}, mismatches {mismatches}")
+    return 1 if unexcused else 0
 
 
 if __name__ == "__main__":

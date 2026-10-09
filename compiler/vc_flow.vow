@@ -72,18 +72,12 @@ fn vc_flow_name(fl: VcFlow, ar: VcArena, hdr: SmtScript, sort: i64, t: i64) -> i
 }
 
 fn vc_flow_and(fl: VcFlow, ar: VcArena, hdr: SmtScript, a: i64, b: i64) -> i64 {
-    if vc_tm_is_true(ar, a) { return b; }
-    if vc_tm_is_true(ar, b) { return a; }
-    vc_flow_name(fl, ar, hdr, VC_SORT_BOOL(), vc_tm_app2(ar, VC_OP_AND(), a, b))
+    vc_flow_name(fl, ar, hdr, VC_SORT_BOOL(), vc_tm_and(ar, a, b))
 }
 
 // `pc and not c`, bound to one name (the negation alone is never named).
 fn vc_flow_and_not(fl: VcFlow, ar: VcArena, hdr: SmtScript, pc: i64, c: i64) -> i64 {
-    let negated: i64 = vc_tm_app1(ar, VC_OP_NOT(), c);
-    if vc_tm_is_true(ar, pc) {
-        return vc_flow_name(fl, ar, hdr, VC_SORT_BOOL(), negated);
-    }
-    vc_flow_name(fl, ar, hdr, VC_SORT_BOOL(), vc_tm_app2(ar, VC_OP_AND(), pc, negated))
+    vc_flow_and(fl, ar, hdr, pc, vc_tm_app1(ar, VC_OP_NOT(), c))
 }
 
 fn vc_flow_has_fact(fl: VcFlow, off: i64, len: i64, lit: i64) -> bool {
@@ -101,12 +95,8 @@ fn vc_flow_fact_lit(cond_id: i64, outcome: bool) -> i64 {
     if outcome { cond_id * 2 + 1 } else { cond_id * 2 }
 }
 
-// Length of a fact set extended by one literal, newest facts kept at the cap.
-fn vc_flow_extended_len(len: i64) -> i64 {
-    if len >= VC_FACT_CAP() { VC_FACT_CAP() } else { len + 1 }
-}
-
-// Offset of a copy of the fact set `off`/`len` extended by `lit`.
+// Offset of a copy of the fact set `off`/`len` extended by `lit`; the copy runs
+// to the end of the pool. At the cap the oldest facts are dropped.
 fn vc_flow_extend_facts(fl: VcFlow, off: i64, len: i64, lit: i64) -> i64 {
     let start: i64 = fl.pool.len() as i64;
     let mut from: i64 = 0;
@@ -139,21 +129,11 @@ fn vc_flow_enter(fl: VcFlow, ar: VcArena, hdr: SmtScript, bi: u64) -> bool {
     if first < 0 {
         return false;
     }
-    if fl.e_next[first as u64] < 0 {
-        fl.block_pc[bi] = fl.e_cond[first as u64];
-        fl.block_foff[bi] = fl.e_foff[first as u64];
-        fl.block_flen[bi] = fl.e_flen[first as u64];
-        return true;
-    }
     let mut pc: i64 = fl.e_cond[first as u64];
     let mut e: i64 = fl.e_next[first as u64];
     while e >= 0 {
         let c: i64 = fl.e_cond[e as u64];
-        if vc_tm_is_true(ar, pc) || vc_tm_is_true(ar, c) {
-            pc = vc_tm_bool_const(ar, true);
-        } else {
-            pc = vc_tm_app2(ar, VC_OP_OR(), pc, c);
-        }
+        pc = vc_tm_or(ar, pc, c);
         e = fl.e_next[e as u64];
     }
     fl.block_pc[bi] = vc_flow_name(fl, ar, hdr, VC_SORT_BOOL(), pc);
