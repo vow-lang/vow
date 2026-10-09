@@ -5296,7 +5296,7 @@ pub unsafe extern "C" fn __vow_btreemap_contains(map: *const u8, key: i64) -> bo
 }
 
 // ---------------------------------------------------------------------------
-// Sanitize mode — Vec provenance tracking
+// Sanitize mode — use-after-region-close detection for Vecs
 // ---------------------------------------------------------------------------
 
 static SANITIZE_ENABLED: AtomicBool = AtomicBool::new(false);
