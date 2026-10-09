@@ -791,7 +791,7 @@ fn replay_confirm() -> ReplayVerdict {
     ReplayVerdict { status: String::from("confirmed"), reason: String::from("") }
 }
 
-fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String, abort_claims: bool) -> ReplayVerdict [io] {
+fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String, abort_claims: bool) -> ReplayVerdict [io, read, write] {
     if ce.function == String::from("main") {
         return replay_skip(String::from("cannot replay the entry function `main`"));
     }
@@ -1077,7 +1077,7 @@ fn replay_last_error_kind_in_line(line: String) -> String {
     found
 }
 
-fn replay_all(ces: Vec<VerifyCE>, fns: Vec<IrFunction>, path: String, argv0: String, abort_claims: bool) -> Vec<VerifyCE> [io] {
+fn replay_all(ces: Vec<VerifyCE>, fns: Vec<IrFunction>, path: String, argv0: String, abort_claims: bool) -> Vec<VerifyCE> [io, read, write] {
     let out: Vec<VerifyCE> = Vec::new();
     let mut i: u64 = 0;
     while i < ces.len() {
@@ -1144,7 +1144,7 @@ fn skip_if_non_modelable(f: IrFunction, ir_mod: IrModule, const_fn_indices: Vec<
 
 // Returns 0=Verified, 1=VerifyFailed, 2=Skipped (both 1 and 2 exit 1).
 fn run_verify_loop(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                   vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64) -> i64 [io] {
+                   vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64) -> i64 [io, write] {
     run_verify_loop_traced(esbmc_bin, fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, trace_off())
 }
 
@@ -1153,7 +1153,7 @@ fn run_verify_loop(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrModule, co
 // `fi` is the function index used as the flow id. A no-op for tracing when `t`
 // is disabled. Returns the proven flag from verify_collect_and_report.
 fn verify_collect_traced(esbmc_bin: String, t: TraceCtx, verify_origin: i64, h: i64, tmp: String, f: IrFunction, fi: i64, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                         vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, model_bounds: Vec<String>, dctx: DiagCtx) -> i64 [io] {
+                         vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, model_bounds: Vec<String>, dctx: DiagCtx) -> i64 [io, write] {
     let proof_start: i64 = trace_now(t);
     trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, fi, TRACE_FLOW_START());
     trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, fi, TRACE_FLOW_END());
@@ -1168,7 +1168,7 @@ fn verify_collect_traced(esbmc_bin: String, t: TraceCtx, verify_origin: i64, h: 
 
 // Returns 0=Verified, 1=VerifyFailed, 2=Skipped (both 1 and 2 exit 1).
 fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                   vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64, t: TraceCtx) -> i64 [io] {
+                   vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64, t: TraceCtx) -> i64 [io, write] {
     let mut all_proven: i64 = 1;
     let mut any_skipped: i64 = 0;
     let verify_origin: i64 = trace_now(t);
@@ -1534,7 +1534,7 @@ fn verify_collect_and_report(
     esbmc_bin: String, h: i64, tmp_path: String, f: IrFunction, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>,
     max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
     vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, t: TraceCtx, dctx: DiagCtx,
-) -> i64 [io] {
+) -> i64 [io, write] {
     let effective_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
     let vr0: VerifyResult = verify_collect(h, f, effective_timeout, tmp_path, t);
     // #585: an `arith:` counterexample reports a checked operator whose abort is
@@ -1788,7 +1788,7 @@ fn native_plan(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64
 // reported in IR order, so the output does not depend on which worker finishes
 // first, and reporting stops at the first function that is not proven, as the
 // sequential driver did.
-fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx: TraceCtx) -> i32 [io] {
+fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx: TraceCtx) -> i32 [io, read, write] {
     let checked: CheckedFrontend = fr.checked;
     let dctx: DiagCtx = checked.dctx;
     let ir_mod: IrModule = fr.ir_mod;
@@ -1860,7 +1860,7 @@ fn run_verify_worker(argv: Vec<String>) -> i32 [io, read, write] {
     0
 }
 
-fn run_verify(argv: Vec<String>) -> i32 [io] {
+fn run_verify(argv: Vec<String>) -> i32 [io, read, write] {
     let path: String = frontend_path_from_argv(argv, true, String::from("verify"));
     let tctx: TraceCtx = {
         if has_flag(argv, "--perfetto") { trace_new(get_flag_arg(argv, "--perfetto")) }
@@ -1928,7 +1928,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
 
 // Shared tail of `verify`: counterexample selection, replay, trace output and
 // the JSON result. Returns the process exit code.
-fn verify_finish(argv: Vec<String>, fns: Vec<IrFunction>, path: String, dctx: DiagCtx, tctx: TraceCtx, status_str: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, failed: bool) -> i32 [io] {
+fn verify_finish(argv: Vec<String>, fns: Vec<IrFunction>, path: String, dctx: DiagCtx, tctx: TraceCtx, status_str: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, failed: bool) -> i32 [io, read, write] {
     let native: bool = get_flag_arg(argv, "--backend") == "native";
     let mut ces_final: Vec<VerifyCE> = Vec::new();
     let ce_wins: bool = vf_prefers_counterexample(ces, soft_meta, fns);
@@ -1980,7 +1980,7 @@ fn build_verify_phase(
     max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
     vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64,
     verify_origin: i64, t: TraceCtx, model_bounds: Vec<String>
-) -> Vec<i64> [io] {
+) -> Vec<i64> [io, write] {
     let mut all_proven: i64 = 1;
     let mut any_skipped: i64 = 0;
     let mut fi: i64 = 0;
@@ -2031,7 +2031,7 @@ fn build_verify_phase(
 //
 // A no-op when `in_flight_h` is empty; callers may invoke it unconditionally
 // without a do_verify guard if desired.
-fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64, verify_origin: i64, t: TraceCtx, model_bounds: Vec<String>, dctx: DiagCtx) -> i64 [io] {
+fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64, verify_origin: i64, t: TraceCtx, model_bounds: Vec<String>, dctx: DiagCtx) -> i64 [io, write] {
     let mut all_proven: i64 = all_proven_in;
     while in_flight_h.len() > 0 {
         let oldest_h: i64 = in_flight_h[0];
@@ -2097,11 +2097,11 @@ fn build_codegen_phase(ir_mod: IrModule, out: String, mode: i64, trace: i64, pat
     0
 }
 
-fn run_build(argv: Vec<String>) -> i32 [io] {
+fn run_build(argv: Vec<String>) -> i32 [io, read, write] {
     run_build_cmd(argv, true)
 }
 
-fn run_build_cmd(argv: Vec<String>, sub: bool) -> i32 [io] {
+fn run_build_cmd(argv: Vec<String>, sub: bool) -> i32 [io, read, write] {
     let path: String = frontend_path_from_argv(argv, sub, String::from("build"));
     let tctx: TraceCtx = {
         if has_flag(argv, "--perfetto") { trace_new(get_flag_arg(argv, "--perfetto")) }
@@ -2276,7 +2276,7 @@ fn emit_test_entry_json(file: String, name: String, status: String, exit_code: i
     r
 }
 
-fn run_test(argv: Vec<String>) -> i32 [io] {
+fn run_test(argv: Vec<String>) -> i32 [io, read, write] {
     let mut path: String = get_source_path_sub(argv);
     if path.len() == 0 {
         path = String::from(".");
@@ -5085,15 +5085,15 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Effect Types\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("| Effect   | Meaning                              |\n"));
-    r.push_str(String::from("|----------|--------------------------------------|\n"));
-    r.push_str(String::from("| `io`     | Standard I/O (print, stdin, network) |\n"));
-    r.push_str(String::from("| `read`   | File system reads                    |\n"));
-    r.push_str(String::from("| `write`  | File system writes                   |\n"));
-    r.push_str(String::from("| `panic`  | May panic (unwrap, etc.)             |\n"));
-    r.push_str(String::from("| `unsafe` | Unsafe operations (FFI, raw memory)  |\n"));
+    r.push_str(String::from("| Effect   | Meaning                                                                    |\n"));
+    r.push_str(String::from("|----------|----------------------------------------------------------------------------|\n"));
+    r.push_str(String::from("| `io`     | Output and process/system interaction (print, process, time, mkdir, remove, rename) |\n"));
+    r.push_str(String::from("| `read`   | Reads of external state (file system, environment, arguments, stdin)       |\n"));
+    r.push_str(String::from("| `write`  | File system writes (`fs_write`)                                            |\n"));
+    r.push_str(String::from("| `panic`  | May panic (unwrap, etc.)                                                   |\n"));
+    r.push_str(String::from("| `unsafe` | Unsafe operations (FFI, raw memory)                                        |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Each effect is independent -- `io` is not a superset of `read` or `write`.\n"));
+    r.push_str(String::from("Each effect is independent -- `io` is not a superset of `read` or `write`. A function that prints and also reads a file declares both: `[io, read]`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`.unwrap()` requires `[panic]`. Out-of-bounds indexing, the checked operators (`+! -! *! /! %!`) and the `/`, `%` zero-divisor traps do not: their aborts are verification obligations of pure functions, and declaring an effect would remove the function from the verifier model.\n"));
     r.push_str(String::from("\n"));
@@ -7415,7 +7415,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Fix:** Add the required effect to the function signature: `fn f() -> () [io]`.\n"));
+    r.push_str(String::from("**Fix:** Add the required effect to the function signature: `fn f() -> () [io]`. Effects are independent: `[io]` does not cover `read` or `write`, so a function that prints and reads a file declares `[io, read]`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn mark(p: Point) -> bool {\n"));
@@ -11114,15 +11114,15 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Effect Types\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("| Effect   | Meaning                              |\n"));
-    r.push_str(String::from("|----------|--------------------------------------|\n"));
-    r.push_str(String::from("| `io`     | Standard I/O (print, stdin, network) |\n"));
-    r.push_str(String::from("| `read`   | File system reads                    |\n"));
-    r.push_str(String::from("| `write`  | File system writes                   |\n"));
-    r.push_str(String::from("| `panic`  | May panic (unwrap, etc.)             |\n"));
-    r.push_str(String::from("| `unsafe` | Unsafe operations (FFI, raw memory)  |\n"));
+    r.push_str(String::from("| Effect   | Meaning                                                                    |\n"));
+    r.push_str(String::from("|----------|----------------------------------------------------------------------------|\n"));
+    r.push_str(String::from("| `io`     | Output and process/system interaction (print, process, time, mkdir, remove, rename) |\n"));
+    r.push_str(String::from("| `read`   | Reads of external state (file system, environment, arguments, stdin)       |\n"));
+    r.push_str(String::from("| `write`  | File system writes (`fs_write`)                                            |\n"));
+    r.push_str(String::from("| `panic`  | May panic (unwrap, etc.)                                                   |\n"));
+    r.push_str(String::from("| `unsafe` | Unsafe operations (FFI, raw memory)                                        |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Each effect is independent -- `io` is not a superset of `read` or `write`.\n"));
+    r.push_str(String::from("Each effect is independent -- `io` is not a superset of `read` or `write`. A function that prints and also reads a file declares both: `[io, read]`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`.unwrap()` requires `[panic]`. Out-of-bounds indexing, the checked operators (`+! -! *! /! %!`) and the `/`, `%` zero-divisor traps do not: their aborts are verification obligations of pure functions, and declaring an effect would remove the function from the verifier model.\n"));
     r.push_str(String::from("\n"));
@@ -13452,7 +13452,7 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Fix:** Add the required effect to the function signature: `fn f() -> () [io]`.\n"));
+    r.push_str(String::from("**Fix:** Add the required effect to the function signature: `fn f() -> () [io]`. Effects are independent: `[io]` does not cover `read` or `write`, so a function that prints and reads a file declares `[io, read]`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn mark(p: Point) -> bool {\n"));
@@ -16053,7 +16053,7 @@ fn run_skill(argv: Vec<String>) -> i32 [io, read, write] {
     0
 }
 
-fn maybe_auto_install_skill() [io, write] {
+fn maybe_auto_install_skill() [io, read, write] {
     if fs_is_dir(".claude") != 1 {
         return;
     }
@@ -16253,7 +16253,7 @@ fn cq_classify(kind: String, desc: String) -> String {
     String::from("substantive")
 }
 
-fn run_contracts(argv: Vec<String>) -> i32 [io] {
+fn run_contracts(argv: Vec<String>) -> i32 [io, read, write] {
     let path: String = frontend_path_from_argv(argv, true, String::from("contracts"));
     let fr: LoweredFrontend = frontend_lower_path(path);
     let checked: CheckedFrontend = fr.checked;

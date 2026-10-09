@@ -12,7 +12,7 @@ use ir_dominance
 // without this sweep a lowerer regression would silently shrink verified code.
 
 // Name of the first function with a non-dominating read, or "" when clean.
-fn first_offender(path: String, root: String) -> String [io] {
+fn first_offender(path: String, root: String) -> String [io, read] {
     let lowered: LoweredFrontend = frontend_lower_path_with_root(path, root);
     let m: IrModule = lowered.ir_mod;
     if m.functions.len() == 0 {
@@ -29,7 +29,7 @@ fn first_offender(path: String, root: String) -> String [io] {
     String::from("")
 }
 
-fn check(path: String, root: String) -> bool [io] {
+fn check(path: String, root: String) -> bool [io, read] {
     let bad: String = first_offender(path, root);
     if bad.len() > 0 {
         print_str(String::from("non-dominating read in "));
@@ -42,7 +42,7 @@ fn check(path: String, root: String) -> bool [io] {
     true
 }
 
-fn main() -> i32 [io] {
+fn main() -> i32 [io, read] {
     let mut failed: i32 = 0;
     if !check(String::from("compiler/main.vow"), String::from("compiler")) { failed = failed + 1; }
     if !check(String::from("tests/fixtures/short_circuit_assign.vow"), String::from("")) { failed = failed + 1; }

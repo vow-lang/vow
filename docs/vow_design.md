@@ -250,8 +250,8 @@ Every function has an explicit effect signature. A function with no effect annot
 Current effect vocabulary:
 
 - Pure (implicit, no annotation)
-- `[io]` — standard I/O (print, stdin, network)
-- `[read]` — file system reads
+- `[io]` — output and process/system interaction (print, process, time, mkdir, remove, rename)
+- `[read]` — reads of external state (file system, environment, arguments, stdin)
 - `[write]` — file system writes
 - `[panic]` — may panic (unwrap, etc.)
 - `[unsafe]` — unsafe operations (FFI, raw memory)

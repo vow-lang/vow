@@ -100,7 +100,7 @@ fn test_filter_matches(path: String, filter: String) -> bool {
 // Discover and filter in one traversal. Symlink entries are skipped, matching
 // Rust DirEntry::file_type lstat semantics; a direct scan path retains the
 // existing behavior and is selected by stem filter regardless of its filename.
-fn discover_selected_tests(root: String, filter: String, root_is_dir: bool) -> Vec<String> [io] {
+fn discover_selected_tests(root: String, filter: String, root_is_dir: bool) -> Vec<String> [io, read] {
     let files: Vec<String> = Vec::new();
     if !root_is_dir {
         if test_filter_matches(root, filter) {
@@ -137,7 +137,7 @@ fn discover_selected_tests(root: String, filter: String, root_is_dir: bool) -> V
 
 // Build the only selection interface consumed by `run_test`. The caller owns
 // nonexistent-path diagnostics; this function assumes `scan_path` exists.
-fn select_tests(scan_path: String, filter: String, module_root_override: String) -> TestSelection [io] {
+fn select_tests(scan_path: String, filter: String, module_root_override: String) -> TestSelection [io, read] {
     let scan_is_dir: bool = fs_is_dir(scan_path) == 1;
     let files: Vec<String> = discover_selected_tests(scan_path, filter, scan_is_dir);
     let module_root: String = {
@@ -229,7 +229,7 @@ fn psi_avg10_int(text: String, kind: String) -> i64 {
 
 // Extra workers are only started while the machine is not under memory or IO
 // stall pressure; the first worker is always allowed so progress is guaranteed.
-fn machine_under_pressure() -> bool [io] {
+fn machine_under_pressure() -> bool [io, read] {
     let mem: i64 = psi_avg10_int(fs_read(String::from("/proc/pressure/memory")), String::from("some"));
     let stall: i64 = psi_avg10_int(fs_read(String::from("/proc/pressure/io")), String::from("full"));
     mem >= 20 || stall >= 20
@@ -260,7 +260,7 @@ fn test_worker_argv(test_path: String, module_root: String, common: Vec<String>,
 // Run every file in a worker subprocess of `exe`, at most `jobs` at a time.
 // Returns the raw worker replies in file order regardless of completion order;
 // a worker that could not start or died without a reply yields "".
-fn run_tests_parallel(exe: String, files: Vec<String>, module_root: String, common: Vec<String>, jobs: i64) -> Vec<String> [io] {
+fn run_tests_parallel(exe: String, files: Vec<String>, module_root: String, common: Vec<String>, jobs: i64) -> Vec<String> [io, read] {
     let n: u64 = files.len();
     let replies: Vec<String> = Vec::new();
     let mut k: u64 = 0;

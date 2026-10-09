@@ -2642,15 +2642,15 @@ Effects are explicit. Every function declares which side effects it may perform.
 
 ### Effect Types
 
-| Effect   | Meaning                              |
-|----------|--------------------------------------|
-| `io`     | Standard I/O (print, stdin, network) |
-| `read`   | File system reads                    |
-| `write`  | File system writes                   |
-| `panic`  | May panic (unwrap, etc.)             |
-| `unsafe` | Unsafe operations (FFI, raw memory)  |
+| Effect   | Meaning                                                                    |
+|----------|----------------------------------------------------------------------------|
+| `io`     | Output and process/system interaction (print, process, time, mkdir, remove, rename) |
+| `read`   | Reads of external state (file system, environment, arguments, stdin)       |
+| `write`  | File system writes (`fs_write`)                                            |
+| `panic`  | May panic (unwrap, etc.)                                                   |
+| `unsafe` | Unsafe operations (FFI, raw memory)                                        |
 
-Each effect is independent — `io` is not a superset of `read` or `write`.
+Each effect is independent — `io` is not a superset of `read` or `write`. A function that prints and also reads a file declares both: `[io, read]`.
 
 `.unwrap()` requires `[panic]`. Out-of-bounds indexing, the checked operators (`+! -! *! /! %!`) and the `/`, `%` zero-divisor traps do not: their aborts are verification obligations of pure functions, and declaring an effect would remove the function from the verifier model.
 
@@ -4972,7 +4972,7 @@ fn f() -> () {
 }
 ```
 
-**Fix:** Add the required effect to the function signature: `fn f() -> () [io]`.
+**Fix:** Add the required effect to the function signature: `fn f() -> () [io]`. Effects are independent: `[io]` does not cover `read` or `write`, so a function that prints and reads a file declares `[io, read]`.
 
 ```vow
 fn mark(p: Point) -> bool {
@@ -8649,15 +8649,15 @@ Effects are explicit. Every function declares which side effects it may perform.
 
 ### Effect Types
 
-| Effect   | Meaning                              |
-|----------|--------------------------------------|
-| `io`     | Standard I/O (print, stdin, network) |
-| `read`   | File system reads                    |
-| `write`  | File system writes                   |
-| `panic`  | May panic (unwrap, etc.)             |
-| `unsafe` | Unsafe operations (FFI, raw memory)  |
+| Effect   | Meaning                                                                    |
+|----------|----------------------------------------------------------------------------|
+| `io`     | Output and process/system interaction (print, process, time, mkdir, remove, rename) |
+| `read`   | Reads of external state (file system, environment, arguments, stdin)       |
+| `write`  | File system writes (`fs_write`)                                            |
+| `panic`  | May panic (unwrap, etc.)                                                   |
+| `unsafe` | Unsafe operations (FFI, raw memory)                                        |
 
-Each effect is independent — `io` is not a superset of `read` or `write`.
+Each effect is independent — `io` is not a superset of `read` or `write`. A function that prints and also reads a file declares both: `[io, read]`.
 
 `.unwrap()` requires `[panic]`. Out-of-bounds indexing, the checked operators (`+! -! *! /! %!`) and the `/`, `%` zero-divisor traps do not: their aborts are verification obligations of pure functions, and declaring an effect would remove the function from the verifier model.
 
@@ -10983,7 +10983,7 @@ fn f() -> () {
 }
 ```
 
-**Fix:** Add the required effect to the function signature: `fn f() -> () [io]`.
+**Fix:** Add the required effect to the function signature: `fn f() -> () [io]`. Effects are independent: `[io]` does not cover `read` or `write`, so a function that prints and reads a file declares `[io, read]`.
 
 ```vow
 fn mark(p: Point) -> bool {

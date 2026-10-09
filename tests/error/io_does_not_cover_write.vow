@@ -1,0 +1,13 @@
+// TEST: error-code EffectViolation
+//
+// Issue #635: `io` is independent of `write`; a function that writes must
+// declare `[write]` (e.g. `[io, write]`) even when it already declares `[io]`.
+module io_does_not_cover_write
+
+fn save(path: String, data: String) -> i64 [io] {
+    fs_write(path, data)
+}
+
+fn main() -> i32 [io] {
+    0
+}

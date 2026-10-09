@@ -1,0 +1,28 @@
+// TEST: exit 0
+// TEST: stdout "ok\n"
+//
+// Issue #635: `io`, `read` and `write` are independent effects; a function
+// that prints, reads and writes declares all three.
+module IoReadWriteDeclaredTogether
+
+fn roundtrip() -> bool [io, read, write] {
+    let dir: String = mktemp_dir(String::from("vow-635"));
+    let path: String = String::from("");
+    path.push_str(dir);
+    path.push_str(String::from("/f.txt"));
+    if fs_write(path, String::from("x")) != 0 {
+        return false;
+    }
+    let found: bool = fs_exists(path) == 1;
+    fs_remove(path);
+    fs_remove_dir(dir);
+    found
+}
+
+fn main() -> i32 [io, read, write] {
+    if !roundtrip() {
+        return 1;
+    }
+    print_str(String::from("ok\n"));
+    0
+}

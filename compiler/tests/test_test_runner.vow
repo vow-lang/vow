@@ -2,7 +2,7 @@ module TestTestRunner
 
 use runner_plan
 
-fn main() -> i32 [io] {
+fn main() -> i32 [io, read] {
     let directory: TestSelection = select_tests(
         String::from("compiler/tests"),
         String::from("smoke"),
