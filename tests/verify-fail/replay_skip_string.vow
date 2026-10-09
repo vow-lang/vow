@@ -1,6 +1,6 @@
 // TEST: category callee-blame
 // TEST: counterexample-fn "want_big"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-vow-id 0
 // TEST: replay skipped
 //

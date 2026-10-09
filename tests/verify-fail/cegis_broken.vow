@@ -1,7 +1,7 @@
 // TEST: category callee-blame
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-fn "safe_sub"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 module CegisBroken
 
 fn safe_sub(a: i64, b: i64 where b >= 0) -> i64 vow {

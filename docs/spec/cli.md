@@ -61,7 +61,7 @@ Opt-in; the default stays `esbmc`. Implemented only by the self-hosted `vowc`: t
 
 - **Subset.** A function is verified when it is pure, its control flow is acyclic, and it uses only these operations on integers of every width (`i8`..`i128`, `u8`..`u128`) and `bool`: constants, integer parameters, wrapping `+ - * / %`, the checked `+! -! *! /! %!`, `& | ^`, `<<` and `>>` (the shifted type's signedness picks arithmetic or logical `>>`), integer `as` casts (widening, same-width, and the truncating casts the lowerer emits for coerced literals), comparisons (`==`/`!=` also on `bool`), `!`, `if`/`else` (including nested, early `return`, and the `&&`/`||` that lower to branches) with the variables they update, and `requires`/`ensures` clauses. Integers are fixed-width bit-vectors, so wrapping, signedness and 128-bit values are exact. Everything else (loops, calls (so the narrowing intrinsics such as `i64_to_u8_wrap`), effects, `bool` parameters, floats, collections, enum and struct values and so the `match` over them, `invariant`) is **`Skipped`**, never `Verified`. The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from ADR-1430 (`function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`, `unmodeled-builtin` with detail the runtime symbol, `wide-aggregate-field`, `unsupported-opcode` with detail `Op[type]`, or a control-flow shape such as `loop (back edge in the control-flow graph)`). A machine-readable `reason_code` field is not emitted yet.
 - **Proof obligations.** One query per `ensures` clause and per abort site, in walk order (blocks in reverse postorder); a `requires` is an assumption only for the obligations after it, and so is every earlier abort guard on the same path (an aborting run never reaches a later obligation). An obligation is asked only on the paths that reach it: its query asserts the block's path condition, and an assumption made inside a branch holds only under that branch's condition. A variable updated in a branch is merged with one `ite` over the incoming edges, and only when the arms supply different values; a branch whose condition is constant, or was already decided by an enclosing branch on the same value, leaves the other arm unexecuted. The query grows with the number of branches and updated variables, not with the number of paths. Two kinds of abort follow the language:
-  - *Wrapping `/` and `%`* abort on a zero divisor, and signed `/` aborts on `MIN / -1` (`MIN % -1` is `0`). A shift aborts unless `0 <= count < width` of the shifted type, tested in the count's own type so a negative signed count is rejected. Each is its own obligation: a counterexample is `VerifyFailed`, with the unattributed vow id `4294967293`, blame `none` and violation text `division or remainder by zero`, `signed division overflow (MIN / -1)` or `shift amount exceeds the operand's bit width`.
+  - *Wrapping `/` and `%`* abort on a zero divisor, and signed `/` aborts on `MIN / -1` (`MIN % -1` is `0`). A shift aborts unless `0 <= count < width` of the shifted type, tested in the count's own type so a negative signed count is rejected. Each is its own obligation: a counterexample is `VerifyFailed`, with the unattributed vow id `4294967293`, blame `None` and violation text `division or remainder by zero`, `signed division overflow (MIN / -1)` or `shift amount exceeds the operand's bit width`.
   - *Checked `+! -! *! /! %!`* abort on overflow (and on a zero divisor, and signed `MIN /! -1`). The contract is judged on returning executions only, so a counterexample to such an abort is **not** a failure: the function is still `Verified` when its contracts hold, and each reachable abort adds an `ArithOverflowReachable` warning, as under ESBMC.
 
   A function with no obligation is `Verified` without a solver call. Counterexample values are decimal text of the declared type (unsigned types as magnitudes, 128-bit values in full).
@@ -380,7 +380,7 @@ failure.
         "length": 20
       },
       "hints": ["function `safe_sub` failed to establish its postcondition"],
-      "blame": "callee"
+      "blame": "Callee"
     }
   ],
   "function": "safe_sub",
@@ -396,15 +396,15 @@ failure.
         "offset": 76,
         "length": 20
       },
-      "blame": "callee"
+      "blame": "Callee"
     }
   ]
 }
 ```
 
 Every counterexample also yields one `error` diagnostic, appended after any
-warnings. Its code follows the counterexample's `blame` (`caller` →
-`VowRequiresViolated`, `callee` → `VowEnsuresViolated`; a failed `invariant` is
+warnings. Its code follows the counterexample's `blame` (`Caller` →
+`VowRequiresViolated`, `Callee` → `VowEnsuresViolated`; a failed `invariant` is
 callee-blamed, so it reports `VowEnsuresViolated`), or is
 `VerifierAssertionUnattributed` when the failure is not attributed to a vow
 clause. The `message` is ``contract violation in `<function>`: <violation>`` (or
@@ -432,14 +432,19 @@ argument expression.
 
 When a callee verified alongside its caller fails its own `ensures` or
 `invariant`, the counterexample is attributed to that callee: `function` names
-the callee, `violation`, `source` and `blame` (`"callee"`) are the callee's
+the callee, `violation`, `source` and `blame` (`"Callee"`) are the callee's
 clause, and `vow_id` is the callee-local id. The outcome's top-level `function`
 remains the function being verified. Such a counterexample carries no
 `execution_path` or `branch_decisions` (block ids are not attributable to the
 callee), and `--replay-cex` reports it as `"skipped"` because its inputs are
 the caller's.
 
-When `blame` is `"none"`, `violation` describes the failed verifier-model check
+`blame` uses one casing on every surface: `Caller` or `Callee` in diagnostics
+(omitted when no party is at fault), `Caller`, `Callee` or `None` in
+counterexamples, and the same `Caller`/`Callee` in `vow contracts` and the
+runtime `VowViolation` line.
+
+When `blame` is `"None"`, `violation` describes the failed verifier-model check
 (such as division by zero, collection bounds or capacity, unwrap-on-None, or
 shift count) rather than exposing raw verifier output.
 
@@ -479,7 +484,7 @@ the structured diagnostics documented under [Runtime Errors](errors.md#runtime-e
 
 `replay`/`replay_reason` are present on a counterexample only when `--replay-cex` was passed.
 
-**Native backend.** Under `vowc verify --backend native` the replay contract is stricter, because the native model is meant to be checked against the runtime rather than trusted. The counterexamples for a division or remainder abort (zero divisor; signed `MIN / -1`), which carry the reserved unattributed `vow_id` and blame `none`, are replayed instead of skipped: the harness calls the function with the counterexample's inputs and the replay is `"confirmed"` when the program aborts with `ArithmeticOverflow` (exit status `134`). The runtime envelope names the abort kind but not the site, so this confirms the kind of failure for those inputs, not which operation raised it. A native counterexample whose replay ends `"diverged"` or `"aborted"` additionally yields one [`VerifierBug`](errors.md#verifierbug) error diagnostic: the model and the runtime disagree, so the defect is in the verifier. `"skipped"` never ran and is not reported as a verifier bug. The `status` and exit code are unchanged. The ESBMC backend keeps skipping the unattributed ids.
+**Native backend.** Under `vowc verify --backend native` the replay contract is stricter, because the native model is meant to be checked against the runtime rather than trusted. The counterexamples for a division or remainder abort (zero divisor; signed `MIN / -1`), which carry the reserved unattributed `vow_id` and blame `None`, are replayed instead of skipped: the harness calls the function with the counterexample's inputs and the replay is `"confirmed"` when the program aborts with `ArithmeticOverflow` (exit status `134`). The runtime envelope names the abort kind but not the site, so this confirms the kind of failure for those inputs, not which operation raised it. A native counterexample whose replay ends `"diverged"` or `"aborted"` additionally yields one [`VerifierBug`](errors.md#verifierbug) error diagnostic: the model and the runtime disagree, so the defect is in the verifier. `"skipped"` never ran and is not reported as a verifier bug. The `status` and exit code are unchanged. The ESBMC backend keeps skipping the unattributed ids.
 
 ## Contracts Output JSON
 

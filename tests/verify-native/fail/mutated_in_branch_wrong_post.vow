@@ -1,6 +1,6 @@
 // TEST: counterexample-fn "bump"
 // TEST: counterexample-vow-id 2
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-violation "ensures result == x + 1"
 module MutatedInBranchWrongPost
 

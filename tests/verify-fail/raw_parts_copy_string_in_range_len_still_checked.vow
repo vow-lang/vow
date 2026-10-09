@@ -1,7 +1,7 @@
 // TEST: category callee-blame
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-fn "small"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // An in-range constant length keeps the plain assumption, so a false
 // postcondition after the call is still reported.
 module RawPartsCopyStringInRangeLenStillChecked

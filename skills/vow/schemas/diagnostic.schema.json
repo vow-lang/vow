@@ -75,7 +75,7 @@
     },
     "blame": {
       "type": "string",
-      "enum": ["caller", "callee"],
+      "enum": ["Caller", "Callee"],
       "description": "Who is responsible for a contract violation; omitted when no party is at fault"
     }
   },

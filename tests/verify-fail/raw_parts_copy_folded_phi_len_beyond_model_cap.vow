@@ -1,7 +1,7 @@
 // TEST: category overflow
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-fn "big"
-// TEST: counterexample-blame none
+// TEST: counterexample-blame None
 // A `let mut` whose every assignment is the same constant reaches the call
 // through a phi, yet the length is provably 500: above the model capacity of
 // both String (256) and Vec (128), so it must fail closed rather than be

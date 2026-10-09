@@ -1,7 +1,7 @@
 // TEST: category callee-blame
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-fn "set_c"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // #397 precision guard: the user-struct heap model is not vacuous. A WRONG
 // field postcondition (result.c == c + 1) is refuted with a callee-blamed
 // counterexample — proving FieldSet then FieldGet read the same heap slot.

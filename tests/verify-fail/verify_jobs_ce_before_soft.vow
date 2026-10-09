@@ -1,7 +1,7 @@
 // TEST: category callee-blame
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-fn "early_bad"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // Regression: with --verify-jobs > 1, an earlier counterexample must suppress
 // later in-flight soft verifier metadata in the final JSON payload.
 module VerifyJobsCeBeforeSoft

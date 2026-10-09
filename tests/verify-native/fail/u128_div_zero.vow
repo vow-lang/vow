@@ -1,7 +1,7 @@
 // TEST: replay-skipped 128-bit parameter
 // TEST: counterexample-fn "divide"
 // TEST: counterexample-vow-id 4294967293
-// TEST: counterexample-blame none
+// TEST: counterexample-blame None
 // TEST: counterexample-violation "division or remainder by zero"
 // TEST: counterexample-value y 0
 module U128DivZero

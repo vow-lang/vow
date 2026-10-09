@@ -1,7 +1,7 @@
 // TEST: replay-skipped 128-bit parameter
 // TEST: counterexample-fn "bigger"
 // TEST: counterexample-vow-id 0
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-violation "ensures result > x"
 // TEST: counterexample-value x 170141183460469231731687303715884105727
 module I128OverflowPost

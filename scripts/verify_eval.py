@@ -63,7 +63,7 @@ CATEGORIES = {
     "unverifiable",
 }
 
-VALID_BLAME = {"caller", "callee", "none"}
+VALID_BLAME = {"Caller", "Callee", "None"}
 
 # Verdict kinds, ordered by severity for reporting.
 SOUNDNESS = "soundness"
@@ -193,9 +193,9 @@ def parse_directives(path, default_status):
                 if len(parts) < 2:
                     raise ValueError(
                         f"{path}: malformed counterexample-blame directive "
-                        f"(expected: counterexample-blame <caller|callee|none>): {body!r}"
+                        f"(expected: counterexample-blame <Caller|Callee|None>): {body!r}"
                     )
-                legacy["blame"] = validate_blame(path, parts[1].strip().lower())
+                legacy["blame"] = validate_blame(path, parts[1].strip())
             elif body.startswith("counterexample-vow-id"):
                 parts = body.split(None, 1)
                 if len(parts) < 2:
@@ -219,7 +219,7 @@ def parse_directives(path, default_status):
                     if key == "fn":
                         cex["fn"] = val
                     elif key == "blame":
-                        cex["blame"] = validate_blame(path, val.lower())
+                        cex["blame"] = validate_blame(path, val)
                     elif key == "vow_id":
                         cex["vow_id"] = int(val)
                 missing = {"fn", "blame", "vow_id"} - set(cex)
@@ -287,7 +287,7 @@ def actual_cex(verify_json):
         result.append(
             {
                 "fn": ce.get("function"),
-                "blame": (blame or "none").lower(),
+                "blame": blame or "None",
                 "vow_id": ce.get("vow_id"),
             }
         )
@@ -324,7 +324,7 @@ def match_cex(want, actuals):
         same_fn = actuals
     if "blame" in want and all(want["blame"] != g["blame"] for g in same_fn):
         got = ", ".join(sorted({g["blame"] for g in same_fn}))
-        return "blame", f"blame want={want['blame']} got={got or 'none'}", None
+        return "blame", f"blame want={want['blame']} got={got or 'None'}", None
     if "vow_id" in want and all(want["vow_id"] != g["vow_id"] for g in same_fn):
         got = ", ".join(sorted({str(g["vow_id"]) for g in same_fn}))
         return "vow_id", f"vow_id want={want['vow_id']} got={got or 'none'}", None

@@ -1,7 +1,7 @@
 // TEST: category overflow
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-fn "big"
-// TEST: counterexample-blame none
+// TEST: counterexample-blame None
 // A length that is the result of calling a constant-returning function is
 // provably 500, above the model capacity of both String (256) and Vec (128), so
 // it must fail closed like a literal rather than be assumed away (which would

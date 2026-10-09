@@ -1,7 +1,7 @@
 // TEST: category callee-blame
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-fn "push_three"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 module VecOvercount
 
 fn push_three() -> Vec<i64> vow {

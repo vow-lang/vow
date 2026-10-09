@@ -1,7 +1,7 @@
 // TEST: category invariant
 // TEST: counterexample-vow-id 2
 // TEST: counterexample-fn "fill_and_sum"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // The loop invariant claims sum == i but the loop
 // adds (i+1) each iteration, so sum grows faster than i.
 // Concrete loop bound (8), not a `requires n <= 8` clause: ESBMC unwind limits

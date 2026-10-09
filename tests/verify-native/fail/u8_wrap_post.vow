@@ -1,7 +1,7 @@
 // TEST: replay-skipped u8 parameter
 // TEST: counterexample-fn "inc"
 // TEST: counterexample-vow-id 0
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-violation "ensures result > x"
 // TEST: counterexample-value x 255
 module U8WrapPost

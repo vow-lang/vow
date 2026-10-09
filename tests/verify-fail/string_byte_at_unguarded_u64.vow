@@ -1,6 +1,6 @@
 // TEST: category bounds
 // TEST: counterexample-fn "byte_at_any"
-// TEST: counterexample-blame none
+// TEST: counterexample-blame None
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-violation "index out of bounds"
 // An unsigned offset still has an upper bound: byte_at on an index that is not

@@ -1,7 +1,7 @@
 // TEST: category overflow
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-fn "over"
-// TEST: counterexample-blame none
+// TEST: counterexample-blame None
 // String capacity assertion: a.len + b.len can exceed string_max (both
 // parameters are modelled nondeterministically in [0, string_max-1]), and
 // using parameters matters: String::from("a") now clones a concrete

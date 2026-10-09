@@ -1,6 +1,6 @@
 // TEST: category callee-blame
 // TEST: counterexample-fn "widen_and_bound"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-violation "ensures result < 100 as u64"
 // The failing ensures clause carries an `as u64` cast, so the counterexample's
 // `violation` text must render the real cast target type on both compilers.

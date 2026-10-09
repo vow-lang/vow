@@ -1,6 +1,6 @@
 // TEST: category caller-blame
 // TEST: counterexample-fn "f"
-// TEST: counterexample-blame caller
+// TEST: counterexample-blame Caller
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-violation "requires x > 0"
 // TEST: counterexample-call-site-count 1

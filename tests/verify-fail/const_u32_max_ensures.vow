@@ -1,6 +1,6 @@
 // TEST: category callee-blame
 // TEST: counterexample-fn "wide"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-violation "ensures result == 4294967294"
 // A u32 const above i32::MAX must reach the verifier model as an unsigned
 // value, so an off-by-one ensures has to fail.
