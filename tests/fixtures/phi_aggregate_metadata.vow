@@ -51,3 +51,43 @@ fn spin_loop(n: i64) -> i64 {
     }
     p.b
 }
+
+fn mutate_in_if(c: bool) -> i64 {
+    let mut p = P { a: 0, b: 0 };
+    if c { p = P { a: 1, b: 2 }; } else { p = P { a: 3, b: 4 }; }
+    p.a
+}
+
+fn mutate_in_if_no_else(c: bool) -> i64 {
+    let mut p = P { a: 0, b: 0 };
+    if c { p = P { a: 1, b: 2 }; }
+    p.a
+}
+
+fn mutate_then_returns(c: bool) -> i64 {
+    let mut p = P { a: 0, b: 0 };
+    if c { return 0; } else { p = P { a: 1, b: 2 }; }
+    p.a
+}
+
+fn mutate_in_match(o: Option<i64>) -> i64 {
+    let mut p = P { a: 0, b: 0 };
+    match o {
+        Option::Some(v) => { p = P { a: v, b: 2 }; },
+        Option::None => { p = P { a: 3, b: 4 }; },
+    }
+    p.a
+}
+
+fn break_value() -> i64 {
+    let p = loop { break P { a: 1, b: 2 }; };
+    p.a
+}
+
+fn spin_for(v: Vec<i64>) -> i64 {
+    let mut p = P { a: 0, b: 7 };
+    for x in v {
+        p = P { a: p.a + x, b: p.b };
+    }
+    p.b
+}

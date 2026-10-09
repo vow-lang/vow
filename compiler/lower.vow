@@ -66,6 +66,7 @@ struct LowerCtx {
     loop_break_up_ids: Vec<i64>,
     loop_break_up_blocks: Vec<i64>,
     loop_break_up_tys: Vec<i64>,
+    loop_break_up_vals: Vec<i64>,
     loop_break_counts: Vec<i64>,
     loop_exit_phi_names: Vec<Vec<String>>,
     loop_exit_phi_ids: Vec<Vec<i64>>,
@@ -167,6 +168,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         loop_break_up_ids: Vec::new(),
         loop_break_up_blocks: Vec::new(),
         loop_break_up_tys: Vec::new(),
+        loop_break_up_vals: Vec::new(),
         loop_break_counts: Vec::new(),
         loop_exit_phi_names: Vec::new(),
         loop_exit_phi_ids: Vec::new(),
@@ -3298,6 +3300,10 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), mphi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""), origin);
             backpatch_upsilon(ctx, then_exit_block, mut_up_then[mi3], phi_id);
             backpatch_upsilon(ctx, else_exit_block, mut_up_else[mi3], phi_id);
+            let mut_srcs: Vec<i64> = Vec::new();
+            if !then_terminated { mut_srcs.push(then_mut_vals[mi3]); }
+            if !else_terminated { mut_srcs.push(else_mut_vals[mi3]); }
+            lctx_merge_compatible_aggregate_metadata(ctx, mut_srcs, phi_id);
             lctx_assign(ctx, mname, phi_id);
             mi3 = mi3 + 1;
         }
@@ -3676,18 +3682,22 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let first_ty: i64 = ctx.loop_break_up_tys[break_start as u64];
             let phi_args2: Vec<i64> = Vec::new();
             let break_phi: i64 = lctx_emit(ctx, IOP_PHI(), first_ty, phi_args2, IDATA_NONE(), 0, 0, String::from(""), origin);
+            let break_srcs: Vec<i64> = Vec::new();
             let mut bi: i64 = 0;
             while bi < break_count {
                 let up_id: i64 = ctx.loop_break_up_ids[(break_start + bi) as u64];
                 let up_block: i64 = ctx.loop_break_up_blocks[(break_start + bi) as u64];
                 backpatch_upsilon(ctx, up_block, up_id, break_phi);
+                break_srcs.push(ctx.loop_break_up_vals[(break_start + bi) as u64]);
                 bi = bi + 1;
             }
+            lctx_merge_compatible_aggregate_metadata(ctx, break_srcs, break_phi);
             let mut ti: i64 = 0;
             while ti < break_count {
                 ctx.loop_break_up_ids.pop();
                 ctx.loop_break_up_blocks.pop();
                 ctx.loop_break_up_tys.pop();
+                ctx.loop_break_up_vals.pop();
                 ti = ti + 1;
             }
             return break_phi;
@@ -4816,6 +4826,13 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                 backpatch_upsilon(ctx, arm_exit_blocks[bpi], arm_mut_ups[bpi * nmut + mpi], mphi_id);
                 bpi = bpi + 1;
             }
+            let arm_mut_srcs: Vec<i64> = Vec::new();
+            let mut msi: u64 = 0;
+            while msi < n_merge_arms {
+                arm_mut_srcs.push(arm_mut_inputs[msi * nmut + mpi]);
+                msi = msi + 1;
+            }
+            lctx_merge_compatible_aggregate_metadata(ctx, arm_mut_srcs, mphi_id);
             lctx_assign(ctx, match_muts[mpi], mphi_id);
             mpi = mpi + 1;
         }
@@ -4978,6 +4995,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                     ctx.loop_break_up_ids.push(up_id);
                     ctx.loop_break_up_blocks.push(cur_block);
                     ctx.loop_break_up_tys.push(val_ty);
+                    ctx.loop_break_up_vals.push(val_id);
                     let cnt_idx: i64 = ctx.loop_break_counts.len() as i64 - 1;
                     let old_cnt: i64 = ctx.loop_break_counts[cnt_idx as u64];
                     ctx.loop_break_counts[cnt_idx as u64] = old_cnt + 1;

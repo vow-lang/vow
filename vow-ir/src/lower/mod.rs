@@ -1019,8 +1019,8 @@ pub(crate) struct LowerCtx {
     // avoid picking up shadowed bindings in inner blocks.
     loop_continue_scope_depth: Vec<usize>,
     // Per-loop break-value Upsilon collector.  `Some(vec)` for `loop` (collects
-    // (source_block, upsilon_id, value_ty)), `None` for `while`.
-    loop_break_upsilons: Vec<Option<Vec<(BlockId, InstId, Ty)>>>,
+    // BreakUpsilon entries), `None` for `while`.
+    loop_break_upsilons: Vec<Option<Vec<BreakUpsilon>>>,
     // Per-loop exit-block Phi IDs for mutation variables.  Break emits Upsilons
     // targeting these so the exit block receives updated values.
     loop_exit_phis: Vec<Vec<(String, InstId)>>,
@@ -1543,6 +1543,10 @@ fn block_result_is_coercible_int_marker(block: &Block) -> bool {
     }
     false
 }
+
+/// A `break value` feeding a `loop` result Phi: `(source_block, upsilon_id,
+/// value_ty, value)`.
+type BreakUpsilon = (BlockId, InstId, Ty, InstId);
 
 /// A match arm that reaches the merge block: `(exit_block, result_upsilon,
 /// result_ty, mutated_variable_values, mutated_variable_upsilons)`.
@@ -2164,6 +2168,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 if let Some(&up) = else_mut_upsilons.get(i) {
                     backpatch_upsilon(ctx, else_upsilon_block, up, phi_id);
                 }
+                let mut reaching = Vec::new();
+                if !then_terminated {
+                    reaching.push(then_mut_vals[i]);
+                }
+                if !else_terminated {
+                    reaching.push(else_mut_vals[i]);
+                }
+                merge_compatible_aggregate_metadata(ctx, &reaching, phi_id);
                 ctx.assign(name, phi_id);
             }
 
@@ -2872,9 +2884,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 } else {
                     let ty = ups[0].2;
                     let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
-                    for (block, up_id, _) in &ups {
+                    for (block, up_id, _, _) in &ups {
                         backpatch_upsilon(ctx, *block, *up_id, phi_id);
                     }
+                    let break_vals: Vec<InstId> = ups.iter().map(|up| up.3).collect();
+                    merge_compatible_aggregate_metadata(ctx, &break_vals, phi_id);
                     phi_id
                 }
             } else {
@@ -2903,7 +2917,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     );
                     let block = ctx.current_block;
                     if let Some(Some(ups)) = ctx.loop_break_upsilons.last_mut() {
-                        ups.push((block, up_id, val_ty));
+                        ups.push((block, up_id, val_ty, val_id));
                     }
                 }
             }
@@ -3682,6 +3696,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 for (exit_block, _, _, _, mut_upsilons) in &arm_results {
                     backpatch_upsilon(ctx, *exit_block, mut_upsilons[i], phi_id);
                 }
+                let arm_values: Vec<InstId> = arm_results.iter().map(|arm| arm.3[i]).collect();
+                merge_compatible_aggregate_metadata(ctx, &arm_values, phi_id);
                 ctx.assign(name, phi_id);
             }
 
@@ -6759,71 +6775,27 @@ fn unsigned_max() -> u128 {
             .unwrap_or_else(|| panic!("function `{name}`"))
     }
 
-    fn assert_no_lowering_warnings(source: &str) -> Module {
-        let module = lower_source_to_module(source, "phi_metadata_probe.vow");
-        assert!(module.warnings.is_empty(), "{:?}", module.warnings);
-        module
-    }
-
+    /// Twin of `compiler/tests/test_lower_phi_aggregate_metadata.vow`; both read
+    /// `tests/fixtures/phi_aggregate_metadata.vow`. Every if/else, match, `loop`,
+    /// `while` and `for` merge Phi over a struct must keep its aggregate metadata, so
+    /// `result.a` / `p.a` lowers to a real FieldGet instead of an untagged one (#403).
     #[test]
-    fn if_else_struct_result_phi_keeps_aggregate_metadata() {
-        let both_live = concat!(
-            "module M\n",
-            "struct P { a: i64, b: i64 }\n",
-            "fn pick(c: bool) -> P vow { ensures: result.a == 1 || result.a == 2 } {\n",
-            "  if c { P { a: 1, b: 0 } } else { P { a: 2, b: 0 } }\n",
-            "}\n",
-        );
-        let module = assert_no_lowering_warnings(both_live);
-        let func = module.functions.iter().find(|f| f.name == "pick").unwrap();
+    fn merge_phis_keep_aggregate_metadata() {
+        let fixture = include_str!("../../../tests/fixtures/phi_aggregate_metadata.vow");
+        let module = lower_source_to_module(fixture, "phi_aggregate_metadata.vow");
+        assert!(module.warnings.is_empty(), "{:?}", module.warnings);
+        assert_eq!(module.functions.len(), 12);
+        let pick = module
+            .functions
+            .iter()
+            .find(|f| f.name == "pick_if_else")
+            .unwrap();
         assert!(
-            insts_of(func)
+            insts_of(pick)
                 .iter()
                 .any(|inst| inst.opcode == Opcode::FieldGet),
             "ensures must read result.a through a real FieldGet"
         );
-
-        assert_no_lowering_warnings(concat!(
-            "module M\n",
-            "struct P { a: i64, b: i64 }\n",
-            "fn pick(n: i64) -> P vow { ensures: result.a >= 0 } {\n",
-            "  if n == 0 { P { a: 0, b: 0 } } else if n == 1 { P { a: 1, b: 0 } } else { P { a: 2, b: 0 } }\n",
-            "}\n",
-        ));
-        assert_no_lowering_warnings(concat!(
-            "module M\n",
-            "struct P { a: i64, b: i64 }\n",
-            "fn pick(c: bool) -> P vow { ensures: result.a == 1 } {\n",
-            "  if c { return P { a: 1, b: 0 }; } else { P { a: 1, b: 2 } }\n",
-            "}\n",
-        ));
-        assert_no_lowering_warnings(concat!(
-            "module M\n",
-            "struct P { a: i64, b: i64 }\n",
-            "fn pick(c: bool) -> P vow { ensures: result.a == 1 } {\n",
-            "  if c { P { a: 1, b: 0 } } else { return P { a: 1, b: 2 }; }\n",
-            "}\n",
-        ));
-    }
-
-    #[test]
-    fn loop_carried_struct_phis_keep_aggregate_metadata() {
-        for (kind, body) in [
-            (
-                "while",
-                "while i < n vow { invariant: p.a >= 0 } { p = P { a: p.a + 1, b: p.b }; i = i + 1; }",
-            ),
-            (
-                "loop",
-                "loop { if i >= n { break; } p = P { a: p.a + 1, b: p.b }; i = i + 1; }",
-            ),
-        ] {
-            let source = format!(
-                "module M\nstruct P {{ a: i64, b: i64 }}\nfn run(n: i64) -> i64 {{\n  let mut p = P {{ a: 0, b: 7 }};\n  let mut i: i64 = 0;\n  {body}\n  p.b\n}}\n"
-            );
-            let module = lower_source_to_module(&source, "phi_metadata_probe.vow");
-            assert!(module.warnings.is_empty(), "{kind}: {:?}", module.warnings);
-        }
     }
 
     #[test]

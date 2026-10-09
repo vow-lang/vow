@@ -1,4 +1,5 @@
 // TEST: exit 0
+// TEST: stdout "0"
 module IfElseStructEnsuresTrue
 
 struct Heap {
