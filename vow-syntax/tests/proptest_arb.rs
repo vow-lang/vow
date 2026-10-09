@@ -29,6 +29,13 @@ pub fn arb_type_name() -> impl Strategy<Value = String> {
     .prop_map(|s| s.to_string())
 }
 
+fn arb_scalar_type_name() -> impl Strategy<Value = String> {
+    prop::sample::select(&[
+        "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f32", "f64", "bool",
+    ])
+    .prop_map(|s| s.to_string())
+}
+
 pub fn arb_user_type_name() -> impl Strategy<Value = String> {
     prop::sample::select(&[
         "Point", "Color", "Node", "Pair", "Entry", "State", "Config", "Result2",
@@ -105,6 +112,7 @@ fn arb_expr_inner(depth: u32) -> impl Strategy<Value = Expr> {
         1 => arb_unop_expr(depth - 1),
         1 => arb_call_expr(depth - 1),
         1 => arb_question_expr(depth - 1),
+        1 => arb_cast_expr(depth - 1),
     ]
     .boxed()
 }
@@ -119,6 +127,7 @@ fn arb_expr_or_if(depth: u32) -> impl Strategy<Value = Expr> {
         1 => arb_unop_expr(depth - 1),
         1 => arb_if_expr(depth - 1),
         1 => arb_call_expr(depth - 1),
+        1 => arb_cast_expr(depth - 1),
     ]
     .boxed()
 }
@@ -213,6 +222,16 @@ fn arb_question_expr(depth: u32) -> impl Strategy<Value = Expr> {
     arb_expr_inner(depth).prop_map(|operand| Expr {
         kind: ExprKind::Question {
             expr: Box::new(operand),
+        },
+        span: z(),
+    })
+}
+
+fn arb_cast_expr(depth: u32) -> impl Strategy<Value = Expr> {
+    (arb_expr_inner(depth), arb_scalar_type_name()).prop_map(|(operand, name)| Expr {
+        kind: ExprKind::Cast {
+            expr: Box::new(operand),
+            target_ty: Box::new(Type::Named { name, span: z() }),
         },
         span: z(),
     })
