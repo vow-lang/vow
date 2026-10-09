@@ -4497,15 +4497,7 @@ fn collect_calls_in_expr(e: CheckEnv, m: Module, eid: i64, calls: Vec<String>) [
         return;
     }
 
-    if tag == EXPR_RETURN() {
-        let val_eid: i64 = expr_a(a, eid);
-        if val_eid != -1 {
-            collect_calls_in_expr(e, m, val_eid, calls);
-        }
-        return;
-    }
-
-    if tag == EXPR_BREAK() {
+    if tag == EXPR_RETURN() || tag == EXPR_BREAK() {
         let val_eid: i64 = expr_a(a, eid);
         if val_eid != -1 {
             collect_calls_in_expr(e, m, val_eid, calls);
