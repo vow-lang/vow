@@ -472,6 +472,13 @@ proptest! {
             "Expression print not idempotent.\nSource:\n{}",
             printed1
         );
+
+        prop_assert_eq!(
+            strip_module(module),
+            strip_module(parsed),
+            "Expression AST not equal after roundtrip.\nSource:\n{}",
+            printed1
+        );
     }
 }
 
