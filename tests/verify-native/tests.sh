@@ -36,6 +36,14 @@ case "$FAKE_BW_MODE" in
     exit1) echo "[error] boom" >&2; exit 1 ;;
     hang) echo $$ > "$FAKE_BW_DIR/pid"; exec sleep 29 ;;
     sat_empty) printf 'sat\n(\n)\n' ;;
+    sat_zero)
+        echo sat
+        echo "("
+        grep -o '^(declare-const p[0-9]*' "$file" | sed 's/(declare-const //' | while read -r name; do
+            echo "  ($name (_ bv0 64))"
+        done
+        echo ")"
+        ;;
     sat)
         echo sat
         echo "("
@@ -248,6 +256,38 @@ RUN_OUT=$(PATH="$EMPTY_DIR" TMPDIR="$SCRATCH" "$VOWC_BIN" verify --no-cache --ba
 expect "no-claims status" "$(field "$RUN_OUT" status)" "Verified"
 expect "no-claims exit" "$RUN_RC" "0"
 expect "no-claims needs no solver" "$(field "$RUN_OUT" verify_status)" ""
+
+# --replay-cex: a counterexample the runtime reproduces is `confirmed`; one it
+# does not is a verifier bug. The fake solver answers b = 0 (a real divide-by-zero)
+# or b = 7 (a model the runtime disagrees with). The source defines no `main`:
+# the self-hosted replay harness cannot splice one in.
+REPLAY_SRC="$TMP_ROOT/replay.vow"
+cat > "$REPLAY_SRC" <<'SRC'
+module Replay
+
+fn quot(a: i64, b: i64) -> i64 vow {
+  ensures: result == result
+} {
+  a / b
+}
+SRC
+run_native sat_zero "$REPLAY_SRC" --replay-cex
+expect "replay confirmed status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "replay confirmed exit" "$RUN_RC" "1"
+expect "replay confirmed" "$(field "$RUN_OUT" counterexamples.0.replay)" "confirmed"
+expect "replay confirmed has no bug report" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
+no_leftovers "replay confirmed"
+
+run_native sat "$REPLAY_SRC" --replay-cex
+expect "replay diverged status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "replay diverged exit" "$RUN_RC" "1"
+expect "replay diverged" "$(field "$RUN_OUT" counterexamples.0.replay)" "diverged"
+expect "replay diverged bug code" "$(field "$RUN_OUT" diagnostics.0.error_code)" "VerifierBug"
+no_leftovers "replay diverged"
+
+run_native sat "$REPLAY_SRC"
+expect "no replay without the flag" "$(field "$RUN_OUT" counterexamples.0.replay)" ""
+expect "no bug report without the flag" "$(field "$RUN_OUT" diagnostics.0.error_code)" "VerifierAssertionUnattributed"
 
 # flag handling.
 usage_error() {

@@ -62,6 +62,9 @@ fn EC_VERIFIER_ASSERTION_UNATTRIBUTED() -> i64 { 38 }
 // collection lengths to the verifier's model capacity. Mirrors
 // `vow_diag::ErrorCode::ModelCapacityAssumed`.
 fn EC_MODEL_CAPACITY_ASSUMED() -> i64 { 39 }
+// Emitted under `--backend native --replay-cex` when a counterexample does not
+// reproduce at runtime: the verifier model and the runtime disagree.
+fn EC_VERIFIER_BUG() -> i64 { 40 }
 
 struct Diagnostic {
     severity: i64,
@@ -408,8 +411,11 @@ fn ec_name(code: i64) -> String {
     if code == EC_MODEL_CAPACITY_ASSUMED() {
         String::from("ModelCapacityAssumed")
     } else {
+    if code == EC_VERIFIER_BUG() {
+        String::from("VerifierBug")
+    } else {
         String::from("Unknown")
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 fn sev_name_lower(s: i64) -> String {
