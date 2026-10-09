@@ -130,6 +130,29 @@ pub(crate) fn with_sigpipe_blocked<T>(f: impl FnOnce() -> T) -> T {
     result
 }
 
+/// Runs `f`, which writes to `fd`, so that a closed reader yields `EPIPE` on
+/// every platform. Blocking SIGPIPE on this thread is not enough on Darwin,
+/// which directs the signal at the process, so there the descriptor's own
+/// no-SIGPIPE flag is set for the duration of the call and then restored.
+#[cfg(target_vendor = "apple")]
+pub(crate) fn with_sigpipe_suppressed<T>(fd: libc::c_int, f: impl FnOnce() -> T) -> T {
+    // Not exported by the libc crate; values from <sys/fcntl.h>.
+    const F_SETNOSIGPIPE: libc::c_int = 73;
+    const F_GETNOSIGPIPE: libc::c_int = 74;
+    let previous = unsafe { libc::fcntl(fd, F_GETNOSIGPIPE) };
+    let changed = previous == 0 && unsafe { libc::fcntl(fd, F_SETNOSIGPIPE, 1) } == 0;
+    let result = with_sigpipe_blocked(f);
+    if changed {
+        unsafe { libc::fcntl(fd, F_SETNOSIGPIPE, 0) };
+    }
+    result
+}
+
+#[cfg(not(target_vendor = "apple"))]
+pub(crate) fn with_sigpipe_suppressed<T>(_fd: libc::c_int, f: impl FnOnce() -> T) -> T {
+    with_sigpipe_blocked(f)
+}
+
 /// Writes `data` with SIGPIPE shielded, so a child that stopped reading yields
 /// `EPIPE` instead of killing the program.
 fn write_shielded(stdin: &mut ChildStdin, data: &[u8]) -> bool {
