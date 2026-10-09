@@ -2378,20 +2378,22 @@ impl<'e> Checker<'e> {
                     && let ExprKind::Cast { expr, target_ty } = &operand.kind
                     && let ExprKind::Lit(Lit::Int(magnitude)) = expr.kind
                     && let Type::Named { name, .. } = target_ty.as_ref()
+                    && let Some(target) = Ty::from_primitive_name(name)
+                    && target.is_integer()
                 {
-                    if name == "i128" {
+                    if !target.is_unsigned() {
                         self.check_integer_value_range(
                             ConstIntValue {
                                 magnitude,
                                 negative: true,
                             },
-                            &Ty::I128,
+                            &target,
                             operand.span,
                         );
-                        return Ty::I128;
+                        return target;
                     }
-                    if name == "u128" && magnitude == 0 {
-                        return Ty::U128;
+                    if magnitude == 0 {
+                        return target;
                     }
                 }
                 let operand_ty = self.check_expr(operand);

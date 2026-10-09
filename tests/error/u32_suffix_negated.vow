@@ -1,0 +1,8 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "unary negation is not allowed on unsigned type"
+module U32SuffixNegated
+
+fn main() -> i32 {
+    let x: u32 = -1u32;
+    0
+}

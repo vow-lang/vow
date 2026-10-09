@@ -139,6 +139,25 @@ pub enum IntSuffix {
     Isize,
 }
 
+impl IntSuffix {
+    pub fn type_name(self) -> &'static str {
+        match self {
+            IntSuffix::I8 => "i8",
+            IntSuffix::I16 => "i16",
+            IntSuffix::I32 => "i32",
+            IntSuffix::I64 => "i64",
+            IntSuffix::I128 => "i128",
+            IntSuffix::U8 => "u8",
+            IntSuffix::U16 => "u16",
+            IntSuffix::U32 => "u32",
+            IntSuffix::U64 => "u64",
+            IntSuffix::U128 => "u128",
+            IntSuffix::Usize => "usize",
+            IntSuffix::Isize => "isize",
+        }
+    }
+}
+
 impl TokenKind {
     pub fn from_keyword(s: &str) -> Option<TokenKind> {
         match s {

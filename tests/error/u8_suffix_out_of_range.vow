@@ -1,0 +1,8 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal 256 does not fit in u8"
+module U8SuffixOutOfRange
+
+fn main() -> i32 {
+    let x: u8 = 256u8;
+    0
+}

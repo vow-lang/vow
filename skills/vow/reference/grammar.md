@@ -253,8 +253,14 @@ let y: i8 = 200;   // error: LiteralOutOfRange — i8 range is -128..=127
 42i8     42i16     42i32     42i64     42i128
 ```
 
-Suffixed forms are supported for all 10 integer widths. They override context
-coercion and are still subject to the same compile-time range check.
+Suffixed forms are supported for all 10 integer widths. A suffixed literal is
+sugar for the cast `NNN as T` (so `42u8` and `42 as u8` are the same AST and
+print as `42 as u8`). The suffix fixes the literal's type: it is never
+coerced to the surrounding context, so `let x: i64 = 5u8;` is a `TypeMismatch`.
+The value is range-checked against the suffix type, so `256u8` is a
+`LiteralOutOfRange` error. A negated literal is checked as a negative value
+(`-128i8` is valid), and negating an unsigned literal is a `TypeMismatch`
+(`-1u32` is an error). Suffixes inside `match` patterns are not part of this rule.
 
 There are no `usize`/`isize` suffixes, because there are no such types. A literal
 carrying one is an `InvalidIntSuffix` error at lex time rather than a silently
