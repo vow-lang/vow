@@ -55,6 +55,20 @@ fn arb_type_inner(depth: u32) -> impl Strategy<Value = Type> {
             elems,
             span: z(),
         }),
+        1 => (arb_ident(), arb_type_leaf(), arb_binop(), arb_expr_leaf(), arb_expr_leaf())
+            .prop_map(|(binding, base, op, lhs, rhs)| Type::Refinement {
+                binding,
+                base: Box::new(base),
+                predicate: Box::new(Expr {
+                    kind: ExprKind::BinaryOp {
+                        op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    span: z(),
+                }),
+                span: z(),
+            }),
     ]
     .boxed()
 }

@@ -435,7 +435,7 @@ pub fn print_type(ty: &Type) -> String {
             ..
         } => {
             format!(
-                "{{ {}: {} | {} }}",
+                "{{ {}: {} || {} }}",
                 binding,
                 print_type(base),
                 print_expr(predicate)
@@ -1443,7 +1443,7 @@ mod tests {
             )),
             span: s(),
         };
-        assert_eq!(print_type(&ty), "{ x: i64 | x > 0 }");
+        assert_eq!(print_type(&ty), "{ x: i64 || x > 0 }");
     }
 
     #[test]
