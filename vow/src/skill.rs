@@ -1710,6 +1710,10 @@ false
 
 Supported escape sequences: `\n`, `\t`, `\r`, `\\`, `\"`, `\0`.
 
+A literal that reaches end of file without a closing quote, or a trailing `\`
+with nothing to escape, is an `UnterminatedString` error. A byte that starts no
+token is an `InvalidCharacter` error. Neither is skipped silently.
+
 String literals have type `String` and are backed by a read-only static
 descriptor. Passing or returning a literal does not allocate. To obtain a
 mutable, arena-owned copy, use `String::from("...")`.
@@ -4715,7 +4719,10 @@ These appear in the `diagnostics` array of the build output JSON.
 ### UnterminatedString
 
 **Phase:** Lexer
-**Meaning:** A string literal was opened with `"` but never closed.
+**Meaning:** A string literal was opened with `"` but never closed before the
+end of the file, or the file ends with a `\` escape that has nothing to escape
+(`unterminated string escape`). An escaped quote (`"abc\"`) does not close the
+literal.
 
 ```vow
 fn f() -> () [io] {
@@ -4728,7 +4735,9 @@ fn f() -> () [io] {
 ### InvalidCharacter
 
 **Phase:** Lexer
-**Meaning:** The source contains a character the lexer does not recognize.
+**Meaning:** The source contains a character the lexer does not recognize. The
+message is `unexpected character '<c>'` and the span covers that one byte.
+Lexing stops at the first lexical error.
 
 ```vow
 fn f() -> i64 {
@@ -7716,6 +7725,10 @@ false
 ```
 
 Supported escape sequences: `\n`, `\t`, `\r`, `\\`, `\"`, `\0`.
+
+A literal that reaches end of file without a closing quote, or a trailing `\`
+with nothing to escape, is an `UnterminatedString` error. A byte that starts no
+token is an `InvalidCharacter` error. Neither is skipped silently.
 
 String literals have type `String` and are backed by a read-only static
 descriptor. Passing or returning a literal does not allocate. To obtain a
@@ -10726,7 +10739,10 @@ These appear in the `diagnostics` array of the build output JSON.
 ### UnterminatedString
 
 **Phase:** Lexer
-**Meaning:** A string literal was opened with `"` but never closed.
+**Meaning:** A string literal was opened with `"` but never closed before the
+end of the file, or the file ends with a `\` escape that has nothing to escape
+(`unterminated string escape`). An escaped quote (`"abc\"`) does not close the
+literal.
 
 ```vow
 fn f() -> () [io] {
@@ -10739,7 +10755,9 @@ fn f() -> () [io] {
 ### InvalidCharacter
 
 **Phase:** Lexer
-**Meaning:** The source contains a character the lexer does not recognize.
+**Meaning:** The source contains a character the lexer does not recognize. The
+message is `unexpected character '<c>'` and the span covers that one byte.
+Lexing stops at the first lexical error.
 
 ```vow
 fn f() -> i64 {
