@@ -1,0 +1,29 @@
+// TEST: stdout "0\n-1\n1\n-170141183460469231731687303715884105728\n170141183460469231731687303715884105727\n0\n340282366920938463463374607431768211455\n3154393236604333326336\n-3154393236604333326336\n"
+module I128ToStringRoundtrip
+
+fn show_signed(v: i128) -> () [io] {
+    print_str(int128_to_string(v));
+    print_str("\n");
+}
+
+fn show_unsigned(v: u128) -> () [io] {
+    print_str(uint128_to_string(v));
+    print_str("\n");
+}
+
+fn i128_min() -> i128 {
+    -170141183460469231731687303715884105727i128 - 1i128
+}
+
+fn main() -> i32 [io] {
+    show_signed(0i128);
+    show_signed(-1i128);
+    show_signed(1i128);
+    show_signed(i128_min());
+    show_signed(170141183460469231731687303715884105727i128);
+    show_unsigned(0u128);
+    show_unsigned(340282366920938463463374607431768211455u128);
+    show_signed(3154393236604333326336i128);
+    show_signed(-3154393236604333326336i128);
+    0
+}

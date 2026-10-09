@@ -9,8 +9,3 @@ fn divide(x: i64, y: i64) -> i64 vow {
 } {
   x / y
 }
-
-fn main() -> i32 [io] {
-  print_i64(divide(10, 2));
-  0
-}

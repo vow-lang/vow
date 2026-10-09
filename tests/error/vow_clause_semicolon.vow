@@ -1,0 +1,4 @@
+// TEST: error-code UnexpectedToken
+module VowClauseSemicolon
+
+fn pos(x: i64) -> i64 vow { requires: x > 0; }

@@ -31,6 +31,19 @@ fn status_str(s: i64) -> String {
     String::from("unknown")
 }
 
+// Verdict for an oracle run on the unmutated tree: "" means the baseline
+// passed, anything else is the human-readable reason it did not. Any
+// nonzero rc is a failure here, unlike per-mutant classification where it
+// means the mutant was caught.
+fn baseline_failure_reason(rc: i64) -> String {
+    if rc == 0 { return String::from(""); }
+    if rc == -1 { return String::from("could not spawn the oracle command"); }
+    if rc == -2 { return String::from("timed out"); }
+    let r: String = String::from("exit code ");
+    r.push_str(i64_to_string(rc));
+    r
+}
+
 // Run a shell command via `sh -c`, return exit code (or -2 on timeout, -1 on
 // spawn error). Cmd is interpreted by the shell, so it can include flags,
 // pipes, redirections, etc.

@@ -123,6 +123,10 @@ pub struct StructuredCounterexample {
     /// assignment parser truncates, so vec reconstruction re-parses this.
     /// Never serialized.
     pub replay_raw_output: String,
+    /// The failing clause belongs to a co-emitted callee, so the captured
+    /// inputs are the verify target's and cannot drive a replay of the owner.
+    /// Never serialized.
+    pub replay_callee_owned: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2144,6 +2148,7 @@ pub fn main() -> i32 [io] {
                 replay_reason: None,
                 replay_raw_values: vec![],
                 replay_raw_output: String::new(),
+                replay_callee_owned: false,
             }],
             verify_status: None,
             verify_message: None,
@@ -2603,6 +2608,7 @@ fn main() -> i32 {
                 replay_reason: None,
                 replay_raw_values: vec![],
                 replay_raw_output: String::new(),
+                replay_callee_owned: false,
             }],
             verify_status: None,
             verify_message: None,
@@ -2695,6 +2701,7 @@ fn main() -> i32 {
             replay_reason: None,
             replay_raw_values: vec![],
             replay_raw_output: String::new(),
+            replay_callee_owned: false,
         });
         let json = serde_json::to_string(&ce).unwrap();
         assert!(json.contains("\"function\":\"f\""), "function: {json}");
@@ -2728,6 +2735,7 @@ fn main() -> i32 {
             replay_reason: None,
             replay_raw_values: vec![],
             replay_raw_output: String::new(),
+            replay_callee_owned: false,
         });
         let json = serde_json::to_string(&ce).unwrap();
         assert!(json.contains("\"file\":\"test.vow\""), "file: {json}");
@@ -2883,6 +2891,7 @@ fn main() -> i32 {
                 replay_reason: None,
                 replay_raw_values: vec![],
                 replay_raw_output: String::new(),
+                replay_callee_owned: false,
             }],
             verify_status: None,
             verify_message: None,
@@ -3575,6 +3584,7 @@ fn main() -> i32 {
             replay_reason: None,
             replay_raw_values: vec![],
             replay_raw_output: String::new(),
+            replay_callee_owned: false,
         };
         let json_ce = CounterexampleJson::from_structured(&sce);
         let serialized = serde_json::to_string(&json_ce).unwrap();
@@ -3598,6 +3608,7 @@ fn main() -> i32 {
             replay_reason: None,
             replay_raw_values: vec![],
             replay_raw_output: String::new(),
+            replay_callee_owned: false,
         };
         let json_callee = CounterexampleJson::from_structured(&sce_callee);
         let serialized_callee = serde_json::to_string(&json_callee).unwrap();
@@ -3689,6 +3700,7 @@ fn main() -> i32 {
             replay_reason: None,
             replay_raw_values: vec![],
             replay_raw_output: String::new(),
+            replay_callee_owned: false,
         };
         let json_obj = CounterexampleJson::from_structured(&sce);
         let json = serde_json::to_string(&json_obj).unwrap();

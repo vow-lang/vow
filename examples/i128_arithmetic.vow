@@ -1,0 +1,40 @@
+module I128Arithmetic
+
+fn widening_mul(a: u64, b: u64) -> u128 vow {
+    ensures: result == (a as u128) * (b as u128)
+} {
+    (a as u128) * (b as u128)
+}
+
+fn midpoint(lo: u128, hi: u128) -> u128 vow {
+    requires: lo <= hi,
+    ensures: result >= lo && result <= hi
+} {
+    lo + (hi - lo) / (2u64 as u128)
+}
+
+fn power_of_two(exponent: u32) -> u128 vow {
+    requires: exponent < 128,
+    ensures: result > (0u64 as u128)
+} {
+    (1u64 as u128) << exponent
+}
+
+fn signed_gap(a: i64, b: i64) -> i128 vow {
+    ensures: result == (a as i128) - (b as i128)
+} {
+    (a as i128) - (b as i128)
+}
+
+fn main() -> i32 [io] {
+    let product: u128 = widening_mul(18446744073709551615u64, 18446744073709551615u64);
+    print_str(uint128_to_string(product));
+    print_str("\n");
+    print_str(uint128_to_string(midpoint(10u128, 20u128)));
+    print_str("\n");
+    print_str(uint128_to_string(power_of_two(127u32)));
+    print_str("\n");
+    print_str(int128_to_string(signed_gap(-9223372036854775807 - 1, 9223372036854775807)));
+    print_str("\n");
+    0
+}

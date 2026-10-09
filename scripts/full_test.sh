@@ -1420,6 +1420,19 @@ for vow_file in tests/verify-native/pass/*.vow tests/verify-native/fail/*.vow te
         continue
     fi
     native_errors=()
+    if [ "$native_dir" = "skip" ]; then
+        native_reason=$(sed -n 's|^// TEST: skip-reason \(.*\)$|\1|p' "$vow_file" | head -1)
+        if [ -z "$native_reason" ]; then
+            native_errors+=("missing '// TEST: skip-reason <code>' directive")
+        elif ! python3 -c "
+import json, sys
+msgs = [d.get('message', '') for d in json.loads(sys.argv[1]).get('diagnostics') or []]
+skipped = [m for m in msgs if m.startswith('skipped verification of')]
+sys.exit(0 if skipped and all(': ' + sys.argv[2] + ': ' in m for m in skipped) else 1)
+" "$native_json" "$native_reason" 2>/dev/null; then
+            native_errors+=("skip-reason: not every skipped-verification message carries code '$native_reason'")
+        fi
+    fi
     if [ "$native_dir" = "fail" ]; then
         for native_field in fn vow-id blame violation; do
             native_expected=$(sed -n "s|^// TEST: counterexample-${native_field} \"\?\([^\"]*\)\"\?\$|\1|p" "$vow_file" | head -1)
@@ -1437,13 +1450,14 @@ print(cx[0].get(key, '') if cx else '')
         native_replay_json=$(run_self verify --backend native --no-cache --replay-cex "$vow_file" 2>/dev/null) || true
         native_replay=$(python3 -c "
 import json, sys
-cx = json.loads(sys.argv[1]).get('counterexamples') or []
-print(cx[0].get('replay', '') if cx else '')
+j = json.loads(sys.argv[1])
+cx = j.get('counterexamples') or []
+bad = [c.get('function', '?') + '=' + str(c.get('replay', '')) for c in cx if c.get('replay') != 'confirmed']
+print(','.join(bad) if bad else ('confirmed' if cx else 'none'))
 " "$native_replay_json" 2>/dev/null) || native_replay=""
-        case "$native_replay" in
-            confirmed|skipped) ;;
-            *) native_errors+=("--replay-cex: expected confirmed or skipped, got '$native_replay'") ;;
-        esac
+        if [ "$native_replay" != "confirmed" ]; then
+            native_errors+=("--replay-cex: every counterexample must replay as confirmed, got '$native_replay'")
+        fi
     fi
     if [ ${#native_errors[@]} -eq 0 ]; then
         pass "verify-native/${native_dir}/${name}"

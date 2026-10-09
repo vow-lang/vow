@@ -96,7 +96,7 @@ The `vow` block sits between the signature and the body. Clauses:
 - `ensures: <expr>` — postcondition (blame: Callee); use `result` for the return value
 - `invariant: <expr>` — loop invariant (blame: Callee)
 
-Multiple clauses are separated by commas:
+Multiple clauses are separated by commas; the comma may be omitted. A semicolon between clauses is a parse error:
 
 ```vow
 fn clamp(x: i64, lo: i64, hi: i64) -> i64 vow {
@@ -362,7 +362,7 @@ overflows aborts and therefore never returns, so it cannot witness a violated
 counterexample into a proof. Whether such an aborting execution is *reachable* is
 reported separately, as an
 [`ArithOverflowReachable`](errors.md#arithoverflowreachable) warning, so a proof
-never hides a program that can die at the operator. Widths `i8`/`u8` through
+never hides a program that can die at the operator. Checked operators do not require the `[panic]` effect (see [Effect Types](#effect-types)). Widths `i8`/`u8` through
 `i64`/`u64` are modelled; 128-bit checked arithmetic is reported `Skipped`
 (fail-closed) rather than modelled as wrapping. See
 [`verifier-discipline.md`](../verifier-discipline.md).
@@ -605,8 +605,8 @@ For the `u8` target, the available narrowing source types are `i16`, `i32`,
 `i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three
 forms, for example `u16_to_u8_try`, `u16_to_u8_wrap`, and `u16_to_u8_sat`.
 
-For the `i32` target, the available narrowing source types are `i64`, `i128`,
-`u32`, `u64`, and `u128`, each providing all three forms:
+For the `i32` target, the available narrowing source types are `i64`, `u32`,
+`u64`, `i128`, and `u128`, each providing all three forms:
 `i64_to_i32_try`/`_wrap`/`_sat`, `u32_to_i32_try`/`_wrap`/`_sat`,
 `u64_to_i32_try`/`_wrap`/`_sat`, `i128_to_i32_try`/`_wrap`/`_sat`, and
 `u128_to_i32_try`/`_wrap`/`_sat`.
@@ -622,6 +622,13 @@ The remaining executable sub-64-bit targets expose these complete families:
 
 Every listed source/target pair provides `_try`, `_wrap`, and `_sat`. Same-width
 signedness changes use `as`; they are bit reinterpretations, not narrowing.
+
+`i128` and `u128` appear in these tables only as sources: they are the widest
+integer types, so no other width narrows into them. The one conversion between
+them is the same-width sign change, which has `i128_to_u128_wrap`/`_sat` and
+`u128_to_i128_wrap`/`_sat` (no `_try`, because 128-bit enum payloads are not
+supported yet). There is no `i128`/`u128` to `i64`/`u64` narrowing family; use
+`int128_to_string`/`uint128_to_string` to observe a full 128-bit value.
 
 No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The
 operands must already have the same type. The compiler does not coerce
@@ -1241,6 +1248,8 @@ Effects are explicit. Every function declares which side effects it may perform.
 
 Each effect is independent — `io` is not a superset of `read` or `write`.
 
+`.unwrap()` requires `[panic]`. Out-of-bounds indexing, the checked operators (`+! -! *! /! %!`) and the `/`, `%` zero-divisor traps do not: their aborts are verification obligations of pure functions, and declaring an effect would remove the function from the verifier model.
+
 ### Propagation
 
 A function must declare every effect that any function it calls may produce:
@@ -1362,13 +1371,21 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 #### Conversion
 
-**Formatting** uses two baselines; widen via `as` for narrower types:
+**Formatting** uses four baselines; widen via `as` for narrower types. The
+128-bit formatters exist because most 128-bit values do not fit `i64`/`u64`, so
+they cannot be formatted by narrowing first:
 
-| Function         | Signature                                  | Effects    |
-|------------------|--------------------------------------------|------------|
-| `int_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
-| `uint_to_string` | `fn(v: u64) -> String`                     | `[]`       |
-| `i64_to_string`  | `fn(v: i64) -> String` (alias of `int_to_string`) | `[]` |
+| Function            | Signature                                  | Effects    |
+|---------------------|--------------------------------------------|------------|
+| `int_to_string`     | `fn(v: i64) -> String`                     | `[]`       |
+| `uint_to_string`    | `fn(v: u64) -> String`                     | `[]`       |
+| `i64_to_string`     | `fn(v: i64) -> String` (alias of `int_to_string`) | `[]` |
+| `int128_to_string`  | `fn(v: i128) -> String`                    | `[]`       |
+| `uint128_to_string` | `fn(v: u128) -> String`                    | `[]`       |
+
+The 128-bit formatters render the full decimal value (`i128::MIN` is 40
+characters, `u128::MAX` is 39). The verifier has no model of their result, so a
+function that calls one is reported `Skipped` rather than proven.
 
 ```vow
 let small: u8 = 42;

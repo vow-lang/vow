@@ -1,0 +1,28 @@
+// TEST: stdout "1\n2\n-5|7\n"
+module I128ToStringEscape
+
+fn render_pair(a: i128, b: u128) -> String {
+    let left: String = int128_to_string(a);
+    left.push_str("|");
+    left.push_str(uint128_to_string(b));
+    left
+}
+
+fn collect(a: i128, b: u128) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    out.push(int128_to_string(a));
+    out.push(uint128_to_string(b));
+    out.push(render_pair(-5i128, 7u128));
+    out
+}
+
+fn main() -> i32 [io] {
+    let parts: Vec<String> = collect(1i128, 2u128);
+    print_str(parts[0]);
+    print_str("\n");
+    print_str(parts[1]);
+    print_str("\n");
+    print_str(parts[2]);
+    print_str("\n");
+    0
+}

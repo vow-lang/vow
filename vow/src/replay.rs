@@ -612,6 +612,12 @@ fn replay_one(
                 .to_string(),
         );
     }
+    if ce.replay_callee_owned {
+        return replay_skip(
+            "replay: counterexample belongs to a co-emitted callee; its inputs are the caller's"
+                .to_string(),
+        );
+    }
     let Some(ast_fn) = ast_module.items.iter().find_map(|it| match it {
         Item::Fn(f) if f.name == ce.function => Some(f),
         _ => None,
@@ -701,6 +707,7 @@ mod tests {
             replay_reason: None,
             replay_raw_values: vec![],
             replay_raw_output: String::new(),
+            replay_callee_owned: false,
         }
     }
 
@@ -752,6 +759,27 @@ mod tests {
         run_replay_cex(&path, &mut out);
         assert_eq!(out.counterexamples[0].replay.as_deref(), Some("skipped"));
         assert_eq!(out.counterexamples[1].replay.as_deref(), Some("skipped"));
+    }
+
+    #[test]
+    fn run_replay_cex_skips_callee_owned_counterexample_without_codegen() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M\n\nfn add(a: i64, b: i64) -> i64 {\n    a + b\n}\n";
+        let path = write_source(&dir, "m.vow", src);
+        let mut owned = ce("add", 0);
+        owned.replay_callee_owned = true;
+        let mut out = output_with(vec![owned]);
+
+        run_replay_cex(&path, &mut out);
+
+        assert_eq!(out.counterexamples[0].replay.as_deref(), Some("skipped"));
+        assert!(
+            out.counterexamples[0]
+                .replay_reason
+                .as_deref()
+                .unwrap()
+                .contains("co-emitted callee")
+        );
     }
 
     #[test]

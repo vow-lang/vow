@@ -111,6 +111,10 @@ pub enum ErrorCode {
     // is genuine but covers only executions within that bound. Does not change
     // the build status.
     ModelCapacityAssumed,
+    // Emitted by the self-hosted `vowc verify --backend native --replay-cex`
+    // when a counterexample does not reproduce at runtime: the verifier model
+    // and the runtime disagree. Never emitted by the Rust compiler.
+    VerifierBug,
 }
 
 pub trait DiagnosticEmitter {
@@ -440,5 +444,10 @@ mod tests {
     #[test]
     fn diagnostic_schema_lists_model_capacity_assumed() {
         assert_schema_lists([ErrorCode::ModelCapacityAssumed]);
+    }
+
+    #[test]
+    fn diagnostic_schema_lists_verifier_bug() {
+        assert_schema_lists([ErrorCode::VerifierBug]);
     }
 }

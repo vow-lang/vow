@@ -151,7 +151,7 @@ t11_run_classifies_caught_and_missed() {
         FAIL=$((FAIL + 1))
         FAILURES+=("T11-missed")
     fi
-    result=$(do_run caught_t1 --root tests/fixtures/mutants --tier1-cmd 'false' --tier2-cmd 'true')
+    result=$(do_run caught_t1 --root tests/fixtures/mutants --tier1-cmd 'false' --skip-baseline --tier2-cmd 'true')
     outdir="${result#*:}"
     local caught_t1
     caught_t1=$(grep -cE '"status":"caught","tier":1,' "$outdir/outcomes.json" 2>/dev/null || true)
@@ -868,9 +868,50 @@ t2_list_empty_dir_prints_total_zero() {
 
 t28_run_classifies_caught_at_tier15() {
     local result outdir
-    result=$(do_run caught_t15 --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'false' --tier2-cmd 'true')
+    result=$(do_run caught_t15 --root tests/fixtures/mutants --tier1-cmd 'true' --tier15-cmd 'false' --skip-baseline --tier2-cmd 'true')
     outdir="${result#*:}"
     assert_grep "T28: false-tier15 oracle yields tier-1.5 caught records" '"status":"caught","tier":1\.5,' "$(cat "$outdir/outcomes.json" 2>/dev/null)"
+}
+
+assert_baseline_abort() {
+    local label="$1" want_stderr="$2"; shift 2
+    local outdir="$TMP/out_$label" err rc before_worktrees after_worktrees
+    rm -rf "$outdir"
+    before_worktrees=$(git worktree list | grep -c '/tmp/vow-mutants-' || true)
+    set +e
+    err=$(run_vowm run --output-dir "$outdir" --root tests/fixtures/mutants "$@" --tier2-cmd 'true' 2>&1 >/dev/null)
+    rc=$?
+    set -e
+    after_worktrees=$(git worktree list | grep -c '/tmp/vow-mutants-' || true)
+    assert_eq "$label: exit code" "1" "$rc"
+    assert_grep "$label: stderr names the baseline failure" 'baseline oracle failed' "$err"
+    assert_grep "$label: stderr names the failing tier" "$want_stderr" "$err"
+    assert_eq "$label: worktree released" "$before_worktrees" "$after_worktrees"
+    assert_eq "$label: lock released" "no" "$([ -e "$outdir/.lock" ] && echo yes || echo no)"
+    assert_eq "$label: no outcomes.json" "no" "$([ -e "$outdir/outcomes.json" ] && echo yes || echo no)"
+    assert_eq "$label: no mutants.json" "no" "$([ -e "$outdir/mutants.json" ] && echo yes || echo no)"
+    assert_eq "$label: baseline.log kept" "yes" "$([ -f "$outdir/logs/baseline.log" ] && echo yes || echo no)"
+}
+
+t29_baseline_tier1_failure_aborts_run() {
+    assert_baseline_abort t29 'tier 1 baseline' --tier1-cmd 'false' --tier15-cmd 'true'
+}
+
+t30_baseline_tier15_failure_aborts_run() {
+    assert_baseline_abort t30 'tier 1.5 baseline' --tier1-cmd 'true' --tier15-cmd 'false'
+}
+
+t31_skip_baseline_restores_per_mutant_scoring() {
+    local result outdir caught_t1
+    result=$(do_run skipbase --root tests/fixtures/mutants --tier1-cmd 'false' --skip-baseline --tier2-cmd 'true')
+    outdir="${result#*:}"
+    assert_eq "T31: --skip-baseline run exits 0" "0" "${result%%:*}"
+    caught_t1=$(grep -cE '"status":"caught","tier":1,' "$outdir/outcomes.json" 2>/dev/null || true)
+    assert_eq "T31: mutants scored caught without baseline" "yes" "$([ "$caught_t1" -ge 1 ] && echo yes || echo no)"
+}
+
+t32_baseline_catches_missing_relative_binary() {
+    assert_baseline_abort t32 'tier 1 baseline' --tier1-cmd 'test -x ./does-not-exist' --tier15-cmd 'true'
 }
 
 # --- main ---
@@ -906,6 +947,10 @@ t25_body_replace_label_has_no_double_space
 t26_modulo_paired_with_division
 t27_json_escapes_control_bytes_in_paths
 t28_run_classifies_caught_at_tier15
+t29_baseline_tier1_failure_aborts_run
+t30_baseline_tier15_failure_aborts_run
+t31_skip_baseline_restores_per_mutant_scoring
+t32_baseline_catches_missing_relative_binary
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then

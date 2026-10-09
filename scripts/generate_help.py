@@ -571,7 +571,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
             "let_binding": "let name: Type = expr; or let mut name: Type = expr;",
             "function": "fn <name>(<params>) -> <RetTy> [<effects>] { <body> }",
             "public_function": "pub fn <name>(<params>) -> <RetTy> [<effects>] { <body> }",
-            "vow_function": "fn <name>(<params>) -> <RetTy> vow { requires: <expr>; ensures: <expr> } { <body> }",
+            "vow_function": "fn <name>(<params>) -> <RetTy> vow { requires: <expr>, ensures: <expr> } { <body> }",
             "while_with_invariant": "while <cond> vow { invariant: <expr> } { <body> }",
             "literals": {
                 "integer": "42 | -1 | 42u64 (unsuffixed integers default to i64)",

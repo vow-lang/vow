@@ -1,0 +1,14 @@
+// TEST: error-code TypeMismatch
+//
+// Issue #622: `unwrap` exists only as a method. A call-form spelling must not
+// resolve, otherwise it would bypass the `[panic]` check that keys on the
+// `.unwrap()` method call.
+module unwrap_call_form_rejected
+
+fn first(o: Option<i64>) -> i64 {
+    Option::unwrap(o)
+}
+
+fn main() -> i32 [io] {
+    0
+}

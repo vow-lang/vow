@@ -222,6 +222,8 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
         def("int_to_string", vec![Ty::I64], Ty::Str, &[]),
         def("uint_to_string", vec![Ty::U64], Ty::Str, &[]),
         def("i64_to_string", vec![Ty::I64], Ty::Str, &[]),
+        def("int128_to_string", vec![Ty::I128], Ty::Str, &[]),
+        def("uint128_to_string", vec![Ty::U128], Ty::Str, &[]),
         def("vec_sort", vec![vec_ty(Ty::I64)], vec_ty(Ty::I64), &[]),
         def("time_unix", vec![], Ty::I64, &[Effect::IO]),
         def("time_unix_ms", vec![], Ty::I64, &[Effect::IO]),
@@ -1000,6 +1002,7 @@ i64_to_u32_wrap(I64) -> U32 []
 i64_to_u8_sat(I64) -> U8 []
 i64_to_u8_try(I64) -> Applied(Enum("Option"), [U8]) []
 i64_to_u8_wrap(I64) -> U8 []
+int128_to_string(I128) -> Str []
 int_to_string(I64) -> Str []
 memory_alloc_count_since_start() -> U64 [IO]
 memory_peak_bytes() -> U64 [IO]
@@ -1114,6 +1117,7 @@ u64_to_u32_wrap(U64) -> U32 []
 u64_to_u8_sat(U64) -> U8 []
 u64_to_u8_try(U64) -> Applied(Enum("Option"), [U8]) []
 u64_to_u8_wrap(U64) -> U8 []
+uint128_to_string(U128) -> Str []
 uint_to_string(U64) -> Str []
 vec_sort(Applied(Struct("Vec"), [I64])) -> Applied(Struct("Vec"), [I64]) []
 "#;

@@ -158,7 +158,7 @@ tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.
 
 `vow verify --replay-cex` (also `vow build --replay-cex`) cross-checks a counterexample against the executable's runtime semantics. After ESBMC reports a violation, Vow maps the symbolic assignment to concrete Vow inputs, builds a `--mode debug` harness that calls the failing function with them, and checks whether the runtime `VowViolation` matches — **same `vow_id` and same blame**.
 
-This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's C model (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope.
+This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's C model (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope. Under `--backend native` the replay is also the oracle for the native checker: a counterexample that does not reproduce is reported as a `VerifierBug` diagnostic.
 
 ## Integer Contracts
 
@@ -187,7 +187,7 @@ fn safe_add(a: i64, b: i64) -> i64 vow {
 }
 ```
 
-`a +! b` aborts rather than wraps, so every execution that *returns* satisfies both postconditions, for every non-negative `a` and `b`. The verifier models that abort, so no bound is needed. Writing `requires: a <= 4611686018427387903` instead would be the [verification-driven bound](#verification-driven-bounds-anti-pattern) anti-pattern wearing a semantic disguise: it excludes inputs the function handles correctly (it aborts, which is a defined outcome) purely to make wrapping unreachable.
+`a +! b` aborts rather than wraps, so every execution that *returns* satisfies both postconditions, for every non-negative `a` and `b`. The verifier models that abort, so no bound is needed. Neither `+!` nor indexing requires a `[panic]` effect: a function with any effect is not modelable, so gating them would remove exactly these functions from verification (see [Effect Types](grammar.md#effect-types)). Writing `requires: a <= 4611686018427387903` instead would be the [verification-driven bound](#verification-driven-bounds-anti-pattern) anti-pattern wearing a semantic disguise: it excludes inputs the function handles correctly (it aborts, which is a defined outcome) purely to make wrapping unreachable.
 
 A range bound earns its place when it excludes inputs the function genuinely has no answer for — `requires: x > -9223372036854775807` on `abs`, whose result is not representable at `i64::MIN` under any operator.
 
@@ -472,6 +472,12 @@ expression, and `violating_args` identifies the callee parameter and caller
 argument span when Vow can recover it. If `violating_args[].value` is `""`,
 Vow could not statically recover the caller argument value; `arg_offset` and
 `arg_length` still identify the argument expression.
+
+When a callee verified alongside its caller fails its own `ensures` or
+`invariant`, the counterexample is attributed to the callee: `function` is the
+callee, `violation`, `source` and `blame` are the callee's clause, and `vow_id`
+is the callee-local id (the id a debug-mode `VowViolation` for that callee would
+report). It is never resolved against the verified caller's same-numbered clause.
 
 Variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot
 appear in a Vow identifier, so the prefix cannot collide with a source name.

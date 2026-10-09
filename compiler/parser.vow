@@ -592,10 +592,7 @@ fn parse_vow_block(p: Parser) -> i64 {
             clause_ids.push(cid);
         } else {
             push_error(p, String::from("expected requires, ensures, or invariant"));
-            let _skip: Token = advance(p);
-        }
-        if at(p, tok_semicolon()) {
-            let _sc: Token = advance(p);
+            break;
         }
         if at(p, tok_comma()) {
             let _cm: Token = advance(p);
