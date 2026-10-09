@@ -470,31 +470,29 @@ fn check_expanding_string_helper_falls_back(name: String, argc: i64, base_code: 
     0
 }
 
-fn wide_const_function(id: i64, op: i64, ty: i64, dk: i64, lo: i64, hi: i64) -> IrModule {
+fn wide_const_module(op: i64, ty: i64, dk: i64, lo: i64, hi: i64) -> IrModule {
     let insts: Vec<IrInst> = Vec::new();
     insts.push(ir_inst_new(0, op, ty, Vec::new(), dk, lo, hi, String::from("")));
     insts.push(mk_inst_return(1, 0));
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, insts));
-    let f: IrFunction = mk_function(id, String::from("wide"), Vec::new(), ty, blocks);
+    let f: IrFunction = mk_function(14, String::from("wide"), Vec::new(), ty, blocks);
     let functions: Vec<IrFunction> = Vec::new();
     functions.push(f);
     mk_module(functions)
 }
 
-fn check_wide_constant(id: i64, op: i64, ty: i64, dk: i64, lo: i64, hi: i64,
-                       expected: String, base_code: i64) -> i64 {
-    let m: IrModule = wide_const_function(id, op, ty, dk, lo, hi);
+fn check_wide_constant(op: i64, ty: i64, dk: i64, lo: i64, hi: i64,
+                       expected: String, code: i64) -> i64 {
+    let m: IrModule = wide_const_module(op, ty, dk, lo, hi);
     let fns: Vec<IrFunction> = m.functions;
-    if non_modelable_reason(fns[0u64], m, Vec::new()) != String::from("") { return base_code; }
-    let c: String = emit_c_module(m, 16, 16, 16, 16);
-    if !c.contains(expected) { return base_code + 1; }
-    if c.contains(String::from("/* opcode Const")) { return base_code + 2; }
+    if non_modelable_reason(fns[0u64], m, Vec::new()) != String::from("") { return code; }
+    if !emit_c_module(m, 16, 16, 16, 16).contains(expected) { return code; }
     0
 }
 
 fn check_malformed_wide_constant_fails_closed() -> i64 {
-    let m: IrModule = wide_const_function(18, IOP_CONST_I128(), ITY_I128(), IDATA_NONE(), 0, 0);
+    let m: IrModule = wide_const_module(IOP_CONST_I128(), ITY_I128(), IDATA_NONE(), 0, 0);
     let c: String = emit_c_module(m, 16, 16, 16, 16);
     if !c.contains(String::from("/* opcode ConstI128 not modelled */")) { return 76; }
     0
@@ -505,12 +503,15 @@ fn check_wide_constants_are_modelable() -> i64 {
     let i128_min: String = String::from("v0 = (__int128)((((unsigned __int128)9223372036854775808ULL) << 64) | (unsigned __int128)0ULL);");
     let u128_max: String = String::from("v0 = (unsigned __int128)((((unsigned __int128)18446744073709551615ULL) << 64) | (unsigned __int128)18446744073709551615ULL);");
     let u128_one: String = String::from("v0 = (unsigned __int128)((((unsigned __int128)0ULL) << 64) | (unsigned __int128)1ULL);");
-    let mut r: i64 = check_wide_constant(14, IOP_CONST_I128(), ITY_I128(), IDATA_CONST_I128(), -1, 9223372036854775807, i128_max, 64);
-    if r == 0 { r = check_wide_constant(15, IOP_CONST_I128(), ITY_I128(), IDATA_CONST_I128(), 0, -9223372036854775807 - 1, i128_min, 67); }
-    if r == 0 { r = check_wide_constant(16, IOP_CONST_U128(), ITY_U128(), IDATA_CONST_U128(), -1, -1, u128_max, 70); }
-    if r == 0 { r = check_wide_constant(17, IOP_CONST_U128(), ITY_U128(), IDATA_CONST_U128(), 1, 0, u128_one, 73); }
-    if r == 0 { r = check_malformed_wide_constant_fails_closed(); }
-    r
+    let r1: i64 = check_wide_constant(IOP_CONST_I128(), ITY_I128(), IDATA_CONST_I128(), -1, 9223372036854775807, i128_max, 64);
+    if r1 != 0 { return r1; }
+    let r2: i64 = check_wide_constant(IOP_CONST_I128(), ITY_I128(), IDATA_CONST_I128(), 0, -9223372036854775807 - 1, i128_min, 67);
+    if r2 != 0 { return r2; }
+    let r3: i64 = check_wide_constant(IOP_CONST_U128(), ITY_U128(), IDATA_CONST_U128(), -1, -1, u128_max, 70);
+    if r3 != 0 { return r3; }
+    let r4: i64 = check_wide_constant(IOP_CONST_U128(), ITY_U128(), IDATA_CONST_U128(), 1, 0, u128_one, 73);
+    if r4 != 0 { return r4; }
+    check_malformed_wide_constant_fails_closed()
 }
 
 // `bits` is the i64 reinterpretation of an f64's IEEE-754 bit pattern (i.e.

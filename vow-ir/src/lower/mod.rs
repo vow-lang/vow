@@ -4869,6 +4869,9 @@ fn emit_integer_zero(ctx: &mut LowerCtx, ty: Ty, span: Span) -> InstId {
 /// preserves the original operators -- especially checked arithmetic --
 /// instead of folding the whole expression into a wrapping constant.
 fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<InstId> {
+    if !expr_is_coercible_int_marker(expr) {
+        return None;
+    }
     match &expr.kind {
         ExprKind::Lit(Lit::Int(value)) => {
             Some(emit_narrow_integer_constant(ctx, *value, ty, expr.span))
@@ -4876,7 +4879,7 @@ fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<In
         ExprKind::UnaryOp {
             op: UnOp::Neg,
             operand,
-        } if expr_is_coercible_int_marker(expr) => {
+        } => {
             if let ExprKind::Lit(Lit::Int(value)) = &operand.kind
                 && !matches!(ty, Ty::I128 | Ty::U128)
             {
@@ -4897,7 +4900,7 @@ fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<In
                 expr.span,
             ))
         }
-        ExprKind::BinaryOp { op, lhs, rhs } if expr_is_coercible_int_marker(expr) => {
+        ExprKind::BinaryOp { op, lhs, rhs } => {
             let lhs = lower_integer_marker_as(ctx, lhs, ty)?;
             let rhs_ty = if matches!(op, BinOp::Shl | BinOp::Shr) {
                 Ty::U32

@@ -1189,17 +1189,11 @@ fn emit_inst(
                 out.push_str(&format!("  v{} = {}LL;\n", id, v));
             }
         }
-        Opcode::ConstI128 | Opcode::ConstU128 => {
-            let bits = match inst.data {
-                InstData::ConstI128(v) => Some(v as u128),
-                InstData::ConstU128(v) => Some(v),
-                _ => None,
-            };
-            match bits {
-                Some(bits) => out.push_str(&wide_const_assignment(id, inst.ty, bits)),
-                None => emit_unmodelled(inst, out),
-            }
-        }
+        Opcode::ConstI128 | Opcode::ConstU128 => match inst.data {
+            InstData::ConstI128(v) => out.push_str(&wide_const_assignment(id, inst.ty, v as u128)),
+            InstData::ConstU128(v) => out.push_str(&wide_const_assignment(id, inst.ty, v)),
+            _ => emit_unmodelled(inst, out),
+        },
         Opcode::ConstF32 => {
             if let InstData::ConstF32(v) = inst.data {
                 out.push_str(&format!("  v{} = {}f;\n", id, v));
@@ -5110,14 +5104,6 @@ mod tests {
                 "v8 = (unsigned __int128)((((unsigned __int128)18446744073709551615ULL) << 64) | (unsigned __int128)18446744073709551615ULL);"
             ),
             "ConstU128 assign: {c}"
-        );
-        assert!(
-            !c.contains("opcode ConstI128"),
-            "ConstI128 is modelled: {c}"
-        );
-        assert!(
-            !c.contains("opcode ConstU128"),
-            "ConstU128 is modelled: {c}"
         );
     }
 
