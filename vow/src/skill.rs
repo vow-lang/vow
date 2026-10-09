@@ -3368,6 +3368,15 @@ If `violating_args[].value` is `""`, Vow could not statically recover the
 caller argument value; `arg_offset` and `arg_length` still identify the
 argument expression.
 
+When a callee verified alongside its caller fails its own `ensures` or
+`invariant`, the counterexample is attributed to that callee: `function` names
+the callee, `violation`, `source` and `blame` (`"callee"`) are the callee's
+clause, and `vow_id` is the callee-local id. The outcome's top-level `function`
+remains the function being verified. Such a counterexample carries no
+`execution_path` or `branch_decisions` (block ids are not attributable to the
+callee), and `--replay-cex` reports it as `"skipped"` because its inputs are
+the caller's.
+
 When `blame` is `"none"`, `violation` describes the failed verifier-model check
 (such as division by zero, collection bounds or capacity, unwrap-on-None, or
 shift count) rather than exposing raw verifier output.
@@ -4125,6 +4134,12 @@ expression, and `violating_args` identifies the callee parameter and caller
 argument span when Vow can recover it. If `violating_args[].value` is `""`,
 Vow could not statically recover the caller argument value; `arg_offset` and
 `arg_length` still identify the argument expression.
+
+When a callee verified alongside its caller fails its own `ensures` or
+`invariant`, the counterexample is attributed to the callee: `function` is the
+callee, `violation`, `source` and `blame` are the callee's clause, and `vow_id`
+is the callee-local id (the id a debug-mode `VowViolation` for that callee would
+report). It is never resolved against the verified caller's same-numbered clause.
 
 Variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot
 appear in a Vow identifier, so the prefix cannot collide with a source name.
@@ -9267,6 +9282,15 @@ If `violating_args[].value` is `""`, Vow could not statically recover the
 caller argument value; `arg_offset` and `arg_length` still identify the
 argument expression.
 
+When a callee verified alongside its caller fails its own `ensures` or
+`invariant`, the counterexample is attributed to that callee: `function` names
+the callee, `violation`, `source` and `blame` (`"callee"`) are the callee's
+clause, and `vow_id` is the callee-local id. The outcome's top-level `function`
+remains the function being verified. Such a counterexample carries no
+`execution_path` or `branch_decisions` (block ids are not attributable to the
+callee), and `--replay-cex` reports it as `"skipped"` because its inputs are
+the caller's.
+
 When `blame` is `"none"`, `violation` describes the failed verifier-model check
 (such as division by zero, collection bounds or capacity, unwrap-on-None, or
 shift count) rather than exposing raw verifier output.
@@ -10025,6 +10049,12 @@ expression, and `violating_args` identifies the callee parameter and caller
 argument span when Vow can recover it. If `violating_args[].value` is `""`,
 Vow could not statically recover the caller argument value; `arg_offset` and
 `arg_length` still identify the argument expression.
+
+When a callee verified alongside its caller fails its own `ensures` or
+`invariant`, the counterexample is attributed to the callee: `function` is the
+callee, `violation`, `source` and `blame` are the callee's clause, and `vow_id`
+is the callee-local id (the id a debug-mode `VowViolation` for that callee would
+report). It is never resolved against the verified caller's same-numbered clause.
 
 Variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot
 appear in a Vow identifier, so the prefix cannot collide with a source name.

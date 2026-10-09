@@ -473,6 +473,12 @@ argument span when Vow can recover it. If `violating_args[].value` is `""`,
 Vow could not statically recover the caller argument value; `arg_offset` and
 `arg_length` still identify the argument expression.
 
+When a callee verified alongside its caller fails its own `ensures` or
+`invariant`, the counterexample is attributed to the callee: `function` is the
+callee, `violation`, `source` and `blame` are the callee's clause, and `vow_id`
+is the callee-local id (the id a debug-mode `VowViolation` for that callee would
+report). It is never resolved against the verified caller's same-numbered clause.
+
 Variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot
 appear in a Vow identifier, so the prefix cannot collide with a source name.
 Named inputs map directly to function parameters, including source names that

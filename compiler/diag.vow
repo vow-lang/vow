@@ -592,6 +592,10 @@ fn diag_ctx_print_all(ctx: DiagCtx) [io] {
 
 struct VerifyCE {
     function: String,
+    // The function being verified when the failing clause belongs to a
+    // co-emitted callee (`function` then names the callee). Not serialized per
+    // counterexample; keeps the top-level `function` the verify target.
+    target_function: String,
     var_names: Vec<String>,
     var_values: Vec<String>,
     violation: String,
