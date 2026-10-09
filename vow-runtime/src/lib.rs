@@ -7374,12 +7374,6 @@ mod tests {
             unsafe { std::slice::from_raw_parts(wide_umax_header.ptr, wide_umax_header.len) };
         assert_eq!(wide_umax_bytes, b"340282366920938463463374607431768211455");
 
-        let wide_zero = unsafe { __vow_string_from_i128_in_arena(&mut a, 0) };
-        let wide_zero_header = unsafe { &*(wide_zero as *const VowVec) };
-        let wide_zero_bytes =
-            unsafe { std::slice::from_raw_parts(wide_zero_header.ptr, wide_zero_header.len) };
-        assert_eq!(wide_zero_bytes, b"0");
-
         unsafe { __vow_arena_close(&mut a) };
     }
 

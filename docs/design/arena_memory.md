@@ -574,7 +574,8 @@ its `--check` verifies the runtime defines every symbol:
 - `Option` cells: the `parse_*_opt` family, `HashMap::get`, `BTreeMap::get` and
   `BTreeMap::insert`, and every `<src>_to_<tgt>_try` narrowing conversion.
 - `String` results: the string constructors and transformers (`string_new`,
-  `from_cstr`, `clone`, `substr`, `substring`, `from_i64`, `from_u64`, `from_i128`, `from_u128`, `trim`,
+  `from_cstr`, `clone`, `substr`, `substring`, `from_i64`, `from_u64`,
+  `from_i128`, `from_u128`, `trim`,
   `to_upper`, `to_lower`, `replace`, `join`), `fs_read`, `fs_read_line`,
   `stdin_read`, `getenv`, `path_lookup`, `mktemp_dir`, `hex_encode`,
   `format_f64_bits`, `process_get_stdout`, `process_get_stderr`,
