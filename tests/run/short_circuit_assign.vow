@@ -1,5 +1,10 @@
-// TEST: stdout "5\n9\n9\n5\n11\n"
+// TEST: stdout "5\n9\n9\n5\n11\n30\n3\n"
 module ShortCircuitAssign
+
+struct Pair {
+    a: i64,
+    b: i64,
+}
 
 fn and_assign(a: bool) -> i64 {
     let mut x: i64 = 5;
@@ -24,6 +29,13 @@ fn while_cond_assign(n: i64) -> i64 {
     i + seen
 }
 
+fn struct_and_assign(a: bool) -> i64 {
+    let mut p: Pair = Pair { a: 1, b: 2 };
+    let ok: bool = a && { p = Pair { a: 10, b: 20 }; true };
+    if ok { p.a = p.a + 0; }
+    p.a + p.b
+}
+
 fn main() -> i32 [io] {
     // A variable assigned in the right-hand side of `&&` / `||` keeps its old
     // value on the path that short-circuits and the new one on the path that
@@ -37,6 +49,10 @@ fn main() -> i32 [io] {
     print_i64(or_assign(true));
     print_str(String::from("\n"));
     print_i64(while_cond_assign(4) + 3);
+    print_str(String::from("\n"));
+    print_i64(struct_and_assign(true));
+    print_str(String::from("\n"));
+    print_i64(struct_and_assign(false));
     print_str(String::from("\n"));
     0
 }

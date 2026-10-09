@@ -2885,7 +2885,6 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), then_target, else_target, String::from(""), origin);
 
             // RHS block: evaluate RHS, Upsilon, Jump to merge.
-            let snap: ScopeSnap = lctx_snapshot(ctx);
             lctx_switch_to_block(ctx, rhs_block);
             let rhs_id: i64 = lower_expr(ctx, rhs_eid);
             let rhs_mut_vals: Vec<i64> = Vec::new();
@@ -2905,7 +2904,6 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let rhs_up_block: i64 = ctx.current_block;
             let rhs_jmp_args: Vec<i64> = Vec::new();
             lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), rhs_jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""), origin);
-            lctx_restore(ctx, snap);
             let mut ami: u64 = 0;
             while ami < nmut {
                 lctx_assign(ctx, mutations[ami], saved_mut_vals[ami]);
@@ -2942,6 +2940,10 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                 );
                 let mphi_args: Vec<i64> = Vec::new();
                 let mphi_id: i64 = lctx_emit(ctx, IOP_PHI(), mphi_ty, mphi_args, IDATA_NONE(), 0, 0, String::from(""), origin);
+                let mphi_sources: Vec<i64> = Vec::new();
+                mphi_sources.push(rhs_mut_vals[mmi]);
+                mphi_sources.push(saved_mut_vals[mmi]);
+                lctx_merge_compatible_aggregate_metadata(ctx, mphi_sources, mphi_id);
                 backpatch_upsilon(ctx, rhs_up_block, mut_up_rhs[mmi], mphi_id);
                 backpatch_upsilon(ctx, short_up_block, mut_up_short[mmi], mphi_id);
                 lctx_assign(ctx, mutations[mmi], mphi_id);

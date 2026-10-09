@@ -5,7 +5,7 @@
 module ShortCircuitAssign
 
 fn gated_store(a: bool) -> i64 vow {
-  ensures: result == 5 || result == 9
+  ensures: (a && result == 9) || (!a && result == 5)
 } {
   let mut x: i64 = 5;
   let ok: bool = a && { x = 9; true };

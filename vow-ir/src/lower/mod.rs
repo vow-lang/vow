@@ -1735,7 +1735,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 );
 
                 // RHS block: evaluate RHS and feed it into the merge Phi.
-                let scope_snap = ctx.snapshot_scope();
                 ctx.switch_to_block(rhs_block);
                 let rhs_id = lower_expr(ctx, rhs);
                 let rhs_mut_vals: Vec<InstId> = mutations
@@ -1761,7 +1760,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::JumpTarget(merge_block),
                     span,
                 );
-                ctx.restore_scope(scope_snap.clone());
+                for (name, pre_id) in &mutations {
+                    ctx.assign(name, *pre_id);
+                }
 
                 // Short-circuit block: produce constant false (&&) or true (||)
                 ctx.switch_to_block(short_block);
@@ -1797,6 +1798,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 for (i, (name, pre_id)) in mutations.iter().enumerate() {
                     let phi_ty = merge_phi_ty(ctx.inst_ty(rhs_mut_vals[i]), ctx.inst_ty(*pre_id));
                     let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
+                    merge_compatible_aggregate_metadata(ctx, &[rhs_mut_vals[i], *pre_id], phi_id);
                     backpatch_upsilon(ctx, rhs_upsilon_block, rhs_mut_upsilons[i], phi_id);
                     backpatch_upsilon(ctx, short_upsilon_block, short_mut_upsilons[i], phi_id);
                     ctx.assign(name, phi_id);
