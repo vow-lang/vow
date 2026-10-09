@@ -1,0 +1,11 @@
+// TEST: error-code UnterminatedString
+// TEST: error-count 1
+// TEST: stderr "unterminated string literal"
+// A string literal that reaches end of input without a closing quote is a lex
+// error in both compilers; the self-hosted lexer used to accept it silently.
+module UnterminatedString
+
+fn main() -> i32 [io] {
+  print_str("hello);
+  0
+}

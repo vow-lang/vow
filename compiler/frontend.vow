@@ -100,7 +100,7 @@ fn resolve_use_path(arena: AstArena, root_dir: String, use_lid: i64) -> String [
 
 fn frontend_parse_source_into(dctx: DiagCtx, arena: AstArena, path: String, src: String) -> Module {
     diag_ctx_add_source(dctx, path, src);
-    let tokens: Vec<Token> = lex(src);
+    let tokens: Vec<Token> = lex_into(src, dctx, path);
     parse_module_into(tokens, arena, dctx, path)
 }
 
@@ -258,7 +258,7 @@ fn frontend_prepare_path_traced(path: String, module_root: String, t: TraceCtx) 
     let src: String = fs_read(path);
     diag_ctx_add_source(dctx, path, src);
     let t_parse: i64 = trace_now(t);
-    let tokens: Vec<Token> = lex(src);
+    let tokens: Vec<Token> = lex_into(src, dctx, path);
     let arena: AstArena = arena_new();
     let m: Module = parse_module_into(tokens, arena, dctx, path);
     trace_span(t, String::from("parse"), PID_COMPILER(), TID_MAIN(), t_parse, trace_now(t) - t_parse, String::from(""));
