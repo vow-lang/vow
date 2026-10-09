@@ -500,7 +500,7 @@ print('ok' if any(s in ('proven', 'proven-ir') for s in ss) else 'no_proven')
           verify_json="$(run_vowc build --verify-jobs 2 "$SCRIPT_DIR/verify-fail/verify_jobs_ce_before_soft.vow" -o "$TMPDIR/ce_before_soft" 2>/dev/null)"
           ;;
         legacy)
-          verify_json="$(run_vowc --verify --verify-jobs 2 "$SCRIPT_DIR/verify-fail/verify_jobs_ce_before_soft.vow" 2>/dev/null)"
+          verify_json="$(run_vowc --verify-jobs 2 "$SCRIPT_DIR/verify-fail/verify_jobs_ce_before_soft.vow" 2>/dev/null)"
           ;;
       esac
       verify_exit=$?

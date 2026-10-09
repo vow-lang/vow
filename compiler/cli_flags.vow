@@ -37,9 +37,8 @@ fn cf_is_complexity_value(f: String) -> bool {
     f == "--cog-anchor" || f == "--nloc-anchor" || f == "--max-score" || f == "--max-cognitive" || f == "--max-cyclomatic"
 }
 
-fn cf_kind_build(f: String, legacy: bool) -> i64 {
+fn cf_kind_build(f: String) -> i64 {
     if cf_is_help(f) || cf_is_build_bool(f) { return CF_BOOL(); }
-    if legacy && (f == "--emit-c" || f == "--verify") { return CF_BOOL(); }
     if cf_is_build_value(f) || cf_is_prover_value(f) { return CF_VALUE(); }
     CF_UNKNOWN()
 }
@@ -77,8 +76,7 @@ fn cf_kind_skill(f: String) -> i64 {
 // Each table is a superset of the matching clap struct in vow/src/cli.rs plus the
 // self-hosted-only extras; `mutants` owns its own flags and is never validated.
 fn cli_flag_kind(cmd: i64, flag: String) -> i64 {
-    if cmd == CMD_BUILD() { return cf_kind_build(flag, false); }
-    if cmd == CMD_NONE() { return cf_kind_build(flag, true); }
+    if cmd == CMD_BUILD() || cmd == CMD_NONE() { return cf_kind_build(flag); }
     if cmd == CMD_VERIFY() { return cf_kind_verify(flag); }
     if cmd == CMD_TEST() { return cf_kind_test(flag); }
     if cmd == CMD_CONTRACTS() { return cf_kind_contracts(flag); }

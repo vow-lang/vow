@@ -8,8 +8,10 @@ Compile source to native executable. Verifies contracts by default.
 
 ```
 vow build [OPTIONS] <source.vow>
-vow [OPTIONS] <source.vow>          # legacy (equivalent)
+vow [OPTIONS] <source.vow>          # bare form (identical to `vow build`)
 ```
+
+The bare `vow <source.vow>` form is exactly `vow build`: it verifies by default, accepts the same flags, prints the same build-result JSON and fails closed (non-zero exit and `VerifyFailed` when verification fails). The former legacy-only `--emit-c` and `--verify` flags are not accepted and are rejected with the usage error (exit 2) like any unknown flag; `--no-verify` is the opt-out and `--dump-ir` prints the IR. Without `-o` the executable is written to `build/<stem>`.
 
 **Options:**
 
@@ -49,7 +51,7 @@ vow verify [OPTIONS] <source.vow>
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
-| `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is the in-process symbolic checker with Bitwuzla (epic #1398); self-hosted `vowc` only, see "Native backend" below. Accepted by `verify` only: `build`, `contracts`, `test` and the legacy `vowc <file> --verify` form reject `--backend native` with a usage error (exit 1) instead of silently running ESBMC. Any value other than `esbmc` or `native` is a usage error |
+| `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is the in-process symbolic checker with Bitwuzla (epic #1398); self-hosted `vowc` only, see "Native backend" below. Accepted by `verify` only: `build`, `contracts`, `test` and the bare `vowc <file>` form (identical to `build`) reject `--backend native` with a usage error (exit 1) instead of silently running ESBMC. Any value other than `esbmc` or `native` is a usage error |
 | `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
 | `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. |
 
@@ -105,7 +107,7 @@ vow skill install --global  # install to $HOME/.claude/skills/vow/ on Linux
 
 When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow/` and fails if `$HOME` is unset or empty.
 
-**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
+**Auto-install on build.** The first time `vow build` (or the bare `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
 
 ### `vow test`
 
