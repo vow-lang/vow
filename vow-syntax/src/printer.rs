@@ -58,7 +58,7 @@ fn print_decl_item(item: &Item, level: usize) -> String {
 fn print_fn_decl(f: &FnDef, level: usize) -> String {
     let ind = indent(level);
     let vis = print_visibility(&f.vis);
-    let params = print_params(&f.params);
+    let params = print_params(&f.params, level);
     let ret = print_type(&f.return_ty);
     let effects = print_effects(&f.effects);
 
@@ -134,14 +134,19 @@ fn print_effects(effects: &[Effect]) -> String {
     format!(" [{}]", names.join(", "))
 }
 
-fn print_params(params: &[Param]) -> String {
+fn print_params(params: &[Param], level: usize) -> String {
     params
         .iter()
         .map(|p| {
             let ty_str = print_type(&p.ty);
             match &p.refinement {
                 None => format!("{}: {}", p.name, ty_str),
-                Some(pred) => format!("{}: {} where {}", p.name, ty_str, print_expr(pred)),
+                Some(pred) => format!(
+                    "{}: {} where {}",
+                    p.name,
+                    ty_str,
+                    print_expr_at(pred, level)
+                ),
             }
         })
         .collect::<Vec<_>>()
@@ -196,7 +201,7 @@ fn print_fn(f: &FnDef, level: usize) -> String {
 
     let ind = indent(level);
     let vis = print_visibility(&f.vis);
-    let params = print_params(&f.params);
+    let params = print_params(&f.params, level);
     let ret = print_type(&f.return_ty);
     let effects = print_effects(&f.effects);
 
@@ -335,7 +340,7 @@ fn print_trait(t: &TraitDef, level: usize) -> String {
 
 fn print_trait_method(m: &TraitMethod, level: usize) -> String {
     let ind = indent(level);
-    let params = print_params(&m.params);
+    let params = print_params(&m.params, level);
     let ret = print_type(&m.return_ty);
     let effects = print_effects(&m.effects);
 
@@ -401,7 +406,7 @@ fn print_extern(e: &ExternBlock, level: usize) -> String {
 
 fn print_extern_fn(f: &ExternFn, level: usize) -> String {
     let ind = indent(level);
-    let params = print_params(&f.params);
+    let params = print_params(&f.params, level);
     let effects = print_effects(&f.effects);
 
     let ret_part = match &f.return_ty {
@@ -605,7 +610,8 @@ fn print_expr_at(expr: &Expr, level: usize) -> String {
             for arm in arms {
                 out.push_str(&print_match_arm(arm, level + 1));
             }
-            out.push_str(&format!("{}}}", indent(level)));
+            out.push_str(&indent(level));
+            out.push('}');
             out
         }
         ExprKind::If {
@@ -1416,7 +1422,7 @@ mod tests {
             ))),
             span: s(),
         };
-        let out = print_params(&[param]);
+        let out = print_params(&[param], 0);
         assert_eq!(out, "n: i64 where n != 0");
     }
 
