@@ -1,0 +1,75 @@
+module TestLowerShortCircuitAssign
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+use ir_dominance
+
+// Twin of `short_circuit_rhs_assignment_reaches_merge_through_phi` in
+// vow-ir/src/lower/mod.rs. Both lower tests/fixtures/short_circuit_assign.vow.
+// Here every function must pass the dominance validator, and the `&&` / `||`
+// functions must merge their right-hand-side assignments through a Phi.
+
+fn lower_fixture(source: String, file: String) -> IrModule {
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(lex(source), arena, diag_ctx_new(), file);
+    let item_files: Vec<String> = Vec::new();
+    let mut fi: u64 = 0;
+    while fi < parsed.items.len() {
+        item_files.push(file);
+        fi = fi + 1;
+    }
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), item_files
+    )
+}
+
+fn count_phis(f: IrFunction) -> i64 {
+    let mut n: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let block: IrBlock = f.blocks[bi];
+        let insts: Vec<IrInst> = block.insts;
+        let mut ii: u64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_PHI() {
+                n = n + 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    n
+}
+
+// Minimum number of Phis: one per short-circuit result plus one per variable
+// assigned in a right-hand side.
+fn min_phis(name: String) -> i64 {
+    if name == String::from("and_rhs_assign") { return 2; }
+    if name == String::from("or_rhs_assign") { return 2; }
+    if name == String::from("if_cond_assign") { return 2; }
+    if name == String::from("nested_assign") { return 5; }
+    0
+}
+
+fn main() -> i32 [read] {
+    let src: String = fs_read(String::from("tests/fixtures/short_circuit_assign.vow"));
+    if src.len() == 0 { return 1; }
+    let lowered: IrModule = lower_fixture(src, String::from("short_circuit_assign.vow"));
+    if lowered.functions.len() == 0 { return 2; }
+
+    let mut fi: u64 = 0;
+    while fi < lowered.functions.len() {
+        let f: IrFunction = lowered.functions[fi];
+        if ir_non_dominating_read(f).len() > 0 { return 10 + fi as i32; }
+        if count_phis(f) < min_phis(f.name) { return 100 + fi as i32; }
+        fi = fi + 1;
+    }
+    0
+}

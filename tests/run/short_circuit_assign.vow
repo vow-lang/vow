@@ -1,0 +1,42 @@
+// TEST: stdout "5\n9\n9\n5\n11\n"
+module ShortCircuitAssign
+
+fn and_assign(a: bool) -> i64 {
+    let mut x: i64 = 5;
+    let ok: bool = a && { x = 9; true };
+    if ok { x = x + 0; }
+    x
+}
+
+fn or_assign(a: bool) -> i64 {
+    let mut x: i64 = 5;
+    let ok: bool = a || { x = 9; false };
+    if ok { x = x + 0; }
+    x
+}
+
+fn while_cond_assign(n: i64) -> i64 {
+    let mut i: i64 = 0;
+    let mut seen: i64 = 0;
+    while i < n && { seen = seen + 1; true } {
+        i = i + 1;
+    }
+    i + seen
+}
+
+fn main() -> i32 [io] {
+    // A variable assigned in the right-hand side of `&&` / `||` keeps its old
+    // value on the path that short-circuits and the new one on the path that
+    // evaluates the right-hand side.
+    print_i64(and_assign(false));
+    print_str(String::from("\n"));
+    print_i64(and_assign(true));
+    print_str(String::from("\n"));
+    print_i64(or_assign(false));
+    print_str(String::from("\n"));
+    print_i64(or_assign(true));
+    print_str(String::from("\n"));
+    print_i64(while_cond_assign(4) + 3);
+    print_str(String::from("\n"));
+    0
+}

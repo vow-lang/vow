@@ -1,0 +1,116 @@
+// Shared fixture for the short-circuit assignment tests: the Rust lowerer
+// (vow-ir/src/lower/mod.rs, `short_circuit_rhs_assignment_reaches_merge_through_phi`)
+// and the self-hosted lowerer (compiler/tests/test_lower_short_circuit_assign.vow)
+// both lower this file. A variable assigned in the right-hand side of `&&` / `||`
+// is only defined on the path that evaluates the right-hand side, so a read after
+// the merge must go through a Phi instead of the right-hand side's own value.
+// Functions named `branch_*` assign through a hidden expression form inside an
+// `if` and read the variable after the merge.
+module ShortCircuitAssign
+
+enum Pick {
+    Low,
+    High(i64),
+}
+
+struct Pair {
+    a: i64,
+    b: i64,
+}
+
+fn pick(n: i64) -> Pick {
+    if n > 2 { Pick::High(n) } else { Pick::Low {} }
+}
+
+fn bump(x: i64) -> i64 { x + 1 }
+
+fn and_rhs_assign(a: bool) -> i64 {
+    let mut x: i64 = 5;
+    let ok: bool = a && { x = 9; true };
+    if ok { x = x + 0; }
+    x
+}
+
+fn or_rhs_assign(a: bool) -> i64 {
+    let mut x: i64 = 5;
+    let ok: bool = a || { x = 9; false };
+    if ok { x = x + 0; }
+    x
+}
+
+fn if_cond_assign(a: bool) -> i64 {
+    let mut x: i64 = 5;
+    if a && { x = 9; true } { x = x + 1; }
+    x
+}
+
+fn nested_assign(a: bool, b: bool, c: bool) -> i64 {
+    let mut x: i64 = 1;
+    let mut y: i64 = 2;
+    let ok: bool = a && (b || { x = 10; c }) && { y = 20; true };
+    if ok { x = x + 0; }
+    x + y
+}
+
+fn while_cond_assign(n: i64) -> i64 {
+    let mut i: i64 = 0;
+    let mut seen: i64 = 0;
+    while i < n && { seen = seen + 1; true } {
+        i = i + 1;
+    }
+    i + seen
+}
+
+fn rhs_early_return(a: bool, n: i64) -> i64 {
+    let mut x: i64 = 5;
+    let ok: bool = a && { x = n; if n > 100 { return 1; } true };
+    if ok { x = x + 0; }
+    x
+}
+
+fn branch_cast(c: bool) -> u64 {
+    let mut x: i64 = 5;
+    if c { let t: u64 = ({ x = 9; x }) as u64; t + 0; }
+    x as u64
+}
+
+fn branch_index(c: bool, v: Vec<i64>) -> i64 {
+    let mut x: i64 = 5;
+    if c { let t: i64 = v[{ x = 0; 0 }]; t + 0; }
+    x
+}
+
+fn branch_tuple(c: bool) -> i64 {
+    let mut x: i64 = 5;
+    if c { let (p, q): (i64, i64) = ({ x = 9; x }, 2); p + q; }
+    x
+}
+
+fn branch_struct(c: bool) -> i64 {
+    let mut x: i64 = 5;
+    if c { let p: Pair = Pair { a: { x = 9; x }, b: 0 }; p.a + 0; }
+    x
+}
+
+fn branch_enum(c: bool) -> i64 {
+    let mut x: i64 = 5;
+    if c { let p: Pick = Pick::High({ x = 9; x }); match p { Pick::Low => { x = x + 0; }, Pick::High(h) => { x = x + h; } } }
+    x
+}
+
+fn branch_call_arg(c: bool) -> i64 {
+    let mut x: i64 = 5;
+    if c { let t: i64 = bump({ x = 9; x }); t + 0; }
+    x
+}
+
+fn branch_match_arm(c: bool, n: i64) -> i64 {
+    let mut x: i64 = 5;
+    if c {
+        match pick(n) {
+            Pick::Low => { x = 1; },
+            Pick::High(h) => { x = h; },
+        }
+    }
+    x
+}
