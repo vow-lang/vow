@@ -14,6 +14,8 @@ use tests.builders
 fn check_fresh_table_lookup() -> i64 {
     if !fresh_arena_base_extern(String::from("__vow_string_parse_i64_opt")) { return 1; }
     if !fresh_arena_base_extern(String::from("__vow_string_parse_u32_opt")) { return 2; }
+    if !fresh_arena_base_extern(String::from("__vow_string_parse_i128_opt")) { return 43; }
+    if !fresh_arena_base_extern(String::from("__vow_string_parse_u128_opt")) { return 44; }
     if !fresh_arena_base_extern(String::from("__vow_map_get")) { return 3; }
     if !fresh_arena_base_extern(String::from("__vow_btreemap_get")) { return 4; }
     if !fresh_arena_base_extern(String::from("__vow_i64_to_u8_try")) { return 5; }

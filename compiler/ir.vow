@@ -770,6 +770,15 @@ fn fresh_arena_base_extern(sym: String) -> bool {
             }
         }
     }
+    if n == 27 {
+        let c0: i64 = sym.byte_at(19);
+        if c0 == 105 {
+            return sym == String::from("__vow_string_parse_i128_opt");
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_string_parse_u128_opt");
+        }
+    }
     return false;
 }
 // GENERATE:OPERATIONS:END

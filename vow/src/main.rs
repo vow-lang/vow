@@ -1645,7 +1645,7 @@ fn main() -> i32 [io] {
         ] {
             assert!(
                 lang["builtins"].get(name).is_none(),
-                "unexpected unimplemented builtin {name}"
+                "{name} is documented in the Parsing table, not in language.builtins"
             );
         }
         let string_methods = lang["methods"]["String"].as_array().unwrap();

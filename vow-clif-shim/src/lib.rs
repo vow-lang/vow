@@ -3576,6 +3576,14 @@ const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[
         "__vow_string_parse_u32_opt",
         "__vow_string_parse_u32_opt_in_arena",
     ),
+    (
+        "__vow_string_parse_i128_opt",
+        "__vow_string_parse_i128_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_u128_opt",
+        "__vow_string_parse_u128_opt_in_arena",
+    ),
     ("__vow_map_get", "__vow_map_get_in_arena"),
     ("__vow_btreemap_get", "__vow_btreemap_get_in_arena"),
     ("__vow_btreemap_insert", "__vow_btreemap_insert_in_arena"),
@@ -3905,7 +3913,9 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         | "__vow_string_parse_i16_opt"
         | "__vow_string_parse_u16_opt"
         | "__vow_string_parse_u32_opt"
-        | "__vow_string_parse_i32_opt" => {
+        | "__vow_string_parse_i32_opt"
+        | "__vow_string_parse_i128_opt"
+        | "__vow_string_parse_u128_opt" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }

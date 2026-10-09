@@ -95,6 +95,8 @@ fn check_explicit_option_rows() -> i64 {
     if r == 0 { r = expect_tag(String::from("u64_to_i32_try"), ITY_I32(), 59); }
     if r == 0 { r = expect_tag(String::from("i128_to_i32_try"), ITY_I32(), 92); }
     if r == 0 { r = expect_tag(String::from("u128_to_i32_try"), ITY_I32(), 93); }
+    if r == 0 { r = expect_tag(String::from("parse_i128"), ITY_I128(), 98); }
+    if r == 0 { r = expect_tag(String::from("parse_u128"), ITY_U128(), 99); }
     r
 }
 

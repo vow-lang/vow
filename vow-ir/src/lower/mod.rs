@@ -115,6 +115,8 @@ fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "parse_i16" => Some(("__vow_string_parse_i16_opt", Ty::Ptr)),
         "parse_u16" => Some(("__vow_string_parse_u16_opt", Ty::Ptr)),
         "parse_u32" => Some(("__vow_string_parse_u32_opt", Ty::Ptr)),
+        "parse_i128" => Some(("__vow_string_parse_i128_opt", Ty::Ptr)),
+        "parse_u128" => Some(("__vow_string_parse_u128_opt", Ty::Ptr)),
         "i16_to_u8_try" => Some(("__vow_i16_to_u8_try", Ty::Ptr)),
         "i16_to_u8_wrap" => Some(("__vow_i16_to_u8_wrap", Ty::U8)),
         "i16_to_u8_sat" => Some(("__vow_i16_to_u8_sat", Ty::U8)),
@@ -268,6 +270,8 @@ fn builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
         "parse_i16" => Some(BuiltinResultTag::OptionOf(Ty::I16)),
         "parse_u16" => Some(BuiltinResultTag::OptionOf(Ty::U16)),
         "parse_u32" => Some(BuiltinResultTag::OptionOf(Ty::U32)),
+        "parse_i128" => Some(BuiltinResultTag::OptionOf(Ty::I128)),
+        "parse_u128" => Some(BuiltinResultTag::OptionOf(Ty::U128)),
         "parse_u8" | "i16_to_u8_try" | "i32_to_u8_try" | "i64_to_u8_try" | "i128_to_u8_try"
         | "u16_to_u8_try" | "u32_to_u8_try" | "u64_to_u8_try" | "u128_to_u8_try" => {
             Some(BuiltinResultTag::OptionOf(Ty::U8))
@@ -6109,6 +6113,8 @@ mod tests {
             ("parse_i16", Ty::I16),
             ("parse_u16", Ty::U16),
             ("parse_u32", Ty::U32),
+            ("parse_i128", Ty::I128),
+            ("parse_u128", Ty::U128),
             ("parse_i64", Ty::I64),
             ("parse_u8", Ty::U8),
             ("i16_to_u8_try", Ty::U8),
@@ -6503,14 +6509,21 @@ type PairView = PairAlias;
 
     #[test]
     fn phase3_parser_calls_preserve_runtime_symbols() {
-        let mut stmts: Vec<Stmt> = ["parse_i8", "parse_i16", "parse_u16", "parse_u32"]
-            .into_iter()
-            .map(|name| Stmt::Expr {
-                expr: call_expr(name, vec![string_expr("0")]),
-                has_semicolon: true,
-                span: sp(),
-            })
-            .collect();
+        let mut stmts: Vec<Stmt> = [
+            "parse_i8",
+            "parse_i16",
+            "parse_u16",
+            "parse_u32",
+            "parse_i128",
+            "parse_u128",
+        ]
+        .into_iter()
+        .map(|name| Stmt::Expr {
+            expr: call_expr(name, vec![string_expr("0")]),
+            has_semicolon: true,
+            span: sp(),
+        })
+        .collect();
         stmts.push(Stmt::Expr {
             expr: call_expr("i16_to_i8_try", vec![int_expr(0)]),
             has_semicolon: true,
@@ -6554,6 +6567,8 @@ type PairView = PairAlias;
             "__vow_string_parse_i8_opt",
             "__vow_string_parse_i16_opt",
             "__vow_string_parse_u16_opt",
+            "__vow_string_parse_i128_opt",
+            "__vow_string_parse_u128_opt",
             "__vow_string_parse_u32_opt",
             "__vow_i16_to_i8_try",
         ] {

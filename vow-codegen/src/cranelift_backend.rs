@@ -2835,7 +2835,9 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         | "__vow_string_parse_i16_opt"
         | "__vow_string_parse_u16_opt"
         | "__vow_string_parse_u32_opt"
-        | "__vow_string_parse_i32_opt" => {
+        | "__vow_string_parse_i32_opt"
+        | "__vow_string_parse_i128_opt"
+        | "__vow_string_parse_u128_opt" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
         }
