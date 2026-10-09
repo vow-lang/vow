@@ -1,0 +1,166 @@
+module VcExec
+
+use ir
+use vc_term
+use vc_smt
+use vc_gate
+
+// Symbolic execution of a straight-line i64/Bool function (one that
+// `vc_skip_reason` accepts) into proof obligations. Each IR value becomes a
+// `define-fun`; each `requires` is an assumption for the claims that follow it;
+// each `ensures` and each division/remainder abort condition is a claim, in IR
+// order. SMT division is total, so the aborts the language specifies (zero
+// divisor; signed MIN / -1 for `/`) are separate claims, and a later claim
+// always assumes the guards of earlier ones: an aborting run never reaches it.
+
+fn VC_CLAIM_ENSURES() -> i64 { 0 }
+fn VC_CLAIM_DIV_ZERO() -> i64 { 1 }
+fn VC_CLAIM_DIV_OVERFLOW() -> i64 { 2 }
+
+fn VC_LABEL_DIV_ZERO() -> String { String::from("division by zero") }
+fn VC_LABEL_DIV_OVERFLOW() -> String { String::from("division overflow") }
+
+struct VcClaims {
+    arena: VcArena,
+    kinds: Vec<i64>,
+    vow_ids: Vec<i64>,
+    labels: Vec<String>,
+    scripts: Vec<SmtScript>,
+    model_names: Vec<String>,
+    model_params: Vec<i64>,
+}
+
+fn vc_value_name(id: i64) -> String {
+    let out: String = String::from("v");
+    out.push_str(i64_to_string(id));
+    out
+}
+
+fn vc_param_name(k: i64) -> String {
+    let out: String = String::from("p");
+    out.push_str(i64_to_string(k));
+    out
+}
+
+fn vc_smt_op(op: i64) -> i64 {
+    if op == IOP_WADD() { return VC_OP_BVADD(); }
+    if op == IOP_WSUB() { return VC_OP_BVSUB(); }
+    if op == IOP_WMUL() { return VC_OP_BVMUL(); }
+    if op == IOP_WDIV() { return VC_OP_BVSDIV(); }
+    if op == IOP_WREM() { return VC_OP_BVSREM(); }
+    if op == IOP_BITAND() { return VC_OP_BVAND(); }
+    if op == IOP_BITOR() { return VC_OP_BVOR(); }
+    if op == IOP_BITXOR() { return VC_OP_BVXOR(); }
+    if op == IOP_EQ() { return VC_OP_EQ(); }
+    if op == IOP_NE() { return VC_OP_DISTINCT(); }
+    if op == IOP_LT() { return VC_OP_BVSLT(); }
+    if op == IOP_LE() { return VC_OP_BVSLE(); }
+    if op == IOP_GT() { return VC_OP_BVSGT(); }
+    if op == IOP_GE() { return VC_OP_BVSGE(); }
+    if op == IOP_AND() { return VC_OP_AND(); }
+    VC_OP_OR()
+}
+
+fn vc_sort_of(ty: i64) -> i64 {
+    if ty == ITY_BOOL() { return VC_SORT_BOOL(); }
+    VC_SORT_BV64()
+}
+
+fn vc_add_claim(cs: VcClaims, hdr: SmtScript, assumed: Vec<i64>, kind: i64, vow_id: i64, label: String, goal: i64) {
+    let ar: VcArena = cs.arena;
+    let s: SmtScript = vc_script_copy(hdr);
+    let mut i: u64 = 0;
+    while i < assumed.len() {
+        vc_script_assert(s, assumed[i]);
+        i = i + 1;
+    }
+    vc_script_assert(s, vc_tm_app1(ar, VC_OP_NOT(), goal));
+    vc_script_check_sat(s);
+    vc_script_get_value(s, cs.model_names);
+    cs.kinds.push(kind);
+    cs.vow_ids.push(vow_id);
+    cs.labels.push(label);
+    cs.scripts.push(s);
+}
+
+// Obligations for a function inside the native subset, in IR order.
+fn vc_claims(f: IrFunction) -> VcClaims {
+    let ar: VcArena = vc_arena_new();
+    let cs: VcClaims = VcClaims {
+        arena: ar,
+        kinds: Vec::new(),
+        vow_ids: Vec::new(),
+        labels: Vec::new(),
+        scripts: Vec::new(),
+        model_names: Vec::new(),
+        model_params: Vec::new(),
+    };
+    let hdr: SmtScript = vc_script_new();
+    vc_script_set_logic(hdr, String::from("QF_BV"));
+    vc_script_set_option(hdr, String::from(":produce-models"), String::from("true"));
+    let mut pi: u64 = 0;
+    while pi < f.params.len() {
+        if f.params[pi] == ITY_I64() {
+            vc_script_declare_const(hdr, vc_param_name(pi as i64), VC_SORT_BV64());
+            cs.model_names.push(vc_param_name(pi as i64));
+            cs.model_params.push(pi as i64);
+        }
+        pi = pi + 1;
+    }
+
+    let tys: Vec<i64> = vc_ty_table(f);
+    let var_of: Vec<i64> = Vec::new();
+    let mut k: u64 = 0;
+    while k < tys.len() {
+        var_of.push(-1);
+        k = k + 1;
+    }
+    let assumed: Vec<i64> = Vec::new();
+    let zero: i64 = vc_tm_bv_const(ar, 0);
+    let min: i64 = vc_tm_bv_const(ar, -9223372036854775807 - 1);
+    let minus_one: i64 = vc_tm_bv_const(ar, -1);
+
+    let entry: IrBlock = f.blocks[0];
+    let mut ii: u64 = 0;
+    while ii < entry.insts.len() {
+        let inst: IrInst = entry.insts[ii];
+        let op: i64 = inst.op;
+        let mut defined: i64 = -1;
+        if op == IOP_CONST_I64() {
+            defined = vc_tm_bv_const(ar, inst.dv);
+        } else if op == IOP_CONST_BOOL() {
+            defined = vc_tm_bool_const(ar, inst.dv != 0);
+        } else if op == IOP_GET_ARG() {
+            defined = vc_tm_var(ar, vc_param_name(inst.dv));
+        } else if op == IOP_NOT() {
+            defined = vc_tm_app1(ar, VC_OP_NOT(), var_of[inst.args[0] as u64]);
+        } else if op == IOP_VOW_REQ() {
+            assumed.push(var_of[inst.args[0] as u64]);
+        } else if op == IOP_VOW_ENS() {
+            vc_add_claim(cs, hdr, assumed, VC_CLAIM_ENSURES(), inst.dv, String::from(""), var_of[inst.args[0] as u64]);
+        } else if op != IOP_RETURN() {
+            let lhs: i64 = var_of[inst.args[0] as u64];
+            let rhs: i64 = var_of[inst.args[1] as u64];
+            defined = vc_tm_app2(ar, vc_smt_op(op), lhs, rhs);
+            if op == IOP_WDIV() || op == IOP_WREM() {
+                let nonzero: i64 = vc_tm_app2(ar, VC_OP_DISTINCT(), rhs, zero);
+                vc_add_claim(cs, hdr, assumed, VC_CLAIM_DIV_ZERO(), -1, VC_LABEL_DIV_ZERO(), nonzero);
+                assumed.push(nonzero);
+                if op == IOP_WDIV() {
+                    let hits_min: i64 = vc_tm_app2(ar, VC_OP_EQ(), lhs, min);
+                    let by_minus_one: i64 = vc_tm_app2(ar, VC_OP_EQ(), rhs, minus_one);
+                    let overflow: i64 = vc_tm_app2(ar, VC_OP_AND(), hits_min, by_minus_one);
+                    let no_overflow: i64 = vc_tm_app1(ar, VC_OP_NOT(), overflow);
+                    vc_add_claim(cs, hdr, assumed, VC_CLAIM_DIV_OVERFLOW(), -1, VC_LABEL_DIV_OVERFLOW(), no_overflow);
+                    assumed.push(no_overflow);
+                }
+            }
+        }
+        if defined >= 0 {
+            vc_script_define_fun(hdr, vc_value_name(inst.id), vc_sort_of(inst.ty), defined);
+            var_of[inst.id as u64] = vc_tm_var(ar, vc_value_name(inst.id));
+        }
+        ii = ii + 1;
+    }
+    cs
+}

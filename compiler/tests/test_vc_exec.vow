@@ -1,0 +1,223 @@
+module TestVcExec
+
+use ir
+use vc_term
+use vc_smt
+use vc_gate
+use vc_exec
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn params2() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    p.push(ITY_I64());
+    p
+}
+
+fn mk_vow(id: i64, op: i64, pred: i64, vow_id: i64) -> IrInst {
+    ir_inst_new(id, op, ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+fn one_block(name: String, params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, name, params, ret, blocks)
+}
+
+fn query(cs: VcClaims, k: u64) -> String {
+    vc_smt_render(cs.arena, cs.scripts[k])
+}
+
+fn count_of(hay: String, needle: String) -> i64 {
+    let mut n: i64 = 0;
+    let mut i: u64 = 0;
+    while i + needle.len() <= hay.len() {
+        if hay.substring(i, i + needle.len()) == needle {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+// divide(x, y) requires y > 0, body x / y
+fn divide_with_requires(op: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_arg(1, ITY_I64(), 1));
+    i.push(mk_inst_const_i64(2, 0));
+    i.push(mk_inst(3, IOP_GT(), ITY_BOOL(), args2(1, 2)));
+    i.push(mk_vow(4, IOP_VOW_REQ(), 3, 0));
+    i.push(mk_inst(5, op, ITY_I64(), args2(0, 1)));
+    i.push(mk_inst_return(6, 5));
+    one_block(String::from("divide"), params2(), ITY_I64(), i)
+}
+
+fn check_divide_with_requires() -> i64 {
+    let f: IrFunction = divide_with_requires(IOP_WDIV());
+    if vc_skip_reason(f).len() != 0 { return 1; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.scripts.len() != 2 { return 2; }
+    if cs.kinds[0] != VC_CLAIM_DIV_ZERO() { return 3; }
+    if cs.kinds[1] != VC_CLAIM_DIV_OVERFLOW() { return 4; }
+    if cs.vow_ids[0] != -1 { return 5; }
+    if cs.labels[0] != String::from("division by zero") { return 6; }
+    if cs.labels[1] != String::from("division overflow") { return 7; }
+    let q0: String = query(cs, 0);
+    if !q0.contains(String::from("(assert v3)\n(assert (not (distinct v1 (_ bv0 64))))\n(check-sat)")) { return 8; }
+    let q1: String = query(cs, 1);
+    if !q1.contains(String::from("(assert v3)\n(assert (distinct v1 (_ bv0 64)))\n(assert (not (not (and (= v0 (_ bv9223372036854775808 64)) (= v1 (_ bv18446744073709551615 64))))))\n")) { return 9; }
+    0
+}
+
+fn check_rem_has_only_zero_claim() -> i64 {
+    let cs: VcClaims = vc_claims(divide_with_requires(IOP_WREM()));
+    if cs.scripts.len() != 1 { return 10; }
+    if cs.kinds[0] != VC_CLAIM_DIV_ZERO() { return 11; }
+    0
+}
+
+// twice(x) requires x > 0 ensures result > x, body x + x
+fn check_ensures_claim_golden() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_const_i64(1, 0));
+    i.push(mk_inst(2, IOP_GT(), ITY_BOOL(), args2(0, 1)));
+    i.push(mk_vow(3, IOP_VOW_REQ(), 2, 0));
+    i.push(mk_inst_add(4, 0, 0));
+    i.push(mk_inst(5, IOP_GT(), ITY_BOOL(), args2(4, 0)));
+    i.push(mk_vow(6, IOP_VOW_ENS(), 5, 1));
+    i.push(mk_inst_return(7, 4));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    let f: IrFunction = one_block(String::from("twice"), p, ITY_I64(), i);
+    let cs: VcClaims = vc_claims(f);
+    if cs.scripts.len() != 1 { return 20; }
+    if cs.kinds[0] != VC_CLAIM_ENSURES() { return 21; }
+    if cs.vow_ids[0] != 1 { return 22; }
+    let want: String = String::from("(set-logic QF_BV)\n");
+    want.push_str(String::from("(set-option :produce-models true)\n"));
+    want.push_str(String::from("(declare-const p0 (_ BitVec 64))\n"));
+    want.push_str(String::from("(define-fun v0 () (_ BitVec 64) p0)\n"));
+    want.push_str(String::from("(define-fun v1 () (_ BitVec 64) (_ bv0 64))\n"));
+    want.push_str(String::from("(define-fun v2 () Bool (bvsgt v0 v1))\n"));
+    want.push_str(String::from("(define-fun v4 () (_ BitVec 64) (bvadd v0 v0))\n"));
+    want.push_str(String::from("(define-fun v5 () Bool (bvsgt v4 v0))\n"));
+    want.push_str(String::from("(assert v2)\n"));
+    want.push_str(String::from("(assert (not v5))\n"));
+    want.push_str(String::from("(check-sat)\n"));
+    want.push_str(String::from("(get-value (p0))\n"));
+    if query(cs, 0) != want { return 23; }
+    0
+}
+
+fn check_requires_only_has_no_claims() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_const_i64(1, 0));
+    i.push(mk_inst(2, IOP_GE(), ITY_BOOL(), args2(0, 1)));
+    i.push(mk_vow(3, IOP_VOW_REQ(), 2, 0));
+    i.push(mk_inst_return(4, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    let cs: VcClaims = vc_claims(one_block(String::from("r"), p, ITY_I64(), i));
+    if cs.scripts.len() != 0 { return 30; }
+    0
+}
+
+fn check_second_division_assumes_first() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_arg(1, ITY_I64(), 1));
+    i.push(mk_inst(2, IOP_WDIV(), ITY_I64(), args2(0, 1)));
+    i.push(mk_inst(3, IOP_WREM(), ITY_I64(), args2(2, 1)));
+    i.push(mk_inst_return(4, 3));
+    let cs: VcClaims = vc_claims(one_block(String::from("dd"), params2(), ITY_I64(), i));
+    if cs.scripts.len() != 3 { return 40; }
+    if cs.kinds[2] != VC_CLAIM_DIV_ZERO() { return 41; }
+    let q: String = query(cs, 2);
+    if count_of(q, String::from("(assert (distinct v1 (_ bv0 64)))")) != 1 { return 42; }
+    if !q.contains(String::from("(assert (not (and (= v0 ")) { return 43; }
+    let first: String = query(cs, 0);
+    if first.contains(String::from("(assert (distinct v1")) { return 44; }
+    0
+}
+
+// A division inside a requires clause is a claim that must not assume that requires.
+fn check_division_in_requires_is_positional() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_arg(1, ITY_I64(), 1));
+    i.push(mk_inst(2, IOP_WREM(), ITY_I64(), args2(0, 1)));
+    i.push(mk_inst_const_i64(3, 0));
+    i.push(mk_inst(4, IOP_EQ(), ITY_BOOL(), args2(2, 3)));
+    i.push(mk_vow(5, IOP_VOW_REQ(), 4, 0));
+    i.push(mk_inst_return(6, 0));
+    let cs: VcClaims = vc_claims(one_block(String::from("rq"), params2(), ITY_I64(), i));
+    if cs.scripts.len() != 1 { return 50; }
+    if query(cs, 0).contains(String::from("(assert v4)")) { return 51; }
+    0
+}
+
+fn check_names_are_internal() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst(1, IOP_EQ(), ITY_BOOL(), args2(0, 0)));
+    i.push(mk_vow(2, IOP_VOW_ENS(), 1, 0));
+    i.push(mk_inst_return(3, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    let f: IrFunction = one_block(String::from("evil"), p, ITY_I64(), i);
+    f.param_names[0] = String::from("x\"; (assert false)");
+    let cs: VcClaims = vc_claims(f);
+    if cs.scripts.len() != 1 { return 60; }
+    let q: String = query(cs, 0);
+    if q.contains(String::from("assert false")) { return 61; }
+    if q.contains(String::from("evil")) { return 62; }
+    if cs.model_names.len() != 1 || cs.model_names[0] != String::from("p0") { return 63; }
+    0
+}
+
+fn check_bool_operators() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_const_i64(0, 1));
+    i.push(mk_inst(1, IOP_EQ(), ITY_BOOL(), args2(0, 0)));
+    i.push(mk_inst(2, IOP_NOT(), ITY_BOOL(), args1(1)));
+    i.push(mk_inst(3, IOP_OR(), ITY_BOOL(), args2(1, 2)));
+    i.push(mk_inst(4, IOP_AND(), ITY_BOOL(), args2(3, 1)));
+    i.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    i.push(mk_inst_return(6, 0));
+    let f: IrFunction = one_block(String::from("b"), Vec::new(), ITY_I64(), i);
+    let cs: VcClaims = vc_claims(f);
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(define-fun v2 () Bool (not v1))\n")) { return 70; }
+    if !q.contains(String::from("(define-fun v3 () Bool (or v1 v2))\n")) { return 71; }
+    if !q.contains(String::from("(define-fun v4 () Bool (and v3 v1))\n")) { return 72; }
+    if !q.contains(String::from("(get-value ())\n")) { return 73; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_divide_with_requires();
+    if r == 0 { r = check_rem_has_only_zero_claim(); }
+    if r == 0 { r = check_ensures_claim_golden(); }
+    if r == 0 { r = check_requires_only_has_no_claims(); }
+    if r == 0 { r = check_second_division_assumes_first(); }
+    if r == 0 { r = check_division_in_requires_is_positional(); }
+    if r == 0 { r = check_names_are_internal(); }
+    if r == 0 { r = check_bool_operators(); }
+    i64_to_i32_wrap(r)
+}
