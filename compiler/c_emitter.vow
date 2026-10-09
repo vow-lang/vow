@@ -1327,13 +1327,13 @@ fn float_slot_name(ty: i64) -> String {
 fn float_slot_encode(ty: i64, value: String) -> String {
     let name: String = float_slot_name(ty);
     if name.len() == 0 { return value; }
-    str4(String::from("__vow_"), name, String::from("_to_slot("), cemit_str2(value, String::from(")")))
+    str5(String::from("__vow_"), name, String::from("_to_slot("), value, String::from(")"))
 }
 
 fn float_slot_decode(ty: i64, slot: String) -> String {
     let name: String = float_slot_name(ty);
     if name.len() == 0 { return slot; }
-    str4(String::from("__vow_"), name, String::from("_from_slot("), cemit_str2(slot, String::from(")")))
+    str5(String::from("__vow_"), name, String::from("_from_slot("), slot, String::from(")"))
 }
 
 fn emit_unmodelled(out: String, inst: IrInst) {
@@ -3031,8 +3031,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         } else {
             // A float phi value is carried in its own type: an int64_t temp would truncate it.
             let src_ty: i64 = inst_ty_of(inst_ty_by_id, src);
-            let c_ty: String = if src_ty == ITY_F32() { String::from("float") }
-                else if src_ty == ITY_F64() { String::from("double") }
+            let c_ty: String = if float_slot_name(src_ty).len() > 0 { ir_ty_to_c(src_ty) }
                 else { String::from("int64_t") };
             out.push_str(str4(String::from("  "), c_ty, String::from(" __ups_"), cemit_str2(i64_to_string(src), String::from(";\n"))));
         }
@@ -3615,13 +3614,17 @@ fn scope_has_op(scope: Vec<IrFunction>, op: i64, ty: i64, arith: bool) -> bool {
     false
 }
 
-// Whether any function in `scope` moves a value of float type `ty` through an
-// aggregate slot (FieldGet result type, or the value operand of a FieldSet).
-fn scope_has_float_slot_use(scope: Vec<IrFunction>, ty: i64) -> bool {
+// Bit 1 (f64) / bit 2 (f32) set when a function in `scope` moves a value of
+// that float type through an aggregate slot (FieldGet result type, or the
+// value operand of a FieldSet). One walk; operand types are resolved lazily,
+// only for functions that actually contain a FieldSet.
+fn float_slot_use_mask(scope: Vec<IrFunction>) -> i64 {
+    let mut mask: i64 = 0;
     let mut fi: u64 = 0u64;
-    while fi < scope.len() {
+    while fi < scope.len() && mask != 3 {
         let f: IrFunction = scope[fi];
-        let inst_ty_by_id: Vec<i64> = build_inst_ty_by_id(f);
+        let mut inst_ty_by_id: Vec<i64> = Vec::new();
+        let mut have_tys: bool = false;
         let blocks: Vec<IrBlock> = f.blocks;
         let mut bi: u64 = 0u64;
         while bi < blocks.len() {
@@ -3630,33 +3633,39 @@ fn scope_has_float_slot_use(scope: Vec<IrFunction>, ty: i64) -> bool {
             let mut ii: u64 = 0u64;
             while ii < insts.len() {
                 let inst: IrInst = insts[ii];
-                if inst.op == IOP_FIELD_GET() && inst.ty == ty { return true; }
-                if inst.op == IOP_FIELD_SET() {
+                let mut slot_ty: i64 = ITY_I64();
+                if inst.op == IOP_FIELD_GET() {
+                    slot_ty = inst.ty;
+                } else if inst.op == IOP_FIELD_SET() && inst.args.len() > 1 {
+                    if !have_tys {
+                        inst_ty_by_id = build_inst_ty_by_id(f);
+                        have_tys = true;
+                    }
                     let iargs: Vec<i64> = inst.args;
-                    if iargs.len() > 1 && inst_ty_of(inst_ty_by_id, iargs[1]) == ty { return true; }
+                    slot_ty = inst_ty_of(inst_ty_by_id, iargs[1]);
                 }
+                if slot_ty == ITY_F64() { mask = mask | 1; }
+                if slot_ty == ITY_F32() { mask = mask | 2; }
                 ii = ii + 1;
             }
             bi = bi + 1;
         }
         fi = fi + 1;
     }
-    false
+    mask
 }
 
 fn append_float_slot_helpers(out: String, scope: Vec<IrFunction>) -> bool {
-    let mut emitted: bool = false;
-    if scope_has_float_slot_use(scope, ITY_F64()) {
+    let mask: i64 = float_slot_use_mask(scope);
+    if mask & 1 != 0 {
         out.push_str(String::from("static inline int64_t __vow_f64_to_slot(double value) { union { double f; int64_t i; } u; u.f = value; return u.i; }\n"));
         out.push_str(String::from("static inline double __vow_f64_from_slot(int64_t slot) { union { double f; int64_t i; } u; u.i = slot; return u.f; }\n"));
-        emitted = true;
     }
-    if scope_has_float_slot_use(scope, ITY_F32()) {
+    if mask & 2 != 0 {
         out.push_str(String::from("static inline int64_t __vow_f32_to_slot(float value) { union { float f; uint32_t i; } u; u.f = value; return (int64_t)u.i; }\n"));
         out.push_str(String::from("static inline float __vow_f32_from_slot(int64_t slot) { union { float f; uint32_t i; } u; u.i = (uint32_t)slot; return u.f; }\n"));
-        emitted = true;
     }
-    emitted
+    mask != 0
 }
 
 // The width/signedness-specialised shift and checked-arithmetic helpers the

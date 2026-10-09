@@ -293,6 +293,14 @@ fn operand_ty(id: u32, inst_by_id: &HashMap<u32, &Inst>) -> Ty {
     inst_by_id.get(&id).map_or(Ty::I64, |i| i.ty)
 }
 
+fn build_inst_by_id(func: &Function) -> HashMap<u32, &Inst> {
+    func.blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .map(|inst| (inst.id.0, inst))
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Typed variable analysis (Vec, String, HashMap)
 // ---------------------------------------------------------------------------
@@ -2594,12 +2602,7 @@ pub fn emit_c_function_full(
         ));
     }
 
-    let mut inst_by_id: HashMap<u32, &Inst> = HashMap::new();
-    for block in &func.blocks {
-        for inst in &block.insts {
-            inst_by_id.insert(inst.id.0, inst);
-        }
-    }
+    let inst_by_id = build_inst_by_id(func);
     // Pre-declare Upsilon temporaries at function scope
     {
         let mut ups_sources: Vec<u32> = Vec::new();
@@ -2628,10 +2631,11 @@ pub fn emit_c_function_full(
                 out.push_str(&format!("  __vow_btreemap_t __ups_{};\n", src));
             } else {
                 // A float phi value is carried in its own type: an int64_t temp would truncate it.
-                let c_ty = match operand_ty(src, &inst_by_id) {
-                    Ty::F32 => "float",
-                    Ty::F64 => "double",
-                    _ => "int64_t",
+                let src_ty = operand_ty(src, &inst_by_id);
+                let c_ty = if float_slot_name(src_ty).is_some() {
+                    ir_ty_to_c(src_ty)
+                } else {
+                    "int64_t"
                 };
                 out.push_str(&format!("  {c_ty} __ups_{};\n", src));
             }
@@ -2802,41 +2806,26 @@ impl ModelHelpers {
 /// bit pattern, as native codegen stores them: `f64` as its raw 64 bits, `f32`
 /// as its 32 bits zero-extended. A plain C conversion would truncate `2.5` to
 /// `2`, so every slot store/load of a float goes through these helpers.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum FloatSlot {
-    F32,
-    F64,
-}
-
-impl FloatSlot {
-    fn of(ty: Ty) -> Option<Self> {
-        match ty {
-            Ty::F32 => Some(Self::F32),
-            Ty::F64 => Some(Self::F64),
-            _ => None,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::F32 => "f32",
-            Self::F64 => "f64",
-        }
+fn float_slot_name(ty: Ty) -> Option<&'static str> {
+    match ty {
+        Ty::F32 => Some("f32"),
+        Ty::F64 => Some("f64"),
+        _ => None,
     }
 }
 
 /// `value` as the `int64_t` a slot stores: unchanged for non-floats.
 fn float_slot_encode(ty: Ty, value: &str) -> String {
-    match FloatSlot::of(ty) {
-        Some(kind) => format!("__vow_{}_to_slot({value})", kind.name()),
+    match float_slot_name(ty) {
+        Some(name) => format!("__vow_{name}_to_slot({value})"),
         None => value.to_string(),
     }
 }
 
 /// The `ty` value held in `slot`: unchanged for non-floats.
 fn float_slot_decode(ty: Ty, slot: &str) -> String {
-    match FloatSlot::of(ty) {
-        Some(kind) => format!("__vow_{}_from_slot({slot})", kind.name()),
+    match float_slot_name(ty) {
+        Some(name) => format!("__vow_{name}_from_slot({slot})"),
         None => slot.to_string(),
     }
 }
@@ -2849,10 +2838,10 @@ struct FloatSlotNeeds {
 
 impl FloatSlotNeeds {
     fn note(&mut self, ty: Ty) {
-        match FloatSlot::of(ty) {
-            Some(FloatSlot::F32) => self.f32 = true,
-            Some(FloatSlot::F64) => self.f64 = true,
-            None => {}
+        match ty {
+            Ty::F32 => self.f32 = true,
+            Ty::F64 => self.f64 = true,
+            _ => {}
         }
     }
 
@@ -2864,18 +2853,15 @@ impl FloatSlotNeeds {
 fn scan_float_slot_needs(funcs: &[&Function]) -> FloatSlotNeeds {
     let mut needs = FloatSlotNeeds::default();
     for func in funcs {
-        let ty_by_id: HashMap<u32, Ty> = func
-            .blocks
-            .iter()
-            .flat_map(|b| &b.insts)
-            .map(|inst| (inst.id.0, inst.ty))
-            .collect();
+        let mut by_id = None;
         for inst in func.blocks.iter().flat_map(|b| &b.insts) {
             match inst.opcode {
                 Opcode::FieldGet => needs.note(inst.ty),
                 Opcode::FieldSet => {
-                    let val = inst.args.get(1).and_then(|a| ty_by_id.get(&a.0));
-                    needs.note(val.copied().unwrap_or(Ty::I64));
+                    if let Some(val) = inst.args.get(1) {
+                        let by_id = by_id.get_or_insert_with(|| build_inst_by_id(func));
+                        needs.note(operand_ty(val.0, by_id));
+                    }
                 }
                 _ => {}
             }
@@ -5493,127 +5479,13 @@ mod tests {
         assert!(c.contains("float rem not modelled"), "frem64: {c}");
     }
 
-    fn float_field_roundtrip_func(ty: Ty) -> Function {
-        let const_op = if ty == Ty::F32 {
-            Opcode::ConstF32
-        } else {
-            Opcode::ConstF64
-        };
-        let data = if ty == Ty::F32 {
-            InstData::ConstF32(2.5)
-        } else {
-            InstData::ConstF64(2.5)
-        };
+    fn field_roundtrip_func(ty: Ty) -> Function {
         make_func(
-            "float_field",
-            vec![],
+            "field_roundtrip",
+            vec![ty],
             ty,
             vec![
-                inst(
-                    0,
-                    Opcode::RegionAlloc,
-                    Ty::Ptr,
-                    vec![],
-                    InstData::AllocSize { size: 16, align: 8 },
-                ),
-                inst(1, const_op, ty, vec![], data),
-                inst(
-                    2,
-                    Opcode::FieldSet,
-                    Ty::Unit,
-                    vec![0, 1],
-                    InstData::FieldIndex(1),
-                ),
-                inst(3, Opcode::FieldGet, ty, vec![0], InstData::FieldIndex(1)),
-                inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
-            ],
-        )
-    }
-
-    #[test]
-    fn float_field_slots_move_by_bit_pattern() {
-        for (ty, name) in [(Ty::F64, "f64"), (Ty::F32, "f32")] {
-            let func = float_field_roundtrip_func(ty);
-            let c = emit_c_module(&[&func], &HashMap::new(), &VerifyLimits::default());
-            assert!(
-                c.contains(&format!("__vow_heap[v0 + 1] = __vow_{name}_to_slot(v1);")),
-                "{name} store must encode by bits: {c}"
-            );
-            assert!(
-                c.contains(&format!("v3 = __vow_{name}_from_slot(__vow_heap[v0 + 1]);")),
-                "{name} load must decode by bits: {c}"
-            );
-            assert!(
-                c.contains(&format!("static inline int64_t __vow_{name}_to_slot(")),
-                "{name} encode helper must be defined: {c}"
-            );
-            assert!(
-                c.contains(&format!("__vow_{name}_from_slot(int64_t slot)")),
-                "{name} decode helper must be defined: {c}"
-            );
-        }
-    }
-
-    #[test]
-    fn float_phi_temporaries_keep_their_float_type() {
-        use vow_ir::InstId;
-        for (ty, const_op, data, c_ty) in [
-            (Ty::F64, Opcode::ConstF64, InstData::ConstF64(2.5), "double"),
-            (Ty::F32, Opcode::ConstF32, InstData::ConstF32(2.5), "float"),
-        ] {
-            let func = make_func(
-                "phi_float",
-                vec![],
-                ty,
-                vec![
-                    Inst {
-                        id: InstId(0),
-                        opcode: Opcode::Phi,
-                        ty,
-                        args: vec![],
-                        data: InstData::None,
-                        origin: sp(),
-                        region: RegionId::Root,
-                    },
-                    inst(1, const_op, ty, vec![], data),
-                    Inst {
-                        id: InstId(2),
-                        opcode: Opcode::Upsilon,
-                        ty: Ty::Unit,
-                        args: vec![InstId(1)],
-                        data: InstData::PhiTarget(InstId(0)),
-                        origin: sp(),
-                        region: RegionId::Root,
-                    },
-                    inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
-                ],
-            );
-            let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
-            assert!(
-                c.contains(&format!("  {c_ty} __ups_1;")),
-                "{ty:?} upsilon temp must not truncate through int64_t: {c}"
-            );
-        }
-    }
-
-    #[test]
-    fn float_slot_helpers_only_for_used_widths() {
-        let c = emit_c_module(
-            &[&float_field_roundtrip_func(Ty::F64)],
-            &HashMap::new(),
-            &VerifyLimits::default(),
-        );
-        assert!(!c.contains("__vow_f32_"), "f32 helpers unused: {c}");
-    }
-
-    #[test]
-    fn integer_field_slots_stay_unconverted() {
-        let func = make_func(
-            "int_field",
-            vec![Ty::I64],
-            Ty::I64,
-            vec![
-                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                inst(0, Opcode::GetArg, ty, vec![], InstData::ArgIndex(0)),
                 inst(
                     1,
                     Opcode::RegionAlloc,
@@ -5628,16 +5500,74 @@ mod tests {
                     vec![1, 0],
                     InstData::FieldIndex(1),
                 ),
-                inst(
-                    3,
-                    Opcode::FieldGet,
-                    Ty::I64,
-                    vec![1],
-                    InstData::FieldIndex(1),
-                ),
+                inst(3, Opcode::FieldGet, ty, vec![1], InstData::FieldIndex(1)),
                 inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
             ],
-        );
+        )
+    }
+
+    #[test]
+    fn float_field_slots_move_by_bit_pattern() {
+        for (ty, name, other) in [(Ty::F64, "f64", "f32"), (Ty::F32, "f32", "f64")] {
+            let func = field_roundtrip_func(ty);
+            let c = emit_c_module(&[&func], &HashMap::new(), &VerifyLimits::default());
+            assert!(
+                c.contains(&format!("__vow_heap[v1 + 1] = __vow_{name}_to_slot(v0);")),
+                "{name} store must encode by bits: {c}"
+            );
+            assert!(
+                c.contains(&format!("v3 = __vow_{name}_from_slot(__vow_heap[v1 + 1]);")),
+                "{name} load must decode by bits: {c}"
+            );
+            assert!(
+                c.contains(&format!("static inline int64_t __vow_{name}_to_slot(")),
+                "{name} encode helper must be defined: {c}"
+            );
+            assert!(
+                c.contains(&format!("__vow_{name}_from_slot(int64_t slot)")),
+                "{name} decode helper must be defined: {c}"
+            );
+            assert!(
+                !c.contains(&format!("__vow_{other}_")),
+                "{other} helpers unused: {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn float_phi_temporaries_keep_their_float_type() {
+        for (ty, const_op, data, c_ty) in [
+            (Ty::F64, Opcode::ConstF64, InstData::ConstF64(2.5), "double"),
+            (Ty::F32, Opcode::ConstF32, InstData::ConstF32(2.5), "float"),
+        ] {
+            let func = make_func(
+                "phi_float",
+                vec![],
+                ty,
+                vec![
+                    inst(0, Opcode::Phi, ty, vec![], InstData::None),
+                    inst(1, const_op, ty, vec![], data),
+                    inst(
+                        2,
+                        Opcode::Upsilon,
+                        Ty::Unit,
+                        vec![1],
+                        InstData::PhiTarget(InstId(0)),
+                    ),
+                    inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            );
+            let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+            assert!(
+                c.contains(&format!("  {c_ty} __ups_1;")),
+                "{ty:?} upsilon temp must not truncate through int64_t: {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn integer_field_slots_stay_unconverted() {
+        let func = field_roundtrip_func(Ty::I64);
         let c = emit_c_module(&[&func], &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__vow_heap[v1 + 1] = v0;"), "int store: {c}");
         assert!(c.contains("v3 = __vow_heap[v1 + 1];"), "int load: {c}");
