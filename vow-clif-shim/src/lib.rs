@@ -3424,6 +3424,11 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
             sig.params.push(AbiParam::new(types::I64));
             true
         }
+        "__vow_try_eprintln_str" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
         "__vow_process_exit" => {
             sig.params.push(AbiParam::new(types::I64));
             true
@@ -4529,6 +4534,7 @@ mod tests {
             "__vow_fs_remove_dir_all",
             "__vow_fs_is_dir",
             "__vow_fs_is_symlink",
+            "__vow_try_eprintln_str",
         ];
         for sym in one_param_returns_i64 {
             let sig = make_extern_sig(sym, &module_ctx.obj_module);
