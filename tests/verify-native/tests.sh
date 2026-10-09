@@ -282,8 +282,14 @@ run_native sat "$REPLAY_SRC" --replay-cex
 expect "replay diverged status" "$(field "$RUN_OUT" status)" "VerifyFailed"
 expect "replay diverged exit" "$RUN_RC" "1"
 expect "replay diverged" "$(field "$RUN_OUT" counterexamples.0.replay)" "diverged"
-expect "replay diverged bug code" "$(field "$RUN_OUT" diagnostics.0.error_code)" "VerifierBug"
+expect "replay diverged keeps the violation diagnostic first" "$(field "$RUN_OUT" diagnostics.0.error_code)" "VerifierAssertionUnattributed"
+expect "replay diverged bug code" "$(field "$RUN_OUT" diagnostics.1.error_code)" "VerifierBug"
 no_leftovers "replay diverged"
+
+# a skipped replay never ran, so it is not a verifier bug (THREE_CLAIMS defines main).
+run_native sat_zero "$THREE_CLAIMS" --replay-cex
+expect "replay skipped" "$(field "$RUN_OUT" counterexamples.0.replay)" "skipped"
+expect "skipped replay is not a verifier bug" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
 
 run_native sat "$REPLAY_SRC"
 expect "no replay without the flag" "$(field "$RUN_OUT" counterexamples.0.replay)" ""

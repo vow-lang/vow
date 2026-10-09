@@ -750,6 +750,10 @@ fn replay_abort(reason: String) -> ReplayVerdict {
     ReplayVerdict { status: String::from("aborted"), reason: reason }
 }
 
+fn replay_is_synthetic_id(vow_id: i64) -> bool {
+    vow_id == caller_precondition_vow_id() || vow_id == unsupported_op_vow_id() || vow_id == verifier_unattributed_vow_id()
+}
+
 fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String, native: bool) -> ReplayVerdict [io] {
     if ce.function == String::from("main") {
         return replay_skip(String::from("cannot replay the entry function `main`"));
@@ -760,7 +764,7 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     // arithmetic aborts (zero divisor, signed MIN / -1); those replay and are
     // confirmed by a runtime ArithmeticOverflow abort.
     let abort_claim: bool = native && ce.vow_id == verifier_unattributed_vow_id();
-    if !abort_claim && (ce.vow_id == caller_precondition_vow_id() || ce.vow_id == unsupported_op_vow_id() || ce.vow_id == verifier_unattributed_vow_id()) {
+    if !abort_claim && replay_is_synthetic_id(ce.vow_id) {
         return replay_skip(String::from("replay: synthetic counterexample id (caller-precondition / unsupported-op / unattributed-property sentinel)"));
     }
     let fi: i64 = replay_find_fn(fns, ce.function);
@@ -960,6 +964,9 @@ fn replay_abort_claim_verdict(scan: ReplayScan, rrc: i64) -> ReplayVerdict {
     }
     if rrc == RUNTIME_ABORT_EXIT_CODE && scan.abort_kind.len() > 0 {
         return replay_abort(str2(String::from("runtime aborted with "), str2(scan.abort_kind, String::from(" instead of the predicted ArithmeticOverflow"))));
+    }
+    if rrc == RUNTIME_ABORT_EXIT_CODE && scan.violation_line.len() > 0 {
+        return replay_diverge(String::from("runtime fired a VowViolation (a contract was violated by the counterexample inputs) instead of the predicted ArithmeticOverflow"));
     }
     replay_diverge(String::from("runtime did not abort with the predicted ArithmeticOverflow"))
 }
@@ -1810,9 +1817,6 @@ fn verify_finish(argv: Vec<String>, fns: Vec<IrFunction>, path: String, dctx: Di
     }
     if has_flag(argv, "--replay-cex") && ces_final.len() > 0 {
         ces_final = replay_all(ces_final, fns, path, argv[0], native);
-        if native {
-            report_unreplayed_ces(dctx, ces_final);
-        }
     }
     let vstatus: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
     let vmsg: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
@@ -1825,6 +1829,9 @@ fn verify_finish(argv: Vec<String>, fns: Vec<IrFunction>, path: String, dctx: Di
     }
     trace_write(tctx);
     vf_add_ce_diagnostics(dctx, ces_final);
+    if native && has_flag(argv, "--replay-cex") {
+        report_unreplayed_ces(dctx, ces_final);
+    }
     diag_emit_verify_json_full(status_str, dctx, ces_final, vstatus, vmsg, vf_func, vf_ce);
     if failed {
         return 1;
@@ -5831,7 +5838,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("`replay`/`replay_reason` are present on a counterexample only when `--replay-cex` was passed.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Native backend.** Under `vowc verify --backend native` the replay contract is stricter, because the native model is meant to be checked against the runtime rather than trusted. The counterexamples for a division or remainder abort (zero divisor; signed `MIN / -1`), which carry the reserved unattributed `vow_id` and blame `none`, are replayed instead of skipped: the harness calls the function with the counterexample's inputs and the replay is `\"confirmed\"` when the program aborts with `ArithmeticOverflow` (exit status `134`). A native counterexample whose replay ends `\"diverged\"` or `\"aborted\"` additionally yields one [`VerifierBug`](errors.md#verifierbug) error diagnostic: the model and the runtime disagree, so the defect is in the verifier. `\"skipped\"` never ran and is not reported as a verifier bug. The `status` and exit code are unchanged. The ESBMC backend keeps skipping the unattributed ids.\n"));
+    r.push_str(String::from("**Native backend.** Under `vowc verify --backend native` the replay contract is stricter, because the native model is meant to be checked against the runtime rather than trusted. The counterexamples for a division or remainder abort (zero divisor; signed `MIN / -1`), which carry the reserved unattributed `vow_id` and blame `none`, are replayed instead of skipped: the harness calls the function with the counterexample's inputs and the replay is `\"confirmed\"` when the program aborts with `ArithmeticOverflow` (exit status `134`). The runtime envelope names the abort kind but not the site, so this confirms the kind of failure for those inputs, not which operation raised it. A native counterexample whose replay ends `\"diverged\"` or `\"aborted\"` additionally yields one [`VerifierBug`](errors.md#verifierbug) error diagnostic: the model and the runtime disagree, so the defect is in the verifier. `\"skipped\"` never ran and is not reported as a verifier bug. The `status` and exit code are unchanged. The ESBMC backend keeps skipping the unattributed ids.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Contracts Output JSON\n"));
     r.push_str(String::from("\n"));
@@ -11770,7 +11777,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("`replay`/`replay_reason` are present on a counterexample only when `--replay-cex` was passed.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Native backend.** Under `vowc verify --backend native` the replay contract is stricter, because the native model is meant to be checked against the runtime rather than trusted. The counterexamples for a division or remainder abort (zero divisor; signed `MIN / -1`), which carry the reserved unattributed `vow_id` and blame `none`, are replayed instead of skipped: the harness calls the function with the counterexample's inputs and the replay is `\"confirmed\"` when the program aborts with `ArithmeticOverflow` (exit status `134`). A native counterexample whose replay ends `\"diverged\"` or `\"aborted\"` additionally yields one [`VerifierBug`](errors.md#verifierbug) error diagnostic: the model and the runtime disagree, so the defect is in the verifier. `\"skipped\"` never ran and is not reported as a verifier bug. The `status` and exit code are unchanged. The ESBMC backend keeps skipping the unattributed ids.\n"));
+    r.push_str(String::from("**Native backend.** Under `vowc verify --backend native` the replay contract is stricter, because the native model is meant to be checked against the runtime rather than trusted. The counterexamples for a division or remainder abort (zero divisor; signed `MIN / -1`), which carry the reserved unattributed `vow_id` and blame `none`, are replayed instead of skipped: the harness calls the function with the counterexample's inputs and the replay is `\"confirmed\"` when the program aborts with `ArithmeticOverflow` (exit status `134`). The runtime envelope names the abort kind but not the site, so this confirms the kind of failure for those inputs, not which operation raised it. A native counterexample whose replay ends `\"diverged\"` or `\"aborted\"` additionally yields one [`VerifierBug`](errors.md#verifierbug) error diagnostic: the model and the runtime disagree, so the defect is in the verifier. `\"skipped\"` never ran and is not reported as a verifier bug. The `status` and exit code are unchanged. The ESBMC backend keeps skipping the unattributed ids.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Contracts Output JSON\n"));
     r.push_str(String::from("\n"));
