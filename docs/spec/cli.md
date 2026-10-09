@@ -271,7 +271,7 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 
 Both compilers reject a flag the selected subcommand does not implement before doing any work, with
 exit `2` and `error: unexpected argument '<flag>' found` on stderr. This includes flags that were
-retired (`--vec-max`, `--string-max`, `--hashmap-max`, `--btreemap-max`) and typos: they are never
+retired prover-model flags and typos: they are never
 silently ignored. The self-hosted `vowc` only accepts the `--flag value` form for value flags;
 `--flag=value` is reported as an unknown argument with a hint. `vowc mutants` forwards its flags to
 its own parser and is not validated by the driver.

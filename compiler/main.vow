@@ -5587,7 +5587,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Both compilers reject a flag the selected subcommand does not implement before doing any work, with\n"));
     r.push_str(String::from("exit `2` and `error: unexpected argument '<flag>' found` on stderr. This includes flags that were\n"));
-    r.push_str(String::from("retired (`--vec-max`, `--string-max`, `--hashmap-max`, `--btreemap-max`) and typos: they are never\n"));
+    r.push_str(String::from("retired prover-model flags and typos: they are never\n"));
     r.push_str(String::from("silently ignored. The self-hosted `vowc` only accepts the `--flag value` form for value flags;\n"));
     r.push_str(String::from("`--flag=value` is reported as an unknown argument with a hint. `vowc mutants` forwards its flags to\n"));
     r.push_str(String::from("its own parser and is not validated by the driver.\n"));
@@ -11501,7 +11501,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Both compilers reject a flag the selected subcommand does not implement before doing any work, with\n"));
     r.push_str(String::from("exit `2` and `error: unexpected argument '<flag>' found` on stderr. This includes flags that were\n"));
-    r.push_str(String::from("retired (`--vec-max`, `--string-max`, `--hashmap-max`, `--btreemap-max`) and typos: they are never\n"));
+    r.push_str(String::from("retired prover-model flags and typos: they are never\n"));
     r.push_str(String::from("silently ignored. The self-hosted `vowc` only accepts the `--flag value` form for value flags;\n"));
     r.push_str(String::from("`--flag=value` is reported as an unknown argument with a hint. `vowc mutants` forwards its flags to\n"));
     r.push_str(String::from("its own parser and is not validated by the driver.\n"));
