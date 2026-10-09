@@ -52,6 +52,8 @@ unknown_flag --verify complexity --verify "$FIXTURE"
 unknown_flag --mode verify --mode debug "$FIXTURE"
 unknown_flag -o verify -o "$TMP_ROOT/x" "$FIXTURE"
 unknown_flag --no-verify test --no-verify "$FIXTURE"
+unknown_flag --no-verify decl --no-verify "$FIXTURE"
+unknown_flag --module-root decl --module-root "$TMP_ROOT" "$FIXTURE"
 
 # Rust (clap) accepts `--flag=value`; the self-hosted driver does not.
 if [ "$VOWC_KIND" = "self" ]; then

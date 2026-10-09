@@ -97,7 +97,6 @@ def normalize_option(
     default: str,
     desc: str,
     *,
-    output_default: str | None = None,
     merge_mode: bool = False,
 ) -> tuple[str, str, dict]:
     """Normalize an option row for both legacy dict output and structured help."""
@@ -112,8 +111,8 @@ def normalize_option(
         )
     elif flag == "-o, --output":
         normalized_flag = "-o, --output <path>"
-        if output_default is not None:
-            description = f"{desc} (default: {output_default})"
+        if default not in ("", "(off)", "(default)"):
+            description = f"{desc} (default: {default})"
     elif default not in ("", "(off)", "(default)") and not desc.endswith(")"):
         description = f"{desc} (default: {default})"
 
@@ -155,8 +154,6 @@ def normalize_option(
         option["default"] = default
     elif normalized_flag == "--max-k-step <N>":
         option["default"] = int(default) if default.isdigit() else default
-    elif output_default is not None:
-        option["default"] = output_default
     elif default not in ("", "(off)", "(default)"):
         option["default"] = default
 
@@ -237,9 +234,6 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
             flag,
             default,
             desc,
-            output_default="source without .vow extension"
-            if flag == "-o, --output"
-            else None,
         )
         build_options[key] = value
         build_option_entries.append(option)
@@ -264,7 +258,6 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
             row[0],
             row[1],
             row[2],
-            output_default="<source>.vow.d" if row[0] == "-o, --output" else None,
         )
         decl_options[key] = value
         decl_option_entries.append(option)

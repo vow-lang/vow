@@ -193,6 +193,10 @@ vow decl [OPTIONS] <source.vow>
 |-------------------|-------------|--------------------------------------------|
 | `-o, --output`    | `<source>.vow.d` | Output declaration file path          |
 
+`decl` type-checks the source with its `use` dependencies, then writes one declaration stub for the merged module: dependency items first, the entry module's items last, with no `use` lines. Function bodies are dropped; signatures, effects, `vow` blocks, struct/enum/const/type-alias definitions and `extern "C"` blocks are kept. The path written is reported on stderr as `wrote <path>` and stdout stays empty. An existing output file is overwritten. Frontend diagnostics go to stderr, followed by `vow decl: <parse|module load|type> error`, and the exit code is 1 with no file written. `decl` accepts only `-o/--output`, `--help` and `--human`.
+
+The self-hosted compiler cannot print an `enum` with a struct-like variant (`V { f: T }`): its AST drops the field names. `vowc decl` exits 1 with `vow decl: enum <Name> has a struct-like variant, which the self-hosted compiler cannot print` instead of writing a stub with a different meaning.
+
 ### `vow mutants` (self-hosted only)
 
 Run mutation testing on a Vow source tree. Implemented in the self-hosted compiler only; the Rust bootstrap compiler emits an error pointing the user to `build/vowc`. See `docs/mutants.md` for full details on output schema, mutation kinds, skip-list, and known limitations.

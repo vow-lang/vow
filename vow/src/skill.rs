@@ -231,12 +231,12 @@ fn skill_json() -> String {
       "options": [
         {
           "form": "-o, --output <path>",
-          "description": "Output executable path (default: source without .vow extension)",
+          "description": "Output executable path (default: build/<stem>)",
           "short": "-o",
           "long": "--output",
           "value_name": "path",
           "value_kind": "path",
-          "default": "source without .vow extension"
+          "default": "build/<stem>"
         },
         {
           "form": "--mode <debug|release|profile|sanitize>",
@@ -736,7 +736,7 @@ fn skill_json() -> String {
     }
   },
   "build_options": {
-    "-o, --output <path>": "Output executable path (default: source without .vow extension)",
+    "-o, --output <path>": "Output executable path (default: build/<stem>)",
     "--mode <debug|release|profile|sanitize>": "Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking (default: release)",
     "--no-verify": "Skip ESBMC static verification",
     "--dump-ir": "Print IR text to stdout and exit (no JSON output, no codegen)",
@@ -1161,7 +1161,7 @@ USAGE
   vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)
 
 BUILD OPTIONS
-  -o, --output <path>     Output executable path (default: source without .vow extension)
+  -o, --output <path>     Output executable path (default: build/<stem>)
   --mode <debug|release|profile|sanitize>  Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking (default: release)
   --no-verify             Skip ESBMC static verification
   --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)
@@ -3139,6 +3139,10 @@ vow decl [OPTIONS] <source.vow>
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `-o, --output`    | `<source>.vow.d` | Output declaration file path          |
+
+`decl` type-checks the source with its `use` dependencies, then writes one declaration stub for the merged module: dependency items first, the entry module's items last, with no `use` lines. Function bodies are dropped; signatures, effects, `vow` blocks, struct/enum/const/type-alias definitions and `extern "C"` blocks are kept. The path written is reported on stderr as `wrote <path>` and stdout stays empty. An existing output file is overwritten. Frontend diagnostics go to stderr, followed by `vow decl: <parse|module load|type> error`, and the exit code is 1 with no file written. `decl` accepts only `-o/--output`, `--help` and `--human`.
+
+The self-hosted compiler cannot print an `enum` with a struct-like variant (`V { f: T }`): its AST drops the field names. `vowc decl` exits 1 with `vow decl: enum <Name> has a struct-like variant, which the self-hosted compiler cannot print` instead of writing a stub with a different meaning.
 
 ### `vow mutants` (self-hosted only)
 
@@ -9036,6 +9040,10 @@ vow decl [OPTIONS] <source.vow>
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `-o, --output`    | `<source>.vow.d` | Output declaration file path          |
+
+`decl` type-checks the source with its `use` dependencies, then writes one declaration stub for the merged module: dependency items first, the entry module's items last, with no `use` lines. Function bodies are dropped; signatures, effects, `vow` blocks, struct/enum/const/type-alias definitions and `extern "C"` blocks are kept. The path written is reported on stderr as `wrote <path>` and stdout stays empty. An existing output file is overwritten. Frontend diagnostics go to stderr, followed by `vow decl: <parse|module load|type> error`, and the exit code is 1 with no file written. `decl` accepts only `-o/--output`, `--help` and `--human`.
+
+The self-hosted compiler cannot print an `enum` with a struct-like variant (`V { f: T }`): its AST drops the field names. `vowc decl` exits 1 with `vow decl: enum <Name> has a struct-like variant, which the self-hosted compiler cannot print` instead of writing a stub with a different meaning.
 
 ### `vow mutants` (self-hosted only)
 

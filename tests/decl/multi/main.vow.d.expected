@@ -1,0 +1,13 @@
+module Main
+
+pub struct B {
+    v: i64,
+}
+
+pub fn base_val(a: i64) -> i64 vow {
+    ensures: result == a
+};
+
+pub fn mid_val(a: i64) -> i64;
+
+pub fn top(a: i64) -> i64;

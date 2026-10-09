@@ -90,6 +90,7 @@ fn arb_expr_inner(depth: u32) -> impl Strategy<Value = Expr> {
         2 => arb_binop_expr(depth - 1),
         1 => arb_unop_expr(depth - 1),
         1 => arb_call_expr(depth - 1),
+        1 => arb_question_expr(depth - 1),
     ]
     .boxed()
 }
@@ -194,6 +195,15 @@ fn arb_if_expr(depth: u32) -> impl Strategy<Value = Expr> {
             },
             span: z(),
         })
+}
+
+fn arb_question_expr(depth: u32) -> impl Strategy<Value = Expr> {
+    arb_expr_inner(depth).prop_map(|operand| Expr {
+        kind: ExprKind::Question {
+            expr: Box::new(operand),
+        },
+        span: z(),
+    })
 }
 
 fn arb_call_expr(depth: u32) -> impl Strategy<Value = Expr> {

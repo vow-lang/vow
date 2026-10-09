@@ -1474,6 +1474,26 @@ else
 fi
 echo ""
 
+# ─── Section 4i: `decl` declaration stubs (tests/decl/, #595) ──────
+#
+# Both compilers must write byte-identical `.vow.d` stubs for the same
+# source (goldens generated once from the Rust compiler).
+
+section_begin "Section 4i: decl declaration stubs"
+decl_rust_log="$TMPDIR/decl-rust.log"
+if VOWC_BIN="$RUST" VOWC_KIND=rust bash tests/decl/tests.sh >"$decl_rust_log" 2>&1; then
+    pass "decl/rust"
+else
+    fail "decl/rust" "$(tail -20 "$decl_rust_log")"
+fi
+decl_self_log="$TMPDIR/decl-self.log"
+if VOWC_BIN="$SELF" VOWC_KIND=self bash tests/decl/tests.sh >"$decl_self_log" 2>&1; then
+    pass "decl/self-hosted"
+else
+    fail "decl/self-hosted" "$(tail -20 "$decl_self_log")"
+fi
+echo ""
+
 # ─── Section 5: Debug Mode ─────────────────────────────────────────
 
 section_begin "Section 5: Debug Mode"
