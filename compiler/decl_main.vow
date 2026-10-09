@@ -35,6 +35,11 @@ fn decl_fail(msg: String) -> i32 [io] {
 
 fn run_decl(argv: Vec<String>) -> i32 [io, read, write] {
     let path: String = frontend_path_from_argv(argv, true, String::from("decl"));
+    if fs_exists(path) != 1 {
+        let msg: String = String::from("cannot read ");
+        msg.push_str(path);
+        return decl_fail(msg);
+    }
     let prep: FrontendPrep = frontend_prepare_path(path);
     let checked: CheckedFrontend = prep.checked;
     let dctx: DiagCtx = checked.dctx;

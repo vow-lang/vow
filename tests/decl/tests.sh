@@ -48,6 +48,12 @@ case "$err" in
     *) fail "missing source: stderr lacks the diagnostic: $err" ;;
 esac
 
+# A nonexistent source file fails without writing a stub.
+rc=0
+"$VOWC_BIN" decl "$TMP_ROOT/absent.vow" -o "$TMP_ROOT/absent.vow.d" >/dev/null 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || fail "absent source: expected exit 1, got $rc"
+[ ! -e "$TMP_ROOT/absent.vow.d" ] || fail "absent source: a stub was written"
+
 # A type error writes no file and reports `vow decl: type error`.
 cat >"$TMP_ROOT/bad.vow" <<'VOW'
 module Bad
