@@ -1661,7 +1661,7 @@ pub unsafe extern "C" fn __vow_vec_push_in_arena(
     // Sanitizer first — consults the shadow table by pointer value and
     // diagnoses UseAfterFree without dereferencing. The cap check must
     // dereference, so it has to run after the sanitizer.
-    sanitize_on_push(vec as usize);
+    sanitize_check_live(vec as usize, "push");
     unsafe { vec_push_no_sanitize_in_arena(arena, vec, elem, elem_size, elem_align, "Vec::push") };
 }
 
@@ -1674,7 +1674,7 @@ pub unsafe extern "C" fn __vow_vec_push(
 ) {
     // The growth arena is read out of the descriptor, so the sanitizer has to
     // look at the address first; the no-sanitize helper avoids a second check.
-    sanitize_on_push(vec as usize);
+    sanitize_check_live(vec as usize, "push");
     unsafe {
         with_growth_arena(vec, |arena| {
             vec_push_no_sanitize_in_arena(arena, vec, elem, elem_size, elem_align, "Vec::push")
@@ -1708,6 +1708,11 @@ pub unsafe extern "C" fn __vow_vec_len(vec: *const u8) -> usize {
     v.len
 }
 
+unsafe fn vec_push_val_no_sanitize_in_arena(arena: *mut VowArena, vec: *mut u8, value: i64) {
+    let bytes = value.to_ne_bytes();
+    unsafe { vec_push_no_sanitize_in_arena(arena, vec, bytes.as_ptr(), 8, 8, "Vec::push_val") };
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_push_val_in_arena(
     arena: *mut VowArena,
@@ -1721,18 +1726,16 @@ pub unsafe extern "C" fn __vow_vec_push_val_in_arena(
     // the whole path to __vow_vec_push would (a) double-sanitize and (b)
     // report the trap as "Vec::push" instead of "Vec::push_val". Delegate
     // the actual push to the no-sanitize helper.
-    sanitize_on_push(vec as usize);
-    let bytes = value.to_ne_bytes();
-    unsafe { vec_push_no_sanitize_in_arena(arena, vec, bytes.as_ptr(), 8, 8, "Vec::push_val") };
+    sanitize_check_live(vec as usize, "push");
+    unsafe { vec_push_val_no_sanitize_in_arena(arena, vec, value) };
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
-    sanitize_on_push(vec as usize);
-    let bytes = value.to_ne_bytes();
+    sanitize_check_live(vec as usize, "push");
     unsafe {
         with_growth_arena(vec, |arena| {
-            vec_push_no_sanitize_in_arena(arena, vec, bytes.as_ptr(), 8, 8, "Vec::push_val")
+            vec_push_val_no_sanitize_in_arena(arena, vec, value)
         })
     }
 }
@@ -1745,7 +1748,7 @@ pub unsafe extern "C" fn __vow_vec_get_val(vec: *const u8, index: usize) -> i64 
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_pop(vec: *mut u8) {
-    sanitize_on_pop(vec as usize);
+    sanitize_check_live(vec as usize, "pop");
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::pop");
@@ -1759,7 +1762,7 @@ pub unsafe extern "C" fn __vow_vec_pop(vec: *mut u8) {
 /// the region closes; the header remains valid and can be reused with push().
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_clear(vec: *mut u8) {
-    sanitize_on_clear(vec as usize);
+    sanitize_check_live(vec as usize, "clear");
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::clear");
@@ -1771,7 +1774,7 @@ pub unsafe extern "C" fn __vow_vec_clear(vec: *mut u8) {
 /// shrunk; their storage is reclaimed when the containing region closes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
-    sanitize_on_truncate(vec as usize);
+    sanitize_check_live(vec as usize, "truncate");
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::truncate");
@@ -1784,7 +1787,7 @@ pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i64) {
-    sanitize_on_set(vec as usize);
+    sanitize_check_live(vec as usize, "set");
     let v = unsafe { &*(vec as *const VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::set");
@@ -2228,7 +2231,7 @@ pub unsafe extern "C" fn __vow_string_push_byte_in_arena(
     // a type-specific operation name. This keeps both orderings correct:
     // sanitizer runs before any dereference (UAF detected first) and checks
     // the descriptor once.
-    sanitize_on_push(s as usize);
+    sanitize_check_live(s as usize, "push");
     unsafe { string_push_byte_in_arena_no_sanitize(arena, s, byte as u8) };
 }
 
@@ -2249,7 +2252,7 @@ pub unsafe extern "C" fn __vow_string_push_byte_in_candidate_arena(
     if candidate.is_null() {
         null_arena_trap("String::push_byte");
     }
-    sanitize_on_push(s as usize);
+    sanitize_check_live(s as usize, "push");
     if !arena_is_root(candidate) && unsafe { vow_vec_is_owned_by(s, candidate) } {
         unsafe { string_push_byte_in_arena_no_sanitize(candidate, s, byte as u8) };
         return;
@@ -2259,7 +2262,7 @@ pub unsafe extern "C" fn __vow_string_push_byte_in_candidate_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_byte(s: *mut u8, byte: u64) {
-    sanitize_on_push(s as usize);
+    sanitize_check_live(s as usize, "push");
     unsafe {
         with_growth_arena(s, |arena| {
             string_push_byte_in_arena_no_sanitize(arena, s, byte as u8)
@@ -5320,19 +5323,12 @@ struct ShadowVec {
 
 // Ordered so a freed or reallocated arena chunk can be matched against the
 // Vec descriptors inside its address range.
-static SHADOW_TABLE: Mutex<Option<BTreeMap<usize, ShadowVec>>> = Mutex::new(None);
-
-fn shadow_table_get_or_init(
-    table: &mut Option<BTreeMap<usize, ShadowVec>>,
-) -> &mut BTreeMap<usize, ShadowVec> {
-    table.get_or_insert_with(BTreeMap::new)
-}
+static SHADOW_TABLE: Mutex<BTreeMap<usize, ShadowVec>> = Mutex::new(BTreeMap::new());
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_sanitize_init() {
     SANITIZE_ENABLED.store(true, Ordering::SeqCst);
-    let mut table = SHADOW_TABLE.lock().unwrap();
-    *table = Some(BTreeMap::new());
+    SHADOW_TABLE.lock().unwrap().clear();
 }
 
 fn sanitize_is_enabled() -> bool {
@@ -5349,9 +5345,10 @@ fn sanitize_on_vec_new(vec_addr: usize) {
     if !sanitize_is_enabled() {
         return;
     }
-    let mut table = SHADOW_TABLE.lock().unwrap();
-    let map = shadow_table_get_or_init(&mut table);
-    map.insert(vec_addr, ShadowVec { freed: false });
+    SHADOW_TABLE
+        .lock()
+        .unwrap()
+        .insert(vec_addr, ShadowVec { freed: false });
 }
 
 // Called with a chunk that is about to be returned to libc: every tracked
@@ -5363,7 +5360,7 @@ fn sanitize_on_chunk_free(base: *const u8) {
     let start = base as usize;
     let end = start + unsafe { chunk_total(base) };
     let mut table = SHADOW_TABLE.lock().unwrap();
-    for (_, shadow) in shadow_table_get_or_init(&mut table).range_mut(start..end) {
+    for (_, shadow) in table.range_mut(start..end) {
         shadow.freed = true;
     }
 }
@@ -5377,10 +5374,9 @@ fn sanitize_on_chunk_alloc(base: *const u8, total: usize) {
     }
     let start = base as usize;
     let mut table = SHADOW_TABLE.lock().unwrap();
-    let map = shadow_table_get_or_init(&mut table);
-    let stale: Vec<usize> = map.range(start..start + total).map(|(k, _)| *k).collect();
+    let stale: Vec<usize> = table.range(start..start + total).map(|(k, _)| *k).collect();
     for addr in stale {
-        map.remove(&addr);
+        table.remove(&addr);
     }
 }
 
@@ -5389,8 +5385,7 @@ fn sanitize_check_live(vec_addr: usize, op: &str) {
         return;
     }
     let table = SHADOW_TABLE.lock().unwrap();
-    if let Some(map) = table.as_ref()
-        && let Some(shadow) = map.get(&vec_addr)
+    if let Some(shadow) = table.get(&vec_addr)
         && shadow.freed
     {
         drop(table);
@@ -5399,26 +5394,6 @@ fn sanitize_check_live(vec_addr: usize, op: &str) {
             &format!("\"op\":\"{op}\",\"vec\":\"0x{vec_addr:x}\""),
         );
     }
-}
-
-fn sanitize_on_push(vec_addr: usize) {
-    sanitize_check_live(vec_addr, "push");
-}
-
-fn sanitize_on_set(vec_addr: usize) {
-    sanitize_check_live(vec_addr, "set");
-}
-
-fn sanitize_on_truncate(vec_addr: usize) {
-    sanitize_check_live(vec_addr, "truncate");
-}
-
-fn sanitize_on_clear(vec_addr: usize) {
-    sanitize_check_live(vec_addr, "clear");
-}
-
-fn sanitize_on_pop(vec_addr: usize) {
-    sanitize_check_live(vec_addr, "pop");
 }
 
 fn sanitize_on_read(vec_addr: usize, _index: usize) {
@@ -8626,7 +8601,7 @@ mod tests {
             // deadlocks the worker.
             {
                 let mut table = SHADOW_TABLE.lock().unwrap();
-                shadow_table_get_or_init(&mut table).insert(vec_addr, ShadowVec { freed: true });
+                table.insert(vec_addr, ShadowVec { freed: true });
             }
             unsafe { __vow_perf_count_vec_sort(vec_addr as *const u8) };
             eprintln!("rodata_trap_worker: perf Vec::sort UAF did NOT trap");
@@ -8939,7 +8914,7 @@ mod tests {
             let vec_addr = &raw const vec as usize;
             {
                 let mut table = SHADOW_TABLE.lock().unwrap();
-                shadow_table_get_or_init(&mut table).insert(vec_addr, ShadowVec { freed: true });
+                table.insert(vec_addr, ShadowVec { freed: true });
             }
             sanitize_on_chunk_alloc(vec_addr as *const u8, core::mem::size_of::<VowVec>());
             if unsafe { __vow_vec_len(vec_addr as *const u8) } != 4 {
@@ -8986,8 +8961,8 @@ mod tests {
                 unsafe { __vow_i64_to_u8_try_in_arena(ap, 3) },
             ];
             let control = unsafe { __vow_vec_new_in_arena(ap, 8, 8) };
-            let mut table = SHADOW_TABLE.lock().unwrap();
-            let shadows = shadow_table_get_or_init(&mut table);
+            let table = SHADOW_TABLE.lock().unwrap();
+            let shadows = &*table;
             if !shadows.contains_key(&(control as usize)) {
                 eprintln!("worker: sanitize shadow tracking is not active for Vecs");
                 std::process::exit(44);
