@@ -1,4 +1,4 @@
-// TEST: stdout "3\n5\n"
+// TEST: stdout "3\n3\n"
 module LinearLoopLocalConsume
 
 linear struct Handle {
@@ -35,7 +35,7 @@ fn main() -> i32 [io] {
             break;
         }
     }
-    print_i64(sum + 2);
+    print_i64(sum);
     print_str("\n");
     0
 }
