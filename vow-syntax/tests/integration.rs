@@ -556,3 +556,49 @@ pub fn check(s: Shape) -> i32 {
     }
 }
 ";
+
+fn printed(src: &str) -> String {
+    let (ast, diags) = parse_module(src, "<test>");
+    assert!(diags.is_empty(), "parse errors: {:?}", diags);
+    let out = print_module(&ast);
+    roundtrip(&out);
+    out
+}
+
+#[test]
+fn nested_control_flow_indents_by_depth() {
+    let out = printed(
+        "module M\nfn f(x: i64) -> i64 { while x > 0 { if x > 5 { x = x - 1; } else { x = x - 2; } } x }\n",
+    );
+    let expected = "module M\n\nfn f(x: i64) -> i64 {\n    while x > 0 {\n        if x > 5 {\n            x = x - 1;\n        } else {\n            x = x - 2;\n        }\n    }\n    x\n}\n";
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn else_if_chain_indents_by_depth() {
+    let out = printed(
+        "module M\nfn f(a: i64) -> i64 { if a > 0 { 1 } else if a < 0 { 2 } else { 3 } }\n",
+    );
+    let expected = "module M\n\nfn f(a: i64) -> i64 {\n    if a > 0 {\n        1\n    } else if a < 0 {\n        2\n    } else {\n        3\n    }\n}\n";
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn match_arms_and_blocks_indent_by_depth() {
+    let out = printed(
+        "module M\nfn f(a: i64) -> i64 { match a { 0 => { let b: i64 = 1; { b } }, _ => 2, } }\n",
+    );
+    let expected = "module M\n\nfn f(a: i64) -> i64 {\n    match a {\n        0 => {\n            let b: i64 = 1;\n            {\n                b\n            }\n        },\n        _ => 2,\n    }\n}\n";
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn nested_loop_vow_clauses_indent_by_depth() {
+    let out = printed(
+        "module M\nfn f(n: i64) [write] { let mut i: i64 = 0; if n > 0 { while i < n vow { invariant: i >= 0 } { i = i + 1; } } }\n",
+    );
+    assert!(
+        out.contains("        while i < n vow {\n            invariant: i >= 0\n        } {\n            i = i + 1;\n        }\n"),
+        "{out}"
+    );
+}

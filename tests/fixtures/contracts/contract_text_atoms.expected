@@ -25,11 +25,11 @@ requires {\n    let u: () = nop();\n    true\n}
 requires {\n    nop();\n    true\n}
 requires {\n    let z: ! = return o;\n    true\n}
 requires {\n    let e: Unit = Unit {};\n    true\n}
-requires {\n    let z: i64 = if x > 0 {\n    1\n} else {\n    return o\n};\n    z > 0\n}
+requires {\n    let z: i64 = if x > 0 {\n        1\n    } else {\n        return o\n    };\n    z > 0\n}
 requires (-x) as i128 != 0
 requires x as u64 as i128 != 3
 requires y as i64 != x
 ensures (result + 1) as i128 != 0
-requires {\n    let mut i: i64 = 0;\n    while i < 3 vow {\n    requires: i >= 0\n    ensures: i >= 0\n    invariant: i >= 0\n} {\n    i = i + 1;\n}\n    i == 3\n}
+requires {\n    let mut i: i64 = 0;\n    while i < 3 vow {\n        requires: i >= 0\n        ensures: i >= 0\n        invariant: i >= 0\n    } {\n        i = i + 1;\n    }\n    i == 3\n}
 invariant i >= 0
-requires {\n    if x > 0 {\n    return;\n}\n    true\n}
+requires {\n    if x > 0 {\n        return;\n    }\n    true\n}

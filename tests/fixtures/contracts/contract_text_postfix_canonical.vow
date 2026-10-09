@@ -25,10 +25,10 @@ fn casts(x: i64, c: bool) -> i64 vow {
 }) as u64 as i64 == 1
   requires: (if c {
     if c {
-    1
-} else {
-    2
-}
+        1
+    } else {
+        2
+    }
 } else {
     3
 }) as u64 == 1

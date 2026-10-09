@@ -155,13 +155,25 @@ fn print_vow_block(vow: &VowBlock, level: usize) -> String {
     for clause in &vow.clauses {
         match clause {
             VowClause::Requires { expr, .. } => {
-                out.push_str(&format!("{}requires: {}\n", inner, print_expr(expr)));
+                out.push_str(&format!(
+                    "{}requires: {}\n",
+                    inner,
+                    print_expr_at(expr, level + 1)
+                ));
             }
             VowClause::Ensures { expr, .. } => {
-                out.push_str(&format!("{}ensures: {}\n", inner, print_expr(expr)));
+                out.push_str(&format!(
+                    "{}ensures: {}\n",
+                    inner,
+                    print_expr_at(expr, level + 1)
+                ));
             }
             VowClause::Invariant { expr, .. } => {
-                out.push_str(&format!("{}invariant: {}\n", inner, print_expr(expr)));
+                out.push_str(&format!(
+                    "{}invariant: {}\n",
+                    inner,
+                    print_expr_at(expr, level + 1)
+                ));
             }
         }
     }
@@ -214,7 +226,11 @@ fn print_block_body(block: &Block, level: usize) -> String {
         out.push_str(&print_stmt(stmt, level));
     }
     if let Some(expr) = &block.trailing_expr {
-        out.push_str(&format!("{}{}\n", indent(level), print_expr(expr)));
+        out.push_str(&format!(
+            "{}{}\n",
+            indent(level),
+            print_expr_at(expr, level)
+        ));
     }
     out
 }
@@ -238,7 +254,13 @@ fn print_stmt(stmt: &Stmt, level: usize) -> String {
                 Some(t) => format!(": {}", print_type(t)),
                 None => String::new(),
             };
-            format!("{}let {}{} = {};\n", ind, pat_str, ty_str, print_expr(init))
+            format!(
+                "{}let {}{} = {};\n",
+                ind,
+                pat_str,
+                ty_str,
+                print_expr_at(init, level)
+            )
         }
         Stmt::Expr {
             expr,
@@ -246,9 +268,9 @@ fn print_stmt(stmt: &Stmt, level: usize) -> String {
             ..
         } => {
             if *has_semicolon {
-                format!("{}{};\n", ind, print_expr(expr))
+                format!("{}{};\n", ind, print_expr_at(expr, level))
             } else {
-                format!("{}{}\n", ind, print_expr(expr))
+                format!("{}{}\n", ind, print_expr_at(expr, level))
             }
         }
     }
@@ -359,7 +381,7 @@ fn print_const(c: &ConstDef, level: usize) -> String {
         vis,
         c.name,
         print_type(&c.ty),
-        print_expr(&c.value)
+        print_expr_at(&c.value, level)
     )
 }
 
@@ -486,7 +508,7 @@ fn expr_precedence(expr: &Expr) -> u8 {
 
 // An unparenthesised block-like expression ends the expression, so it needs
 // parentheses before any postfix operator and as a left binary operand.
-fn print_postfix_base(expr: &Expr) -> String {
+fn print_postfix_base(expr: &Expr, level: usize) -> String {
     if expr.kind.is_block_like()
         || matches!(
             expr.kind,
@@ -497,13 +519,13 @@ fn print_postfix_base(expr: &Expr) -> String {
                 | ExprKind::Return { .. }
         )
     {
-        format!("({})", print_expr(expr))
+        format!("({})", print_expr_at(expr, level))
     } else {
-        print_expr(expr)
+        print_expr_at(expr, level)
     }
 }
 
-fn print_expr_with_parens(expr: &Expr, parent_prec: u8, is_right: bool) -> String {
+fn print_expr_with_parens(expr: &Expr, parent_prec: u8, is_right: bool, level: usize) -> String {
     let child_prec = expr_precedence(expr);
     let needs_parens = match &expr.kind {
         ExprKind::BinaryOp { .. } => {
@@ -516,20 +538,24 @@ fn print_expr_with_parens(expr: &Expr, parent_prec: u8, is_right: bool) -> Strin
         _ => !is_right && expr.kind.is_block_like(),
     };
     if needs_parens {
-        format!("({})", print_expr(expr))
+        format!("({})", print_expr_at(expr, level))
     } else {
-        print_expr(expr)
+        print_expr_at(expr, level)
     }
 }
 
 pub fn print_expr(expr: &Expr) -> String {
+    print_expr_at(expr, 0)
+}
+
+fn print_expr_at(expr: &Expr, level: usize) -> String {
     match &expr.kind {
         ExprKind::Lit(lit) => print_lit(lit),
         ExprKind::Ident(name) => name.clone(),
         ExprKind::BinaryOp { op, lhs, rhs } => {
             let prec = binop_precedence(*op);
-            let lhs_str = print_expr_with_parens(lhs, prec, false);
-            let rhs_str = print_expr_with_parens(rhs, prec, true);
+            let lhs_str = print_expr_with_parens(lhs, prec, false, level);
+            let rhs_str = print_expr_with_parens(rhs, prec, true, level);
             format!("{} {} {}", lhs_str, binop_str(*op), rhs_str)
         }
         ExprKind::UnaryOp { op, operand } => {
@@ -538,40 +564,48 @@ pub fn print_expr(expr: &Expr) -> String {
                 UnOp::Not => "!",
             };
             let inner = match &operand.kind {
-                ExprKind::BinaryOp { .. } => format!("({})", print_expr(operand)),
-                _ => print_expr(operand),
+                ExprKind::BinaryOp { .. } => format!("({})", print_expr_at(operand, level)),
+                _ => print_expr_at(operand, level),
             };
             format!("{}{}", op_str, inner)
         }
         ExprKind::Call { callee, args } => {
-            let args_str: Vec<String> = args.iter().map(print_expr).collect();
-            format!("{}({})", print_postfix_base(callee), args_str.join(", "))
+            let args_str: Vec<String> = args.iter().map(|e| print_expr_at(e, level)).collect();
+            format!(
+                "{}({})",
+                print_postfix_base(callee, level),
+                args_str.join(", ")
+            )
         }
         ExprKind::MethodCall {
             receiver,
             method,
             args,
         } => {
-            let args_str: Vec<String> = args.iter().map(print_expr).collect();
+            let args_str: Vec<String> = args.iter().map(|e| print_expr_at(e, level)).collect();
             format!(
                 "{}.{}({})",
-                print_postfix_base(receiver),
+                print_postfix_base(receiver, level),
                 method,
                 args_str.join(", ")
             )
         }
         ExprKind::FieldAccess { base, field } => {
-            format!("{}.{}", print_postfix_base(base), field)
+            format!("{}.{}", print_postfix_base(base, level), field)
         }
         ExprKind::Index { base, index } => {
-            format!("{}[{}]", print_postfix_base(base), print_expr(index))
+            format!(
+                "{}[{}]",
+                print_postfix_base(base, level),
+                print_expr_at(index, level)
+            )
         }
         ExprKind::Match { scrutinee, arms } => {
-            let mut out = format!("match {} {{\n", print_expr(scrutinee));
+            let mut out = format!("match {} {{\n", print_expr_at(scrutinee, level));
             for arm in arms {
-                out.push_str(&print_match_arm(arm, 1));
+                out.push_str(&print_match_arm(arm, level + 1));
             }
-            out.push('}');
+            out.push_str(&format!("{}}}", indent(level)));
             out
         }
         ExprKind::If {
@@ -581,19 +615,19 @@ pub fn print_expr(expr: &Expr) -> String {
         } => {
             let mut out = format!(
                 "if {} {}",
-                print_expr(condition),
-                print_block(then_branch, 0)
+                print_expr_at(condition, level),
+                print_block(then_branch, level)
             );
             if let Some(else_expr) = else_branch {
                 match &else_expr.kind {
                     ExprKind::If { .. } => {
-                        out.push_str(&format!(" else {}", print_expr(else_expr)));
+                        out.push_str(&format!(" else {}", print_expr_at(else_expr, level)));
                     }
                     ExprKind::Block(b) => {
-                        out.push_str(&format!(" else {}", print_block(b, 0)));
+                        out.push_str(&format!(" else {}", print_block(b, level)));
                     }
                     _ => {
-                        out.push_str(&format!(" else {}", print_expr(else_expr)));
+                        out.push_str(&format!(" else {}", print_expr_at(else_expr, level)));
                     }
                 }
             }
@@ -604,31 +638,12 @@ pub fn print_expr(expr: &Expr) -> String {
             vow,
             body,
         } => {
-            let mut out = format!("while {}", print_expr(condition));
+            let mut out = format!("while {}", print_expr_at(condition, level));
             if let Some(v) = vow {
-                out.push_str(" vow {\n");
-                for clause in &v.clauses {
-                    match clause {
-                        VowClause::Requires { expr, .. } => {
-                            out.push_str(&format!("{}requires: {}\n", indent(1), print_expr(expr)));
-                        }
-                        VowClause::Ensures { expr, .. } => {
-                            out.push_str(&format!("{}ensures: {}\n", indent(1), print_expr(expr)));
-                        }
-                        VowClause::Invariant { expr, .. } => {
-                            out.push_str(&format!(
-                                "{}invariant: {}\n",
-                                indent(1),
-                                print_expr(expr)
-                            ));
-                        }
-                    }
-                }
-                out.push_str("} ");
-            } else {
-                out.push(' ');
+                push_vow_block_inline(&mut out, v, level);
             }
-            out.push_str(&print_block(body, 0));
+            out.push(' ');
+            out.push_str(&print_block(body, level));
             out
         }
         ExprKind::ForEach {
@@ -637,72 +652,34 @@ pub fn print_expr(expr: &Expr) -> String {
             vow,
             body,
         } => {
-            let mut out = format!("for {} in {}", binding, print_expr(iterable));
+            let mut out = format!("for {} in {}", binding, print_expr_at(iterable, level));
             if let Some(v) = vow {
-                out.push_str(" vow {\n");
-                for clause in &v.clauses {
-                    match clause {
-                        VowClause::Requires { expr, .. } => {
-                            out.push_str(&format!("{}requires: {}\n", indent(1), print_expr(expr)));
-                        }
-                        VowClause::Ensures { expr, .. } => {
-                            out.push_str(&format!("{}ensures: {}\n", indent(1), print_expr(expr)));
-                        }
-                        VowClause::Invariant { expr, .. } => {
-                            out.push_str(&format!(
-                                "{}invariant: {}\n",
-                                indent(1),
-                                print_expr(expr)
-                            ));
-                        }
-                    }
-                }
-                out.push_str("} ");
-            } else {
-                out.push(' ');
+                push_vow_block_inline(&mut out, v, level);
             }
-            out.push_str(&print_block(body, 0));
+            out.push(' ');
+            out.push_str(&print_block(body, level));
             out
         }
         ExprKind::Loop { vow, body } => {
             let mut out = "loop".to_string();
             if let Some(v) = vow {
-                out.push_str(" vow {\n");
-                for clause in &v.clauses {
-                    match clause {
-                        VowClause::Requires { expr, .. } => {
-                            out.push_str(&format!("{}requires: {}\n", indent(1), print_expr(expr)));
-                        }
-                        VowClause::Ensures { expr, .. } => {
-                            out.push_str(&format!("{}ensures: {}\n", indent(1), print_expr(expr)));
-                        }
-                        VowClause::Invariant { expr, .. } => {
-                            out.push_str(&format!(
-                                "{}invariant: {}\n",
-                                indent(1),
-                                print_expr(expr)
-                            ));
-                        }
-                    }
-                }
-                out.push_str("} ");
-            } else {
-                out.push(' ');
+                push_vow_block_inline(&mut out, v, level);
             }
-            out.push_str(&print_block(body, 0));
+            out.push(' ');
+            out.push_str(&print_block(body, level));
             out
         }
         ExprKind::Break { value } => match value {
-            Some(v) => format!("break {}", print_expr(v)),
+            Some(v) => format!("break {}", print_expr_at(v, level)),
             None => "break".to_string(),
         },
         ExprKind::Continue => "continue".to_string(),
         ExprKind::Return { value } => match value {
-            Some(v) => format!("return {}", print_expr(v)),
+            Some(v) => format!("return {}", print_expr_at(v, level)),
             None => "return".to_string(),
         },
-        ExprKind::Block(b) => print_block(b, 0),
-        ExprKind::Question { expr } => format!("{}?", print_postfix_base(expr)),
+        ExprKind::Block(b) => print_block(b, level),
+        ExprKind::Question { expr } => format!("{}?", print_postfix_base(expr, level)),
         ExprKind::Cast { expr, target_ty } => {
             let inner = match &expr.kind {
                 ExprKind::Lit(_)
@@ -712,16 +689,20 @@ pub fn print_expr(expr: &Expr) -> String {
                 | ExprKind::FieldAccess { .. }
                 | ExprKind::Index { .. }
                 | ExprKind::Question { .. }
-                | ExprKind::Cast { .. } => print_expr(expr),
-                _ => format!("({})", print_expr(expr)),
+                | ExprKind::Cast { .. } => print_expr_at(expr, level),
+                _ => format!("({})", print_expr_at(expr, level)),
             };
             format!("{} as {}", inner, print_type(target_ty))
         }
         ExprKind::Assign { lhs, rhs } => {
-            format!("{} = {}", print_expr(lhs), print_expr(rhs))
+            format!(
+                "{} = {}",
+                print_expr_at(lhs, level),
+                print_expr_at(rhs, level)
+            )
         }
         ExprKind::Tuple(elems) => {
-            let elem_strs: Vec<String> = elems.iter().map(print_expr).collect();
+            let elem_strs: Vec<String> = elems.iter().map(|e| print_expr_at(e, level)).collect();
             format!("({})", elem_strs.join(", "))
         }
         ExprKind::Result => "result".to_string(),
@@ -731,7 +712,7 @@ pub fn print_expr(expr: &Expr) -> String {
             } else {
                 let field_strs: Vec<String> = fields
                     .iter()
-                    .map(|(n, e)| format!("{}: {}", n, print_expr(e)))
+                    .map(|(n, e)| format!("{}: {}", n, print_expr_at(e, level)))
                     .collect();
                 format!("{} {{ {} }}", name, field_strs.join(", "))
             }
@@ -741,7 +722,7 @@ pub fn print_expr(expr: &Expr) -> String {
             if fields.is_empty() {
                 path_str
             } else {
-                let args: Vec<String> = fields.iter().map(print_expr).collect();
+                let args: Vec<String> = fields.iter().map(|e| print_expr_at(e, level)).collect();
                 format!("{}({})", path_str, args.join(", "))
             }
         }
@@ -785,7 +766,7 @@ fn print_match_arm(arm: &MatchArm, level: usize) -> String {
         "{}{} => {},\n",
         ind,
         print_pat(&arm.pattern),
-        print_expr(&arm.body)
+        print_expr_at(&arm.body, level)
     )
 }
 

@@ -6,7 +6,7 @@
 // (backslash as `\\`, newline as `\n`); the Rust integration test
 // (vow-ir/tests/contract_text_forms.rs) and the `contract-text/parity` block of
 // scripts/full_test.sh (both compilers) compare against it. Nested blocks
-// restart at column 0, exactly as the canonical printer renders them.
+// indent by nesting depth, exactly as the canonical printer renders them.
 module ContractTextBlocks
 
 enum Shape { Empty, Circle(i64), Rect(i64, i64) }
@@ -71,4 +71,13 @@ fn types(r: &i64, t: (i64, i64), v: Vec<i64>) -> i64 vow {
   requires: { let q: Vec<i64> = v; true }
 } {
   0
+}
+
+fn deep(x: i64, s: Shape) -> i64 vow {
+  requires: { let mut i: i64 = 0; while i < 3 { if i > 1 { i = i + 2; } else { i = i + 1; } } i >= 3 }
+  requires: match s { Shape::Circle(r) => { let q: i64 = r; { if q > 0 { true } else { false } } }, _ => true }
+  requires: { let mut i: i64 = 0; if x > 0 { while i < 3 vow { invariant: if i > 0 { i >= 0 } else { true } } { i = i + 1; } } i >= 0 }
+  requires: { let mut t: i64 = 0; loop { match s { Shape::Empty => { break; }, _ => { t = t + 1; } } } t >= 0 }
+} {
+  x
 }

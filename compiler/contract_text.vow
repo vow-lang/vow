@@ -8,8 +8,9 @@ use diag
 // counterexample `violation`) is "{kind} {print_expr_text(predicate)}"; it must be
 // byte-identical to what `vow_syntax::printer::print_expr` renders for the same
 // predicate, so every function here mirrors its counterpart in
-// vow-syntax/src/printer.rs, quirks included (a nested block restarts at indent
-// level 0). Every node a contract can reach is covered; forms the parser cannot
+// vow-syntax/src/printer.rs, including how it indents nested blocks (4 spaces per
+// nesting level, a closing brace aligned with its opener). Every node a contract
+// can reach is covered; forms the parser cannot
 // build (borrow, refinement types) and forms the checker rejects inside a
 // contract have no arm here. The checker rejects tuple expressions directly
 // (`contract_depth`); a tuple pattern is rejected indirectly, because it needs a
@@ -67,13 +68,24 @@ fn print_type_list_text(a: AstArena, lid: i64) -> String {
     result
 }
 
-fn print_expr_list_text(a: AstArena, lid: i64) -> String {
+// Four spaces per nesting level, mirroring `indent` in printer.rs.
+fn indent_text(level: i64) -> String {
+    let result: String = String::from("");
+    let mut i: i64 = 0;
+    while i < level {
+        result.push_str(String::from("    "));
+        i = i + 1;
+    }
+    result
+}
+
+fn print_expr_list_text(a: AstArena, lid: i64, level: i64) -> String {
     let result: String = String::from("");
     let n: i64 = list_len(a, lid);
     let mut i: i64 = 0;
     while i < n {
         if i > 0 { result.push_str(String::from(", ")); }
-        result.push_str(print_expr_text(a, list_get(a, lid, i)));
+        result.push_str(print_expr_text_at(a, list_get(a, lid, i), level));
         i = i + 1;
     }
     result
@@ -151,8 +163,8 @@ fn binop_precedence(op: i64) -> i64 {
 // Mirrors `print_postfix_base`: an unparenthesised block-like expression ends
 // the expression, so it (like any operator expression) is parenthesized before
 // a postfix `.`, `[`, `(` or `?`.
-fn print_postfix_base_text(a: AstArena, eid: i64) -> String {
-    let text: String = print_expr_text(a, eid);
+fn print_postfix_base_text(a: AstArena, eid: i64, level: i64) -> String {
+    let text: String = print_expr_text_at(a, eid, level);
     let tag: i64 = expr_tag(a, eid);
     if is_block_expr(a, eid) || tag == EXPR_BINOP() || tag == EXPR_UNOP() || tag == EXPR_ASSIGN()
         || tag == EXPR_BREAK() || tag == EXPR_RETURN() {
@@ -164,8 +176,8 @@ fn print_postfix_base_text(a: AstArena, eid: i64) -> String {
 // Mirrors `print_expr_with_parens`: a nested binary operand is parenthesized
 // when it binds no tighter than its parent (strictly looser on the left); a
 // block-like left operand is always parenthesized.
-fn print_binop_operand_text(a: AstArena, eid: i64, parent_prec: i64, is_right: bool) -> String {
-    let text: String = print_expr_text(a, eid);
+fn print_binop_operand_text(a: AstArena, eid: i64, parent_prec: i64, is_right: bool, level: i64) -> String {
+    let text: String = print_expr_text_at(a, eid, level);
     if !is_right && is_block_expr(a, eid) { return parenthesize_text(text); }
     if expr_tag(a, eid) != EXPR_BINOP() { return text; }
     let child_prec: i64 = binop_precedence(expr_a(a, eid));
@@ -175,6 +187,12 @@ fn print_binop_operand_text(a: AstArena, eid: i64, parent_prec: i64, is_right: b
 }
 
 fn print_expr_text(a: AstArena, eid: i64) -> String {
+    print_expr_text_at(a, eid, 0)
+}
+
+// Mirrors `print_expr_at`: `level` is the indent level of the line the
+// expression starts on.
+fn print_expr_text_at(a: AstArena, eid: i64, level: i64) -> String {
     let tag: i64 = expr_tag(a, eid);
     if tag == EXPR_LIT_INT() {
         return expr_int_text(a, eid);
@@ -211,8 +229,8 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         let lhs_eid: i64 = expr_b(a, eid);
         let rhs_eid: i64 = expr_c(a, eid);
         let prec: i64 = binop_precedence(op);
-        let lhs_s: String = print_binop_operand_text(a, lhs_eid, prec, false);
-        let rhs_s: String = print_binop_operand_text(a, rhs_eid, prec, true);
+        let lhs_s: String = print_binop_operand_text(a, lhs_eid, prec, false, level);
+        let rhs_s: String = print_binop_operand_text(a, rhs_eid, prec, true, level);
         let op_s: String = binop_str(op);
         let result: String = String::from("");
         result.push_str(lhs_s);
@@ -225,7 +243,7 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
     if tag == EXPR_UNOP() {
         let op: i64 = expr_a(a, eid);
         let operand_eid: i64 = expr_b(a, eid);
-        let mut inner_s: String = print_expr_text(a, operand_eid);
+        let mut inner_s: String = print_expr_text_at(a, operand_eid, level);
         if expr_tag(a, operand_eid) == EXPR_BINOP() {
             inner_s = parenthesize_text(inner_s);
         }
@@ -240,7 +258,7 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
     }
     if tag == EXPR_CAST() {
         let inner_eid: i64 = expr_a(a, eid);
-        let inner_s: String = print_expr_text(a, inner_eid);
+        let inner_s: String = print_expr_text_at(a, inner_eid, level);
         let result: String = String::from("");
         // A non-atomic operand is parenthesized so the cast binds where the
         // source said it did. EXPR_RESULT is listed because the self-hosted
@@ -280,7 +298,7 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
             if i > 0 { result.push_str(String::from(", ")); }
             result.push_str(arena_str(a, list_get(a, fields_lid, i * 2)));
             result.push_str(String::from(": "));
-            result.push_str(print_expr_text(a, list_get(a, fields_lid, i * 2 + 1)));
+            result.push_str(print_expr_text_at(a, list_get(a, fields_lid, i * 2 + 1), level));
             i = i + 1;
         }
         result.push_str(String::from(" }"));
@@ -291,18 +309,18 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         let args_lid: i64 = expr_b(a, eid);
         if list_len(a, args_lid) == 0 { return result; }
         result.push_str(String::from("("));
-        result.push_str(print_expr_list_text(a, args_lid));
+        result.push_str(print_expr_list_text(a, args_lid, level));
         result.push_str(String::from(")"));
         return result;
     }
     if tag == EXPR_QUESTION() {
         let result: String = String::from("");
-        result.push_str(print_postfix_base_text(a, expr_a(a, eid)));
+        result.push_str(print_postfix_base_text(a, expr_a(a, eid), level));
         result.push_str(String::from("?"));
         return result;
     }
     if tag == EXPR_FIELD() {
-        let base_s: String = print_postfix_base_text(a, expr_a(a, eid));
+        let base_s: String = print_postfix_base_text(a, expr_a(a, eid), level);
         let result: String = String::from("");
         result.push_str(base_s);
         result.push_str(String::from("."));
@@ -310,8 +328,8 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         return result;
     }
     if tag == EXPR_INDEX() {
-        let base_s: String = print_postfix_base_text(a, expr_a(a, eid));
-        let idx_s: String = print_expr_text(a, expr_b(a, eid));
+        let base_s: String = print_postfix_base_text(a, expr_a(a, eid), level);
+        let idx_s: String = print_expr_text_at(a, expr_b(a, eid), level);
         let result: String = String::from("");
         result.push_str(base_s);
         result.push_str(String::from("["));
@@ -320,74 +338,75 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         return result;
     }
     if tag == EXPR_METHOD() {
-        let recv_s: String = print_postfix_base_text(a, expr_a(a, eid));
+        let recv_s: String = print_postfix_base_text(a, expr_a(a, eid), level);
         let result: String = String::from("");
         result.push_str(recv_s);
         result.push_str(String::from("."));
         result.push_str(arena_str(a, expr_b(a, eid)));
         result.push_str(String::from("("));
-        result.push_str(print_expr_list_text(a, expr_c(a, eid)));
+        result.push_str(print_expr_list_text(a, expr_c(a, eid), level));
         result.push_str(String::from(")"));
         return result;
     }
     if tag == EXPR_CALL() {
-        let callee_s: String = print_postfix_base_text(a, expr_a(a, eid));
+        let callee_s: String = print_postfix_base_text(a, expr_a(a, eid), level);
         let result: String = String::from("");
         result.push_str(callee_s);
         result.push_str(String::from("("));
-        result.push_str(print_expr_list_text(a, expr_b(a, eid)));
+        result.push_str(print_expr_list_text(a, expr_b(a, eid), level));
         result.push_str(String::from(")"));
         return result;
     }
-    print_control_expr_text(a, eid, tag)
+    print_control_expr_text(a, eid, tag, level)
 }
 
 // The compound forms: `if`, blocks, `match` and the loop / jump expressions.
-fn print_control_expr_text(a: AstArena, eid: i64, tag: i64) -> String {
+fn print_control_expr_text(a: AstArena, eid: i64, tag: i64, level: i64) -> String {
     if tag == EXPR_IF() {
         let result: String = String::from("if ");
-        result.push_str(print_expr_text(a, expr_a(a, eid)));
+        result.push_str(print_expr_text_at(a, expr_a(a, eid), level));
         result.push_str(String::from(" "));
-        result.push_str(print_block_text(a, expr_b(a, eid)));
+        result.push_str(print_block_text(a, expr_b(a, eid), level));
         let else_eid: i64 = expr_c(a, eid);
         if else_eid != -1 {
             result.push_str(String::from(" else "));
-            result.push_str(print_expr_text(a, else_eid));
+            result.push_str(print_expr_text_at(a, else_eid, level));
         }
         return result;
     }
     if tag == EXPR_BLOCK() {
-        return print_block_text(a, expr_a(a, eid));
+        return print_block_text(a, expr_a(a, eid), level);
     }
     if tag == EXPR_MATCH() {
         let result: String = String::from("match ");
-        result.push_str(print_expr_text(a, expr_a(a, eid)));
+        result.push_str(print_expr_text_at(a, expr_a(a, eid), level));
         result.push_str(String::from(" {\n"));
         let arms_lid: i64 = expr_b(a, eid);
         let narms: i64 = list_len(a, arms_lid) / 2;
         let mut i: i64 = 0;
         while i < narms {
-            result.push_str(String::from("    "));
+            result.push_str(indent_text(level + 1));
             result.push_str(print_pat_text(a, list_get(a, arms_lid, i * 2)));
             result.push_str(String::from(" => "));
-            result.push_str(print_expr_text(a, list_get(a, arms_lid, i * 2 + 1)));
+            result.push_str(print_expr_text_at(a, list_get(a, arms_lid, i * 2 + 1), level + 1));
             result.push_str(String::from(",\n"));
             i = i + 1;
         }
+        result.push_str(indent_text(level));
         result.push_str(String::from("}"));
         return result;
     }
     if tag == EXPR_WHILE() {
         let result: String = String::from("while ");
-        result.push_str(print_expr_text(a, expr_a(a, eid)));
-        result.push_str(print_loop_vow_text(a, expr_c(a, eid)));
-        result.push_str(print_block_text(a, expr_b(a, eid)));
+        result.push_str(print_expr_text_at(a, expr_a(a, eid), level));
+        result.push_str(print_loop_vow_text(a, expr_c(a, eid), level));
+        result.push_str(print_block_text(a, expr_b(a, eid), level));
         return result;
     }
     if tag == EXPR_LOOP() {
         let result: String = String::from("loop");
-        result.push_str(print_loop_vow_text(a, expr_b(a, eid)));
-        result.push_str(print_block_text(a, expr_a(a, eid)));
+        result.push_str(print_loop_vow_text(a, expr_b(a, eid), level));
+        result.push_str(print_block_text(a, expr_a(a, eid), level));
         return result;
     }
     if tag == EXPR_FOR() {
@@ -395,9 +414,9 @@ fn print_control_expr_text(a: AstArena, eid: i64, tag: i64) -> String {
         let result: String = String::from("for ");
         result.push_str(arena_str(a, list_get(a, info_lid, 0)));
         result.push_str(String::from(" in "));
-        result.push_str(print_expr_text(a, expr_a(a, eid)));
-        result.push_str(print_loop_vow_text(a, list_get(a, info_lid, 1)));
-        result.push_str(print_block_text(a, expr_b(a, eid)));
+        result.push_str(print_expr_text_at(a, expr_a(a, eid), level));
+        result.push_str(print_loop_vow_text(a, list_get(a, info_lid, 1), level));
+        result.push_str(print_block_text(a, expr_b(a, eid), level));
         return result;
     }
     if tag == EXPR_BREAK() || tag == EXPR_RETURN() {
@@ -407,16 +426,16 @@ fn print_control_expr_text(a: AstArena, eid: i64, tag: i64) -> String {
         let value_eid: i64 = expr_a(a, eid);
         if value_eid != -1 {
             result.push_str(String::from(" "));
-            result.push_str(print_expr_text(a, value_eid));
+            result.push_str(print_expr_text_at(a, value_eid, level));
         }
         return result;
     }
     if tag == EXPR_CONTINUE() { return String::from("continue"); }
     if tag == EXPR_ASSIGN() {
         let result: String = String::from("");
-        result.push_str(print_expr_text(a, expr_a(a, eid)));
+        result.push_str(print_expr_text_at(a, expr_a(a, eid), level));
         result.push_str(String::from(" = "));
-        result.push_str(print_expr_text(a, expr_b(a, eid)));
+        result.push_str(print_expr_text_at(a, expr_b(a, eid), level));
         return result;
     }
     String::from("")
@@ -477,7 +496,7 @@ fn print_pat_text(a: AstArena, pid: i64) -> String {
 
 // The ` vow { ... } ` clause list a loop carries, or a single space when it has
 // none. Mirrors the While/ForEach/Loop arms of `print_expr` in printer.rs.
-fn print_loop_vow_text(a: AstArena, vow_lid: i64) -> String {
+fn print_loop_vow_text(a: AstArena, vow_lid: i64, level: i64) -> String {
     if vow_lid == -1 { return String::from(" "); }
     let result: String = String::from(" vow {\n");
     let n: i64 = list_len(a, vow_lid);
@@ -485,21 +504,22 @@ fn print_loop_vow_text(a: AstArena, vow_lid: i64) -> String {
     while i < n {
         let cid: i64 = list_get(a, vow_lid, i);
         let kind: i64 = vow_clause_kind(a, cid);
-        result.push_str(String::from("    "));
+        result.push_str(indent_text(level + 1));
         if kind == CLAUSE_REQUIRES() { result.push_str(String::from("requires")); }
         else if kind == CLAUSE_ENSURES() { result.push_str(String::from("ensures")); }
         else { result.push_str(String::from("invariant")); }
         result.push_str(String::from(": "));
-        result.push_str(print_expr_text(a, vow_clause_expr(a, cid)));
+        result.push_str(print_expr_text_at(a, vow_clause_expr(a, cid), level + 1));
         result.push_str(String::from("\n"));
         i = i + 1;
     }
+    result.push_str(indent_text(level));
     result.push_str(String::from("} "));
     result
 }
 
 // Mirrors `print_stmt` without the leading indent and trailing newline.
-fn print_stmt_text(a: AstArena, sid: i64) -> String {
+fn print_stmt_text(a: AstArena, sid: i64, level: i64) -> String {
     let result: String = String::from("");
     if stmt_tag(a, sid) == STMT_LET() {
         result.push_str(String::from("let "));
@@ -510,31 +530,32 @@ fn print_stmt_text(a: AstArena, sid: i64) -> String {
             result.push_str(print_type_text(a, annot_tid));
         }
         result.push_str(String::from(" = "));
-        result.push_str(print_expr_text(a, stmt_c(a, sid)));
+        result.push_str(print_expr_text_at(a, stmt_c(a, sid), level));
         result.push_str(String::from(";"));
         return result;
     }
-    result.push_str(print_expr_text(a, stmt_a(a, sid)));
+    result.push_str(print_expr_text_at(a, stmt_a(a, sid), level));
     if stmt_b(a, sid) == 1 { result.push_str(String::from(";")); }
     result
 }
 
-// Mirrors `print_block`: statements are indented four spaces and nested blocks
-// restart at column 0, exactly as the Rust printer renders them, so the two
-// outputs match byte for byte. The parser
+// Mirrors `print_block`: statements are indented one level deeper than `level`
+// and the closing brace sits at `level`, exactly as the Rust printer renders
+// them, so the two outputs match byte for byte. The parser
 // stores a block's trailing expression as its last statement (no semicolon), so
 // `blk_trail` is never set and prints identically to Rust's `trailing_expr`.
-fn print_block_text(a: AstArena, bid: i64) -> String {
+fn print_block_text(a: AstArena, bid: i64, level: i64) -> String {
     let result: String = String::from("{\n");
     let stmts_lid: i64 = blk_stmts(a, bid);
     let n: i64 = list_len(a, stmts_lid);
     let mut i: i64 = 0;
     while i < n {
-        result.push_str(String::from("    "));
-        result.push_str(print_stmt_text(a, list_get(a, stmts_lid, i)));
+        result.push_str(indent_text(level + 1));
+        result.push_str(print_stmt_text(a, list_get(a, stmts_lid, i), level + 1));
         result.push_str(String::from("\n"));
         i = i + 1;
     }
+    result.push_str(indent_text(level));
     result.push_str(String::from("}"));
     result
 }

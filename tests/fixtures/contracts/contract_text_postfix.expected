@@ -1,7 +1,7 @@
 requires (if c {\n    1\n} else {\n    2\n}) as u64 == 1
 requires (if c {\n    1\n} else {\n    2\n}) as u64 as i64 == 1
 requires (if c {\n    1\n} else {\n    2\n}) as u64 as i64 == 1
-requires (if c {\n    if c {\n    1\n} else {\n    2\n}\n} else {\n    3\n}) as u64 == 1
+requires (if c {\n    if c {\n        1\n    } else {\n        2\n    }\n} else {\n    3\n}) as u64 == 1
 requires ({\n    x\n}) as u64 == 1
 requires (loop {\n    break x;\n}) as u64 == 1
 requires x as u64 as i64 == 1

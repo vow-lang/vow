@@ -5834,9 +5834,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("(`5u64` is `5 as u64`), a cast prints its real target type, and a nested binary\n"));
     r.push_str(String::from("operator is parenthesized exactly when its precedence requires it. Block, `if`/`else`,\n"));
     r.push_str(String::from("`match` and loop expressions print multi-line (so `description` may contain newlines):\n"));
-    r.push_str(String::from("4-space indentation for statements and match arms, `let` statements with their pattern and\n"));
-    r.push_str(String::from("type annotation, and a nested block restarts at column 0 exactly as the canonical printer\n"));
-    r.push_str(String::from("renders it.\n"));
+    r.push_str(String::from("4-space indentation per nesting level for statements, match arms and loop `vow` clauses,\n"));
+    r.push_str(String::from("`let` statements with their pattern and type annotation, and every closing brace aligned\n"));
+    r.push_str(String::from("with the line its block opened on, so a block nested inside another block, arm or loop\n"));
+    r.push_str(String::from("indents by its depth exactly as the canonical printer renders it.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`source.offset` anchors differently depending on where the clause comes from: for a\n"));
     r.push_str(String::from("clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte\n"));
@@ -11743,9 +11744,10 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("(`5u64` is `5 as u64`), a cast prints its real target type, and a nested binary\n"));
     r.push_str(String::from("operator is parenthesized exactly when its precedence requires it. Block, `if`/`else`,\n"));
     r.push_str(String::from("`match` and loop expressions print multi-line (so `description` may contain newlines):\n"));
-    r.push_str(String::from("4-space indentation for statements and match arms, `let` statements with their pattern and\n"));
-    r.push_str(String::from("type annotation, and a nested block restarts at column 0 exactly as the canonical printer\n"));
-    r.push_str(String::from("renders it.\n"));
+    r.push_str(String::from("4-space indentation per nesting level for statements, match arms and loop `vow` clauses,\n"));
+    r.push_str(String::from("`let` statements with their pattern and type annotation, and every closing brace aligned\n"));
+    r.push_str(String::from("with the line its block opened on, so a block nested inside another block, arm or loop\n"));
+    r.push_str(String::from("indents by its depth exactly as the canonical printer renders it.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`source.offset` anchors differently depending on where the clause comes from: for a\n"));
     r.push_str(String::from("clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte\n"));

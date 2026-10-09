@@ -3463,9 +3463,10 @@ literals print in unsigned decimal at full 128-bit width (a `u64` literal above
 (`5u64` is `5 as u64`), a cast prints its real target type, and a nested binary
 operator is parenthesized exactly when its precedence requires it. Block, `if`/`else`,
 `match` and loop expressions print multi-line (so `description` may contain newlines):
-4-space indentation for statements and match arms, `let` statements with their pattern and
-type annotation, and a nested block restarts at column 0 exactly as the canonical printer
-renders it.
+4-space indentation per nesting level for statements, match arms and loop `vow` clauses,
+`let` statements with their pattern and type annotation, and every closing brace aligned
+with the line its block opened on, so a block nested inside another block, arm or loop
+indents by its depth exactly as the canonical printer renders it.
 
 `source.offset` anchors differently depending on where the clause comes from: for a
 clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte
@@ -9349,9 +9350,10 @@ literals print in unsigned decimal at full 128-bit width (a `u64` literal above
 (`5u64` is `5 as u64`), a cast prints its real target type, and a nested binary
 operator is parenthesized exactly when its precedence requires it. Block, `if`/`else`,
 `match` and loop expressions print multi-line (so `description` may contain newlines):
-4-space indentation for statements and match arms, `let` statements with their pattern and
-type annotation, and a nested block restarts at column 0 exactly as the canonical printer
-renders it.
+4-space indentation per nesting level for statements, match arms and loop `vow` clauses,
+`let` statements with their pattern and type annotation, and every closing brace aligned
+with the line its block opened on, so a block nested inside another block, arm or loop
+indents by its depth exactly as the canonical printer renders it.
 
 `source.offset` anchors differently depending on where the clause comes from: for a
 clause inside a `vow { ... }` block (`requires`, `ensures`, `invariant`), it is the byte

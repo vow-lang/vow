@@ -474,3 +474,62 @@ proptest! {
         );
     }
 }
+
+fn strip_string_literals(line: &str) -> String {
+    let mut out = String::new();
+    let mut in_str = false;
+    let mut escaped = false;
+    for ch in line.chars() {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_str = false;
+            }
+        } else if ch == '"' {
+            in_str = true;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn assert_indentation_matches_brace_depth(printed: &str) -> Result<(), TestCaseError> {
+    let mut depth: usize = 0;
+    for line in printed.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let code = strip_string_literals(line);
+        let trimmed = code.trim_start();
+        let expected = if trimmed.starts_with('}') {
+            depth.saturating_sub(1)
+        } else {
+            depth
+        };
+        let actual = line.len() - line.trim_start().len();
+        prop_assert_eq!(
+            actual,
+            expected * 4,
+            "bad indentation in:\n{}\nline: {}",
+            printed,
+            line
+        );
+        let opens = trimmed.matches('{').count();
+        let closes = trimmed.matches('}').count();
+        depth = (depth + opens).saturating_sub(closes);
+    }
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    #[test]
+    fn printed_indentation_follows_brace_depth(module in proptest_arb::arb_module()) {
+        assert_indentation_matches_brace_depth(&print_module(&module))?;
+    }
+}
