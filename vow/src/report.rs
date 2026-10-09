@@ -442,6 +442,7 @@ mod tests {
             replay_reason: None,
             replay_raw_values: Vec::new(),
             replay_raw_output: String::new(),
+            replay_callee_owned: false,
         }
     }
 

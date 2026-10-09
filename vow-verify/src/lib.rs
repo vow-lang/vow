@@ -10,8 +10,8 @@ pub use c_emitter::{
     detect_constant_functions, non_modelable_reason,
 };
 pub use esbmc::{
-    ArithOverflowSite, CalleePrecondition, CallerRole, Counterexample, DEFAULT_MAX_K_STEP,
-    ReachVerdict, VerificationResult, VerifyRequest, caller_precondition_role,
+    ArithOverflowSite, CalleePostcondition, CalleePrecondition, CallerRole, Counterexample,
+    DEFAULT_MAX_K_STEP, ReachVerdict, VerificationResult, VerifyRequest, caller_precondition_role,
     emit_bodyreplace_c_source, emit_reach_c_source, emit_verify_c_source, extract_arith_site,
     extract_assert_label, find_esbmc, function_has_ensures, function_has_requires,
     parse_esbmc_output, requires_callees, run_c_source, run_esbmc_bodyreplace,

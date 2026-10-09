@@ -194,12 +194,20 @@ pub(crate) fn build_structured_counterexample_with_module(
 ) -> StructuredCounterexample {
     use vow_ir::InstData;
     let vid = ce.vow_id.unwrap_or(UNATTRIBUTED_VOW_ID);
-    let resolved_callee_precondition = ce.callee_precondition.and_then(|pre| {
-        let module = module?;
-        let callee = module.functions.iter().find(|f| f.id.0 == pre.func_id)?;
-        let entry = callee.vows.iter().find(|v| v.id.0 == pre.vow_id)?;
+    let resolve_owner = |func_id: u32, vow_id: u32| {
+        let callee = module?.functions.iter().find(|f| f.id.0 == func_id)?;
+        let entry = callee.vows.iter().find(|v| v.id.0 == vow_id)?;
         Some((callee, entry))
-    });
+    };
+    let resolved_callee_precondition = ce
+        .callee_precondition
+        .and_then(|pre| resolve_owner(pre.func_id, pre.vow_id));
+    // A co-emitted callee's `ensures`/`invariant` failed: its vow id is local to
+    // the callee, so it must never be looked up in the verify target's `vows`.
+    let resolved_callee_postcondition = ce
+        .callee_postcondition
+        .and_then(|post| resolve_owner(post.func_id, post.vow_id));
+    let resolved_owner = resolved_callee_precondition.or(resolved_callee_postcondition);
 
     // ESBMC tripped a fail-closed assertion that vow-verify's c_emitter inserts
     // for opcodes the verifier model does not handle. The sentinel id is
@@ -212,15 +220,14 @@ pub(crate) fn build_structured_counterexample_with_module(
     // sentinel branch for stale cache entries or older verifier output.
     let caller_precondition =
         ce.callee_precondition.is_some() || ce.vow_id == Some(CALLER_PRECONDITION_VOW_ID);
-    let vow_func = resolved_callee_precondition
-        .map(|(callee, _)| callee)
-        .unwrap_or(func);
-    let vow_entry = resolved_callee_precondition
-        .map(|(_, entry)| entry)
-        .or_else(|| {
-            ce.vow_id
-                .and_then(|id| func.vows.iter().find(|v| v.id.0 == id))
-        });
+    let vow_func = resolved_owner.map(|(callee, _)| callee).unwrap_or(func);
+    let vow_entry = resolved_owner.map(|(_, entry)| entry).or_else(|| {
+        if ce.callee_precondition.is_some() || ce.callee_postcondition.is_some() {
+            return None;
+        }
+        ce.vow_id
+            .and_then(|id| func.vows.iter().find(|v| v.id.0 == id))
+    });
     let violation = if unsupported_op {
         "function uses side-effecting operations not supported for verification".to_string()
     } else if let Some(entry) = vow_entry {
@@ -328,10 +335,14 @@ pub(crate) fn build_structured_counterexample_with_module(
         vec![]
     };
 
+    // Block ids are function-local C variables, so visits recorded for a
+    // co-emitted callee cannot be told apart from the target's.
+    let callee_owned = resolved_callee_postcondition.is_some();
+
     // Execution path from block visits
     let visited: std::collections::HashSet<u32> = ce.block_visits.iter().copied().collect();
     let mut execution_path: Vec<CePathStep> = Vec::new();
-    for block in &func.blocks {
+    for block in func.blocks.iter().filter(|_| !callee_owned) {
         if visited.contains(&block.id.0) {
             let span = block
                 .insts
@@ -356,7 +367,7 @@ pub(crate) fn build_structured_counterexample_with_module(
 
     // Branch decisions
     let mut branch_decisions: Vec<CeBranchDecision> = Vec::new();
-    for block in &func.blocks {
+    for block in func.blocks.iter().filter(|_| !callee_owned) {
         for inst in &block.insts {
             if inst.opcode == vow_ir::Opcode::Branch
                 && let InstData::BranchTargets {
@@ -381,7 +392,9 @@ pub(crate) fn build_structured_counterexample_with_module(
     }
 
     StructuredCounterexample {
-        function: func.name.clone(),
+        function: resolved_callee_postcondition
+            .map_or(func.name.as_str(), |(callee, _)| callee.name.as_str())
+            .to_string(),
         values: mapped_values,
         violation,
         vow_id: vid,
@@ -395,6 +408,7 @@ pub(crate) fn build_structured_counterexample_with_module(
         replay_reason: None,
         replay_raw_values: ce.values.clone(),
         replay_raw_output: ce.raw_output.clone(),
+        replay_callee_owned: callee_owned,
     }
 }
 
@@ -532,6 +546,7 @@ mod tests {
             description: "[Counterexample]".to_string(),
             vow_id: None,
             callee_precondition: None,
+            callee_postcondition: None,
             values: vec![],
             block_visits: vec![],
             raw_output: format!(
@@ -897,6 +912,7 @@ mod tests {
             description: "y != 0".to_string(),
             vow_id: Some(0),
             callee_precondition: None,
+            callee_postcondition: None,
             values: vec![
                 ("p0".to_string(), "10".to_string()),
                 ("p1".to_string(), "0".to_string()),
@@ -967,6 +983,7 @@ mod tests {
             description: "[Counterexample]".to_string(),
             vow_id: Some(UNSUPPORTED_OP_VOW_ID),
             callee_precondition: None,
+            callee_postcondition: None,
             values: vec![],
             block_visits: vec![],
             raw_output: String::new(),
@@ -1089,6 +1106,7 @@ mod tests {
             description: "result == x + x".to_string(),
             vow_id: Some(0),
             callee_precondition: None,
+            callee_postcondition: None,
             values: vec![("p0".to_string(), "5".to_string())],
             block_visits: vec![0],
             raw_output: String::new(),
@@ -1283,6 +1301,7 @@ mod tests {
             description: "test".to_string(),
             vow_id: Some(0),
             callee_precondition: None,
+            callee_postcondition: None,
             values: vec![
                 ("p0".to_string(), "10".to_string()),
                 ("p1".to_string(), "0".to_string()),
@@ -1309,6 +1328,165 @@ mod tests {
         assert_eq!(sce.violating_args[0].value, "0");
         assert_eq!(sce.violating_args[0].arg_offset, 59);
         assert_eq!(sce.violating_args[0].arg_length, 1);
+    }
+
+    fn ensures_fn(
+        id: u32,
+        name: &str,
+        description: &str,
+        file: &str,
+        span_start: u32,
+    ) -> vow_ir::Function {
+        use vow_ir::*;
+        use vow_syntax::span::Span;
+        Function {
+            id: FuncId(id),
+            name: name.to_string(),
+            params: vec![Ty::I64],
+            param_names: vec!["x".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: description.to_string(),
+                blame: vow_diag::Blame::Callee,
+                bindings: vec![],
+                file: file.to_string(),
+                offset: span_start,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(0),
+                        origin: Span::new(span_start, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::VowEnsures,
+                        ty: Ty::Unit,
+                        args: vec![InstId(0)],
+                        data: InstData::VowId(VowId(0)),
+                        origin: Span::new(span_start + 5, 9),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(0)],
+                        data: InstData::None,
+                        origin: Span::new(span_start + 20, 1),
+                        region: RegionId::Root,
+                    },
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: file.to_string(),
+        }
+    }
+
+    fn ensures_module_and_ce(
+        post: Option<vow_verify::CalleePostcondition>,
+    ) -> (vow_ir::Module, vow_verify::Counterexample) {
+        let module = vow_ir::Module {
+            name: "test".to_string(),
+            functions: vec![
+                ensures_fn(1, "f", "f clause", "f.vow", 100),
+                ensures_fn(3, "g", "g clause", "g.vow", 300),
+            ],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let ce = vow_verify::Counterexample {
+            arith_overflow: None,
+            description: "raw".to_string(),
+            vow_id: Some(0),
+            callee_precondition: None,
+            callee_postcondition: post,
+            values: vec![("p0".to_string(), "5".to_string())],
+            block_visits: vec![0],
+            raw_output: String::new(),
+        };
+        (module, ce)
+    }
+
+    #[test]
+    fn callee_postcondition_counterexample_is_attributed_to_the_callee() {
+        let (module, ce) = ensures_module_and_ce(Some(vow_verify::CalleePostcondition {
+            func_id: 3,
+            vow_id: 0,
+        }));
+        let target = module.functions[0].clone();
+        let sce = build_structured_counterexample_with_module(
+            &target,
+            Some(&module),
+            &ce,
+            "f.vow",
+            &build_call_site_index(&module, "f.vow"),
+        );
+
+        assert_eq!(sce.function, "g");
+        assert_eq!(sce.violation, "g clause");
+        assert_eq!(sce.blame, "callee");
+        assert_eq!(sce.vow_id, 0);
+        let source = sce.source.expect("callee clause span");
+        assert_eq!(
+            (source.file.as_str(), source.offset, source.length),
+            ("g.vow", 305, 9)
+        );
+        assert_eq!(sce.values, vec![("x".to_string(), "5".to_string())]);
+        assert!(sce.execution_path.is_empty());
+        assert!(sce.branch_decisions.is_empty());
+        assert!(sce.replay_callee_owned);
+    }
+
+    #[test]
+    fn target_ensures_counterexample_stays_on_the_target() {
+        let (module, ce) = ensures_module_and_ce(None);
+        let target = module.functions[0].clone();
+        let sce = build_structured_counterexample_with_module(
+            &target,
+            Some(&module),
+            &ce,
+            "f.vow",
+            &build_call_site_index(&module, "f.vow"),
+        );
+
+        assert_eq!(sce.function, "f");
+        assert_eq!(sce.violation, "f clause");
+        assert!(!sce.replay_callee_owned);
+        assert!(!sce.execution_path.is_empty());
+    }
+
+    #[test]
+    fn unresolvable_callee_postcondition_is_not_resolved_against_the_target() {
+        let (module, ce) = ensures_module_and_ce(Some(vow_verify::CalleePostcondition {
+            func_id: 99,
+            vow_id: 0,
+        }));
+        let target = module.functions[0].clone();
+        for module_arg in [Some(&module), None] {
+            let sce = build_structured_counterexample_with_module(
+                &target,
+                module_arg,
+                &ce,
+                "f.vow",
+                &build_call_site_index(&module, "f.vow"),
+            );
+            assert_eq!(sce.function, "f");
+            assert_ne!(sce.violation, "f clause");
+            assert_eq!(sce.violation, "internal verifier assertion failed");
+            assert!(sce.source.is_none());
+        }
     }
 
     #[test]
@@ -1512,6 +1690,7 @@ mod tests {
                 func_id: 7,
                 vow_id: 1,
             }),
+            callee_postcondition: None,
             values: vec![
                 ("p0".to_string(), "1".to_string()),
                 ("p1".to_string(), "0".to_string()),
@@ -1717,6 +1896,7 @@ mod tests {
                 func_id: 7,
                 vow_id: 0,
             }),
+            callee_postcondition: None,
             values: vec![],
             block_visits: vec![0],
             raw_output: String::new(),
@@ -1820,6 +2000,7 @@ mod tests {
             description: "test".to_string(),
             vow_id: Some(0),
             callee_precondition: None,
+            callee_postcondition: None,
             values: vec![("p0".to_string(), "0".to_string())],
             block_visits: vec![0, 2],
             raw_output: String::new(),
