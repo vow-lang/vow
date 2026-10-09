@@ -4032,6 +4032,24 @@ pub unsafe extern "C" fn __vow_fs_remove_dir(path_ptr: *const u8) -> i64 {
         Ok(s) => s,
         Err(_) => return -1,
     };
+    match std::fs::remove_dir(path) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_fs_remove_dir_all(path_ptr: *const u8) -> i64 {
+    if path_ptr.is_null() {
+        return -1;
+    }
+    sanitize_on_read(path_ptr as usize, 0);
+    let v = unsafe { &*(path_ptr as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let path = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
     match std::fs::remove_dir_all(path) {
         Ok(_) => 0,
         Err(_) => -1,
@@ -6566,6 +6584,51 @@ mod tests {
         assert!(vow_words(unsafe { __vow_hex_decode(std::ptr::null()) }).is_empty());
         assert_eq!(vow_text(unsafe { __vow_hex_encode(std::ptr::null()) }), "");
         assert!(vow_words(unsafe { __vow_vec_sort(std::ptr::null()) }).is_empty());
+    }
+
+    #[test]
+    fn fs_remove_dir_is_rmdir_and_remove_dir_all_is_recursive() {
+        let root = std::env::temp_dir().join(format!("vow_rmdir_sem_{}", std::process::id()));
+        let tree = root.join("tree");
+        std::fs::create_dir_all(tree.join("sub")).unwrap();
+        std::fs::write(tree.join("sub").join("f.txt"), "x").unwrap();
+        let path_v = |p: &std::path::Path| {
+            let s = p.to_str().unwrap().to_string();
+            unsafe { __vow_string_new(s.as_ptr().cast(), s.len()) }
+        };
+
+        let tree_v = path_v(&tree);
+        assert_ne!(unsafe { __vow_fs_remove_dir(tree_v) }, 0);
+        assert!(tree.join("sub").join("f.txt").exists());
+        assert_ne!(
+            unsafe { __vow_fs_remove_dir(path_v(&tree.join("sub").join("f.txt"))) },
+            0
+        );
+        assert_ne!(unsafe { __vow_fs_remove_dir(std::ptr::null()) }, 0);
+        assert_ne!(unsafe { __vow_fs_remove_dir_all(std::ptr::null()) }, 0);
+
+        std::fs::remove_file(tree.join("sub").join("f.txt")).unwrap();
+        assert_eq!(unsafe { __vow_fs_remove_dir(path_v(&tree.join("sub"))) }, 0);
+        std::fs::create_dir_all(tree.join("sub")).unwrap();
+        std::fs::write(tree.join("sub").join("f.txt"), "x").unwrap();
+
+        #[cfg(unix)]
+        {
+            let keep = root.join("keep");
+            std::fs::create_dir_all(&keep).unwrap();
+            std::fs::write(keep.join("k.txt"), "k").unwrap();
+            let link = root.join("link");
+            std::os::unix::fs::symlink(&keep, &link).unwrap();
+            assert_eq!(unsafe { __vow_fs_remove_dir_all(path_v(&link)) }, 0);
+            assert!(!link.exists() && std::fs::symlink_metadata(&link).is_err());
+            assert!(keep.join("k.txt").exists());
+        }
+
+        assert_eq!(unsafe { __vow_fs_remove_dir_all(tree_v) }, 0);
+        assert!(!tree.exists());
+        assert_ne!(unsafe { __vow_fs_remove_dir_all(tree_v) }, 0);
+        assert_ne!(unsafe { __vow_fs_remove_dir(tree_v) }, 0);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

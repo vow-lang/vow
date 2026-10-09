@@ -1822,6 +1822,7 @@ fn catalogue_builtin_to_extern(name: String) -> String {
     if name == String::from("fs_listdir") { return String::from("__vow_fs_listdir"); }
     if name == String::from("fs_remove") { return String::from("__vow_fs_remove"); }
     if name == String::from("fs_remove_dir") { return String::from("__vow_fs_remove_dir"); }
+    if name == String::from("fs_remove_dir_all") { return String::from("__vow_fs_remove_dir_all"); }
     if name == String::from("fs_is_dir") { return String::from("__vow_fs_is_dir"); }
     if name == String::from("fs_is_symlink") { return String::from("__vow_fs_is_symlink"); }
     if name == String::from("fs_rename") { return String::from("__vow_fs_rename"); }
@@ -1870,6 +1871,7 @@ fn catalogue_builtin_ret_ty(name: String) -> i64 {
     if name == String::from("fs_listdir") { return ITY_PTR(); }
     if name == String::from("fs_remove") { return ITY_I64(); }
     if name == String::from("fs_remove_dir") { return ITY_I64(); }
+    if name == String::from("fs_remove_dir_all") { return ITY_I64(); }
     if name == String::from("fs_is_dir") { return ITY_I64(); }
     if name == String::from("fs_is_symlink") { return ITY_I64(); }
     if name == String::from("fs_rename") { return ITY_I64(); }

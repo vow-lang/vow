@@ -45,6 +45,7 @@ fn catalogue_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "fs_listdir" => Some(("__vow_fs_listdir", Ty::Ptr)),
         "fs_remove" => Some(("__vow_fs_remove", Ty::I64)),
         "fs_remove_dir" => Some(("__vow_fs_remove_dir", Ty::I64)),
+        "fs_remove_dir_all" => Some(("__vow_fs_remove_dir_all", Ty::I64)),
         "fs_is_dir" => Some(("__vow_fs_is_dir", Ty::I64)),
         "fs_is_symlink" => Some(("__vow_fs_is_symlink", Ty::I64)),
         "fs_rename" => Some(("__vow_fs_rename", Ty::I64)),
