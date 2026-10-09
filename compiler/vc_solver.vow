@@ -1,5 +1,7 @@
 module VcSolver
 
+use verifier
+
 // Bitwuzla verdict and model parsing for the native verifier, followed by the
 // child-process driver (`vc_solver_check`). The parsers are pure. Anything that
 // is not a recognised verdict, or a `sat` whose model is unparsable or
@@ -22,51 +24,13 @@ struct VcModel {
     values: Vec<i64>,
 }
 
-fn vc_is_ws(b: i64) -> bool {
-    b == 32 || b == 9 || b == 10 || b == 13
-}
-
-fn vc_trim(s: String) -> String {
-    let n: u64 = s.len();
-    let mut start: u64 = 0;
-    while start < n && vc_is_ws(s.byte_at(start)) {
-        start = start + 1;
-    }
-    if start >= n { return String::from(""); }
-    let mut end: u64 = n;
-    while end > start && vc_is_ws(s.byte_at(end - 1)) {
-        end = end - 1;
-    }
-    s.substring(start, end)
-}
-
 fn vc_first_line(s: String) -> String {
     let n: u64 = s.len();
     let mut i: u64 = 0;
     while i < n && s.byte_at(i) != 10 {
         i = i + 1;
     }
-    vc_trim(s.substring(0, i))
-}
-
-fn vc_find_from(hay: String, from: u64, needle: String) -> i64 {
-    let hlen: u64 = hay.len();
-    let nlen: u64 = needle.len();
-    if nlen == 0 || nlen > hlen { return -1; }
-    let mut i: u64 = from;
-    while i + nlen <= hlen {
-        let mut j: u64 = 0;
-        let mut matched: bool = true;
-        while j < nlen && matched {
-            if hay.byte_at(i + j) != needle.byte_at(j) {
-                matched = false;
-            }
-            j = j + 1;
-        }
-        if matched { return i as i64; }
-        i = i + 1;
-    }
-    -1
+    str_trim(s.substring(0, i))
 }
 
 // VC_ANS_SAT / UNSAT / UNKNOWN from the first stdout line; VC_ANS_ERROR for
@@ -95,7 +59,7 @@ fn vc_digit(b: i64, base: u64) -> i64 {
 fn vc_value_end_ok(out: String, i: u64) -> bool {
     if i >= out.len() { return true; }
     let b: i64 = out.byte_at(i);
-    vc_is_ws(b) || b == 41
+    is_ws(b) || b == 41
 }
 
 fn vc_parse_radix_value(out: String, start: u64, base: u64, want_digits: u64) -> VcParsed {
@@ -150,7 +114,7 @@ fn vc_parse_bv_app(out: String, start: u64) -> VcParsed {
 fn vc_parse_value_at(out: String, pos: u64) -> VcParsed {
     let n: u64 = out.len();
     let mut i: u64 = pos;
-    while i < n && vc_is_ws(out.byte_at(i)) {
+    while i < n && is_ws(out.byte_at(i)) {
         i = i + 1;
     }
     if i + 2 < n && out.byte_at(i) == 35 {
@@ -175,7 +139,7 @@ fn vc_parse_model(out: String, names: Vec<String>) -> VcModel {
         let key: String = String::from("(");
         key.push_str(names[k]);
         key.push_str(String::from(" "));
-        let at: i64 = vc_find_from(out, 0, key);
+        let at: i64 = str_find_from(out, 0, key);
         if at < 0 {
             ok = 0;
             values.push(0);
@@ -195,17 +159,16 @@ fn vc_parse_model(out: String, names: Vec<String>) -> VcModel {
 
 struct VcSolverAnswer {
     verdict: i64,
-    names: Vec<String>,
     values: Vec<i64>,
     raw: String,
 }
 
-fn vc_answer(verdict: i64, names: Vec<String>, values: Vec<i64>, raw: String) -> VcSolverAnswer {
-    VcSolverAnswer { verdict: verdict, names: names, values: values, raw: raw }
+fn vc_answer(verdict: i64, values: Vec<i64>, raw: String) -> VcSolverAnswer {
+    VcSolverAnswer { verdict: verdict, values: values, raw: raw }
 }
 
 fn vc_answer_plain(verdict: i64, raw: String) -> VcSolverAnswer {
-    vc_answer(verdict, Vec::new(), Vec::new(), raw)
+    vc_answer(verdict, Vec::new(), raw)
 }
 
 // Path of the `bitwuzla` executable on $PATH, or "".
@@ -225,7 +188,7 @@ fn vc_classify_run(exit_code: i64, stdout: String, stderr: String, names: Vec<St
     if verdict != VC_ANS_SAT() { return vc_answer_plain(verdict, raw); }
     let model: VcModel = vc_parse_model(stdout, names);
     if model.ok == 0 { return vc_answer_plain(VC_ANS_ERROR(), raw); }
-    vc_answer(VC_ANS_SAT(), names, model.values, raw)
+    vc_answer(VC_ANS_SAT(), model.values, raw)
 }
 
 fn vc_solver_args(file: String) -> Vec<String> {

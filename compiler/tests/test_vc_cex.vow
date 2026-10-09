@@ -34,13 +34,10 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
 }
 
 fn answer(verdict: i64, a: i64, b: i64) -> VcSolverAnswer {
-    let names: Vec<String> = Vec::new();
-    names.push(String::from("p0"));
-    names.push(String::from("p1"));
     let values: Vec<i64> = Vec::new();
     values.push(a);
     values.push(b);
-    VcSolverAnswer { verdict: verdict, names: names, values: values, raw: String::from("raw text") }
+    VcSolverAnswer { verdict: verdict, values: values, raw: String::from("raw text") }
 }
 
 fn fn_xy() -> IrFunction {
