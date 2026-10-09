@@ -3155,7 +3155,7 @@ vowc mutants run   [--root DIR] [--shard X/Y]
                    [--tier1-cmd 'cmd'] [--tier15-cmd 'cmd'] [--tier2-cmd 'cmd']
                    [--tier1-timeout-secs N] [--tier15-timeout-secs N] [--tier2-timeout-secs N]
                    [--tier2-budget-secs N]
-                   [--workdir DIR] [--output-dir DIR] [--force-unlock]
+                   [--workdir DIR] [--output-dir DIR] [--force-unlock] [--skip-baseline]
 ```
 
 | Flag | Default | Notes |
@@ -3172,6 +3172,7 @@ vowc mutants run   [--root DIR] [--shard X/Y]
 | `--workdir` | `/tmp/vow-mutants-<ms>` | Path of the throwaway `git worktree` used for all mutations. |
 | `--output-dir` | `mutants.out` | Directory for `mutants.json`, `outcomes.json`, status text files, `diff/`, `logs/`. |
 | `--force-unlock` | off | Remove a stale `output_dir/.lock` before starting. |
+| `--skip-baseline` | off | Skip the baseline run of Tier 1 and Tier 1.5 on the unmutated worktree. Without it, a failing baseline aborts the run with exit 1 — see `docs/mutants.md`. |
 
 Output schemas: see `docs/spec/schemas/mutants-result.schema.json`.
 
@@ -9056,7 +9057,7 @@ vowc mutants run   [--root DIR] [--shard X/Y]
                    [--tier1-cmd 'cmd'] [--tier15-cmd 'cmd'] [--tier2-cmd 'cmd']
                    [--tier1-timeout-secs N] [--tier15-timeout-secs N] [--tier2-timeout-secs N]
                    [--tier2-budget-secs N]
-                   [--workdir DIR] [--output-dir DIR] [--force-unlock]
+                   [--workdir DIR] [--output-dir DIR] [--force-unlock] [--skip-baseline]
 ```
 
 | Flag | Default | Notes |
@@ -9073,6 +9074,7 @@ vowc mutants run   [--root DIR] [--shard X/Y]
 | `--workdir` | `/tmp/vow-mutants-<ms>` | Path of the throwaway `git worktree` used for all mutations. |
 | `--output-dir` | `mutants.out` | Directory for `mutants.json`, `outcomes.json`, status text files, `diff/`, `logs/`. |
 | `--force-unlock` | off | Remove a stale `output_dir/.lock` before starting. |
+| `--skip-baseline` | off | Skip the baseline run of Tier 1 and Tier 1.5 on the unmutated worktree. Without it, a failing baseline aborts the run with exit 1 — see `docs/mutants.md`. |
 
 Output schemas: see `docs/spec/schemas/mutants-result.schema.json`.
 
