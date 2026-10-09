@@ -6,7 +6,7 @@ mod violation;
 
 use profile::render_profile_report;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::{CStr, c_char};
 use std::io::Write as _;
 use std::ptr::NonNull;
@@ -831,6 +831,7 @@ fn memory_note_alloc_request() {
 unsafe fn alloc_chunk(total: usize, oversized: bool) -> *mut u8 {
     let base = unsafe { libc::malloc(total) } as *mut u8;
     if !base.is_null() {
+        sanitize_on_chunk_alloc(base, total);
         unsafe { set_next_chunk(base, core::ptr::null_mut()) };
         let flag = if oversized { CHUNK_OVERSIZED_FLAG } else { 0 };
         unsafe { set_chunk_total_word(base, total | flag) };
@@ -1010,6 +1011,7 @@ pub unsafe extern "C" fn __vow_arena_close(a: *mut VowArena) {
     let mut chunk = arena.first_chunk;
     while !chunk.is_null() {
         let next = unsafe { next_chunk(chunk) };
+        sanitize_on_chunk_free(chunk);
         unsafe { libc::free(chunk as *mut libc::c_void) };
         chunk = next;
     }
@@ -1669,6 +1671,7 @@ pub unsafe extern "C" fn __vow_vec_push(
     elem_size: usize,
     elem_align: usize,
 ) {
+    sanitize_on_push(vec as usize);
     unsafe {
         with_growth_arena(vec, |arena| {
             __vow_vec_push_in_arena(arena, vec, elem, elem_size, elem_align)
@@ -1723,6 +1726,7 @@ pub unsafe extern "C" fn __vow_vec_push_val_in_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
+    sanitize_on_push(vec as usize);
     unsafe { with_growth_arena(vec, |arena| __vow_vec_push_val_in_arena(arena, vec, value)) }
 }
 
@@ -5300,19 +5304,21 @@ struct ShadowVec {
     freed: bool,
 }
 
-static SHADOW_TABLE: Mutex<Option<HashMap<usize, ShadowVec>>> = Mutex::new(None);
+// Ordered so a freed or reallocated arena chunk can be matched against the
+// Vec descriptors inside its address range.
+static SHADOW_TABLE: Mutex<Option<BTreeMap<usize, ShadowVec>>> = Mutex::new(None);
 
 fn shadow_table_get_or_init(
-    table: &mut Option<HashMap<usize, ShadowVec>>,
-) -> &mut HashMap<usize, ShadowVec> {
-    table.get_or_insert_with(HashMap::new)
+    table: &mut Option<BTreeMap<usize, ShadowVec>>,
+) -> &mut BTreeMap<usize, ShadowVec> {
+    table.get_or_insert_with(BTreeMap::new)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_sanitize_init() {
     SANITIZE_ENABLED.store(true, Ordering::SeqCst);
     let mut table = SHADOW_TABLE.lock().unwrap();
-    *table = Some(HashMap::new());
+    *table = Some(BTreeMap::new());
 }
 
 fn sanitize_is_enabled() -> bool {
@@ -5332,6 +5338,36 @@ fn sanitize_on_vec_new(vec_addr: usize) {
     let mut table = SHADOW_TABLE.lock().unwrap();
     let map = shadow_table_get_or_init(&mut table);
     map.insert(vec_addr, ShadowVec { freed: false });
+}
+
+// Called with a chunk that is about to be returned to libc: every tracked
+// Vec descriptor inside it is dangling from here on.
+fn sanitize_on_chunk_free(base: *const u8) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    let start = base as usize;
+    let end = start + unsafe { chunk_total(base) };
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    for (_, shadow) in shadow_table_get_or_init(&mut table).range_mut(start..end) {
+        shadow.freed = true;
+    }
+}
+
+// Called with a freshly malloc'd chunk: libc may have recycled the address of
+// a freed chunk, so tombstones inside the new range no longer describe
+// anything and must not flag the new occupant.
+fn sanitize_on_chunk_alloc(base: *const u8, total: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    let start = base as usize;
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    let map = shadow_table_get_or_init(&mut table);
+    let stale: Vec<usize> = map.range(start..start + total).map(|(k, _)| *k).collect();
+    for addr in stale {
+        map.remove(&addr);
+    }
 }
 
 fn sanitize_check_live(vec_addr: usize, op: &str) {
@@ -8837,6 +8873,77 @@ mod tests {
             unsafe { __vow_arena_close(ap) };
             std::process::exit(if sum == 11 && len == 0 { 0 } else { 45 });
         }
+        if let Some(hook) = op.strip_prefix("sanitize_uaf_") {
+            __vow_sanitize_init();
+            let mut a = empty_arena_header();
+            let ap: *mut VowArena = &mut a;
+            unsafe { __vow_arena_open(ap) };
+            let v = unsafe { __vow_vec_new_in_arena(ap, 8, 8) };
+            unsafe { __vow_vec_push_val_in_arena(ap, v, 1) };
+            unsafe { __vow_arena_close(ap) };
+            match hook {
+                "push" => unsafe { __vow_vec_push_val(v, 2) },
+                "set" => unsafe { __vow_vec_set_val(v, 0, 3) },
+                "pop" => unsafe { __vow_vec_pop(v) },
+                "clear" => unsafe { __vow_vec_clear(v) },
+                "truncate" => unsafe { __vow_vec_truncate(v, 0) },
+                "len" => drop(unsafe { __vow_vec_len(v) }),
+                "get" => drop(unsafe { __vow_vec_get_val(v, 0) }),
+                other => panic!("unknown sanitize_uaf hook {other}"),
+            }
+            eprintln!("rodata_trap_worker: use after arena close did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "sanitize_sibling_arena_live" {
+            __vow_sanitize_init();
+            let mut a = empty_arena_header();
+            let mut b = empty_arena_header();
+            let (ap, bp): (*mut VowArena, *mut VowArena) = (&mut a, &mut b);
+            unsafe { __vow_arena_open(ap) };
+            unsafe { __vow_arena_open(bp) };
+            let va = unsafe { __vow_vec_new_in_arena(ap, 8, 8) };
+            let vb = unsafe { __vow_vec_new_in_arena(bp, 8, 8) };
+            unsafe { __vow_vec_push_val_in_arena(ap, va, 1) };
+            unsafe { __vow_vec_push_val_in_arena(bp, vb, 7) };
+            unsafe { __vow_arena_close(ap) };
+            unsafe { __vow_vec_push_val(vb, 8) };
+            let sum = unsafe { __vow_vec_get_val(vb, 0) + __vow_vec_get_val(vb, 1) };
+            unsafe { __vow_arena_close(bp) };
+            std::process::exit(if sum == 15 { 0 } else { 46 });
+        }
+        if op == "sanitize_recycled_chunk" {
+            __vow_sanitize_init();
+            // A tombstone left at an address that libc later hands out as a
+            // fresh chunk must be purged, so the new occupant is not flagged.
+            let vec = VowVec {
+                ptr: std::ptr::dangling_mut(),
+                len: 4,
+                cap: 4,
+            };
+            let vec_addr = &raw const vec as usize;
+            {
+                let mut table = SHADOW_TABLE.lock().unwrap();
+                shadow_table_get_or_init(&mut table).insert(vec_addr, ShadowVec { freed: true });
+            }
+            sanitize_on_chunk_alloc(vec_addr as *const u8, core::mem::size_of::<VowVec>());
+            if unsafe { __vow_vec_len(vec_addr as *const u8) } != 4 {
+                std::process::exit(47);
+            }
+            // The same cycle through real arenas: close, reopen, rebuild.
+            let mut a = empty_arena_header();
+            let ap: *mut VowArena = &mut a;
+            for round in 0..4 {
+                unsafe { __vow_arena_open(ap) };
+                let v = unsafe { __vow_vec_new_in_arena(ap, 8, 8) };
+                unsafe { __vow_vec_push_val_in_arena(ap, v, round) };
+                unsafe { __vow_vec_push_val(v, round + 1) };
+                if unsafe { __vow_vec_get_val(v, 1) } != round + 1 {
+                    std::process::exit(48);
+                }
+                unsafe { __vow_arena_close(ap) };
+            }
+            std::process::exit(0);
+        }
         if op == "option_cells_shadow_untracked" {
             __vow_sanitize_init();
             let mut a = empty_arena_header();
@@ -9102,6 +9209,57 @@ mod tests {
 
     fn assert_runtime_invariant_null_arena(op: &str, expected_op_in_json: &str) {
         assert_runtime_invariant(op, expected_op_in_json, "null arena");
+    }
+
+    /// A Vec's descriptor and backing both live in its owner arena, so any
+    /// operation after `__vow_arena_close` is a use-after-free that the
+    /// sanitizer must report with the operation that touched it.
+    #[test]
+    fn sanitize_reports_use_after_arena_close_per_operation() {
+        for (hook, expected_op) in [
+            ("push", "push"),
+            ("set", "set"),
+            ("pop", "pop"),
+            ("clear", "clear"),
+            ("truncate", "truncate"),
+            ("len", "read"),
+            ("get", "read"),
+        ] {
+            let (out, stderr) = spawn_trap_worker(&format!("sanitize_uaf_{hook}"));
+            assert_eq!(
+                out.status.code(),
+                Some(VOW_RUNTIME_ABORT_EXIT),
+                "{hook} after arena close must abort; stderr:\n{stderr}"
+            );
+            assert!(
+                stderr.contains(r#""error":"UseAfterFree""#),
+                "{hook}: stderr missing UseAfterFree:\n{stderr}"
+            );
+            assert!(
+                stderr.contains(&format!(r#""op":"{expected_op}""#)),
+                "{hook}: stderr missing op={expected_op}:\n{stderr}"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_arena_close_leaves_sibling_arena_vecs_live() {
+        let (out, stderr) = spawn_trap_worker("sanitize_sibling_arena_live");
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "closing one arena must not poison a Vec in another; stderr:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn sanitize_recycled_chunk_address_is_not_flagged() {
+        let (out, stderr) = spawn_trap_worker("sanitize_recycled_chunk");
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "a recycled chunk address must not report UseAfterFree; stderr:\n{stderr}"
+        );
     }
 
     #[test]
