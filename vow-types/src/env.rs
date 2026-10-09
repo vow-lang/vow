@@ -270,6 +270,12 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
             Ty::I64,
             &[Effect::IO],
         ),
+        def(
+            "process_start_capped",
+            vec![Ty::Str, vec_ty(Ty::Str), Ty::I64],
+            Ty::I64,
+            &[Effect::IO],
+        ),
         def("process_wait", vec![Ty::I64], Ty::I64, &[Effect::IO]),
         def(
             "process_wait_timeout",
@@ -1035,6 +1041,7 @@ process_read_line(I64, I64) -> Str [IO]
 process_read_status(I64) -> I64 [IO]
 process_run(Str, Applied(Struct("Vec"), [Str])) -> I64 [IO]
 process_start(Str, Applied(Struct("Vec"), [Str])) -> I64 [IO]
+process_start_capped(Str, Applied(Struct("Vec"), [Str]), I64) -> I64 [IO]
 process_start_piped(Str, Applied(Struct("Vec"), [Str])) -> I64 [IO]
 process_stderr_for(I64) -> Str [IO]
 process_stdout_for(I64) -> Str [IO]

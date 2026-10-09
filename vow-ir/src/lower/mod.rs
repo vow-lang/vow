@@ -59,6 +59,7 @@ fn catalogue_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "process_get_stdout" => Some(("__vow_process_get_stdout", Ty::Ptr)),
         "process_get_stderr" => Some(("__vow_process_get_stderr", Ty::Ptr)),
         "process_start" => Some(("__vow_process_start", Ty::I64)),
+        "process_start_capped" => Some(("__vow_process_start_capped", Ty::I64)),
         "process_wait" => Some(("__vow_process_wait", Ty::I64)),
         "process_wait_timeout" => Some(("__vow_process_wait_timeout", Ty::I64)),
         "process_poll_wait" => Some(("__vow_process_poll_wait", Ty::I64)),
@@ -6445,6 +6446,11 @@ type PairView = PairAlias;
             ("process_get_stdout", "__vow_process_get_stdout", Ty::Ptr),
             ("process_get_stderr", "__vow_process_get_stderr", Ty::Ptr),
             ("process_start", "__vow_process_start", Ty::I64),
+            (
+                "process_start_capped",
+                "__vow_process_start_capped",
+                Ty::I64,
+            ),
             ("process_wait", "__vow_process_wait", Ty::I64),
             (
                 "process_wait_timeout",

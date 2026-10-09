@@ -255,6 +255,15 @@
       "verifier_model": "unmodeled"
     },
     {
+      "name": "process_start_capped",
+      "runtime_symbol": "__vow_process_start_capped",
+      "params": ["ptr", "ptr", "i64"],
+      "return": "i64",
+      "doc_signature": "fn(cmd: String, args: Vec<String>, mem_kb: i64) -> i64",
+      "effects": "[io]",
+      "verifier_model": "unmodeled"
+    },
+    {
       "name": "process_wait",
       "runtime_symbol": "__vow_process_wait",
       "params": ["i64"],

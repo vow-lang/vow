@@ -32,6 +32,13 @@ struct FileReadState {
 
 static PROCESS_MAP: Mutex<Option<HashMap<i64, ProcessState>>> = Mutex::new(None);
 static NEXT_PROCESS_HANDLE: AtomicI64 = AtomicI64::new(1);
+// Handles started by `__vow_process_start_capped`: each leads its own process
+// group, which is killed as a whole, and reports signal deaths as
+// `PROC_SIGNAL_BASE - signal` instead of the -1 shared with spawn errors.
+static GROUPED_PROCESSES: Mutex<std::collections::BTreeSet<i64>> =
+    Mutex::new(std::collections::BTreeSet::new());
+/// Exit status of a grouped child killed by signal `n` is `PROC_SIGNAL_BASE - n`.
+pub const PROC_SIGNAL_BASE: i64 = -1000;
 // Persistent stdout/stderr drain threads for handles being polled via
 // __vow_process_poll_wait, so a chatty child (ESBMC) cannot deadlock on a full
 // pipe between polls. Keyed by handle; joined when the child completes or is
@@ -4359,6 +4366,54 @@ fn decode_process_command(cmd_ptr: i64, args_ptr: i64) -> Option<(String, Vec<St
     Some((cmd, args))
 }
 
+fn is_grouped(handle: i64) -> bool {
+    GROUPED_PROCESSES.lock().unwrap().contains(&handle)
+}
+
+/// Exit status reported to Vow: the exit code, or for a grouped child killed
+/// by a signal `PROC_SIGNAL_BASE - signal`; -1 otherwise.
+fn process_status_code(handle: i64, status: std::process::ExitStatus) -> i64 {
+    if let Some(code) = status.code() {
+        return code as i64;
+    }
+    #[cfg(unix)]
+    if is_grouped(handle) {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(sig) = status.signal() {
+            return PROC_SIGNAL_BASE - sig as i64;
+        }
+    }
+    -1
+}
+
+/// SIGKILLs the whole process group led by a grouped child; plain
+/// `Child::kill` for any other handle. Never fails the caller.
+fn kill_process_tree(handle: i64, child: &mut std::process::Child) {
+    #[cfg(unix)]
+    if is_grouped(handle) {
+        unsafe {
+            libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+}
+
+/// After a grouped leader exits, SIGKILLs any member it left behind.
+fn sweep_group(handle: i64, leader_pid: u32) {
+    #[cfg(unix)]
+    if is_grouped(handle) {
+        unsafe {
+            libc::killpg(leader_pid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (handle, leader_pid);
+}
+
+fn forget_grouped(handle: i64) {
+    GROUPED_PROCESSES.lock().unwrap().remove(&handle);
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_process_start(cmd_ptr: i64, args_ptr: i64) -> i64 {
     let Some((cmd_str, args)) = decode_process_command(cmd_ptr, args_ptr) else {
@@ -4372,11 +4427,71 @@ pub unsafe extern "C" fn __vow_process_start(cmd_ptr: i64, args_ptr: i64) -> i64
         .stderr(Stdio::piped())
         .spawn()
     {
+        Ok(child) => register_child(child),
+        Err(_) => -1,
+    }
+}
+
+/// Sets the address-space limit of the calling process (runs in the child
+/// between fork and exec, so it only calls async-signal-safe functions).
+#[cfg(target_os = "linux")]
+fn limit_address_space(soft: libc::rlim_t, hard: libc::rlim_t) -> std::io::Result<()> {
+    let lim = libc::rlimit {
+        rlim_cur: soft,
+        rlim_max: hard,
+    };
+    if unsafe { libc::setrlimit(libc::RLIMIT_AS, &lim) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Files a started child in the process table and returns its handle.
+fn register_child(child: std::process::Child) -> i64 {
+    let handle = NEXT_PROCESS_HANDLE.fetch_add(1, Ordering::Relaxed);
+    let mut guard = PROCESS_MAP.lock().unwrap();
+    process_map_init(&mut guard).insert(handle, ProcessState::Running(child));
+    handle
+}
+
+/// Like `__vow_process_start`, but the child leads a new process group and,
+/// on Linux, runs with an address-space limit of `mem_kb` KiB (`<= 0` means
+/// none). Timeouts and `__vow_process_kill` SIGKILL the whole group, and a
+/// signal death is reported as `PROC_SIGNAL_BASE - signal`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_process_start_capped(
+    cmd_ptr: i64,
+    args_ptr: i64,
+    mem_kb: i64,
+) -> i64 {
+    let Some((cmd_str, args)) = decode_process_command(cmd_ptr, args_ptr) else {
+        return -1;
+    };
+    spawn_capped(&cmd_str, &args, mem_kb)
+}
+
+fn spawn_capped(cmd_str: &str, args: &[String], mem_kb: i64) -> i64 {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(cmd_str);
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    #[cfg(target_os = "linux")]
+    if mem_kb > 0 {
+        let bytes = (mem_kb as u64).saturating_mul(1024) as libc::rlim_t;
+        unsafe {
+            command.pre_exec(move || limit_address_space(bytes, bytes));
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = mem_kb;
+    match command.spawn() {
         Ok(child) => {
-            let handle = NEXT_PROCESS_HANDLE.fetch_add(1, Ordering::Relaxed);
-            let mut guard = PROCESS_MAP.lock().unwrap();
-            let map = process_map_init(&mut guard);
-            map.insert(handle, ProcessState::Running(child));
+            let handle = register_child(child);
+            GROUPED_PROCESSES.lock().unwrap().insert(handle);
             handle
         }
         Err(_) => -1,
@@ -4428,20 +4543,24 @@ pub extern "C" fn __vow_process_wait(handle: i64) -> i64 {
         None => return -1,
     };
     match state {
-        ProcessState::Running(child) => match wait_for_output(handle, child) {
-            Ok(output) => {
-                let exit_code = output.status.code().unwrap_or(-1) as i64;
-                map.insert(
-                    handle,
-                    ProcessState::Completed {
-                        stdout: output.stdout,
-                        stderr: output.stderr,
-                    },
-                );
-                exit_code
+        ProcessState::Running(child) => {
+            let leader_pid = child.id();
+            match wait_for_output(handle, child) {
+                Ok(output) => {
+                    sweep_group(handle, leader_pid);
+                    let exit_code = process_status_code(handle, output.status);
+                    map.insert(
+                        handle,
+                        ProcessState::Completed {
+                            stdout: output.stdout,
+                            stderr: output.stderr,
+                        },
+                    );
+                    exit_code
+                }
+                Err(_) => -1,
             }
-            Err(_) => -1,
-        },
+        }
         ProcessState::Completed { stdout, stderr } => {
             map.insert(handle, ProcessState::Completed { stdout, stderr });
             0
@@ -4521,7 +4640,7 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
                 }
                 match child.try_wait() {
                     Ok(Some(status)) => {
-                        break Ok(status.code().unwrap_or(-1) as i64);
+                        break Ok(process_status_code(handle, status));
                     }
                     Ok(None) => {
                         if start.elapsed() >= timeout {
@@ -4541,6 +4660,7 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
 
             match result {
                 Ok(exit_code) => {
+                    sweep_group(handle, child.id());
                     let joined = (
                         stdout_thread.join().unwrap_or_default(),
                         stderr_thread.join().unwrap_or_default(),
@@ -4552,7 +4672,7 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
                 Err(code) => {
                     // On timeout or error, kill the child so pipes close,
                     // then join reader threads to reclaim their buffers.
-                    let _ = child.kill();
+                    kill_process_tree(handle, &mut child);
                     let _ = child.wait();
                     let joined = (
                         stdout_thread.join().unwrap_or_default(),
@@ -4620,7 +4740,7 @@ pub extern "C" fn __vow_process_poll_wait(handle: i64, ms: i64) -> i64 {
             p.pump();
         }
         match child.try_wait() {
-            Ok(Some(status)) => break Ok(status.code().unwrap_or(-1) as i64),
+            Ok(Some(status)) => break Ok(process_status_code(handle, status)),
             Ok(None) => {
                 if start.elapsed() >= budget {
                     break Err(()); // still running
@@ -4635,6 +4755,7 @@ pub extern "C" fn __vow_process_poll_wait(handle: i64, ms: i64) -> i64 {
     let map = process_map_init(&mut guard);
     match outcome {
         Ok(exit_code) => {
+            sweep_group(handle, child.id());
             let readers = POLL_READERS
                 .lock()
                 .unwrap()
@@ -4668,7 +4789,7 @@ pub extern "C" fn __vow_process_kill(handle: i64) -> i64 {
         ProcessState::Running(mut child) => {
             // Kill (or reap if already exited), then close pipes by dropping the
             // child so any poll-drain threads can finish.
-            let _ = child.kill();
+            kill_process_tree(handle, &mut child);
             let _ = child.wait();
             0
         }
@@ -4687,6 +4808,7 @@ pub extern "C" fn __vow_process_kill(handle: i64) -> i64 {
         let _ = se.join();
     }
     let _ = piped::release(handle);
+    forget_grouped(handle);
     rc
 }
 
@@ -5998,6 +6120,122 @@ mod tests {
             }
         }
         assert_eq!(code, 0, "sleep exits 0 — poll_wait did not kill it");
+    }
+
+    #[test]
+    fn capped_timeout_kills_the_whole_group() {
+        let dir = std::env::temp_dir().join(format!("vow_capped_grp_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pidfile = dir.join("child.pid");
+        let script = format!("sleep 30 & echo $! > {}; wait", pidfile.display());
+        let handle = spawn_capped("sh", &["-c".to_string(), script], 0);
+        assert!(handle > 0);
+        for _ in 0..200 {
+            if std::fs::read_to_string(&pidfile).is_ok_and(|s| !s.trim().is_empty()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let grandchild: i32 = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            __vow_process_wait_timeout(handle, 100),
+            -2,
+            "deadline expires"
+        );
+        let mut gone = false;
+        for _ in 0..200 {
+            if unsafe { libc::kill(grandchild, 0) } != 0 {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(gone, "grandchild {grandchild} survived the group kill");
+        __vow_process_kill(handle);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn capped_signal_death_is_distinct_from_spawn_error() {
+        let handle = spawn_capped("sh", &["-c".to_string(), "kill -9 $$".to_string()], 0);
+        assert_eq!(
+            __vow_process_wait_timeout(handle, 5000),
+            PROC_SIGNAL_BASE - 9
+        );
+        __vow_process_kill(handle);
+        assert_eq!(spawn_capped("/nonexistent/vow-no-such-binary", &[], 0), -1);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn capped_address_space_limit_is_applied_to_the_child() {
+        let handle = spawn_capped("sh", &["-c".to_string(), "ulimit -v".to_string()], 65_536);
+        assert_eq!(__vow_process_wait_timeout(handle, 5000), 0);
+        assert_eq!(process_stream_bytes(handle, false), b"65536\n");
+        __vow_process_kill(handle);
+        let free = spawn_capped("sh", &["-c".to_string(), "ulimit -v".to_string()], 0);
+        assert_eq!(__vow_process_wait_timeout(free, 5000), 0);
+        assert_eq!(process_stream_bytes(free, false), b"unlimited\n");
+        __vow_process_kill(free);
+    }
+
+    #[test]
+    fn capped_normal_exit_keeps_its_code_and_output() {
+        let handle = spawn_capped(
+            "sh",
+            &["-c".to_string(), "printf hi; exit 3".to_string()],
+            0,
+        );
+        assert_eq!(__vow_process_wait_timeout(handle, 5000), 3);
+        assert_eq!(process_stream_bytes(handle, false), b"hi");
+        __vow_process_kill(handle);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn limit_address_space_applies_and_rejects_inverted_limits() {
+        let mut cur: libc::rlimit = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_AS, &mut cur) }, 0);
+        assert!(limit_address_space(cur.rlim_cur, cur.rlim_max).is_ok());
+        assert!(limit_address_space(2, 1).is_err());
+    }
+
+    #[test]
+    fn plain_child_killed_by_signal_reports_minus_one() {
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("kill -9 $$")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn sh");
+        let handle = 999_003;
+        {
+            let mut g = PROCESS_MAP.lock().unwrap();
+            process_map_init(&mut g).insert(handle, ProcessState::Running(child));
+        }
+        assert_eq!(__vow_process_wait_timeout(handle, 5000), -1);
+        __vow_process_kill(handle);
+    }
+
+    #[test]
+    fn process_start_capped_extern_decodes_its_arguments() {
+        unsafe fn vow_str(s: &str) -> i64 {
+            unsafe { __vow_string_new(s.as_ptr() as *const c_char, s.len()) as i64 }
+        }
+        unsafe {
+            let args = __vow_vec_new(8, 8);
+            __vow_vec_push_val(args, vow_str("-c"));
+            __vow_vec_push_val(args, vow_str("exit 7"));
+            let handle = __vow_process_start_capped(vow_str("sh"), args as i64, 0);
+            assert!(handle > 0);
+            assert_eq!(__vow_process_wait_timeout(handle, 5000), 7);
+            __vow_process_kill(handle);
+        }
     }
 
     #[test]

@@ -124,6 +124,9 @@ fn check_classify_run() -> i64 {
     if vc_classify_run(0, String::from("unsat\n"), String::from("[error] boom\n"), none, none_w()).verdict != VC_ANS_ERROR() { return 87; }
     if vc_classify_run(0, String::from("sat\n"), String::from(""), ns, w1(64)).verdict != VC_ANS_ERROR() { return 88; }
     if vc_classify_run(0, String::from("gibberish"), String::from(""), none, none_w()).verdict != VC_ANS_ERROR() { return 89; }
+    if vc_classify_run(1, String::from(""), String::from("(error) Out of memory\n"), none, none_w()).verdict != VC_ANS_MEMORY() { return 90; }
+    if vc_classify_run(-1, String::from(""), String::from("terminate: std::bad_alloc\n"), none, none_w()).verdict != VC_ANS_MEMORY() { return 91; }
+    if vc_classify_run(0, String::from("unsat\n"), String::from("Out of memory\n"), none, none_w()).verdict != VC_ANS_UNSAT() { return 92; }
     0
 }
 

@@ -25,8 +25,9 @@ cat > "$FAKE_DIR/bitwuzla" <<'SHIM'
 #!/usr/bin/env bash
 set -eu
 file="${!#}"
-n=$(find "$FAKE_BW_DIR" -name 'q.*.smt2' | wc -l)
-cp "$file" "$FAKE_BW_DIR/q.$((n + 1)).smt2"
+n=1
+until mkdir "$FAKE_BW_DIR/.slot.$n" 2>/dev/null; do n=$((n + 1)); done
+cp "$file" "$FAKE_BW_DIR/q.$n.smt2"
 echo "$file" >> "$FAKE_BW_DIR/paths"
 echo "$*" >> "$FAKE_BW_DIR/args"
 case "$FAKE_BW_MODE" in
@@ -36,6 +37,23 @@ case "$FAKE_BW_MODE" in
     exit1) echo "[error] boom" >&2; exit 1 ;;
     hang) echo $$ > "$FAKE_BW_DIR/pid"; exec sleep 29 ;;
     sat_empty) printf 'sat\n(\n)\n' ;;
+    oom_msg) echo "(error) Out of memory" >&2; exit 1 ;;
+    kill_worker) echo $$ >> "$FAKE_BW_DIR/pids"; kill -9 "$PPID"; sleep 5 ;;
+    crash_worker) kill -6 "$PPID"; sleep 5 ;;
+    mixed)
+        echo $$ >> "$FAKE_BW_DIR/pids"
+        h=$(cksum < "$file" | cut -d' ' -f1)
+        sleep "0.$((h % 4))"
+        if [ $((h % 5)) -eq 0 ]; then echo unknown; else echo unsat; fi
+        ;;
+    hang_tree)
+        echo "$PPID" >> "$FAKE_BW_DIR/worker_pids"
+        echo $$ >> "$FAKE_BW_DIR/pids"
+        sleep 29 &
+        echo $! >> "$FAKE_BW_DIR/grandchild_pids"
+        wait
+        ;;
+    slow_unsat) echo $$ >> "$FAKE_BW_DIR/pids"; sleep 0.3; echo unsat ;;
     sat|sat_zero)
         val=7
         [ "$FAKE_BW_MODE" = sat_zero ] && val=0
@@ -245,6 +263,111 @@ else
     fail "fake solver did not record its pid"
 fi
 no_leftovers "hang"
+
+# a worker killed from outside (the kernel OOM killer) or a solver out of memory
+# is `unknown` with a memory reason, never a verdict and never a compiler crash.
+for mode in kill_worker oom_msg; do
+    run_native "$mode" "$ONE_CLAIM"
+    expect "$mode verify_status" "$(field "$RUN_OUT" verify_status)" "unknown"
+    expect "$mode status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+    expect "$mode exit" "$RUN_RC" "1"
+    case "$(field "$RUN_OUT" verify_message)" in
+        *"memory limit exceeded"*) ;;
+        *) fail "$mode lacks a memory reason: $(field "$RUN_OUT" verify_message)" ;;
+    esac
+    no_leftovers "$mode"
+done
+
+# any other abnormal worker death is `panicked`.
+run_native crash_worker "$ONE_CLAIM"
+expect "crash verify_status" "$(field "$RUN_OUT" verify_status)" "panicked"
+expect "crash exit" "$RUN_RC" "1"
+
+# timeout kills the worker's whole process group: the worker, every solver and
+# every process a solver started (which only a group kill reaches) are gone.
+MANY="$TMP_ROOT/many.vow"
+python3 - "$MANY" <<'PY'
+import sys
+out = ["module Many", ""]
+for i in range(6):
+    out += [f"fn keep{i}(x: i64) -> i64 vow {{", "  ensures: result == x", "} {", f"  x + {i} - {i}", "}", ""]
+out += ["fn main() -> i32 [io] {", "  print_i64(keep0(1));", "  0", "}", ""]
+open(sys.argv[1], "w").write("\n".join(out))
+PY
+all_dead() {
+    local file="$1" what="$2" p
+    [ -f "$file" ] || { fail "$what: no pids recorded"; return; }
+    while read -r p; do
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            case "$(ps -p "$p" -o stat= 2>/dev/null | tr -d ' ')" in
+                ""|Z*) break ;;
+            esac
+            sleep 0.1
+        done
+        case "$(ps -p "$p" -o stat= 2>/dev/null | tr -d ' ')" in
+            ""|Z*) ;;
+            *) fail "$what $p survived the timeout"; kill -9 "$p" 2>/dev/null || true ;;
+        esac
+    done < "$file"
+}
+for jobs in 1 4; do
+    run_native hang_tree "$MANY" --timeout 1 --verify-jobs "$jobs"
+    expect "hang_tree jobs=$jobs verify_status" "$(field "$RUN_OUT" verify_status)" "timeout"
+    all_dead "$BW_DIR/worker_pids" "worker (jobs=$jobs)"
+    all_dead "$BW_DIR/pids" "solver (jobs=$jobs)"
+    all_dead "$BW_DIR/grandchild_pids" "solver child (jobs=$jobs)"
+    no_leftovers "hang_tree jobs=$jobs"
+done
+
+# --verify-jobs N gives the same bytes as --verify-jobs 1, however the workers
+# interleave, and never leaves a solver behind.
+combined() {
+    PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE="$1" FAKE_BW_DIR="$BW_DIR" \
+        "$VOWC_BIN" verify --no-cache --backend native --verify-jobs "$2" "$MANY" 2>&1 || true
+}
+BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
+ref=$(combined mixed 1)
+for round in 1 2 3; do
+    got=$(combined mixed 8)
+    if [ "$got" != "$ref" ]; then
+        fail "--verify-jobs 8 output differs from --verify-jobs 1 (round $round)"
+        diff <(echo "$ref") <(echo "$got") >&2 || true
+    fi
+done
+ref_ok=$(combined slow_unsat 1)
+got_ok=$(combined slow_unsat 8)
+if [ "$ref_ok" != "$got_ok" ]; then fail "all-proven output differs between --verify-jobs 1 and 8"; fi
+no_leftovers "determinism"
+if [ -f "$BW_DIR/pids" ]; then all_dead "$BW_DIR/pids" "solver (determinism)"; fi
+
+# real Bitwuzla, real memory pressure: a straight-line function whose query is
+# too large for the worker's address-space cap is `unknown` with a memory reason
+# and the compiler survives. The cap is lowered with the test-only
+# VOW_VERIFY_WORKER_MEM_KB (there is no user-facing memory flag); without it the
+# same function is decided normally.
+if command -v bitwuzla >/dev/null 2>&1; then
+    BIG="$TMP_ROOT/big.vow"
+    python3 - "$BIG" <<'PY'
+import sys
+n = 400
+params = ", ".join(f"x{i}: i64" for i in range(2 * n))
+body = " + ".join(f"x{2 * i} * x{2 * i + 1}" for i in range(n))
+open(sys.argv[1], "w").write(
+    f"module Big\n\nfn big({params}) -> i64 vow {{\n  ensures: result != 12345\n}} {{\n  {body}\n}}\n\n"
+    "fn main() -> i32 [io] {\n  print_i64(0);\n  0\n}\n")
+PY
+    RUN_RC=0
+    RUN_OUT=$(TMPDIR="$SCRATCH" VOW_VERIFY_WORKER_MEM_KB=100000 "$VOWC_BIN" verify --no-cache --backend native "$BIG" 2>/dev/null) || RUN_RC=$?
+    expect "explosive verify_status" "$(field "$RUN_OUT" verify_status)" "unknown"
+    expect "explosive status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+    expect "explosive exit" "$RUN_RC" "1"
+    expect "explosive reason" "$(field "$RUN_OUT" verify_message)" "memory limit exceeded"
+    RUN_RC=0
+    RUN_OUT=$(TMPDIR="$SCRATCH" "$VOWC_BIN" verify --no-cache --backend native "$BIG" 2>/dev/null) || RUN_RC=$?
+    expect "explosive uncapped status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+    expect "explosive uncapped is a counterexample" "$(field "$RUN_OUT" verify_status)" ""
+    no_leftovers "explosive"
+fi
 
 # --timeout 0 never reaches the solver.
 run_native unsat "$ONE_CLAIM" --timeout 0

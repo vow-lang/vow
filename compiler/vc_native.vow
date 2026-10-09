@@ -14,8 +14,8 @@ use vc_cex
 // fails the function: `sat` records that the abort is reachable, `unsat` that it
 // is not, and only an undecided run (unknown, timeout, error) stops the check.
 // `timeout_ms` is the budget for the whole function; each claim gets what is
-// left of it. The solver is looked up only when there is a claim to decide: a
-// function without obligations is proven without one.
+// left of it. `scratch`, when not empty, is the directory for the query files. The solver is looked up only when there
+// is a claim to decide: a function without obligations is proven without one.
 
 // A verdict plus the reachable checked-arithmetic aborts found on the way. The
 // sites are meaningful only when the result is `proven`.
@@ -28,12 +28,12 @@ fn vc_bare_outcome(result: VerifyResult) -> VcOutcome {
     VcOutcome { result: result, sites: Vec::new() }
 }
 
-fn vc_check_claim(bin: String, cs: VcClaims, k: u64, budget_ms: i64) -> VcSolverAnswer [io, read, write] {
+fn vc_check_claim(bin: String, cs: VcClaims, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     let query: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
-    vc_solver_check(bin, query, cs.model_names, cs.model_widths, budget_ms)
+    vc_solver_check(bin, query, cs.model_names, cs.model_widths, budget_ms, scratch)
 }
 
-fn vc_verify_function(f: IrFunction, timeout_ms: i64) -> VcOutcome [io, read, write] {
+fn vc_verify_function(f: IrFunction, timeout_ms: i64, scratch: String) -> VcOutcome [io, read, write] {
     let cs: VcClaims = vc_claims(f);
     if cs.kinds.len() == 0 {
         return vc_bare_outcome(vc_proven_result());
@@ -47,7 +47,7 @@ fn vc_verify_function(f: IrFunction, timeout_ms: i64) -> VcOutcome [io, read, wr
     let mut k: u64 = 0;
     while k < cs.kinds.len() {
         let spent_ms: i64 = (time_micros() - started) / 1000;
-        let ans: VcSolverAnswer = vc_check_claim(bin, cs, k, timeout_ms - spent_ms);
+        let ans: VcSolverAnswer = vc_check_claim(bin, cs, k, timeout_ms - spent_ms, scratch);
         if cs.kinds[k] == VC_CLAIM_ARITH() && ans.verdict == VC_ANS_SAT() {
             sites.push(ParsedArithSite { cause: cs.labels[k], owner: f.id, ostart: cs.ostarts[k], olen: cs.olens[k] });
         } else if ans.verdict != VC_ANS_UNSAT() {

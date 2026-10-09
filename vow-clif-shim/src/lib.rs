@@ -3448,6 +3448,13 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
             sig.returns.push(AbiParam::new(types::I64));
             true
         }
+        "__vow_process_start_capped" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
         "__vow_process_wait" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
@@ -4485,6 +4492,12 @@ mod tests {
             assert_eq!(sig.returns.len(), 1, "{sym}");
             assert_eq!(sig.returns[0].value_type, types::I64, "{sym}");
         }
+
+        let sig = make_extern_sig("__vow_process_start_capped", &module_ctx.obj_module);
+        assert_eq!(sig.params.len(), 3);
+        assert!(sig.params.iter().all(|p| p.value_type == types::I64));
+        assert_eq!(sig.returns.len(), 1);
+        assert_eq!(sig.returns[0].value_type, types::I64);
 
         unsafe { __vow_clif_destroy(ctx) };
     }

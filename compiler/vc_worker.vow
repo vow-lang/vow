@@ -1,0 +1,453 @@
+module VcWorker
+
+use ir
+use verifier
+use vc_native
+use vc_cex
+
+// Per-function worker subprocesses for the native verifier. The parent never
+// runs the solver pipeline itself: each verify target goes to a `vowc
+// verify-worker` child of the same binary, started with an address-space cap in
+// its own process group. A worker that exhausts memory, crashes or overruns the
+// deadline therefore costs one function's verdict, never the compiler. The
+// group is killed as a whole, so a solver child cannot outlive its worker.
+//
+// The worker prints one `VerifyResult` in the wire format below; the parent
+// decodes it and reuses the ordinary reporting. Anything that is not a clean
+// decoded result is classified here and never counts as proof.
+
+fn VC_WORKER_MEM_KB() -> i64 { 4194304 }
+
+// Mirrors `PROC_SIGNAL_BASE` in vow-runtime: a signal death is reported as base - signal.
+fn VC_PROC_SIGNAL_BASE() -> i64 { -1000 }
+
+fn VC_ST_NEXT() -> u64 { 0 }
+fn VC_ST_LIMIT() -> u64 { 1 }
+fn VC_ST_RUNNING() -> u64 { 2 }
+
+fn VC_TASK_PENDING() -> i64 { 0 }
+fn VC_TASK_RUNNING() -> i64 { 1 }
+fn VC_TASK_DONE() -> i64 { 2 }
+fn VC_TASK_CANCELLED() -> i64 { 3 }
+
+// Path the workers are started from: this binary, as invoked.
+fn vc_worker_exe(argv0: String) -> String [read] {
+    if str_contains_byte(argv0, 47) { return argv0; }
+    let found: String = path_lookup(argv0);
+    if found.len() > 0 { found } else { argv0 }
+}
+
+// Test-only override of the cap, in KiB. Not a user flag: it can only lower the
+// cap, never raise it past the default.
+fn vc_worker_mem_kb() -> i64 [read] {
+    let v: i64 = str_to_i64(getenv(String::from("VOW_VERIFY_WORKER_MEM_KB")));
+    if v > 0 && v < VC_WORKER_MEM_KB() { v } else { VC_WORKER_MEM_KB() }
+}
+
+// ---------------------------------------------------------------------------
+// Wire format: `VOWRES1\n`, then integers one per line and strings as
+// `<byte length>\n<bytes>\n`. Pure, so it is unit-tested directly.
+// ---------------------------------------------------------------------------
+
+fn vc_wire_tag() -> String { String::from("VOWRES1\n") }
+
+fn vc_wire_int(out: String, v: i64) {
+    out.push_str(i64_to_string(v));
+    out.push_str(String::from("\n"));
+}
+
+fn vc_wire_str(out: String, s: String) {
+    vc_wire_int(out, s.len() as i64);
+    out.push_str(s);
+    out.push_str(String::from("\n"));
+}
+
+fn vc_wire_encode(oc: VcOutcome) -> String {
+    let vr: VerifyResult = oc.result;
+    let out: String = vc_wire_tag();
+    vc_wire_int(out, vr.status);
+    vc_wire_int(out, vr.vow_id);
+    vc_wire_int(out, vr.callee_precondition_func_id);
+    vc_wire_int(out, vr.callee_precondition_vow_id);
+    vc_wire_int(out, vr.callee_postcondition_func_id);
+    vc_wire_int(out, vr.callee_postcondition_vow_id);
+    vc_wire_int(out, vr.var_names.len() as i64);
+    let mut i: u64 = 0;
+    while i < vr.var_names.len() {
+        vc_wire_str(out, vr.var_names[i]);
+        vc_wire_str(out, vr.var_values[i]);
+        i = i + 1;
+    }
+    vc_wire_int(out, vr.block_visits.len() as i64);
+    let mut j: u64 = 0;
+    while j < vr.block_visits.len() {
+        vc_wire_int(out, vr.block_visits[j]);
+        j = j + 1;
+    }
+    vc_wire_str(out, vr.raw_output);
+    vc_wire_int(out, oc.sites.len() as i64);
+    let mut k: u64 = 0;
+    while k < oc.sites.len() {
+        let site: ParsedArithSite = oc.sites[k];
+        vc_wire_str(out, site.cause);
+        vc_wire_int(out, site.owner);
+        vc_wire_int(out, site.ostart);
+        vc_wire_int(out, site.olen);
+        k = k + 1;
+    }
+    out
+}
+
+// `cur` is [position, failed]. A failed cursor stays failed.
+fn vc_wire_read_int(s: String, cur: Vec<i64>) -> i64 {
+    if cur[1] != 0 { return 0; }
+    let n: i64 = s.len() as i64;
+    let start: i64 = cur[0];
+    let mut i: i64 = start;
+    while i < n && s.byte_at(i as u64) != 10 {
+        i = i + 1;
+    }
+    if i >= n || i == start {
+        cur[1] = 1;
+        return 0;
+    }
+    cur[0] = i + 1;
+    match parse_i64(s.substring(start as u64, i as u64)) {
+        Option::Some(v) => { v },
+        Option::None => { cur[1] = 1; 0 },
+    }
+}
+
+fn vc_wire_read_str(s: String, cur: Vec<i64>) -> String {
+    let len: i64 = vc_wire_read_int(s, cur);
+    if cur[1] != 0 { return String::from(""); }
+    let start: i64 = cur[0];
+    let end: i64 = start + len;
+    if len < 0 || end >= s.len() as i64 || s.byte_at(end as u64) != 10 {
+        cur[1] = 1;
+        return String::from("");
+    }
+    cur[0] = end + 1;
+    s.substring(start as u64, end as u64)
+}
+
+// A decoded result is `Some` only for a complete, well-formed message that
+// begins at the first wire tag in `text`.
+fn vc_wire_decode(text: String) -> Option<VcOutcome> {
+    let at: i64 = str_find_from(text, 0, vc_wire_tag());
+    if at < 0 { return Option::None; }
+    let cur: Vec<i64> = Vec::new();
+    cur.push(at + vc_wire_tag().len() as i64);
+    cur.push(0);
+    let status: i64 = vc_wire_read_int(text, cur);
+    let vow_id: i64 = vc_wire_read_int(text, cur);
+    let cpf: i64 = vc_wire_read_int(text, cur);
+    let cpv: i64 = vc_wire_read_int(text, cur);
+    let cqf: i64 = vc_wire_read_int(text, cur);
+    let cqv: i64 = vc_wire_read_int(text, cur);
+    let n_vars: i64 = vc_wire_read_int(text, cur);
+    let names: Vec<String> = Vec::new();
+    let values: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n_vars && cur[1] == 0 {
+        names.push(vc_wire_read_str(text, cur));
+        values.push(vc_wire_read_str(text, cur));
+        i = i + 1;
+    }
+    let n_visits: i64 = vc_wire_read_int(text, cur);
+    let visits: Vec<i64> = Vec::new();
+    let mut j: i64 = 0;
+    while j < n_visits && cur[1] == 0 {
+        visits.push(vc_wire_read_int(text, cur));
+        j = j + 1;
+    }
+    let raw: String = vc_wire_read_str(text, cur);
+    let n_sites: i64 = vc_wire_read_int(text, cur);
+    let sites: Vec<ParsedArithSite> = Vec::new();
+    let mut s: i64 = 0;
+    while s < n_sites && cur[1] == 0 {
+        let cause: String = vc_wire_read_str(text, cur);
+        let owner: i64 = vc_wire_read_int(text, cur);
+        let ostart: i64 = vc_wire_read_int(text, cur);
+        let olen: i64 = vc_wire_read_int(text, cur);
+        sites.push(ParsedArithSite { cause: cause, owner: owner, ostart: ostart, olen: olen });
+        s = s + 1;
+    }
+    if cur[1] != 0 || status < 0 || status > VERIFY_PANICKED() { return Option::None; }
+    let result: VerifyResult = VerifyResult {
+        status: status,
+        vow_id: vow_id,
+        callee_precondition_func_id: cpf,
+        callee_precondition_vow_id: cpv,
+        callee_postcondition_func_id: cqf,
+        callee_postcondition_vow_id: cqv,
+        var_names: names,
+        var_values: values,
+        block_visits: visits,
+        raw_output: raw,
+    };
+    Option::Some(VcOutcome { result: result, sites: sites })
+}
+
+// ---------------------------------------------------------------------------
+// Classification of a finished worker
+// ---------------------------------------------------------------------------
+
+fn vc_plain_result(status: i64, raw: String) -> VerifyResult {
+    vc_verify_result(status, -1, Vec::new(), Vec::new(), raw)
+}
+
+// The runtime reports a signal death as -1000 - signal (see `process_start_capped`).
+fn vc_signal_of(exit_code: i64) -> i64 {
+    if exit_code <= VC_PROC_SIGNAL_BASE() { return VC_PROC_SIGNAL_BASE() - exit_code; }
+    0
+}
+
+fn vc_tail(s: String, max: u64) -> String {
+    let t: String = str_trim(s);
+    if t.len() <= max { return t; }
+    let mut start: u64 = t.len() - max;
+    while start < t.len() && t.byte_at(start) >= 128 && t.byte_at(start) < 192 {
+        start = start + 1;
+    }
+    t.substring(start, t.len())
+}
+
+fn vc_panic_detail(exit_code: i64, stderr: String) -> String {
+    let d: String = String::from("verification worker died: ");
+    let sig: i64 = vc_signal_of(exit_code);
+    if sig > 0 {
+        d.push_str(String::from("signal "));
+        d.push_str(i64_to_string(sig));
+    } else {
+        d.push_str(String::from("exit status "));
+        d.push_str(i64_to_string(exit_code));
+    }
+    let tail: String = vc_tail(stderr, 300);
+    if tail.len() > 0 {
+        d.push_str(String::from(": "));
+        d.push_str(tail);
+    }
+    d
+}
+
+// Everything a worker under the address-space cap prints or does when memory
+// runs out: the Vow runtime's structured OOM report, its stack-guard report (the
+// stack cannot grow once the address space is spent; the parent lowered the same
+// program uncapped, so this is not a real recursion bug), Rust's allocation and
+// thread-spawn failures, a SIGKILL that was not ours (the kernel OOM killer), or
+// a memory-limit message from the solver. All mean `unknown`, never a verdict.
+fn vc_worker_ran_out_of_memory(exit_code: i64, stderr: String) -> bool {
+    if str_find_str(stderr, String::from("\"error\":\"OutOfMemory\"")) >= 0 { return true; }
+    if str_find_str(stderr, String::from("\"error\":\"StackOverflow\"")) >= 0 { return true; }
+    if str_find_str(stderr, String::from("memory allocation of")) >= 0 { return true; }
+    if str_find_str(stderr, String::from("failed to spawn thread")) >= 0 { return true; }
+    if vc_signal_of(exit_code) == 9 { return true; }
+    output_has_memory_limit(stderr)
+}
+
+// `exit_code` is the worker's status (-1000 - signal for a signal death).
+// A decoded result wins only for a clean exit.
+fn vc_worker_result(exit_code: i64, stdout: String, stderr: String) -> VcOutcome {
+    if exit_code == 0 {
+        return match vc_wire_decode(stdout) {
+            Option::Some(oc) => { oc },
+            Option::None => {
+                vc_bare_outcome(vc_plain_result(VERIFY_PANICKED(), String::from("verification worker produced no result")))
+            },
+        };
+    }
+    if vc_worker_ran_out_of_memory(exit_code, stderr) {
+        return vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), memory_limit_reason()));
+    }
+    vc_bare_outcome(vc_plain_result(VERIFY_PANICKED(), vc_panic_detail(exit_code, stderr)))
+}
+
+// ---------------------------------------------------------------------------
+// Pool: runs the tasks in order, at most `jobs` at a time
+// ---------------------------------------------------------------------------
+
+// `state` holds the counters at the VC_ST_* indices.
+struct VcPool {
+    exe: String,
+    path: String,
+    budget_ms: i64,
+    mem_kb: i64,
+    jobs: i64,
+    fn_idx: Vec<i64>,
+    fn_names: Vec<String>,
+    phase: Vec<i64>,
+    handles: Vec<i64>,
+    started: Vec<i64>,
+    scratch: Vec<String>,
+    results: Vec<VcOutcome>,
+    state: Vec<i64>,
+}
+
+fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String>, jobs: i64, budget_ms: i64) -> VcPool [read] {
+    let phase: Vec<i64> = Vec::new();
+    let handles: Vec<i64> = Vec::new();
+    let started: Vec<i64> = Vec::new();
+    let scratch: Vec<String> = Vec::new();
+    let results: Vec<VcOutcome> = Vec::new();
+    let mut k: u64 = 0;
+    while k < fn_idx.len() {
+        phase.push(VC_TASK_PENDING());
+        handles.push(-1);
+        started.push(0);
+        scratch.push(String::from(""));
+        results.push(vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("not run"))));
+        k = k + 1;
+    }
+    let state: Vec<i64> = Vec::new();
+    state.push(0);
+    state.push(fn_idx.len() as i64);
+    state.push(0);
+    VcPool {
+        exe: exe,
+        path: path,
+        budget_ms: budget_ms,
+        mem_kb: vc_worker_mem_kb(),
+        jobs: jobs,
+        fn_idx: fn_idx,
+        fn_names: fn_names,
+        phase: phase,
+        handles: handles,
+        started: started,
+        scratch: scratch,
+        results: results,
+        state: state,
+    }
+}
+
+fn vc_worker_argv(p: VcPool, k: u64) -> Vec<String> {
+    let a: Vec<String> = Vec::new();
+    a.push(String::from("verify-worker"));
+    a.push(p.path);
+    a.push(String::from("--worker-index"));
+    a.push(i64_to_string(p.fn_idx[k]));
+    a.push(String::from("--worker-name"));
+    a.push(p.fn_names[k]);
+    a.push(String::from("--worker-budget-ms"));
+    a.push(i64_to_string(p.budget_ms));
+    if p.scratch[k].len() > 0 {
+        a.push(String::from("--worker-scratch"));
+        a.push(p.scratch[k]);
+    }
+    a
+}
+
+// Removes task `k`'s scratch directory. Only called once its process group is
+// dead, so nothing is still writing into it.
+fn vc_pool_release(p: VcPool, k: u64) [io] {
+    if p.scratch[k].len() > 0 {
+        fs_remove_dir_all(p.scratch[k]);
+        p.scratch[k] = String::from("");
+    }
+}
+
+// Stops running task `k` (its whole process group) and drops its scratch dir.
+fn vc_pool_cancel(p: VcPool, k: u64) [io] {
+    process_kill(p.handles[k]);
+    vc_pool_release(p, k);
+    p.handles[k] = -1;
+    p.phase[k] = VC_TASK_CANCELLED();
+    p.state[VC_ST_RUNNING()] = p.state[VC_ST_RUNNING()] - 1;
+}
+
+fn vc_pool_finish(p: VcPool, k: u64, oc: VcOutcome) [io] {
+    vc_pool_release(p, k);
+    p.results[k] = oc;
+    p.phase[k] = VC_TASK_DONE();
+    p.handles[k] = -1;
+    p.state[VC_ST_RUNNING()] = p.state[VC_ST_RUNNING()] - 1;
+    // Nothing above a task that did not prove is ever reported, so stop
+    // starting those and stop the ones already running.
+    if oc.result.status != VERIFY_PROVEN() && (k as i64) < p.state[VC_ST_LIMIT()] {
+        p.state[VC_ST_LIMIT()] = k as i64;
+        let mut j: u64 = k + 1;
+        while j < p.phase.len() {
+            if p.phase[j] == VC_TASK_RUNNING() {
+                vc_pool_cancel(p, j);
+            }
+            j = j + 1;
+        }
+    }
+}
+
+fn vc_pool_launch(p: VcPool) [io] {
+    while p.state[VC_ST_NEXT()] < p.state[VC_ST_LIMIT()] && p.state[VC_ST_RUNNING()] < p.jobs {
+        let k: u64 = p.state[VC_ST_NEXT()] as u64;
+        p.state[VC_ST_NEXT()] = p.state[VC_ST_NEXT()] + 1;
+        p.scratch[k] = mktemp_dir(String::from("vow-native"));
+        p.state[VC_ST_RUNNING()] = p.state[VC_ST_RUNNING()] + 1;
+        if p.scratch[k].len() == 0 {
+            vc_pool_finish(p, k, vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("cannot create a temporary directory"))));
+            continue;
+        }
+        let h: i64 = process_start_capped(p.exe, vc_worker_argv(p, k), p.mem_kb);
+        if h < 0 {
+            vc_pool_finish(p, k, vc_bare_outcome(vc_plain_result(VERIFY_PANICKED(), String::from("cannot start the verification worker"))));
+        } else {
+            p.handles[k] = h;
+            p.phase[k] = VC_TASK_RUNNING();
+            p.started[k] = time_micros();
+        }
+    }
+}
+
+// Reaps task `k` once its worker has exited and kills the group of any that
+// overran `--timeout`. The parent's deadline is the whole budget from launch;
+// the worker's own budget (frontend excluded) only bounds an orphan.
+fn vc_pool_poll_one(p: VcPool, k: u64, wait_ms: i64) -> bool [io] {
+    let h: i64 = p.handles[k];
+    let rc: i64 = process_poll_wait(h, wait_ms);
+    if rc != proc_still_running() {
+        let out: String = process_stdout_for(h);
+        let err: String = process_stderr_for(h);
+        process_kill(h);
+        vc_pool_finish(p, k, vc_worker_result(rc, out, err));
+        return true;
+    }
+    if p.budget_ms > 0 && (time_micros() - p.started[k]) / 1000 >= p.budget_ms {
+        process_kill(h);
+        vc_pool_finish(p, k, vc_bare_outcome(vc_plain_result(VERIFY_TIMEOUT(), String::from(""))));
+        return true;
+    }
+    false
+}
+
+// One scheduling pass: start what fits, then reap what finished. Blocks for at
+// most ~10 ms when nothing finished.
+fn vc_pool_step(p: VcPool) [io] {
+    vc_pool_launch(p);
+    let mut progressed: bool = false;
+    let mut first_running: i64 = -1;
+    let mut k: u64 = 0;
+    while k < p.phase.len() {
+        if p.phase[k] == VC_TASK_RUNNING() {
+            if first_running < 0 { first_running = k as i64; }
+            if vc_pool_poll_one(p, k, 0) { progressed = true; }
+        }
+        k = k + 1;
+    }
+    if !progressed && first_running >= 0 && p.phase[first_running as u64] == VC_TASK_RUNNING() {
+        vc_pool_poll_one(p, first_running as u64, 10);
+    }
+}
+
+fn vc_pool_ready(p: VcPool, k: u64) -> bool {
+    p.phase[k] == VC_TASK_DONE()
+}
+
+// Stops every worker still running. Safe to call more than once.
+fn vc_pool_abort(p: VcPool) [io] {
+    let mut k: u64 = 0;
+    while k < p.phase.len() {
+        if p.phase[k] == VC_TASK_RUNNING() {
+            vc_pool_cancel(p, k);
+        }
+        k = k + 1;
+    }
+    p.state[VC_ST_LIMIT()] = 0;
+}

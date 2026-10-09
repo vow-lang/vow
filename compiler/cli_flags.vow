@@ -9,6 +9,7 @@ fn CMD_SKILL() -> i64 { 5 }
 fn CMD_MUTANTS() -> i64 { 6 }
 fn CMD_COMPLEXITY() -> i64 { 7 }
 fn CMD_DECL() -> i64 { 8 }
+fn CMD_VERIFY_WORKER() -> i64 { 9 }
 
 fn CF_UNKNOWN() -> i64 { 0 }
 fn CF_BOOL() -> i64 { 1 }
@@ -36,6 +37,16 @@ fn cf_is_test_value(f: String) -> bool {
 
 fn cf_is_complexity_value(f: String) -> bool {
     f == "--cog-anchor" || f == "--nloc-anchor" || f == "--max-score" || f == "--max-cognitive" || f == "--max-cyclomatic"
+}
+
+fn cf_is_worker_value(f: String) -> bool {
+    f == "--worker-index" || f == "--worker-name" || f == "--worker-budget-ms" || f == "--worker-scratch"
+}
+
+fn cf_kind_verify_worker(f: String) -> i64 {
+    if cf_is_help(f) { return CF_BOOL(); }
+    if cf_is_worker_value(f) { return CF_VALUE(); }
+    CF_UNKNOWN()
 }
 
 fn cf_kind_build(f: String) -> i64 {
@@ -90,13 +101,14 @@ fn cli_flag_kind(cmd: i64, flag: String) -> i64 {
     if cmd == CMD_COMPLEXITY() { return cf_kind_complexity(flag); }
     if cmd == CMD_SKILL() { return cf_kind_skill(flag); }
     if cmd == CMD_DECL() { return cf_kind_decl(flag); }
+    if cmd == CMD_VERIFY_WORKER() { return cf_kind_verify_worker(flag); }
     CF_UNKNOWN()
 }
 
 // Command-agnostic: does any subcommand take a value after `flag`? Used to skip
 // flag values when locating the source path.
 fn cli_flag_takes_value(flag: String) -> bool {
-    cf_is_build_value(flag) || cf_is_prover_value(flag) || cf_is_test_value(flag) || cf_is_complexity_value(flag)
+    cf_is_build_value(flag) || cf_is_prover_value(flag) || cf_is_test_value(flag) || cf_is_complexity_value(flag) || cf_is_worker_value(flag)
 }
 
 fn cf_eq_index(tok: String) -> i64 {

@@ -261,6 +261,14 @@ PROCESS_OPS = [
         "effects": "[io]",
     },
     {
+        "name": "process_start_capped",
+        "runtime_symbol": "__vow_process_start_capped",
+        "params": ["ptr", "ptr", "i64"],
+        "return": "i64",
+        "doc_signature": "fn(cmd: String, args: Vec<String>, mem_kb: i64) -> i64",
+        "effects": "[io]",
+    },
+    {
         "name": "process_wait",
         "runtime_symbol": "__vow_process_wait",
         "params": ["i64"],
@@ -764,6 +772,7 @@ class RealCatalogueProcessOpsTest(unittest.TestCase):
             "process_get_stdout",
             "process_get_stderr",
             "process_start",
+            "process_start_capped",
             "process_wait",
             "process_wait_timeout",
             "process_poll_wait",
