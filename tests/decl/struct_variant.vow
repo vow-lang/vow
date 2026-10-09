@@ -1,0 +1,10 @@
+module StructVariant
+
+enum Msg {
+    Quit,
+    Move { x: i64, y: i64 },
+}
+
+fn main() -> i32 [io] {
+    0
+}

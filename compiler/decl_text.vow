@@ -1,0 +1,254 @@
+module DeclText
+
+use ast
+use contract_text
+
+// Declaration-stub (`.vow.d`) text for a merged module. Mirrors
+// `print_declarations` and its helpers in vow-syntax/src/printer.rs byte for
+// byte: signatures, contracts and type definitions, never function bodies.
+
+fn decl_visibility_text(is_pub: bool) -> String {
+    if is_pub { String::from("pub ") } else { String::from("") }
+}
+
+// Alphabetical, like `print_effects`: io, panic, read, unsafe, write.
+fn decl_effects_text(eff: i64) -> String {
+    if eff == 0 { return String::from(""); }
+    let names: Vec<String> = Vec::new();
+    if (eff / EFF_IO()) % 2 != 0 { names.push(String::from("io")); }
+    if (eff / EFF_PANIC()) % 2 != 0 { names.push(String::from("panic")); }
+    if (eff / EFF_READ()) % 2 != 0 { names.push(String::from("read")); }
+    if (eff / EFF_UNSAFE()) % 2 != 0 { names.push(String::from("unsafe")); }
+    if (eff / EFF_WRITE()) % 2 != 0 { names.push(String::from("write")); }
+    let result: String = String::from(" [");
+    let n: u64 = names.len();
+    let mut i: u64 = 0u64;
+    while i < n {
+        if i > 0u64 { result.push_str(String::from(", ")); }
+        result.push_str(names[i]);
+        i = i + 1u64;
+    }
+    result.push_str(String::from("]"));
+    result
+}
+
+// Parameter lists store four entries per parameter: name, type,
+// refinement predicate (-1 when absent) and name span.
+fn decl_params_text(a: AstArena, lid: i64, level: i64) -> String {
+    let result: String = String::from("");
+    let n: i64 = list_len(a, lid) / 4;
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 0 { result.push_str(String::from(", ")); }
+        result.push_str(arena_str(a, list_get(a, lid, i * 4)));
+        result.push_str(String::from(": "));
+        result.push_str(print_type_text(a, list_get(a, lid, i * 4 + 1)));
+        let refinement: i64 = list_get(a, lid, i * 4 + 2);
+        if refinement != -1 {
+            result.push_str(String::from(" where "));
+            result.push_str(print_expr_text_at(a, refinement, level));
+        }
+        i = i + 1;
+    }
+    result
+}
+
+fn decl_return_text(a: AstArena, ret_tid: i64) -> String {
+    if ret_tid == -1 { return String::from(""); }
+    if type_tag(a, ret_tid) == TY_UNIT() { return String::from(""); }
+    let result: String = String::from(" -> ");
+    result.push_str(print_type_text(a, ret_tid));
+    result
+}
+
+// `vow { ... }` without a leading indent or trailing newline, as
+// `print_vow_block` renders it.
+fn decl_vow_text(a: AstArena, vow_lid: i64, level: i64) -> String {
+    let result: String = String::from("vow {\n");
+    let n: i64 = list_len(a, vow_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let cid: i64 = list_get(a, vow_lid, i);
+        let kind: i64 = vow_clause_kind(a, cid);
+        result.push_str(indent_text(level + 1));
+        if kind == CLAUSE_REQUIRES() { result.push_str(String::from("requires")); }
+        else if kind == CLAUSE_ENSURES() { result.push_str(String::from("ensures")); }
+        else { result.push_str(String::from("invariant")); }
+        result.push_str(String::from(": "));
+        result.push_str(print_expr_text_at(a, vow_clause_expr(a, cid), level + 1));
+        result.push_str(String::from("\n"));
+        i = i + 1;
+    }
+    result.push_str(indent_text(level));
+    result.push_str(String::from("}"));
+    result
+}
+
+fn decl_fn_text(a: AstArena, fid: i64, is_pub: bool, level: i64) -> String {
+    let result: String = indent_text(level);
+    result.push_str(decl_visibility_text(is_pub));
+    result.push_str(String::from("fn "));
+    result.push_str(arena_str(a, fn_name_sid(a, fid)));
+    result.push_str(String::from("("));
+    result.push_str(decl_params_text(a, fn_params_lid(a, fid), level));
+    result.push_str(String::from(")"));
+    result.push_str(decl_return_text(a, fn_ret_ast_tid(a, fid)));
+    result.push_str(decl_effects_text(fn_eff(a, fid)));
+    let vow_lid: i64 = fn_vow_lid(a, fid);
+    if vow_lid != -1 {
+        result.push_str(String::from(" "));
+        result.push_str(decl_vow_text(a, vow_lid, level));
+    }
+    result.push_str(String::from(";\n"));
+    result
+}
+
+fn decl_struct_text(a: AstArena, sid: i64, is_pub: bool) -> String {
+    let result: String = decl_visibility_text(is_pub);
+    if sdef_is_linear(a, sid) == 1 { result.push_str(String::from("linear ")); }
+    result.push_str(String::from("struct "));
+    result.push_str(arena_str(a, sdef_name_sid(a, sid)));
+    result.push_str(String::from(" {\n"));
+    let fields_lid: i64 = sdef_fields_lid(a, sid);
+    let n: i64 = list_len(a, fields_lid) / 2;
+    let mut i: i64 = 0;
+    while i < n {
+        result.push_str(String::from("    "));
+        result.push_str(arena_str(a, list_get(a, fields_lid, i * 2)));
+        result.push_str(String::from(": "));
+        result.push_str(print_type_text(a, list_get(a, fields_lid, i * 2 + 1)));
+        result.push_str(String::from(",\n"));
+        i = i + 1;
+    }
+    result.push_str(String::from("}\n"));
+    result
+}
+
+// Variants store two entries each: name and payload type list (empty for a
+// unit variant).
+fn decl_enum_text(a: AstArena, eid: i64, is_pub: bool) -> String {
+    let result: String = decl_visibility_text(is_pub);
+    result.push_str(String::from("enum "));
+    result.push_str(arena_str(a, edef_name_sid(a, eid)));
+    result.push_str(String::from(" {\n"));
+    let variants_lid: i64 = edef_variants_lid(a, eid);
+    let n: i64 = list_len(a, variants_lid) / 2;
+    let mut i: i64 = 0;
+    while i < n {
+        result.push_str(String::from("    "));
+        result.push_str(arena_str(a, list_get(a, variants_lid, i * 2)));
+        let payload_lid: i64 = list_get(a, variants_lid, i * 2 + 1);
+        if list_len(a, payload_lid) > 0 {
+            result.push_str(String::from("("));
+            result.push_str(print_type_list_text(a, payload_lid));
+            result.push_str(String::from(")"));
+        }
+        result.push_str(String::from(",\n"));
+        i = i + 1;
+    }
+    result.push_str(String::from("}\n"));
+    result
+}
+
+fn decl_const_text(a: AstArena, cid: i64, is_pub: bool) -> String {
+    let result: String = decl_visibility_text(is_pub);
+    result.push_str(String::from("const "));
+    result.push_str(arena_str(a, cdef_name_sid(a, cid)));
+    result.push_str(String::from(": "));
+    result.push_str(print_type_text(a, cdef_type_tid(a, cid)));
+    result.push_str(String::from(" = "));
+    result.push_str(print_expr_text_at(a, cdef_value_eid(a, cid), 0));
+    result.push_str(String::from(";\n"));
+    result
+}
+
+fn decl_alias_text(a: AstArena, aid: i64, is_pub: bool) -> String {
+    let result: String = decl_visibility_text(is_pub);
+    result.push_str(String::from("type "));
+    result.push_str(arena_str(a, alias_name_sid(a, aid)));
+    result.push_str(String::from(" = "));
+    result.push_str(print_type_text(a, alias_type_tid(a, aid)));
+    result.push_str(String::from(";\n"));
+    result
+}
+
+// An extern function never carries its own contract; the block's `vow` does.
+fn decl_extern_text(a: AstArena, xid: i64) -> String {
+    let result: String = String::from("extern \"C\" {\n");
+    let vow_lid: i64 = ext_vow_lid(a, xid);
+    if vow_lid != -1 {
+        result.push_str(String::from("    "));
+        result.push_str(decl_vow_text(a, vow_lid, 1));
+        result.push_str(String::from("\n"));
+    }
+    let fns_lid: i64 = ext_fns_lid(a, xid);
+    let n: i64 = list_len(a, fns_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        result.push_str(decl_fn_text(a, list_get(a, fns_lid, i), false, 1));
+        i = i + 1;
+    }
+    result.push_str(String::from("}\n"));
+    result
+}
+
+fn decl_item_text(a: AstArena, item: i64, is_pub: bool) -> String {
+    if item < 0 { return String::from(""); }
+    let kind: i64 = item_kind(item);
+    let id: i64 = item_id(item);
+    if kind == ITEM_FN() { return decl_fn_text(a, id, is_pub, 0); }
+    if kind == ITEM_STRUCT() { return decl_struct_text(a, id, is_pub); }
+    if kind == ITEM_ENUM() { return decl_enum_text(a, id, is_pub); }
+    if kind == ITEM_CONST() { return decl_const_text(a, id, is_pub); }
+    if kind == ITEM_TYPE_ALIAS() { return decl_alias_text(a, id, is_pub); }
+    decl_extern_text(a, id)
+}
+
+// Name of the first enum in `items` with a struct-like variant, or "" when
+// none: the AST drops struct-variant field names, so such an enum cannot be
+// printed faithfully and `vowc decl` refuses it instead of emitting a stub
+// that changes its meaning.
+fn decl_unprintable_enum(m: Module) -> String {
+    let a: AstArena = m.arena;
+    let bad: HashMap<i64, i64> = HashMap::new();
+    let nb: u64 = a.struct_variant_enums.len();
+    let mut bi: u64 = 0u64;
+    while bi < nb {
+        bad.insert(a.struct_variant_enums[bi], 1);
+        bi = bi + 1u64;
+    }
+    let n: u64 = m.items.len();
+    let mut i: u64 = 0u64;
+    while i < n {
+        let item: i64 = m.items[i];
+        if item >= 0 && item_kind(item) == ITEM_ENUM() && bad.contains_key(item_id(item)) {
+            return arena_str(a, edef_name_sid(a, item_id(item)));
+        }
+        i = i + 1u64;
+    }
+    String::from("")
+}
+
+fn decl_module_text(m: Module, name: String) -> String {
+    let a: AstArena = m.arena;
+    let pubs: HashMap<i64, i64> = HashMap::new();
+    let np: u64 = a.pub_items.len();
+    let mut pi: u64 = 0u64;
+    while pi < np {
+        pubs.insert(a.pub_items[pi], 1);
+        pi = pi + 1u64;
+    }
+    let result: String = String::from("module ");
+    result.push_str(name);
+    result.push_str(String::from("\n"));
+    let n: u64 = m.items.len();
+    if n > 0u64 { result.push_str(String::from("\n")); }
+    let mut i: u64 = 0u64;
+    while i < n {
+        let item: i64 = m.items[i];
+        result.push_str(decl_item_text(a, item, pubs.contains_key(item)));
+        if i + 1u64 < n { result.push_str(String::from("\n")); }
+        i = i + 1u64;
+    }
+    result
+}

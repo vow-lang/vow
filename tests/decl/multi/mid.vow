@@ -1,0 +1,7 @@
+module Mid
+
+use base
+
+pub fn mid_val(a: i64) -> i64 {
+    base_val(a)
+}

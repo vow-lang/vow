@@ -20,6 +20,7 @@ use mutants_main
 use complexity
 use complexity_main
 use cli_flags
+use decl_main
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
     let mut i: u64 = 1;
@@ -150,6 +151,9 @@ fn get_subcommand(argv: Vec<String>) -> i64 {
     }
     if sub == "complexity" {
         return CMD_COMPLEXITY();
+    }
+    if sub == "decl" {
+        return CMD_DECL();
     }
     CMD_NONE()
 }
@@ -16327,6 +16331,9 @@ fn main() -> i32 [io, read, write] {
     }
     if cmd == CMD_COMPLEXITY() {
         return run_complexity(argv);
+    }
+    if cmd == CMD_DECL() {
+        return run_decl(argv);
     }
     maybe_auto_install_skill();
     run_legacy(argv)

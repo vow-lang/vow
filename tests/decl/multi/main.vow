@@ -1,0 +1,7 @@
+module Main
+
+use mid
+
+pub fn top(a: i64) -> i64 {
+    mid_val(a)
+}

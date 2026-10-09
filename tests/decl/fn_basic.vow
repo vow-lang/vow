@@ -1,0 +1,25 @@
+module FnBasic
+
+pub fn clamp_pos(x: i64 where x >= 0, hi: i64) -> i64 vow {
+    requires: hi >= 0,
+    ensures: result >= 0 && result <= hi
+} {
+    if x > hi { hi } else { x }
+}
+
+fn effects_all(v: Vec<i64>, label: String) -> Option<Vec<Option<i64>>> [io, panic, read, unsafe, write] {
+    print_str(label);
+    Option::None
+}
+
+fn unit_pure(a: i64) {
+    let _x: i64 = a;
+}
+
+fn tuple_ret(a: i64) -> (i64, bool) {
+    (a, true)
+}
+
+pub fn main() -> i32 [io] {
+    0
+}
