@@ -434,14 +434,23 @@ mod tests {
 
     #[test]
     fn const_value_drops_a_cast_of_a_negated_literal_to_the_declared_type() {
-        let ExprKind::UnaryOp {
-            op: UnOp::Neg,
-            operand,
-        } = const_value("const X: i64 = -1 as i64;")
-        else {
-            unreachable!()
-        };
-        assert!(matches!(operand.kind, ExprKind::Lit(Lit::Int(_))));
+        assert!(matches!(
+            const_value("const X: i64 = -1 as i64;"),
+            ExprKind::UnaryOp { op: UnOp::Neg, ref operand }
+                if matches!(operand.kind, ExprKind::Lit(Lit::Int(_)))
+        ));
+    }
+
+    #[test]
+    fn const_value_keeps_a_cast_of_a_non_literal_or_negated_non_literal() {
+        assert!(matches!(
+            const_value("const X: i64 = y as i64;"),
+            ExprKind::Cast { .. }
+        ));
+        assert!(matches!(
+            const_value("const X: i64 = -y as i64;"),
+            ExprKind::Cast { .. }
+        ));
     }
 
     #[test]

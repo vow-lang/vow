@@ -1539,57 +1539,46 @@ mod tests {
 
     #[test]
     fn unary_minus_and_not_bind_tighter_than_cast() {
-        for (src, op) in [("-a as u64", UnOp::Neg), ("!x as i64", UnOp::Not)] {
-            match &parse_no_errors(src).kind {
-                ExprKind::Cast { expr, .. } => match &expr.kind {
-                    ExprKind::UnaryOp { op: got, operand } => {
-                        assert_eq!(*got, op, "{src:?}");
-                        assert!(matches!(operand.kind, ExprKind::Ident(_)), "{src:?}");
-                    }
-                    other => panic!("{src:?}: expected UnaryOp under Cast, got {other:?}"),
-                },
-                other => panic!("{src:?}: expected Cast, got {other:?}"),
-            }
-        }
+        assert!(matches!(
+            parse_no_errors("-a as u64").kind,
+            ExprKind::Cast { ref expr, .. }
+                if matches!(expr.kind, ExprKind::UnaryOp { op: UnOp::Neg, .. })
+        ));
+        assert!(matches!(
+            parse_no_errors("!x as i64").kind,
+            ExprKind::Cast { ref expr, .. }
+                if matches!(expr.kind, ExprKind::UnaryOp { op: UnOp::Not, .. })
+        ));
     }
 
     #[test]
     fn explicitly_parenthesised_cast_stays_under_the_unary() {
-        match &parse_no_errors("-(a as u64)").kind {
-            ExprKind::UnaryOp { op, operand } => {
-                assert_eq!(*op, UnOp::Neg);
-                assert!(matches!(operand.kind, ExprKind::Cast { .. }));
-            }
-            other => panic!("expected UnaryOp, got {other:?}"),
-        }
+        assert!(matches!(
+            parse_no_errors("-(a as u64)").kind,
+            ExprKind::UnaryOp { op: UnOp::Neg, ref operand }
+                if matches!(operand.kind, ExprKind::Cast { .. })
+        ));
     }
 
     #[test]
     fn cast_of_unary_chains_and_composes_with_binary_operators() {
-        match &parse_no_errors("-x as u64 + 1").kind {
-            ExprKind::BinaryOp { op, lhs, .. } => {
-                assert_eq!(*op, BinOp::Add);
-                assert!(matches!(&lhs.kind, ExprKind::Cast { expr, .. }
-                    if matches!(expr.kind, ExprKind::UnaryOp { .. })));
-            }
-            other => panic!("expected Add, got {other:?}"),
-        }
-        match &parse_no_errors("a - b as u64").kind {
-            ExprKind::BinaryOp { op, rhs, .. } => {
-                assert_eq!(*op, BinOp::Sub);
-                assert!(matches!(rhs.kind, ExprKind::Cast { .. }));
-            }
-            other => panic!("expected Sub, got {other:?}"),
-        }
-        match &parse_no_errors("--x as u64").kind {
-            ExprKind::Cast { expr, .. } => match &expr.kind {
-                ExprKind::UnaryOp { operand, .. } => {
-                    assert!(matches!(operand.kind, ExprKind::UnaryOp { .. }))
-                }
-                other => panic!("expected nested UnaryOp, got {other:?}"),
-            },
-            other => panic!("expected Cast, got {other:?}"),
-        }
+        assert!(matches!(
+            parse_no_errors("-x as u64 + 1").kind,
+            ExprKind::BinaryOp { op: BinOp::Add, ref lhs, .. }
+                if matches!(&lhs.kind, ExprKind::Cast { expr, .. }
+                    if matches!(expr.kind, ExprKind::UnaryOp { .. }))
+        ));
+        assert!(matches!(
+            parse_no_errors("a - b as u64").kind,
+            ExprKind::BinaryOp { op: BinOp::Sub, ref rhs, .. }
+                if matches!(rhs.kind, ExprKind::Cast { .. })
+        ));
+        assert!(matches!(
+            parse_no_errors("--x as u64").kind,
+            ExprKind::Cast { ref expr, .. }
+                if matches!(&expr.kind, ExprKind::UnaryOp { operand, .. }
+                    if matches!(operand.kind, ExprKind::UnaryOp { .. }))
+        ));
         assert!(matches!(
             parse_no_errors("-x as u64?").kind,
             ExprKind::Question { .. }
@@ -1598,13 +1587,10 @@ mod tests {
 
     #[test]
     fn parenthesised_block_like_operand_takes_postfix_and_cast() {
-        let expr = parse_no_errors("(if c { 1 } else { 2 }) as u64");
-        match &expr.kind {
-            ExprKind::Cast { expr: inner, .. } => {
-                assert!(matches!(inner.kind, ExprKind::If { .. }))
-            }
-            other => panic!("expected Cast, got {other:?}"),
-        }
+        assert!(matches!(
+            parse_no_errors("(if c { 1 } else { 2 }) as u64").kind,
+            ExprKind::Cast { ref expr, .. } if matches!(expr.kind, ExprKind::If { .. })
+        ));
         let expr = parse_no_errors("(if c { v } else { w }).len()");
         assert!(matches!(expr.kind, ExprKind::MethodCall { .. }));
     }
