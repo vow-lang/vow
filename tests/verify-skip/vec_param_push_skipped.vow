@@ -1,0 +1,20 @@
+// TEST: category unverifiable
+module VecParamPushSkipped
+
+// Regression test for issue #572. `grid.push(row)` stores a Vec parameter into
+// a Vec<Vec<i64>> parameter. Neither is classified by the verifier's typed-var
+// scan (they are only used as a store value / receiver), so the push used to
+// emit an `int64_t` store of a Vec handle and the proof was bogus. The
+// Ptr-typed value operand now makes the function non-modelable, so it is
+// Skipped.
+fn add_row(grid: Vec<Vec<i64>>, row: Vec<i64>) -> i64 vow {
+  ensures: result >= 0
+} {
+  grid.push(row);
+  grid.len() as i64
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

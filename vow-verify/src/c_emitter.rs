@@ -337,6 +337,8 @@ enum ModelArgRole {
     Receiver,
     SecondString,
     VecValue,
+    MapKey,
+    MapValue,
     Operand(usize),
 }
 
@@ -346,7 +348,8 @@ fn model_arg_index(name: &str, role: ModelArgRole) -> Option<usize> {
     if !is_known_builtin(name)
         || !(name.starts_with("__vow_vec_")
             || name.starts_with("__vow_string_")
-            || name.starts_with("__vow_map_"))
+            || name.starts_with("__vow_map_")
+            || name.starts_with("__vow_btreemap_"))
     {
         return None;
     }
@@ -406,6 +409,25 @@ fn model_arg_index(name: &str, role: ModelArgRole) -> Option<usize> {
             "__vow_vec_set_val" => Some(2),
             _ => None,
         },
+        ModelArgRole::MapKey => match name {
+            "__vow_map_insert"
+            | "__vow_map_insert_in_arena"
+            | "__vow_map_get"
+            | "__vow_map_get_in_arena"
+            | "__vow_map_contains"
+            | "__vow_map_remove"
+            | "__vow_map_remove_in_arena"
+            | "__vow_btreemap_insert"
+            | "__vow_btreemap_get"
+            | "__vow_btreemap_contains" => Some(offset + 1),
+            _ => None,
+        },
+        ModelArgRole::MapValue => match name {
+            "__vow_map_insert" | "__vow_map_insert_in_arena" | "__vow_btreemap_insert" => {
+                Some(offset + 2)
+            }
+            _ => None,
+        },
     }
 }
 
@@ -449,41 +471,36 @@ fn passes_structured_arg(
     })
 }
 
-/// True when `inst` is a vec store/load op whose element side is a model
-/// struct rather than a scalar — the configuration that produces
-/// `int64_t = __vow_vec_t` (issue #505) in the emitted C model.
-fn vec_op_carries_non_scalar(
-    name: &str,
-    inst: &Inst,
-    vec_vars: &HashSet<u32>,
-    string_vars: &HashSet<u32>,
-    hashmap_vars: &HashSet<u32>,
-    btreemap_vars: &HashSet<u32>,
-    option_vars: &HashSet<u32>,
-) -> bool {
+/// True when `inst` is a vec store/load or map/btreemap key/value op whose
+/// stored side is a model struct or a `Ptr`-typed handle rather than a scalar —
+/// the configuration that produces `int64_t = __vow_vec_t` (issue #505) in the
+/// emitted C model. `Ptr`-typed operands cover values `collect_typed_vars`
+/// never classifies (params, results of other collection ops). A vec load's
+/// result is always `i64` in the IR, so only classification can flag it.
+/// Self-hosted mirror: `compiler/c_emitter.vow::collection_op_carries_non_scalar`.
+fn collection_op_carries_non_scalar(name: &str, inst: &Inst, facts: &ModelFacts) -> bool {
+    let is_structured = |id: u32| {
+        is_structured_value_id(
+            id,
+            &facts.vec_vars,
+            &facts.string_vars,
+            &facts.hashmap_vars,
+            &facts.btreemap_vars,
+            &facts.option_vars,
+        )
+    };
     if name == "__vow_vec_get_val" {
-        return is_structured_value_id(
-            inst.id.0,
-            vec_vars,
-            string_vars,
-            hashmap_vars,
-            btreemap_vars,
-            option_vars,
-        );
+        return is_structured(inst.id.0);
     }
-    if let Some(arg_idx) = model_arg_index(name, ModelArgRole::VecValue)
-        && let Some(arg) = inst.args.get(arg_idx)
-    {
-        return is_structured_value_id(
-            arg.0,
-            vec_vars,
-            string_vars,
-            hashmap_vars,
-            btreemap_vars,
-            option_vars,
-        );
-    }
-    false
+    [
+        ModelArgRole::VecValue,
+        ModelArgRole::MapKey,
+        ModelArgRole::MapValue,
+    ]
+    .into_iter()
+    .filter_map(|role| model_arg_index(name, role))
+    .filter_map(|arg_idx| inst.args.get(arg_idx))
+    .any(|arg| is_structured(arg.0) || facts.ptr_vars.contains(&arg.0))
 }
 
 fn is_map_model_creator(name: &str) -> bool {
@@ -614,6 +631,20 @@ fn collect_wide_vars(func: &Function) -> HashSet<u32> {
         .iter()
         .flat_map(|block| &block.insts)
         .filter(|inst| matches!(inst.ty, Ty::I128 | Ty::U128))
+        .map(|inst| inst.id.0)
+        .collect()
+}
+
+// Ids of the `Ptr`-typed instructions that may hold a collection handle:
+// everything except `RegionAlloc`, whose result is a user-struct handle the
+// model already represents as an `int64_t` heap slot index.
+fn collect_ptr_vars(func: &Function) -> HashSet<u32> {
+    func.blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| {
+            matches!(inst.ty, Ty::Ptr | Ty::LinearPtr) && inst.opcode != Opcode::RegionAlloc
+        })
         .map(|inst| inst.id.0)
         .collect()
 }
@@ -796,6 +827,7 @@ struct ModelFacts {
     btreemap_vars: HashSet<u32>,
     option_vars: HashSet<u32>,
     wide_vars: HashSet<u32>,
+    ptr_vars: HashSet<u32>,
 }
 
 impl ModelFacts {
@@ -807,6 +839,7 @@ impl ModelFacts {
             btreemap_vars: collect_typed_vars(func, "__vow_btreemap_new", "__vow_btreemap_"),
             option_vars: collect_option_vars(func),
             wide_vars: collect_wide_vars(func),
+            ptr_vars: collect_ptr_vars(func),
         }
     }
 }
@@ -901,15 +934,7 @@ fn modelability_issue<'a>(
             InstData::CallExtern(name) => {
                 if !is_known_builtin(name) {
                     Some(ModelIssue::UnknownExtern(name))
-                } else if vec_op_carries_non_scalar(
-                    name,
-                    inst,
-                    &facts.vec_vars,
-                    &facts.string_vars,
-                    &facts.hashmap_vars,
-                    &facts.btreemap_vars,
-                    &facts.option_vars,
-                ) {
+                } else if collection_op_carries_non_scalar(name, inst, facts) {
                     Some(ModelIssue::NonScalarExtern(name))
                 } else {
                     None
@@ -3360,7 +3385,7 @@ mod tests {
 
     #[test]
     fn model_arg_index_covers_collection_roles_and_arena_shift() {
-        use ModelArgRole::{Operand, Receiver, SecondString, VecValue};
+        use ModelArgRole::{MapKey, MapValue, Operand, Receiver, SecondString, VecValue};
 
         assert_eq!(model_arg_index("__vow_vec_push_val", Receiver), Some(0));
         assert_eq!(
@@ -3373,6 +3398,18 @@ mod tests {
         );
         assert_eq!(model_arg_index("__vow_vec_set_val", VecValue), Some(2));
         assert_eq!(model_arg_index("__vow_vec_get_val", VecValue), None);
+        assert_eq!(model_arg_index("__vow_map_insert", MapKey), Some(1));
+        assert_eq!(model_arg_index("__vow_map_insert", MapValue), Some(2));
+        assert_eq!(
+            model_arg_index("__vow_map_insert_in_arena", MapValue),
+            Some(3)
+        );
+        assert_eq!(model_arg_index("__vow_map_get_in_arena", MapKey), Some(2));
+        assert_eq!(model_arg_index("__vow_map_get", MapValue), None);
+        assert_eq!(model_arg_index("__vow_btreemap_insert", MapKey), Some(1));
+        assert_eq!(model_arg_index("__vow_btreemap_insert", MapValue), Some(2));
+        assert_eq!(model_arg_index("__vow_btreemap_get", MapValue), None);
+        assert_eq!(model_arg_index("__vow_btreemap_insert", Receiver), None);
         assert_eq!(
             model_arg_index("__vow_string_push_str", SecondString),
             Some(1)
@@ -7110,6 +7147,82 @@ mod tests {
             matches!(reason.as_deref(), Some(text) if text.contains("non-scalar element")),
             "nested Vec<Vec<...>> push must be non-modelable with non-scalar element reason; got: {reason:?}"
         );
+    }
+
+    fn collection_op_reason(op: &str, arg_tys: &[Ty]) -> Option<String> {
+        let mut insts: Vec<Inst> = arg_tys
+            .iter()
+            .enumerate()
+            .map(|(i, ty)| {
+                inst(
+                    i as u32,
+                    Opcode::GetArg,
+                    *ty,
+                    vec![],
+                    InstData::ArgIndex(i as u32),
+                )
+            })
+            .collect();
+        let n = arg_tys.len() as u32;
+        insts.push(inst(
+            n,
+            Opcode::Call,
+            Ty::Unit,
+            (0..n).collect(),
+            InstData::CallExtern(op.to_string()),
+        ));
+        insts.push(inst(
+            n + 1,
+            Opcode::Return,
+            Ty::Unit,
+            vec![],
+            InstData::None,
+        ));
+        let (func, module) = one_block_func_module("collection_op", Ty::Unit, insts);
+        non_modelable_reason(&func, &module, &HashMap::new())
+    }
+
+    #[test]
+    fn ptr_typed_value_or_key_in_collection_op_is_non_modelable() {
+        let cases: [(&str, &[Ty]); 7] = [
+            ("__vow_vec_push_val", &[Ty::Ptr, Ty::Ptr]),
+            ("__vow_vec_push_val_in_arena", &[Ty::Ptr, Ty::Ptr, Ty::Ptr]),
+            ("__vow_vec_set_val", &[Ty::Ptr, Ty::I64, Ty::Ptr]),
+            ("__vow_map_insert", &[Ty::Ptr, Ty::I64, Ty::Ptr]),
+            (
+                "__vow_map_insert_in_arena",
+                &[Ty::Ptr, Ty::Ptr, Ty::I64, Ty::Ptr],
+            ),
+            ("__vow_btreemap_insert", &[Ty::Ptr, Ty::I64, Ty::Ptr]),
+            ("__vow_map_get", &[Ty::Ptr, Ty::Ptr]),
+        ];
+        for (op, tys) in cases {
+            let reason = collection_op_reason(op, tys);
+            assert!(
+                matches!(reason.as_deref(), Some(text) if text.contains(op) && text.contains("non-scalar element")),
+                "{op} with a Ptr-typed operand must be non-modelable; got: {reason:?}"
+            );
+        }
+        let reason = collection_op_reason("__vow_btreemap_get", &[Ty::Ptr, Ty::Ptr]);
+        assert!(matches!(reason.as_deref(), Some(text) if text.contains("non-scalar element")));
+    }
+
+    #[test]
+    fn scalar_collection_ops_stay_modelable() {
+        let cases: [(&str, &[Ty]); 5] = [
+            ("__vow_vec_push_val", &[Ty::Ptr, Ty::I64]),
+            ("__vow_vec_set_val", &[Ty::Ptr, Ty::I64, Ty::I64]),
+            ("__vow_map_insert", &[Ty::Ptr, Ty::I64, Ty::I64]),
+            ("__vow_btreemap_insert", &[Ty::Ptr, Ty::I64, Ty::Bool]),
+            ("__vow_map_contains", &[Ty::Ptr, Ty::I64]),
+        ];
+        for (op, tys) in cases {
+            let reason = collection_op_reason(op, tys);
+            assert!(
+                !matches!(reason.as_deref(), Some(text) if text.contains("non-scalar element")),
+                "{op} with scalar operands must not be flagged non-scalar; got: {reason:?}"
+            );
+        }
     }
 
     #[test]

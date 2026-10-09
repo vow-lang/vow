@@ -23,5 +23,40 @@ fn main() -> i32 {
     let cache_vals: Vec<i64> = Vec::new();
     if modelability_issue(insts[0], facts, m, Vec::new(), cache_ids, cache_vals) != MCI_OK() { return 1; }
     if modelability_issue(insts[1], facts, m, Vec::new(), cache_ids, cache_vals) != MCI_WIDE() { return 2; }
+    if collection_issue(String::from("__vow_vec_push_val"), 2, ITY_PTR(), ITY_PTR(), ITY_PTR()) != MCI_NONSCALAR_EXTERN() { return 3; }
+    if collection_issue(String::from("__vow_vec_set_val"), 3, ITY_PTR(), ITY_I64(), ITY_PTR()) != MCI_NONSCALAR_EXTERN() { return 4; }
+    if collection_issue(String::from("__vow_map_insert"), 3, ITY_PTR(), ITY_I64(), ITY_PTR()) != MCI_NONSCALAR_EXTERN() { return 5; }
+    if collection_issue(String::from("__vow_btreemap_insert"), 3, ITY_PTR(), ITY_I64(), ITY_PTR()) != MCI_NONSCALAR_EXTERN() { return 6; }
+    if collection_issue(String::from("__vow_map_get"), 2, ITY_PTR(), ITY_PTR(), ITY_I64()) != MCI_NONSCALAR_EXTERN() { return 7; }
+    if collection_issue(String::from("__vow_vec_push_val"), 2, ITY_PTR(), ITY_I64(), ITY_I64()) != MCI_OK() { return 8; }
+    if collection_issue(String::from("__vow_map_insert"), 3, ITY_PTR(), ITY_I64(), ITY_I64()) != MCI_OK() { return 9; }
+    if collection_issue(String::from("__vow_btreemap_insert"), 3, ITY_PTR(), ITY_I64(), ITY_BOOL()) != MCI_OK() { return 10; }
     0
+}
+
+// One GetArg per operand (tys[i] = type of arg i) followed by a call to `name`;
+// returns the modelability issue of that call.
+fn collection_issue(name: String, nargs: i64, t0: i64, t1: i64, t2: i64) -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    let call_args: Vec<i64> = Vec::new();
+    let tys: Vec<i64> = Vec::new();
+    tys.push(t0);
+    tys.push(t1);
+    tys.push(t2);
+    let mut i: i64 = 0;
+    while i < nargs {
+        insts.push(mk_inst_arg(i, tys[i as u64], i));
+        call_args.push(i);
+        i = i + 1;
+    }
+    insts.push(mk_inst_call_extern(nargs, ITY_UNIT(), call_args, name));
+    insts.push(mk_inst_return(nargs + 1, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let f: IrFunction = mk_function(0, String::from("collection_issue"), Vec::new(), ITY_UNIT(), blocks);
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(f);
+    let m: IrModule = mk_module(funcs);
+    let facts: ModelFacts = model_facts(f);
+    modelability_issue(insts[nargs as u64], facts, m, Vec::new(), Vec::new(), Vec::new())
 }

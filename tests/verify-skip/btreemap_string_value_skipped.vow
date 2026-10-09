@@ -1,0 +1,17 @@
+// TEST: category unverifiable
+module BTreeMapStringValueSkipped
+
+// Regression test for issue #572. BTreeMap twin of
+// hashmap_string_value_skipped.vow: a String stored as a BTreeMap value must
+// make the function non-modelable, so it is Skipped.
+fn put(m: BTreeMap<i64, String>, s: String) -> i64 vow {
+  ensures: result >= 0
+} {
+  m.insert(1, s);
+  m.len() as i64
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}
