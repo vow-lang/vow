@@ -215,12 +215,12 @@ fn check_unwrap_claim() -> i64 {
     if cs.vow_ids[0] != -1 { return 52; }
     if cs.labels[0] != String::from("unwrap-none") { return 53; }
     let q: String = query(cs, 0);
-    if !q.contains(String::from("(declare-const p0f0 (_ BitVec 64))")) { return 54; }
-    if !q.contains(String::from("(define-fun v1 () (_ BitVec 64) p0f0)")) { return 55; }
+    if !q.contains(String::from("(declare-const p0f0s64 (_ BitVec 64))")) { return 54; }
+    if !q.contains(String::from("(define-fun v1 () (_ BitVec 64) p0f0s64)")) { return 55; }
     if !q.contains(String::from("(assert (and v3 (not false)))")) { return 56; }
     // `Result::unwrap` aborts on `Err`, whose tag is 1: the claim follows the tag it compares.
     let err: String = query(vc_claims(unwrap_fn(true, true, 1)), 0);
-    if !err.contains(String::from("(define-fun v2 () (_ BitVec 64) (_ bv1 64))")) { return 57; }
+    if !err.contains(String::from("(define-fun v2 () (_ BitVec 64) #x0000000000000001)")) { return 57; }
     if !err.contains(String::from("(assert (and v3 (not false)))")) { return 58; }
     0
 }
@@ -252,7 +252,7 @@ fn check_param_symbols_declared_once() -> i64 {
     i.push(mk_inst_return(5, 1));
     let cs: VcClaims = vc_claims(one_block(String::from("g"), ptr_param(), ITY_I64(), i));
     let q: String = query(cs, 0);
-    if count_of(q, String::from("(declare-const p0f1 ")) != 1 { return 80; }
+    if count_of(q, String::from("(declare-const p0f1s64 ")) != 1 { return 80; }
     0
 }
 
@@ -313,17 +313,17 @@ fn check_slot_overwrite_and_sorts() -> i64 {
     let hdr: SmtScript = vc_script_new();
     let ag: VcAgg = vc_agg_new();
     let o: i64 = vc_agg_alloc(ag);
-    let a: i64 = vc_tm_bv_const(ar, 1);
-    let b: i64 = vc_tm_bv_const(ar, 2);
-    vc_agg_set(ag, o, 3, VC_SORT_BV64(), a);
-    if vc_agg_get(ag, ar, hdr, o, 3, VC_SORT_BV64()) != a { return 110; }
-    vc_agg_set(ag, o, 3, VC_SORT_BV64(), b);
-    if vc_agg_get(ag, ar, hdr, o, 3, VC_SORT_BV64()) != b { return 111; }
+    let a: i64 = vc_tm_bv(ar, 64, 1, 0);
+    let b: i64 = vc_tm_bv(ar, 64, 2, 0);
+    vc_agg_set(ag, o, 3, 64, a);
+    if vc_agg_get(ag, ar, hdr, o, 3, 64) != a { return 110; }
+    vc_agg_set(ag, o, 3, 64, b);
+    if vc_agg_get(ag, ar, hdr, o, 3, 64) != b { return 111; }
     // Writing the Bool view of a slot invalidates its i64 view.
     let t: i64 = vc_tm_bool_const(ar, true);
     vc_agg_set(ag, o, 3, VC_SORT_BOOL(), t);
     if vc_agg_get(ag, ar, hdr, o, 3, VC_SORT_BOOL()) != t { return 112; }
-    let reread: i64 = vc_agg_get(ag, ar, hdr, o, 3, VC_SORT_BV64());
+    let reread: i64 = vc_agg_get(ag, ar, hdr, o, 3, 64);
     if reread == a || reread == b { return 113; }
     // A second parameter object per index is never created.
     let p0: i64 = vc_agg_param(ag, 0);
