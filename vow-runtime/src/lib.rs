@@ -1434,7 +1434,9 @@ unsafe fn alloc_owned_vow_vec_descriptor(arena: *mut VowArena) -> *mut VowVec {
             cap: VOW_CAP_RUNTIME_OWNED,
         };
     }
-    unsafe { core::ptr::addr_of_mut!((*owned_ptr).desc) }
+    let desc = unsafe { core::ptr::addr_of_mut!((*owned_ptr).desc) };
+    sanitize_on_vec_new(desc as usize);
+    desc
 }
 
 struct StdinLineScratch {
@@ -1518,7 +1520,6 @@ pub unsafe extern "C" fn __vow_vec_new_in_arena(
         (*header_ptr).len = 0;
         set_vow_vec_capacity(&mut *header_ptr, 0, "Vec::new");
     }
-    sanitize_on_vec_new(header_ptr as usize);
     header_ptr as *mut u8
 }
 
@@ -8944,6 +8945,18 @@ mod tests {
             }
             std::process::exit(0);
         }
+        if op == "sanitize_string_clone_tracked" {
+            __vow_sanitize_init();
+            let mut a = empty_arena_header();
+            let ap: *mut VowArena = &mut a;
+            unsafe { __vow_arena_open(ap) };
+            let src = unsafe { __vow_string_new_in_arena(ap, c"abc".as_ptr(), 3) };
+            let copy = unsafe { __vow_string_clone_into_arena(ap, src) };
+            unsafe { __vow_arena_close(ap) };
+            unsafe { __vow_string_len(copy) };
+            eprintln!("rodata_trap_worker: cloned String after close did NOT trap");
+            std::process::exit(42);
+        }
         if op == "option_cells_shadow_untracked" {
             __vow_sanitize_init();
             let mut a = empty_arena_header();
@@ -9259,6 +9272,20 @@ mod tests {
             out.status.code(),
             Some(0),
             "a recycled chunk address must not report UseAfterFree; stderr:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn sanitize_tracks_cloned_string_descriptors() {
+        let (out, stderr) = spawn_trap_worker("sanitize_string_clone_tracked");
+        assert_eq!(
+            out.status.code(),
+            Some(VOW_RUNTIME_ABORT_EXIT),
+            "a cloned String used after its arena closed must abort; stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(r#""error":"UseAfterFree""#),
+            "stderr missing UseAfterFree:\n{stderr}"
         );
     }
 
