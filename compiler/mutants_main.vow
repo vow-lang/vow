@@ -344,7 +344,7 @@ fn report_baseline_failure(tier: String, reason: String, log_p: String) [io] {
     let l2: String = String::from("  see ");
     l2.push_str(log_p);
     eprintln_str(l2);
-    eprintln_str("  (pass --skip-baseline to bypass this check)");
+    eprintln_str("  (raise --tier1-timeout-secs/--tier15-timeout-secs if it timed out on a cold worktree, or pass --skip-baseline to bypass this check)");
 }
 
 // Capture `git diff --no-color -- <file>` from inside `workdir` and write
