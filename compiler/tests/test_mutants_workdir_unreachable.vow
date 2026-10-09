@@ -1,0 +1,45 @@
+module TestMutantsWorkdirUnreachable
+
+use mutants_oracle
+
+fn main() -> i32 [io, read, write] {
+    if !oracle_workdir_unreachable(125) { return 1; }
+    if oracle_workdir_unreachable(0) { return 2; }
+    if oracle_workdir_unreachable(1) { return 3; }
+    if oracle_workdir_unreachable(2) { return 4; }
+    if oracle_workdir_unreachable(124) { return 5; }
+    if oracle_workdir_unreachable(126) { return 6; }
+    if oracle_workdir_unreachable(-1) { return 7; }
+    if oracle_workdir_unreachable(-2) { return 8; }
+
+    let scratch: String = mktemp_dir(String::from("vow-wdu-"));
+    let log: String = String::from("");
+    log.push_str(scratch);
+    log.push_str(String::from("/oracle.log"));
+
+    let missing: String = String::from("");
+    missing.push_str(scratch);
+    missing.push_str(String::from("/no/such/dir"));
+    let rc_missing: i64 = run_shell(cd_with_log(missing, String::from("true"), log, String::from("tier1"), false), 10000);
+    if rc_missing != 125 { return 10; }
+
+    let bad_log: String = String::from("");
+    bad_log.push_str(scratch);
+    bad_log.push_str(String::from("/no/such/dir/oracle.log"));
+    let rc_bad_log: i64 = run_shell(cd_with_log(scratch, String::from("true"), bad_log, String::from("tier1"), false), 10000);
+    if rc_bad_log != 125 { return 16; }
+    let rc_bad_log_append: i64 = run_shell(cd_with_log(scratch, String::from("true"), bad_log, String::from("tier1"), true), 10000);
+    if rc_bad_log_append != 125 { return 17; }
+
+    let rc_ok: i64 = run_shell(cd_with_log(scratch, String::from("true"), log, String::from("tier1"), false), 10000);
+    if rc_ok != 0 { return 11; }
+    let has_marker: bool = fs_read(log).contains(String::from("--- tier1 ---"));
+    let rc_three: i64 = run_shell(cd_with_log(scratch, String::from("exit 3"), log, String::from("tier1"), false), 10000);
+    if rc_three != 3 { return 12; }
+    let rc_fail: i64 = run_shell(cd_with_log(scratch, String::from("false"), log, String::from("tier1"), false), 10000);
+    if rc_fail != 1 { return 13; }
+
+    fs_remove_dir_all(scratch);
+    if !has_marker { return 15; }
+    0
+}

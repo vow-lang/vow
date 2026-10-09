@@ -8,5 +8,6 @@ fn main() -> i32 {
     if baseline_failure_reason(-2) != String::from("timed out") { return 3; }
     if baseline_failure_reason(1) != String::from("exit code 1") { return 4; }
     if baseline_failure_reason(124) != String::from("exit code 124") { return 5; }
+    if baseline_failure_reason(125) != String::from("workdir unreachable (cd or log open failed before the oracle ran)") { return 6; }
     0
 }
