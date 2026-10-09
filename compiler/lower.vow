@@ -1100,6 +1100,40 @@ fn lctx_variant_payload_ty(
     payload[payload_index as u64]
 }
 
+// Number of 8-byte slots an enum payload of IR type `ty` occupies: two for
+// i128/u128 (ADR 0001 decision 9), one for everything else.
+fn lower_payload_slot_width(ty: i64) -> i64 {
+    if ty == ITY_I128() || ty == ITY_U128() { 2 } else { 1 }
+}
+
+// Slot index (tag is slot 0) of payload `index` of a variant being built from
+// `payload_values`: each wide payload before it pushes it up by one slot.
+fn lctx_built_payload_slot(ctx: LowerCtx, payload_values: Vec<i64>, index: i64) -> i64 {
+    let mut slot: i64 = 1;
+    let mut k: i64 = 0;
+    while k < index {
+        slot = slot + lower_payload_slot_width(lctx_inst_ty(ctx, payload_values[k as u64]));
+        k = k + 1;
+    }
+    slot
+}
+
+// Slot index of payload `index` of a declared enum variant, from its
+// declared payload types.
+fn lctx_declared_payload_slot(
+    ctx: LowerCtx, enum_name: String, variant_name: String, index: i64
+) -> i64 {
+    let mut slot: i64 = 1;
+    let mut k: i64 = 0;
+    while k < index {
+        slot = slot + lower_payload_slot_width(
+            lctx_variant_payload_ty(ctx, enum_name, variant_name, k)
+        );
+        k = k + 1;
+    }
+    slot
+}
+
 // Declared 128-bit width of an enum variant's payload slot, by enum name.
 //
 // The per-instruction payload maps only know a width when the scrutinee was
@@ -4320,7 +4354,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             }
             pvi = pvi + 1;
         }
-        let size: i64 = (2 + n_payload) * 8;
+        let size: i64 = (1 + lctx_built_payload_slot(ctx, payload_values, n_payload)) * 8;
         let alloc_args: Vec<i64> = Vec::new();
         let alloc_ty: i64 = if owns_linear { ITY_LPTR() } else { ITY_PTR() };
         let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), alloc_ty, alloc_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""), origin);
@@ -4356,7 +4390,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let pfs_args: Vec<i64> = Vec::new();
             pfs_args.push(ptr_id);
             pfs_args.push(val_id);
-            lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), pfs_args, IDATA_FIELD(), 1 + pi, 0, String::from(""), origin);
+            lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), pfs_args, IDATA_FIELD(), lctx_built_payload_slot(ctx, payload_values, pi), 0, String::from(""), origin);
             pi = pi + 1;
         }
         return ptr_id;
@@ -4704,7 +4738,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                         };
                         let fg2_args: Vec<i64> = Vec::new();
                         fg2_args.push(ptr_id);
-                        let field_val: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ty, fg2_args, IDATA_FIELD(), 1 + ii, 0, String::from(""), origin);
+                        let field_val: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ty, fg2_args, IDATA_FIELD(), lctx_declared_payload_slot(ctx, en, vn, ii), 0, String::from(""), origin);
                         lctx_apply_pattern_aggregate_metadata(
                             ctx, field_val, inner_pid, aggregate_struct
                         );

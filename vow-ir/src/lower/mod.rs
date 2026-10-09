@@ -853,6 +853,26 @@ fn variant_payload_ty(ctx: &LowerCtx, inst: InstId, tag: i64) -> Option<Ty> {
         .flatten()
 }
 
+/// Number of 8-byte slots an enum payload of type `ty` occupies: two for
+/// `i128`/`u128` (ADR 0001 decision 9), one for everything else.
+fn payload_slot_width(ty: Ty) -> u32 {
+    if matches!(ty, Ty::I128 | Ty::U128) {
+        2
+    } else {
+        1
+    }
+}
+
+/// Slot index (tag is slot 0) of payload `index` given the preceding payload
+/// types: every wide payload before it pushes it up by one slot.
+fn payload_slot(payload_tys: &[Ty], index: usize) -> u32 {
+    1 + payload_tys
+        .iter()
+        .take(index)
+        .map(|ty| payload_slot_width(*ty))
+        .sum::<u32>()
+}
+
 /// Declared 128-bit width of an enum variant's payload slot, by enum name.
 ///
 /// The per-instruction payload maps only know a width when the scrutinee was
@@ -3394,8 +3414,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 || payload_values
                     .iter()
                     .any(|value| ctx.inst_ty(*value) == Ty::LinearPtr);
-            let n_payload = payload_values.len();
-            let size = (2 + n_payload) as u32 * 8;
+            let value_tys: Vec<Ty> = payload_values.iter().map(|v| ctx.inst_ty(*v)).collect();
+            let payload_slots: u32 = value_tys.iter().map(|ty| payload_slot_width(*ty)).sum();
+            let size = (2 + payload_slots) * 8;
             let ptr_id = ctx.emit(
                 Opcode::RegionAlloc,
                 if owns_linear { Ty::LinearPtr } else { Ty::Ptr },
@@ -3438,7 +3459,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     Opcode::FieldSet,
                     Ty::Unit,
                     vec![ptr_id, val_id],
-                    InstData::FieldIndex(1 + i as u32),
+                    InstData::FieldIndex(payload_slot(&value_tys, i)),
                     span,
                 );
             }
@@ -3529,6 +3550,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         let payload_ty = variant_payload_ty(ctx, ptr_id, expected_tag)
                             .or_else(|| ctx.inst_option_elem_ty.get(&ptr_id).copied())
                             .unwrap_or(Ty::I64);
+                        let declared_payload_tys: Vec<Ty> = ctx
+                            .enum_variant_payload_tys
+                            .get(enum_name)
+                            .and_then(|variants| variants.get(expected_tag as usize))
+                            .cloned()
+                            .unwrap_or_default();
                         for (i, inner_pat) in inner.iter().enumerate() {
                             if let PatKind::Ident { name, .. } = &inner_pat.kind {
                                 let aggregate = ctx
@@ -3557,7 +3584,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                     Opcode::FieldGet,
                                     field_ty,
                                     vec![ptr_id],
-                                    InstData::FieldIndex(1 + i as u32),
+                                    InstData::FieldIndex(payload_slot(&declared_payload_tys, i)),
                                     span,
                                 );
                                 if let Some(info) = aggregate {
@@ -7331,6 +7358,70 @@ fn ok_limb(r: Result<i128, i64>) -> i64 {
                 "`{fn_name}` payload slot {slot} must lower as {expected:?}, not a truncated limb:\n{func:#?}"
             );
         }
+    }
+
+    /// A 128-bit payload occupies two consecutive 8-byte slots (ADR 0001
+    /// decision 9), so every payload after it moves up by one slot and the
+    /// allocation grows with it: tag + 4 payload slots + the guard slot.
+    #[test]
+    fn wide_enum_payload_shifts_later_slots_and_grows_allocation() {
+        let module = lower_source_to_module(
+            r#"
+module WideSlotLayout
+
+enum Mix {
+    V(i64, i128, i64),
+    Empty,
+}
+
+fn make(a: i64, b: i128, c: i64) -> Mix {
+    Mix::V(a, b, c)
+}
+
+fn third(m: Mix) -> i64 {
+    match m {
+        Mix::V(x, y, z) => { z },
+        Mix::Empty => { 0 },
+    }
+}
+"#,
+            "wide_slot_layout.vow",
+        );
+        let find = |name: &str| {
+            module
+                .functions
+                .iter()
+                .find(|f| f.name == name)
+                .unwrap_or_else(|| panic!("missing function `{name}`"))
+        };
+
+        let make = find("make");
+        let make_insts = insts_of(make);
+        let alloc = make_insts
+            .iter()
+            .find(|inst| inst.opcode == Opcode::RegionAlloc)
+            .expect("enum allocation");
+        assert_eq!(
+            alloc.data,
+            InstData::AllocSize { size: 48, align: 8 },
+            "tag + 1 + 2 + 1 payload slots + guard slot:\n{make:#?}"
+        );
+        let stored: Vec<u32> = make_insts
+            .iter()
+            .filter(|inst| inst.opcode == Opcode::FieldSet)
+            .filter_map(|inst| match inst.data {
+                InstData::FieldIndex(slot) => Some(slot),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stored, vec![0, 1, 2, 4], "tag, a, b (2 slots), c");
+
+        let third = find("third");
+        assert!(
+            insts_of(third).iter().any(|inst| inst.opcode == Opcode::FieldGet
+                && inst.data == InstData::FieldIndex(4)),
+            "`z` must be read from slot 4, past the wide member:\n{third:#?}"
+        );
     }
 
     /// `Result` is built in, so it has no declaration for the match arm to
