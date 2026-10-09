@@ -1108,64 +1108,6 @@ fn lower_payload_field_dk(ty: i64) -> i64 {
     if lower_payload_slot_width(ty) == 2 { IDATA_WIDE_SLOT() } else { IDATA_FIELD() }
 }
 
-// The declaration decides the layout, exactly as it does for every read; a
-// value whose lowered type disagrees then fails closed in codegen instead of
-// being stored with a different slot map. Built-in Option/Result have no
-// declaration, so their value types are used.
-fn lctx_built_payload_ty(
-    ctx: LowerCtx, enum_name: String, variant_name: String, payload_values: Vec<i64>, index: i64
-) -> i64 {
-    let declared: i64 = lctx_variant_payload_ty(ctx, enum_name, variant_name, index);
-    if declared != -1 { return declared; }
-    lctx_inst_ty(ctx, payload_values[index as u64])
-}
-
-fn lctx_built_payload_slot(
-    ctx: LowerCtx, enum_name: String, variant_name: String, payload_values: Vec<i64>, index: i64
-) -> i64 {
-    let mut slot: i64 = 1;
-    let mut k: i64 = 0;
-    while k < index {
-        slot = slot + lower_payload_slot_width(
-            lctx_built_payload_ty(ctx, enum_name, variant_name, payload_values, k)
-        );
-        k = k + 1;
-    }
-    slot
-}
-
-fn lctx_declared_payload_slot(
-    ctx: LowerCtx, enum_name: String, variant_name: String, index: i64
-) -> i64 {
-    let mut slot: i64 = 1;
-    let mut k: i64 = 0;
-    while k < index {
-        slot = slot + lower_payload_slot_width(
-            lctx_variant_payload_ty(ctx, enum_name, variant_name, k)
-        );
-        k = k + 1;
-    }
-    slot
-}
-
-// Declared 128-bit width of an enum variant's payload slot, by enum name.
-//
-// The per-instruction payload maps only know a width when the scrutinee was
-// built in the same function, so a wide payload read out of a parameter would
-// lower as i64 and slip past the wide-aggregate gates in codegen and the C
-// emitters -- truncating the value and letting a contract over it be reported
-// Verified against the 8-byte model. The declaration knows the width whatever
-// the value's provenance. Returns -1 for narrow or unknown payloads: those
-// already lower correctly, and widening them here would change existing
-// FieldGet types.
-fn lctx_declared_wide_payload_ty(
-    ctx: LowerCtx, enum_name: String, variant_name: String, payload_index: i64
-) -> i64 {
-    let ty: i64 = lctx_variant_payload_ty(ctx, enum_name, variant_name, payload_index);
-    if ty == ITY_I128() || ty == ITY_U128() { return ty; }
-    -1
-}
-
 fn lctx_variant_payload_ast_tid(
     ctx: LowerCtx, enum_name: String, variant_name: String, payload_index: i64
 ) -> i64 {
@@ -4349,6 +4291,12 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
         let tag_val: i64 = lctx_find_variant_tag(ctx, enum_name, variant_name);
         let n_payload: i64 = list_len(a, fields_lid);
         let payload_values: Vec<i64> = Vec::new();
+        // The declaration decides the layout, exactly as it does for every read; a
+        // value whose lowered type disagrees then fails closed in codegen. Built-in
+        // Option/Result have no declaration, so their value types are used.
+        let payload_slot_tys: Vec<i64> = Vec::new();
+        let payload_slots: Vec<i64> = Vec::new();
+        let mut next_slot: i64 = 1;
         let mut owns_linear: bool = vec_contains_str(ctx.linear_owner_names, enum_name);
         let mut pvi: i64 = 0;
         while pvi < n_payload {
@@ -4368,12 +4316,17 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                 );
             }
             payload_values.push(payload_value);
-            if lctx_inst_ty(ctx, payload_value) == ITY_LPTR() {
+            let value_ty: i64 = lctx_inst_ty(ctx, payload_value);
+            let slot_ty: i64 = if payload_ty != -1 { payload_ty } else { value_ty };
+            payload_slot_tys.push(slot_ty);
+            payload_slots.push(next_slot);
+            next_slot = next_slot + lower_payload_slot_width(slot_ty);
+            if value_ty == ITY_LPTR() {
                 owns_linear = true;
             }
             pvi = pvi + 1;
         }
-        let size: i64 = (1 + lctx_built_payload_slot(ctx, enum_name, variant_name, payload_values, n_payload)) * 8;
+        let size: i64 = (1 + next_slot) * 8;
         let alloc_args: Vec<i64> = Vec::new();
         let alloc_ty: i64 = if owns_linear { ITY_LPTR() } else { ITY_PTR() };
         let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), alloc_ty, alloc_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""), origin);
@@ -4409,7 +4362,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let pfs_args: Vec<i64> = Vec::new();
             pfs_args.push(ptr_id);
             pfs_args.push(val_id);
-            lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), pfs_args, lower_payload_field_dk(lctx_built_payload_ty(ctx, enum_name, variant_name, payload_values, pi)), lctx_built_payload_slot(ctx, enum_name, variant_name, payload_values, pi), 0, String::from(""), origin);
+            lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), pfs_args, lower_payload_field_dk(payload_slot_tys[pi as u64]), payload_slots[pi as u64], 0, String::from(""), origin);
             pi = pi + 1;
         }
         return ptr_id;
@@ -4731,14 +4684,17 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                 };
                 let n_inner: i64 = list_len(a, inner_lid);
                 let mut ii: i64 = 0;
+                let mut field_slot: i64 = 1;
                 while ii < n_inner {
                     let inner_pid: i64 = list_get(a, inner_lid, ii);
                     let inner_ptag: i64 = pat_tag(a, inner_pid);
+                    let declared_ty: i64 = lctx_variant_payload_ty(ctx, en, vn, ii);
                     if inner_ptag == PAT_IDENT() {
                         let name_sid: i64 = pat_a(a, inner_pid);
                         let pname: String = arena_str(a, name_sid);
                         let aggregate_struct: String = lctx_get_pattern_aggregate(ctx, inner_pid);
-                        let declared_wide: i64 = lctx_declared_wide_payload_ty(ctx, en, vn, ii);
+                        // The declaration knows a wide payload's width whatever the value's provenance.
+                        let declared_wide: i64 = if lower_payload_slot_width(declared_ty) == 2 { declared_ty } else { -1 };
                         let checked_scalar: i64 = lctx_get_pattern_scalar_ty(ctx, inner_pid);
                         let field_ty: i64 = {
                             if aggregate_struct.len() > 0 && lctx_pattern_is_linear(ctx, inner_pid) == 1 {
@@ -4757,12 +4713,13 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                         };
                         let fg2_args: Vec<i64> = Vec::new();
                         fg2_args.push(ptr_id);
-                        let field_val: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ty, fg2_args, lower_payload_field_dk(field_ty), lctx_declared_payload_slot(ctx, en, vn, ii), 0, String::from(""), origin);
+                        let field_val: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ty, fg2_args, lower_payload_field_dk(field_ty), field_slot, 0, String::from(""), origin);
                         lctx_apply_pattern_aggregate_metadata(
                             ctx, field_val, inner_pid, aggregate_struct
                         );
                         lctx_define(ctx, pname, field_val);
                     }
+                    field_slot = field_slot + lower_payload_slot_width(declared_ty);
                     ii = ii + 1;
                 }
 

@@ -1795,7 +1795,9 @@ fn lower_inst(
                     .store(MemFlagsData::trusted(), hi, base, offset + 8);
                 let unit = builder.ins().iconst(types::I32, 0);
                 ctx.value_map.insert(inst.id, unit);
-            } else if let InstData::FieldIndex(idx) = inst.data {
+                return Ok(());
+            }
+            if let InstData::FieldIndex(idx) = inst.data {
                 let base = ctx.value_map[&inst.args[0]];
                 let new_val = ctx.value_map[&inst.args[1]];
                 let offset = (idx as i32) * 8;

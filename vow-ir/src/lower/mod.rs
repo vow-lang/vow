@@ -857,6 +857,14 @@ fn variant_payload_ty(ctx: &LowerCtx, inst: InstId, tag: i64) -> Option<Ty> {
         .flatten()
 }
 
+fn declared_payload_tys(ctx: &LowerCtx, enum_name: &str, tag: i64) -> Vec<Ty> {
+    usize::try_from(tag)
+        .ok()
+        .and_then(|tag| ctx.enum_variant_payload_tys.get(enum_name)?.get(tag))
+        .cloned()
+        .unwrap_or_default()
+}
+
 fn payload_slot_width(ty: Ty) -> u32 {
     if matches!(ty, Ty::I128 | Ty::U128) {
         2
@@ -3380,12 +3388,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .get(enum_name)
                 .and_then(|vs| vs.iter().position(|v| v == variant_name))
                 .unwrap_or(0) as i64;
-            let payload_tys = ctx
-                .enum_variant_payload_tys
-                .get(enum_name)
-                .and_then(|variants| variants.get(tag as usize))
-                .cloned()
-                .unwrap_or_default();
+            let payload_tys = declared_payload_tys(ctx, enum_name, tag);
             let payload_ast_types = ctx
                 .enum_variant_payload_ast_types
                 .get(enum_name)
@@ -3435,8 +3438,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         .unwrap_or_else(|| ctx.inst_ty(*v))
                 })
                 .collect();
-            let payload_slots: u32 = value_tys.iter().map(|ty| payload_slot_width(*ty)).sum();
-            let size = (2 + payload_slots) * 8;
+            let size = (payload_slot(&value_tys, value_tys.len()) + 1) * 8;
             let ptr_id = ctx.emit(
                 Opcode::RegionAlloc,
                 if owns_linear { Ty::LinearPtr } else { Ty::Ptr },
@@ -3570,12 +3572,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         let payload_ty = variant_payload_ty(ctx, ptr_id, expected_tag)
                             .or_else(|| ctx.inst_option_elem_ty.get(&ptr_id).copied())
                             .unwrap_or(Ty::I64);
-                        let declared_payload_tys: Vec<Ty> = ctx
-                            .enum_variant_payload_tys
-                            .get(enum_name)
-                            .and_then(|variants| variants.get(expected_tag as usize))
-                            .cloned()
-                            .unwrap_or_default();
+                        let declared_payload_tys =
+                            declared_payload_tys(ctx, enum_name, expected_tag);
                         for (i, inner_pat) in inner.iter().enumerate() {
                             if let PatKind::Ident { name, .. } = &inner_pat.kind {
                                 let aggregate = ctx

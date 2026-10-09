@@ -2581,14 +2581,23 @@ unsafe fn parse_string_arg<T: std::str::FromStr>(s: *const u8) -> Option<T> {
 // the function).
 macro_rules! define_option_parser {
     ($parse_name:ident, $parse_arena_name:ident, $ty:ty) => {
+        define_option_parser!(
+            $parse_name,
+            $parse_arena_name,
+            $ty,
+            alloc_option_in_arena,
+            i64
+        );
+    };
+    ($parse_name:ident, $parse_arena_name:ident, $ty:ty, $alloc:ident, $repr:ty) => {
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $parse_arena_name(arena: *mut VowArena, s: *const u8) -> *mut u8 {
             let value = unsafe { parse_string_arg::<$ty>(s) };
             unsafe {
-                alloc_option_in_arena(
+                $alloc(
                     arena,
                     stringify!($parse_arena_name),
-                    value.map(|v| v as i64),
+                    value.map(|v| v as $repr),
                 )
             }
         }
@@ -2641,35 +2650,18 @@ define_option_parser!(
     u32
 );
 
-macro_rules! define_wide_option_parser {
-    ($parse_name:ident, $parse_arena_name:ident, $ty:ty) => {
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $parse_arena_name(arena: *mut VowArena, s: *const u8) -> *mut u8 {
-            let value = unsafe { parse_string_arg::<$ty>(s) };
-            unsafe {
-                alloc_wide_option_in_arena(
-                    arena,
-                    stringify!($parse_arena_name),
-                    value.map(|v| v as u128),
-                )
-            }
-        }
-
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn $parse_name(s: *const u8) -> *mut u8 {
-            unsafe { with_root_arena(|arena| $parse_arena_name(arena, s)) }
-        }
-    };
-}
-
-define_wide_option_parser!(
+define_option_parser!(
     __vow_string_parse_i128_opt,
     __vow_string_parse_i128_opt_in_arena,
-    i128
+    i128,
+    alloc_wide_option_in_arena,
+    u128
 );
-define_wide_option_parser!(
+define_option_parser!(
     __vow_string_parse_u128_opt,
     __vow_string_parse_u128_opt_in_arena,
+    u128,
+    alloc_wide_option_in_arena,
     u128
 );
 
