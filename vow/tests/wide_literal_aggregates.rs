@@ -448,7 +448,7 @@ fn main() -> () [io] {
     print_i64(u128_to_u8_wrap((got as u128) >> 64) as i64);
 }
 "#,
-        "128-bit struct fields and enum payloads",
+        "128-bit struct fields",
         "128-bit struct fields",
     );
 }

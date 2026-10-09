@@ -207,7 +207,7 @@ fn report_narrowed_wide_argument() {
     );
 }
 
-const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields and enum payloads are not supported yet (epic #526): an aggregate \
+const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields are not supported yet (epic #526): an aggregate \
      field slot is 8 bytes, so a 128-bit field would truncate or overwrite its neighbour";
 
 const WIDE_SLOT_TYPE_MSG: &str = "internal error: a two-slot enum payload access must carry a 128-bit value, but lowering produced a narrower type";

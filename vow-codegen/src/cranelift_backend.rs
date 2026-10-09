@@ -25,7 +25,7 @@ use crate::return_materialization::{
 use crate::{Backend, BuildMode, CodegenError, CompiledObject, TraceMode};
 
 const WIDE_SLOT_TYPE_MSG: &str = "internal error: a two-slot enum payload access must carry a 128-bit value, but lowering produced a narrower type";
-const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields and enum payloads are not supported yet (epic #526): an aggregate \
+const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields are not supported yet (epic #526): an aggregate \
      field slot is 8 bytes, so a 128-bit field would truncate or overwrite its neighbour";
 
 pub struct CraneliftBackend;
@@ -6323,10 +6323,7 @@ mod tests {
         let Err(CodegenError::UnsupportedOpcode(message)) = result else {
             panic!("128-bit field loads must be rejected before Cranelift verification");
         };
-        assert!(
-            message.contains("128-bit struct fields and enum payloads"),
-            "{message}"
-        );
+        assert!(message.contains("128-bit struct fields"), "{message}");
     }
 
     #[test]
@@ -6370,10 +6367,7 @@ mod tests {
         let Err(CodegenError::UnsupportedOpcode(message)) = result else {
             panic!("128-bit field stores must be rejected before they can overwrite a slot");
         };
-        assert!(
-            message.contains("128-bit struct fields and enum payloads"),
-            "{message}"
-        );
+        assert!(message.contains("128-bit struct fields"), "{message}");
     }
 
     #[test]
