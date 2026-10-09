@@ -1,0 +1,76 @@
+module TestVcOps
+
+use ir
+use ir_printer
+use vc_ops
+
+// Every opcode of the IR has an entry in the op-model table, so adding an
+// opcode to ir.vow without deciding whether the verifier models it fails here.
+fn check_every_opcode_classified() -> i64 {
+    let mut op: i64 = 0;
+    while op < 256 {
+        if opcode_name(op) != String::from("???") && vc_op_model(op) == VC_OPM_UNCLASSIFIED() {
+            return 1 + op;
+        }
+        op = op + 1;
+    }
+    0
+}
+
+fn check_classes_are_disjoint() -> i64 {
+    let mut op: i64 = 0;
+    while op < 256 {
+        let mut n: i64 = 0;
+        if vc_op_modeled(op) { n = n + 1; }
+        if vc_op_unsupported(op) { n = n + 1; }
+        if op == IOP_CALL() { n = n + 1; }
+        if op == IOP_FIELD_GET() || op == IOP_FIELD_SET() { n = n + 1; }
+        if op == IOP_REM_F32() || op == IOP_REM_F64() { n = n + 1; }
+        if n > 1 { return 300 + op; }
+        op = op + 1;
+    }
+    0
+}
+
+fn check_known_classes() -> i64 {
+    if vc_op_model(IOP_WADD()) != VC_OPM_MODELED() { return 600; }
+    if vc_op_model(IOP_CADD()) != VC_OPM_UNSUPPORTED() { return 601; }
+    if vc_op_model(IOP_CALL()) != VC_OPM_CALL() { return 602; }
+    if vc_op_model(IOP_FIELD_SET()) != VC_OPM_FIELD() { return 603; }
+    if vc_op_model(IOP_REM_F32()) != VC_OPM_FLOAT_REM() { return 604; }
+    if vc_op_model(IOP_REM_F64()) != VC_OPM_FLOAT_REM() { return 605; }
+    if vc_op_model(9999) != VC_OPM_UNCLASSIFIED() { return 606; }
+    0
+}
+
+// Nothing is modelled yet: catalogued (unmodeled) and symbols the catalogue lacks alike.
+fn check_builtin_model() -> i64 {
+    if catalogue_verifier_known(String::from("__vow_fs_exists")) { return 700; }
+    if catalogue_verifier_known(String::from("__vow_string_print")) { return 701; }
+    if catalogue_verifier_known(String::from("__vow_vec_len")) { return 702; }
+    if catalogue_verifier_known(String::from("")) { return 703; }
+    0
+}
+
+fn check_closed_code_list() -> i64 {
+    if !vc_skip_code_valid(VC_SKIP_FUNCTION_HAS_EFFECTS()) { return 800; }
+    if !vc_skip_code_valid(VC_SKIP_RECURSION()) { return 801; }
+    if !vc_skip_code_valid(VC_SKIP_FLOAT_REM()) { return 802; }
+    if !vc_skip_code_valid(VC_SKIP_NON_DOMINATING_READ()) { return 803; }
+    if !vc_skip_code_valid(VC_SKIP_UNMODELED_BUILTIN()) { return 804; }
+    if !vc_skip_code_valid(VC_SKIP_UNSUPPORTED_OPCODE()) { return 805; }
+    if !vc_skip_code_valid(VC_SKIP_NON_MODELABLE_CALLEE()) { return 806; }
+    if !vc_skip_code_valid(VC_SKIP_RESERVED_SYMBOL()) { return 807; }
+    if !vc_skip_code_valid(VC_SKIP_WIDE_AGGREGATE_FIELD()) { return 808; }
+    if vc_skip_code_valid(String::from("something-else")) { return 809; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_every_opcode_classified();
+    if r == 0 { r = check_classes_are_disjoint(); }
+    if r == 0 { r = check_known_classes(); }
+    if r == 0 { r = check_builtin_model(); }
+    if r == 0 { r = check_closed_code_list(); }
+    i64_to_i32_wrap(r)
+}

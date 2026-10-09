@@ -1,0 +1,14 @@
+// TEST: category unverifiable
+// TEST: skip-reason unmodeled-builtin
+module UnmodeledBuiltinSkipped
+
+fn size(s: String) -> u64 vow {
+  ensures: result == result
+} {
+  s.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(size(String::from("a")));
+  0
+}
