@@ -1,0 +1,9 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "unary negation is not allowed on unsigned type"
+module NegOfUnsignedCast
+
+// The explicit `-(x as u64)` grouping negates the unsigned cast result, which is
+// rejected; `-x as u64` negates `x` first and is accepted.
+fn bad(x: i64) -> u64 {
+    -(x as u64)
+}

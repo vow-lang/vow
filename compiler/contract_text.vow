@@ -243,7 +243,7 @@ fn print_expr_text_at(a: AstArena, eid: i64, level: i64) -> String {
         let op: i64 = expr_a(a, eid);
         let operand_eid: i64 = expr_b(a, eid);
         let mut inner_s: String = print_expr_text_at(a, operand_eid, level);
-        if expr_tag(a, operand_eid) == EXPR_BINOP() {
+        if expr_tag(a, operand_eid) == EXPR_BINOP() || expr_tag(a, operand_eid) == EXPR_CAST() {
             inner_s = parenthesize_text(inner_s);
         }
         // `-!x` would lex as the checked-subtraction token `-!`.

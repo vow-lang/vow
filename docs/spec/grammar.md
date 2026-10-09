@@ -505,10 +505,14 @@ From loosest to tightest, Vow follows the usual C/Rust precedence for logical an
 
 `||`, `&&`, comparisons (`== != < <= > >=`), `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`
 
-Unary `-` and `!` bind tighter than every binary operator. The postfix forms
-(`.field`, `.method()`, `[index]`, `(args)`, `?`, and `as Type`) bind tighter
-still, so `-x as u64` is `-(x as u64)` and `a.len() as i64 + 1` is
-`(a.len() as i64) + 1`.
+Unary `-` and `!` bind tighter than every binary operator and tighter than
+`as Type`, matching Rust: `-x as u64` is `(-x) as u64` and `!b as i64` is
+`(!b) as i64`. The other postfix forms (`.field`, `.method()`, `[index]`,
+`(args)`, `?`) bind tighter than unary, so `-v.len()` is `-(v.len())`, and
+`as Type` binds tighter than every binary operator, so `a.len() as i64 + 1` is
+`(a.len() as i64) + 1`. To negate a cast result write `-(x as i64)`. The
+canonical printer prints exactly that, and prints the cast of a negation as
+`(-x) as u64`.
 
 `&` is only the infix bitwise AND operator (`lhs & rhs`). There is no prefix
 `&expr`: Vow has no borrow expressions, so `&x`, `&mut x`, `&&x` (and `x & &y`)
