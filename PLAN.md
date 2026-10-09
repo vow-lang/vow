@@ -1,7 +1,7 @@
 # Plan: route self-hosted bare `vowc <file.vow>` through the `build` path (issue #596)
 
 ## Goal
-Make the self-hosted no-subcommand form behave exactly like `vowc build` (verify by default, `--no-verify` opt-out, build-result JSON, fail closed on VerifyFailed/Skipped), mirroring the Rust driver's `None` arm (`vow/src/main.rs` ~10169-10220, which calls `run_build_command`). Delete the divergent `run_legacy` body instead of patching it.
+Make the self-hosted no-subcommand form behave exactly like `vowc build` (verify by default, `--no-verify` opt-out, build-result JSON, fail closed on VerifyFailed/Skipped), mirroring the Rust driver's `None` arm (`vow/src/main.rs:1042-1090`, the `None =>` arm; verified: flattened `Args` in `vow/src/cli.rs:140`, source-required message `vow: source file required (try --help or use a subcommand)`, `maybe_auto_install`, then the same `run_build_command(..., args.no_verify, args.dump_ir, ...)` as `Command::Build` at :841-870 — no `--emit-c`/`--verify` fields, no Rust change needed). Delete the divergent `run_legacy` body instead of patching it.
 
 ## Assumptions
 - Line numbers in the issue are stale; current locations: `run_legacy` `compiler/main.vow:2427-2560`, `run_build` `:1919`, `main()` `:16284-16332`, `get_source_path` `:58`, `get_source_path_sub` `:81`, `frontend_path_from_argv` `:157`. (best guess, verified by reading)
@@ -24,13 +24,13 @@ Make the self-hosted no-subcommand form behave exactly like `vowc build` (verify
 ## Steps (ordered, TDD slices)
 
 ### Slice 1 — red: behavioural test that bare form verifies / fails closed
-- **File**: `scripts/full_test.sh` (new block next to `verify_jobs_counterexample_suppresses_later_soft_meta`, ~l.1031), mirrored in `tests/run_tests.sh`.
+- **File**: `tests/cli-flags/tests.sh` (already wired into CI via `scripts/full_test.sh` Section 4h, l.1456-1464, run for both compilers; fast red-green loop, unlike the ~40 min `full_test.sh`). Needs ESBMC on PATH — skip the verify cases (with a printed note) when `esbmc` is absent. Optionally also a `legacy` parity block in `full_test.sh`.
 - **Test**: for `tests/verify-fail/verify_jobs_ce_before_soft.vow` (known VerifyFailed fixture), run `run_self "$fixture" -o "$TMPDIR/x"` and assert exit != 0, `status == "VerifyFailed"`, no output binary; for a proven fixture (`tests/verify/*` pick an existing small one) assert exit 0, `status == "Verified"` (check build-result key names against `diag_emit_build_verify_json`) and binary exists; with `--no-verify` assert exit 0 and `Unverified`. Also assert Rust (`$RUST`) bare form gives the same JSON via the existing `compare_json` helper (run both, `scripts/parity.py json`).
 - Fails today: legacy returns `Unverified` / prints IR.
 
 ### Slice 2 — green: reuse `run_build` for the bare form
 - **File**: `compiler/main.vow`.
-- **Change**: rename `run_build(argv)` body to `run_build_cmd(argv, sub: bool)`; first line becomes `frontend_path_from_argv(argv, sub, ...)` with the command label `"build"` when `sub` else a path that emits the existing legacy message `vow: source file required (try --help or use a subcommand)` and exits 1 (add a small branch in `frontend_path_from_argv` or pass a message; keep `complexity`/`verify`/`contracts` callers untouched). `run_build(argv) = run_build_cmd(argv, true)`. In `main()` replace `run_legacy(argv)` with `run_build_cmd(argv, false)` (keep `maybe_auto_install_skill()` — cli.md:108 documents the bare form auto-installs).
+- **Change**: rename `run_build(argv)` body to `run_build_cmd(argv, sub: bool)`; first line becomes `frontend_path_from_argv(argv, sub, "build")`. The legacy no-source message is handled in `main()` instead (decision): before dispatching the bare form, `if get_source_path(argv).len() == 0 { eprintln_str("vow: source file required (try --help or use a subcommand)"); return 1; }`. `frontend_path_from_argv` and its four callers stay untouched. `run_build(argv) = run_build_cmd(argv, true)`. In `main()` replace `run_legacy(argv)` with `run_build_cmd(argv, false)` (keep `maybe_auto_install_skill()` — cli.md:108 documents the bare form auto-installs).
 - Delete `run_legacy` (2427-2560) wholesale; confirm no other caller (`grep -n run_legacy compiler/`). Do **not** copy-paste its verify loop — it duplicates `run_build`'s and is the source of the drift.
 - Default output: `run_build` uses `default_output(path)` when no `-o` (matches Rust `build/<stem>`); this is an intended behaviour change for bare-without-`-o` (previously IR dump) — document in cli.md/PR.
 - **Reuses**: `run_build` (`main.vow:1919`), `get_source_path` (`:58`), `default_output` (`:105`).
@@ -51,6 +51,9 @@ Make the self-hosted no-subcommand form behave exactly like `vowc build` (verify
 - `docs/spec/cli.md`: line 52 replace "the legacy `vowc <file> --verify` form" with "the bare `vowc <file>` form (identical to `build`)"; add under `vow build`: bare form is exactly `vow build` — verifies by default, same flags, same JSON, fails closed; `--emit-c` and `--verify` are not accepted. Keep the line-11 / line-108 text.
 - Run `uv run python scripts/generate_help.py` only if help-covered sections changed; `python3 scripts/check_help_coverage.py` must stay green.
 
+### Slice 6 — docs outside spec
+- `CLAUDE.md` (repo root): the self-hosted examples `/tmp/vow_main compiler/lexer.vow` (type-check, print IR), `/tmp/vow_main -o /tmp/lexer compiler/lexer.vow`, and the "Bootstrap triple test" block (`/tmp/compiler_a -o /tmp/compiler_b ...`) use the bare form; rewrite to `build --no-verify` / `--dump-ir`. README.md:87 mention of `vowc <source.vow>` auto-install stays true.
+
 ## Testing
 - Per slice: `build/vowc test compiler/tests/test_cli_flags.vow`; `bash tests/cli-flags/tests.sh` (`VOWC_BIN=build/vowc`, and Rust with `VOWC_KIND=rust`).
 - Before PR: `scripts/bootstrap.sh --skip-cargo --no-cache` on final head SHA (record SHA in checklist per CLAUDE.md), then `scripts/full_test.sh` (~40 min; run in background and poll with short bounded checks — no sleep loops).
@@ -61,6 +64,8 @@ Make the self-hosted no-subcommand form behave exactly like `vowc build` (verify
 - New fixtures: none required — reuse `tests/verify-fail/verify_jobs_ce_before_soft.vow` and an existing `tests/verify/*.vow`.
 
 ## Risks
+- **Test-worker argv (checked)**: `main.vow:1206-1215` `test_worker_common_flags` forwards `--verify` to `vowc test` workers (`run_tests_parallel(argv[0], ...)`, l.2152). That `--verify` belongs to `CMD_TEST` (`cf_kind_test` still accepts it), not the legacy table. Implementer must confirm the worker spawn argv starts with the `test` subcommand (read `run_tests_parallel`) so the bare-form change cannot affect workers; if it spawns bare, add `test` there.
+- **Wider caller grep (done)**: no bare-form callers in README/docs/examples/install scripts; `scripts/cli_compat_test.sh:127` and `scripts/full_test.sh:88` use the *Rust* bare form with `--no-verify` (unchanged). `full_test.sh:1204-1212` always passes `verify`/`build`. Implementer re-runs `rg -n 'run_self(_bin)? +(-|"?\$)' scripts tests` once before landing.
 - **Bootstrap triple test (biggest)**: Stage 1/2 in `full_test.sh` invoke the self-hosted binary bare with `-o`; after the change that would run ESBMC on the entire concat compiler. Mitigation: Slice 4 switches to `build --no-verify`. Grep once more for other bare-form uses (`rg -n 'compiler_[abc]|vowc2|vowc3' scripts tests`) before landing.
 - **Binary fixed point**: `main.vow` shrinks; codegen is deterministic so b==c should hold, but any new `Vec`/map iteration must not introduce ordering nondeterminism. No `BTreeMap`/clif-shim changes.
 - **Behaviour change for users**: bare `vowc file.vow` without `-o` now writes `build/<stem>` and requires ESBMC (fails with `VerifyFailed` JSON if missing, same as `build`). That is the documented contract.
