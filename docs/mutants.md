@@ -38,6 +38,10 @@ Before the first mutant, `run` executes the Tier-1 and Tier-1.5 oracles once on 
 
 Tier 2 is not baselined (a full suite run per shard is ~30-46 minutes); Tier 1.5 already runs the same `full_test.sh` prefix. The baseline reuses `--tier1-timeout-secs` and `--tier15-timeout-secs`, and costs one Tier-1 plus one Tier-1.5 run per shard. Pass `--skip-baseline` to bypass it.
 
+### Infrastructure failures
+
+Each oracle command runs as `cd <workdir> || exit 125; (...) > log`. If `cd` fails (the worktree vanished or became unreadable), the oracle never ran, so exit code 125 is reserved: `run` aborts with exit 1 and `oracle workdir unreachable (cd failed); aborting shard` instead of scoring the mutant `caught`; the mutated file is restored best-effort and the worktree and lock are released. An oracle command that itself exits 125 is indistinguishable and aborts the run the same way.
+
 ### Tier 1.5
 
 The oracle is a three-tier pipeline: Tier 1 (build-to-fixed-point only) → Tier 1.5 (a fast,

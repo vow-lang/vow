@@ -914,6 +914,31 @@ t32_baseline_catches_missing_relative_binary() {
     assert_baseline_abort t32 'tier 1 baseline' --tier1-cmd 'test -x ./does-not-exist' --tier15-cmd 'true'
 }
 
+assert_workdir_unreachable_abort() {
+    local label="$1"; shift
+    local outdir="$TMP/out_$label" err rc before_worktrees after_worktrees
+    rm -rf "$outdir"
+    before_worktrees=$(git worktree list | grep -c '/tmp/vow-mutants-' || true)
+    set +e
+    err=$(run_vowm run --output-dir "$outdir" --root tests/fixtures/mutants --skip-baseline "$@" --tier2-cmd 'true' 2>&1 >/dev/null)
+    rc=$?
+    set -e
+    after_worktrees=$(git worktree list | grep -c '/tmp/vow-mutants-' || true)
+    assert_eq "$label: exit code" "1" "$rc"
+    assert_grep "$label: stderr names the unreachable workdir" 'workdir unreachable' "$err"
+    assert_eq "$label: worktree released" "$before_worktrees" "$after_worktrees"
+    assert_eq "$label: lock released" "no" "$([ -e "$outdir/.lock" ] && echo yes || echo no)"
+    assert_eq "$label: no outcomes.json" "no" "$([ -e "$outdir/outcomes.json" ] && echo yes || echo no)"
+}
+
+t33_workdir_unreachable_at_tier1_aborts_run() {
+    assert_workdir_unreachable_abort t33 --tier1-cmd 'exit 125' --tier15-cmd 'true'
+}
+
+t34_workdir_unreachable_at_tier15_aborts_run() {
+    assert_workdir_unreachable_abort t34 --tier1-cmd 'true' --tier15-cmd 'exit 125'
+}
+
 # --- main ---
 
 setup
@@ -951,6 +976,8 @@ t29_baseline_tier1_failure_aborts_run
 t30_baseline_tier15_failure_aborts_run
 t31_skip_baseline_restores_per_mutant_scoring
 t32_baseline_catches_missing_relative_binary
+t33_workdir_unreachable_at_tier1_aborts_run
+t34_workdir_unreachable_at_tier15_aborts_run
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then
