@@ -103,11 +103,11 @@ fn suppress_sigpipe(stdin: &ChildStdin) {
 #[cfg(not(target_vendor = "apple"))]
 fn suppress_sigpipe(_stdin: &ChildStdin) {}
 
-/// Writes `data` with SIGPIPE blocked on this thread, so a child that stopped
-/// reading yields `EPIPE` instead of killing the program. The process-wide
-/// disposition is left alone: ignoring it globally would also keep a program
-/// alive after its own stdout consumer (`| head`) has gone away.
-fn write_shielded(stdin: &mut ChildStdin, data: &[u8]) -> bool {
+/// Runs `f` with SIGPIPE blocked on this thread, so a write to a closed pipe
+/// yields `EPIPE` instead of killing the program. The process-wide disposition
+/// is left alone: ignoring it globally would also keep a program alive after
+/// its own stdout consumer (`| head`) has gone away.
+pub(crate) fn with_sigpipe_blocked<T>(f: impl FnOnce() -> T) -> T {
     let mut sigpipe: libc::sigset_t = unsafe { std::mem::zeroed() };
     let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
     unsafe {
@@ -115,7 +115,7 @@ fn write_shielded(stdin: &mut ChildStdin, data: &[u8]) -> bool {
         libc::sigaddset(&mut sigpipe, libc::SIGPIPE);
         libc::pthread_sigmask(libc::SIG_BLOCK, &sigpipe, &mut previous);
     }
-    let written = stdin.write_all(data).and_then(|()| stdin.flush()).is_ok();
+    let result = f();
     unsafe {
         if libc::sigismember(&previous, libc::SIGPIPE) != 1 {
             let mut pending: libc::sigset_t = std::mem::zeroed();
@@ -127,7 +127,36 @@ fn write_shielded(stdin: &mut ChildStdin, data: &[u8]) -> bool {
         }
         libc::pthread_sigmask(libc::SIG_SETMASK, &previous, std::ptr::null_mut());
     }
-    written
+    result
+}
+
+/// Runs `f`, which writes to `fd`, so that a closed reader yields `EPIPE` on
+/// every platform. Blocking SIGPIPE on this thread is not enough on Darwin,
+/// which directs the signal at the process, so there the descriptor's own
+/// no-SIGPIPE flag is set for the duration of the call and then restored.
+#[cfg(target_vendor = "apple")]
+pub(crate) fn with_sigpipe_suppressed<T>(fd: libc::c_int, f: impl FnOnce() -> T) -> T {
+    // Not exported by the libc crate; values from <sys/fcntl.h>.
+    const F_SETNOSIGPIPE: libc::c_int = 73;
+    const F_GETNOSIGPIPE: libc::c_int = 74;
+    let previous = unsafe { libc::fcntl(fd, F_GETNOSIGPIPE) };
+    let changed = previous == 0 && unsafe { libc::fcntl(fd, F_SETNOSIGPIPE, 1) } == 0;
+    let result = with_sigpipe_blocked(f);
+    if changed {
+        unsafe { libc::fcntl(fd, F_SETNOSIGPIPE, 0) };
+    }
+    result
+}
+
+#[cfg(not(target_vendor = "apple"))]
+pub(crate) fn with_sigpipe_suppressed<T>(_fd: libc::c_int, f: impl FnOnce() -> T) -> T {
+    with_sigpipe_blocked(f)
+}
+
+/// Writes `data` with SIGPIPE shielded, so a child that stopped reading yields
+/// `EPIPE` instead of killing the program.
+fn write_shielded(stdin: &mut ChildStdin, data: &[u8]) -> bool {
+    with_sigpipe_blocked(|| stdin.write_all(data).and_then(|()| stdin.flush()).is_ok())
 }
 
 fn spawn_stdout_reader(

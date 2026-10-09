@@ -4245,6 +4245,41 @@ pub unsafe extern "C" fn __vow_eprintln_str(s: *const u8) {
     }
 }
 
+const STDERR_WRITE_OK: i64 = 0;
+const STDERR_WRITE_BROKEN_PIPE: i64 = 1;
+const STDERR_WRITE_FAILED: i64 = 2;
+
+/// Classifies one `bytes + "\n"` write: a broken pipe is `1`, any other failure
+/// `2`. `EBADF` is `0` because Rust std treats a closed stderr as a successful
+/// write, so `2>&-` behaves the same under both compilers.
+fn stderr_write_status(write: impl FnOnce(&[u8]) -> std::io::Result<()>, bytes: &[u8]) -> i64 {
+    let mut line = Vec::with_capacity(bytes.len() + 1);
+    line.extend_from_slice(bytes);
+    line.push(b'\n');
+    match write(&line) {
+        Ok(()) => STDERR_WRITE_OK,
+        Err(e) if e.raw_os_error() == Some(libc::EBADF) => STDERR_WRITE_OK,
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => STDERR_WRITE_BROKEN_PIPE,
+        Err(_) => STDERR_WRITE_FAILED,
+    }
+}
+
+/// Writes `s` and a newline to stderr and reports the outcome: `0` written,
+/// `1` broken pipe, `2` any other failure. SIGPIPE is suppressed for the call
+/// so a closed pipe returns `1` instead of terminating the process.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_try_eprintln_str(s: *const u8) -> i64 {
+    if s.is_null() {
+        return STDERR_WRITE_OK;
+    }
+    sanitize_on_read(s as usize, 0);
+    let v = unsafe { &*(s as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    piped::with_sigpipe_suppressed(libc::STDERR_FILENO, || {
+        stderr_write_status(|line| std::io::stderr().write_all(line), bytes)
+    })
+}
+
 /// All of stdin; blocks until EOF, so callers read it before locking an arena.
 fn read_all_stdin() -> Vec<u8> {
     use std::io::Read;
@@ -5403,6 +5438,72 @@ fn sanitize_on_read(vec_addr: usize, _index: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stderr_write_status_classifies_each_failure() {
+        use std::io::ErrorKind;
+        for (kind, want) in [
+            (ErrorKind::BrokenPipe, 1),
+            (ErrorKind::PermissionDenied, 2),
+            (ErrorKind::StorageFull, 2),
+            (ErrorKind::WriteZero, 2),
+        ] {
+            let got = stderr_write_status(|_| Err(std::io::Error::from(kind)), b"x");
+            assert_eq!(got, want, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn stderr_write_status_treats_a_closed_descriptor_as_written() {
+        let ebadf = |_: &[u8]| Err(std::io::Error::from_raw_os_error(libc::EBADF));
+        assert_eq!(stderr_write_status(ebadf, b"x"), 0);
+    }
+
+    #[test]
+    fn stderr_write_status_appends_exactly_one_newline() {
+        let mut out: Vec<u8> = Vec::new();
+        let status = stderr_write_status(
+            |line| {
+                out.extend_from_slice(line);
+                Ok(())
+            },
+            b"hello",
+        );
+        assert_eq!(status, 0);
+        assert_eq!(out, b"hello\n");
+    }
+
+    #[test]
+    fn try_eprintln_str_reports_written_for_null_and_real_strings() {
+        assert_eq!(unsafe { __vow_try_eprintln_str(std::ptr::null()) }, 0);
+        let mut bytes = *b"try_eprintln_str test line";
+        let s = VowVec {
+            ptr: bytes.as_mut_ptr(),
+            len: bytes.len(),
+            cap: bytes.len(),
+        };
+        assert_eq!(
+            unsafe { __vow_try_eprintln_str(&s as *const VowVec as *const u8) },
+            0
+        );
+    }
+
+    #[test]
+    fn broken_pipe_is_reported_without_raising_sigpipe() {
+        let mut fds = [0 as libc::c_int; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        unsafe { libc::close(fds[0]) };
+        let mut w = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(fds[1]) };
+        let inherited = unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+        let status = piped::with_sigpipe_suppressed(fds[1], || {
+            stderr_write_status(|line| w.write_all(line), b"x")
+        });
+        unsafe { libc::signal(libc::SIGPIPE, inherited) };
+        assert_eq!(status, 1);
+        let mut pending: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe { libc::sigpending(&mut pending) };
+        assert_ne!(unsafe { libc::sigismember(&pending, libc::SIGPIPE) }, 1);
+    }
 
     /// The 128-bit division helpers must agree with native Rust `i128`/`u128`
     /// arithmetic across both limbs, including the sign rules that differ

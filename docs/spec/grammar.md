@@ -1335,6 +1335,9 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 | `print_i64`      | `fn(v: i64) -> ()`                         | `[io]`     |
 | `print_u64`      | `fn(v: u64) -> ()`                         | `[io]`     |
 | `eprintln_str`   | `fn(s: String) -> ()`                      | `[io]`     |
+| `try_eprintln_str` | `fn(s: String) -> i64`                   | `[io]`     |
+
+`try_eprintln_str` writes `s` and a newline to stderr and reports the outcome instead of ignoring it: `0` when written, `1` when stderr is a closed pipe (`BrokenPipe`), `2` for any other write failure. A closed stderr descriptor (`EBADF`) counts as `0`, matching Rust's standard library. SIGPIPE is blocked for the duration of the call, so a closed pipe returns `1` instead of terminating the process. `eprintln_str` ignores write failures entirely.
 
 #### Debug
 

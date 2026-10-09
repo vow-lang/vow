@@ -212,6 +212,14 @@ FS_STDIN_ARGS_STDERR_OPS = [
         "doc_signature": "fn(s: String) -> ()",
         "effects": "[io]",
     },
+    {
+        "name": "try_eprintln_str",
+        "runtime_symbol": "__vow_try_eprintln_str",
+        "params": ["ptr"],
+        "return": "i64",
+        "doc_signature": "fn(s: String) -> i64",
+        "effects": "[io]",
+    },
 ]
 
 # Process operations migrated in #1273 -- see docs/spec/operations.json for

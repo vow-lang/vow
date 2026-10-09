@@ -171,7 +171,7 @@ fn frontend_path_from_argv(argv: Vec<String>, sub: bool, cmd: String) -> String 
         }
     };
     if path.len() == 0 {
-        eprintln_str(str3(String::from("vow "), cmd, String::from(": source file required (try --help)")));
+        diag_eprintln_best_effort(str3(String::from("vow "), cmd, String::from(": source file required (try --help)")));
         process_exit(1);
     }
     path
@@ -1119,7 +1119,7 @@ fn emit_ce_vars(vr: VerifyResult) [io] {
     let vvals: Vec<String> = vr.var_values;
     let mut vi: u64 = 0;
     while vi < vnames.len() {
-        eprintln_str(str4(String::from("    "), vnames[vi], String::from(" = "), vvals[vi]));
+        diag_eprintln_best_effort(str4(String::from("    "), vnames[vi], String::from(" = "), vvals[vi]));
         vi = vi + 1;
     }
 }
@@ -1130,7 +1130,7 @@ fn skip_if_non_modelable(f: IrFunction, ir_mod: IrModule, const_fn_indices: Vec<
     if reason.len() == 0 {
         return false;
     }
-    eprintln_str(str3(String::from("  "), f.name, String::from(": SKIPPED (non-modelable in verifier)")));
+    diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": SKIPPED (non-modelable in verifier)")));
     let msg: String = str3(
         String::from("skipped verification of `"),
         f.name,
@@ -1200,7 +1200,7 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
                     // Fail closed: a non-modelable function is not statically proved.
                     any_skipped = 1;
                 } else {
-                    eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
+                    diag_eprintln_best_effort(str3(String::from("Verifying "), f.name, String::from("...")));
                     let started: EsbmcStart = verify_start(esbmc_bin, f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                     model_bounds[fi as u64] = started.bounds;
                     in_flight_h.push(started.handle);
@@ -1243,7 +1243,7 @@ fn emit_ir_warnings(ir_mod: IrModule, dctx: DiagCtx) [io] {
     while i < ws.len() {
         let d: Diagnostic = diag_new(SEV_WARNING(), EC_LOWERING_WARNING(), ws[i], String::from(""), 0, 0, DIAG_BLAME_NONE());
         diag_ctx_emit(dctx, d);
-        eprintln_str(ws[i]);
+        diag_eprintln_best_effort(ws[i]);
         i = i + 1;
     }
 }
@@ -1259,7 +1259,7 @@ fn resolve_verify_jobs(argv: Vec<String>) -> i64 [io] {
             Option::None => { 0 },
         };
         if n < 1 {
-            eprintln_str(String::from("error: --verify-jobs must be >= 1"));
+            diag_eprintln_best_effort(String::from("error: --verify-jobs must be >= 1"));
             process_exit(1);
             1
         } else {
@@ -1284,7 +1284,7 @@ fn resolve_test_jobs(argv: Vec<String>, do_verify: bool) -> i64 [io] {
         Option::None => { 0 },
     };
     if n < 1 {
-        eprintln_str(String::from("error: --jobs must be >= 1"));
+        diag_eprintln_best_effort(String::from("error: --jobs must be >= 1"));
         process_exit(1);
     }
     n
@@ -1461,7 +1461,7 @@ fn report_arith_overflow(f: IrFunction, ir_mod: IrModule, path: String, site: Pa
     // A function's own source_file is authoritative under multi-module
     // compilation; `path` is only the entry path the CLI was given.
     let owner_file: String = if owner_src.len() > 0 { owner_src } else { path };
-    eprintln_str(str3(String::from("  "), owner_name, String::from(": PROVEN (checked arithmetic can abort)")));
+    diag_eprintln_best_effort(str3(String::from("  "), owner_name, String::from(": PROVEN (checked arithmetic can abort)")));
     let msg: String = str3(
         String::from("checked arithmetic in `"),
         owner_name,
@@ -1569,7 +1569,7 @@ fn verify_collect_and_report(
             return 1;
         }
         if st == VERIFY_FAILED() {
-            eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
+            diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": FAILED")));
             emit_ce_vars(vr);
             if ces.len() == 0 {
                 ces.push(build_ce_from_result(f, ir_mod, vr, path));
@@ -1577,36 +1577,36 @@ fn verify_collect_and_report(
             return 0;
         }
         if st == VERIFY_TIMEOUT() {
-            eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
+            diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
             record_soft_fail(soft_meta, String::from("timeout"), String::from(""), f.name);
             return 0;
         }
         if st == VERIFY_UNKNOWN() {
-            eprintln_str(str3(String::from("  "), f.name, String::from(": UNKNOWN")));
+            diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": UNKNOWN")));
             record_soft_fail(soft_meta, String::from("unknown"), parse_unknown_reason(vr.raw_output), f.name);
             return 0;
         }
         if st == VERIFY_NOT_FOUND() {
-            eprintln_str(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
+            diag_eprintln_best_effort(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
             record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"), f.name);
             return 0;
         }
-        eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
+        diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": ERROR")));
         record_soft_fail(soft_meta, String::from("error"), String::from("ESBMC error during contracts-only verification"), f.name);
         return 0;
     }
     if st == VERIFY_PROVEN() {
-        eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
+        diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": PROVEN")));
         // No on-disk cache on self-hosted; see the note above
         // resolve_auto_bv_solver in verifier.vow.
         return 1;
     }
     if st == VERIFY_PROVEN_IR() {
-        eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN (IR)")));
+        diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": PROVEN (IR)")));
         return 1;
     }
     if st == VERIFY_FAILED() {
-        eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
+        diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": FAILED")));
         emit_ce_vars(vr);
         if ces.len() == 0 {
             ces.push(build_ce_from_result(f, ir_mod, vr, path));
@@ -1630,11 +1630,11 @@ fn verify_collect_and_report(
         let bv_solver: String = resolve_auto_bv_solver(solver);
         let auto_enc: bool = is_auto_encoding(encoding);
         if (!bv_is_unknown || bv_memory_limit) && auto_enc && bv_solver != String::from("bitwuzla") {
-            eprintln_str(str3(String::from("  "), f.name, String::from(": BV inconclusive, retrying with --z3 --ir...")));
+            diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": BV inconclusive, retrying with --z3 --ir...")));
             let vr2: VerifyResult = verify_function_ir_fallback(esbmc_bin, f, ir_mod, max_k_step, use_cache, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
             let st2: i64 = vr2.status;
             if st2 == VERIFY_PROVEN_IR() {
-                eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN (IR)")));
+                diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": PROVEN (IR)")));
                 return 1;
             }
             if st2 == VERIFY_FAILED() {
@@ -1642,44 +1642,44 @@ fn verify_collect_and_report(
                 // overflow modeling), so a FAILED here is unsound — surface
                 // the original timeout instead. Mirrors solver_strategy's
                 // demote-IR-FAILED rule.
-                eprintln_str(str4(String::from("  "), f.name, String::from(": "), bv_label_upper));
+                diag_eprintln_best_effort(str4(String::from("  "), f.name, String::from(": "), bv_label_upper));
                 record_soft_fail(soft_meta, bv_label, bv_msg_initial, f.name);
                 return 0;
             }
             if st2 == VERIFY_TIMEOUT() {
-                eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT (BV and IR)")));
+                diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": TIMEOUT (BV and IR)")));
                 // Empty verify_message — match Rust's verify_status="timeout" + None shape.
                 record_soft_fail(soft_meta, String::from("timeout"), String::from(""), f.name);
                 return 0;
             }
             if st2 == VERIFY_UNKNOWN() {
                 let reason2: String = parse_unknown_reason(vr2.raw_output);
-                eprintln_str(str3(String::from("  "), f.name, String::from(": UNKNOWN (BV and IR)")));
+                diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": UNKNOWN (BV and IR)")));
                 record_soft_fail(soft_meta, String::from("unknown"), reason2, f.name);
                 return 0;
             }
             if st2 == VERIFY_NOT_FOUND() {
-                eprintln_str(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
+                diag_eprintln_best_effort(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
                 record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"), f.name);
                 return 0;
             }
-            eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
+            diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": ERROR")));
             record_soft_fail(soft_meta, String::from("error"), String::from("ESBMC error during IR fallback"), f.name);
             return 0;
         }
-        eprintln_str(str4(String::from("  "), f.name, String::from(": "), bv_label_upper));
+        diag_eprintln_best_effort(str4(String::from("  "), f.name, String::from(": "), bv_label_upper));
         record_soft_fail(soft_meta, bv_label, bv_msg_initial, f.name);
         return 0;
     }
     if st == VERIFY_NOT_FOUND() {
-        eprintln_str(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
+        diag_eprintln_best_effort(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
         record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"), f.name);
         return 0;
     }
     let error_message: String = {
         if vr.raw_output.len() > 0 { vr.raw_output } else { String::from("unrecognized ESBMC outcome") }
     };
-    eprintln_str(str5(String::from("  "), f.name, String::from(": ERROR ("), error_message, String::from(")")));
+    diag_eprintln_best_effort(str5(String::from("  "), f.name, String::from(": ERROR ("), error_message, String::from(")")));
     record_soft_fail(soft_meta, String::from("error"), error_message, f.name);
     0
 }
@@ -1693,7 +1693,7 @@ fn native_report_result(f: IrFunction, ir_mod: IrModule, path: String, oc: VcOut
     let st: i64 = vr.status;
     if st == VERIFY_PROVEN() {
         if oc.sites.len() == 0 {
-            eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
+            diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": PROVEN")));
         }
         let mut si: u64 = 0;
         while si < oc.sites.len() {
@@ -1703,7 +1703,7 @@ fn native_report_result(f: IrFunction, ir_mod: IrModule, path: String, oc: VcOut
         return 1;
     }
     if st == VERIFY_FAILED() {
-        eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
+        diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": FAILED")));
         emit_ce_vars(vr);
         if ces.len() == 0 {
             ces.push(build_ce_from_result(f, ir_mod, vr, path));
@@ -1711,12 +1711,12 @@ fn native_report_result(f: IrFunction, ir_mod: IrModule, path: String, oc: VcOut
         return 0;
     }
     if st == VERIFY_TIMEOUT() {
-        eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
+        diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
         record_soft_fail(soft_meta, String::from("timeout"), String::from(""), f.name);
         return 0;
     }
     if st == VERIFY_UNKNOWN() {
-        eprintln_str(str3(String::from("  "), f.name, String::from(": UNKNOWN")));
+        diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": UNKNOWN")));
         let why: String = {
             if output_has_memory_limit(vr.raw_output) { memory_limit_reason() }
             else { String::from("the solver answered unknown") }
@@ -1725,12 +1725,12 @@ fn native_report_result(f: IrFunction, ir_mod: IrModule, path: String, oc: VcOut
         return 0;
     }
     if st == VERIFY_PANICKED() {
-        eprintln_str(str5(String::from("  "), f.name, String::from(": PANICKED ("), vr.raw_output, String::from(")")));
+        diag_eprintln_best_effort(str5(String::from("  "), f.name, String::from(": PANICKED ("), vr.raw_output, String::from(")")));
         record_soft_fail(soft_meta, String::from("panicked"), vr.raw_output, f.name);
         return 0;
     }
     if st == VERIFY_NOT_FOUND() {
-        eprintln_str(String::from("error: Bitwuzla not found; install Bitwuzla to run native verification"));
+        diag_eprintln_best_effort(String::from("error: Bitwuzla not found; install Bitwuzla to run native verification"));
         record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("Bitwuzla not found"), f.name);
         return 0;
     }
@@ -1738,13 +1738,13 @@ fn native_report_result(f: IrFunction, ir_mod: IrModule, path: String, oc: VcOut
         if vr.raw_output.len() > 0 { vr.raw_output } else { String::from("unrecognized Bitwuzla outcome") }
     };
     let detail: String = str_trim(raw);
-    eprintln_str(str5(String::from("  "), f.name, String::from(": ERROR ("), detail, String::from(")")));
+    diag_eprintln_best_effort(str5(String::from("  "), f.name, String::from(": ERROR ("), detail, String::from(")")));
     record_soft_fail(soft_meta, String::from("error"), detail, f.name);
     0
 }
 
 fn native_skip_function(f: IrFunction, reason: String, dctx: DiagCtx) [io] {
-    eprintln_str(str3(String::from("  "), f.name, String::from(": SKIPPED (outside the native verifier subset)")));
+    diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": SKIPPED (outside the native verifier subset)")));
     let msg: String = str3(
         String::from("skipped verification of `"),
         f.name,
@@ -1815,7 +1815,7 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
             any_skipped = true;
             e = e + 1;
         } else if vc_pool_ready(pool, en.task as u64) {
-            eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
+            diag_eprintln_best_effort(str3(String::from("Verifying "), f.name, String::from("...")));
             let oc: VcOutcome = pool.results[en.task as u64];
             if native_report_result(f, ir_mod, path, oc, ces, soft_meta, dctx) == 0 {
                 all_proven = false;
@@ -1848,12 +1848,12 @@ fn run_verify_worker(argv: Vec<String>) -> i32 [io, read, write] {
     let checked: CheckedFrontend = fr.checked;
     let fns: Vec<IrFunction> = fr.ir_mod.functions;
     if checked.n_errors > 0 || index < 0 || index >= fns.len() as i64 {
-        eprintln_str(String::from("verify-worker: program does not match the planned function table"));
+        diag_eprintln_best_effort(String::from("verify-worker: program does not match the planned function table"));
         return 3;
     }
     let f: IrFunction = fns[index as u64];
     if f.name != get_flag_arg(argv, "--worker-name") {
-        eprintln_str(String::from("verify-worker: function name does not match the planned index"));
+        diag_eprintln_best_effort(String::from("verify-worker: function name does not match the planned index"));
         return 3;
     }
     print_str(vc_wire_encode(vc_verify_function(f, budget_ms, get_flag_arg(argv, "--worker-scratch"))));
@@ -1871,8 +1871,11 @@ fn run_verify(argv: Vec<String>) -> i32 [io, read, write] {
     let dctx: DiagCtx = checked.dctx;
     let n_items: i64 = checked.n_items;
     let n_errors: i64 = checked.n_errors;
-    diag_ctx_print_all(dctx);
-    eprintln_str(str4(i64_to_string(n_items), String::from(" items, "), i64_to_string(n_errors), String::from(" errors")));
+    if diag_ctx_print_all(dctx) == DIAG_EMIT_FAILED() {
+        diag_emit_emission_failure_json(dctx);
+        return 1;
+    }
+    diag_eprintln_best_effort(str4(i64_to_string(n_items), String::from(" items, "), i64_to_string(n_errors), String::from(" errors")));
     if n_errors > 0 {
         diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
         return 1;
@@ -1896,7 +1899,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io, read, write] {
     let timeout_secs: String = get_flag_arg(argv, "--timeout");
     if encoding == String::from("ir") {
         if solver == String::from("boolector") || solver == String::from("bitwuzla") {
-            eprintln_str(String::from("error: --encoding ir requires --solver z3"));
+            diag_eprintln_best_effort(String::from("error: --encoding ir requires --solver z3"));
             return 1;
         }
         if solver.len() == 0 || solver == String::from("auto") {
@@ -1905,7 +1908,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io, read, write] {
     }
     let esbmc_bin: String = esbmc_path();
     if !esbmc_exists(esbmc_bin) {
-        eprintln_str(String::from("error: ESBMC not found; install ESBMC to run verification"));
+        diag_eprintln_best_effort(String::from("error: ESBMC not found; install ESBMC to run verification"));
         diag_emit_verify_json(String::from("VerifyFailed"), dctx, Vec::new());
         return 1;
     }
@@ -2006,7 +2009,7 @@ fn build_verify_phase(
                     // Fail closed: a non-modelable function is not statically proved.
                     any_skipped = 1;
                 } else {
-                    eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
+                    diag_eprintln_best_effort(str3(String::from("Starting verification of "), f.name, String::from("...")));
                     let started: EsbmcStart = verify_start(esbmc_bin, f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                     model_bounds[fi as u64] = started.bounds;
                     in_flight_h.push(started.handle);
@@ -2080,7 +2083,7 @@ fn codegen_failure_diagnostic(result: i64, path: String, obj_path: String) -> Di
 fn emit_codegen_failure(result: i64, path: String, obj_path: String, dctx: DiagCtx) [io] {
     let d: Diagnostic = codegen_failure_diagnostic(result, path, obj_path);
     diag_ctx_emit(dctx, d);
-    eprintln_str(diag_to_human(d, dctx));
+    diag_eprintln_best_effort(diag_to_human(d, dctx));
 }
 
 // Codegen phase: emits the native object via Cranelift FFI and links it.
@@ -2112,8 +2115,11 @@ fn run_build_cmd(argv: Vec<String>, sub: bool) -> i32 [io, read, write] {
     let dctx: DiagCtx = checked.dctx;
     let n_items: i64 = checked.n_items;
     let n_errors: i64 = checked.n_errors;
-    diag_ctx_print_all(dctx);
-    eprintln_str(str4(i64_to_string(n_items), String::from(" items, "), i64_to_string(n_errors), String::from(" errors")));
+    if diag_ctx_print_all(dctx) == DIAG_EMIT_FAILED() {
+        diag_emit_emission_failure_json(dctx);
+        return 1;
+    }
+    diag_eprintln_best_effort(str4(i64_to_string(n_items), String::from(" items, "), i64_to_string(n_errors), String::from(" errors")));
     if n_errors > 0 {
         diag_emit_build_verify_json(String::from("CompileFailed"), String::from(""), dctx, Vec::new());
         return 1;
@@ -2153,7 +2159,7 @@ fn run_build_cmd(argv: Vec<String>, sub: bool) -> i32 [io, read, write] {
     };
     if do_verify {
         if !esbmc_exists(esbmc_bin) {
-            eprintln_str(String::from("error: ESBMC not found; install ESBMC or use --no-verify to skip verification"));
+            diag_eprintln_best_effort(String::from("error: ESBMC not found; install ESBMC or use --no-verify to skip verification"));
             diag_emit_build_verify_json(String::from("VerifyFailed"), String::from(""), dctx, Vec::new());
             return 1;
         }
@@ -2169,7 +2175,7 @@ fn run_build_cmd(argv: Vec<String>, sub: bool) -> i32 [io, read, write] {
     let timeout_secs: String = get_flag_arg(argv, "--timeout");
     if encoding == String::from("ir") {
         if solver == String::from("boolector") || solver == String::from("bitwuzla") {
-            eprintln_str(String::from("error: --encoding ir requires --solver z3"));
+            diag_eprintln_best_effort(String::from("error: --encoding ir requires --solver z3"));
             return 1;
         }
         if solver.len() == 0 || solver == String::from("auto") {
@@ -2510,7 +2516,7 @@ fn run_test(argv: Vec<String>) -> i32 [io, read, write] {
                 if result != 0 {
                     let duration: i64 = time_unix_ms() - start_time;
                     let codegen_diag: Diagnostic = codegen_failure_diagnostic(result, test_path, str2(tmp_out, String::from(".o")));
-                    eprintln_str(diag_to_human(codegen_diag, checked.dctx));
+                    diag_eprintln_best_effort(diag_to_human(codegen_diag, checked.dctx));
                     let diag_json2: String = str3(String::from("["), diag_to_json(codegen_diag), String::from("]"));
                     let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration, diag_json2);
                     entries_json.push(entry);
@@ -3352,6 +3358,7 @@ fn skill_json() -> String {
     r.push_str(String::from("      \"print_i64\": \"fn(v: i64) -> () [io]\",\n"));
     r.push_str(String::from("      \"print_u64\": \"fn(v: u64) -> () [io]\",\n"));
     r.push_str(String::from("      \"eprintln_str\": \"fn(s: String) -> () [io]\",\n"));
+    r.push_str(String::from("      \"try_eprintln_str\": \"fn(s: String) -> i64 [io]\",\n"));
     r.push_str(String::from("      \"debug_str\": \"fn(s: String) -> () []\",\n"));
     r.push_str(String::from("      \"debug_i64\": \"fn(v: i64) -> () []\",\n"));
     r.push_str(String::from("      \"debug_u64\": \"fn(v: u64) -> () []\",\n"));
@@ -3703,7 +3710,7 @@ fn skill_human() -> String {
     r.push_str(String::from("TYPES     : i8  i16  i32  i64  i128  u8  u16  u32  u64  u128  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>  BTreeMap<K, V>\n"));
     r.push_str(String::from("EFFECTS   : io  read  write  panic  unsafe\n"));
     r.push_str(String::from("BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []   drop: fn(value: L) -> () for a linear owner L []   print_str: fn(s: String) -> () [io]\n"));
-    r.push_str(String::from("            print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_read_status: fn() -> i64 [read]   getenv: fn(name: String) -> String [read]   path_lookup: fn(name: String) -> String [read]   mktemp_dir: fn(prefix: String) -> String [io]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_remove_dir_all: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: u64, len: u64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: u64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   int128_to_string: fn(v: i128) -> String []   uint128_to_string: fn(v: u128) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   hash_u64: fn(x: u64) -> u64 []   hash_str: fn(s: String) -> u64 []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_start_capped: fn(cmd: String, args: Vec<String>, mem_kb: i64) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_poll_wait: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]   process_start_piped: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_write_stdin: fn(pid: i64, data: String) -> i64 [io]   process_close_stdin: fn(pid: i64) -> i64 [io]   process_read_line: fn(pid: i64, timeout_ms: i64) -> String [io]   process_read_status: fn(pid: i64) -> i64 [io]\n"));
+    r.push_str(String::from("            print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   try_eprintln_str: fn(s: String) -> i64 [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_read_status: fn() -> i64 [read]   getenv: fn(name: String) -> String [read]   path_lookup: fn(name: String) -> String [read]   mktemp_dir: fn(prefix: String) -> String [io]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_remove_dir_all: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: u64, len: u64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: u64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   int128_to_string: fn(v: i128) -> String []   uint128_to_string: fn(v: u128) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   hash_u64: fn(x: u64) -> u64 []   hash_str: fn(s: String) -> u64 []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_start_capped: fn(cmd: String, args: Vec<String>, mem_kb: i64) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_poll_wait: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]   process_start_piped: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_write_stdin: fn(pid: i64, data: String) -> i64 [io]   process_close_stdin: fn(pid: i64) -> i64 [io]   process_read_line: fn(pid: i64, timeout_ms: i64) -> String [io]   process_read_status: fn(pid: i64) -> i64 [io]\n"));
     r.push_str(String::from("METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/String::from_raw_parts_copy/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64\n"));
     r.push_str(String::from("            HashMap: HashMap::new/insert/get/contains_key/remove/len   BTreeMap: BTreeMap::new/insert/get/contains/len   Option: unwrap\n"));
     r.push_str(String::from("OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! ?\n"));
@@ -5175,6 +5182,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `print_i64`      | `fn(v: i64) -> ()`                         | `[io]`     |\n"));
     r.push_str(String::from("| `print_u64`      | `fn(v: u64) -> ()`                         | `[io]`     |\n"));
     r.push_str(String::from("| `eprintln_str`   | `fn(s: String) -> ()`                      | `[io]`     |\n"));
+    r.push_str(String::from("| `try_eprintln_str` | `fn(s: String) -> i64`                   | `[io]`     |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`try_eprintln_str` writes `s` and a newline to stderr and reports the outcome instead of ignoring it: `0` when written, `1` when stderr is a closed pipe (`BrokenPipe`), `2` for any other write failure. A closed stderr descriptor (`EBADF`) counts as `0`, matching Rust's standard library. SIGPIPE is blocked for the duration of the call, so a closed pipe returns `1` instead of terminating the process. `eprintln_str` ignores write failures entirely.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("#### Debug\n"));
     r.push_str(String::from("\n"));
@@ -11213,6 +11223,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("| `print_i64`      | `fn(v: i64) -> ()`                         | `[io]`     |\n"));
     r.push_str(String::from("| `print_u64`      | `fn(v: u64) -> ()`                         | `[io]`     |\n"));
     r.push_str(String::from("| `eprintln_str`   | `fn(s: String) -> ()`                      | `[io]`     |\n"));
+    r.push_str(String::from("| `try_eprintln_str` | `fn(s: String) -> i64`                   | `[io]`     |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`try_eprintln_str` writes `s` and a newline to stderr and reports the outcome instead of ignoring it: `0` when written, `1` when stderr is a closed pipe (`BrokenPipe`), `2` for any other write failure. A closed stderr descriptor (`EBADF`) counts as `0`, matching Rust's standard library. SIGPIPE is blocked for the duration of the call, so a closed pipe returns `1` instead of terminating the process. `eprintln_str` ignores write failures entirely.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("#### Debug\n"));
     r.push_str(String::from("\n"));
@@ -15942,7 +15955,7 @@ fn install_skill_tree(root: String, emit_errors: bool) -> String [io, write] {
     let mk: i64 = fs_mkdir(dir);
     if mk < 0 {
         if emit_errors {
-            eprintln_str(str2(String::from("vow skill install: cannot create "), dir));
+            diag_eprintln_best_effort(str2(String::from("vow skill install: cannot create "), dir));
         }
         return String::from("");
     }
@@ -15951,7 +15964,7 @@ fn install_skill_tree(root: String, emit_errors: bool) -> String [io, write] {
     let wr: i64 = fs_write(path, skill_entrypoint());
     if wr < 0 {
         if emit_errors {
-            eprintln_str(str2(String::from("vow skill install: cannot write "), path));
+            diag_eprintln_best_effort(str2(String::from("vow skill install: cannot write "), path));
         }
         return String::from("");
     }
@@ -15964,7 +15977,7 @@ fn install_skill_tree(root: String, emit_errors: bool) -> String [io, write] {
             let parent_mk: i64 = fs_mkdir(support_parent);
             if parent_mk < 0 {
                 if emit_errors {
-                    eprintln_str(str2(String::from("vow skill install: cannot create "), support_parent));
+                    diag_eprintln_best_effort(str2(String::from("vow skill install: cannot create "), support_parent));
                 }
                 return String::from("");
             }
@@ -15972,7 +15985,7 @@ fn install_skill_tree(root: String, emit_errors: bool) -> String [io, write] {
         let support_wr: i64 = fs_write(support_path, skill_support_content(i));
         if support_wr < 0 {
             if emit_errors {
-                eprintln_str(str2(String::from("vow skill install: cannot write "), support_path));
+                diag_eprintln_best_effort(str2(String::from("vow skill install: cannot write "), support_path));
             }
             return String::from("");
         }
@@ -15999,35 +16012,35 @@ fn skill_install_root(local: bool, global: bool) -> String [io, read] {
     let mut use_local: bool = local;
     let mut use_global: bool = global;
     if use_local && use_global {
-        eprintln_str("vow skill install: --local and --global are mutually exclusive");
+        diag_eprintln_best_effort("vow skill install: --local and --global are mutually exclusive");
         return String::from("");
     }
     if !use_local && !use_global {
-        eprintln_str("Install Vow skill locally (./.claude) or globally (~/.claude)? [l/g]: ");
+        diag_eprintln_best_effort("Install Vow skill locally (./.claude) or globally (~/.claude)? [l/g]: ");
         let answer: String = string_to_lower(string_trim(stdin_read_line()));
         if answer == String::from("l") || answer == String::from("local") {
             use_local = true;
         } else if answer == String::from("g") || answer == String::from("global") {
             use_global = true;
         } else {
-            eprintln_str("vow skill install: stdin closed or unrecognised answer; pass --local or --global");
+            diag_eprintln_best_effort("vow skill install: stdin closed or unrecognised answer; pass --local or --global");
             return String::from("");
         }
     }
     if use_local {
         if fs_is_dir(String::from(".claude")) != 1 {
-            eprintln_str("vow skill install: --local requires a .claude/ directory in the current project");
+            diag_eprintln_best_effort("vow skill install: --local requires a .claude/ directory in the current project");
             return String::from("");
         }
         if fs_exists(String::from(".git")) != 1 {
-            eprintln_str("vow skill install: --local requires the current project to be a git checkout");
+            diag_eprintln_best_effort("vow skill install: --local requires the current project to be a git checkout");
             return String::from("");
         }
         return String::from(".");
     }
     let home: String = skill_home_dir();
     if home.len() == 0 {
-        eprintln_str("vow skill install: --global requires $HOME");
+        diag_eprintln_best_effort("vow skill install: --global requires $HOME");
         return String::from("");
     }
     home
@@ -16043,13 +16056,13 @@ fn run_skill(argv: Vec<String>) -> i32 [io, read, write] {
         } else if action == String::from("print") {
             do_install = false;
         } else {
-            eprintln_str(str3(String::from("vow skill: unknown action '"), action, String::from("' (expected 'print' or 'install')")));
+            diag_eprintln_best_effort(str3(String::from("vow skill: unknown action '"), action, String::from("' (expected 'print' or 'install')")));
             return 1;
         }
     }
     if do_install {
         if do_bundle {
-            eprintln_str("vow skill install: --bundle is only valid with print");
+            diag_eprintln_best_effort("vow skill install: --bundle is only valid with print");
             return 1;
         }
         let root: String = skill_install_root(has_flag(argv, String::from("--local")), has_flag(argv, String::from("--global")));
@@ -16060,7 +16073,7 @@ fn run_skill(argv: Vec<String>) -> i32 [io, read, write] {
         if path.len() == 0 {
             return 1;
         }
-        eprintln_str(str2(String::from("installed skill to "), path));
+        diag_eprintln_best_effort(str2(String::from("installed skill to "), path));
         return 0;
     }
     if do_bundle {
@@ -16277,7 +16290,10 @@ fn run_contracts(argv: Vec<String>) -> i32 [io, read, write] {
     let checked: CheckedFrontend = fr.checked;
     let dctx: DiagCtx = checked.dctx;
     let n_errors: i64 = checked.n_errors;
-    diag_ctx_print_all(dctx);
+    if diag_ctx_print_all(dctx) == DIAG_EMIT_FAILED() {
+        diag_emit_emission_failure_json(dctx);
+        return 1;
+    }
     if n_errors > 0 {
         diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
         return 1;
@@ -16296,7 +16312,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io, read, write] {
     let timeout_secs: String = get_flag_arg(argv, "--timeout");
     if encoding == String::from("ir") {
         if solver == String::from("boolector") || solver == String::from("bitwuzla") {
-            eprintln_str(String::from("error: --encoding ir requires --solver z3"));
+            diag_eprintln_best_effort(String::from("error: --encoding ir requires --solver z3"));
             return 1;
         }
         if solver.len() == 0 || solver == String::from("auto") {
@@ -16609,18 +16625,18 @@ fn main() -> i32 [io, read, write] {
         return 0;
     }
     if argv.len() <= 1 {
-        eprintln_str("vow: source file required (try --help or use a subcommand)");
+        diag_eprintln_best_effort("vow: source file required (try --help or use a subcommand)");
         return 1;
     }
     let cmd: i64 = get_subcommand(argv);
     let backend_error: String = backend_flag_error(argv, cmd);
     if backend_error.len() > 0 {
-        eprintln_str(backend_error);
+        diag_eprintln_best_effort(backend_error);
         return 1;
     }
     let flag_error: String = cli_flag_error(argv, cmd);
     if flag_error.len() > 0 {
-        eprintln_str(flag_error);
+        diag_eprintln_best_effort(flag_error);
         return 2;
     }
     if cmd == CMD_TEST() {
@@ -16652,7 +16668,7 @@ fn main() -> i32 [io, read, write] {
         return run_verify_worker(argv);
     }
     if get_source_path(argv).len() == 0 {
-        eprintln_str("vow: source file required (try --help or use a subcommand)");
+        diag_eprintln_best_effort("vow: source file required (try --help or use a subcommand)");
         return 1;
     }
     maybe_auto_install_skill();

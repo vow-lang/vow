@@ -578,14 +578,50 @@ fn diag_to_human(d: Diagnostic, ctx: DiagCtx) -> String {
     r
 }
 
-fn diag_ctx_print_all(ctx: DiagCtx) [io] {
+fn DIAG_EMIT_OK() -> i64 { 0 }
+fn DIAG_EMIT_BROKEN_PIPE() -> i64 { 1 }
+fn DIAG_EMIT_FAILED() -> i64 { 2 }
+
+// Prints every diagnostic to stderr and stops at the first failed write,
+// returning its status: DIAG_EMIT_BROKEN_PIPE (closed pipe, tolerated by the
+// callers) or DIAG_EMIT_FAILED (any other failure). Every later write would
+// fail the same way.
+fn diag_ctx_print_all(ctx: DiagCtx) -> i64 [io] {
     let ds: Vec<Diagnostic> = ctx.diags;
     let n: u64 = ds.len();
     let mut i: u64 = 0u64;
     while i < n {
-        eprintln_str(diag_to_human(ds[i], ctx));
+        let st: i64 = try_eprintln_str(diag_to_human(ds[i], ctx));
+        if st != DIAG_EMIT_OK() {
+            return st;
+        }
         i = i + 1;
     }
+    DIAG_EMIT_OK()
+}
+
+// Follow-on stderr line after a tolerated broken pipe: a bare eprintln_str
+// would raise SIGPIPE and kill the process the failed emission already survived.
+fn diag_eprintln_best_effort(s: String) [io] {
+    try_eprintln_str(s);
+}
+
+fn diag_emission_failure_message() -> String {
+    String::from("failed to emit frontend diagnostics: stderr write failed")
+}
+
+fn diag_compile_failed_json(dctx: DiagCtx, message: String) -> String {
+    let r: String = String::from("{\"status\":\"CompileFailed\",\"executable\":null,\"diagnostics\":");
+    r.push_str(diag_ctx_to_json(dctx));
+    r.push_str(String::from(",\"counterexamples\":[],\"message\":\""));
+    r.push_str(diag_json_escape_str(message));
+    r.push_str(String::from("\"}"));
+    r
+}
+
+fn diag_emit_emission_failure_json(dctx: DiagCtx) [io] {
+    print_str(diag_compile_failed_json(dctx, diag_emission_failure_message()));
+    print_str(String::from("\n"));
 }
 
 struct VerifyCE {
