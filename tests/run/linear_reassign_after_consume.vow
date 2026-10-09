@@ -1,0 +1,75 @@
+// TEST: exit 0
+module LinearReassignAfterConsume
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn open(fd: i64) -> Handle {
+    Handle { fd: fd }
+}
+
+fn close(h: Handle) -> i64 {
+    let fd: i64 = h.fd;
+    drop(h);
+    fd
+}
+
+fn wrap(h: Handle) -> Handle {
+    let fd: i64 = h.fd;
+    drop(h);
+    Handle { fd: fd + 1 }
+}
+
+fn reassign_after_consume() -> i64 {
+    let mut h: Handle = open(1);
+    let a: i64 = close(h);
+    h = open(2);
+    let b: i64 = close(h);
+    a + b
+}
+
+fn reassign_in_both_branches(c: bool) -> i64 {
+    let mut h: Handle = open(3);
+    let a: i64 = close(h);
+    if c {
+        h = open(4);
+    } else {
+        h = open(5);
+    }
+    let b: i64 = close(h);
+    a + b
+}
+
+fn wrap_round_trip() -> i64 {
+    let mut h: Handle = open(6);
+    h = wrap(h);
+    close(h)
+}
+
+fn shadow_after_consume() -> i64 {
+    let h: Handle = open(7);
+    let a: i64 = close(h);
+    let mut h: i64 = 0;
+    h = a + 1;
+    h
+}
+
+fn main() -> i32 {
+    if reassign_after_consume() != 3 {
+        return 1;
+    }
+    if reassign_in_both_branches(true) != 7 {
+        return 2;
+    }
+    if reassign_in_both_branches(false) != 8 {
+        return 3;
+    }
+    if wrap_round_trip() != 7 {
+        return 4;
+    }
+    if shadow_after_consume() != 8 {
+        return 5;
+    }
+    0
+}

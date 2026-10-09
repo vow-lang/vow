@@ -161,17 +161,25 @@ fn check_block(
 /// Names are tracked flat, so a consumed block-local would otherwise keep
 /// shadowing (or being mistaken for) a same-named binding outside the block.
 /// Only consumed bindings are handed back: an unconsumed one stays so the
-/// end-of-function backstop still reports it.
+/// end-of-function backstop still reports it. A non-linear `let` that evicted a
+/// consumed entry is restored the same way.
 fn close_scope(tracker: &mut LinearTracker) {
     let frame = tracker.scopes.pop().expect("check_block pushed a scope");
     for (name, shadowed) in frame.into_iter().rev() {
-        if !matches!(tracker.vars.get(&name), Some(ConsumeState::Consumed(_))) {
-            continue;
+        match tracker.vars.get(&name) {
+            None => {
+                if let Some(state) = shadowed {
+                    tracker.vars.insert(name, state);
+                }
+            }
+            Some(ConsumeState::Consumed(_)) => {
+                match shadowed {
+                    Some(state) => tracker.vars.insert(name, state),
+                    None => tracker.vars.remove(&name),
+                };
+            }
+            Some(_) => {}
         }
-        match shadowed {
-            Some(state) => tracker.vars.insert(name, state),
-            None => tracker.vars.remove(&name),
-        };
     }
 }
 
@@ -205,16 +213,30 @@ fn register_pattern_linear(
     tracker: &mut LinearTracker,
     span: Span,
 ) {
-    if let PatKind::Ident { name, .. } = &pat.kind {
-        let is_linear = ty_ann.map(|t| is_linear_ast_type(t, env)).unwrap_or(false);
-        if is_linear {
-            let shadowed = tracker.vars.insert(
-                name.clone(),
-                ConsumeState::Available(span, tracker.loop_depth),
-            );
-            if let Some(frame) = tracker.scopes.last_mut() {
-                frame.push((name.clone(), shadowed));
-            }
+    if let PatKind::Ident { name, .. } = &pat.kind
+        && ty_ann.is_some_and(|t| is_linear_ast_type(t, env))
+    {
+        let shadowed = tracker.vars.insert(
+            name.clone(),
+            ConsumeState::Available(span, tracker.loop_depth),
+        );
+        if let Some(frame) = tracker.scopes.last_mut() {
+            frame.push((name.clone(), shadowed));
+        }
+        return;
+    }
+    // Names are tracked flat: evict a consumed entry so a later assignment cannot re-arm it.
+    if tracker.vars.is_empty() {
+        return;
+    }
+    let mut names = vec![];
+    collect_pattern_binding_names(pat, &mut names);
+    for name in names {
+        if matches!(tracker.vars.get(&name), Some(ConsumeState::Consumed(_)))
+            && let Some(state) = tracker.vars.remove(&name)
+            && let Some(frame) = tracker.scopes.last_mut()
+        {
+            frame.push((name, Some(state)));
         }
     }
 }
@@ -275,19 +297,29 @@ fn check_expr(
             condition, body, ..
         } => {
             check_expr(condition, tracker, env, file, emitter, false);
-            check_loop_body(body, tracker, env, file, emitter);
+            check_loop_body(body, true, tracker, env, file, emitter);
         }
         ExprKind::ForEach { iterable, body, .. } => {
             check_expr(iterable, tracker, env, file, emitter, false);
-            check_loop_body(body, tracker, env, file, emitter);
+            check_loop_body(body, true, tracker, env, file, emitter);
         }
         ExprKind::Loop { body, .. } => {
-            check_loop_body(body, tracker, env, file, emitter);
+            check_loop_body(body, false, tracker, env, file, emitter);
         }
         ExprKind::Block(block) => check_block(block, tracker, env, file, emitter),
         ExprKind::Assign { lhs, rhs } => {
             check_expr(lhs, tracker, env, file, emitter, false);
             check_expr(rhs, tracker, env, file, emitter, true);
+            // The RHS is visited first so `h = wrap(h)` consumes the old value before re-arming.
+            if let ExprKind::Ident(name) = &lhs.kind
+                && let Some(state) = tracker.vars.get_mut(name)
+            {
+                let depth = match *state {
+                    ConsumeState::Available(_, depth) => depth,
+                    _ => tracker.loop_depth,
+                };
+                *state = ConsumeState::Available(lhs.span, depth);
+            }
         }
         ExprKind::BinaryOp { lhs, rhs, .. } => {
             check_expr(lhs, tracker, env, file, emitter, false);
@@ -335,14 +367,29 @@ fn check_expr(
 
 fn check_loop_body(
     body: &Block,
+    may_skip: bool,
     tracker: &mut LinearTracker,
     env: &TypeEnv,
     file: &str,
     emitter: &mut dyn DiagnosticEmitter,
 ) {
+    let consumed_before: Vec<(String, Span)> = tracker
+        .vars
+        .iter()
+        .filter(|_| may_skip)
+        .filter_map(|(name, state)| {
+            state_may_be_consumed(Some(state)).map(|span| (name.clone(), span))
+        })
+        .collect();
     tracker.loop_depth += 1;
     check_block(body, tracker, env, file, emitter);
     tracker.loop_depth -= 1;
+    // A body that may run zero times cannot re-arm a value consumed before the loop.
+    for (name, span) in consumed_before {
+        if let Some(state @ ConsumeState::Available(..)) = tracker.vars.get_mut(&name) {
+            *state = ConsumeState::MaybeConsumed(span);
+        }
+    }
 }
 
 fn consume_var(
@@ -353,7 +400,7 @@ fn consume_var(
     emitter: &mut dyn DiagnosticEmitter,
 ) {
     match tracker.vars.get(name) {
-        None => {}
+        None => return,
         Some(ConsumeState::Consumed(_)) => {
             emit_violation(
                 file,
@@ -365,6 +412,7 @@ fn consume_var(
                     "`{name}` was already consumed; clone it or restructure to use it only once"
                 )],
             );
+            return;
         }
         Some(ConsumeState::MaybeConsumed(_)) => {
             emit_violation(
@@ -391,11 +439,11 @@ fn consume_var(
                     vec![format!("move the consumption of `{name}` outside the loop")],
                 );
             }
-            tracker
-                .vars
-                .insert(name.to_string(), ConsumeState::Consumed(span));
         }
     }
+    tracker
+        .vars
+        .insert(name.to_string(), ConsumeState::Consumed(span));
 }
 
 fn merge_branch_state(
@@ -698,6 +746,28 @@ mod tests {
         Block {
             stmts: vec![],
             trailing_expr: Some(Box::new(expr)),
+            span: dummy_span(),
+        }
+    }
+
+    fn block_with_stmts(stmts: Vec<Stmt>) -> Block {
+        Block {
+            stmts,
+            trailing_expr: None,
+            span: dummy_span(),
+        }
+    }
+
+    fn block_expr(stmts: Vec<Stmt>) -> Expr {
+        Expr {
+            kind: ExprKind::Block(Box::new(block_with_stmts(stmts))),
+            span: dummy_span(),
+        }
+    }
+
+    fn true_expr() -> Expr {
+        Expr {
+            kind: ExprKind::Lit(Lit::Bool(true)),
             span: dummy_span(),
         }
     }
@@ -1670,5 +1740,289 @@ mod tests {
         check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
 
         assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+    }
+
+    fn let_local(name: &str, ty: Type, init: &str) -> Stmt {
+        Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: name.to_string(),
+                    is_mut: true,
+                },
+                span: dummy_span(),
+            },
+            ty: Some(ty),
+            init: Box::new(ident_expr(init)),
+            span: dummy_span(),
+        }
+    }
+
+    fn assign_expr(lhs: Expr, rhs: Expr) -> Expr {
+        Expr {
+            kind: ExprKind::Assign {
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+            span: dummy_span(),
+        }
+    }
+
+    fn assign_stmt(name: &str, rhs: &str) -> Stmt {
+        expr_stmt(assign_expr(ident_expr(name), ident_expr(rhs)))
+    }
+
+    fn if_expr(then_stmts: Vec<Stmt>, else_stmts: Option<Vec<Stmt>>) -> Expr {
+        Expr {
+            kind: ExprKind::If {
+                condition: Box::new(true_expr()),
+                then_branch: Box::new(block_with_stmts(then_stmts)),
+                else_branch: else_stmts.map(|stmts| Box::new(block_expr(stmts))),
+            },
+            span: dummy_span(),
+        }
+    }
+
+    fn run_linear(stmts: Vec<Stmt>) -> Vec<Diagnostic> {
+        let env = make_env_with_linear_struct("FileHandle");
+        let fn_def = make_fn_def(vec![], block_with_stmts(stmts));
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+        emitter.0
+    }
+
+    fn consume_stmt() -> Stmt {
+        expr_stmt(call_with("consume", "h"))
+    }
+
+    #[test]
+    fn test_assign_after_consume_rearms_linear() {
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            assign_stmt("h", "open"),
+            consume_stmt(),
+        ]);
+
+        assert!(diags.is_empty(), "Got: {diags:?}");
+    }
+
+    #[test]
+    fn test_assign_self_wrap_rearms_once() {
+        let wrap_assign = expr_stmt(assign_expr(ident_expr("h"), call_with("wrap", "h")));
+        let ok = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            wrap_assign.clone(),
+            consume_stmt(),
+        ]);
+        assert!(ok.is_empty(), "Got: {ok:?}");
+
+        let leaked = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            wrap_assign,
+        ]);
+        assert_eq!(leaked.len(), 1, "Got: {leaked:?}");
+        assert!(leaked[0].message.contains("never consumed"));
+    }
+
+    #[test]
+    fn test_assign_over_available_is_deferred_to_region_check() {
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            assign_stmt("h", "open2"),
+            consume_stmt(),
+        ]);
+
+        assert!(diags.is_empty(), "Got: {diags:?}");
+    }
+
+    #[test]
+    fn test_assign_in_else_less_if_after_consume_stays_consumed() {
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            expr_stmt(if_expr(vec![assign_stmt("h", "open")], None)),
+            consume_stmt(),
+        ]);
+
+        assert_eq!(diags.len(), 1, "Got: {diags:?}");
+        assert!(diags[0].message.contains("already consumed"));
+    }
+
+    #[test]
+    fn test_assign_in_one_arm_with_else_after_consume_is_maybe_consumed() {
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            expr_stmt(if_expr(vec![assign_stmt("h", "open")], Some(vec![]))),
+            consume_stmt(),
+        ]);
+
+        assert_eq!(diags.len(), 1, "Got: {diags:?}");
+        assert!(diags[0].message.contains("may already be consumed"));
+    }
+
+    #[test]
+    fn test_assign_in_both_branches_after_consume_rearms() {
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            expr_stmt(if_expr(
+                vec![assign_stmt("h", "open")],
+                Some(vec![assign_stmt("h", "open")]),
+            )),
+            consume_stmt(),
+        ]);
+
+        assert!(diags.is_empty(), "Got: {diags:?}");
+    }
+
+    #[test]
+    fn test_field_assign_does_not_rearm() {
+        let field_assign = expr_stmt(assign_expr(
+            Expr {
+                kind: ExprKind::FieldAccess {
+                    base: Box::new(ident_expr("h")),
+                    field: "fd".to_string(),
+                },
+                span: dummy_span(),
+            },
+            Expr {
+                kind: ExprKind::Lit(Lit::Int(1)),
+                span: dummy_span(),
+            },
+        ));
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            field_assign,
+            consume_stmt(),
+        ]);
+
+        assert_eq!(diags.len(), 1, "Got: {diags:?}");
+        assert!(diags[0].message.contains("already consumed"));
+    }
+
+    #[test]
+    fn test_shadowing_nonlinear_let_over_consumed_linear_not_rearmed() {
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            let_local("h", named_type("i64"), "zero"),
+            assign_stmt("h", "one"),
+        ]);
+
+        assert!(diags.is_empty(), "Got: {diags:?}");
+    }
+
+    fn while_expr(stmts: Vec<Stmt>) -> Expr {
+        Expr {
+            kind: ExprKind::While {
+                condition: Box::new(true_expr()),
+                vow: None,
+                body: Box::new(block_with_stmts(stmts)),
+            },
+            span: dummy_span(),
+        }
+    }
+
+    #[test]
+    fn test_tuple_let_shadow_over_consumed_linear_not_rearmed() {
+        let tuple_let = Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Tuple(vec![
+                    Pat {
+                        kind: PatKind::Ident {
+                            name: "h".to_string(),
+                            is_mut: true,
+                        },
+                        span: dummy_span(),
+                    },
+                    Pat {
+                        kind: PatKind::Ident {
+                            name: "y".to_string(),
+                            is_mut: false,
+                        },
+                        span: dummy_span(),
+                    },
+                ]),
+                span: dummy_span(),
+            },
+            ty: None,
+            init: Box::new(ident_expr("zero")),
+            span: dummy_span(),
+        };
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            tuple_let,
+            assign_stmt("h", "one"),
+        ]);
+
+        assert!(diags.is_empty(), "Got: {diags:?}");
+    }
+
+    #[test]
+    fn test_assign_in_while_after_consume_is_maybe_consumed_after_loop() {
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            expr_stmt(while_expr(vec![assign_stmt("h", "open")])),
+            consume_stmt(),
+        ]);
+
+        assert_eq!(diags.len(), 1, "Got: {diags:?}");
+        assert!(diags[0].message.contains("may already be consumed"));
+    }
+
+    #[test]
+    fn test_inner_block_shadow_does_not_forget_outer_consumed_linear() {
+        let inner = expr_stmt(block_expr(vec![let_local("h", named_type("i64"), "zero")]));
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            inner,
+            consume_stmt(),
+        ]);
+
+        assert_eq!(diags.len(), 1, "Got: {diags:?}");
+        assert!(diags[0].message.contains("already consumed"));
+    }
+
+    #[test]
+    fn test_reassign_then_consume_inside_loop_after_consume_ok() {
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            expr_stmt(while_expr(vec![assign_stmt("h", "open"), consume_stmt()])),
+        ]);
+
+        assert!(diags.is_empty(), "Got: {diags:?}");
+    }
+
+    #[test]
+    fn test_consume_in_loop_then_reassign_still_reports_loop_consume() {
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            expr_stmt(while_expr(vec![consume_stmt(), assign_stmt("h", "open")])),
+            consume_stmt(),
+        ]);
+
+        assert_eq!(diags.len(), 1, "Got: {diags:?}");
+        assert!(diags[0].message.contains("inside a loop"));
+    }
+
+    #[test]
+    fn test_inner_linear_then_non_linear_shadow_keeps_outer_available() {
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            expr_stmt(block_expr(vec![
+                let_local("h", named_type("FileHandle"), "open"),
+                consume_stmt(),
+                let_local("h", named_type("i64"), "zero"),
+            ])),
+            consume_stmt(),
+        ]);
+
+        assert!(diags.is_empty(), "Got: {diags:?}");
     }
 }
