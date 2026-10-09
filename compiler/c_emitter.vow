@@ -1314,6 +1314,28 @@ fn field_access_is_wide(inst: IrInst, wide_vars: Vec<i64>) -> bool {
     op == IOP_FIELD_SET() && iargs.len() > 1 && vec_contains_i64(wide_vars, iargs[1])
 }
 
+// Floats travel through the model's int64 aggregate slots by IEEE-754 bit
+// pattern, as native codegen stores them: f64 as its raw 64 bits, f32 as its 32
+// bits zero-extended. A plain C conversion would truncate 2.5 to 2. Mirrors
+// `vow_verify::c_emitter::FloatSlot`.
+fn float_slot_name(ty: i64) -> String {
+    if ty == ITY_F32() { return String::from("f32"); }
+    if ty == ITY_F64() { return String::from("f64"); }
+    String::from("")
+}
+
+fn float_slot_encode(ty: i64, value: String) -> String {
+    let name: String = float_slot_name(ty);
+    if name.len() == 0 { return value; }
+    str5(String::from("__vow_"), name, String::from("_to_slot("), value, String::from(")"))
+}
+
+fn float_slot_decode(ty: i64, slot: String) -> String {
+    let name: String = float_slot_name(ty);
+    if name.len() == 0 { return slot; }
+    str5(String::from("__vow_"), name, String::from("_from_slot("), slot, String::from(")"))
+}
+
 fn emit_unmodelled(out: String, inst: IrInst) {
     let id: i64 = inst.id;
     out.push_str(str3(String::from("  /* opcode "), opcode_name(inst.op), String::from(" not modelled */\n")));
@@ -2005,10 +2027,10 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, 
         if iargs.len() > 0 && inst.dk == IDATA_FIELD() {
             // User-struct heap model: load base's field slot.
             let ids: String = i64_to_string(id);
-            out.push_str(str6(String::from("  v"), ids,
-                String::from(" = __vow_heap[v"), i64_to_string(iargs[0]),
-                str3(String::from(" + "), i64_to_string(inst.dv), String::from("]")),
-                String::from(";\n")));
+            let slot: String = str5(String::from("__vow_heap[v"), i64_to_string(iargs[0]),
+                String::from(" + "), i64_to_string(inst.dv), String::from("]"));
+            out.push_str(str4(String::from("  v"), ids, String::from(" = "),
+                cemit_str2(float_slot_decode(inst.ty, slot), String::from(";\n"))));
             return;
         }
         emit_unmodelled(out, inst);
@@ -2046,9 +2068,10 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, 
         // User-struct heap model: store into base's field slot.
         let base: i64 = iargs[0];
         let val: i64 = iargs[1];
+        let stored: String = float_slot_encode(inst_ty_of(inst_ty_by_id, val), cemit_str2(String::from("v"), i64_to_string(val)));
         out.push_str(str6(String::from("  __vow_heap[v"), i64_to_string(base),
             String::from(" + "), i64_to_string(inst.dv),
-            String::from("] = v"), cemit_str2(i64_to_string(val), String::from(";\n"))));
+            String::from("] = "), cemit_str2(stored, String::from(";\n"))));
         return;
     }
 
@@ -3006,7 +3029,11 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         } else if vec_contains_i64(btreemap_vars, src) {
             out.push_str(str3(String::from("  __vow_btreemap_t __ups_"), i64_to_string(src), String::from(";\n")));
         } else {
-            out.push_str(str3(String::from("  int64_t __ups_"), i64_to_string(src), String::from(";\n")));
+            // A float phi value is carried in its own type: an int64_t temp would truncate it.
+            let src_ty: i64 = inst_ty_of(inst_ty_by_id, src);
+            let c_ty: String = if float_slot_name(src_ty).len() > 0 { ir_ty_to_c(src_ty) }
+                else { String::from("int64_t") };
+            out.push_str(str4(String::from("  "), c_ty, String::from(" __ups_"), cemit_str2(i64_to_string(src), String::from(";\n"))));
         }
         ui = ui + 1;
     }
@@ -3587,10 +3614,65 @@ fn scope_has_op(scope: Vec<IrFunction>, op: i64, ty: i64, arith: bool) -> bool {
     false
 }
 
+// Bit 1 (f64) / bit 2 (f32) set when a function in `scope` moves a value of
+// that float type through an aggregate slot (FieldGet result type, or the
+// value operand of a FieldSet). One walk; operand types are resolved lazily,
+// only for functions that actually contain a FieldSet.
+fn float_slot_use_mask(scope: Vec<IrFunction>) -> i64 {
+    let mut mask: i64 = 0;
+    let mut fi: u64 = 0u64;
+    while fi < scope.len() && mask != 3 {
+        let f: IrFunction = scope[fi];
+        let mut inst_ty_by_id: Vec<i64> = Vec::new();
+        let mut have_tys: bool = false;
+        let blocks: Vec<IrBlock> = f.blocks;
+        let mut bi: u64 = 0u64;
+        while bi < blocks.len() {
+            let blk: IrBlock = blocks[bi];
+            let insts: Vec<IrInst> = blk.insts;
+            let mut ii: u64 = 0u64;
+            while ii < insts.len() {
+                let inst: IrInst = insts[ii];
+                let mut slot_ty: i64 = ITY_I64();
+                if inst.op == IOP_FIELD_GET() {
+                    slot_ty = inst.ty;
+                } else if inst.op == IOP_FIELD_SET() && inst.args.len() > 1 {
+                    if !have_tys {
+                        inst_ty_by_id = build_inst_ty_by_id(f);
+                        have_tys = true;
+                    }
+                    let iargs: Vec<i64> = inst.args;
+                    slot_ty = inst_ty_of(inst_ty_by_id, iargs[1]);
+                }
+                if slot_ty == ITY_F64() { mask = mask | 1; }
+                if slot_ty == ITY_F32() { mask = mask | 2; }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+        fi = fi + 1;
+    }
+    mask
+}
+
+fn append_float_slot_helpers(out: String, scope: Vec<IrFunction>) -> bool {
+    let mask: i64 = float_slot_use_mask(scope);
+    if mask & 1 != 0 {
+        out.push_str(String::from("static inline int64_t __vow_f64_to_slot(double value) { union { double f; int64_t i; } u; u.f = value; return u.i; }\n"));
+        out.push_str(String::from("static inline double __vow_f64_from_slot(int64_t slot) { union { double f; int64_t i; } u; u.i = slot; return u.f; }\n"));
+    }
+    if mask & 2 != 0 {
+        out.push_str(String::from("static inline int64_t __vow_f32_to_slot(float value) { union { float f; uint32_t i; } u; u.f = value; return (int64_t)u.i; }\n"));
+        out.push_str(String::from("static inline float __vow_f32_from_slot(int64_t slot) { union { float f; uint32_t i; } u; u.i = (uint32_t)slot; return u.f; }\n"));
+    }
+    mask != 0
+}
+
 // The width/signedness-specialised shift and checked-arithmetic helpers the
 // functions in `scope` need, in one canonical order shared with the Rust
 // emitter (`ModelHelpers`): shifts (`shl` then `shr`) per type, then guards
-// (`add`, `sub`, `mul`) per type, followed by a single blank line.
+// (`add`, `sub`, `mul`) per type, then the float slot helpers (`f64` then
+// `f32`), followed by a single blank line.
 fn append_model_helpers(out: String, scope: Vec<IrFunction>) {
     let mut emitted: bool = false;
     let mut ti: i64 = 0;
@@ -3623,6 +3705,7 @@ fn append_model_helpers(out: String, scope: Vec<IrFunction>) {
         }
         ti = ti + 1;
     }
+    if append_float_slot_helpers(out, scope) { emitted = true; }
     if emitted { out.push_byte(10); }
 }
 

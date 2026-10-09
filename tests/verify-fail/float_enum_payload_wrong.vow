@@ -1,0 +1,22 @@
+// TEST: category callee-blame
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-fn "option_f64_wrong"
+// TEST: counterexample-blame Callee
+// The payload 2.5 is not 2.0. A model that truncates the float to int64 slot
+// storage reads 2 back, which equals 2.0 and wrongly proves this contract.
+module FloatEnumPayloadWrong
+
+fn option_f64_wrong(x: f64) -> f64 vow {
+    requires: x == 2.5,
+    ensures: result == 2.0
+} {
+    match Option::Some(x) {
+        Option::Some(v) => v,
+        Option::None => 0.0,
+    }
+}
+
+fn main() -> i32 [io] {
+    print_i64(0);
+    0
+}
