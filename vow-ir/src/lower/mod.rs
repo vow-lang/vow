@@ -5063,6 +5063,24 @@ fn binop_opcode(op: BinOp, operand_ty: &Ty) -> (Opcode, Ty, InstData) {
     if let Some(opcode) = float_opcode {
         return (opcode, result_ty, InstData::None);
     }
+    let float_compare = match (op, operand_ty) {
+        (BinOp::Eq, Ty::F32) => Some(Opcode::EqF32),
+        (BinOp::Ne, Ty::F32) => Some(Opcode::NeF32),
+        (BinOp::Lt, Ty::F32) => Some(Opcode::LtF32),
+        (BinOp::Le, Ty::F32) => Some(Opcode::LeF32),
+        (BinOp::Gt, Ty::F32) => Some(Opcode::GtF32),
+        (BinOp::Ge, Ty::F32) => Some(Opcode::GeF32),
+        (BinOp::Eq, Ty::F64) => Some(Opcode::EqF64),
+        (BinOp::Ne, Ty::F64) => Some(Opcode::NeF64),
+        (BinOp::Lt, Ty::F64) => Some(Opcode::LtF64),
+        (BinOp::Le, Ty::F64) => Some(Opcode::LeF64),
+        (BinOp::Gt, Ty::F64) => Some(Opcode::GtF64),
+        (BinOp::Ge, Ty::F64) => Some(Opcode::GeF64),
+        _ => None,
+    };
+    if let Some(opcode) = float_compare {
+        return (opcode, Ty::Bool, InstData::None);
+    }
     let integer_data = InstData::Integer(integer_type_for_ir_ty(result_ty));
     match op {
         BinOp::Add => (Opcode::WrappingAdd, result_ty, integer_data),
@@ -7253,6 +7271,58 @@ fn rem_f64(a: f64, b: f64) -> f64 { a % b }
                 .unwrap_or_else(|| panic!("missing {opcode:?} in {func:#?}"));
             assert_eq!(arithmetic.ty, ty, "{}", func.name);
             assert_eq!(arithmetic.data, InstData::None, "{}", func.name);
+        }
+    }
+
+    #[test]
+    fn float_comparison_uses_float_opcodes() {
+        let module = lower_source_to_module(
+            r#"
+module FloatComparisonLowering
+
+fn eq_f32(a: f32, b: f32) -> bool { a == b }
+fn ne_f32(a: f32, b: f32) -> bool { a != b }
+fn lt_f32(a: f32, b: f32) -> bool { a < b }
+fn le_f32(a: f32, b: f32) -> bool { a <= b }
+fn gt_f32(a: f32, b: f32) -> bool { a > b }
+fn ge_f32(a: f32, b: f32) -> bool { a >= b }
+
+fn eq_f64(a: f64, b: f64) -> bool { a == b }
+fn ne_f64(a: f64, b: f64) -> bool { a != b }
+fn lt_f64(a: f64, b: f64) -> bool { a < b }
+fn le_f64(a: f64, b: f64) -> bool { a <= b }
+fn gt_f64(a: f64, b: f64) -> bool { a > b }
+fn ge_f64(a: f64, b: f64) -> bool { a >= b }
+
+fn lt_i64(a: i64, b: i64) -> bool { a < b }
+"#,
+            "float_comparison_lowering.vow",
+        );
+
+        let expected = [
+            (Opcode::EqF32, InstData::None),
+            (Opcode::NeF32, InstData::None),
+            (Opcode::LtF32, InstData::None),
+            (Opcode::LeF32, InstData::None),
+            (Opcode::GtF32, InstData::None),
+            (Opcode::GeF32, InstData::None),
+            (Opcode::EqF64, InstData::None),
+            (Opcode::NeF64, InstData::None),
+            (Opcode::LtF64, InstData::None),
+            (Opcode::LeF64, InstData::None),
+            (Opcode::GtF64, InstData::None),
+            (Opcode::GeF64, InstData::None),
+            (Opcode::Lt, InstData::Integer(IntegerType::I64)),
+        ];
+
+        assert_eq!(module.functions.len(), expected.len());
+        for (func, (opcode, data)) in module.functions.iter().zip(expected) {
+            let compare = insts_of(func)
+                .into_iter()
+                .find(|inst| inst.opcode == opcode)
+                .unwrap_or_else(|| panic!("missing {opcode:?} in {func:#?}"));
+            assert_eq!(compare.ty, Ty::Bool, "{}", func.name);
+            assert_eq!(compare.data, data, "{}", func.name);
         }
     }
 

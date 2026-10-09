@@ -24,6 +24,62 @@ fn check_float_binops(
     0
 }
 
+fn check_float_compares(
+    ty: i64,
+    eq: i64,
+    ne: i64,
+    lt: i64,
+    le: i64,
+    gt: i64,
+    ge: i64,
+) -> i64 {
+    if binop_opcode(BINOP_EQ(), ty) != eq { return 1; }
+    if binop_opcode(BINOP_NE(), ty) != ne { return 2; }
+    if binop_opcode(BINOP_LT(), ty) != lt { return 3; }
+    if binop_opcode(BINOP_LE(), ty) != le { return 4; }
+    if binop_opcode(BINOP_GT(), ty) != gt { return 5; }
+    if binop_opcode(BINOP_GE(), ty) != ge { return 6; }
+    if binop_result_ty(BINOP_LT(), ty) != ITY_BOOL() { return 7; }
+    0
+}
+
+fn check_float_compare_data() -> i64 {
+    let source: String = String::from(
+        "module FloatCompare\nfn lt(a: f64, b: f64) -> bool { a < b }"
+    );
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, diag_ctx_new(), String::from("float_compare.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    item_files.push(String::from("float_compare.vow"));
+    let lowered: IrModule = lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), item_files
+    );
+
+    if lowered.functions.len() != 1 { return 61; }
+    let function: IrFunction = lowered.functions[0];
+    let mut block_index: u64 = 0;
+    while block_index < function.blocks.len() {
+        let block: IrBlock = function.blocks[block_index];
+        let mut inst_index: u64 = 0;
+        while inst_index < block.insts.len() {
+            let inst: IrInst = block.insts[inst_index];
+            if inst.op == IOP_LT_F64() {
+                if inst.ty != ITY_BOOL() { return 62; }
+                if inst.dk != IDATA_NONE() { return 63; }
+                if inst.dv != 0 || inst.dv2 != 0 { return 64; }
+                return 0;
+            }
+            inst_index = inst_index + 1;
+        }
+        block_index = block_index + 1;
+    }
+    65
+}
+
 fn check_float_binop_data() -> i64 {
     let source: String = String::from(
         "module FloatArithmetic\nfn add(a: f64, b: f64) -> f64 { a + b }"
@@ -81,7 +137,30 @@ fn main() -> i32 {
         IOP_REM_F64(),
     );
     if f64_result != 0 { return i64_to_i32_wrap(f64_result + 10); }
+    let f32_cmp: i64 = check_float_compares(
+        ITY_F32(),
+        IOP_EQ_F32(),
+        IOP_NE_F32(),
+        IOP_LT_F32(),
+        IOP_LE_F32(),
+        IOP_GT_F32(),
+        IOP_GE_F32(),
+    );
+    if f32_cmp != 0 { return i64_to_i32_wrap(f32_cmp + 30); }
+    let f64_cmp: i64 = check_float_compares(
+        ITY_F64(),
+        IOP_EQ_F64(),
+        IOP_NE_F64(),
+        IOP_LT_F64(),
+        IOP_LE_F64(),
+        IOP_GT_F64(),
+        IOP_GE_F64(),
+    );
+    if f64_cmp != 0 { return i64_to_i32_wrap(f64_cmp + 40); }
+    if binop_opcode(BINOP_LT(), ITY_I64()) != IOP_LT() { return 50; }
     let data_result: i64 = check_float_binop_data();
     if data_result != 0 { return i64_to_i32_wrap(data_result); }
+    let cmp_data_result: i64 = check_float_compare_data();
+    if cmp_data_result != 0 { return i64_to_i32_wrap(cmp_data_result); }
     0
 }
