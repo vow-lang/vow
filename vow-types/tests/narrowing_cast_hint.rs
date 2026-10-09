@@ -20,7 +20,7 @@ impl DiagnosticEmitter for CollectingEmitter {
     }
 }
 
-fn narrowing_hints(src_ty: &str, tgt_ty: &str) -> Vec<String> {
+fn narrowing_hint(src_ty: &str, tgt_ty: &str) -> String {
     let src = format!(
         "module Test\n\nfn f(x: {src_ty}) -> {tgt_ty} {{\n    x as {tgt_ty}\n}}\n\nfn main() -> i32 {{\n    0\n}}\n"
     );
@@ -47,7 +47,7 @@ fn narrowing_hints(src_ty: &str, tgt_ty: &str) -> Vec<String> {
         "expected one hint, got {:?}",
         diag.hints
     );
-    diag.hints.clone()
+    diag.hints[0].clone()
 }
 
 #[test]
@@ -60,9 +60,8 @@ fn registered_narrowing_pairs_name_their_try_intrinsic() {
         ("i128", "i32"),
         ("i32", "i8"),
     ] {
-        let hints = narrowing_hints(src, tgt);
         assert_eq!(
-            hints[0],
+            narrowing_hint(src, tgt),
             format!("use a `{src}_to_{tgt}_try`, `_wrap`, or `_sat` narrowing intrinsic"),
         );
     }
@@ -76,13 +75,11 @@ fn pairs_without_a_registered_family_do_not_name_a_missing_intrinsic() {
         ("i128", "u64"),
         ("u128", "i64"),
     ] {
-        let hints = narrowing_hints(src, tgt);
         assert_eq!(
-            hints[0],
+            narrowing_hint(src, tgt),
             format!(
                 "no narrowing intrinsic from {src} to {tgt} exists; narrow to i32 or smaller with `{src}_to_i32_try`, or keep the value as {src}"
             ),
         );
-        assert!(!hints[0].contains(&format!("{src}_to_{tgt}_try")));
     }
 }
