@@ -1394,6 +1394,73 @@ fn check_model_helpers_use_canonical_order() -> i64 {
     0
 }
 
+// arg0 (of `ty`) stored into field 1 of a fresh 16-byte aggregate and read back.
+fn field_roundtrip_function(id: i64, ty: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ty, 0));
+    insts.push(ir_inst_new(1, IOP_REGION_ALLOC(), ITY_PTR(), Vec::new(), IDATA_ALLOC_SIZE(), 16, 8, String::from("")));
+    let set_args: Vec<i64> = Vec::new();
+    set_args.push(1);
+    set_args.push(0);
+    insts.push(ir_inst_new(2, IOP_FIELD_SET(), ITY_UNIT(), set_args, IDATA_FIELD(), 1, 0, String::from("")));
+    let get_args: Vec<i64> = Vec::new();
+    get_args.push(1);
+    insts.push(ir_inst_new(3, IOP_FIELD_GET(), ty, get_args, IDATA_FIELD(), 1, 0, String::from("")));
+    insts.push(mk_inst_return(4, 3));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ty);
+    mk_function(id, String::from("field_roundtrip"), params, ty, blocks)
+}
+
+// Float values cross the model's int64 aggregate slots by bit pattern, so a
+// numeric conversion cannot truncate 2.5 to 2. Helpers are emitted only for the
+// widths a module uses, f64 before f32, exactly as the Rust emitter does.
+fn check_float_field_slots_move_by_bit_pattern(ty: i64, name: String, base: i64) -> i64 {
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(field_roundtrip_function(base, ty));
+    let c: String = emit_c_module(mk_module(funcs), 16, 16, 16, 16);
+    let store: String = str3(String::from("__vow_heap[v1 + 1] = __vow_"), name, String::from("_to_slot(v0);"));
+    if !c.contains(store) { return base; }
+    let load: String = str3(String::from("v3 = __vow_"), name, String::from("_from_slot(__vow_heap[v1 + 1]);"));
+    if !c.contains(load) { return base + 1; }
+    let encoder: String = str3(String::from("static inline int64_t __vow_"), name, String::from("_to_slot("));
+    if !c.contains(encoder) { return base + 2; }
+    let decoder: String = str3(String::from("__vow_"), name, String::from("_from_slot(int64_t slot)"));
+    if !c.contains(decoder) { return base + 3; }
+    let other: String = if ty == ITY_F64() { String::from("__vow_f32_") } else { String::from("__vow_f64_") };
+    if c.contains(other) { return base + 4; }
+    0
+}
+
+fn check_integer_field_slots_stay_unconverted() -> i64 {
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(field_roundtrip_function(730, ITY_I64()));
+    let c: String = emit_c_module(mk_module(funcs), 16, 16, 16, 16);
+    if !c.contains(String::from("__vow_heap[v1 + 1] = v0;")) { return 730; }
+    if !c.contains(String::from("v3 = __vow_heap[v1 + 1];")) { return 731; }
+    if c.contains(String::from("_slot(")) { return 732; }
+    0
+}
+
+fn check_float_phi_temporary_keeps_its_type(ty: i64, c_ty: String, base: i64) -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_phi(0, ty));
+    insts.push(mk_inst_arg(1, ty, 0));
+    insts.push(mk_inst_upsilon(2, 1, 0));
+    insts.push(mk_inst_return(3, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ty);
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(base, String::from("phi_float"), params, ty, blocks));
+    let c: String = emit_c_module(mk_module(funcs), 16, 16, 16, 16);
+    if !c.contains(str3(String::from("  "), c_ty, String::from(" __ups_1;"))) { return base; }
+    0
+}
+
 fn substring_function(id: i64, read_bytes: bool) -> IrFunction {
     let insts: Vec<IrInst> = Vec::new();
     insts.push(mk_inst_arg(0, ITY_PTR(), 0));
@@ -1662,5 +1729,15 @@ fn main() -> i32 {
     if r49 != 0 { return i64_to_i32_wrap(r49); }
     let r50: i64 = check_u64_literals_print_as_unsigned();
     if r50 != 0 { return i64_to_i32_wrap(r50); }
+    let r51: i64 = check_float_field_slots_move_by_bit_pattern(ITY_F64(), String::from("f64"), 700);
+    if r51 != 0 { return i64_to_i32_wrap(r51); }
+    let r52: i64 = check_float_field_slots_move_by_bit_pattern(ITY_F32(), String::from("f32"), 710);
+    if r52 != 0 { return i64_to_i32_wrap(r52); }
+    let r53: i64 = check_integer_field_slots_stay_unconverted();
+    if r53 != 0 { return i64_to_i32_wrap(r53); }
+    let r54: i64 = check_float_phi_temporary_keeps_its_type(ITY_F64(), String::from("double"), 740);
+    if r54 != 0 { return i64_to_i32_wrap(r54); }
+    let r55: i64 = check_float_phi_temporary_keeps_its_type(ITY_F32(), String::from("float"), 750);
+    if r55 != 0 { return i64_to_i32_wrap(r55); }
     0
 }
