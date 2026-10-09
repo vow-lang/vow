@@ -1499,6 +1499,7 @@ A hash is **not** an identity: distinct strings can collide. To key a `HashMap` 
 | `process_get_stdout`  | `fn() -> String`                                 | `[io]`  |
 | `process_get_stderr`  | `fn() -> String`                                 | `[io]`  |
 | `process_start`       | `fn(cmd: String, args: Vec<String>) -> i64`      | `[io]`  |
+| `process_start_capped` | `fn(cmd: String, args: Vec<String>, mem_kb: i64) -> i64` | `[io]`  |
 | `process_wait`        | `fn(pid: i64) -> i64`                            | `[io]`  |
 | `process_wait_timeout`| `fn(pid: i64, timeout_ms: i64) -> i64`           | `[io]`  |
 | `process_poll_wait`   | `fn(pid: i64, timeout_ms: i64) -> i64`           | `[io]`  |
@@ -1536,6 +1537,8 @@ A hash is **not** an identity: distinct strings can collide. To key a `HashMap` 
 **`process_run` vs `process_start`:** `process_run(cmd, args)` runs a subprocess synchronously and returns its exit code. After it returns, `process_get_stdout()` and `process_get_stderr()` retrieve the captured output of the most recent `process_run` call. `process_start(cmd, args)` launches a subprocess asynchronously and returns a process ID. Use `process_wait(pid)` to wait for completion and get the exit code, and `process_stdout_for(pid)` / `process_stderr_for(pid)` to retrieve output.
 
 **`process_wait_timeout`:** `process_wait_timeout(pid, timeout_ms)` polls a process started with `process_start` until it exits or the timeout (in milliseconds) elapses. Returns the exit code on completion, `-1` on error, or `-2` on timeout. After a timeout, the process is still running; use `process_kill(pid)` to terminate it.
+
+**`process_start_capped`:** `process_start_capped(cmd, args, mem_kb)` starts a child like `process_start` (same ID, same `process_wait*`, `process_poll_wait`, `process_stdout_for` and `process_kill` behaviour) with two differences. The child leads its own process group, and `process_kill` and a `process_wait_timeout` expiry SIGKILL the whole group, so grandchildren die with it; after a normal exit the group is swept the same way. On Linux the child also runs with an address-space limit of `mem_kb` KiB (`mem_kb <= 0` means no limit; other platforms ignore it). A child killed by a signal reports `-1000 - signal` instead of `-1`, so a signal death can be told from a spawn error. Returns `-1` if the command cannot be started.
 
 **`process_poll_wait`:** `process_poll_wait(pid, timeout_ms)` waits up to `timeout_ms` milliseconds for a process started with `process_start` to exit, without killing it on timeout. Returns the exit code on completion, `-1` on an unknown process ID, or a large negative sentinel if the process is still running after the timeout (left alive, not killed). Unlike `process_wait_timeout`, callers can re-poll and impose their own watchdog deadline instead of the process being killed automatically.
 

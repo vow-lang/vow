@@ -69,6 +69,9 @@ fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> 
     if ans.verdict == VC_ANS_UNKNOWN() {
         return vc_verify_result(VERIFY_UNKNOWN(), -1, Vec::new(), Vec::new(), ans.raw);
     }
+    if ans.verdict == VC_ANS_MEMORY() {
+        return vc_verify_result(VERIFY_UNKNOWN(), -1, Vec::new(), Vec::new(), memory_limit_reason());
+    }
     if ans.verdict == VC_ANS_TIMEOUT() {
         return vc_verify_result(VERIFY_TIMEOUT(), -1, Vec::new(), Vec::new(), ans.raw);
     }

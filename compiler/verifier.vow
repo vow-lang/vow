@@ -15,6 +15,7 @@ fn VERIFY_ERROR() -> i64 { 3 }
 fn VERIFY_NOT_FOUND() -> i64 { 4 }
 fn VERIFY_PROVEN_IR() -> i64 { 5 }
 fn VERIFY_UNKNOWN() -> i64 { 6 }
+fn VERIFY_PANICKED() -> i64 { 7 }
 
 struct VerifyResult {
     status: i64,

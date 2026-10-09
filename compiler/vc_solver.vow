@@ -13,6 +13,7 @@ fn VC_ANS_UNKNOWN() -> i64 { 2 }
 fn VC_ANS_ERROR() -> i64 { 3 }
 fn VC_ANS_TIMEOUT() -> i64 { 4 }
 fn VC_ANS_NOT_FOUND() -> i64 { 5 }
+fn VC_ANS_MEMORY() -> i64 { 6 }
 
 // A parsed bit-vector literal: `value` is the low 64 bits, `high` the next 64.
 struct VcParsed {
@@ -203,8 +204,10 @@ fn vc_classify_run(exit_code: i64, stdout: String, stderr: String, names: Vec<St
     let raw: String = String::from(stdout);
     raw.push_str(stderr);
     if exit_code == -2 { return vc_answer_plain(VC_ANS_TIMEOUT(), raw); }
-    if exit_code != 0 { return vc_answer_plain(VC_ANS_ERROR(), raw); }
-    if stderr.contains(String::from("[error]")) { return vc_answer_plain(VC_ANS_ERROR(), raw); }
+    if exit_code != 0 || stderr.contains(String::from("[error]")) {
+        if output_has_memory_limit(raw) { return vc_answer_plain(VC_ANS_MEMORY(), raw); }
+        return vc_answer_plain(VC_ANS_ERROR(), raw);
+    }
     let verdict: i64 = vc_parse_check_sat(stdout);
     if verdict != VC_ANS_SAT() { return vc_answer_plain(verdict, raw); }
     let model: VcModel = vc_parse_model(stdout, names, widths);
@@ -222,14 +225,18 @@ fn vc_solver_args(file: String) -> Vec<String> {
 
 // Runs `bin` on one self-contained query and returns its classified answer.
 // `budget_ms` is a hard wall-clock limit enforced by the runtime watchdog; a
-// non-positive budget is a timeout without spawning. The query lives in a
-// private temp directory that is removed on every path, and the child's
-// process-table entry is always evicted.
-fn vc_solver_check(bin: String, query: String, names: Vec<String>, widths: Vec<i64>, budget_ms: i64) -> VcSolverAnswer [io, read, write] {
+// non-positive budget is a timeout without spawning. The query lives in
+// `scratch` when the caller owns a directory (a verify-worker's parent removes
+// it even if the worker is killed), else in a private temp directory removed on
+// every path. The child's process-table entry is always evicted.
+fn vc_solver_check(bin: String, query: String, names: Vec<String>, widths: Vec<i64>, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     if budget_ms <= 0 {
         return vc_answer_plain(VC_ANS_TIMEOUT(), String::from("time budget exhausted"));
     }
-    let dir: String = mktemp_dir(String::from("vow-native"));
+    let owned: bool = scratch.len() == 0;
+    let dir: String = {
+        if owned { mktemp_dir(String::from("vow-native")) } else { scratch }
+    };
     if dir.len() == 0 {
         return vc_answer_plain(VC_ANS_ERROR(), String::from("cannot create a temporary directory"));
     }
@@ -237,13 +244,13 @@ fn vc_solver_check(bin: String, query: String, names: Vec<String>, widths: Vec<i
     file.push_str(String::from("/query.smt2"));
     if fs_write(file, query) != 0 {
         fs_remove(file);
-        fs_remove_dir(dir);
+        if owned { fs_remove_dir(dir); }
         return vc_answer_plain(VC_ANS_ERROR(), String::from("cannot write the solver query"));
     }
     let handle: i64 = process_start(bin, vc_solver_args(file));
     if handle < 0 {
         fs_remove(file);
-        fs_remove_dir(dir);
+        if owned { fs_remove_dir(dir); }
         return vc_answer_plain(VC_ANS_ERROR(), String::from("failed to start the solver"));
     }
     let exit_code: i64 = process_wait_timeout(handle, budget_ms);
@@ -251,6 +258,6 @@ fn vc_solver_check(bin: String, query: String, names: Vec<String>, widths: Vec<i
     let stderr: String = process_stderr_for(handle);
     process_kill(handle);
     fs_remove(file);
-    fs_remove_dir(dir);
+    if owned { fs_remove_dir(dir); }
     vc_classify_run(exit_code, stdout, stderr, names, widths)
 }

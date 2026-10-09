@@ -57,6 +57,7 @@ Every verification-related flag in `docs/spec/cli.md`, for `build`, `verify`,
 | `--encoding <bv\|ir\|auto>` | build, verify, contracts | **removed** | Fixed-width bit-vectors only (D2, D7). |
 | `VOW_VERIFY_DEBUG` (Rust driver env) | env | removed with the ESBMC driver (`vow-verify/src/esbmc.rs` reads it; the self-hosted driver never wired it) | The native replacement (retained `.smt2` under `VOW_CACHE_DIR`, perfetto) is decided in the P1 solver-driver child. |
 | `VOW_VERIFY_RUN_MEMLIMIT_RSS` (test-only env) | env | removed with ESBMC | Not part of the CLI contract. |
+| `VOW_VERIFY_WORKER_MEM_KB` (test-only env) | env | new, test-only | Lowers the internal address-space cap of a `verify-worker` (KiB) so tests can force an out-of-memory worker. Not part of the CLI contract and not a user-facing memory flag; the default cap is fixed (issue #1410). |
 | `verify-worker` subcommand, `--worker-entry` | internal | not CLI contract | Output and flags are unstable. |
 
 Not verification-related, therefore out of scope for this classification:
@@ -245,6 +246,15 @@ the reserved set to be fixed (no native query contains a user function name).
 | P3 | `docs/spec` and the skill are rewritten to this surface; `generate_help.py` is rerun. |
 | P5 | Default flips to `native`. `--backend esbmc` is the opt-out. `--replay-cex` joins the oracle. |
 | P6 | `--backend esbmc`, `--solver`, `--max-k-step` and `--encoding` become explicit rejections (section 2); `proven-ir` is deleted; `ModelCapacityAssumed` is retired. |
+
+**Addendum (issue #1410, verify-worker).** Each function runs in a `verify-worker`
+subprocess in its own process group; `--timeout` kills the group. A worker that
+runs out of memory is `unknown` with the reason `memory limit exceeded`. The
+signals of an exhausted address space count: the runtime's `OutOfMemory` and
+`StackOverflow` reports, Rust's allocation and thread-spawn failures, a solver
+memory message, and a SIGKILL that was not the parent's. Any other abnormal
+death is `panicked`. Known limitation: because workers lead their own group, a
+terminal Ctrl-C no longer reaches them; they stop at their own budget.
 
 ## Why this meets the language-design criteria
 

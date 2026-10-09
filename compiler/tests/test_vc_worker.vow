@@ -1,0 +1,169 @@
+module TestVcWorker
+
+use verifier
+use vc_native
+use vc_worker
+
+fn sample_result() -> VerifyResult {
+    let names: Vec<String> = Vec::new();
+    let values: Vec<String> = Vec::new();
+    names.push(String::from("a"));
+    values.push(String::from("-9223372036854775808"));
+    names.push(String::from("b"));
+    values.push(String::from("line1\nline2\n"));
+    let visits: Vec<i64> = Vec::new();
+    visits.push(3);
+    visits.push(-1);
+    VerifyResult {
+        status: VERIFY_FAILED(),
+        vow_id: 4294967293,
+        callee_precondition_func_id: -1,
+        callee_precondition_vow_id: 7,
+        callee_postcondition_func_id: 11,
+        callee_postcondition_vow_id: 13,
+        var_names: names,
+        var_values: values,
+        block_visits: visits,
+        raw_output: String::from("Violated property:\n  division by zero\n"),
+    }
+}
+
+fn wr(code: i64, out: String, err: String) -> VerifyResult {
+    let oc: VcOutcome = vc_worker_result(code, out, err);
+    oc.result
+}
+
+fn sample() -> VcOutcome {
+    let sites: Vec<ParsedArithSite> = Vec::new();
+    sites.push(ParsedArithSite { cause: String::from("overflow in +!"), owner: 3, ostart: 17, olen: 6 });
+    sites.push(ParsedArithSite { cause: String::from("a\nb"), owner: -1, ostart: 0, olen: 0 });
+    VcOutcome { result: sample_result(), sites: sites }
+}
+
+fn check_round_trip() -> i64 {
+    let vr: VerifyResult = sample_result();
+    let back_oc: VcOutcome = match vc_wire_decode(vc_wire_encode(sample())) {
+        Option::Some(v) => { v },
+        Option::None => { return 1; },
+    };
+    let back: VerifyResult = back_oc.result;
+    if back_oc.sites.len() != 2 { return 12; }
+    if back_oc.sites[0].cause != String::from("overflow in +!") || back_oc.sites[0].owner != 3 { return 13; }
+    if back_oc.sites[0].ostart != 17 || back_oc.sites[0].olen != 6 { return 14; }
+    if back_oc.sites[1].cause != String::from("a\nb") || back_oc.sites[1].owner != -1 { return 15; }
+    if back.status != vr.status { return 2; }
+    if back.vow_id != vr.vow_id { return 3; }
+    if back.callee_precondition_func_id != -1 || back.callee_precondition_vow_id != 7 { return 4; }
+    if back.callee_postcondition_func_id != 11 || back.callee_postcondition_vow_id != 13 { return 11; }
+    if back.var_names.len() != 2 || back.var_values.len() != 2 { return 5; }
+    if back.var_names[1] != String::from("b") { return 6; }
+    if back.var_values[1] != String::from("line1\nline2\n") { return 7; }
+    if back.var_values[0] != String::from("-9223372036854775808") { return 8; }
+    if back.block_visits.len() != 2 || back.block_visits[1] != -1 { return 9; }
+    if back.raw_output != vr.raw_output { return 10; }
+    0
+}
+
+fn check_leading_noise_is_skipped() -> i64 {
+    let text: String = String::from("some noise\n");
+    text.push_str(vc_wire_encode(sample()));
+    match vc_wire_decode(text) {
+        Option::Some(v) => { if v.result.status != VERIFY_FAILED() { return 1; } },
+        Option::None => { return 2; },
+    };
+    0
+}
+
+fn is_none(t: String) -> bool {
+    match vc_wire_decode(t) {
+        Option::Some(v) => { false },
+        Option::None => { true },
+    }
+}
+
+fn check_truncation_never_decodes() -> i64 {
+    let full: String = vc_wire_encode(sample());
+    let mut n: u64 = 0;
+    while n < full.len() {
+        if !is_none(full.substring(0, n)) { return 1; }
+        n = n + 1;
+    }
+    if is_none(full) { return 2; }
+    if !is_none(String::from("")) { return 3; }
+    if !is_none(String::from("VOWRES1\n99\n")) { return 4; }
+    if !is_none(String::from("VOWRES1\n99\n0\n0\n0\n0\n0\n0\n0\n0\n")) { return 5; }
+    0
+}
+
+fn check_clean_exit_decodes() -> i64 {
+    let vr: VerifyResult = wr(0, vc_wire_encode(sample()), String::from(""));
+    if vr.status != VERIFY_FAILED() { return 1; }
+    let none: VerifyResult = wr(0, String::from("nothing"), String::from(""));
+    if none.status != VERIFY_PANICKED() { return 2; }
+    0
+}
+
+fn check_memory_is_unknown() -> i64 {
+    let oom: String = String::from("{\"error\":\"OutOfMemory\",\"operation\":\"Vec::reserve\"}\n");
+    let a: VerifyResult = wr(134, String::from(""), oom);
+    if a.status != VERIFY_UNKNOWN() || a.raw_output != memory_limit_reason() { return 1; }
+    let b: VerifyResult = wr(-1009, String::from(""), String::from(""));
+    if b.status != VERIFY_UNKNOWN() || b.raw_output != memory_limit_reason() { return 2; }
+    let c: VerifyResult = wr(1, String::from(""), String::from("std::bad_alloc"));
+    if c.status != VERIFY_UNKNOWN() { return 3; }
+    let e: VerifyResult = wr(134, String::from(""), String::from("{\"error\":\"StackOverflow\"}\nstack overflow\n"));
+    if e.status != VERIFY_UNKNOWN() { return 5; }
+    let f: VerifyResult = wr(-1006, String::from(""), String::from("memory allocation of 8192 bytes failed\n"));
+    if f.status != VERIFY_UNKNOWN() { return 6; }
+    let g: VerifyResult = wr(-1006, String::from(""), String::from("failed to spawn thread: Os { code: 11 }\n"));
+    if g.status != VERIFY_UNKNOWN() { return 7; }
+    // A decoded proof is not trusted when the worker did not exit cleanly.
+    let d: VerifyResult = wr(134, vc_wire_encode(vc_bare_outcome(vc_plain_result(VERIFY_PROVEN(), String::from("")))), oom);
+    if d.status == VERIFY_PROVEN() { return 4; }
+    0
+}
+
+fn check_crash_is_panicked() -> i64 {
+    let a: VerifyResult = wr(-1006, String::from(""), String::from("boom"));
+    if a.status != VERIFY_PANICKED() { return 1; }
+    if str_find_str(a.raw_output, String::from("signal 6")) < 0 { return 2; }
+    if str_find_str(a.raw_output, String::from("boom")) < 0 { return 3; }
+    let b: VerifyResult = wr(3, String::from(""), String::from(""));
+    if b.status != VERIFY_PANICKED() { return 4; }
+    if str_find_str(b.raw_output, String::from("exit status 3")) < 0 { return 5; }
+    0
+}
+
+fn check_signal_decoding() -> i64 {
+    if vc_signal_of(-1009) != 9 { return 1; }
+    if vc_signal_of(-1) != 0 { return 2; }
+    if vc_signal_of(0) != 0 { return 3; }
+    if vc_signal_of(134) != 0 { return 4; }
+    0
+}
+
+fn check_tail_keeps_whole_characters() -> i64 {
+    let s: String = String::from("");
+    let mut i: u64 = 0;
+    while i < 200 {
+        s.push_str(String::from("é"));
+        i = i + 1;
+    }
+    let t: String = vc_tail(s, 301);
+    if t.len() != 300 { return 1; }
+    if t.byte_at(0) != 195 { return 2; }
+    if vc_tail(String::from("  short  "), 300) != String::from("short") { return 3; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_round_trip();
+    if r == 0 { r = check_leading_noise_is_skipped(); }
+    if r == 0 { r = check_truncation_never_decodes(); }
+    if r == 0 { r = check_clean_exit_decodes(); }
+    if r == 0 { r = check_memory_is_unknown(); }
+    if r == 0 { r = check_crash_is_panicked(); }
+    if r == 0 { r = check_signal_decoding(); }
+    if r == 0 { r = check_tail_keeps_whole_characters(); }
+    i64_to_i32_wrap(r)
+}
