@@ -1,0 +1,17 @@
+// Native-only (see unwrap_some.vow): the unwrap sits on the `Some` arm, so the
+// abort path is infeasible.
+module UnwrapGuardedByMatch
+
+fn first(o: Option<i64>, d: i64) -> i64 [panic] vow {
+  ensures: result == result
+} {
+  match o {
+    Option::Some(_) => o.unwrap(),
+    Option::None => d,
+  }
+}
+
+fn main() -> i32 [io, panic] {
+  print_i64(first(Option::Some(1), 0));
+  0
+}

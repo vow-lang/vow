@@ -2,6 +2,7 @@ module VcCfg
 
 use ir
 use ir_dominance
+use vc_ops
 
 // Control-flow shape the native symbolic executor can walk: every reachable
 // block ends in exactly one Branch/Jump/Return, the reachable graph is acyclic,
@@ -13,13 +14,28 @@ use ir_dominance
 
 // `Unreachable` ends the dead merge block of an `if` whose arms both return.
 // It is fine there, because the executor never walks a block the entry cannot
-// reach; a reachable one would need a "this path aborts" obligation.
+// reach. A reachable one needs a "this path aborts" obligation, which only the
+// unwrap abort call right before it carries.
+fn vc_unwrap_abort_precedes(blk: IrBlock) -> bool {
+    let mut k: u64 = blk.insts.len() - 1;
+    while k > 0 {
+        k = k - 1;
+        let prev: IrInst = blk.insts[k];
+        if prev.op == IOP_CALL() {
+            return prev.dk == IDATA_CALL_EXTERN() && prev.ds == VC_INTERNAL_UNWRAP_PANIC();
+        }
+        // The region analysis closes the block's region before the abort ends it.
+        if prev.op != IOP_REGION_CLOSE() { return false; }
+    }
+    false
+}
+
 fn vc_reachable_unreachable_detail(f: IrFunction, rpo: Vec<i64>) -> String {
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
         let last: IrInst = blk.insts[blk.insts.len() - 1];
-        if rpo[bi] >= 0 && last.op == IOP_UNREACHABLE() {
+        if rpo[bi] >= 0 && last.op == IOP_UNREACHABLE() && !vc_unwrap_abort_precedes(blk) {
             return opcode_name(last.op);
         }
         bi = bi + 1;

@@ -1,0 +1,246 @@
+module VcAgg
+
+use ir
+use ir_dominance
+use vc_term
+use vc_smt
+use vc_flow
+
+// Scalarised model of the heap aggregates (structs, enums, `Option`, `Result`)
+// the native verifier reads. A pointer value is an object, and an object is a
+// set of scalar field terms; no pointer is ever an SMT term, so field access,
+// construction and `match` reduce to the i64/Bool terms the executor already
+// handles.
+//
+// Three kinds of object exist. An allocation (`RegionAlloc`) starts with no
+// field values and is written by `FieldSet`; a parameter's fields are
+// per-parameter symbols; a pointer Phi is the `ite` over its incoming objects.
+// A field nothing wrote is a fresh unconstrained constant, never 0: it is what
+// the other arm of a `Some`/`None` merge would leave in the payload slot. Slots
+// are read lazily, so a parameter needs no layout. A slot is keyed by index and
+// sort (Bool or a bit-vector width), because one enum slot can hold an i64
+// payload in one variant and a Bool in another.
+//
+// This is exact only because every write precedes every read of its object.
+// The gate (`vc_agg_shape_detail`) allows a `FieldSet` only on an object
+// allocated in the same block, so by the time any other block (or a Phi) reads
+// an object it is final; mutation anywhere else is `Skipped`, never guessed at.
+
+fn VC_OBJ_ALLOC() -> i64 { 0 }
+fn VC_OBJ_PARAM() -> i64 { 1 }
+fn VC_OBJ_PHI() -> i64 { 2 }
+
+struct VcAgg {
+    kinds: Vec<i64>,
+    owners: Vec<i64>,
+    heads: Vec<i64>,
+    pe_first: Vec<i64>,
+    pe_count: Vec<i64>,
+    pe_cond: Vec<i64>,
+    pe_obj: Vec<i64>,
+    sl_next: Vec<i64>,
+    sl_idx: Vec<i64>,
+    sl_sort: Vec<i64>,
+    sl_term: Vec<i64>,
+    junk: i64,
+}
+
+fn vc_agg_new() -> VcAgg {
+    VcAgg {
+        kinds: Vec::new(),
+        owners: Vec::new(),
+        heads: Vec::new(),
+        pe_first: Vec::new(),
+        pe_count: Vec::new(),
+        pe_cond: Vec::new(),
+        pe_obj: Vec::new(),
+        sl_next: Vec::new(),
+        sl_idx: Vec::new(),
+        sl_sort: Vec::new(),
+        sl_term: Vec::new(),
+        junk: 0,
+    }
+}
+
+fn vc_agg_push_obj(ag: VcAgg, kind: i64, owner: i64) -> i64 {
+    let id: i64 = ag.kinds.len() as i64;
+    ag.kinds.push(kind);
+    ag.owners.push(owner);
+    ag.heads.push(-1);
+    ag.pe_first.push(-1);
+    ag.pe_count.push(0);
+    id
+}
+
+fn vc_agg_alloc(ag: VcAgg) -> i64 {
+    vc_agg_push_obj(ag, VC_OBJ_ALLOC(), -1)
+}
+
+// One object per parameter index, so a parameter's field symbols are declared once.
+fn vc_agg_param(ag: VcAgg, k: i64) -> i64 {
+    let mut o: u64 = 0;
+    while o < ag.kinds.len() {
+        if ag.kinds[o] == VC_OBJ_PARAM() && ag.owners[o] == k {
+            return o as i64;
+        }
+        o = o + 1;
+    }
+    vc_agg_push_obj(ag, VC_OBJ_PARAM(), k)
+}
+
+fn vc_agg_find(ag: VcAgg, obj: i64, idx: i64, sort: i64) -> i64 {
+    let mut s: i64 = ag.heads[obj as u64];
+    while s >= 0 {
+        if ag.sl_idx[s as u64] == idx && ag.sl_sort[s as u64] == sort {
+            return s;
+        }
+        s = ag.sl_next[s as u64];
+    }
+    -1
+}
+
+fn vc_agg_store(ag: VcAgg, obj: i64, idx: i64, sort: i64, term: i64) {
+    let s: i64 = vc_agg_find(ag, obj, idx, sort);
+    if s >= 0 {
+        ag.sl_term[s as u64] = term;
+        return;
+    }
+    let id: i64 = ag.sl_idx.len() as i64;
+    ag.sl_next.push(ag.heads[obj as u64]);
+    ag.sl_idx.push(idx);
+    ag.sl_sort.push(sort);
+    ag.sl_term.push(term);
+    ag.heads[obj as u64] = id;
+}
+
+// Writes `term` into slot `idx`; the same slot read at any other sort is
+// overwritten too, so it reads as unconstrained again.
+fn vc_agg_set(ag: VcAgg, obj: i64, idx: i64, sort: i64, term: i64) {
+    let mut s: i64 = ag.heads[obj as u64];
+    while s >= 0 {
+        if ag.sl_idx[s as u64] == idx && ag.sl_sort[s as u64] != sort {
+            ag.sl_term[s as u64] = -1;
+        }
+        s = ag.sl_next[s as u64];
+    }
+    vc_agg_store(ag, obj, idx, sort, term);
+}
+
+fn vc_agg_declare(ar: VcArena, hdr: SmtScript, name: String, sort: i64) -> i64 {
+    vc_script_declare_const(hdr, name, sort);
+    vc_tm_var(ar, name)
+}
+
+fn vc_agg_junk(ag: VcAgg, ar: VcArena, hdr: SmtScript, sort: i64) -> i64 {
+    let name: String = String::from("j");
+    name.push_str(i64_to_string(ag.junk));
+    ag.junk = ag.junk + 1;
+    vc_agg_declare(ar, hdr, name, sort)
+}
+
+fn vc_agg_param_symbol(ar: VcArena, hdr: SmtScript, k: i64, idx: i64, sort: i64) -> i64 {
+    let name: String = String::from("p");
+    name.push_str(i64_to_string(k));
+    name.push_str(String::from("f"));
+    name.push_str(i64_to_string(idx));
+    name.push_str(String::from("s"));
+    name.push_str(i64_to_string(sort));
+    vc_agg_declare(ar, hdr, name, sort)
+}
+
+// Term of slot `idx` of `obj` at `sort`. Any reachable object is final (see
+// the header), so a term computed here is cached in the slot for good.
+fn vc_agg_get(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: i64) -> i64 {
+    let s: i64 = vc_agg_find(ag, obj, idx, sort);
+    if s >= 0 && ag.sl_term[s as u64] >= 0 {
+        return ag.sl_term[s as u64];
+    }
+    let kind: i64 = ag.kinds[obj as u64];
+    let mut t: i64 = -1;
+    if kind == VC_OBJ_PARAM() {
+        t = vc_agg_param_symbol(ar, hdr, ag.owners[obj as u64], idx, sort);
+    } else if kind == VC_OBJ_PHI() {
+        t = vc_agg_phi_read(ag, ar, hdr, obj, idx, sort);
+    } else {
+        t = vc_agg_junk(ag, ar, hdr, sort);
+    }
+    vc_agg_store(ag, obj, idx, sort, t);
+    t
+}
+
+// The `ite` chain `vc_flow_phi_value` builds, over the slot of each incoming object.
+fn vc_agg_phi_read(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: i64) -> i64 {
+    let first: i64 = ag.pe_first[obj as u64];
+    let n: i64 = ag.pe_count[obj as u64];
+    let mut acc: i64 = vc_agg_get(ag, ar, hdr, ag.pe_obj[first as u64], idx, sort);
+    let mut k: i64 = 1;
+    while k < n {
+        let e: u64 = (first + k) as u64;
+        let v: i64 = vc_agg_get(ag, ar, hdr, ag.pe_obj[e], idx, sort);
+        if v != acc {
+            acc = vc_tm_app3(ar, VC_OP_ITE(), ag.pe_cond[e], v, acc);
+        }
+        k = k + 1;
+    }
+    acc
+}
+
+// Object of the Phi `phi_id` at the head of block `bi`: the object itself when
+// every live edge supplies the same one, else an object that merges them. The
+// Upsilons recorded the supplied objects in place of terms.
+fn vc_agg_phi(ag: VcAgg, fl: VcFlow, bi: u64, phi_id: i64) -> i64 {
+    let first: i64 = fl.in_head[bi];
+    let base: i64 = vc_flow_upsilon_from(fl, phi_id, fl.e_src[first as u64]);
+    let mut same: bool = true;
+    let mut e: i64 = fl.e_next[first as u64];
+    while e >= 0 {
+        if vc_flow_upsilon_from(fl, phi_id, fl.e_src[e as u64]) != base {
+            same = false;
+        }
+        e = fl.e_next[e as u64];
+    }
+    if same {
+        return base;
+    }
+    let obj: i64 = vc_agg_push_obj(ag, VC_OBJ_PHI(), -1);
+    ag.pe_first[obj as u64] = ag.pe_obj.len() as i64;
+    ag.pe_cond.push(fl.e_cond[first as u64]);
+    ag.pe_obj.push(base);
+    let mut n: i64 = 1;
+    e = fl.e_next[first as u64];
+    while e >= 0 {
+        ag.pe_cond.push(fl.e_cond[e as u64]);
+        ag.pe_obj.push(vc_flow_upsilon_from(fl, phi_id, fl.e_src[e as u64]));
+        n = n + 1;
+        e = fl.e_next[e as u64];
+    }
+    ag.pe_count[obj as u64] = n;
+    obj
+}
+
+// Gate rule for writes: a `FieldSet` must target a `RegionAlloc` of its own
+// block. "" when every one does, else the detail of an `unsupported-opcode`
+// skip. `n_ids` is the size of the instruction-id space.
+fn vc_agg_shape_detail(f: IrFunction, n_ids: u64) -> String {
+    let alloc_blk: Vec<i64> = dom_fill(n_ids, -1);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_REGION_ALLOC() && inst.id >= 0 && (inst.id as u64) < n_ids {
+                alloc_blk[inst.id as u64] = bi as i64;
+            }
+            if inst.op == IOP_FIELD_SET() {
+                let target: i64 = inst.args[0];
+                if target < 0 || target >= n_ids as i64 || alloc_blk[target as u64] != bi as i64 {
+                    return String::from("FieldSet outside the block that allocates its target");
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}

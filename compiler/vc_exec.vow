@@ -6,10 +6,12 @@ use vc_smt
 use vc_int
 use vc_gate
 use vc_flow
+use vc_agg
 use ir_dominance
 
-// Symbolic execution of an acyclic integer/Bool function (one that
-// `vc_skip_reason` accepts) into proof obligations. Blocks are walked in
+// Symbolic execution of an acyclic integer/Bool function, with the scalarised
+// aggregates of `vc_agg` (one that `vc_skip_reason` accepts) into proof
+// obligations. Blocks are walked in
 // reverse postorder (`vc_flow` holds the path conditions and merges). Each IR
 // value becomes a `define-fun`; each `requires` is an assumption for the claims
 // that follow it. A claim is only asked on the paths that reach it: its query
@@ -21,6 +23,9 @@ use ir_dominance
 //
 //   hard  wrapping `/`, `%` (zero divisor, signed MIN / -1) and a shift count
 //         outside `0 <= count < width`: a counterexample fails the function.
+//   hard  the abort of `.unwrap()` on `None`/`Err`: the lowerer branches on the
+//         discriminant and calls the abort on the empty variant, so that call is
+//         a claim that its path is infeasible.
 //   soft  checked `+! -! *! /! %!`: the language aborts on overflow, so the
 //         contract is judged on returning runs only. A counterexample to a soft
 //         claim is not a failure; it means the abort is reachable and the
@@ -31,10 +36,12 @@ fn VC_CLAIM_DIV_ZERO() -> i64 { 1 }
 fn VC_CLAIM_DIV_OVERFLOW() -> i64 { 2 }
 fn VC_CLAIM_SHIFT_COUNT() -> i64 { 3 }
 fn VC_CLAIM_ARITH() -> i64 { 4 }
+fn VC_CLAIM_UNWRAP_NONE() -> i64 { 5 }
 
 fn VC_LABEL_DIV_ZERO() -> String { String::from("division by zero") }
 fn VC_LABEL_DIV_OVERFLOW() -> String { String::from("division overflow") }
 fn VC_LABEL_SHIFT_COUNT() -> String { String::from("integer shift count") }
+fn VC_LABEL_UNWRAP_NONE() -> String { String::from("unwrap-none") }
 
 // One shared command list (`header`) and one append-only assumption list serve
 // every claim: claim `k` is the first `header_lens[k]` header commands, the
@@ -115,8 +122,10 @@ fn vc_claim_script(cs: VcClaims, k: u64) -> SmtScript {
 struct VcWalk {
     cs: VcClaims,
     fl: VcFlow,
+    ag: VcAgg,
     var_of: Vec<i64>,
     def_of: Vec<i64>,
+    obj_of: Vec<i64>,
     tys: Vec<i64>,
     lits: Vec<i64>,
     dvs: Vec<i64>,
@@ -252,6 +261,41 @@ fn vc_walk_branch(w: VcWalk, inst: IrInst, bi: u64, then_idx: i64, else_idx: i64
     }
 }
 
+// Aggregate instructions: pointers are objects (`obj_of`), never terms; a field
+// read defines a scalar value.
+fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
+    let cs: VcClaims = w.cs;
+    let ag: VcAgg = w.ag;
+    let op: i64 = inst.op;
+    if op == IOP_GET_ARG() && inst.ty == ITY_PTR() {
+        w.obj_of[inst.id as u64] = vc_agg_param(ag, inst.dv);
+        return true;
+    }
+    if op == IOP_REGION_ALLOC() {
+        w.obj_of[inst.id as u64] = vc_agg_alloc(ag);
+        return true;
+    }
+    if op == IOP_FIELD_SET() {
+        let val: i64 = inst.args[1];
+        vc_agg_set(ag, w.obj_of[inst.args[0] as u64], inst.dv, vc_ty_sort(w.tys[val as u64]), w.var_of[val as u64]);
+        return true;
+    }
+    if op == IOP_FIELD_GET() {
+        let t: i64 = vc_agg_get(ag, cs.arena, cs.header, w.obj_of[inst.args[0] as u64], inst.dv, vc_ty_sort(inst.ty));
+        vc_define(w, inst, t);
+        return true;
+    }
+    if op == IOP_PHI() && inst.ty == ITY_PTR() {
+        w.obj_of[inst.id as u64] = vc_agg_phi(ag, w.fl, bi, inst.id);
+        return true;
+    }
+    if op == IOP_UPSILON() && w.tys[inst.args[0] as u64] == ITY_PTR() {
+        vc_flow_add_upsilon(w.fl, inst.dv, bi as i64, w.obj_of[inst.args[0] as u64]);
+        return true;
+    }
+    false
+}
+
 fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     let cs: VcClaims = w.cs;
     let fl: VcFlow = w.fl;
@@ -263,6 +307,13 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
         return;
     }
     if op == IOP_UPSILON() && w.tys[inst.args[0] as u64] == ITY_UNIT() {
+        return;
+    }
+    // Region markers only scope an allocation's lifetime; they change no value.
+    if op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE() {
+        return;
+    }
+    if vc_walk_agg(w, bi, inst) {
         return;
     }
     if op == IOP_PHI() {
@@ -277,6 +328,8 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
         vc_flow_add_edge(fl, succ[bi * 2] as u64, bi as i64, pc, fl.block_foff[bi], fl.block_flen[bi]);
     } else if op == IOP_BRANCH() {
         vc_walk_branch(w, inst, bi, succ[bi * 2], succ[bi * 2 + 1]);
+    } else if op == IOP_CALL() {
+        vc_guard(cs, VC_CLAIM_UNWRAP_NONE(), VC_LABEL_UNWRAP_NONE(), pc, vc_tm_bool_const(cs.arena, false), inst);
     } else if op != IOP_RETURN() && op != IOP_UNREACHABLE() {
         vc_define(w, inst, vc_exec_value(w, inst, pc));
     }
@@ -323,8 +376,10 @@ fn vc_claims(f: IrFunction) -> VcClaims {
     let w: VcWalk = VcWalk {
         cs: cs,
         fl: vc_flow_new(nb, tys.len()),
+        ag: vc_agg_new(),
         var_of: dom_fill(tys.len(), -1),
         def_of: dom_fill(tys.len(), -1),
+        obj_of: dom_fill(tys.len(), -1),
         tys: tys,
         lits: vc_literal_table(f, tys),
         dvs: dom_fill(tys.len(), 0),

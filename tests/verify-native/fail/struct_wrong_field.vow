@@ -1,0 +1,12 @@
+// TEST: counterexample-fn "build"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame callee
+module StructWrongField
+
+struct Pair { lo: i64, hi: i64 }
+
+fn build(a: i64) -> Pair vow {
+  ensures: result.hi == a
+} {
+  Pair { lo: a, hi: a + 1 }
+}

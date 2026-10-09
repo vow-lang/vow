@@ -1,0 +1,17 @@
+// TEST: category unverifiable
+// TEST: skip-reason unsupported-opcode
+module NestedStructField
+
+struct Inner { n: i64 }
+struct Outer { inner: Inner, k: i64 }
+
+fn total(o: Outer) -> i64 vow {
+  ensures: result == o.inner.n + o.k
+} {
+  o.inner.n + o.k
+}
+
+fn main() -> i32 [io] {
+  print_i64(total(Outer { inner: Inner { n: 1 }, k: 2 }));
+  0
+}

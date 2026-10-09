@@ -1,0 +1,20 @@
+// TEST: category unverifiable
+// TEST: skip-reason unsupported-opcode
+module FieldSetInBranch
+
+struct Cell { value: i64 }
+
+fn maybe(x: i64) -> Cell vow {
+  ensures: result.value >= 1
+} {
+  let c: Cell = Cell { value: 1 };
+  if x > 0 {
+    c.value = x;
+  }
+  c
+}
+
+fn main() -> i32 [io] {
+  print_i64(maybe(2).value);
+  0
+}

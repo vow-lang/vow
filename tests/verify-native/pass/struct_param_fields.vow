@@ -1,0 +1,18 @@
+module StructParamFields
+
+struct Pair { lo: i64, hi: i64 }
+
+fn width(p: Pair) -> i64 vow {
+  requires: p.lo <= p.hi,
+  requires: p.lo >= 0,
+  requires: p.hi < 1000000,
+  ensures: result >= 0,
+  ensures: result == p.hi - p.lo
+} {
+  p.hi - p.lo
+}
+
+fn main() -> i32 [io] {
+  print_i64(width(Pair { lo: 1, hi: 4 }));
+  0
+}

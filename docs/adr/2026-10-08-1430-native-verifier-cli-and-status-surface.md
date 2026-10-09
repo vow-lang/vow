@@ -150,7 +150,7 @@ opcode or builtin name); `detail` is never part of the enumerated set.
 
 | Code | When | Lifetime |
 |---|---|---|
-| `function-has-effects` | The function has a non-empty effect set (D10). | Permanent. |
+| `function-has-effects` | The function has an effect other than `panic` (D10). `panic`, the effect of `.unwrap()`, is modelled: the abort is a claim (#1417). | Permanent. |
 | `recursion-unsupported` | The function is directly or mutually recursive in the inlined call graph (D10). | Permanent here; modular verification is a separate decision. |
 | `float-rem-unsupported` | The body uses `RemF32` or `RemF64` (D7). | Until codegen defines float `%`. |
 | `ir-non-dominating-read` | The dominance validator rejects the IR (D13). | Kept as a defensive gate after the lowerer fix. |
