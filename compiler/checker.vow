@@ -4577,6 +4577,22 @@ fn collect_calls_in_block(e: CheckEnv, m: Module, bid: i64, calls: Vec<String>) 
     }
 }
 
+fn effect_bit_name(bit: i64) -> String {
+    if bit == 1 {
+        return String::from("IO");
+    }
+    if bit == 2 {
+        return String::from("Panic");
+    }
+    if bit == 4 {
+        return String::from("Read");
+    }
+    if bit == 8 {
+        return String::from("Unsafe");
+    }
+    String::from("Write")
+}
+
 fn check_effects_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     let a: AstArena = m.arena;
     let declared_eff: i64 = fn_eff(a, fid);
@@ -4601,7 +4617,19 @@ fn check_effects_fn(e: CheckEnv, m: Module, fid: i64) [io] {
             if fidx != -1 {
                 let needed_eff: i64 = e.fn_effects[fidx as u64];
                 if needed_eff != 0 && !effect_covered(declared_eff, needed_eff) {
-                    env_emit_error_code(e, EC_EFFECT_VIOLATION(), String::from("effectful call from pure function"), fn_span(a, fid));
+                    let fname: String = arena_str(a, fn_name_sid(a, fid));
+                    let mut bit: i64 = 1;
+                    while bit <= 16 {
+                        if has_eff_bit(needed_eff, bit) && !effect_covered(declared_eff, bit) {
+                            let hint: String = String::from("add '");
+                            hint.push_str(effect_bit_name(bit));
+                            hint.push_str(String::from("' to `"));
+                            hint.push_str(fname);
+                            hint.push_str(String::from("`'s effect list"));
+                            env_emit_error_code_hint(e, EC_EFFECT_VIOLATION(), String::from("effectful call from pure function"), fn_span(a, fid), hint);
+                        }
+                        bit = bit * 2;
+                    }
                 }
             }
         }
