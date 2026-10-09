@@ -182,7 +182,7 @@ fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64, ex: CxExtra) {
     out.push_str(String::from("}}"));
 }
 
-fn run_complexity(argv: Vec<String>) -> i32 [io] {
+fn run_complexity(argv: Vec<String>) -> i32 [io, read] {
     // Fail closed on a malformed value-taking flag (mirrors the Rust CLI, which
     // rejects non-integer values): a typo'd `--max-*` must not silently disable
     // the opt-in CI gate.

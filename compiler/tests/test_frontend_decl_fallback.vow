@@ -53,7 +53,7 @@ fn tfdf_item_file(m: Module, item_files: Vec<String>, name: String) -> String {
     String::from("")
 }
 
-fn tfdf_check_fallback(t: String) -> i32 [io, write] {
+fn tfdf_check_fallback(t: String) -> i32 [io, read, write] {
     let dir: String = tfdf_join(t, String::from("/fallback"));
     if tfdf_run2(String::from("mkdir"), String::from("-p"), dir) != 0 { return 90; }
     if tfdf_put(
@@ -77,7 +77,7 @@ fn tfdf_check_fallback(t: String) -> i32 [io, write] {
     0
 }
 
-fn tfdf_check_stub_still_preferred(t: String) -> i32 [io, write] {
+fn tfdf_check_stub_still_preferred(t: String) -> i32 [io, read, write] {
     let dir: String = tfdf_join(t, String::from("/preferred"));
     if tfdf_run2(String::from("mkdir"), String::from("-p"), dir) != 0 { return 94; }
     // Deliberately ill-typed, mirroring tests/multi/decl_stub_preference: the
@@ -107,7 +107,7 @@ fn tfdf_check_stub_still_preferred(t: String) -> i32 [io, write] {
 // silently falling back to a valid sibling .vow source: the fallback is
 // scoped to #1472's contract-hiding bug, not stub parse robustness. Mirrors
 // vow/src/module_loader.rs's load_deps_does_not_fall_back_when_stub_fails_to_parse.
-fn tfdf_check_stub_parse_failure_does_not_fall_back(t: String) -> i32 [io, write] {
+fn tfdf_check_stub_parse_failure_does_not_fall_back(t: String) -> i32 [io, read, write] {
     let dir: String = tfdf_join(t, String::from("/parsefail"));
     if tfdf_run2(String::from("mkdir"), String::from("-p"), dir) != 0 { return 98; }
     if tfdf_put(
@@ -128,7 +128,7 @@ fn tfdf_check_stub_parse_failure_does_not_fall_back(t: String) -> i32 [io, write
     0
 }
 
-fn main() -> i32 [io, write] {
+fn main() -> i32 [io, read, write] {
     let t: String = tfdf_temp_dir();
     if t.len() == 0 { return 80; }
     let fallback_code: i32 = tfdf_check_fallback(t);

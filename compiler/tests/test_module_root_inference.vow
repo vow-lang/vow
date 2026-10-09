@@ -30,7 +30,7 @@ fn tmr_join(a: String, b: String) -> String {
     r
 }
 
-fn tmr_run_checks(t: String) -> i32 [io, write] {
+fn tmr_run_checks(t: String) -> i32 [io, read, write] {
     let root: String = tmr_join(t, String::from("/root"));
     let tests: String = tmr_join(root, String::from("/tests"));
     let deep: String = tmr_join(tests, String::from("/sub/deep"));
@@ -59,7 +59,7 @@ fn tmr_run_checks(t: String) -> i32 [io, write] {
     0
 }
 
-fn main() -> i32 [io, write] {
+fn main() -> i32 [io, read, write] {
     let t: String = tmr_temp_dir();
     if t.len() == 0 { return 80; }
     let code: i32 = tmr_run_checks(t);

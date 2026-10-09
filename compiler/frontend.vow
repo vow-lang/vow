@@ -137,7 +137,7 @@ fn frontend_parent_dir(dir: String) -> String {
     }
 }
 
-fn frontend_uses_resolve_in(arena: AstArena, dir: String, uses: Vec<i64>) -> bool [io] {
+fn frontend_uses_resolve_in(arena: AstArena, dir: String, uses: Vec<i64>) -> bool [io, read] {
     let mut i: u64 = 0u64;
     while i < uses.len() {
         if fs_exists(resolve_use_path(arena, dir, uses[i])) != 1 {
@@ -157,7 +157,7 @@ fn frontend_uses_resolve_in(arena: AstArena, dir: String, uses: Vec<i64>) -> boo
 // entry's own directory already works, the entry has no `use`, or nothing
 // resolves them all. Mirrors `module_loader::infer_module_root` in the Rust
 // driver.
-fn frontend_infer_module_root(path: String) -> String [io] {
+fn frontend_infer_module_root(path: String) -> String [io, read] {
     let dctx: DiagCtx = diag_ctx_new();
     let arena: AstArena = arena_new();
     let m: Module = parse_module_into(lex(fs_read(path)), arena, dctx, path);
@@ -187,7 +187,7 @@ fn frontend_infer_module_root(path: String) -> String [io] {
     String::from("")
 }
 
-fn load_frontend_deps(root_dir: String, m: Module, arena: AstArena, all_items: Vec<i64>, item_files: Vec<String>, visited: Vec<String>, dctx: DiagCtx, importing_file: String) [io] {
+fn load_frontend_deps(root_dir: String, m: Module, arena: AstArena, all_items: Vec<i64>, item_files: Vec<String>, visited: Vec<String>, dctx: DiagCtx, importing_file: String) [io, read] {
     let uses: Vec<i64> = m.uses;
     let uses_spans: Vec<i64> = m.uses_spans;
     let n_uses: u64 = uses.len();
@@ -237,7 +237,7 @@ fn load_frontend_deps(root_dir: String, m: Module, arena: AstArena, all_items: V
     }
 }
 
-fn frontend_prepare_path(path: String) -> FrontendPrep [io] {
+fn frontend_prepare_path(path: String) -> FrontendPrep [io, read] {
     frontend_prepare_path_with_root(path, String::from(""))
 }
 
@@ -246,14 +246,14 @@ fn frontend_prepare_path(path: String) -> FrontendPrep [io] {
 // `module_root` keeps the default behaviour. `vowc test` passes the test
 // scan path here so a test at `compiler/tests/test_region.vow` can
 // `use region;` and resolve against `compiler/region.vow`.
-fn frontend_prepare_path_with_root(path: String, module_root: String) -> FrontendPrep [io] {
+fn frontend_prepare_path_with_root(path: String, module_root: String) -> FrontendPrep [io, read] {
     frontend_prepare_path_traced(path, module_root, trace_off())
 }
 
 // Tracing variant of `frontend_prepare_path_with_root`: records parse,
 // module-load, merge, and typecheck phase spans into `t` (a no-op when `t` is
 // disabled). Used by the --perfetto build/verify paths (issue #784).
-fn frontend_prepare_path_traced(path: String, module_root: String, t: TraceCtx) -> FrontendPrep [io] {
+fn frontend_prepare_path_traced(path: String, module_root: String, t: TraceCtx) -> FrontendPrep [io, read] {
     let dctx: DiagCtx = diag_ctx_new();
     let src: String = fs_read(path);
     diag_ctx_add_source(dctx, path, src);
@@ -331,20 +331,20 @@ fn frontend_prepare_path_traced(path: String, module_root: String, t: TraceCtx) 
     }
 }
 
-fn frontend_lower_path(path: String) -> LoweredFrontend [io] {
+fn frontend_lower_path(path: String) -> LoweredFrontend [io, read] {
     frontend_lower_path_with_root(path, String::from(""))
 }
 
 // Same as `frontend_lower_path`, but resolves `use` declarations against
 // `module_root` instead of the entry file's parent directory. Empty
 // `module_root` falls back to the default. See `frontend_prepare_path_with_root`.
-fn frontend_lower_path_with_root(path: String, module_root: String) -> LoweredFrontend [io] {
+fn frontend_lower_path_with_root(path: String, module_root: String) -> LoweredFrontend [io, read] {
     frontend_lower_path_traced(path, module_root, trace_off())
 }
 
 // Tracing variant of `frontend_lower_path_with_root`: records lower,
 // region-inference, and region-markers spans into `t` (issue #784).
-fn frontend_lower_path_traced(path: String, module_root: String, t: TraceCtx) -> LoweredFrontend [io] {
+fn frontend_lower_path_traced(path: String, module_root: String, t: TraceCtx) -> LoweredFrontend [io, read] {
     let prep: FrontendPrep = frontend_prepare_path_traced(path, module_root, t);
     let checked: CheckedFrontend = prep.checked;
     // Snapshot the diags-Vec length before region inference. Counting

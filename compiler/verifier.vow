@@ -478,7 +478,7 @@ fn cleanup_verify_tmp_path(tmp_path: String) [io] {
     }
 }
 
-fn save_esbmc_debug(esbmc_bin: String, c_source: String, tmp_path: String, max_k_step: String, func_name: String, memlimit_arg: String, debug: bool) [io] {
+fn save_esbmc_debug(esbmc_bin: String, c_source: String, tmp_path: String, max_k_step: String, func_name: String, memlimit_arg: String, debug: bool) [io, write] {
     // Self-hosted VOW_VERIFY_DEBUG is not wired yet: compiler code has no
     // getenv builtin, so callers pass false. Keep this template aligned with
     // the real ESBMC args for the future env-var hook.
@@ -577,7 +577,7 @@ fn append_memlimit_arg(args: Vec<String>, memlimit_arg: String) [io] {
     args.push(memlimit_arg);
 }
 
-fn run_esbmc(esbmc_bin: String, c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String, extra_args: Vec<String>) -> EsbmcRun [io] {
+fn run_esbmc(esbmc_bin: String, c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String, extra_args: Vec<String>) -> EsbmcRun [io, write] {
     fs_write(tmp_path, c_source);
     let memlimit_arg: String = DEFAULT_ESBMC_MEMLIMIT_ARG();
     save_esbmc_debug(esbmc_bin, c_source, tmp_path, max_k_step, func_name, memlimit_arg, false);
@@ -626,7 +626,7 @@ fn run_esbmc(esbmc_bin: String, c_source: String, max_k_step: String, tmp_path: 
     EsbmcRun { exit_code: exit_code, combined: combined }
 }
 
-fn start_esbmc(esbmc_bin: String, c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> i64 [io] {
+fn start_esbmc(esbmc_bin: String, c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> i64 [io, write] {
     fs_write(tmp_path, c_source);
     let memlimit_arg: String = DEFAULT_ESBMC_MEMLIMIT_ARG();
     save_esbmc_debug(esbmc_bin, c_source, tmp_path, max_k_step, func_name, memlimit_arg, false);
@@ -1130,7 +1130,7 @@ fn parse_multi_property_verdicts(output: String, ids: Vec<i64>, proven: Vec<i64>
 // retry under integer (IR) encoding — per-clause precision, not throughput, is
 // the goal here; this mirrors run_esbmc_multi_property in vow-verify (#81 PR-A).
 fn verify_function_multi_property(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
-                                  vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> MultiPropertyResult [io] {
+                                  vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> MultiPropertyResult [io, write] {
     let ids: Vec<i64> = Vec::new();
     let proven: Vec<i64> = Vec::new();
     let vows: Vec<IrVowEntry> = f.vows;
@@ -1354,7 +1354,7 @@ fn function_has_requires(f: IrFunction) -> bool {
 // `requires`. Returns 1 when vacuous, 0 otherwise. Mirrors run_esbmc_reach in
 // vow-verify/src/esbmc.rs.
 fn verify_function_vacuity(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
-                           vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
+                           vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io, write] {
     if !function_has_requires(f) {
         return 0;
     }
@@ -1472,7 +1472,7 @@ fn body_replaceable_result(f: IrFunction) -> bool {
 // inconclusive probe is reported as not trivially satisfiable. Mirrors
 // run_esbmc_bodyreplace in vow-verify/src/esbmc.rs.
 fn verify_function_trivial(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
-                           vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
+                           vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io, write] {
     if !function_has_ensures(f) {
         return 0;
     }
@@ -1733,7 +1733,7 @@ fn build_verify_result(f: IrFunction, status: i64, combined: String) -> VerifyRe
 }
 
 fn verify_function_ir_fallback(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, use_cache: bool, timeout_secs: String,
-                               vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> VerifyResult [io] {
+                               vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> VerifyResult [io, write] {
     if f.vows.len() == 0 && requires_callee_names(f, m).len() == 0 {
         return VerifyResult {
             status: VERIFY_PROVEN(),
@@ -1796,7 +1796,7 @@ fn verify_function_ir_fallback(esbmc_bin: String, f: IrFunction, m: IrModule, ma
 // the abort assumes remain — so this asks exactly the right question: do the
 // contracts hold on every execution that returns? Mirrors
 // `crate::verification::verify_contracts_only` in the Rust driver (#585).
-fn run_contracts_only_once(esbmc_bin: String, f: IrFunction, c_source: String, max_k_step: String, solver: String, encoding: String, timeout_secs: String) -> VerifyResult [io] {
+fn run_contracts_only_once(esbmc_bin: String, f: IrFunction, c_source: String, max_k_step: String, solver: String, encoding: String, timeout_secs: String) -> VerifyResult [io, write] {
     let tmp_path: String = verify_tmp_path();
     let no_extra: Vec<String> = Vec::new();
     let eff_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
@@ -1812,7 +1812,7 @@ fn run_contracts_only_once(esbmc_bin: String, f: IrFunction, c_source: String, m
 }
 
 fn verify_function_contracts_only(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
-                                  vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> VerifyResult [io] {
+                                  vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> VerifyResult [io, write] {
     let c_source: String = contracts_only_source(emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, false));
     let bv: VerifyResult = run_contracts_only_once(esbmc_bin, f, c_source, max_k_step, solver, encoding, timeout_secs);
     let st: i64 = bv.status;
@@ -1845,7 +1845,7 @@ fn verify_function_contracts_only(esbmc_bin: String, f: IrFunction, m: IrModule,
 }
 
 fn verify_start(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> EsbmcStart [io] {
+                vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> EsbmcStart [io, write] {
     if f.vows.len() == 0 && requires_callee_names(f, m).len() == 0 {
         return EsbmcStart { handle: -1, tmp_path: String::from(""), bounds: String::from("") };
     }
