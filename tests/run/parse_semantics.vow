@@ -1,0 +1,63 @@
+// TEST: stdout "42\n7\n7\n0\nN\nN\nN\n42\n7\n7\nN\nN\n42\n7\n0\n7\nN\n9\n5\n77\n"
+module ParseSemantics
+
+// Every parse_X (and String.parse_X()) shares one parser: surrounding Unicode
+// whitespace is trimmed, a leading '+' and leading zeros are accepted, "-0" is
+// zero for a signed type and rejected by an unsigned one, and "+", "-" and ""
+// are rejected. These rules are identical at every width, 128-bit included.
+
+fn show8(o: Option<i8>) [io] {
+    match o {
+        Option::Some(v) => { print_i64(v as i64); },
+        Option::None => { print_str(String::from("N")); },
+    }
+    print_str(String::from("\n"));
+}
+
+fn showu8(o: Option<u8>) [io] {
+    match o {
+        Option::Some(v) => { print_i64(v as i64); },
+        Option::None => { print_str(String::from("N")); },
+    }
+    print_str(String::from("\n"));
+}
+
+fn show64(o: Option<i64>) [io] {
+    match o {
+        Option::Some(v) => { print_i64(v); },
+        Option::None => { print_str(String::from("N")); },
+    }
+    print_str(String::from("\n"));
+}
+
+fn showu64(o: Option<u64>) [io] {
+    match o {
+        Option::Some(v) => { print_i64(v as i64); },
+        Option::None => { print_str(String::from("N")); },
+    }
+    print_str(String::from("\n"));
+}
+
+fn main() -> i32 [io] {
+    show8(parse_i8(String::from("  42  ")));
+    show8(parse_i8(String::from("+7")));
+    show8(parse_i8(String::from("007")));
+    show8(parse_i8(String::from("-0")));
+    show8(parse_i8(String::from("+")));
+    show8(parse_i8(String::from("-")));
+    show8(parse_i8(String::from("")));
+    showu8(parse_u8(String::from("  42  ")));
+    showu8(parse_u8(String::from("+7")));
+    showu8(parse_u8(String::from("007")));
+    showu8(parse_u8(String::from("-0")));
+    showu8(parse_u8(String::from("+")));
+    show64(parse_i64(String::from("  42  ")));
+    show64(parse_i64(String::from("+7")));
+    show64(parse_i64(String::from("-0")));
+    showu64(String::from("+7").parse_u64());
+    showu64(String::from("-0").parse_u64());
+    showu64(String::from("\t9\n").parse_u64());
+    show64(parse_i64(String::from(" 5 ")));
+    show64(parse_i64(String::from("  77 ")));
+    0
+}
