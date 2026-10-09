@@ -243,10 +243,19 @@ fn parse_path(p: Parser) -> i64 {
     arena_add_list(p.arena, items)
 }
 
-// Drops an integer-literal suffix that merely restates the declared `const`
-// type (`const X: u8 = 200u8;`, `const Y: i32 = -5i32;`), leaving the bare
-// literal that const registration and lowering expect. A suffix naming a
-// different type is kept so the checker still rejects it.
+fn is_int_literal_or_negation(a: AstArena, eid: i64) -> bool {
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_LIT_INT() {
+        return true;
+    }
+    tag == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() && expr_tag(a, expr_b(a, eid)) == EXPR_LIT_INT()
+}
+
+// Drops an integer-literal suffix or cast that merely restates the declared
+// `const` type (`const X: u8 = 200u8;`, `const Y: i32 = -5i32;`,
+// `const Z: i64 = -1 as i64;`), leaving the bare literal that const
+// registration and lowering expect. A suffix naming a different type is kept
+// so the checker still rejects it.
 fn strip_const_suffix_matching(p: Parser, eid: i64, declared_tid: i64) -> i64 {
     let a: AstArena = p.arena;
     if type_tag(a, declared_tid) != TY_NAMED() {
@@ -256,7 +265,7 @@ fn strip_const_suffix_matching(p: Parser, eid: i64, declared_tid: i64) -> i64 {
     if tag == EXPR_CAST() {
         let lit_eid: i64 = expr_a(a, eid);
         let target_tid: i64 = expr_b(a, eid);
-        if expr_tag(a, lit_eid) == EXPR_LIT_INT() && type_tag(a, target_tid) == TY_NAMED()
+        if is_int_literal_or_negation(a, lit_eid) && type_tag(a, target_tid) == TY_NAMED()
             && arena_str(a, type_a(a, target_tid)) == arena_str(a, type_a(a, declared_tid)) {
             return lit_eid;
         }
