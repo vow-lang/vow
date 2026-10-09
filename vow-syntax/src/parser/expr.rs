@@ -1273,8 +1273,7 @@ mod tests {
             "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128",
         ] {
             let source = format!("1{expected_type}");
-            let source = source.as_str();
-            let expr = parse_no_errors(source);
+            let expr = parse_no_errors(&source);
             match &expr.kind {
                 ExprKind::Cast { expr, target_ty } => {
                     assert!(matches!(&expr.kind, ExprKind::Lit(Lit::Int(1))));
