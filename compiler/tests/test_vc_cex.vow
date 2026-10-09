@@ -17,11 +17,15 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
         kinds: Vec::new(),
         vow_ids: Vec::new(),
         labels: Vec::new(),
+        ostarts: Vec::new(),
+        olens: Vec::new(),
         negated_goals: Vec::new(),
         header_lens: Vec::new(),
         assumed_lens: Vec::new(),
         model_names: Vec::new(),
         model_params: Vec::new(),
+        model_tys: Vec::new(),
+        model_widths: Vec::new(),
     };
     cs.kinds.push(kind);
     cs.vow_ids.push(vow_id);
@@ -30,6 +34,8 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
     cs.model_names.push(String::from("p1"));
     cs.model_params.push(0);
     cs.model_params.push(1);
+    cs.model_tys.push(ITY_I64());
+    cs.model_tys.push(ITY_I64());
     cs
 }
 
@@ -37,7 +43,10 @@ fn answer(verdict: i64, a: i64, b: i64) -> VcSolverAnswer {
     let values: Vec<i64> = Vec::new();
     values.push(a);
     values.push(b);
-    VcSolverAnswer { verdict: verdict, values: values, raw: String::from("raw text") }
+    let highs: Vec<i64> = Vec::new();
+    highs.push(0);
+    highs.push(0);
+    VcSolverAnswer { verdict: verdict, values: values, highs: highs, raw: String::from("raw text") }
 }
 
 fn fn_xy() -> IrFunction {
@@ -92,9 +101,59 @@ fn check_non_sat_verdicts() -> i64 {
     0
 }
 
+fn typed_fn(a: i64, b: i64) -> IrFunction {
+    let p: Vec<i64> = Vec::new();
+    p.push(a);
+    p.push(b);
+    let f: IrFunction = mk_function(1, String::from("g"), p, ITY_I64(), Vec::new());
+    f.param_names[0] = String::from("x");
+    f.param_names[1] = String::from("y");
+    f
+}
+
+fn typed_answer(lo0: i64, hi0: i64, lo1: i64, hi1: i64) -> VcSolverAnswer {
+    let values: Vec<i64> = Vec::new();
+    values.push(lo0);
+    values.push(lo1);
+    let highs: Vec<i64> = Vec::new();
+    highs.push(hi0);
+    highs.push(hi1);
+    VcSolverAnswer { verdict: VC_ANS_SAT(), values: values, highs: highs, raw: String::from("") }
+}
+
+fn check_values_follow_declared_types() -> i64 {
+    let f: IrFunction = typed_fn(ITY_U8(), ITY_I8());
+    let cs: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    cs.model_tys[0] = ITY_U8();
+    cs.model_tys[1] = ITY_I8();
+    let r: VerifyResult = vc_claim_result(f, cs, 0, typed_answer(255, 0, 255, 0));
+    if r.var_values[0] != String::from("255") { return 30; }
+    if r.var_values[1] != String::from("-1") { return 31; }
+    let g: IrFunction = typed_fn(ITY_U64(), ITY_U128());
+    let cs2: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    cs2.model_tys[0] = ITY_U64();
+    cs2.model_tys[1] = ITY_U128();
+    let r2: VerifyResult = vc_claim_result(g, cs2, 0, typed_answer(-1, 0, -1, -1));
+    if r2.var_values[0] != String::from("18446744073709551615") { return 32; }
+    if r2.var_values[1] != String::from("340282366920938463463374607431768211455") { return 33; }
+    0
+}
+
+fn check_shift_and_arith_labels() -> i64 {
+    let f: IrFunction = fn_xy();
+    let s: VcClaims = claims_with(VC_CLAIM_SHIFT_COUNT(), -1, String::from("integer shift count"));
+    let r: VerifyResult = vc_claim_result(f, s, 0, answer(VC_ANS_SAT(), 1, 64));
+    if r.status != VERIFY_FAILED() { return 40; }
+    if r.vow_id != -1 { return 41; }
+    if parse_assert_label(r.raw_output) != String::from("shift amount exceeds the operand's bit width") { return 42; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_sat_ensures();
     if r == 0 { r = check_sat_abort_claims(); }
     if r == 0 { r = check_non_sat_verdicts(); }
+    if r == 0 { r = check_values_follow_declared_types(); }
+    if r == 0 { r = check_shift_and_arith_labels(); }
     i64_to_i32_wrap(r)
 }

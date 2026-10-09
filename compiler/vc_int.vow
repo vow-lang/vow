@@ -1,0 +1,169 @@
+module VcInt
+
+use ir
+use vc_term
+
+// Integer semantics for the native verifier: widths and signedness of the IR
+// integer types, and the term builders for wrapping and checked arithmetic,
+// comparisons, shifts and casts. Every builder takes the IR type of its
+// operands, so signedness and width always come from the operands, never from
+// the result type (a comparison yields Bool).
+
+// Abort causes of checked arithmetic. A wire format shared with
+// `c_emitter.vow`'s `arith_cause_*`: `parse_arith_label_text` knows these names.
+fn VC_CAUSE_ADD() -> String { String::from("add") }
+fn VC_CAUSE_SUB() -> String { String::from("sub") }
+fn VC_CAUSE_MUL() -> String { String::from("mul") }
+fn VC_CAUSE_DIV_ZERO() -> String { String::from("div-zero") }
+fn VC_CAUSE_DIV_OVERFLOW() -> String { String::from("div-overflow") }
+
+fn vc_ty_is_int(ty: i64) -> bool {
+    ity_int_width_bits(ty) != 0
+}
+
+fn vc_ty_signed(ty: i64) -> bool {
+    vc_ty_is_int(ty) && !ity_is_unsigned(ty)
+}
+
+fn vc_ty_bits(ty: i64) -> i64 {
+    ity_int_width_bits(ty)
+}
+
+// SMT sort code of an IR type the native verifier models; -1 otherwise.
+fn vc_ty_sort(ty: i64) -> i64 {
+    if ty == ITY_BOOL() { return VC_SORT_BOOL(); }
+    if vc_ty_is_int(ty) { return vc_ty_bits(ty); }
+    -1
+}
+
+// Constant of integer type `ty` from its limbs. `CONST_I32`/`CONST_U8` carry
+// their value sign-extended from 32 bits, which the width mask in the writer
+// removes again.
+fn vc_int_const(ar: VcArena, ty: i64, lo: i64, hi: i64) -> i64 {
+    vc_tm_bv(ar, vc_ty_bits(ty), lo, hi)
+}
+
+fn vc_int_min(ar: VcArena, ty: i64) -> i64 {
+    let w: i64 = vc_ty_bits(ty);
+    if w == 128 { return vc_tm_bv(ar, w, 0, -9223372036854775807 - 1); }
+    vc_tm_bv(ar, w, 1 << (w - 1), 0)
+}
+
+fn vc_int_minus_one(ar: VcArena, ty: i64) -> i64 {
+    vc_tm_bv(ar, vc_ty_bits(ty), -1, -1)
+}
+
+fn vc_int_zero(ar: VcArena, ty: i64) -> i64 {
+    vc_tm_bv(ar, vc_ty_bits(ty), 0, 0)
+}
+
+// -1 for an IR opcode that is not a wrapping/bitwise integer operation.
+fn vc_arith_smt_op(op: i64, signed: bool) -> i64 {
+    if op == IOP_WADD() || op == IOP_CADD() { return VC_OP_BVADD(); }
+    if op == IOP_WSUB() || op == IOP_CSUB() { return VC_OP_BVSUB(); }
+    if op == IOP_WMUL() || op == IOP_CMUL() { return VC_OP_BVMUL(); }
+    if op == IOP_WDIV() || op == IOP_CDIV() {
+        if signed { return VC_OP_BVSDIV(); }
+        return VC_OP_BVUDIV();
+    }
+    if op == IOP_WREM() || op == IOP_CREM() {
+        if signed { return VC_OP_BVSREM(); }
+        return VC_OP_BVUREM();
+    }
+    if op == IOP_BITAND() { return VC_OP_BVAND(); }
+    if op == IOP_BITOR() { return VC_OP_BVOR(); }
+    if op == IOP_BITXOR() { return VC_OP_BVXOR(); }
+    -1
+}
+
+fn vc_cmp_smt_op(op: i64, signed: bool) -> i64 {
+    if op == IOP_EQ() { return VC_OP_EQ(); }
+    if op == IOP_NE() { return VC_OP_DISTINCT(); }
+    if op == IOP_LT() { if signed { return VC_OP_BVSLT(); } return VC_OP_BVULT(); }
+    if op == IOP_LE() { if signed { return VC_OP_BVSLE(); } return VC_OP_BVULE(); }
+    if op == IOP_GT() { if signed { return VC_OP_BVSGT(); } return VC_OP_BVUGT(); }
+    if op == IOP_GE() { if signed { return VC_OP_BVSGE(); } return VC_OP_BVUGE(); }
+    -1
+}
+
+// True when `op` is a checked add, subtract or multiply: the ones whose abort
+// is an overflow predicate (checked division is a zero / MIN-by-minus-one test).
+fn vc_is_checked_addsubmul(op: i64) -> bool {
+    op == IOP_CADD() || op == IOP_CSUB() || op == IOP_CMUL()
+}
+
+fn vc_checked_cause(op: i64) -> String {
+    if op == IOP_CADD() { return VC_CAUSE_ADD(); }
+    if op == IOP_CSUB() { return VC_CAUSE_SUB(); }
+    VC_CAUSE_MUL()
+}
+
+// Holds exactly when the checked add/sub/mul of `a` and `b` does not overflow.
+fn vc_no_overflow(ar: VcArena, op: i64, signed: bool, a: i64, b: i64) -> i64 {
+    let pred: i64 = vc_overflow_pred(op, signed);
+    vc_tm_app1(ar, VC_OP_NOT(), vc_tm_app2(ar, pred, a, b))
+}
+
+fn vc_overflow_pred(op: i64, signed: bool) -> i64 {
+    if op == IOP_CADD() {
+        if signed { return VC_OP_BVSADDO(); }
+        return VC_OP_BVUADDO();
+    }
+    if op == IOP_CSUB() {
+        if signed { return VC_OP_BVSSUBO(); }
+        return VC_OP_BVUSUBO();
+    }
+    if signed { return VC_OP_BVSMULO(); }
+    VC_OP_BVUMULO()
+}
+
+fn vc_div_nonzero(ar: VcArena, ty: i64, b: i64) -> i64 {
+    vc_tm_app2(ar, VC_OP_DISTINCT(), b, vc_int_zero(ar, ty))
+}
+
+fn vc_div_no_overflow(ar: VcArena, ty: i64, a: i64, b: i64) -> i64 {
+    let hits_min: i64 = vc_tm_app2(ar, VC_OP_EQ(), a, vc_int_min(ar, ty));
+    let by_minus_one: i64 = vc_tm_app2(ar, VC_OP_EQ(), b, vc_int_minus_one(ar, ty));
+    vc_tm_app1(ar, VC_OP_NOT(), vc_tm_app2(ar, VC_OP_AND(), hits_min, by_minus_one))
+}
+
+// Holds when `0 <= count < width(lhs_ty)`, tested in the count's own type so a
+// negative signed count is rejected and a wide count never wraps.
+fn vc_shift_count_ok(ar: VcArena, lhs_ty: i64, count_ty: i64, count: i64) -> i64 {
+    let limit: i64 = vc_tm_bv(ar, vc_ty_bits(count_ty), vc_ty_bits(lhs_ty), 0);
+    if vc_ty_signed(count_ty) {
+        let non_neg: i64 = vc_tm_app2(ar, VC_OP_BVSGE(), count, vc_int_zero(ar, count_ty));
+        let below: i64 = vc_tm_app2(ar, VC_OP_BVSLT(), count, limit);
+        return vc_tm_app2(ar, VC_OP_AND(), non_neg, below);
+    }
+    vc_tm_app2(ar, VC_OP_BVULT(), count, limit)
+}
+
+// The count resized to the width of the shifted value. Under a holding
+// `vc_shift_count_ok` the count is below the value's width, so resizing is exact.
+fn vc_shift_count_as(ar: VcArena, lhs_ty: i64, count_ty: i64, count: i64) -> i64 {
+    let lw: i64 = vc_ty_bits(lhs_ty);
+    let cw: i64 = vc_ty_bits(count_ty);
+    if cw == lw { return count; }
+    if cw > lw { return vc_tm_ext(ar, VC_EXT_LOW(), lw, count); }
+    vc_tm_ext(ar, VC_EXT_ZERO(), lw - cw, count)
+}
+
+// `>>` is arithmetic for signed types and logical for unsigned ones.
+fn vc_shift(ar: VcArena, op: i64, lhs_ty: i64, count_ty: i64, x: i64, count: i64) -> i64 {
+    let c: i64 = vc_shift_count_as(ar, lhs_ty, count_ty, count);
+    if op == IOP_SHL() { return vc_tm_app2(ar, VC_OP_BVSHL(), x, c); }
+    if vc_ty_signed(lhs_ty) { return vc_tm_app2(ar, VC_OP_BVASHR(), x, c); }
+    vc_tm_app2(ar, VC_OP_BVLSHR(), x, c)
+}
+
+// Integer cast: sign- or zero-extend by the source's signedness, truncate when
+// narrowing, identity at equal width.
+fn vc_cast(ar: VcArena, src_ty: i64, dst_ty: i64, x: i64) -> i64 {
+    let sw: i64 = vc_ty_bits(src_ty);
+    let dw: i64 = vc_ty_bits(dst_ty);
+    if sw == dw { return x; }
+    if dw < sw { return vc_tm_ext(ar, VC_EXT_LOW(), dw, x); }
+    if vc_ty_signed(src_ty) { return vc_tm_ext(ar, VC_EXT_SIGN(), dw - sw, x); }
+    vc_tm_ext(ar, VC_EXT_ZERO(), dw - sw, x)
+}

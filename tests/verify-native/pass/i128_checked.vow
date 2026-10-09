@@ -1,0 +1,20 @@
+// TEST: warning ArithOverflowReachable
+module I128Checked
+
+fn twice(x: i128) -> i128 vow {
+  requires: x > 0
+  ensures: result > x
+} {
+  x +! x
+}
+
+fn rem_sign(x: i128, d: i128) -> i128 vow {
+  requires: d > 0
+  ensures: result < d
+} {
+  x %! d
+}
+
+fn main() -> i32 [io] {
+  0
+}

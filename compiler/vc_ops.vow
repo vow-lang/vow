@@ -46,6 +46,17 @@ fn VC_OPM_FIELD() -> i64 { 3 }
 fn VC_OPM_FLOAT_REM() -> i64 { 4 }
 
 fn vc_op_modeled(op: i64) -> bool {
+    vc_op_modeled_int(op) || vc_op_modeled_core(op)
+}
+
+fn vc_op_modeled_int(op: i64) -> bool {
+    op == IOP_CONST_I32() || op == IOP_CONST_U64() || op == IOP_CONST_U8()
+        || op == IOP_CONST_I128() || op == IOP_CONST_U128()
+        || op == IOP_CADD() || op == IOP_CSUB() || op == IOP_CMUL() || op == IOP_CDIV() || op == IOP_CREM()
+        || op == IOP_SHL() || op == IOP_SHR() || op == IOP_INT_CAST()
+}
+
+fn vc_op_modeled_core(op: i64) -> bool {
     op == IOP_CONST_I64() || op == IOP_CONST_BOOL() || op == IOP_GET_ARG()
         || op == IOP_WADD() || op == IOP_WSUB() || op == IOP_WMUL() || op == IOP_WDIV() || op == IOP_WREM()
         || op == IOP_BITAND() || op == IOP_BITOR() || op == IOP_BITXOR()
@@ -57,17 +68,13 @@ fn vc_op_modeled(op: i64) -> bool {
 }
 
 fn vc_op_unsupported(op: i64) -> bool {
-    op == IOP_CONST_I32() || op == IOP_CONST_F32() || op == IOP_CONST_F64() || op == IOP_CONST_STR()
-        || op == IOP_CONST_U64() || op == IOP_CONST_U8()
-        || op == IOP_CONST_I128() || op == IOP_CONST_U128()
+    op == IOP_CONST_F32() || op == IOP_CONST_F64() || op == IOP_CONST_STR()
         || op == IOP_ADD_F32() || op == IOP_SUB_F32() || op == IOP_MUL_F32() || op == IOP_DIV_F32()
         || op == IOP_EQ_F32() || op == IOP_NE_F32() || op == IOP_LT_F32() || op == IOP_LE_F32()
         || op == IOP_GT_F32() || op == IOP_GE_F32()
         || op == IOP_ADD_F64() || op == IOP_SUB_F64() || op == IOP_MUL_F64() || op == IOP_DIV_F64()
         || op == IOP_EQ_F64() || op == IOP_NE_F64() || op == IOP_LT_F64() || op == IOP_LE_F64()
         || op == IOP_GT_F64() || op == IOP_GE_F64()
-        || op == IOP_CADD() || op == IOP_CSUB() || op == IOP_CMUL() || op == IOP_CDIV() || op == IOP_CREM()
-        || op == IOP_SHL() || op == IOP_SHR() || op == IOP_INT_CAST()
         || op == IOP_LOAD() || op == IOP_STORE()
         || op == IOP_VOW_INV()
         || op == IOP_DEBUG_CALL()

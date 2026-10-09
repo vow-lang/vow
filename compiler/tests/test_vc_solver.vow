@@ -9,6 +9,19 @@ fn names2() -> Vec<String> {
     v
 }
 
+fn w2() -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(64);
+    v.push(64);
+    v
+}
+
+fn w1(w: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(w);
+    v
+}
+
 fn bits(n: u64, one_at: u64) -> String {
     let s: String = String::from("#b");
     let mut i: u64 = 0;
@@ -33,7 +46,7 @@ fn check_verdicts() -> i64 {
 
 fn check_multiline_model() -> i64 {
     let out: String = String::from("sat\n(\n  (p0 (_ bv1 64))\n  (p1 (_ bv18446744073709551615 64))\n)\n");
-    let m: VcModel = vc_parse_model(out, names2());
+    let m: VcModel = vc_parse_model(out, names2(), w2());
     if m.ok != 1 { return 10; }
     if m.values[0] != 1 { return 11; }
     if m.values[1] != -1 { return 12; }
@@ -43,7 +56,7 @@ fn check_multiline_model() -> i64 {
 fn check_single_line_model() -> i64 {
     let one: Vec<String> = Vec::new();
     one.push(String::from("p1"));
-    let m: VcModel = vc_parse_model(String::from("sat\n((p1 (_ bv9223372036854775808 64)))\n"), one);
+    let m: VcModel = vc_parse_model(String::from("sat\n((p1 (_ bv9223372036854775808 64)))\n"), one, w1(64));
     if m.ok != 1 { return 20; }
     if m.values[0] != -9223372036854775807 - 1 { return 21; }
     0
@@ -53,14 +66,14 @@ fn check_binary_and_hex() -> i64 {
     let out: String = String::from("sat\n((p0 ");
     out.push_str(bits(64, 63));
     out.push_str(String::from(") (p1 #xffffffffffffffff))\n"));
-    let m: VcModel = vc_parse_model(out, names2());
+    let m: VcModel = vc_parse_model(out, names2(), w2());
     if m.ok != 1 { return 30; }
     if m.values[0] != 1 { return 31; }
     if m.values[1] != -1 { return 32; }
     let top: String = String::from("sat\n((p0 ");
     top.push_str(bits(64, 0));
     top.push_str(String::from(") (p1 #x7fffffffffffffff))\n"));
-    let t: VcModel = vc_parse_model(top, names2());
+    let t: VcModel = vc_parse_model(top, names2(), w2());
     if t.ok != 1 { return 33; }
     if t.values[0] != -9223372036854775807 - 1 { return 34; }
     if t.values[1] != 9223372036854775807 { return 35; }
@@ -70,25 +83,29 @@ fn check_binary_and_hex() -> i64 {
 fn check_name_prefix_is_not_confused() -> i64 {
     let ns: Vec<String> = Vec::new();
     ns.push(String::from("p1"));
-    let m: VcModel = vc_parse_model(String::from("sat\n((p10 (_ bv5 64)))\n"), ns);
+    let m: VcModel = vc_parse_model(String::from("sat\n((p10 (_ bv5 64)))\n"), ns, w1(64));
     if m.ok != 0 { return 40; }
     0
 }
 
 fn check_incomplete_or_malformed_is_not_ok() -> i64 {
-    let missing: VcModel = vc_parse_model(String::from("sat\n((p0 (_ bv1 64)))\n"), names2());
+    let missing: VcModel = vc_parse_model(String::from("sat\n((p0 (_ bv1 64)))\n"), names2(), w2());
     if missing.ok != 0 { return 50; }
     let ns: Vec<String> = Vec::new();
     ns.push(String::from("p0"));
-    if vc_parse_model(String::from("sat\n((p0 (_ bv1 32)))\n"), ns).ok != 0 { return 51; }
-    if vc_parse_model(String::from("sat\n((p0 (_ bv99999999999999999999 64)))\n"), ns).ok != 0 { return 52; }
-    if vc_parse_model(String::from("sat\n((p0 #b101))\n"), ns).ok != 0 { return 53; }
-    if vc_parse_model(String::from("sat\n((p0 #xff))\n"), ns).ok != 0 { return 54; }
-    if vc_parse_model(String::from("sat\n((p0 true))\n"), ns).ok != 0 { return 55; }
-    if vc_parse_model(String::from("sat\n((p0 (_ bv 64)))\n"), ns).ok != 0 { return 56; }
-    if vc_parse_model(String::from("sat\n"), ns).ok != 0 { return 57; }
-    if vc_parse_model(String::from(""), ns).ok != 0 { return 58; }
+    if vc_parse_model(String::from("sat\n((p0 (_ bv1 32)))\n"), ns, w1(64)).ok != 0 { return 51; }
+    if vc_parse_model(String::from("sat\n((p0 (_ bv99999999999999999999 64)))\n"), ns, w1(64)).ok != 0 { return 52; }
+    if vc_parse_model(String::from("sat\n((p0 #b101))\n"), ns, w1(64)).ok != 0 { return 53; }
+    if vc_parse_model(String::from("sat\n((p0 #xff))\n"), ns, w1(64)).ok != 0 { return 54; }
+    if vc_parse_model(String::from("sat\n((p0 true))\n"), ns, w1(64)).ok != 0 { return 55; }
+    if vc_parse_model(String::from("sat\n((p0 (_ bv 64)))\n"), ns, w1(64)).ok != 0 { return 56; }
+    if vc_parse_model(String::from("sat\n"), ns, w1(64)).ok != 0 { return 57; }
+    if vc_parse_model(String::from(""), ns, w1(64)).ok != 0 { return 58; }
     0
+}
+
+fn none_w() -> Vec<i64> {
+    Vec::new()
 }
 
 fn check_classify_run() -> i64 {
@@ -96,17 +113,45 @@ fn check_classify_run() -> i64 {
     let ns: Vec<String> = Vec::new();
     ns.push(String::from("p0"));
     let sat: String = String::from("sat\n((p0 (_ bv5 64)))\n");
-    let a: VcSolverAnswer = vc_classify_run(0, sat, String::from(""), ns);
+    let a: VcSolverAnswer = vc_classify_run(0, sat, String::from(""), ns, w1(64));
     if a.verdict != VC_ANS_SAT() { return 80; }
     if a.values[0] != 5 { return 81; }
-    if vc_classify_run(0, String::from("unsat\n"), String::from(""), none).verdict != VC_ANS_UNSAT() { return 82; }
-    if vc_classify_run(0, String::from("unknown\n"), String::from(""), none).verdict != VC_ANS_UNKNOWN() { return 83; }
-    if vc_classify_run(-2, String::from(""), String::from(""), none).verdict != VC_ANS_TIMEOUT() { return 84; }
-    if vc_classify_run(1, String::from("unsat\n"), String::from(""), none).verdict != VC_ANS_ERROR() { return 85; }
-    if vc_classify_run(-1, String::from("unsat\n"), String::from(""), none).verdict != VC_ANS_ERROR() { return 86; }
-    if vc_classify_run(0, String::from("unsat\n"), String::from("[error] boom\n"), none).verdict != VC_ANS_ERROR() { return 87; }
-    if vc_classify_run(0, String::from("sat\n"), String::from(""), ns).verdict != VC_ANS_ERROR() { return 88; }
-    if vc_classify_run(0, String::from("gibberish"), String::from(""), none).verdict != VC_ANS_ERROR() { return 89; }
+    if vc_classify_run(0, String::from("unsat\n"), String::from(""), none, none_w()).verdict != VC_ANS_UNSAT() { return 82; }
+    if vc_classify_run(0, String::from("unknown\n"), String::from(""), none, none_w()).verdict != VC_ANS_UNKNOWN() { return 83; }
+    if vc_classify_run(-2, String::from(""), String::from(""), none, none_w()).verdict != VC_ANS_TIMEOUT() { return 84; }
+    if vc_classify_run(1, String::from("unsat\n"), String::from(""), none, none_w()).verdict != VC_ANS_ERROR() { return 85; }
+    if vc_classify_run(-1, String::from("unsat\n"), String::from(""), none, none_w()).verdict != VC_ANS_ERROR() { return 86; }
+    if vc_classify_run(0, String::from("unsat\n"), String::from("[error] boom\n"), none, none_w()).verdict != VC_ANS_ERROR() { return 87; }
+    if vc_classify_run(0, String::from("sat\n"), String::from(""), ns, w1(64)).verdict != VC_ANS_ERROR() { return 88; }
+    if vc_classify_run(0, String::from("gibberish"), String::from(""), none, none_w()).verdict != VC_ANS_ERROR() { return 89; }
+    0
+}
+
+fn check_wide_and_narrow_widths() -> i64 {
+    let ns: Vec<String> = Vec::new();
+    ns.push(String::from("p0"));
+    let wide: VcModel = vc_parse_model(String::from("sat\n((p0 #x80000000000000000000000000000001))\n"), ns, w1(128));
+    if wide.ok != 1 { return 100; }
+    if wide.values[0] != 1 { return 101; }
+    if wide.highs[0] != -9223372036854775807 - 1 { return 102; }
+    let n8: VcModel = vc_parse_model(String::from("sat\n((p0 #xfe))\n"), ns, w1(8));
+    if n8.ok != 1 { return 103; }
+    if n8.values[0] != 254 { return 104; }
+    let b8: VcModel = vc_parse_model(String::from("sat\n((p0 #b10000001))\n"), ns, w1(8));
+    if b8.ok != 1 { return 105; }
+    if b8.values[0] != 129 { return 106; }
+    let b128: String = String::from("sat\n((p0 #b1");
+    let mut i: u64 = 0;
+    while i < 127 { b128.push_str(String::from("0")); i = i + 1; }
+    b128.push_str(String::from("))\n"));
+    let bm: VcModel = vc_parse_model(b128, ns, w1(128));
+    if bm.ok != 1 { return 107; }
+    if bm.values[0] != 0 { return 108; }
+    if bm.highs[0] != -9223372036854775807 - 1 { return 109; }
+    if vc_parse_model(String::from("sat\n((p0 #xfe))\n"), ns, w1(16)).ok != 0 { return 110; }
+    if vc_parse_model(String::from("sat\n((p0 #xffffffffffffffff))\n"), ns, w1(128)).ok != 0 { return 111; }
+    if vc_parse_model(String::from("sat\n((p0 (_ bv5 8)))\n"), ns, w1(8)).values[0] != 5 { return 112; }
+    if vc_parse_model(String::from("sat\n((p0 (_ bv5 128)))\n"), ns, w1(128)).ok != 0 { return 113; }
     0
 }
 
@@ -118,5 +163,6 @@ fn main() -> i32 {
     if r == 0 { r = check_name_prefix_is_not_confused(); }
     if r == 0 { r = check_incomplete_or_malformed_is_not_ok(); }
     if r == 0 { r = check_classify_run(); }
+    if r == 0 { r = check_wide_and_narrow_widths(); }
     i64_to_i32_wrap(r)
 }

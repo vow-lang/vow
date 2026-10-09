@@ -1,0 +1,14 @@
+// TEST: no-warning ArithOverflowReachable
+module CheckedAddNoAbort
+
+fn bump(x: i32) -> i32 vow {
+  requires: x < 100
+  ensures: result == x + 1
+} {
+  x +! 1
+}
+
+fn main() -> i32 [io] {
+  print_i64(bump(3) as i64);
+  0
+}

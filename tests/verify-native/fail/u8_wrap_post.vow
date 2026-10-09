@@ -1,0 +1,13 @@
+// TEST: replay-skipped u8 parameter
+// TEST: counterexample-fn "inc"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame callee
+// TEST: counterexample-violation "ensures result > x"
+// TEST: counterexample-value x 255
+module U8WrapPost
+
+fn inc(x: u8) -> u8 vow {
+  ensures: result > x
+} {
+  x + 1
+}

@@ -15,8 +15,3 @@ fn bump(x: i64) -> i64 vow {
   }
   acc
 }
-
-fn main() -> i32 [io] {
-  print_i64(bump(25));
-  0
-}

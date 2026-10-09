@@ -4,6 +4,8 @@ use ir
 use verifier
 use vc_solver
 use vc_exec
+use vc_int
+use vc_fmt
 
 // Maps a solver answer for one claim onto the `VerifyResult` the shared
 // counterexample reporting (`build_ce_from_result`) already consumes.
@@ -55,7 +57,7 @@ fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> 
         let mut j: u64 = 0;
         while j < ans.values.len() {
             names.push(vc_source_param_name(f, cs.model_params[j]));
-            values.push(i64_to_string(ans.values[j]));
+            values.push(vc_format_int(cs.model_tys[j], ans.values[j], ans.highs[j]));
             j = j + 1;
         }
         let mut raw: String = String::from("");

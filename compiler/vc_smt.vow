@@ -111,6 +111,21 @@ fn vc_op_symbol(op: i64) -> String {
     if op == VC_OP_NOT() { return String::from("not"); }
     if op == VC_OP_AND() { return String::from("and"); }
     if op == VC_OP_OR() { return String::from("or"); }
+    if op == VC_OP_BVUDIV() { return String::from("bvudiv"); }
+    if op == VC_OP_BVUREM() { return String::from("bvurem"); }
+    if op == VC_OP_BVULT() { return String::from("bvult"); }
+    if op == VC_OP_BVULE() { return String::from("bvule"); }
+    if op == VC_OP_BVUGT() { return String::from("bvugt"); }
+    if op == VC_OP_BVUGE() { return String::from("bvuge"); }
+    if op == VC_OP_BVSHL() { return String::from("bvshl"); }
+    if op == VC_OP_BVLSHR() { return String::from("bvlshr"); }
+    if op == VC_OP_BVASHR() { return String::from("bvashr"); }
+    if op == VC_OP_BVSADDO() { return String::from("bvsaddo"); }
+    if op == VC_OP_BVUADDO() { return String::from("bvuaddo"); }
+    if op == VC_OP_BVSSUBO() { return String::from("bvssubo"); }
+    if op == VC_OP_BVUSUBO() { return String::from("bvusubo"); }
+    if op == VC_OP_BVSMULO() { return String::from("bvsmulo"); }
+    if op == VC_OP_BVUMULO() { return String::from("bvumulo"); }
     if op == VC_OP_ITE() { return String::from("ite"); }
     String::from("vc-unmapped-operator")
 }
@@ -119,7 +134,57 @@ fn vc_sort_text(sort: i64) -> String {
     if sort == VC_SORT_BOOL() {
         return String::from("Bool");
     }
-    String::from("(_ BitVec 64)")
+    let out: String = String::from("(_ BitVec ");
+    out.push_str(i64_to_string(sort));
+    out.push_str(String::from(")"));
+    out
+}
+
+// The low `digits` hex digits of `v`, most significant first.
+fn vc_hex_digits(v: i64, digits: i64) -> String {
+    let out: String = String::from("");
+    let mut i: i64 = digits - 1;
+    while i >= 0 {
+        let nib: i64 = { if i >= 16 { 0 } else { (v >> (i * 4)) & 15 } };
+        if nib < 10 {
+            out.push_byte(i64_to_u8_wrap(48 + nib));
+        } else {
+            out.push_byte(i64_to_u8_wrap(87 + nib));
+        }
+        i = i - 1;
+    }
+    out
+}
+
+// `#x...` with width/4 digits; limbs above the width are dropped.
+fn vc_bv_literal(width: i64, lo: i64, hi: i64) -> String {
+    let total: i64 = width / 4;
+    let out: String = String::from("#x");
+    if total > 16 {
+        out.push_str(vc_hex_digits(hi, total - 16));
+        out.push_str(vc_hex_digits(lo, 16));
+    } else {
+        out.push_str(vc_hex_digits(lo, total));
+    }
+    out
+}
+
+fn vc_ext_prefix(kind: i64, amount: i64) -> String {
+    if kind == VC_EXT_LOW() {
+        let out: String = String::from("(_ extract ");
+        out.push_str(i64_to_string(amount - 1));
+        out.push_str(String::from(" 0)"));
+        return out;
+    }
+    let out: String = String::from("(_ ");
+    if kind == VC_EXT_ZERO() {
+        out.push_str(String::from("zero_extend "));
+    } else {
+        out.push_str(String::from("sign_extend "));
+    }
+    out.push_str(i64_to_string(amount));
+    out.push_str(String::from(")"));
+    out
 }
 
 fn vc_term_text(ar: VcArena, t: i64) -> String {
@@ -129,9 +194,14 @@ fn vc_term_text(ar: VcArena, t: i64) -> String {
         return String::from(ar.strs[aux as u64]);
     }
     if kind == VC_T_BV() {
-        let out: String = String::from("(_ bv");
-        out.push_str(uint_to_string(aux as u64));
-        out.push_str(String::from(" 64)"));
+        return vc_bv_literal(ar.a[t as u64], aux, ar.b[t as u64]);
+    }
+    if kind == VC_T_EXT() {
+        let out: String = String::from("(");
+        out.push_str(vc_ext_prefix(aux, ar.b[t as u64]));
+        out.push_str(String::from(" "));
+        out.push_str(vc_term_text(ar, ar.a[t as u64]));
+        out.push_str(String::from(")"));
         return out;
     }
     if kind == VC_T_BOOL() {

@@ -1,0 +1,33 @@
+module Casts
+
+fn widen_signed(x: i32) -> i64 vow {
+  ensures: result == x as i64
+} {
+  x as i64
+}
+
+fn widen_unsigned(x: u8) -> u64 vow {
+  ensures: result <= 255 as u64
+} {
+  x as u64
+}
+
+fn round_trip(x: i64) -> i64 vow {
+  ensures: result == x
+} {
+  let u: u64 = x as u64;
+  u as i64
+}
+
+fn to_wide(x: i64) -> i128 vow {
+  ensures: result == x as i128
+} {
+  x as i128
+}
+
+fn main() -> i32 [io] {
+  print_i64(widen_signed(0 - 5));
+  print_u64(widen_unsigned(200));
+  print_i64(round_trip(7));
+  0
+}

@@ -13,8 +13,3 @@ fn pick(x: i64) -> i64 vow {
     0
   }
 }
-
-fn main() -> i32 [io] {
-  print_i64(pick(3));
-  0
-}

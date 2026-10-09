@@ -1,0 +1,13 @@
+module CheckedSubU64
+
+fn last_index(n: u64) -> u64 vow {
+  requires: n >= 1
+  ensures: result <= n
+} {
+  n -! 1
+}
+
+fn main() -> i32 [io] {
+  print_u64(last_index(4u64));
+  0
+}

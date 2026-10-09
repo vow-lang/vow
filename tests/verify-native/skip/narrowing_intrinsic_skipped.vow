@@ -1,0 +1,14 @@
+// TEST: category unverifiable
+// TEST: skip-reason unmodeled-builtin
+module NarrowingIntrinsicSkipped
+
+fn low_byte(x: i64) -> u8 vow {
+  ensures: result != 7
+} {
+  i64_to_u8_wrap(x)
+}
+
+fn main() -> i32 [io] {
+  print_i64(low_byte(300) as i64);
+  0
+}

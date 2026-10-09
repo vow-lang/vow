@@ -1,0 +1,24 @@
+module U128Scalars
+
+fn inc(x: u128) -> u128 vow {
+  ensures: result == x + 1
+} {
+  x + 1
+}
+
+fn quotient(x: u128, y: u128) -> u128 vow {
+  requires: y > 0
+  ensures: result <= x
+} {
+  x / y
+}
+
+fn big() -> u128 vow {
+  ensures: result > 18446744073709551615
+} {
+  18446744073709551616
+}
+
+fn main() -> i32 [io] {
+  0
+}

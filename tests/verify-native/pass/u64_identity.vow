@@ -1,6 +1,4 @@
-// TEST: category unverifiable
-// TEST: skip-reason unsupported-opcode
-module U64Skipped
+module U64Identity
 
 fn widen(x: u64) -> u64 vow {
   ensures: result == x

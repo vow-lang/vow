@@ -1447,6 +1447,17 @@ print(cx[0].get(key, '') if cx else '')
                 native_errors+=("counterexample-${native_field}: expected '$native_expected', got '$native_actual'")
             fi
         done
+        while read -r native_name native_value; do
+            [ -n "$native_name" ] || continue
+            native_actual=$(python3 -c "
+import json, sys
+cx = json.loads(sys.argv[1]).get('counterexamples') or []
+print((cx[0].get('values') or {}).get(sys.argv[2], '<absent>') if cx else '<no counterexample>')
+" "$native_json" "$native_name" 2>/dev/null) || native_actual="<unparseable>"
+            if [ "$native_actual" != "$native_value" ]; then
+                native_errors+=("counterexample-value ${native_name}: expected '$native_value', got '$native_actual'")
+            fi
+        done < <(sed -n 's|^// TEST: counterexample-value \([^ ]*\) \(.*\)$|\1 \2|p' "$vow_file")
         native_replay_json=$(run_self verify --backend native --no-cache --replay-cex "$vow_file" 2>/dev/null) || true
         native_replay=$(python3 -c "
 import json, sys
@@ -1455,9 +1466,38 @@ cx = j.get('counterexamples') or []
 bad = [c.get('function', '?') + '=' + str(c.get('replay', '')) for c in cx if c.get('replay') != 'confirmed']
 print(','.join(bad) if bad else ('confirmed' if cx else 'none'))
 " "$native_replay_json" 2>/dev/null) || native_replay=""
-        if [ "$native_replay" != "confirmed" ]; then
-            native_errors+=("--replay-cex: every counterexample must replay as confirmed, got '$native_replay'")
+        # `// TEST: replay-skipped <reason>`: the self-hosted harness replays only
+        # i64/u64/bool scalars and shift counts are not runtime aborts, so a fixture
+        # outside that must say why its counterexample cannot be confirmed.
+        native_replay_want="confirmed"
+        if grep -q '^// TEST: replay-skipped ' "$vow_file"; then native_replay_want="skipped"; fi
+        if [ "$native_replay_want" = "skipped" ] && [ -n "$native_replay" ]; then
+            native_replay=$(python3 -c "
+import json, sys
+cx = json.loads(sys.argv[1]).get('counterexamples') or []
+print('skipped' if cx and all(c.get('replay') == 'skipped' for c in cx) else 'not-skipped')
+" "$native_replay_json" 2>/dev/null) || native_replay=""
         fi
+        if [ "$native_replay" != "$native_replay_want" ]; then
+            native_errors+=("--replay-cex: every counterexample must replay as $native_replay_want, got '$native_replay'")
+        fi
+    fi
+    if [ "$native_dir" = "pass" ]; then
+        # `// TEST: warning <Code>` / `// TEST: no-warning <Code>`: a proof may
+        # carry a warning (a reachable checked-arithmetic abort) or must not.
+        while read -r native_kind native_code; do
+            [ -n "$native_kind" ] || continue
+            native_count=$(python3 -c "
+import json, sys
+ds = json.loads(sys.argv[1]).get('diagnostics') or []
+print(sum(1 for d in ds if d.get('error_code') == sys.argv[2]))
+" "$native_json" "$native_code" 2>/dev/null) || native_count=-1
+            if [ "$native_kind" = "warning" ] && [ "$native_count" -lt 1 ]; then
+                native_errors+=("expected a $native_code diagnostic, got none")
+            elif [ "$native_kind" = "no-warning" ] && [ "$native_count" -ne 0 ]; then
+                native_errors+=("expected no $native_code diagnostic, got $native_count")
+            fi
+        done < <(sed -nE 's#^// TEST: (warning|no-warning) (.*)$#\1 \2#p' "$vow_file")
     fi
     if [ ${#native_errors[@]} -eq 0 ]; then
         pass "verify-native/${native_dir}/${name}"

@@ -1,0 +1,45 @@
+module VcFmt
+
+use ir
+use ast
+use vc_int
+
+// Decimal text of solver-model integers for counterexample values, by the
+// declared IR type: signed types print their two's-complement value, unsigned
+// types their magnitude, and 128-bit values are formatted from two 64-bit limbs.
+
+fn vc_u128_decimal(hi: i64, lo: i64) -> String {
+    u128_limbs_to_text(lo as u64, hi as u64)
+}
+
+fn vc_i128_decimal(hi: i64, lo: i64) -> String {
+    if hi >= 0 { return vc_u128_decimal(hi, lo); }
+    let nlo: u64 = (lo as u64) ^ 18446744073709551615u64;
+    let nhi: u64 = (hi as u64) ^ 18446744073709551615u64;
+    let lo2: u64 = nlo + 1u64;
+    let mut hi2: u64 = nhi;
+    if lo2 == 0 { hi2 = nhi + 1u64; }
+    let out: String = String::from("-");
+    out.push_str(vc_u128_decimal(hi2 as i64, lo2 as i64));
+    out
+}
+
+// Decimal text of the `ty`-typed value with limbs `hi:lo`; bits above the
+// type's width are ignored.
+fn vc_format_int(ty: i64, lo: i64, hi: i64) -> String {
+    let w: i64 = vc_ty_bits(ty);
+    let signed: bool = vc_ty_signed(ty);
+    if w == 128 {
+        if signed { return vc_i128_decimal(hi, lo); }
+        return vc_u128_decimal(hi, lo);
+    }
+    if w == 64 {
+        if signed { return i64_to_string(lo); }
+        return uint_to_string(lo as u64);
+    }
+    let v: i64 = lo & ((1 << w) - 1);
+    if signed && (v >> (w - 1)) & 1 == 1 {
+        return i64_to_string(v - (1 << w));
+    }
+    i64_to_string(v)
+}
