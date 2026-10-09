@@ -376,12 +376,12 @@ remainder by zero aborts at every width, as does signed `/` and `/!` on
 not abort.
 
 128-bit values carry both limbs through locals, parameters, returns,
-temporaries, and the payloads of `enum`, `Option`, and `Result` values (stored in
-two consecutive slots, see the aggregate layout above). The payload width comes
-from the checker, so it holds wherever the value came from: built in the same
-function, received as a parameter, handed back by a call, or read out of a
-`Vec` element or a struct field holding the enum, through a `match` arm, `?`, or `.unwrap()`, and
-at every payload position.
+temporaries, and the payloads of `enum`, `Option`, and `Result` values (stored
+in two consecutive slots, see the aggregate layout above). The payload width
+comes from the checker, so it holds wherever the value came from: built in the
+same function, received as a parameter, handed back by a call, or read out of a
+`Vec` element or a struct field holding the enum; through a `match` arm, `?`, or
+`.unwrap()`; and at every payload position.
 
 Two aggregate positions are not supported yet: `Vec<i128>`/`Vec<u128>`
 elements (the element helpers are i64-only) and `i128`/`u128` struct fields.
@@ -390,17 +390,16 @@ limitation rather than a raw backend verifier dump, before an 8-byte slot can
 truncate the value or a 16-byte store can overwrite its neighbour. The refusal
 is at the access, not the declaration: a struct may declare a 128-bit member
 and still compile as long as nothing touches it. These are backend gaps, not
-language rules; the type checker accepts both at 128-bit width. Verification is
-a separate matter: a contracted
-function whose body contains a 128-bit *constant* is reported as `Skipped`
-with `unsupported opcode ConstI128`, because `ConstI128`/`ConstU128` are not
-yet modelled in the verifier. A contracted function that reads or writes a
-128-bit aggregate field or enum payload is likewise reported `Skipped`, with
-`FieldGet at 128-bit width` or `FieldSet at 128-bit width`, rather than being
-modelled through the verifier's 8-byte heap slot; so is a call to `parse_i128` or
-`parse_u128`, whose `Option` result the verifier's 64-bit `Option` model cannot
-represent. Contracts over 128-bit parameters alone do
-verify.
+language rules; the type checker accepts both at 128-bit width. Verification
+is a separate matter: a contracted function whose body contains a 128-bit
+*constant* is reported as `Skipped` with `unsupported opcode ConstI128`, because
+`ConstI128`/`ConstU128` are not yet modelled in the verifier. A contracted
+function that reads or writes a 128-bit aggregate field or enum payload is
+likewise reported `Skipped`, with `FieldGet at 128-bit width` or `FieldSet at
+128-bit width`, rather than being modelled through the verifier's 8-byte heap
+slot; so is a call to `parse_i128` or `parse_u128`, whose `Option` result the
+verifier's 64-bit `Option` model cannot represent. Contracts over 128-bit
+parameters alone do verify.
 
 Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
 binding captured by a `vow` block reports its full value in the runtime

@@ -566,7 +566,7 @@ fn f(u: ()) -> i64 { 0 }
 
 **Fix:** Remove the parameter.
 
-A 128-bit integer as an `Option`, `Result`, or `enum` payload (`Option<u128>`) is supported, including as a map value. A 128-bit struct field or `Vec` element is not a map restriction: those aggregate positions cannot hold a 128-bit value yet, so codegen rejects them with `CodegenUnsupported` wherever they appear.
+A 128-bit integer as an `Option`, `Result`, or `enum` payload is supported, so `HashMap<i64, Option<u128>>` is a valid map type (the map stores a pointer to the payload cell). A bare `u128` or `i128` map value is still rejected with the error above, because a map value occupies a single 64-bit slot. A 128-bit struct field or `Vec` element is not a map restriction: those aggregate positions cannot hold a 128-bit value yet, so codegen rejects them with `CodegenUnsupported` wherever they appear.
 
 ### BTreeMapKeyTypeMustBeI64
 
