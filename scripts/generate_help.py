@@ -111,7 +111,7 @@ def normalize_option(
         )
     elif flag == "-o, --output":
         normalized_flag = "-o, --output <path>"
-        if default:
+        if default not in ("", "(off)", "(default)"):
             description = f"{desc} (default: {default})"
     elif default not in ("", "(off)", "(default)") and not desc.endswith(")"):
         description = f"{desc} (default: {default})"
