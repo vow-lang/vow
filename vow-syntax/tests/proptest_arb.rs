@@ -172,12 +172,10 @@ fn arb_binop_expr(depth: u32) -> impl Strategy<Value = Expr> {
     })
 }
 
-fn arb_unop_expr(_depth: u32) -> impl Strategy<Value = Expr> {
-    // Only apply unary ops to leaf expressions to avoid ambiguities like
-    // `-!0` (parsed as MinusChecked token) or `!!x` (parsed as BangBang).
+fn arb_unop_expr(depth: u32) -> impl Strategy<Value = Expr> {
     (
         prop::sample::select(&[UnOp::Neg, UnOp::Not]),
-        arb_expr_leaf(),
+        arb_expr_inner(depth),
     )
         .prop_map(|(op, operand)| Expr {
             kind: ExprKind::UnaryOp {
