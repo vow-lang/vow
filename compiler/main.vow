@@ -7439,9 +7439,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("such as consuming it twice, consuming a value declared outside a loop from\n"));
     r.push_str(String::from("inside that loop (it may execute more than once), or consuming it after only\n"));
     r.push_str(String::from("some control-flow paths already consumed it. A value declared inside the loop\n"));
-    r.push_str(String::from("body and consumed there is fresh each iteration and is accepted. The error also rejects a struct field whose type owns a linear obligation,\n"));
-    r.push_str(String::from("because field access has no move-out semantics and repeated reads could expose\n"));
-    r.push_str(String::from("that obligation more than once. Linear owners include `linear struct` values and owned enum,\n"));
+    r.push_str(String::from("body and consumed there is fresh each iteration and is accepted. The error also\n"));
+    r.push_str(String::from("rejects a struct field whose type owns a linear obligation, because field\n"));
+    r.push_str(String::from("access has no move-out semantics and repeated reads could expose that\n"));
+    r.push_str(String::from("obligation more than once. Linear owners include `linear struct` values and owned enum,\n"));
     r.push_str(String::from("`Option`, or `Result` wrappers that transitively contain one; matching such a\n"));
     r.push_str(String::from("wrapper consumes it and transfers the obligation to the selected payload. An\n"));
     r.push_str(String::from("unbound `_` catchall also violates the rule while any unhandled enum variant can\n"));
@@ -13477,9 +13478,10 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("such as consuming it twice, consuming a value declared outside a loop from\n"));
     r.push_str(String::from("inside that loop (it may execute more than once), or consuming it after only\n"));
     r.push_str(String::from("some control-flow paths already consumed it. A value declared inside the loop\n"));
-    r.push_str(String::from("body and consumed there is fresh each iteration and is accepted. The error also rejects a struct field whose type owns a linear obligation,\n"));
-    r.push_str(String::from("because field access has no move-out semantics and repeated reads could expose\n"));
-    r.push_str(String::from("that obligation more than once. Linear owners include `linear struct` values and owned enum,\n"));
+    r.push_str(String::from("body and consumed there is fresh each iteration and is accepted. The error also\n"));
+    r.push_str(String::from("rejects a struct field whose type owns a linear obligation, because field\n"));
+    r.push_str(String::from("access has no move-out semantics and repeated reads could expose that\n"));
+    r.push_str(String::from("obligation more than once. Linear owners include `linear struct` values and owned enum,\n"));
     r.push_str(String::from("`Option`, or `Result` wrappers that transitively contain one; matching such a\n"));
     r.push_str(String::from("wrapper consumes it and transfers the obligation to the selected payload. An\n"));
     r.push_str(String::from("unbound `_` catchall also violates the rule while any unhandled enum variant can\n"));

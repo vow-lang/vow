@@ -20,7 +20,12 @@ struct LinearTracker {
     vars: HashMap<String, ConsumeState>,
     loop_depth: u32,
     decl_depth: HashMap<String, u32>,
+    scopes: Vec<Vec<ShadowedBinding>>,
 }
+
+/// A linear `let` registered in a block, with whatever entry it overwrote, so
+/// the block can hand the name back to the enclosing scope on exit.
+type ShadowedBinding = (String, Option<ConsumeState>, Option<u32>);
 
 impl LinearTracker {
     fn new() -> Self {
@@ -28,6 +33,7 @@ impl LinearTracker {
             vars: HashMap::new(),
             loop_depth: 0,
             decl_depth: HashMap::new(),
+            scopes: Vec::new(),
         }
     }
 }
@@ -134,11 +140,36 @@ fn check_block(
     file: &str,
     emitter: &mut dyn DiagnosticEmitter,
 ) {
+    tracker.scopes.push(Vec::new());
     for stmt in &block.stmts {
         check_stmt(stmt, tracker, env, file, emitter);
     }
     if let Some(expr) = &block.trailing_expr {
         check_expr(expr, tracker, env, file, emitter, true);
+    }
+    close_scope(tracker);
+}
+
+/// Names are tracked flat, so a consumed block-local would otherwise keep
+/// shadowing (or being mistaken for) a same-named binding outside the block.
+/// Only consumed bindings are handed back: an unconsumed one stays so the
+/// end-of-function backstop still reports it.
+fn close_scope(tracker: &mut LinearTracker) {
+    let Some(frame) = tracker.scopes.pop() else {
+        return;
+    };
+    for (name, state, depth) in frame.into_iter().rev() {
+        if !matches!(tracker.vars.get(&name), Some(ConsumeState::Consumed(_))) {
+            continue;
+        }
+        match state {
+            Some(state) => tracker.vars.insert(name.clone(), state),
+            None => tracker.vars.remove(&name),
+        };
+        match depth {
+            Some(depth) => tracker.decl_depth.insert(name, depth),
+            None => tracker.decl_depth.remove(&name),
+        };
     }
 }
 
@@ -175,6 +206,14 @@ fn register_pattern_linear(
     if let PatKind::Ident { name, .. } = &pat.kind {
         let is_linear = ty_ann.map(|t| is_linear_ast_type(t, env)).unwrap_or(false);
         if is_linear {
+            let shadowed = (
+                name.clone(),
+                tracker.vars.get(name).cloned(),
+                tracker.decl_depth.get(name).copied(),
+            );
+            if let Some(frame) = tracker.scopes.last_mut() {
+                frame.push(shadowed);
+            }
             tracker
                 .vars
                 .insert(name.clone(), ConsumeState::Available(span));
@@ -902,6 +941,51 @@ mod tests {
         let errors = check_errors(stmts_block(vec![expr_stmt(loop_expr("loop", inner))]));
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].message.contains("loop"));
+    }
+
+    fn let_plain(name: &str, ty: &str) -> Stmt {
+        Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: name.to_string(),
+                    is_mut: false,
+                },
+                span: dummy_span(),
+            },
+            ty: Some(named_type(ty)),
+            init: Box::new(ident_expr("zero")),
+            span: dummy_span(),
+        }
+    }
+
+    #[test]
+    fn test_loop_local_shadowing_outer_linear_keeps_outer_available() {
+        let inner = stmts_block(vec![let_linear("h"), expr_stmt(call_with("consume", "h"))]);
+        let errors = check_errors(stmts_block(vec![
+            let_linear("h"),
+            expr_stmt(loop_expr("loop", inner)),
+            expr_stmt(call_with("consume", "h")),
+        ]));
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn test_loop_local_name_reused_by_non_linear_binding_after_loop() {
+        let inner = stmts_block(vec![let_linear("h"), expr_stmt(call_with("consume", "h"))]);
+        let errors = check_errors(stmts_block(vec![
+            expr_stmt(loop_expr("loop", inner)),
+            let_plain("h", "i64"),
+            expr_stmt(call_with("use_it", "h")),
+        ]));
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn test_unconsumed_loop_local_still_reported() {
+        let inner = stmts_block(vec![let_linear("h")]);
+        let errors = check_errors(stmts_block(vec![expr_stmt(loop_expr("loop", inner))]));
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].message.contains("never consumed"));
     }
 
     #[test]
