@@ -1,0 +1,18 @@
+// TEST: category unverifiable
+module HashMapStringValueSkipped
+
+// Regression test for issue #572 (map side of #505). A String stored as a
+// HashMap value is a model struct in C but a single int64 slot in the map
+// model, so the insert used to hand ESBMC ill-typed C. The Ptr-typed value
+// operand now makes the function non-modelable, so it is Skipped.
+fn put(m: HashMap<i64, String>, s: String) -> i64 vow {
+  ensures: result >= 0
+} {
+  m.insert(1, s);
+  m.len() as i64
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

@@ -15,5 +15,14 @@ fn main() -> i32 {
     if model_arg_index(String::from("__vow_map_insert_in_arena"), CARG_OPERAND(2)) != 3 { return 10; }
     if model_arg_index(String::from("__vow_map_new_in_arena"), CARG_RECEIVER()) != -1 { return 11; }
     if model_arg_index(String::from("__vow_unknown_in_arena"), CARG_OPERAND(0)) != -1 { return 12; }
+    if model_arg_index(String::from("__vow_map_insert"), CARG_MAP_KEY()) != 1 { return 13; }
+    if model_arg_index(String::from("__vow_map_insert"), CARG_MAP_VALUE()) != 2 { return 14; }
+    if model_arg_index(String::from("__vow_map_insert_in_arena"), CARG_MAP_VALUE()) != 3 { return 15; }
+    if model_arg_index(String::from("__vow_map_get_in_arena"), CARG_MAP_KEY()) != 2 { return 16; }
+    if model_arg_index(String::from("__vow_map_get"), CARG_MAP_VALUE()) != -1 { return 17; }
+    if model_arg_index(String::from("__vow_btreemap_insert"), CARG_MAP_KEY()) != 1 { return 18; }
+    if model_arg_index(String::from("__vow_btreemap_insert"), CARG_MAP_VALUE()) != 2 { return 19; }
+    if model_arg_index(String::from("__vow_btreemap_get"), CARG_MAP_VALUE()) != -1 { return 20; }
+    if model_arg_index(String::from("__vow_btreemap_insert"), CARG_RECEIVER()) != -1 { return 21; }
     0
 }

@@ -258,6 +258,8 @@ fn CARG_RECEIVER() -> i64 { 0 }
 fn CARG_SECOND_STRING() -> i64 { 1 }
 fn CARG_VEC_VALUE() -> i64 { 2 }
 fn CARG_OPERAND(index: i64) -> i64 { 3 + index }
+fn CARG_MAP_KEY() -> i64 { 7 }
+fn CARG_MAP_VALUE() -> i64 { 8 }
 
 // Positions in the runtime call's IR arguments. Logical operands exclude the
 // opaque arena pointer. Only known collection operations have a layout.
@@ -265,7 +267,8 @@ fn model_arg_index(name: String, role: i64) -> i64 {
     if !is_known_builtin(name)
         || !(str_starts_with(name, String::from("__vow_vec_"))
             || str_starts_with(name, String::from("__vow_string_"))
-            || str_starts_with(name, String::from("__vow_map_"))) {
+            || str_starts_with(name, String::from("__vow_map_"))
+            || str_starts_with(name, String::from("__vow_btreemap_"))) {
         return -1;
     }
     let offset: i64 = if str_ends_with(name, String::from("_in_arena")) { 1 } else { 0 };
@@ -276,6 +279,25 @@ fn model_arg_index(name: String, role: i64) -> i64 {
         if name == String::from("__vow_vec_push_val")
             || name == String::from("__vow_vec_push_val_in_arena") { return offset + 1; }
         if name == String::from("__vow_vec_set_val") { return 2; }
+        return -1;
+    }
+    if role == CARG_MAP_KEY() {
+        if name == String::from("__vow_map_insert")
+            || name == String::from("__vow_map_insert_in_arena")
+            || name == String::from("__vow_map_get")
+            || name == String::from("__vow_map_get_in_arena")
+            || name == String::from("__vow_map_contains")
+            || name == String::from("__vow_map_remove")
+            || name == String::from("__vow_map_remove_in_arena")
+            || name == String::from("__vow_btreemap_insert")
+            || name == String::from("__vow_btreemap_get")
+            || name == String::from("__vow_btreemap_contains") { return offset + 1; }
+        return -1;
+    }
+    if role == CARG_MAP_VALUE() {
+        if name == String::from("__vow_map_insert")
+            || name == String::from("__vow_map_insert_in_arena")
+            || name == String::from("__vow_btreemap_insert") { return offset + 2; }
         return -1;
     }
     if role == CARG_SECOND_STRING() {
@@ -349,14 +371,13 @@ fn passes_structured_arg(inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64>
     false
 }
 
-// True when inst is a vec store/load op whose element side is a model struct
-// rather than a scalar — produces `int64_t = __vow_vec_t` in the emitted C
-// model (issue #505).
-fn vec_op_carries_non_scalar(name: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64>, hashmap_vars: Vec<i64>, btreemap_vars: Vec<i64>, option_vars: Vec<i64>) -> bool {
-    if name == String::from("__vow_vec_get_val") {
-        return is_structured_value_id(inst.id, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars);
-    }
-    let arg_idx: i64 = model_arg_index(name, CARG_VEC_VALUE());
+// True when inst is a vec store/load or map/btreemap key/value op whose stored
+// side is a model struct or a Ptr-typed handle rather than a scalar — produces
+// `int64_t = __vow_vec_t` in the emitted C model (issue #505). A vec load's
+// result is always i64 in the IR, so only classification can flag it. Mirrors
+// `collection_op_carries_non_scalar` in vow-verify/src/c_emitter.rs.
+fn operand_carries_non_scalar(inst: IrInst, role: i64, name: String, facts: ModelFacts) -> bool {
+    let arg_idx: i64 = model_arg_index(name, role);
     if arg_idx < 0 {
         return false;
     }
@@ -364,7 +385,18 @@ fn vec_op_carries_non_scalar(name: String, inst: IrInst, vec_vars: Vec<i64>, str
     if arg_idx >= iargs.len() as i64 {
         return false;
     }
-    is_structured_value_id(iargs[arg_idx as u64], vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars)
+    let id: i64 = iargs[arg_idx as u64];
+    is_structured_value_id(id, facts.vec_vars, facts.string_vars, facts.hashmap_vars, facts.btreemap_vars, facts.option_vars)
+        || vec_contains_i64(facts.ptr_vars, id)
+}
+
+fn collection_op_carries_non_scalar(name: String, inst: IrInst, facts: ModelFacts) -> bool {
+    if name == String::from("__vow_vec_get_val") {
+        return is_structured_value_id(inst.id, facts.vec_vars, facts.string_vars, facts.hashmap_vars, facts.btreemap_vars, facts.option_vars);
+    }
+    operand_carries_non_scalar(inst, CARG_VEC_VALUE(), name, facts)
+        || operand_carries_non_scalar(inst, CARG_MAP_KEY(), name, facts)
+        || operand_carries_non_scalar(inst, CARG_MAP_VALUE(), name, facts)
 }
 
 struct ModelFacts {
@@ -374,6 +406,7 @@ struct ModelFacts {
     btreemap_vars: Vec<i64>,
     option_vars: Vec<i64>,
     wide_vars: Vec<i64>,
+    ptr_vars: Vec<i64>,
 }
 
 fn model_facts(f: IrFunction) -> ModelFacts {
@@ -384,6 +417,7 @@ fn model_facts(f: IrFunction) -> ModelFacts {
         btreemap_vars: collect_btreemap_vars(f),
         option_vars: collect_option_vars(f),
         wide_vars: collect_wide_vars(f),
+        ptr_vars: collect_ptr_vars(f),
     }
 }
 
@@ -433,8 +467,7 @@ fn modelability_issue(inst: IrInst, facts: ModelFacts, m: IrModule, const_fn_ind
     if op == IOP_CALL() {
         if inst.dk == IDATA_CALL_EXTERN() {
             if !is_known_builtin(inst.ds) { return MCI_EXTERN(); }
-            if vec_op_carries_non_scalar(inst.ds, inst, facts.vec_vars, facts.string_vars,
-                                         facts.hashmap_vars, facts.btreemap_vars, facts.option_vars) {
+            if collection_op_carries_non_scalar(inst.ds, inst, facts) {
                 return MCI_NONSCALAR_EXTERN();
             }
             return MCI_OK();
@@ -1233,6 +1266,29 @@ fn collect_wide_vars(f: IrFunction) -> Vec<i64> {
         while ii < insts.len() {
             let inst: IrInst = insts[ii];
             if ity_is_wide(inst.ty) {
+                result.push(inst.id);
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    result
+}
+
+// Ids of the Ptr-typed instructions that may hold a collection handle:
+// everything except RegionAlloc, whose result is a user-struct handle the
+// model already represents as an int64_t heap slot index.
+fn collect_ptr_vars(f: IrFunction) -> Vec<i64> {
+    let result: Vec<i64> = Vec::new();
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: u64 = 0u64;
+    while bi < blocks.len() {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let mut ii: u64 = 0u64;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if (inst.ty == ITY_PTR() || inst.ty == ITY_LPTR()) && inst.op != IOP_REGION_ALLOC() {
                 result.push(inst.id);
             }
             ii = ii + 1;
