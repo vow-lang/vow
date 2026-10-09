@@ -1,7 +1,7 @@
 // TEST: category callee-blame
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-fn "divide_weak"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // Precondition is too weak: requires y >= 0 allows y == 0.
 // When x < 0 and y > 0, x/y is negative, violating ensures.
 // When y == 0, the guard returns 0 but for x < 0 the else branch fails.

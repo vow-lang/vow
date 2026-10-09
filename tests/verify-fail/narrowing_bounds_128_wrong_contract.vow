@@ -1,6 +1,6 @@
 // TEST: category callee-blame
 // TEST: counterexample-violation "ensures result as i128 == value"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-vow-id 0
 module NarrowingBounds128WrongContract
 

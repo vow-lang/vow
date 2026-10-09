@@ -1,6 +1,6 @@
 // TEST: category callee-blame
 // TEST: counterexample-fn "bias"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-violation "ensures result == -4"
 // A negative i8 const must reach the verifier model as -5, not as its
 // unsigned byte pattern, so an off-by-one ensures has to fail.

@@ -17,7 +17,7 @@
     },
     "violation": {
       "type": "string",
-      "description": "Description of the violated contract clause, or of the internal check that failed when blame is \"none\""
+      "description": "Description of the violated contract clause, or of the internal check that failed when blame is \"None\""
     },
     "vow_id": {
       "type": "integer",
@@ -42,7 +42,7 @@
     },
     "blame": {
       "type": "string",
-      "enum": ["caller", "callee", "none"],
+      "enum": ["Caller", "Callee", "None"],
       "description": "Who is responsible for the violation"
     },
     "call_sites": {

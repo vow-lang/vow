@@ -37,9 +37,8 @@ pub struct DiagnosticJson {
 impl DiagnosticJson {
     pub(crate) fn from_diagnostic(d: &Diagnostic) -> Self {
         let blame = match d.blame {
-            vow_diag::Blame::Caller => Some("caller".to_string()),
-            vow_diag::Blame::Callee => Some("callee".to_string()),
             vow_diag::Blame::None => None,
+            b => Some(b.as_str().to_string()),
         };
         let secondary = d
             .secondary
@@ -390,7 +389,7 @@ mod tests {
 
         let json = DiagnosticJson::from_diagnostic(&d);
 
-        assert_eq!(json.blame.as_deref(), Some("caller"));
+        assert_eq!(json.blame.as_deref(), Some("Caller"));
         assert_eq!(json.severity, "error");
         assert_eq!(json.message, "y must be non-zero");
         assert_eq!(json.span.file, "divide.vow");
@@ -409,7 +408,7 @@ mod tests {
         );
         assert_eq!(
             DiagnosticJson::from_diagnostic(&callee).blame.as_deref(),
-            Some("callee")
+            Some("Callee")
         );
 
         let plain = diag(
@@ -433,7 +432,7 @@ mod tests {
             violation: "requires violated".to_string(),
             vow_id: 7,
             source: None,
-            blame: "caller".to_string(),
+            blame: "Caller".to_string(),
             call_sites: Vec::new(),
             violating_args: Vec::new(),
             execution_path: Vec::new(),
@@ -460,7 +459,7 @@ mod tests {
 
         assert_eq!(json.function, "push");
         assert_eq!(json.vow_id, 7);
-        assert_eq!(json.blame, "caller");
+        assert_eq!(json.blame, "Caller");
         let keys: Vec<&str> = json.values.keys().map(String::as_str).collect();
         assert_eq!(keys, vec!["h.len", "val"]); // BTreeMap-sorted; no __vow_heap
         assert_eq!(json.values.get("val").map(String::as_str), Some("5"));

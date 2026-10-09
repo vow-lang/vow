@@ -1,4 +1,4 @@
-// TEST: counterexample-blame caller
+// TEST: counterexample-blame Caller
 // Regression for #1472: `dep.vow.d`'s declaration carries `f`'s `requires`
 // contract, but a bodyless declaration cannot be checked by the verifier at
 // a call site. The loader must fall back to the sibling `dep.vow` source so

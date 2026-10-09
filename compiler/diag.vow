@@ -282,14 +282,6 @@ fn diag_blame_name(b: i64) -> String {
     }
 }
 
-fn diag_blame_name_json(b: i64) -> String {
-    if b == DIAG_BLAME_CALLER() {
-        String::from("caller")
-    } else {
-        String::from("callee")
-    }
-}
-
 fn ec_name(code: i64) -> String {
     if code == EC_UNTERMINATED_STRING() {
         String::from("UnterminatedString")
@@ -494,7 +486,7 @@ fn diag_to_json(d: Diagnostic) -> String {
     r.push_str(String::from("}"));
     if d.blame != DIAG_BLAME_NONE() {
         r.push_str(String::from(",\"blame\":\""));
-        r.push_str(diag_blame_name_json(d.blame));
+        r.push_str(diag_blame_name(d.blame));
         r.push_str(String::from("\""));
     }
     let hints: Vec<String> = d.hints;
@@ -657,11 +649,7 @@ fn diag_ce_to_json(ce: VerifyCE) -> String {
         r.push_str(String::from(",\"source\":null"));
     }
     r.push_str(String::from(",\"blame\":\""));
-    if ce.blame != DIAG_BLAME_NONE() {
-        r.push_str(diag_blame_name_json(ce.blame));
-    } else {
-        r.push_str(String::from("none"));
-    }
+    r.push_str(diag_blame_name(ce.blame));
     r.push_str(String::from("\""));
     let csn: u64 = ce.call_site_functions.len();
     if csn > 0 {

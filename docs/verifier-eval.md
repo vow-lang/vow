@@ -71,7 +71,7 @@ extending the same `// TEST:` convention `tests/run_tests.sh` already uses.
 | --- | --- |
 | `// TEST: category <name>` | One of `overflow`, `bounds`, `invariant`, `caller-blame`, `callee-blame`, `model-drift`, `unverifiable`. Required on every corpus program. |
 | `// TEST: counterexample-fn "<fn>"` | Expected counterexample function (verify-fail). |
-| `// TEST: counterexample-blame <caller\|callee\|none>` | Expected blame; `none` = a memory-safety/builtin failure with no contract attribution. |
+| `// TEST: counterexample-blame <Caller\|Callee\|None>` | Expected blame; `None` = a memory-safety/builtin failure with no contract attribution. |
 | `// TEST: counterexample-vow-id <N>` | Expected violated `vow_id` (from the `vow verify` counterexample, which is a distinct id space from `vow contracts --verify`). |
 | `// TEST: cex fn="<fn>" blame=<b> vow_id=<N>` | Repeatable form for programs with multiple expected counterexamples. |
 | `// TEST: known-soundness-gap "<reason>" #<issue>` | Marks a documented false-accept in `tests/verify/` that the verifier does not yet catch. Reported under the KNOWN SOUNDNESS GAPS banner, non-fatal — until the verifier *starts* catching it, at which point the harness fails and demands promotion to a real verify-fail program. |

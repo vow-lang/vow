@@ -1,7 +1,7 @@
 // TEST: category overflow
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-fn "big"
-// TEST: counterexample-blame none
+// TEST: counterexample-blame None
 // A constant length outside the verifier's model capacity must fail closed;
 // assuming it away would make the (true) postcondition below vacuous. The source
 // pointer is a parameter because a null source is modelled as empty, as at runtime.

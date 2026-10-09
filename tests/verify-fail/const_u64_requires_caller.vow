@@ -1,6 +1,6 @@
 // TEST: category caller-blame
 // TEST: counterexample-fn "caller"
-// TEST: counterexample-blame caller
+// TEST: counterexample-blame Caller
 // TEST: counterexample-violation "requires i < SLOTS"
 // A u64 const used as the bound of a requires clause: passing the bound
 // itself violates the precondition, and the caller is blamed.

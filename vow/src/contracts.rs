@@ -217,11 +217,7 @@ fn build_contract_entries(ir_module: &vow_ir::Module) -> Vec<ContractEntryJson> 
     for func in &ir_module.functions {
         for vow in &func.vows {
             let analysis = contract_quality::analyze(&vow.description);
-            let blame = match vow.blame {
-                vow_diag::Blame::Caller => "Caller",
-                vow_diag::Blame::Callee => "Callee",
-                vow_diag::Blame::None => "None",
-            };
+            let blame = vow.blame.as_str();
             entries.push(ContractEntryJson {
                 vow_id: vow.id.0,
                 function: func.name.clone(),
@@ -316,7 +312,7 @@ mod tests {
             kind: "ensures".to_string(),
             // Description must agree with the hard-coded `quality` below.
             description: "ensures: result == x".to_string(),
-            blame: "callee".to_string(),
+            blame: "Callee".to_string(),
             source: source.clone(),
             status: status.to_string(),
             quality: "substantive".to_string(),
@@ -361,7 +357,7 @@ mod tests {
             function_id: 0,
             kind: "ensures".to_string(),
             description: "ensures: result == x".to_string(),
-            blame: "callee".to_string(),
+            blame: "Callee".to_string(),
             source: source.clone(),
             status: status.to_string(),
             quality: "substantive".to_string(),
@@ -394,7 +390,7 @@ mod tests {
             function_id: 0,
             kind: "ensures".to_string(),
             description: "ensures: result == x".to_string(),
-            blame: "callee".to_string(),
+            blame: "Callee".to_string(),
             source: source.clone(),
             status: "not_verified".to_string(),
             quality: quality.to_string(),

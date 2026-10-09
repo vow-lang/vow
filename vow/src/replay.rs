@@ -470,7 +470,7 @@ fn classify_replay_run(
         // arm below guards against: a debug write that happens to coalesce
         // a VowViolation-shaped substring onto its line.
         (Some(RUNTIME_ABORT_EXIT_CODE), Some(ErrorLineKind::Violation(vid, blame))) => {
-            if vid == ce.vow_id && blame.eq_ignore_ascii_case(&ce.blame) {
+            if vid == ce.vow_id && blame == ce.blame {
                 ReplayOutcome {
                     status: "confirmed",
                     reason: None,

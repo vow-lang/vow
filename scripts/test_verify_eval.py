@@ -15,8 +15,8 @@ class ClassifyCounterexamplesTest(unittest.TestCase):
     def test_missing_expected_counterexample_is_a_status_mismatch(self):
         exp = verify_eval.Expect("tests/verify-fail/two_failures.vow", "VerifyFailed")
         exp.cex = [
-            {"fn": "first", "blame": "caller", "vow_id": 1},
-            {"fn": "second", "blame": "callee", "vow_id": 2},
+            {"fn": "first", "blame": "Caller", "vow_id": 1},
+            {"fn": "second", "blame": "Callee", "vow_id": 2},
         ]
         verify_json = {
             "status": "VerifyFailed",
@@ -32,7 +32,7 @@ class ClassifyCounterexamplesTest(unittest.TestCase):
 
     def test_wrong_function_counterexample_is_a_status_mismatch(self):
         exp = verify_eval.Expect("tests/verify-fail/wrong_function.vow", "VerifyFailed")
-        exp.cex = [{"fn": "expected", "blame": "caller", "vow_id": 1}]
+        exp.cex = [{"fn": "expected", "blame": "Caller", "vow_id": 1}]
         verify_json = {
             "status": "VerifyFailed",
             "counterexamples": [
@@ -47,7 +47,7 @@ class ClassifyCounterexamplesTest(unittest.TestCase):
 
     def test_wrong_counterexample_blame_stays_a_blame_regression(self):
         exp = verify_eval.Expect("tests/verify-fail/wrong_blame.vow", "VerifyFailed")
-        exp.cex = [{"fn": "f", "blame": "caller", "vow_id": 7}]
+        exp.cex = [{"fn": "f", "blame": "Caller", "vow_id": 7}]
         verify_json = {
             "status": "VerifyFailed",
             "counterexamples": [
@@ -58,11 +58,11 @@ class ClassifyCounterexamplesTest(unittest.TestCase):
         verdict, detail = verify_eval.classify(exp, verify_json, verifier="/unused/vow")
 
         self.assertEqual(verify_eval.BLAME, verdict)
-        self.assertIn("blame want=caller", detail)
+        self.assertIn("blame want=Caller", detail)
 
     def test_wrong_counterexample_vow_id_stays_a_blame_regression(self):
         exp = verify_eval.Expect("tests/verify-fail/wrong_vow_id.vow", "VerifyFailed")
-        exp.cex = [{"fn": "f", "blame": "callee", "vow_id": 7}]
+        exp.cex = [{"fn": "f", "blame": "Callee", "vow_id": 7}]
         verify_json = {
             "status": "VerifyFailed",
             "counterexamples": [
@@ -121,6 +121,28 @@ class ParseDirectivesKnownGapTest(unittest.TestCase):
                             verify_eval.parse_directives(str(path), status)
             finally:
                 verify_eval.REPO_ROOT = old_repo_root
+
+
+class ParseDirectivesBlameCasingTest(unittest.TestCase):
+    def parse(self, directive):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tests" / "verify-fail" / "b.vow"
+            path.parent.mkdir(parents=True)
+            path.write_text(f"// TEST: {directive}\n", encoding="utf-8")
+            return verify_eval.parse_directives(str(path), "VerifyFailed")
+
+    def test_canonical_blame_is_accepted(self):
+        exp = self.parse('cex fn="f" blame=None vow_id=1')
+        self.assertEqual("None", exp.cex[0]["blame"])
+
+    def test_lowercase_blame_is_rejected(self):
+        for directive in (
+            "counterexample-blame callee",
+            'cex fn="f" blame=caller vow_id=1',
+        ):
+            with self.subTest(directive=directive):
+                with self.assertRaisesRegex(ValueError, "unknown counterexample blame"):
+                    self.parse(directive)
 
 
 class CorpusCountsDocsTest(unittest.TestCase):

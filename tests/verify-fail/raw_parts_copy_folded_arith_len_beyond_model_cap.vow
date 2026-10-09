@@ -1,7 +1,7 @@
 // TEST: category overflow
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-fn "big"
-// TEST: counterexample-blame none
+// TEST: counterexample-blame None
 // A length that is provably constant through arithmetic (here 1 + 300) is as
 // far outside the verifier's model capacity as the literal 301, so it must fail
 // closed the same way. Assuming it away would make the (true) postcondition

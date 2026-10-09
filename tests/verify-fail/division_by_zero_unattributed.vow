@@ -1,6 +1,6 @@
 // TEST: category bounds
 // TEST: counterexample-fn "remainder"
-// TEST: counterexample-blame none
+// TEST: counterexample-blame None
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-violation "division or remainder by zero"
 module DivisionByZeroUnattributed

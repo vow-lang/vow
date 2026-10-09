@@ -1,7 +1,7 @@
 // TEST: category callee-blame
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-fn "positive_or_zero"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // Postcondition is too strong: claims result > 0 but function
 // returns 0 when x == 0 (which satisfies requires: x >= 0).
 module PostconditionTooStrong

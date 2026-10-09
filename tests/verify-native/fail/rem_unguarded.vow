@@ -1,6 +1,6 @@
 // TEST: counterexample-fn "rem"
 // TEST: counterexample-vow-id 4294967293
-// TEST: counterexample-blame none
+// TEST: counterexample-blame None
 // TEST: counterexample-violation "division or remainder by zero"
 module RemUnguarded
 

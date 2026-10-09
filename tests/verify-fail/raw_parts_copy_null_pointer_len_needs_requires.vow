@@ -1,6 +1,6 @@
 // TEST: category callee-blame
 // TEST: counterexample-fn "copy_len"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-violation "ensures result == n"
 // from_raw_parts_copy of a null pointer is empty whatever the length is (the
 // runtime guard), and the verifier models that. `result == n` is therefore only

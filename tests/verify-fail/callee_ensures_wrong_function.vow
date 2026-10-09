@@ -1,6 +1,6 @@
 // TEST: category callee-blame
 // TEST: counterexample-fn "g"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-violation "ensures result > x"
 // Regression for misattributed callee postconditions: `g`'s false `ensures` is

@@ -1,6 +1,6 @@
 // TEST: category callee-blame
 // TEST: counterexample-fn "limit"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-violation "ensures result == 18446744073709551614"
 // A u64 const must reach the verifier model as its exact typed value: the
 // true value is the u64 maximum, so an off-by-one ensures has to fail.

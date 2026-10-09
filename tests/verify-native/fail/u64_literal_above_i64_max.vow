@@ -1,6 +1,6 @@
 // TEST: counterexample-fn "keep"
 // TEST: counterexample-vow-id 1
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-violation "ensures result < 9223372036854775808"
 // TEST: counterexample-value x 9223372036854775808
 module U64LiteralAboveI64Max

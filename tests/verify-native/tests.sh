@@ -215,7 +215,7 @@ expect "sat exit" "$RUN_RC" "1"
 expect "stops at first failing claim" "$(queries)" "1"
 expect "sat function" "$(field "$RUN_OUT" counterexamples.0.function)" "quot"
 expect "abort claim vow id" "$(field "$RUN_OUT" counterexamples.0.vow_id)" "4294967293"
-expect "abort claim blame" "$(field "$RUN_OUT" counterexamples.0.blame)" "none"
+expect "abort claim blame" "$(field "$RUN_OUT" counterexamples.0.blame)" "None"
 expect "abort claim text" "$(field "$RUN_OUT" counterexamples.0.violation)" "division or remainder by zero"
 expect "model value a" "$(field "$RUN_OUT" counterexamples.0.values.a)" "7"
 expect "model value b" "$(field "$RUN_OUT" counterexamples.0.values.b)" "7"
@@ -223,7 +223,7 @@ no_leftovers "sat"
 
 run_native sat "$ONE_CLAIM"
 expect "ensures vow id" "$(field "$RUN_OUT" counterexamples.0.vow_id)" "0"
-expect "ensures blame" "$(field "$RUN_OUT" counterexamples.0.blame)" "callee"
+expect "ensures blame" "$(field "$RUN_OUT" counterexamples.0.blame)" "Callee"
 
 # models are read per declared width: a 128-bit and an 8-bit parameter.
 run_native sat "$WIDE_CLAIM"

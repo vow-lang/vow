@@ -1,6 +1,6 @@
 // TEST: category callee-blame
 // TEST: counterexample-fn "pinned"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-vow-id 1
 // TEST: replay confirmed
 //

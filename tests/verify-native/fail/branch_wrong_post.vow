@@ -1,6 +1,6 @@
 // TEST: counterexample-fn "pick"
 // TEST: counterexample-vow-id 0
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-violation "ensures result > 0"
 module BranchWrongPost
 

@@ -1,7 +1,7 @@
 // TEST: category callee-blame
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-fn "bad_fd"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // `drop` does not weaken verification: a false postcondition on a function that
 // drops a linear value is still refuted.
 module LinearDropStillFails

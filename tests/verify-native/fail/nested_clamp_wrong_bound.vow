@@ -1,6 +1,6 @@
 // TEST: counterexample-fn "clamp"
 // TEST: counterexample-vow-id 3
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-violation "ensures result < hi"
 module NestedClampWrongBound
 

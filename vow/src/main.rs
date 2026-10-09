@@ -2139,7 +2139,7 @@ pub fn main() -> i32 [io] {
                 violation: "y != 0".to_string(),
                 vow_id: 0,
                 source: None,
-                blame: "caller".to_string(),
+                blame: "Caller".to_string(),
                 call_sites: vec![],
                 violating_args: vec![],
                 execution_path: vec![],
@@ -2599,7 +2599,7 @@ fn main() -> i32 {
                     offset: 50,
                     length: 6,
                 }),
-                blame: "caller".to_string(),
+                blame: "Caller".to_string(),
                 call_sites: vec![],
                 violating_args: vec![],
                 execution_path: vec![],
@@ -2692,7 +2692,7 @@ fn main() -> i32 {
             violation: "x > 0".to_string(),
             vow_id: 1,
             source: None,
-            blame: "caller".to_string(),
+            blame: "Caller".to_string(),
             call_sites: vec![],
             violating_args: vec![],
             execution_path: vec![],
@@ -2726,7 +2726,7 @@ fn main() -> i32 {
                 offset: 10,
                 length: 5,
             }),
-            blame: "callee".to_string(),
+            blame: "Callee".to_string(),
             call_sites: vec![],
             violating_args: vec![],
             execution_path: vec![],
@@ -2877,7 +2877,7 @@ fn main() -> i32 {
                     offset: 50,
                     length: 10,
                 }),
-                blame: "caller".to_string(),
+                blame: "Caller".to_string(),
                 call_sites: vec![CeCallSite {
                     caller_function: "main".to_string(),
                     file: "divide.vow".to_string(),
@@ -2904,7 +2904,7 @@ fn main() -> i32 {
         assert_eq!(parsed["counterexample"], "y=0 violates requires");
         let ces = parsed["counterexamples"].as_array().unwrap();
         assert_eq!(ces.len(), 1);
-        assert_eq!(ces[0]["blame"], "caller");
+        assert_eq!(ces[0]["blame"], "Caller");
         let call_sites = ces[0]["call_sites"].as_array().unwrap();
         assert_eq!(call_sites.len(), 1);
         assert_eq!(call_sites[0]["caller_function"], "main");
@@ -3570,7 +3570,7 @@ fn main() -> i32 {
                 offset: 42,
                 length: 6,
             }),
-            blame: "caller".to_string(),
+            blame: "Caller".to_string(),
             call_sites: vec![CeCallSite {
                 caller_function: "main".to_string(),
                 file: "test.vow".to_string(),
@@ -3588,7 +3588,7 @@ fn main() -> i32 {
         };
         let json_ce = CounterexampleJson::from_structured(&sce);
         let serialized = serde_json::to_string(&json_ce).unwrap();
-        assert!(serialized.contains("\"blame\":\"caller\""));
+        assert!(serialized.contains("\"blame\":\"Caller\""));
         assert!(serialized.contains("\"call_sites\""));
         assert!(serialized.contains("\"caller_function\":\"main\""));
 
@@ -3599,7 +3599,7 @@ fn main() -> i32 {
             violation: "result == x + x".to_string(),
             vow_id: 0,
             source: None,
-            blame: "callee".to_string(),
+            blame: "Callee".to_string(),
             call_sites: vec![],
             violating_args: vec![],
             execution_path: vec![],
@@ -3612,7 +3612,7 @@ fn main() -> i32 {
         };
         let json_callee = CounterexampleJson::from_structured(&sce_callee);
         let serialized_callee = serde_json::to_string(&json_callee).unwrap();
-        assert!(serialized_callee.contains("\"blame\":\"callee\""));
+        assert!(serialized_callee.contains("\"blame\":\"Callee\""));
         assert!(!serialized_callee.contains("call_sites"));
     }
 
@@ -3691,7 +3691,7 @@ fn main() -> i32 {
             violation: "test".to_string(),
             vow_id: 0,
             source: None,
-            blame: "callee".to_string(),
+            blame: "Callee".to_string(),
             call_sites: vec![],
             violating_args: vec![],
             execution_path: vec![],

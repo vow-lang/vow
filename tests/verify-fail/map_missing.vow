@@ -1,7 +1,7 @@
 // TEST: category callee-blame
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-fn "insert_wrong"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 module MapMissing
 
 fn insert_wrong() -> HashMap<i64, i64> vow {

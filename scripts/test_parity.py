@@ -27,7 +27,7 @@ def counterexample(**fields):
         "violation": "x > 0",
         "vow_id": 0,
         "source": {"file": "a.vow", "offset": 1, "length": 2},
-        "blame": "callee",
+        "blame": "Callee",
         **fields,
     }
 
@@ -36,7 +36,7 @@ def hard_failure(**values):
     """A VerifyFailed document whose single counterexample carries `values`."""
     return document(
         "VerifyFailed",
-        counterexamples=[{"function": "bad", "blame": "caller", "values": values}],
+        counterexamples=[{"function": "bad", "blame": "Caller", "values": values}],
     )
 
 
@@ -163,11 +163,11 @@ class CompareJsonCharacterizationTest(unittest.TestCase):
     def test_hard_verify_failure_counterexample_fields_must_match(self):
         rust = document(
             "VerifyFailed",
-            counterexamples=[{"function": "f", "blame": "caller"}],
+            counterexamples=[{"function": "f", "blame": "Caller"}],
         )
         self_hosted = document(
             "VerifyFailed",
-            counterexamples=[{"function": "g", "blame": "callee"}],
+            counterexamples=[{"function": "g", "blame": "Callee"}],
         )
 
         errors = parity.compare_json(rust, self_hosted, 1, 1)
@@ -175,7 +175,7 @@ class CompareJsonCharacterizationTest(unittest.TestCase):
         self.assertEqual(
             [
                 "counterexample[0].function: f vs g",
-                "counterexample[0].blame: caller vs callee",
+                "counterexample[0].blame: Caller vs Callee",
             ],
             errors,
         )
@@ -205,12 +205,12 @@ class CompareJsonCharacterizationTest(unittest.TestCase):
         rust = document(
             "VerifyFailed",
             counterexamples=[
-                {"function": "f", "blame": "none", "violation": "[Counterexample]"}
+                {"function": "f", "blame": "None", "violation": "[Counterexample]"}
             ],
         )
         self_hosted = document(
             "VerifyFailed",
-            counterexamples=[{"function": "f", "blame": "none", "violation": ""}],
+            counterexamples=[{"function": "f", "blame": "None", "violation": ""}],
         )
 
         self.assertEqual(
@@ -244,10 +244,10 @@ class CompareJsonDiagnosticParityTest(unittest.TestCase):
 
     def test_diagnostic_blame_must_match(self):
         rust = document(
-            diagnostics=[{"error_code": "VowRequiresViolated", "blame": "caller"}]
+            diagnostics=[{"error_code": "VowRequiresViolated", "blame": "Caller"}]
         )
         self_hosted = document(
-            diagnostics=[{"error_code": "VowRequiresViolated", "blame": "callee"}]
+            diagnostics=[{"error_code": "VowRequiresViolated", "blame": "Callee"}]
         )
 
         errors = parity.compare_json(rust, self_hosted, 1, 1)
@@ -255,8 +255,8 @@ class CompareJsonDiagnosticParityTest(unittest.TestCase):
         self.assertEqual(
             [
                 (
-                    "diagnostics: [('VowRequiresViolated', 'caller')] vs "
-                    "[('VowRequiresViolated', 'callee')]"
+                    "diagnostics: [('VowRequiresViolated', 'Caller')] vs "
+                    "[('VowRequiresViolated', 'Callee')]"
                 )
             ],
             errors,
@@ -265,13 +265,13 @@ class CompareJsonDiagnosticParityTest(unittest.TestCase):
     def test_verify_failed_diagnostics_remain_outside_the_comparison(self):
         rust = document(
             "VerifyFailed",
-            diagnostics=[{"error_code": "VowRequiresViolated", "blame": "caller"}],
-            counterexamples=[{"function": "f", "blame": "caller"}],
+            diagnostics=[{"error_code": "VowRequiresViolated", "blame": "Caller"}],
+            counterexamples=[{"function": "f", "blame": "Caller"}],
         )
         self_hosted = document(
             "VerifyFailed",
             diagnostics=[],
-            counterexamples=[{"function": "f", "blame": "caller"}],
+            counterexamples=[{"function": "f", "blame": "Caller"}],
         )
 
         self.assertEqual([], parity.compare_json(rust, self_hosted, 1, 1))
@@ -312,15 +312,15 @@ class CompareJsonCounterexampleValuesTest(unittest.TestCase):
         rust = document(
             "VerifyFailed",
             counterexamples=[
-                {"function": "first", "blame": "caller", "values": {"x": "1"}},
-                {"function": "second", "blame": "callee", "values": {"y": "2"}},
+                {"function": "first", "blame": "Caller", "values": {"x": "1"}},
+                {"function": "second", "blame": "Callee", "values": {"y": "2"}},
             ],
         )
         self_hosted = document(
             "VerifyFailed",
             counterexamples=[
-                {"function": "first", "blame": "caller", "values": {"x": "1"}},
-                {"function": "second", "blame": "callee", "values": {"y": "3"}},
+                {"function": "first", "blame": "Caller", "values": {"x": "1"}},
+                {"function": "second", "blame": "Callee", "values": {"y": "3"}},
             ],
         )
 
@@ -366,13 +366,13 @@ class CompareJsonCounterexampleCountTest(unittest.TestCase):
         rust = document(
             "VerifyFailed",
             counterexamples=[
-                {"function": "first", "blame": "caller"},
-                {"function": "second", "blame": "callee"},
+                {"function": "first", "blame": "Caller"},
+                {"function": "second", "blame": "Callee"},
             ],
         )
         self_hosted = document(
             "VerifyFailed",
-            counterexamples=[{"function": "first", "blame": "caller"}],
+            counterexamples=[{"function": "first", "blame": "Caller"}],
         )
 
         errors = parity.compare_json(rust, self_hosted, 1, 1)
@@ -941,7 +941,7 @@ class CompareTestTest(unittest.TestCase):
                     self.entry(
                         "test_arith",
                         diagnostics=[
-                            {"error_code": "RegionRootEscape", "blame": "callee"}
+                            {"error_code": "RegionRootEscape", "blame": "Callee"}
                         ],
                     ),
                     self.entry("test_parser"),
@@ -1374,13 +1374,13 @@ class ParityCliCharacterizationTest(unittest.TestCase):
         rust = document(
             "VerifyFailed",
             counterexamples=[
-                {"function": "first", "blame": "caller"},
-                {"function": "second", "blame": "callee"},
+                {"function": "first", "blame": "Caller"},
+                {"function": "second", "blame": "Callee"},
             ],
         )
         self_hosted = document(
             "VerifyFailed",
-            counterexamples=[{"function": "first", "blame": "caller"}],
+            counterexamples=[{"function": "first", "blame": "Caller"}],
         )
 
         completed = run_parity_cli(
@@ -1400,13 +1400,13 @@ class ParityCliCharacterizationTest(unittest.TestCase):
     def test_known_counterexample_count_divergence_is_a_loud_skip(self):
         rust = document(
             "VerifyFailed",
-            counterexamples=[{"function": "first", "blame": "caller"}],
+            counterexamples=[{"function": "first", "blame": "Caller"}],
         )
         self_hosted = document(
             "VerifyFailed",
             counterexamples=[
-                {"function": "first", "blame": "caller"},
-                {"function": "second", "blame": "callee"},
+                {"function": "first", "blame": "Caller"},
+                {"function": "second", "blame": "Callee"},
             ],
         )
 
@@ -1436,10 +1436,10 @@ class ParityCliCharacterizationTest(unittest.TestCase):
             counterexamples=[
                 {
                     "function": "first",
-                    "blame": "caller",
+                    "blame": "Caller",
                     "values": {"x": "-1"},
                 },
-                {"function": "second", "blame": "callee"},
+                {"function": "second", "blame": "Callee"},
             ],
         )
         self_hosted = document(
@@ -1447,7 +1447,7 @@ class ParityCliCharacterizationTest(unittest.TestCase):
             counterexamples=[
                 {
                     "function": "first",
-                    "blame": "caller",
+                    "blame": "Caller",
                     "values": {"n": "-1"},
                 }
             ],
@@ -1605,7 +1605,7 @@ def violation_diagnostic(**fields):
         "severity": "error",
         "span": span(),
         "hints": ["function `f` failed to establish its postcondition"],
-        "blame": "callee",
+        "blame": "Callee",
         **fields,
     }
 
@@ -1974,14 +1974,14 @@ class CompareFullJsonArgumentValueTest(unittest.TestCase):
                         "the call site violated function `f`'s precondition",
                         f"argument `x` = {hint_value} violates the contract",
                     ],
-                    blame="caller",
+                    blame="Caller",
                 )
             ],
             counterexamples=[
                 counterexample(
                     function="f",
                     source=span(),
-                    blame="caller",
+                    blame="Caller",
                     values={label: "-1"},
                     violating_args=[argument],
                 )

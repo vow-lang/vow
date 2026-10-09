@@ -1,6 +1,6 @@
 // TEST: category callee-blame
 // TEST: counterexample-fn "at_least_one"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-violation "ensures result >= 18446744073709551616 as u128"
 module WideLiteralWrongContract
 

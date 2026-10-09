@@ -1,7 +1,7 @@
 // TEST: category callee-blame
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-fn "store_wrong"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 module MapGetWrongValue
 
 fn store_wrong() -> HashMap<i64, i64> vow {

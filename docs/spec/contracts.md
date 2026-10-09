@@ -135,7 +135,7 @@ execution the runtime can produce, so none is reported.
 
 ### Callers Without a `vow` Block
 
-A function with no `vow` block is still a verify target when it **directly calls a function that has `requires`** and the verifier can model it (pure, only modelable operations, and no collection passed as an argument to a user function). Every parameter is nondeterministic — the equivalent of `requires: true` — and each callee `requires` is asserted at the call, so a caller that can violate it is reported `VowRequiresViolated` with `blame: "caller"`.
+A function with no `vow` block is still a verify target when it **directly calls a function that has `requires`** and the verifier can model it (pure, only modelable operations, and no collection passed as an argument to a user function). Every parameter is nondeterministic — the equivalent of `requires: true` — and each callee `requires` is asserted at the call, so a caller that can violate it is reported `VowRequiresViolated` with `blame: "Caller"`.
 
 Only the callee `requires` are obligations of such a function. Its own bounds, capacity, and checked-arithmetic checks are assumed, not asserted: a helper may rely on an invariant its callers keep, and it owes no contract of its own. A helper that forwards a parameter into a call whose `requires` it cannot establish (`fn g(x: i64) -> i64 { f(x) }` with `f` requiring `x >= 0`) is reported, and the fix is a real `requires` on `g`.
 
@@ -447,7 +447,7 @@ A counterexample in the JSON output:
   "violation": "ensures result >= 0",
   "vow_id": 1,
   "source": { "file": "cegis_broken.vow", "offset": 76, "length": 20 },
-  "blame": "callee"
+  "blame": "Callee"
 }
 ```
 

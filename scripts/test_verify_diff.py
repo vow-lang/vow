@@ -9,8 +9,8 @@ from unittest import mock
 
 import verify_diff as vd
 
-K = ("f", "callee", 1)
-OTHER = ("f", "caller", 2)
+K = ("f", "Callee", 1)
+OTHER = ("f", "Caller", 2)
 
 
 class ClassifyTest(unittest.TestCase):

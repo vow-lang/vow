@@ -1,7 +1,7 @@
 // TEST: category callee-blame
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-fn "wrong_len"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 module UnitSetWrongLen
 
 fn wrong_len(k: i64) -> HashMap<i64, ()> vow {

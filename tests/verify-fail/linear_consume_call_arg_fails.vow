@@ -1,7 +1,7 @@
 // TEST: category callee-blame
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-fn "forward"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // A consume only discharges an ownership obligation, so a function that consumes
 // a linear value through a call argument is modeled like any other and its
 // contract is decided by the data flow alone.

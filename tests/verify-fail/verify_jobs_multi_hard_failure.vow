@@ -1,7 +1,7 @@
 // TEST: category callee-blame
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-fn "first_bad"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // Regression: concurrent hard failures report only the first function in
 // module declaration order, independent of how many jobs are in flight.
 module VerifyJobsMultiHardFailure

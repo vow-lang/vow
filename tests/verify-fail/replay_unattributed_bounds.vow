@@ -1,6 +1,6 @@
 // TEST: category bounds
 // TEST: counterexample-fn "past_end"
-// TEST: counterexample-blame none
+// TEST: counterexample-blame None
 // TEST: counterexample-vow-id 4294967293
 // TEST: replay skipped
 //

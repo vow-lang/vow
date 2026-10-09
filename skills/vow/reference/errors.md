@@ -852,7 +852,7 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 ### VerifierAssertionUnattributed
 
 **Phase:** Verification
-**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "none"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.
+**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.
 
 ```json
 {

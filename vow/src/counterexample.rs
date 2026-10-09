@@ -172,17 +172,13 @@ fn build_structured_counterexample(
 /// argument that tripped the callee's `requires` — and this overrides whatever
 /// blame the tripped vow entry itself recorded. Otherwise blame follows the vow
 /// entry's own [`vow_diag::Blame`], and a CE with no vow entry falls back to
-/// `"none"`. The exhaustive `match` makes the mapping a machine-checked contract:
+/// `"None"`. `Blame::as_str` is an exhaustive `match`, so the mapping is a machine-checked contract:
 /// a new `Blame` variant is a compile error here, not a silent miscategorization.
 fn resolve_ce_blame(caller_precondition: bool, vow_blame: Option<vow_diag::Blame>) -> &'static str {
     if caller_precondition {
-        return "caller";
+        return vow_diag::Blame::Caller.as_str();
     }
-    match vow_blame {
-        Some(vow_diag::Blame::Caller) => "caller",
-        Some(vow_diag::Blame::Callee) => "callee",
-        Some(vow_diag::Blame::None) | None => "none",
-    }
+    vow_blame.unwrap_or(vow_diag::Blame::None).as_str()
 }
 
 pub(crate) fn build_structured_counterexample_with_module(
@@ -263,7 +259,7 @@ pub(crate) fn build_structured_counterexample_with_module(
     let value_func = vow_func;
     let name_map = build_c_to_source_name_map(value_func);
     let mapped_values = map_counterexample_values(&ce.values, &name_map);
-    let sites_raw: Vec<CallSiteInfo> = if blame == "caller" {
+    let sites_raw: Vec<CallSiteInfo> = if blame == "Caller" {
         if let Some((callee, entry)) = resolved_callee_precondition {
             let candidates = call_site_index
                 .get(&callee.name)
@@ -293,7 +289,7 @@ pub(crate) fn build_structured_counterexample_with_module(
         .collect();
 
     // Violating args: for caller-blame, map bindings to param indices and arg spans
-    let violating_args = if blame == "caller" {
+    let violating_args = if blame == "Caller" {
         if let Some(entry) = vow_entry {
             let mut args = Vec::new();
             for (binding_name, _inst_id) in &entry.bindings {
@@ -936,7 +932,7 @@ mod tests {
         );
 
         let sce = build_structured_counterexample(&func, &ce, "test.vow", &call_sites);
-        assert_eq!(sce.blame, "caller");
+        assert_eq!(sce.blame, "Caller");
         assert_eq!(sce.call_sites.len(), 1);
         assert_eq!(sce.call_sites[0].caller_function, "main");
         assert_eq!(sce.call_sites[0].offset, 120);
@@ -1003,7 +999,7 @@ mod tests {
             sce.violation, "[Counterexample]",
             "must not fall through to raw ESBMC line"
         );
-        assert_eq!(sce.blame, "none");
+        assert_eq!(sce.blame, "None");
         assert!(sce.source.is_none());
     }
 
@@ -1017,7 +1013,7 @@ mod tests {
             sce.violation, "[Counterexample]",
             "must not fall through to raw ESBMC line"
         );
-        assert_eq!(sce.blame, "none");
+        assert_eq!(sce.blame, "None");
     }
 
     #[test]
@@ -1033,7 +1029,7 @@ mod tests {
             sce.violation, "[Counterexample]",
             "must not fall through to raw ESBMC line"
         );
-        assert_eq!(sce.blame, "none");
+        assert_eq!(sce.blame, "None");
     }
 
     #[test]
@@ -1046,7 +1042,7 @@ mod tests {
             sce.violation, "[Counterexample]",
             "must not fall through to raw ESBMC line"
         );
-        assert_eq!(sce.blame, "none");
+        assert_eq!(sce.blame, "None");
     }
 
     #[test]
@@ -1062,7 +1058,7 @@ mod tests {
 
         assert_eq!(sce.vow_id, UNATTRIBUTED_VOW_ID);
         assert_eq!(sce.violation, "division or remainder by zero");
-        assert_eq!(sce.blame, "none");
+        assert_eq!(sce.blame, "None");
     }
 
     #[test]
@@ -1127,7 +1123,7 @@ mod tests {
         );
 
         let sce = build_structured_counterexample(&func, &ce, "test.vow", &call_sites);
-        assert_eq!(sce.blame, "callee");
+        assert_eq!(sce.blame, "Callee");
         assert!(
             sce.call_sites.is_empty(),
             "callee blame should have no call_sites"
@@ -1323,7 +1319,7 @@ mod tests {
             }],
         );
         let sce = build_structured_counterexample(&func, &ce, "test.vow", &call_site_index);
-        assert_eq!(sce.blame, "caller");
+        assert_eq!(sce.blame, "Caller");
         assert_eq!(sce.violating_args.len(), 1);
         assert_eq!(sce.violating_args[0].param, "y");
         assert_eq!(sce.violating_args[0].value, "0");
@@ -1437,7 +1433,7 @@ mod tests {
 
         assert_eq!(sce.function, "g");
         assert_eq!(sce.violation, "g clause");
-        assert_eq!(sce.blame, "callee");
+        assert_eq!(sce.blame, "Callee");
         assert_eq!(sce.vow_id, 0);
         let source = sce.source.expect("callee clause span");
         assert_eq!(
@@ -1709,7 +1705,7 @@ mod tests {
         );
 
         assert_eq!(sce.function, "f");
-        assert_eq!(sce.blame, "caller");
+        assert_eq!(sce.blame, "Caller");
         assert_eq!(sce.vow_id, 1);
         assert_eq!(sce.violation, "requires y != 0");
         assert_eq!(sce.source.as_ref().map(|s| s.offset), Some(30));
@@ -2024,7 +2020,7 @@ mod tests {
     // The blame-precedence policy for a structured counterexample (same shape as
     // the `resolve_clause_status` seam of #1073): a callee-precondition CE is
     // ALWAYS blamed on the caller, overriding whatever blame the vow entry
-    // itself records, and a CE with no vow entry defaults to "none".
+    // itself records, and a CE with no vow entry defaults to "None".
     // `resolve_ce_blame` makes this an exhaustive, pure mapping, so adding a
     // `Blame` variant is a compile error here rather than a silent fall-through.
     #[test]
@@ -2032,16 +2028,16 @@ mod tests {
         use vow_diag::Blame;
 
         // A callee-precondition CE overrides the vow entry's recorded blame.
-        assert_eq!(resolve_ce_blame(true, Some(Blame::Callee)), "caller");
-        assert_eq!(resolve_ce_blame(true, Some(Blame::None)), "caller");
-        assert_eq!(resolve_ce_blame(true, None), "caller");
+        assert_eq!(resolve_ce_blame(true, Some(Blame::Callee)), "Caller");
+        assert_eq!(resolve_ce_blame(true, Some(Blame::None)), "Caller");
+        assert_eq!(resolve_ce_blame(true, None), "Caller");
 
         // Otherwise blame follows the vow entry's own record.
-        assert_eq!(resolve_ce_blame(false, Some(Blame::Caller)), "caller");
-        assert_eq!(resolve_ce_blame(false, Some(Blame::Callee)), "callee");
-        assert_eq!(resolve_ce_blame(false, Some(Blame::None)), "none");
+        assert_eq!(resolve_ce_blame(false, Some(Blame::Caller)), "Caller");
+        assert_eq!(resolve_ce_blame(false, Some(Blame::Callee)), "Callee");
+        assert_eq!(resolve_ce_blame(false, Some(Blame::None)), "None");
 
-        // Not a caller precondition and no vow entry => fail to "none".
-        assert_eq!(resolve_ce_blame(false, None), "none");
+        // Not a caller precondition and no vow entry => fail to "None".
+        assert_eq!(resolve_ce_blame(false, None), "None");
     }
 }

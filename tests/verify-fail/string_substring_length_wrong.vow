@@ -1,6 +1,6 @@
 // TEST: category callee-blame
 // TEST: counterexample-fn "same_length"
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 // TEST: counterexample-vow-id 0
 // A substring is shorter than its source whenever the range does not cover it;
 // the length-only model must still refute a postcondition that says otherwise.

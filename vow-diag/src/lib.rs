@@ -14,6 +14,18 @@ pub enum Blame {
     None,
 }
 
+impl Blame {
+    /// Canonical wire name used on every JSON surface (diagnostics,
+    /// counterexamples, `vow contracts`, runtime `VowViolation`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Blame::Caller => "Caller",
+            Blame::Callee => "Callee",
+            Blame::None => "None",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceLocation {
     pub file: String,
@@ -235,6 +247,18 @@ mod tests {
     use super::*;
     use std::io;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn blame_as_str_is_pascal_case_and_matches_serde() {
+        for (blame, name) in [
+            (Blame::Caller, "Caller"),
+            (Blame::Callee, "Callee"),
+            (Blame::None, "None"),
+        ] {
+            assert_eq!(blame.as_str(), name);
+            assert_eq!(serde_json::to_value(blame).unwrap(), name);
+        }
+    }
 
     struct SharedBuf(Arc<Mutex<Vec<u8>>>);
 

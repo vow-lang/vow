@@ -283,16 +283,16 @@ fn dedup_warnings(warnings: &[VerifyWarning]) -> Vec<&VerifyWarning> {
 /// operation sentinel.
 fn blame_to_error_code(blame: &str) -> vow_diag::ErrorCode {
     match blame {
-        "caller" => vow_diag::ErrorCode::VowRequiresViolated,
-        "callee" => vow_diag::ErrorCode::VowEnsuresViolated,
+        "Caller" => vow_diag::ErrorCode::VowRequiresViolated,
+        "Callee" => vow_diag::ErrorCode::VowEnsuresViolated,
         _ => vow_diag::ErrorCode::VowRequiresViolated,
     }
 }
 
 fn blame_to_diag_blame(blame: &str) -> vow_diag::Blame {
     match blame {
-        "caller" => vow_diag::Blame::Caller,
-        "callee" => vow_diag::Blame::Callee,
+        "Caller" => vow_diag::Blame::Caller,
+        "Callee" => vow_diag::Blame::Callee,
         _ => vow_diag::Blame::None,
     }
 }
@@ -361,7 +361,7 @@ pub(crate) fn to_output_with_warnings(
                     .collect();
                 let mut hints = Vec::new();
                 match sce.blame.as_str() {
-                    "caller" => {
+                    "Caller" => {
                         hints.push(format!(
                             "the call site violated function `{}`'s precondition",
                             sce.function
@@ -373,7 +373,7 @@ pub(crate) fn to_output_with_warnings(
                             ));
                         }
                     }
-                    "callee" => {
+                    "Callee" => {
                         hints.push(format!(
                             "function `{}` failed to establish its postcondition",
                             sce.function
@@ -695,7 +695,7 @@ mod tests {
             VerifyOutcome::Failed {
                 function: "f".to_string(),
                 description: "contract".to_string(),
-                counterexamples: vec![ce("f", "caller"), ce("f", "callee")],
+                counterexamples: vec![ce("f", "Caller"), ce("f", "Callee")],
             },
             vec![],
             None,
@@ -708,7 +708,7 @@ mod tests {
 
     #[test]
     fn failed_caller_blame_emits_hint_per_violating_arg() {
-        let mut cex = ce("f", "caller");
+        let mut cex = ce("f", "Caller");
         cex.source = Some(CeSource {
             file: "a.vow".to_string(),
             offset: 10,
@@ -765,7 +765,7 @@ mod tests {
             VerifyOutcome::Failed {
                 function: "f".to_string(),
                 description: "contract".to_string(),
-                counterexamples: vec![ce("f", "callee")],
+                counterexamples: vec![ce("f", "Callee")],
             },
             vec![],
             None,
@@ -779,7 +779,7 @@ mod tests {
 
     #[test]
     fn failed_unattributed_counterexample_maps_to_verifier_assertion_unattributed() {
-        let mut cex = ce("r", "none");
+        let mut cex = ce("r", "None");
         cex.vow_id = vow_verify::UNATTRIBUTED_VOW_ID;
         cex.violation = "division or remainder by zero".to_string();
 
@@ -806,7 +806,7 @@ mod tests {
             VerifyOutcome::Failed {
                 function: "f".to_string(),
                 description: "contract".to_string(),
-                counterexamples: vec![ce("f", "caller")],
+                counterexamples: vec![ce("f", "Caller")],
             },
             vec![],
             None,
@@ -1037,7 +1037,7 @@ mod tests {
             VerifyOutcome::Failed {
                 function: "f".to_string(),
                 description: "contract".to_string(),
-                counterexamples: vec![ce("f", "caller")],
+                counterexamples: vec![ce("f", "Caller")],
             },
             vec![existing],
             &[VerifyWarning::Skipped(SkippedFunction {
@@ -1087,10 +1087,10 @@ mod tests {
     #[test]
     fn blame_to_error_code_maps_caller_callee_and_fallback() {
         assert_eq!(
-            blame_to_error_code("caller"),
+            blame_to_error_code("Caller"),
             ErrorCode::VowRequiresViolated
         );
-        assert_eq!(blame_to_error_code("callee"), ErrorCode::VowEnsuresViolated);
+        assert_eq!(blame_to_error_code("Callee"), ErrorCode::VowEnsuresViolated);
         assert_eq!(
             blame_to_error_code("nonsense"),
             ErrorCode::VowRequiresViolated
@@ -1099,8 +1099,8 @@ mod tests {
 
     #[test]
     fn blame_to_diag_blame_maps_caller_callee_and_fallback() {
-        assert_eq!(blame_to_diag_blame("caller"), Blame::Caller);
-        assert_eq!(blame_to_diag_blame("callee"), Blame::Callee);
+        assert_eq!(blame_to_diag_blame("Caller"), Blame::Caller);
+        assert_eq!(blame_to_diag_blame("Callee"), Blame::Callee);
         assert_eq!(blame_to_diag_blame("nonsense"), Blame::None);
     }
 
