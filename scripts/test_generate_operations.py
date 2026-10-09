@@ -410,7 +410,11 @@ ENV_OPS = [
     },
 ]
 
-KNOWN_OPS = PRINT_OPS + FS_STDIN_ARGS_STDERR_OPS + PROCESS_OPS + HASH_OPS + ENV_OPS
+# The native verifier models none of these builtins yet.
+KNOWN_OPS = [
+    dict(op, verifier_model="unmodeled")
+    for op in PRINT_OPS + FS_STDIN_ARGS_STDERR_OPS + PROCESS_OPS + HASH_OPS + ENV_OPS
+]
 
 
 class LoadCatalogueTest(unittest.TestCase):
@@ -852,6 +856,22 @@ class MainCliTest(unittest.TestCase):
             combined = stdout.getvalue() + stderr.getvalue()
             self.assertNotIn("Traceback (most recent call last)", combined)
             self.assertIn("frobnicate", combined)
+
+    def test_undecided_builtin_exits_cleanly_naming_verifier_model(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            self._write_minimal_catalogue(tmp, [dict(PRINT_OPS[0])])
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with (
+                self.assertRaises(SystemExit) as ctx,
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                self._run_main(["--check", "--repo-root", str(tmp)])
+            self.assertEqual(ctx.exception.code, 1)
+            combined = stdout.getvalue() + stderr.getvalue()
+            self.assertNotIn("Traceback (most recent call last)", combined)
+            self.assertIn("verifier_model", combined)
 
     def test_malformed_json_exits_cleanly_without_traceback(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1304,6 +1324,7 @@ def _write_target_fixtures(tmp: Path) -> None:
         ("compiler/lower.vow", "fn builtin_to_extern() {}\n"),
         ("vow-ir/src/region.rs", "fn infer_regions() {}\n"),
         ("compiler/ir.vow", "fn lower_to_ir() {}\n"),
+        ("compiler/vc_ops.vow", "fn vc_op_model() {}\n"),
     ]:
         path = tmp / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1574,6 +1595,45 @@ class FreshRouteProjectionsTest(unittest.TestCase):
         self.assertIn("vow-clif-shim", stale)
         self.assertNotIn("lower.vow", stale)
         self.assertNotIn("cranelift_backend.rs", stale)
+        self.assertNotIn("vc_ops.vow", stale)
+
+
+class VerifierModelDriftTest(unittest.TestCase):
+    def test_entry_without_verifier_model_is_reported_by_name(self):
+        ops = [dict(PRINT_OPS[0]), dict(PRINT_OPS[1], verifier_model="unmodeled")]
+        problems = go.check_verifier_models(ops)
+        self.assertEqual(len(problems), 1)
+        self.assertIn(PRINT_OPS[0]["name"], problems[0])
+
+    def test_explicit_unmodeled_and_known_are_clean(self):
+        ops = [
+            dict(PRINT_OPS[0], verifier_model="unmodeled"),
+            dict(PRINT_OPS[1], verifier_model="known"),
+        ]
+        self.assertEqual(go.check_verifier_models(ops), [])
+
+    def test_real_catalogue_has_a_decision_for_every_builtin(self):
+        self.assertEqual(go.check_verifier_models(go.load_catalogue(REPO_ROOT)), [])
+
+
+class GenVowVcOpsBlockTest(unittest.TestCase):
+    def test_only_known_symbols_land_in_the_lookup(self):
+        ops = [
+            dict(PRINT_OPS[0], verifier_model="known"),
+            dict(PRINT_OPS[1], verifier_model="unmodeled"),
+        ]
+        block = go.gen_vow_vc_ops_block(ops, [])
+        self.assertIn(PRINT_OPS[0]["runtime_symbol"], block)
+        self.assertNotIn(PRINT_OPS[1]["runtime_symbol"], block)
+        self.assertNotIn("catalogue_verifier_unmodeled", block)
+
+    def test_no_known_symbols_still_yields_a_total_lookup(self):
+        block = go.gen_vow_vc_ops_block(
+            [dict(PRINT_OPS[0], verifier_model="unmodeled")], []
+        )
+        self.assertIn("fn catalogue_verifier_known(sym: String) -> bool", block)
+        self.assertIn("return false;", block)
+        self.assertNotIn("let n", block)
 
 
 if __name__ == "__main__":

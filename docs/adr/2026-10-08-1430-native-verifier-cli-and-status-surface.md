@@ -217,6 +217,26 @@ above unchanged. The first native backend emits the code only inside the human
 the `reason_code` field and its schema edits are deferred to the follow-up that
 introduces the op-model table, so no schema changes in #1408.
 
+**Addendum (issue #1409, op-model table).** `compiler/vc_ops.vow` is the single
+op-model table and holds the closed code list (`vc_skip_code_valid`). Every opcode
+of `compiler/ir.vow` is classified there, and `compiler/tests/test_vc_ops.vow`
+fails when an opcode is added without a decision. The catalogue lookup is by
+`runtime_symbol` (`catalogue_verifier_known`, generated from `docs/spec/operations.json`), and `generate_operations.py --check`
+fails when a catalogued builtin has no `verifier_model`. All 45 catalogued
+builtins are `unmodeled` for now: the symbolic executor encodes no call, so a
+`known` entry alone would still be skipped as `unsupported-opcode`. The
+collection runtime symbols are not catalogued, so they are absent, which is
+`unmodeled-builtin` as well. When a function has several unsupported
+instructions, a specific code (`float-rem-unsupported`, `unmodeled-builtin`,
+`wide-aggregate-field`) is reported in preference to a generic
+`unsupported-opcode` that happens to come earlier. The per-function gate emits
+`function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`,
+`unmodeled-builtin`, `wide-aggregate-field` and `unsupported-opcode`. Three codes
+need information the per-function gate does not have and are defined but not yet
+emitted: `recursion-unsupported` and `non-modelable-callee` arrive with call
+inlining (P2), where a call graph exists, and `reserved-verifier-symbol` waits for
+the reserved set to be fixed (no native query contains a user function name).
+
 ### 5. Timeline
 
 | Phase | Effect on this surface |

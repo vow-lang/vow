@@ -1420,6 +1420,19 @@ for vow_file in tests/verify-native/pass/*.vow tests/verify-native/fail/*.vow te
         continue
     fi
     native_errors=()
+    if [ "$native_dir" = "skip" ]; then
+        native_reason=$(sed -n 's|^// TEST: skip-reason \(.*\)$|\1|p' "$vow_file" | head -1)
+        if [ -z "$native_reason" ]; then
+            native_errors+=("missing '// TEST: skip-reason <code>' directive")
+        elif ! python3 -c "
+import json, sys
+msgs = [d.get('message', '') for d in json.loads(sys.argv[1]).get('diagnostics') or []]
+skipped = [m for m in msgs if m.startswith('skipped verification of')]
+sys.exit(0 if skipped and all(': ' + sys.argv[2] + ': ' in m for m in skipped) else 1)
+" "$native_json" "$native_reason" 2>/dev/null; then
+            native_errors+=("skip-reason: not every skipped-verification message carries code '$native_reason'")
+        fi
+    fi
     if [ "$native_dir" = "fail" ]; then
         for native_field in fn vow-id blame violation; do
             native_expected=$(sed -n "s|^// TEST: counterexample-${native_field} \"\?\([^\"]*\)\"\?\$|\1|p" "$vow_file" | head -1)
