@@ -1771,7 +1771,7 @@ pub unsafe extern "C" fn __vow_vec_clear(vec: *mut u8) {
 /// shrunk; their storage is reclaimed when the containing region closes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
-    sanitize_on_truncate(vec as usize, new_len);
+    sanitize_on_truncate(vec as usize);
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::truncate");
@@ -1784,7 +1784,7 @@ pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i64) {
-    sanitize_on_set(vec as usize, index);
+    sanitize_on_set(vec as usize);
     let v = unsafe { &*(vec as *const VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::set");
@@ -5405,11 +5405,11 @@ fn sanitize_on_push(vec_addr: usize) {
     sanitize_check_live(vec_addr, "push");
 }
 
-fn sanitize_on_set(vec_addr: usize, _index: usize) {
+fn sanitize_on_set(vec_addr: usize) {
     sanitize_check_live(vec_addr, "set");
 }
 
-fn sanitize_on_truncate(vec_addr: usize, _new_len: usize) {
+fn sanitize_on_truncate(vec_addr: usize) {
     sanitize_check_live(vec_addr, "truncate");
 }
 
