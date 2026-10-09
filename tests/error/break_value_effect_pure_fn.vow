@@ -1,0 +1,19 @@
+// TEST: error-code EffectViolation
+//
+// Issue #636: an effectful call inside a `break` value must be seen by effect
+// propagation, so a pure function cannot launder an effect through `loop`.
+module break_value_effect_pure_fn
+
+fn g() -> i64 [io] {
+    1
+}
+
+fn f() -> i64 {
+    loop {
+        break g();
+    }
+}
+
+fn main() -> i32 [io] {
+    0
+}

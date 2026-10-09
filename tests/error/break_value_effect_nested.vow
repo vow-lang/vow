@@ -1,0 +1,21 @@
+// TEST: error-code EffectViolation
+//
+// Issue #636: the effectful call sits inside a binop within a `break` value
+// nested under `if`, so effect collection must recurse through the value.
+module break_value_effect_nested
+
+fn g() -> i64 [io] {
+    1
+}
+
+fn f(n: i64) -> i64 {
+    loop {
+        if n > 0 {
+            break 1 + g();
+        }
+    }
+}
+
+fn main() -> i32 [io] {
+    0
+}

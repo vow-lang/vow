@@ -4505,6 +4505,14 @@ fn collect_calls_in_expr(e: CheckEnv, m: Module, eid: i64, calls: Vec<String>) [
         return;
     }
 
+    if tag == EXPR_BREAK() {
+        let val_eid: i64 = expr_a(a, eid);
+        if val_eid != -1 {
+            collect_calls_in_expr(e, m, val_eid, calls);
+        }
+        return;
+    }
+
     if tag == EXPR_BLOCK() {
         collect_calls_in_block(e, m, expr_a(a, eid), calls);
         return;
@@ -4601,7 +4609,7 @@ fn check_effects_fn(e: CheckEnv, m: Module, fid: i64) [io] {
             if fidx != -1 {
                 let needed_eff: i64 = e.fn_effects[fidx as u64];
                 if needed_eff != 0 && !effect_covered(declared_eff, needed_eff) {
-                    env_emit_error(e, String::from("effectful call from pure function"), fn_span(a, fid));
+                    env_emit_error_code(e, EC_EFFECT_VIOLATION(), String::from("effectful call from pure function"), fn_span(a, fid));
                 }
             }
         }
