@@ -152,3 +152,34 @@ It also runs as **Section 4e** of `scripts/full_test.sh`, as a dedicated Rust
 verifier step in the `build-and-test` CI job, and against the fixed-point
 self-hosted `build/vowc` in the Ubuntu `bootstrap` CI job. That means a
 soundness, blame, or exact `vow_id` regression in either verifier blocks PRs.
+
+## Differential harness: native verifier vs ESBMC
+
+[`scripts/verify_diff.py`](../scripts/verify_diff.py) (epic #1398, issue #1414)
+runs the same corpus (`tests/verify`, `tests/verify-fail`, `tests/verify-skip`,
+with the ground truth `verify_eval.py` reads) under
+`vowc verify --backend esbmc` and `vowc verify --backend native`, and classifies
+every fixture:
+
+| Class | Meaning |
+| --- | --- |
+| `match` | Same verdict; when both refute, the same `(function, blame, vow_id)` counterexamples. |
+| `more_precise` | Native concludes where ESBMC does not, reports an extra counterexample, or refutes a program ESBMC proves and the corpus labels incorrect. |
+| `weaker` | Native is `Skipped`/`unknown`/`timeout`/`tool_not_found` where ESBMC proves or refutes, drops or re-attributes a counterexample, or refutes a program the corpus labels correct. **Fails the script.** |
+| `soundness` | Native proves a program ESBMC refutes, or one the corpus labels incorrect. **Fails the script.** |
+
+The report is one JSON document (`schema_version`, `summary`, `rows[]` with both
+backends' verdict, `verify_status`, counterexamples and wall-clock seconds) on
+stdout or in `--output FILE`; a human summary of non-`match` rows goes to
+stderr. Exit codes: `0` clean, `1` any `weaker`/`soundness` row, `2` the harness
+could not run (missing `vowc`, `esbmc` or `bitwuzla`, or unparseable verifier
+output).
+
+```bash
+python3 scripts/verify_diff.py --vowc build/vowc --output /tmp/verify-diff.json
+python3 scripts/verify_diff.py --filter max   # one fixture family
+```
+
+It is a developer and acceptance-gate tool (epic #1398, gate item 1), not a
+`full_test.sh` section: the native backend covers a growing subset, so most
+fixtures are `weaker` until it catches up.
