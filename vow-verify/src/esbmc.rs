@@ -33,6 +33,7 @@ pub struct Counterexample {
     pub description: String,
     pub vow_id: Option<u32>,
     pub callee_precondition: Option<CalleePrecondition>,
+    pub callee_postcondition: Option<CalleePostcondition>,
     /// Set when the violated property was an `arith:` obligation rather than a
     /// contract clause: a checked operator whose abort is reachable (#585).
     /// Mutually exclusive with `vow_id` in practice — ESBMC reports one violated
@@ -60,6 +61,14 @@ pub struct ArithOverflowSite {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CalleePrecondition {
+    pub func_id: u32,
+    pub vow_id: u32,
+}
+
+/// An `ensures`/`invariant` of a co-emitted callee that failed while verifying
+/// its caller. `vow_id` is local to `func_id`, not to the verify target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalleePostcondition {
     pub func_id: u32,
     pub vow_id: u32,
 }
@@ -148,7 +157,8 @@ fn emit_harness(func: &Function) -> String {
 pub fn parse_esbmc_output(output: &str) -> Counterexample {
     let label = extract_vow_label(output);
     let vow_id = label.as_ref().map(VowLabel::vow_id);
-    let callee_precondition = label.and_then(VowLabel::callee_precondition);
+    let callee_precondition = label.as_ref().and_then(VowLabel::callee_precondition);
+    let callee_postcondition = label.and_then(VowLabel::callee_postcondition);
     let arith_overflow = extract_arith_site(output);
     let all_assignments = extract_variable_assignments(output);
 
@@ -179,6 +189,7 @@ pub fn parse_esbmc_output(output: &str) -> Counterexample {
         description,
         vow_id,
         callee_precondition,
+        callee_postcondition,
         arith_overflow,
         values,
         block_visits,
@@ -261,6 +272,7 @@ fn parse_arith_label(rest: &str) -> Option<ArithOverflowSite> {
 enum VowLabel {
     Numeric(u32),
     CalleePrecondition(CalleePrecondition),
+    CalleePostcondition(CalleePostcondition),
 }
 
 impl VowLabel {
@@ -268,26 +280,46 @@ impl VowLabel {
         match self {
             VowLabel::Numeric(id) => *id,
             VowLabel::CalleePrecondition(pre) => pre.vow_id,
+            VowLabel::CalleePostcondition(post) => post.vow_id,
         }
     }
 
-    fn callee_precondition(self) -> Option<CalleePrecondition> {
+    fn callee_precondition(&self) -> Option<CalleePrecondition> {
         match self {
-            VowLabel::Numeric(_) => None,
-            VowLabel::CalleePrecondition(pre) => Some(pre),
+            VowLabel::CalleePrecondition(pre) => Some(*pre),
+            _ => None,
+        }
+    }
+
+    fn callee_postcondition(self) -> Option<CalleePostcondition> {
+        match self {
+            VowLabel::CalleePostcondition(post) => Some(post),
+            _ => None,
         }
     }
 }
 
+fn parse_func_vow_pair(rest: &str) -> Option<(u32, u32)> {
+    let mut parts = rest.split(':');
+    let func_id = parts.next()?.parse::<u32>().ok()?;
+    let vow_id = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((func_id, vow_id))
+}
+
 fn parse_vow_label(label: &str) -> Option<VowLabel> {
     if let Some(rest) = label.strip_prefix("pre:") {
-        let mut parts = rest.split(':');
-        let func_id = parts.next()?.parse::<u32>().ok()?;
-        let vow_id = parts.next()?.parse::<u32>().ok()?;
-        if parts.next().is_some() {
-            return None;
-        }
+        let (func_id, vow_id) = parse_func_vow_pair(rest)?;
         return Some(VowLabel::CalleePrecondition(CalleePrecondition {
+            func_id,
+            vow_id,
+        }));
+    }
+    if let Some(rest) = label.strip_prefix("post:") {
+        let (func_id, vow_id) = parse_func_vow_pair(rest)?;
+        return Some(VowLabel::CalleePostcondition(CalleePostcondition {
             func_id,
             vow_id,
         }));
@@ -2112,6 +2144,18 @@ VERIFICATION FAILED
     }
 
     #[test]
+    fn parse_multi_property_verdicts_ignores_callee_postcondition_claims() {
+        let output = "\
+  PASSED       [vow_user_fn_0.assertion.1]  line 43  vow:0
+  FAILED       [vow_user_fn_0.assertion.2]  line 47  vow:post:3:0
+VERIFICATION FAILED";
+        let v = parse_multi_property_verdicts(output);
+        assert_eq!(v.get(&0), Some(&true), "target clause 0 stays proven");
+        assert_eq!(v.len(), 1);
+        assert_eq!(find_vow_claim_id("vow:post:3:0"), None);
+    }
+
+    #[test]
     fn parse_multi_property_verdicts_esbmc_85_format() {
         // Verbatim ESBMC 8.5 output for the same program as the test above.
         // 8.4 dropped the colon after the verdict and the quotes around the id,
@@ -2324,6 +2368,38 @@ VERIFICATION SUCCESSFUL";
                 vow_id: 2,
             })
         );
+    }
+
+    #[test]
+    fn parse_callee_postcondition_label_extracts_callee_contract() {
+        let output = "[Counterexample]\n\n\
+                      Violated property:\n\
+                        file /tmp/test.c line 1 column 1 function g\n\
+                        vow:post:3:0\n\n\
+                      VERIFICATION FAILED";
+        let ce = parse_esbmc_output(output);
+
+        assert_eq!(ce.vow_id, Some(0));
+        assert_eq!(ce.callee_precondition, None);
+        assert_eq!(
+            ce.callee_postcondition,
+            Some(CalleePostcondition {
+                func_id: 3,
+                vow_id: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_malformed_callee_postcondition_labels_are_rejected() {
+        for label in ["vow:post:3", "vow:post:3:0:1", "vow:post:x:0", "vow:post:"] {
+            let output = format!(
+                "[Counterexample]\n\nViolated property:\n  file t.c line 1 function g\n  {label}\n\nVERIFICATION FAILED"
+            );
+            let ce = parse_esbmc_output(&output);
+            assert_eq!(ce.callee_postcondition, None, "{label}");
+            assert_eq!(ce.vow_id, None, "{label}");
+        }
     }
 
     #[test]

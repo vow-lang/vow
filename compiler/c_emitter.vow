@@ -1823,6 +1823,14 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>, 
     }
     if op == IOP_VOW_ENS() || op == IOP_VOW_INV() {
         let vow_id: i64 = inst.dv;
+        if requires_as_assert == 1 {
+            // Co-emitted callee: vow ids are local to its function, so qualify
+            // the label with the function id.
+            out.push_str(str7(String::from("  __ESBMC_assert(v"), i64_to_string(iargs[0]),
+                String::from(", \"vow:post:"), i64_to_string(f.id), String::from(":"),
+                i64_to_string(vow_id), String::from("\");\n")));
+            return;
+        }
         out.push_str(str5(String::from("  __ESBMC_assert(v"), i64_to_string(iargs[0]),
             String::from(", \"vow:"), i64_to_string(vow_id), String::from("\");\n")));
         return;

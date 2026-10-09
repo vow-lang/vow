@@ -497,6 +497,7 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
     let mut ce_source_file: String = String::from("");
     let mut ce_source_start: i64 = 0;
     let mut ce_source_len: i64 = 0;
+    let mut ce_function: String = f.name;
     if vow_id == unsupported_op_vow_id() {
         // Fail-closed assertion from emit_unsupported_for_verification: no
         // user-authored vow has this id, so synthesize an actionable message
@@ -562,6 +563,33 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
             ce_violation = String::from("callee precondition violated by the caller");
             ce_blame = DIAG_BLAME_CALLER();
         }
+    } else if vr.callee_postcondition_func_id >= 0 && vr.callee_postcondition_vow_id >= 0 {
+        // A co-emitted callee's `ensures`/`invariant` failed: its vow id is local
+        // to the callee, so resolve it there, never against the target's vows.
+        let fi: i64 = find_ir_function_index_by_id(ir_mod.functions, vr.callee_postcondition_func_id);
+        if fi >= 0 {
+            let callee: IrFunction = ir_mod.functions[fi as u64];
+            let vows: Vec<IrVowEntry> = callee.vows;
+            let vi: i64 = find_ir_vow_index(vows, vr.callee_postcondition_vow_id);
+            if vi >= 0 {
+                let ve: IrVowEntry = vows[vi as u64];
+                ce_function = callee.name;
+                ce_violation = ve.description;
+                ce_blame = ve.blame;
+                let callee_src: CeSource = ce_source_for_vow(callee, ve, path);
+                ce_source_file = callee_src.file;
+                ce_source_start = callee_src.start;
+                ce_source_len = callee_src.len;
+            }
+        }
+        if ce_violation.len() == 0 {
+            let assert_description: String = parse_assert_label(vr.raw_output);
+            if assert_description.len() > 0 {
+                ce_violation = assert_description;
+            } else {
+                ce_violation = String::from("internal verifier assertion failed");
+            }
+        }
     } else if vow_id == caller_precondition_vow_id() {
         // A co-emitted callee's `requires` was violated by this caller. The
         // sentinel id matches no vow in `f`, so synthesize a Caller-blamed
@@ -594,7 +622,8 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
         }
     }
     VerifyCE {
-        function: f.name,
+        function: ce_function,
+        target_function: f.name,
         var_names: vr.var_names,
         var_values: vr.var_values,
         violation: ce_violation,
@@ -758,6 +787,9 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     // exact id comparison would always diverge — skip them.
     if ce.vow_id == caller_precondition_vow_id() || ce.vow_id == unsupported_op_vow_id() || ce.vow_id == verifier_unattributed_vow_id() {
         return replay_skip(String::from("replay: synthetic counterexample id (caller-precondition / unsupported-op / unattributed-property sentinel)"));
+    }
+    if ce.function != ce.target_function {
+        return replay_skip(String::from("replay: counterexample belongs to a co-emitted callee; its inputs are the caller's"));
     }
     let fi: i64 = replay_find_fn(fns, ce.function);
     if fi < 0 {
@@ -998,6 +1030,7 @@ fn replay_all(ces: Vec<VerifyCE>, fns: Vec<IrFunction>, path: String, argv0: Str
         };
         out.push(VerifyCE {
             function: ce.function,
+            target_function: ce.target_function,
             var_names: ce.var_names,
             var_values: ce.var_values,
             violation: ce.violation,
@@ -1278,7 +1311,7 @@ fn vf_prefers_counterexample(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Ve
         return true;
     }
     let ce: VerifyCE = ces[0];
-    let ce_idx: i64 = verify_function_index(fns, ce.function);
+    let ce_idx: i64 = verify_function_index(fns, ce.target_function);
     let soft_idx: i64 = verify_function_index(fns, soft_meta[2]);
     ce_idx <= soft_idx
 }
@@ -1287,7 +1320,7 @@ fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunct
     let result: Vec<String> = Vec::new();
     if vf_prefers_counterexample(ces, soft_meta, fns) {
         let ce: VerifyCE = ces[0];
-        result.push(ce.function);
+        result.push(ce.target_function);
         result.push(String::from("[Counterexample]"));
         return result;
     }
@@ -5637,6 +5670,15 @@ fn skill_bundle() -> String {
     r.push_str(String::from("caller argument value; `arg_offset` and `arg_length` still identify the\n"));
     r.push_str(String::from("argument expression.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("When a callee verified alongside its caller fails its own `ensures` or\n"));
+    r.push_str(String::from("`invariant`, the counterexample is attributed to that callee: `function` names\n"));
+    r.push_str(String::from("the callee, `violation`, `source` and `blame` (`\"callee\"`) are the callee's\n"));
+    r.push_str(String::from("clause, and `vow_id` is the callee-local id. The outcome's top-level `function`\n"));
+    r.push_str(String::from("remains the function being verified. Such a counterexample carries no\n"));
+    r.push_str(String::from("`execution_path` or `branch_decisions` (block ids are not attributable to the\n"));
+    r.push_str(String::from("callee), and `--replay-cex` reports it as `\"skipped\"` because its inputs are\n"));
+    r.push_str(String::from("the caller's.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("When `blame` is `\"none\"`, `violation` describes the failed verifier-model check\n"));
     r.push_str(String::from("(such as division by zero, collection bounds or capacity, unwrap-on-None, or\n"));
     r.push_str(String::from("shift count) rather than exposing raw verifier output.\n"));
@@ -6394,6 +6436,12 @@ fn skill_bundle() -> String {
     r.push_str(String::from("argument span when Vow can recover it. If `violating_args[].value` is `\"\"`,\n"));
     r.push_str(String::from("Vow could not statically recover the caller argument value; `arg_offset` and\n"));
     r.push_str(String::from("`arg_length` still identify the argument expression.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("When a callee verified alongside its caller fails its own `ensures` or\n"));
+    r.push_str(String::from("`invariant`, the counterexample is attributed to the callee: `function` is the\n"));
+    r.push_str(String::from("callee, `violation`, `source` and `blame` are the callee's clause, and `vow_id`\n"));
+    r.push_str(String::from("is the callee-local id (the id a debug-mode `VowViolation` for that callee would\n"));
+    r.push_str(String::from("report). It is never resolved against the verified caller's same-numbered clause.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot\n"));
     r.push_str(String::from("appear in a Vow identifier, so the prefix cannot collide with a source name.\n"));
@@ -11562,6 +11610,15 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("caller argument value; `arg_offset` and `arg_length` still identify the\n"));
     r.push_str(String::from("argument expression.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("When a callee verified alongside its caller fails its own `ensures` or\n"));
+    r.push_str(String::from("`invariant`, the counterexample is attributed to that callee: `function` names\n"));
+    r.push_str(String::from("the callee, `violation`, `source` and `blame` (`\"callee\"`) are the callee's\n"));
+    r.push_str(String::from("clause, and `vow_id` is the callee-local id. The outcome's top-level `function`\n"));
+    r.push_str(String::from("remains the function being verified. Such a counterexample carries no\n"));
+    r.push_str(String::from("`execution_path` or `branch_decisions` (block ids are not attributable to the\n"));
+    r.push_str(String::from("callee), and `--replay-cex` reports it as `\"skipped\"` because its inputs are\n"));
+    r.push_str(String::from("the caller's.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("When `blame` is `\"none\"`, `violation` describes the failed verifier-model check\n"));
     r.push_str(String::from("(such as division by zero, collection bounds or capacity, unwrap-on-None, or\n"));
     r.push_str(String::from("shift count) rather than exposing raw verifier output.\n"));
@@ -12321,6 +12378,12 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("argument span when Vow can recover it. If `violating_args[].value` is `\"\"`,\n"));
     r.push_str(String::from("Vow could not statically recover the caller argument value; `arg_offset` and\n"));
     r.push_str(String::from("`arg_length` still identify the argument expression.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("When a callee verified alongside its caller fails its own `ensures` or\n"));
+    r.push_str(String::from("`invariant`, the counterexample is attributed to the callee: `function` is the\n"));
+    r.push_str(String::from("callee, `violation`, `source` and `blame` are the callee's clause, and `vow_id`\n"));
+    r.push_str(String::from("is the callee-local id (the id a debug-mode `VowViolation` for that callee would\n"));
+    r.push_str(String::from("report). It is never resolved against the verified caller's same-numbered clause.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot\n"));
     r.push_str(String::from("appear in a Vow identifier, so the prefix cannot collide with a source name.\n"));

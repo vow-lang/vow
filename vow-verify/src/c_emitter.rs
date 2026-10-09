@@ -1388,10 +1388,20 @@ fn emit_inst(
                 InstData::VowId(v) => v.0,
                 _ => 0,
             };
-            out.push_str(&format!(
-                "  __ESBMC_assert(v{}, \"vow:{}\");\n",
-                pred, vow_id
-            ));
+            if requires_as_assert {
+                // Co-emitted callee: its vow ids are local to its own function,
+                // so the label carries the function id to keep a failure from
+                // being resolved against the target's same-numbered vow.
+                out.push_str(&format!(
+                    "  __ESBMC_assert(v{}, \"{CALLEE_POSTCONDITION_LABEL}{}:{}\");\n",
+                    pred, current_func_id.0, vow_id
+                ));
+            } else {
+                out.push_str(&format!(
+                    "  __ESBMC_assert(v{}, \"vow:{}\");\n",
+                    pred, vow_id
+                ));
+            }
         }
 
         Opcode::ComplexityDescriptor => {
@@ -2916,6 +2926,10 @@ const DEMOTED_ASSERT_MACRO: &str = "__vow_demoted_assert";
 /// (`vow:pre:<callee-func-id>:<callee-vow-id>`). Shared by the emitter and the
 /// caller-preconditions projection so the two cannot drift.
 const CALLEE_PRECONDITION_LABEL: &str = "vow:pre:";
+
+/// Prefix of the assert label a co-emitted callee `ensures`/`invariant` carries
+/// (`vow:post:<callee-func-id>:<callee-vow-id>`).
+const CALLEE_POSTCONDITION_LABEL: &str = "vow:post:";
 
 /// Project an emitted model of an uncontracted caller onto its call-site
 /// obligations alone: every `__ESBMC_assert` becomes an assume of the same
@@ -4563,6 +4577,98 @@ mod tests {
         assert!(
             c.contains("__ESBMC_assert(v3, \"vow:pre:7:2\")"),
             "callee requires assert should carry function-local disambiguation:\n{c}"
+        );
+    }
+
+    fn ensures_func(id: u32, vow_id: u32) -> Function {
+        Function {
+            id: FuncId(id),
+            name: "g".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(vow_id),
+                description: "result > 0".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(2, Opcode::Gt, Ty::Bool, vec![0, 1], InstData::None),
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::VowEnsures,
+                        ty: Ty::Unit,
+                        args: vec![InstId(2)],
+                        data: InstData::VowId(VowId(vow_id)),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        }
+    }
+
+    fn emit_ensures_func(func: &Function, callee: bool) -> String {
+        let module = Module {
+            name: String::new(),
+            functions: vec![],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        emit_c_function_full(
+            func,
+            &HashMap::new(),
+            &HashSet::new(),
+            &module,
+            &VerifyLimits::default(),
+            false,
+            false,
+            callee,
+        )
+    }
+
+    #[test]
+    fn emit_callee_ensures_carries_function_id_label() {
+        let c = emit_ensures_func(&ensures_func(3, 0), true);
+        assert!(
+            c.contains("__ESBMC_assert(v2, \"vow:post:3:0\")"),
+            "callee ensures must carry function-qualified label:\n{c}"
+        );
+        assert!(!c.contains("\"vow:0\""), "bare label would collide:\n{c}");
+    }
+
+    #[test]
+    fn emit_target_ensures_keeps_bare_label() {
+        let c = emit_ensures_func(&ensures_func(3, 0), false);
+        assert!(c.contains("__ESBMC_assert(v2, \"vow:0\")"), "{c}");
+        assert!(!c.contains("vow:post:"), "{c}");
+    }
+
+    #[test]
+    fn caller_preconditions_projection_demotes_callee_postcondition() {
+        let c = emit_ensures_func(&ensures_func(3, 0), true);
+        let projected = caller_preconditions_only_source(&c);
+        assert!(
+            !projected.contains("__ESBMC_assert(v2, \"vow:post:3:0\")"),
+            "callee ensures must be demoted to an assume:\n{projected}"
+        );
+        assert!(
+            projected.contains("__vow_demoted_assert(v2, \"vow:post:3:0\")"),
+            "{projected}"
         );
     }
 

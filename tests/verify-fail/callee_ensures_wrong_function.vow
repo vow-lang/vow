@@ -1,0 +1,28 @@
+// TEST: category callee-blame
+// TEST: counterexample-fn "g"
+// TEST: counterexample-blame callee
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-violation "ensures result > x"
+// Regression for misattributed callee postconditions: `g`'s false `ensures` is
+// co-emitted while verifying `f`, whose own vow 0 is a different, true clause.
+// Both share the function-local vow id 0, so the failure used to be resolved
+// against `f`'s clause. It must be reported against `g`.
+module CalleeEnsuresWrongFunction
+
+fn g(x: i64) -> i64 vow {
+  ensures: result > x
+} {
+  x
+}
+
+fn f() -> i64 vow {
+  ensures: result == 0
+} {
+  let unused: i64 = g(1);
+  0
+}
+
+fn main() -> i32 [io] {
+  print_i64(f());
+  0
+}

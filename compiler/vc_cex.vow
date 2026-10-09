@@ -33,6 +33,8 @@ fn vc_verify_result(status: i64, vow_id: i64, names: Vec<String>, values: Vec<St
         vow_id: vow_id,
         callee_precondition_func_id: -1,
         callee_precondition_vow_id: -1,
+        callee_postcondition_func_id: -1,
+        callee_postcondition_vow_id: -1,
         var_names: names,
         var_values: values,
         block_visits: Vec::new(),
