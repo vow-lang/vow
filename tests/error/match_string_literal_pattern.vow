@@ -1,0 +1,13 @@
+// TEST: error-code UnsupportedPattern
+module MatchStringLiteralPattern
+
+fn f(s: String) -> i64 {
+    match s {
+        "hello" => 1,
+        _ => 0,
+    }
+}
+
+fn main() -> i32 {
+    0
+}

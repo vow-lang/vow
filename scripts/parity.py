@@ -57,6 +57,7 @@ STRICT_SPAN_FIXTURES = frozenset(
         "i32_u64_return.vow",
         "u64_i64_return.vow",
         "match_bool_literal_pattern.vow",
+        "match_string_literal_pattern.vow",
         "index_type_bool.vow",
         "int_suffix_usize.vow",
         "i128_match_literal_out_of_range.vow",
