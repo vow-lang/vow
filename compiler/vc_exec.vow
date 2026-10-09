@@ -175,37 +175,38 @@ fn vc_branch_outcome(w: VcWalk, cond_id: i64, foff: i64, flen: i64) -> i64 {
     -1
 }
 
-fn vc_walk_branch(w: VcWalk, inst: IrInst, bi: u64, pc: i64, foff: i64, flen: i64, then_idx: i64, else_idx: i64) {
+// Registers the edge of `branch` to block `dst` taken when the condition
+// evaluates to `polarity`, unless the path already decided the other outcome.
+fn vc_branch_edge(w: VcWalk, bi: u64, pc: i64, foff: i64, flen: i64, cond_id: i64, outcome: i64, dst: i64, polarity: bool) {
+    let want: i64 = { if polarity { 1 } else { 0 } };
+    if outcome >= 0 && outcome != want {
+        return;
+    }
     let cs: VcClaims = w.cs;
     let ar: VcArena = cs.arena;
     let fl: VcFlow = w.fl;
     let hdr: SmtScript = cs.header;
+    let c: i64 = w.var_of[cond_id as u64];
+    let mut ec: i64 = pc;
+    let mut off: i64 = foff;
+    let mut len: i64 = flen;
+    if outcome < 0 {
+        if polarity {
+            ec = vc_flow_and(fl, ar, hdr, pc, c);
+        } else {
+            ec = vc_flow_and_not(fl, ar, hdr, pc, c);
+        }
+        off = vc_flow_extend_facts(fl, foff, flen, vc_flow_fact_lit(cond_id, polarity));
+        len = vc_flow_extended_len(flen);
+    }
+    vc_flow_add_edge(fl, dst as u64, bi as i64, ec, off, len);
+}
+
+fn vc_walk_branch(w: VcWalk, inst: IrInst, bi: u64, pc: i64, foff: i64, flen: i64, then_idx: i64, else_idx: i64) {
     let cond_id: i64 = inst.args[0];
     let outcome: i64 = vc_branch_outcome(w, cond_id, foff, flen);
-    if outcome != 0 {
-        let c: i64 = w.var_of[cond_id as u64];
-        let mut ec: i64 = pc;
-        let mut off: i64 = foff;
-        let mut len: i64 = flen;
-        if outcome < 0 {
-            ec = vc_flow_and(fl, ar, hdr, pc, c);
-            off = vc_flow_extend_facts(fl, foff, flen, vc_flow_fact_lit(cond_id, true));
-            len = vc_flow_extended_len(flen);
-        }
-        vc_flow_add_edge(fl, then_idx as u64, bi as i64, ec, off, len);
-    }
-    if outcome != 1 {
-        let c: i64 = w.var_of[cond_id as u64];
-        let mut ec: i64 = pc;
-        let mut off: i64 = foff;
-        let mut len: i64 = flen;
-        if outcome < 0 {
-            ec = vc_flow_and(fl, ar, hdr, pc, vc_flow_not(fl, ar, hdr, c));
-            off = vc_flow_extend_facts(fl, foff, flen, vc_flow_fact_lit(cond_id, false));
-            len = vc_flow_extended_len(flen);
-        }
-        vc_flow_add_edge(fl, else_idx as u64, bi as i64, ec, off, len);
-    }
+    vc_branch_edge(w, bi, pc, foff, flen, cond_id, outcome, then_idx, true);
+    vc_branch_edge(w, bi, pc, foff, flen, cond_id, outcome, else_idx, false);
 }
 
 fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {

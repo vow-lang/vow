@@ -104,6 +104,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>) -> bool {
         return n == 1 && t0 == ITY_BOOL() && inst.dk == IDATA_VOW_ID();
     }
     if op == IOP_BRANCH() { return n == 1 && t0 == ITY_BOOL() && inst.dk == IDATA_BRANCH_TARGETS(); }
+    if op == IOP_UNREACHABLE() { return n == 0; }
     if op == IOP_JUMP() { return n == 0 && inst.dk == IDATA_JUMP_TARGET(); }
     if op == IOP_PHI() { return n == 0 && vc_is_merge_ty(inst.ty); }
     if op == IOP_UPSILON() { return n == 1 && inst.dk == IDATA_PHI_TARGET() && vc_is_merge_ty(t0); }

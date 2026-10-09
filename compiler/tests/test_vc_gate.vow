@@ -153,6 +153,41 @@ fn check_branch_to_unknown_block() -> i64 {
     0
 }
 
+fn mk_unreachable(id: i64) -> IrInst {
+    ir_inst_new(id, IOP_UNREACHABLE(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""))
+}
+
+// Both arms return, so the merge block (ending in Unreachable) has no
+// predecessor: accepted. The same block reached by a jump is not.
+fn both_arms_return(dead_merge: bool) -> IrFunction {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_arg(0, ITY_I64(), 0));
+    a.push(mk_inst(1, IOP_GT(), ITY_BOOL(), args2(0, 0)));
+    a.push(mk_inst_branch(2, 1, 1, 2));
+    let t: Vec<IrInst> = Vec::new();
+    t.push(mk_inst_return(3, 0));
+    let e: Vec<IrInst> = Vec::new();
+    if dead_merge {
+        e.push(mk_inst_return(4, 0));
+    } else {
+        e.push(mk_inst_jump(4, 3));
+    }
+    let m: Vec<IrInst> = Vec::new();
+    m.push(mk_unreachable(5));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, a));
+    blocks.push(mk_block(1, t));
+    blocks.push(mk_block(2, e));
+    blocks.push(mk_block(3, m));
+    mk_function(1, String::from("ret2"), params1(), ITY_I64(), blocks)
+}
+
+fn check_unreachable_terminator() -> i64 {
+    if vc_skip_reason(both_arms_return(true)).len() != 0 { return 24; }
+    if vc_skip_reason(both_arms_return(false)) != String::from("unsupported-opcode: Unreachable") { return 25; }
+    0
+}
+
 fn check_op_details() -> i64 {
     let c: Vec<IrInst> = Vec::new();
     c.push(mk_inst_arg(0, ITY_I64(), 0));
@@ -260,6 +295,7 @@ fn main() -> i32 {
     if r == 0 { r = check_phi_input_missing(); }
     if r == 0 { r = check_loop_rejected(); }
     if r == 0 { r = check_branch_to_unknown_block(); }
+    if r == 0 { r = check_unreachable_terminator(); }
     if r == 0 { r = check_op_details(); }
     if r == 0 { r = check_bool_param(); }
     if r == 0 { r = check_get_arg_must_match_param_type(); }

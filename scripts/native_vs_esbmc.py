@@ -3,8 +3,10 @@
 
 Runs both backends over the given fixtures and reports every fixture the native
 backend decides (anything but Skipped) whose status differs from ESBMC's. A
-fixture the native backend skips is not compared: it makes no claim. Known,
-documented divergences are listed in KNOWN_DIVERGENCES with the reason.
+fixture the native backend skips is not compared: it makes no claim. A missing
+JSON result or a timeout counts as a mismatch. Known, documented divergences are
+listed in KNOWN_DIVERGENCES with the reason and are excused only while both
+statuses match the recorded pair.
 
     python3 scripts/native_vs_esbmc.py build/vowc tests/verify/max.vow ...
 
@@ -15,21 +17,31 @@ import json
 import subprocess
 import sys
 
+MIN_DIV = "ESBMC's model does not check MIN / -1 for `/`"
+# fixture name -> (esbmc status, native status, reason). A divergence is only
+# excused while both statuses are exactly the recorded pair.
 KNOWN_DIVERGENCES = {
-    "signed_div_min.vow": "ESBMC's model does not check MIN / -1 for `/`",
-    "io_caller_unchecked_note.vow": "ESBMC's model does not check MIN / -1 for `/`",
-    "where_divide.vow": "ESBMC's model does not check MIN / -1 for `/`",
-    "modulo_safe.vow": "straight-line x - (x / m) * m: the native solver run does not finish within the budget (pre-existing, no branches)",
+    "signed_div_min.vow": ("Verified", "VerifyFailed", MIN_DIV),
+    "io_caller_unchecked_note.vow": ("Verified", "VerifyFailed", MIN_DIV),
+    "where_divide.vow": ("Verified", "VerifyFailed", MIN_DIV),
+    "modulo_safe.vow": (
+        "Verified",
+        "VerifyFailed",
+        "straight-line x - (x / m) * m: the native solver run does not finish within the budget (pre-existing, no branches)",
+    ),
 }
 
 
 def run(vowc, fixture, extra):
-    proc = subprocess.run(
-        [vowc, "verify", "--no-cache", *extra, fixture],
-        capture_output=True,
-        text=True,
-        timeout=900,
-    )
+    try:
+        proc = subprocess.run(
+            [vowc, "verify", "--no-cache", *extra, fixture],
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+    except subprocess.TimeoutExpired:
+        return "<timeout>"
     for line in reversed(proc.stdout.splitlines()):
         line = line.strip()
         if line.startswith("{"):
@@ -54,9 +66,11 @@ def main(argv):
             continue
         esbmc = run(vowc, fixture, [])
         compared += 1
-        if native != esbmc:
+        broken = native.startswith("<") or esbmc.startswith("<")
+        if native != esbmc or broken:
             name = fixture.rsplit("/", 1)[-1]
-            note = KNOWN_DIVERGENCES.get(name)
+            known = KNOWN_DIVERGENCES.get(name)
+            note = known[2] if known and known[:2] == (esbmc, native) else None
             mismatches.append((fixture, esbmc, native, note))
             tag = "known divergence" if note else "MISMATCH"
             print(

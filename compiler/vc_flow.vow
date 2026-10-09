@@ -2,6 +2,7 @@ module VcFlow
 
 use vc_term
 use vc_smt
+use ir_dominance
 
 // Control-flow state of the native symbolic executor over an acyclic CFG.
 // Blocks are visited in reverse postorder, so every predecessor is done before
@@ -38,29 +39,19 @@ struct VcFlow {
     names: i64,
 }
 
-fn vc_flow_fill(n: u64, v: i64) -> Vec<i64> {
-    let out: Vec<i64> = Vec::new();
-    let mut i: u64 = 0;
-    while i < n {
-        out.push(v);
-        i = i + 1;
-    }
-    out
-}
-
 fn vc_flow_new(n_blocks: u64, n_ids: u64) -> VcFlow {
     VcFlow {
-        block_pc: vc_flow_fill(n_blocks, -1),
-        block_foff: vc_flow_fill(n_blocks, 0),
-        block_flen: vc_flow_fill(n_blocks, 0),
-        in_head: vc_flow_fill(n_blocks, -1),
+        block_pc: dom_fill(n_blocks, -1),
+        block_foff: dom_fill(n_blocks, 0),
+        block_flen: dom_fill(n_blocks, 0),
+        in_head: dom_fill(n_blocks, -1),
         e_src: Vec::new(),
         e_cond: Vec::new(),
         e_next: Vec::new(),
         e_foff: Vec::new(),
         e_flen: Vec::new(),
         pool: Vec::new(),
-        up_head: vc_flow_fill(n_ids, -1),
+        up_head: dom_fill(n_ids, -1),
         up_next: Vec::new(),
         up_blk: Vec::new(),
         up_val: Vec::new(),
@@ -86,8 +77,13 @@ fn vc_flow_and(fl: VcFlow, ar: VcArena, hdr: SmtScript, a: i64, b: i64) -> i64 {
     vc_flow_name(fl, ar, hdr, VC_SORT_BOOL(), vc_tm_app2(ar, VC_OP_AND(), a, b))
 }
 
-fn vc_flow_not(fl: VcFlow, ar: VcArena, hdr: SmtScript, a: i64) -> i64 {
-    vc_flow_name(fl, ar, hdr, VC_SORT_BOOL(), vc_tm_app1(ar, VC_OP_NOT(), a))
+// `pc and not c`, bound to one name (the negation alone is never named).
+fn vc_flow_and_not(fl: VcFlow, ar: VcArena, hdr: SmtScript, pc: i64, c: i64) -> i64 {
+    let negated: i64 = vc_tm_app1(ar, VC_OP_NOT(), c);
+    if vc_tm_is_true(ar, pc) {
+        return vc_flow_name(fl, ar, hdr, VC_SORT_BOOL(), negated);
+    }
+    vc_flow_name(fl, ar, hdr, VC_SORT_BOOL(), vc_tm_app2(ar, VC_OP_AND(), pc, negated))
 }
 
 fn vc_flow_has_fact(fl: VcFlow, off: i64, len: i64, lit: i64) -> bool {
