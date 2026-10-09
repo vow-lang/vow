@@ -1,0 +1,11 @@
+module Base
+
+pub struct B {
+    v: i64,
+}
+
+pub fn base_val(a: i64) -> i64 vow {
+    ensures: result == a
+} {
+    a
+}

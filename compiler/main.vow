@@ -20,6 +20,7 @@ use mutants_main
 use complexity
 use complexity_main
 use cli_flags
+use decl_main
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
     let mut i: u64 = 1;
@@ -150,6 +151,9 @@ fn get_subcommand(argv: Vec<String>) -> i64 {
     }
     if sub == "complexity" {
         return CMD_COMPLEXITY();
+    }
+    if sub == "decl" {
+        return CMD_DECL();
     }
     CMD_NONE()
 }
@@ -5510,6 +5514,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| Flag              | Default     | Description                                |\n"));
     r.push_str(String::from("|-------------------|-------------|--------------------------------------------|\n"));
     r.push_str(String::from("| `-o, --output`    | `<source>.vow.d` | Output declaration file path          |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`decl` type-checks the source with its `use` dependencies, then writes one declaration stub for the merged module: dependency items first, the entry module's items last, with no `use` lines. Function bodies are dropped; signatures, effects, `vow` blocks, struct/enum/const/type-alias definitions and `extern \"C\"` blocks are kept. The path written is reported on stderr as `wrote <path>` and stdout stays empty. An existing output file is overwritten. Frontend diagnostics go to stderr, followed by `vow decl: <parse|module load|type> error`, and the exit code is 1 with no file written. `decl` accepts only `-o/--output`, `--help` and `--human`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The self-hosted compiler cannot print an `enum` with a struct-like variant (`V { f: T }`): its AST drops the field names. `vowc decl` exits 1 with `vow decl: enum <Name> has a struct-like variant, which the self-hosted compiler cannot print` instead of writing a stub with a different meaning.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow mutants` (self-hosted only)\n"));
     r.push_str(String::from("\n"));
@@ -11429,6 +11437,10 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("|-------------------|-------------|--------------------------------------------|\n"));
     r.push_str(String::from("| `-o, --output`    | `<source>.vow.d` | Output declaration file path          |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("`decl` type-checks the source with its `use` dependencies, then writes one declaration stub for the merged module: dependency items first, the entry module's items last, with no `use` lines. Function bodies are dropped; signatures, effects, `vow` blocks, struct/enum/const/type-alias definitions and `extern \"C\"` blocks are kept. The path written is reported on stderr as `wrote <path>` and stdout stays empty. An existing output file is overwritten. Frontend diagnostics go to stderr, followed by `vow decl: <parse|module load|type> error`, and the exit code is 1 with no file written. `decl` accepts only `-o/--output`, `--help` and `--human`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The self-hosted compiler cannot print an `enum` with a struct-like variant (`V { f: T }`): its AST drops the field names. `vowc decl` exits 1 with `vow decl: enum <Name> has a struct-like variant, which the self-hosted compiler cannot print` instead of writing a stub with a different meaning.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow mutants` (self-hosted only)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Run mutation testing on a Vow source tree. Implemented in the self-hosted compiler only; the Rust bootstrap compiler emits an error pointing the user to `build/vowc`. See `docs/mutants.md` for full details on output schema, mutation kinds, skip-list, and known limitations.\n"));
@@ -16327,6 +16339,9 @@ fn main() -> i32 [io, read, write] {
     }
     if cmd == CMD_COMPLEXITY() {
         return run_complexity(argv);
+    }
+    if cmd == CMD_DECL() {
+        return run_decl(argv);
     }
     maybe_auto_install_skill();
     run_legacy(argv)
