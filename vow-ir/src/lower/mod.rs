@@ -160,6 +160,8 @@ fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "u128_to_i32_sat" => Some(("__vow_u128_to_i32_sat", Ty::I32)),
         "int_to_string" | "i64_to_string" => Some(("__vow_string_from_i64", Ty::Ptr)),
         "uint_to_string" => Some(("__vow_string_from_u64", Ty::Ptr)),
+        "int128_to_string" => Some(("__vow_string_from_i128", Ty::Ptr)),
+        "uint128_to_string" => Some(("__vow_string_from_u128", Ty::Ptr)),
         "vec_sort" => Some(("__vow_vec_sort", Ty::Ptr)),
         "time_unix" => Some(("__vow_time_unix", Ty::I64)),
         "time_unix_ms" => Some(("__vow_time_unix_ms", Ty::I64)),
@@ -259,8 +261,9 @@ fn builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
     match name {
         "fs_read" | "fs_read_line" | "stdin_read" | "stdin_read_line" | "string_substr"
         | "string_trim" | "string_to_upper" | "string_to_lower" | "string_replace"
-        | "string_join" | "int_to_string" | "uint_to_string" | "i64_to_string" | "hex_encode"
-        | "format_f64_bits" | "proc_sample" => Some(BuiltinResultTag::StringHeap),
+        | "string_join" | "int_to_string" | "uint_to_string" | "i64_to_string"
+        | "int128_to_string" | "uint128_to_string" | "hex_encode" | "format_f64_bits"
+        | "proc_sample" => Some(BuiltinResultTag::StringHeap),
         "args" | "fs_listdir" | "string_split" | "vec_sort" | "hex_decode" => {
             Some(BuiltinResultTag::VecHeap)
         }
@@ -6017,6 +6020,8 @@ mod tests {
             "int_to_string",
             "uint_to_string",
             "i64_to_string",
+            "int128_to_string",
+            "uint128_to_string",
             "hex_encode",
             "format_f64_bits",
             "process_get_stdout",
@@ -6352,6 +6357,8 @@ type PairView = PairAlias;
             ("int_to_string", "__vow_string_from_i64", Ty::Ptr),
             ("uint_to_string", "__vow_string_from_u64", Ty::Ptr),
             ("i64_to_string", "__vow_string_from_i64", Ty::Ptr),
+            ("int128_to_string", "__vow_string_from_i128", Ty::Ptr),
+            ("uint128_to_string", "__vow_string_from_u128", Ty::Ptr),
             ("vec_sort", "__vow_vec_sort", Ty::Ptr),
             ("time_unix", "__vow_time_unix", Ty::I64),
             ("time_unix_ms", "__vow_time_unix_ms", Ty::I64),

@@ -11,6 +11,22 @@ use ir_dominance
 // the detail of an `unsupported-opcode` skip, or "" when the shape is
 // accepted. `tys` is the table from `vc_ty_table`, indexed by instruction id.
 
+// `Unreachable` ends the dead merge block of an `if` whose arms both return.
+// It is fine there, because the executor never walks a block the entry cannot
+// reach; a reachable one would need a "this path aborts" obligation.
+fn vc_reachable_unreachable_detail(f: IrFunction, rpo: Vec<i64>) -> String {
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let last: IrInst = blk.insts[blk.insts.len() - 1];
+        if rpo[bi] >= 0 && last.op == IOP_UNREACHABLE() {
+            return opcode_name(last.op);
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}
+
 fn vc_terminator_detail(f: IrFunction, succ: Vec<i64>) -> String {
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {

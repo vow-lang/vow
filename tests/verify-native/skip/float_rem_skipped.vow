@@ -1,0 +1,14 @@
+// TEST: category unverifiable
+// TEST: skip-reason float-rem-unsupported
+module FloatRemSkipped
+
+fn modulo(x: f64, y: f64) -> f64 vow {
+  ensures: result == result
+} {
+  x % y
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

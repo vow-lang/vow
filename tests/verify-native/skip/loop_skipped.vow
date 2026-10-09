@@ -1,4 +1,5 @@
 // TEST: category unverifiable
+// TEST: skip-reason unsupported-opcode
 module LoopSkipped
 
 fn count(n: i64) -> i64 vow {

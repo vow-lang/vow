@@ -1,4 +1,5 @@
 // TEST: category unverifiable
+// TEST: skip-reason unsupported-opcode
 module U64Skipped
 
 fn widen(x: u64) -> u64 vow {

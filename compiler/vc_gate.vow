@@ -3,22 +3,31 @@ module VcGate
 use ir
 use ir_printer
 use ir_dominance
+use vc_ops
 use vc_cfg
 
 // Fail-closed subset gate for the native verifier. `vc_skip_reason` returns ""
 // only for a pure, loop-free function built from the i64/Bool operations the
-// symbolic executor models, with the control-flow shape `vc_cfg_detail` accepts; every other function is `Skipped` with
-// "<code>: <detail>" using the closed codes of ADR-1430. An unknown opcode is
-// never accepted.
-
-fn VC_SKIP_FUNCTION_HAS_EFFECTS() -> String { String::from("function-has-effects") }
-fn VC_SKIP_UNSUPPORTED_OPCODE() -> String { String::from("unsupported-opcode") }
+// symbolic executor models, with the control-flow shape `vc_cfg_detail` accepts;
+// every other function is `Skipped` with "<code>: <detail>" using the closed codes of ADR-1430 (listed in `vc_ops`).
+// An unknown opcode is never accepted.
 
 fn vc_reason(code: String, detail: String) -> String {
     let out: String = String::from(code);
     out.push_str(String::from(": "));
     out.push_str(detail);
     out
+}
+
+// The code of a "<code>: <detail>" reason.
+fn vc_reason_code(reason: String) -> String {
+    let n: u64 = reason.len();
+    let mut i: u64 = 0;
+    while i < n {
+        if reason.byte_at(i) == 58 { return reason.substring(0 as u64, i); }
+        i = i + 1;
+    }
+    reason
 }
 
 // Type of every defined value, indexed by instruction id; -1 when undefined.
@@ -63,22 +72,6 @@ fn vc_is_merge_ty(ty: i64) -> bool {
     ty == ITY_I64() || ty == ITY_BOOL() || ty == ITY_UNIT()
 }
 
-// `Unreachable` ends the dead merge block of an `if` whose arms both return.
-// It is fine there, because the executor never walks a block the entry cannot
-// reach; a reachable one would need a "this path aborts" obligation.
-fn vc_reachable_unreachable_detail(f: IrFunction, rpo: Vec<i64>) -> String {
-    let mut bi: u64 = 0;
-    while bi < f.blocks.len() {
-        let blk: IrBlock = f.blocks[bi];
-        let last: IrInst = blk.insts[blk.insts.len() - 1];
-        if rpo[bi] >= 0 && last.op == IOP_UNREACHABLE() {
-            return opcode_name(last.op);
-        }
-        bi = bi + 1;
-    }
-    String::from("")
-}
-
 fn vc_arg_ty(tys: Vec<i64>, inst: IrInst, k: u64) -> i64 {
     if k >= inst.args.len() { return -1; }
     let id: i64 = inst.args[k];
@@ -99,12 +92,18 @@ fn vc_is_arith_op(op: i64) -> bool {
 // types of the values it reads.
 fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>) -> bool {
     let op: i64 = inst.op;
+    if !vc_op_modeled(op) { return false; }
     let n: u64 = inst.args.len();
     let t0: i64 = vc_arg_ty(tys, inst, 0);
     let t1: i64 = vc_arg_ty(tys, inst, 1);
     if op == IOP_CONST_I64() { return inst.ty == ITY_I64() && n == 0; }
     if op == IOP_CONST_BOOL() { return inst.ty == ITY_BOOL() && n == 0; }
     if op == IOP_CONST_UNIT() { return inst.ty == ITY_UNIT() && n == 0; }
+    if op == IOP_BRANCH() { return n == 1 && t0 == ITY_BOOL() && inst.dk == IDATA_BRANCH_TARGETS(); }
+    if op == IOP_JUMP() { return n == 0 && inst.dk == IDATA_JUMP_TARGET(); }
+    if op == IOP_UNREACHABLE() { return n == 0; }
+    if op == IOP_PHI() { return n == 0 && vc_is_merge_ty(inst.ty); }
+    if op == IOP_UPSILON() { return n == 1 && inst.dk == IDATA_PHI_TARGET() && vc_is_merge_ty(t0); }
     if op == IOP_GET_ARG() {
         return inst.ty == ITY_I64() && n == 0 && inst.dv >= 0 && inst.dv < f.params.len() as i64
             && f.params[inst.dv as u64] == ITY_I64();
@@ -125,11 +124,6 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>) -> bool {
     if op == IOP_VOW_REQ() || op == IOP_VOW_ENS() {
         return n == 1 && t0 == ITY_BOOL() && inst.dk == IDATA_VOW_ID();
     }
-    if op == IOP_BRANCH() { return n == 1 && t0 == ITY_BOOL() && inst.dk == IDATA_BRANCH_TARGETS(); }
-    if op == IOP_UNREACHABLE() { return n == 0; }
-    if op == IOP_JUMP() { return n == 0 && inst.dk == IDATA_JUMP_TARGET(); }
-    if op == IOP_PHI() { return n == 0 && vc_is_merge_ty(inst.ty); }
-    if op == IOP_UPSILON() { return n == 1 && inst.dk == IDATA_PHI_TARGET() && vc_is_merge_ty(t0); }
     if op == IOP_RETURN() {
         if f.return_ty == ITY_UNIT() { return n == 0; }
         return n == 1 && t0 == f.return_ty && (f.return_ty == ITY_I64() || f.return_ty == ITY_BOOL());
@@ -137,18 +131,49 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>) -> bool {
     false
 }
 
+// Width of the value a FieldGet reads or a FieldSet writes.
+fn vc_field_ty(inst: IrInst, tys: Vec<i64>) -> i64 {
+    if inst.op == IOP_FIELD_SET() { return vc_arg_ty(tys, inst, 1); }
+    inst.ty
+}
+
+// The specific reason (float remainder, unmodelled builtin, wide field) for an
+// instruction `vc_inst_supported` rejected, or "" when it is only generically
+// unsupported. Only the three per-instruction classes of the op-model table can
+// have one, so every other opcode costs a single table lookup.
+fn vc_inst_specific_reason(inst: IrInst, tys: Vec<i64>) -> String {
+    let model: i64 = vc_op_model(inst.op);
+    if model == VC_OPM_FLOAT_REM() { return vc_reason(VC_SKIP_FLOAT_REM(), opcode_name(inst.op)); }
+    if model == VC_OPM_CALL() {
+        if inst.dk == IDATA_CALL_EXTERN() && !catalogue_verifier_known(inst.ds) {
+            return vc_reason(VC_SKIP_UNMODELED_BUILTIN(), inst.ds);
+        }
+        return String::from("");
+    }
+    if model == VC_OPM_FIELD() {
+        let width_ty: i64 = vc_field_ty(inst, tys);
+        if width_ty == ITY_I128() || width_ty == ITY_U128() {
+            return vc_reason(VC_SKIP_WIDE_AGGREGATE_FIELD(), vc_name_with_ty(inst.op, width_ty));
+        }
+    }
+    String::from("")
+}
+
+fn vc_name_with_ty(op: i64, ty: i64) -> String {
+    let out: String = opcode_name(op);
+    out.push_str(String::from("["));
+    out.push_str(ir_ty_str(ty));
+    out.push_str(String::from("]"));
+    out
+}
+
 fn vc_unsupported_detail(inst: IrInst, tys: Vec<i64>) -> String {
-    let out: String = opcode_name(inst.op);
     let mut shown: i64 = inst.ty;
     if vc_is_cmp_op(inst.op) && vc_arg_ty(tys, inst, 0) >= 0 {
         shown = vc_arg_ty(tys, inst, 0);
     }
-    if shown != ITY_UNIT() {
-        out.push_str(String::from("["));
-        out.push_str(ir_ty_str(shown));
-        out.push_str(String::from("]"));
-    }
-    out
+    if shown == ITY_UNIT() { return opcode_name(inst.op); }
+    vc_name_with_ty(inst.op, shown)
 }
 
 // "" when `f` is inside the native subset, else "<code>: <detail>".
@@ -164,6 +189,12 @@ fn vc_skip_reason(f: IrFunction) -> String {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("empty function body"));
     }
     let tys: Vec<i64> = vc_ty_table(f);
+    // A specific reason (float remainder, unmodelled builtin, wide field) beats
+    // the generic `unsupported-opcode` of an earlier instruction: it names what
+    // has to be modelled, and the generic one would hide it behind a parameter
+    // or constant that precedes it.
+    let mut have_generic: bool = false;
+    let mut generic: String = String::from("");
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
@@ -171,12 +202,18 @@ fn vc_skip_reason(f: IrFunction) -> String {
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
             if !vc_inst_supported(f, inst, tys) {
-                return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), vc_unsupported_detail(inst, tys));
+                let specific: String = vc_inst_specific_reason(inst, tys);
+                if specific.len() > 0 { return specific; }
+                if !have_generic {
+                    have_generic = true;
+                    generic = vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), vc_unsupported_detail(inst, tys));
+                }
             }
             ii = ii + 1;
         }
         bi = bi + 1;
     }
+    if have_generic { return generic; }
     let cfg: String = vc_cfg_detail(f, tys);
     if cfg.len() > 0 {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), cfg);

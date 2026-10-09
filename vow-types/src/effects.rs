@@ -352,6 +352,9 @@ fn effect_covered(declared: &[Effect], needed: &Effect) -> bool {
     false
 }
 
+// Panic sites are builtin aborts the verifier cannot model: `.unwrap()` only.
+// Index, checked-arithmetic and `/ %` aborts are verifier-modelled obligations
+// of pure functions and deliberately not sites (docs/adr/2026-10-09-0900-panic-effect-scope.md).
 fn collect_calls_in_expr<'a>(
     expr: &'a Expr,
     calls: &mut Vec<(&'a Expr, &'a str)>,
@@ -1109,6 +1112,61 @@ mod tests {
                 .any(|h| h.contains("Panic") || h.contains("?")),
             "expected hint about adding Panic or using ?"
         );
+    }
+
+    fn body_with_expr(expr: Expr) -> Block {
+        Block {
+            stmts: vec![Stmt::Expr {
+                expr,
+                has_semicolon: true,
+                span: dummy_span(),
+            }],
+            trailing_expr: None,
+            span: dummy_span(),
+        }
+    }
+
+    #[test]
+    fn index_does_not_require_panic_effect() {
+        let env = TypeEnv::new();
+        let index = Expr {
+            kind: ExprKind::Index {
+                base: Box::new(ident_expr("v")),
+                index: Box::new(ident_expr("i")),
+            },
+            span: dummy_span(),
+        };
+        let caller = make_fn("caller", vec![], body_with_expr(index));
+        let mut emitter = TestEmitter(vec![]);
+        check_fn_effects(&caller, &env, "test.vow", &mut emitter);
+        assert!(emitter.0.is_empty());
+    }
+
+    #[test]
+    fn aborting_binops_do_not_require_panic_effect() {
+        let env = TypeEnv::new();
+        for op in [
+            BinOp::AddChecked,
+            BinOp::SubChecked,
+            BinOp::MulChecked,
+            BinOp::DivChecked,
+            BinOp::RemChecked,
+            BinOp::Div,
+            BinOp::Rem,
+        ] {
+            let expr = Expr {
+                kind: ExprKind::BinaryOp {
+                    op,
+                    lhs: Box::new(ident_expr("a")),
+                    rhs: Box::new(ident_expr("b")),
+                },
+                span: dummy_span(),
+            };
+            let caller = make_fn("caller", vec![], body_with_expr(expr));
+            let mut emitter = TestEmitter(vec![]);
+            check_fn_effects(&caller, &env, "test.vow", &mut emitter);
+            assert!(emitter.0.is_empty(), "{op:?} must not require Panic");
+        }
     }
 
     // --- issue #1032: contract clauses writing shared state through a helper ---

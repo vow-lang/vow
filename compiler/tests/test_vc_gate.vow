@@ -3,6 +3,7 @@ module TestVcGate
 use ir
 use ir_printer
 use vc_gate
+use vc_ops
 use tests.builders
 
 fn args1(a: i64) -> Vec<i64> {
@@ -274,6 +275,67 @@ fn check_shape() -> i64 {
     0
 }
 
+// Every code the gate emits is on the closed ADR list.
+fn check_emitted_codes_are_closed() -> i64 {
+    let ops: Vec<IrInst> = Vec::new();
+    ops.push(mk_inst_call_extern(0, ITY_I64(), Vec::new(), String::from("__vow_fs_exists")));
+    ops.push(mk_inst_return(1, 0));
+    if !vc_skip_code_valid(vc_reason_code(vc_skip_reason(one_block(String::from("a"), Vec::new(), ITY_I64(), ops)))) { return 90; }
+    let eff: Vec<IrInst> = Vec::new();
+    eff.push(mk_inst_const_i64(0, 1));
+    eff.push(mk_inst_return(1, 0));
+    let fe: IrFunction = one_block(String::from("e"), Vec::new(), ITY_I64(), eff);
+    fe.effects = 1;
+    if !vc_skip_code_valid(vc_reason_code(vc_skip_reason(fe))) { return 91; }
+    let dom: Vec<IrInst> = Vec::new();
+    dom.push(mk_inst_return(1, 7));
+    if !vc_skip_code_valid(vc_reason_code(vc_skip_reason(one_block(String::from("d"), Vec::new(), ITY_I64(), dom)))) { return 92; }
+    0
+}
+
+fn check_reason_codes() -> i64 {
+    let fr: Vec<IrInst> = Vec::new();
+    fr.push(mk_inst(0, IOP_CONST_F64(), ITY_F64(), Vec::new()));
+    fr.push(mk_inst(1, IOP_REM_F64(), ITY_F64(), args2(0, 0)));
+    fr.push(mk_inst_return(2, 1));
+    let rf: String = vc_skip_reason(one_block(String::from("fr"), Vec::new(), ITY_F64(), fr));
+    if !rf.contains(String::from("float-rem-unsupported: ")) { return 80; }
+
+    let pure_ext: Vec<IrInst> = Vec::new();
+    pure_ext.push(mk_inst_call_extern(0, ITY_I64(), Vec::new(), String::from("__vow_string_len")));
+    pure_ext.push(mk_inst_return(1, 0));
+    let rb: String = vc_skip_reason(one_block(String::from("b"), Vec::new(), ITY_I64(), pure_ext));
+    if rb != String::from("unmodeled-builtin: __vow_string_len") { return 81; }
+
+    let cat: Vec<IrInst> = Vec::new();
+    cat.push(mk_inst_call_extern(0, ITY_I64(), Vec::new(), String::from("__vow_fs_exists")));
+    cat.push(mk_inst_return(1, 0));
+    let rc: String = vc_skip_reason(one_block(String::from("c"), Vec::new(), ITY_I64(), cat));
+    if rc != String::from("unmodeled-builtin: __vow_fs_exists") { return 82; }
+
+    let wg: Vec<IrInst> = Vec::new();
+    wg.push(mk_inst_const_i64(0, 1));
+    wg.push(ir_inst_new(1, IOP_FIELD_GET(), ITY_I128(), args1(0), IDATA_FIELD(), 0, 0, String::from("")));
+    wg.push(mk_inst_return(2, 1));
+    let rw: String = vc_skip_reason(one_block(String::from("w"), Vec::new(), ITY_I128(), wg));
+    if rw != String::from("wide-aggregate-field: FieldGet[i128]") { return 83; }
+    let fs: Vec<IrInst> = Vec::new();
+    fs.push(mk_inst_const_i64(0, 1));
+    fs.push(ir_inst_new(1, IOP_CONST_I128(), ITY_I128(), Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+    fs.push(ir_inst_new(2, IOP_FIELD_SET(), ITY_UNIT(), args2(0, 1), IDATA_FIELD(), 0, 0, String::from("")));
+    fs.push(mk_inst_return(3, 0));
+    let rs: String = vc_skip_reason(one_block(String::from("s"), Vec::new(), ITY_I64(), fs));
+    if rs != String::from("wide-aggregate-field: FieldSet[i128]") { return 85; }
+
+    let ng: Vec<IrInst> = Vec::new();
+    ng.push(mk_inst_const_i64(0, 1));
+    ng.push(ir_inst_new(1, IOP_FIELD_GET(), ITY_I64(), args1(0), IDATA_FIELD(), 0, 0, String::from("")));
+    ng.push(mk_inst_return(2, 1));
+    let rn: String = vc_skip_reason(one_block(String::from("n"), Vec::new(), ITY_I64(), ng));
+    if !rn.contains(String::from("unsupported-opcode: FieldGet")) { return 84; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_accepted();
     if r == 0 { r = check_effects(); }
@@ -288,5 +350,7 @@ fn main() -> i32 {
     if r == 0 { r = check_unsigned_compare_names_operand_type(); }
     if r == 0 { r = check_non_dominating_read(); }
     if r == 0 { r = check_shape(); }
+    if r == 0 { r = check_reason_codes(); }
+    if r == 0 { r = check_emitted_codes_are_closed(); }
     i64_to_i32_wrap(r)
 }

@@ -70,7 +70,8 @@ Decimal / Rational) work are separate subprojects and out of scope here.
 
 8. **Format / parse.** Two formatter baselines: `int_to_string(x: i64) -> String`
    and `uint_to_string(x: u64) -> String`. Agents widen via `as` before
-   formatting. Parsing exposes `parse_X(s: String) -> Option<X>` for every
+   formatting (128-bit values add their own pair; see the 2026-10-09
+   amendment). Parsing exposes `parse_X(s: String) -> Option<X>` for every
    width (the narrow variants reject out-of-range).
 
 9. **Struct field layout.** Struct fields up to 64 bits wide each occupy one
@@ -155,3 +156,10 @@ BigInt subprojects.
   and wider shifts mask the count to the operand width. Both compilers behave
   identically. For 64- and 128-bit left operands a count of the left operand's
   own type is also accepted (`docs/spec/grammar.md`, "Shift count type").
+
+- **2026-10-09 — Decision 8.** Widening via `as` cannot format most 128-bit
+  values, and routing through the `_try` narrowing intrinsics fails for them.
+  Phase 4 therefore adds two scalar formatters, `int128_to_string(x: i128)` and
+  `uint128_to_string(x: u128)`, per the #526 planning comment of 2026-07-19.
+  `parse_i128`/`parse_u128` return `Option<i128>`/`Option<u128>` and wait on
+  128-bit enum payload support (#1543).

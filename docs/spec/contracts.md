@@ -187,7 +187,7 @@ fn safe_add(a: i64, b: i64) -> i64 vow {
 }
 ```
 
-`a +! b` aborts rather than wraps, so every execution that *returns* satisfies both postconditions, for every non-negative `a` and `b`. The verifier models that abort, so no bound is needed. Writing `requires: a <= 4611686018427387903` instead would be the [verification-driven bound](#verification-driven-bounds-anti-pattern) anti-pattern wearing a semantic disguise: it excludes inputs the function handles correctly (it aborts, which is a defined outcome) purely to make wrapping unreachable.
+`a +! b` aborts rather than wraps, so every execution that *returns* satisfies both postconditions, for every non-negative `a` and `b`. The verifier models that abort, so no bound is needed. Neither `+!` nor indexing requires a `[panic]` effect: a function with any effect is not modelable, so gating them would remove exactly these functions from verification (see [Effect Types](grammar.md#effect-types)). Writing `requires: a <= 4611686018427387903` instead would be the [verification-driven bound](#verification-driven-bounds-anti-pattern) anti-pattern wearing a semantic disguise: it excludes inputs the function handles correctly (it aborts, which is a defined outcome) purely to make wrapping unreachable.
 
 A range bound earns its place when it excludes inputs the function genuinely has no answer for — `requires: x > -9223372036854775807` on `abs`, whose result is not representable at `i64::MIN` under any operator.
 

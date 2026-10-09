@@ -3610,6 +3610,8 @@ const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[
     ("__vow_string_substring", "__vow_string_substring_in_arena"),
     ("__vow_string_from_i64", "__vow_string_from_i64_in_arena"),
     ("__vow_string_from_u64", "__vow_string_from_u64_in_arena"),
+    ("__vow_string_from_i128", "__vow_string_from_i128_in_arena"),
+    ("__vow_string_from_u128", "__vow_string_from_u128_in_arena"),
     ("__vow_string_split", "__vow_string_split_in_arena"),
     ("__vow_string_trim", "__vow_string_trim_in_arena"),
     ("__vow_string_to_upper", "__vow_string_to_upper_in_arena"),
@@ -3837,6 +3839,10 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         "__vow_string_from_i64" | "__vow_string_from_u64" => {
             sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_from_i128" | "__vow_string_from_u128" => {
+            sig.params.push(AbiParam::new(types::I128));
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_string_substr" => {
