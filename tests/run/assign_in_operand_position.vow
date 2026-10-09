@@ -1,0 +1,99 @@
+// TEST: stdout "11\n0\n0\n12\n0\n9\n0\n15\n0\n40\n0\n11\n0\n11\n0\n"
+module AssignInOperandPosition
+
+fn id(x: i64) -> i64 {
+    x
+}
+
+fn call_arg(outer: bool, found: bool) -> i64 {
+    let mut count: i64 = 0;
+    let mut total: i64 = 0;
+    if outer {
+        total = id(if found { count = count + 1; count } else { 0 });
+    }
+    count * 10 + total
+}
+
+fn binop_operand(outer: bool) -> i64 {
+    let mut count: i64 = 0;
+    let mut total: i64 = 0;
+    if outer {
+        total = 1 + { count = count + 1; count };
+    }
+    count * 10 + total
+}
+
+fn unop_operand(outer: bool) -> i64 {
+    let mut count: i64 = 0;
+    let mut total: i64 = 0;
+    if outer {
+        total = -{ count = count + 1; count };
+    }
+    count * 10 + total
+}
+
+fn if_condition(outer: bool) -> i64 {
+    let mut count: i64 = 0;
+    let mut total: i64 = 0;
+    if outer {
+        if { count = count + 1; true } {
+            total = 5;
+        }
+    }
+    count * 10 + total
+}
+
+fn while_condition(outer: bool) -> i64 {
+    let mut count: i64 = 0;
+    if outer {
+        let mut i: i64 = 0;
+        while i < 3 + { count = count + 1; 0 } {
+            i = i + 1;
+        }
+    }
+    count * 10
+}
+
+fn method_argument(outer: bool) -> i64 {
+    let mut count: i64 = 0;
+    let v: Vec<i64> = Vec::new();
+    if outer {
+        v.push({ count = count + 1; count });
+    }
+    count * 10 + v.len() as i64
+}
+
+fn assign_rhs(outer: bool) -> i64 {
+    let mut count: i64 = 0;
+    let mut total: i64 = 0;
+    if outer {
+        total = { count = count + 1; count };
+    }
+    count * 10 + total
+}
+
+fn show(n: i64) [io] {
+    print_i64(n);
+    print_str(String::from("\n"));
+}
+
+fn main() -> i32 [io] {
+    // An assignment buried in an operand of a branch body must be merged into
+    // the code after the branch, whichever way the branch went.
+    show(call_arg(true, true));
+    show(call_arg(true, false));
+    show(call_arg(false, true));
+    show(binop_operand(true));
+    show(binop_operand(false));
+    show(unop_operand(true));
+    show(unop_operand(false));
+    show(if_condition(true));
+    show(if_condition(false));
+    show(while_condition(true));
+    show(while_condition(false));
+    show(method_argument(true));
+    show(method_argument(false));
+    show(assign_rhs(true));
+    show(assign_rhs(false));
+    0
+}
