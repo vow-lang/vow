@@ -10,17 +10,18 @@ from unittest import mock
 import verify_diff as vd
 
 K = ("f", "callee", 1)
+OTHER = ("f", "caller", 2)
 
 
 class ClassifyTest(unittest.TestCase):
-    def cls(self, truth, esbmc, native, ek=(), nk=()):
+    def cls(self, truth, esbmc, native, ek=frozenset(), nk=frozenset()):
         return vd.classify(truth, esbmc, native, ek, nk)[0]
 
     def test_equal_verdicts_match(self):
         self.assertEqual(vd.MATCH, self.cls("Verified", vd.PROVEN, vd.PROVEN))
         self.assertEqual(vd.MATCH, self.cls("Skipped", vd.SKIPPED, vd.SKIPPED))
         self.assertEqual(
-            vd.MATCH, self.cls("VerifyFailed", vd.REFUTED, vd.REFUTED, [K], [K])
+            vd.MATCH, self.cls("VerifyFailed", vd.REFUTED, vd.REFUTED, {K}, {K})
         )
 
     def test_native_proving_a_refuted_program_is_soundness(self):
@@ -64,28 +65,24 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(vd.HARNESS, self.cls("Verified", vd.PROVEN, vd.ERROR))
 
     def test_native_solver_failure_is_weaker_even_if_esbmc_is_inconclusive(self):
-        for status in ("panicked", "error", "crashed"):
+        for status, want in (
+            ("panicked", vd.WEAKER),
+            ("error", vd.WEAKER),
+            ("crashed", vd.WEAKER),
+            ("timeout", vd.MATCH),
+        ):
             cls, _ = vd.classify(
                 "Verified", vd.INCONCLUSIVE, vd.INCONCLUSIVE, native_status=status
             )
-            self.assertEqual(vd.WEAKER, cls)
-        cls, _ = vd.classify(
-            "Verified", vd.INCONCLUSIVE, vd.INCONCLUSIVE, native_status="timeout"
-        )
-        self.assertEqual(vd.MATCH, cls)
+            self.assertEqual(want, cls)
 
     def test_counterexample_sets(self):
-        other = ("f", "caller", 2)
-        self.assertEqual(
-            vd.WEAKER, self.cls("VerifyFailed", vd.REFUTED, vd.REFUTED, [K], [])
-        )
-        self.assertEqual(
-            vd.WEAKER, self.cls("VerifyFailed", vd.REFUTED, vd.REFUTED, [K], [other])
-        )
-        self.assertEqual(
-            vd.MORE_PRECISE,
-            self.cls("VerifyFailed", vd.REFUTED, vd.REFUTED, [K], [K, other]),
-        )
+        def refuted(esbmc, native):
+            return self.cls("VerifyFailed", vd.REFUTED, vd.REFUTED, esbmc, native)
+
+        self.assertEqual(vd.WEAKER, refuted({K}, set()))
+        self.assertEqual(vd.WEAKER, refuted({K}, {OTHER}))
+        self.assertEqual(vd.MORE_PRECISE, refuted({K}, {K, OTHER}))
 
 
 class VerdictTest(unittest.TestCase):
@@ -169,11 +166,10 @@ class RunBackendTest(unittest.TestCase):
             proc.communicate.return_value = (stdout, "boom")
         with (
             mock.patch.object(vd.subprocess, "Popen", return_value=proc) as popen,
-            mock.patch.object(vd, "function_count", return_value=1),
             mock.patch.object(vd.os, "killpg") as killpg,
             mock.patch.object(sys, "stderr", io.StringIO()),
         ):
-            result, _ = vd.run_backend("vowc", "native", "x.vow", 7)
+            result, _ = vd.run_backend("vowc", "native", "x.vow", 7, 1)
         return result, popen, killpg
 
     def test_hung_verifier_is_killed_as_a_group_and_times_out(self):
@@ -219,8 +215,9 @@ class MainTest(unittest.TestCase):
             mock.patch.object(
                 vd.verify_eval, "collect", return_value=[("verify", exp)]
             ),
+            mock.patch.object(vd, "function_count", return_value=1),
             mock.patch.object(
-                vd, "run_backend", side_effect=lambda v, b, p, t: (results[b], 0.0)
+                vd, "run_backend", side_effect=lambda v, b, p, t, n: (results[b], 0.0)
             ),
             mock.patch.object(sys, "stdout", out),
             mock.patch.object(sys, "stderr", io.StringIO()),

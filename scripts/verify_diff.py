@@ -31,6 +31,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -38,6 +39,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import candidate_isolation
 import verify_eval
 
 REPO_ROOT = verify_eval.REPO_ROOT
@@ -56,11 +58,18 @@ WEAKER = "weaker"
 SOUNDNESS = "soundness"
 HARNESS = "harness"
 
+CLASSES = (MATCH, MORE_PRECISE, WEAKER, SOUNDNESS, HARNESS)
 FAILING_CLASSES = (WEAKER, SOUNDNESS)
 
 CONCLUSIVE = (PROVEN, REFUTED)
 
 BACKENDS = ("esbmc", "native")
+
+SOFT_FAILURES = ("panicked", "error", "crashed")
+
+WATCHDOG_SLACK = 30
+
+FN_DECL = re.compile(r"^\s*(?:pub\s+)?fn\s", re.MULTILINE)
 
 
 def verdict_of(result):
@@ -79,28 +88,36 @@ def verdict_of(result):
     return ERROR
 
 
-def cex_keys(result):
-    """Counterexamples as a sorted list of comparable (fn, blame, vow_id)."""
-    keys = {
-        (c["fn"], c["blame"], c["vow_id"]) for c in verify_eval.actual_cex(result or {})
-    }
-    return sorted(
-        keys, key=lambda k: (str(k[0]), k[1], k[2] if k[2] is not None else -1)
-    )
+def cex_keys(cexes):
+    """Counterexamples as a set of comparable (fn, blame, vow_id)."""
+    return frozenset((c["fn"], c["blame"], c["vow_id"]) for c in cexes)
 
 
 def compare_cex(esbmc_keys, native_keys):
     """Return (class, detail) for two refutations of the same fixture."""
-    missing = [k for k in esbmc_keys if k not in native_keys]
-    extra = [k for k in native_keys if k not in esbmc_keys]
+    missing = esbmc_keys - native_keys
+    extra = native_keys - esbmc_keys
     if missing:
-        return WEAKER, f"native lacks ESBMC counterexample(s) {missing}"
+        return (
+            WEAKER,
+            f"native lacks ESBMC counterexample(s) {sorted(missing, key=repr)}",
+        )
     if extra:
-        return MORE_PRECISE, f"native reports extra counterexample(s) {extra}"
+        return (
+            MORE_PRECISE,
+            f"native reports extra counterexample(s) {sorted(extra, key=repr)}",
+        )
     return MATCH, None
 
 
-def classify(truth, esbmc, native, esbmc_keys=(), native_keys=(), native_status=None):
+def classify(
+    truth,
+    esbmc,
+    native,
+    esbmc_keys=frozenset(),
+    native_keys=frozenset(),
+    native_status=None,
+):
     """Classify one fixture from the two verdicts and the corpus ground truth.
 
     `truth` is the corpus-expected status (Verified / VerifyFailed / Skipped);
@@ -126,11 +143,11 @@ def classify(truth, esbmc, native, esbmc_keys=(), native_keys=(), native_status=
 
     if esbmc == native:
         if native == REFUTED:
-            return compare_cex(list(esbmc_keys), list(native_keys))
+            return compare_cex(esbmc_keys, native_keys)
         return MATCH, None
 
     if esbmc in CONCLUSIVE and native in CONCLUSIVE:
-        if native == REFUTED and truth == "VerifyFailed":
+        if truth == "VerifyFailed":
             return (
                 MORE_PRECISE,
                 "native refutes a program ESBMC proves; the corpus labels it incorrect",
@@ -151,11 +168,6 @@ def classify(truth, esbmc, native, esbmc_keys=(), native_keys=(), native_status=
     return MATCH, f"neither backend concludes (esbmc: {esbmc}, native: {native})"
 
 
-WATCHDOG_SLACK = 30
-
-SOFT_FAILURES = ("panicked", "error", "crashed")
-
-
 def synthetic_failure(verify_status):
     return {
         "status": "VerifyFailed",
@@ -167,10 +179,10 @@ def synthetic_failure(verify_status):
 def function_count(path):
     """Upper bound on verify targets: `--timeout` is a per-function budget."""
     with open(path, "r", encoding="utf-8") as fh:
-        return max(1, fh.read().count("fn "))
+        return max(1, len(FN_DECL.findall(fh.read())))
 
 
-def run_backend(vowc, backend, path, timeout):
+def run_backend(vowc, backend, path, timeout, max_fns):
     """Run one backend under `--timeout`; a hung or crashed process is inconclusive.
 
     The watchdog scales with the number of functions and adds slack so the
@@ -195,12 +207,11 @@ def run_backend(vowc, backend, path, timeout):
         stderr=subprocess.PIPE,
         text=True,
         cwd=REPO_ROOT,
+        env=candidate_isolation.scrubbed_env(),
         start_new_session=True,
     )
     try:
-        stdout, stderr = proc.communicate(
-            timeout=timeout * function_count(path) + WATCHDOG_SLACK
-        )
+        stdout, stderr = proc.communicate(timeout=timeout * max_fns + WATCHDOG_SLACK)
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
         proc.communicate()
@@ -210,7 +221,7 @@ def run_backend(vowc, backend, path, timeout):
         return json.loads(stdout.strip()), elapsed
     except json.JSONDecodeError:
         pass
-    if proc.returncode < 0 or proc.returncode >= 128:
+    if proc.returncode < 0:
         return synthetic_failure("crashed"), elapsed
     print(
         f"verify_diff: {backend} printed no JSON for {path}: {stderr.rstrip()}",
@@ -219,52 +230,45 @@ def run_backend(vowc, backend, path, timeout):
     return None, elapsed
 
 
-def summarize(result):
-    return {
-        "status": (result or {}).get("status"),
-        "verify_status": (result or {}).get("verify_status"),
-        "counterexamples": [
-            {"fn": c["fn"], "blame": c["blame"], "vow_id": c["vow_id"]}
-            for c in verify_eval.actual_cex(result or {})
-        ],
-    }
-
-
 def diff_fixture(vowc, timeout, sub, exp):
     truth = "VerifyFailed" if exp.known_gap else exp.expected_status
-    results = {}
-    seconds = {}
-    for backend in BACKENDS:
-        results[backend], seconds[backend] = run_backend(
-            vowc, backend, exp.path, timeout
-        )
-    verdicts = {b: verdict_of(results[b]) for b in BACKENDS}
-    cls, detail = classify(
-        truth,
-        verdicts["esbmc"],
-        verdicts["native"],
-        cex_keys(results["esbmc"]),
-        cex_keys(results["native"]),
-        (results["native"] or {}).get("verify_status"),
-    )
+    max_fns = function_count(exp.path)
     row = {
         "fixture": f"{sub}/{exp.name}",
         "truth": truth,
         "known_gap": bool(exp.known_gap),
-        "class": cls,
-        "detail": detail,
     }
+    results = {}
     for backend in BACKENDS:
-        row[backend] = {
-            "verdict": verdicts[backend],
-            "seconds": round(seconds[backend], 3),
-            **summarize(results[backend]),
+        result, seconds = run_backend(vowc, backend, exp.path, timeout, max_fns)
+        result = result or {}
+        cexes = verify_eval.actual_cex(result)
+        results[backend] = {
+            "verdict": verdict_of(result),
+            "keys": cex_keys(cexes),
+            "verify_status": result.get("verify_status"),
         }
+        row[backend] = {
+            "verdict": results[backend]["verdict"],
+            "seconds": round(seconds, 3),
+            "status": result.get("status"),
+            "verify_status": result.get("verify_status"),
+            "counterexamples": cexes,
+        }
+    esbmc, native = results["esbmc"], results["native"]
+    row["class"], row["detail"] = classify(
+        truth,
+        esbmc["verdict"],
+        native["verdict"],
+        esbmc["keys"],
+        native["keys"],
+        native["verify_status"],
+    )
     return row
 
 
 def build_report(vowc, rows):
-    counts = {c: 0 for c in (MATCH, MORE_PRECISE, WEAKER, SOUNDNESS, HARNESS)}
+    counts = dict.fromkeys(CLASSES, 0)
     for row in rows:
         counts[row["class"]] += 1
     return {
@@ -298,10 +302,7 @@ def print_summary(report, stream):
     summary = report["summary"]
     print(
         "verify_diff: "
-        + ", ".join(
-            f"{summary[c]} {c}"
-            for c in (MATCH, MORE_PRECISE, WEAKER, SOUNDNESS, HARNESS)
-        )
+        + ", ".join(f"{summary[c]} {c}" for c in CLASSES)
         + f" of {summary['total']} fixtures",
         file=stream,
     )
