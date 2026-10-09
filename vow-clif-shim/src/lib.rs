@@ -210,6 +210,8 @@ fn report_narrowed_wide_argument() {
 const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields and enum payloads are not supported yet (epic #526): an aggregate \
      field slot is 8 bytes, so a 128-bit field would truncate or overwrite its neighbour";
 
+const WIDE_SLOT_TYPE_MSG: &str = "internal error: a two-slot enum payload access must carry a 128-bit value, but lowering produced a narrower type";
+
 fn reject_wide_aggregate_field() -> i64 {
     eprintln!("clif_shim: {WIDE_AGGREGATE_FIELD_MSG}");
     CLIF_ERR_WIDE_AGGREGATE_FIELD
@@ -824,6 +826,7 @@ const IDATA_CONST_U8: i64 = 19;
 const IDATA_INTEGER_CAST: i64 = 20;
 const IDATA_CONST_I128: i64 = 21;
 const IDATA_CONST_U128: i64 = 22;
+const IDATA_WIDE_SLOT: i64 = 23;
 
 // ---------------------------------------------------------------------------
 // Module context (opaque handle passed through FFI)
@@ -2737,6 +2740,27 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
 
                 // Struct / enum field access
                 IOP_FIELD_GET => {
+                    if dk == IDATA_WIDE_SLOT {
+                        if !ity_is_wide(ity) {
+                            eprintln!("clif_shim: {WIDE_SLOT_TYPE_MSG}");
+                            return -1;
+                        }
+                        let base = arg!(0);
+                        let offset = (dv as i32) * 8;
+                        let lo =
+                            builder
+                                .ins()
+                                .load(types::I64, MemFlagsData::trusted(), base, offset);
+                        let hi = builder.ins().load(
+                            types::I64,
+                            MemFlagsData::trusted(),
+                            base,
+                            offset + 8,
+                        );
+                        let wide = builder.ins().iconcat(lo, hi);
+                        set_val!(iid, wide);
+                        continue;
+                    }
                     if ity_is_wide(ity) {
                         return reject_wide_aggregate_field();
                     }
@@ -2765,6 +2789,29 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     }
                 }
                 IOP_FIELD_SET => {
+                    if dk == IDATA_WIDE_SLOT {
+                        let source_ty = inst_ty_map
+                            .get(&all_args[aoff + 1])
+                            .copied()
+                            .unwrap_or(ITY_I64);
+                        if !ity_is_wide(source_ty) {
+                            eprintln!("clif_shim: {WIDE_SLOT_TYPE_MSG}");
+                            return -1;
+                        }
+                        let base = arg!(0);
+                        let new_val = arg!(1);
+                        let offset = (dv as i32) * 8;
+                        let (lo, hi) = builder.ins().isplit(new_val);
+                        builder
+                            .ins()
+                            .store(MemFlagsData::trusted(), lo, base, offset);
+                        builder
+                            .ins()
+                            .store(MemFlagsData::trusted(), hi, base, offset + 8);
+                        let unit = builder.ins().iconst(types::I32, 0);
+                        set_val!(iid, unit);
+                        continue;
+                    }
                     if dk == IDATA_FIELD {
                         let idx = dv;
                         let base = arg!(0);

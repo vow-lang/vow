@@ -1,0 +1,18 @@
+// TEST: stdout "171 5\n"
+module I128ResultUnwrap
+
+// `.unwrap()` reads the `Ok` payload directly rather than through a match arm.
+// `Result` is built in, so its width comes from the parameter's instantiation.
+fn extract(r: Result<i128, ()>) -> i128 [panic] {
+    r.unwrap()
+}
+
+fn main() -> () [io, panic] {
+    let seed: i128 = 3154393236604333326341;
+    let r: Result<i128, ()> = Result::Ok(seed);
+    let v: i128 = extract(r);
+    print_i64(u128_to_u8_wrap((v as u128) >> 64) as i64);
+    print_str(" ");
+    print_i64(u128_to_u8_wrap(v as u128) as i64);
+    print_str("\n");
+}

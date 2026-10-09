@@ -1,0 +1,86 @@
+// TEST: stdout "171 5\n0 0\n7\n171 5\n9\n3 1\n255 255\n"
+module WideEnumPayload
+
+// 128-bit enum payloads occupy two consecutive 8-byte slots. Every read prints
+// both limbs separately, so a backend that truncates to the low limb fails on
+// the high-limb column; the i64 payloads around the wide one fail if the slot
+// index does not account for the second slot.
+enum Wide {
+    Value(i128),
+    Empty,
+}
+
+enum Mix {
+    V(i64, i128, i64),
+    Empty,
+}
+
+enum Tail {
+    T(u128, i64),
+    Empty,
+}
+
+fn high_seed() -> i128 {
+    3154393236604333326336
+}
+
+fn hi_byte(v: i128) -> u8 {
+    u128_to_u8_wrap((v as u128) >> 64)
+}
+
+fn lo_byte(v: i128) -> u8 {
+    u128_to_u8_wrap(v as u128)
+}
+
+fn show(v: i128) -> () [io] {
+    print_i64(hi_byte(v) as i64);
+    print_str(" ");
+    print_i64(lo_byte(v) as i64);
+    print_str("\n");
+}
+
+fn wide_or_zero(w: Wide) -> i128 {
+    match w {
+        Wide::Value(v) => { v },
+        Wide::Empty => { 0 },
+    }
+}
+
+fn show_mix(m: Mix) -> () [io] {
+    match m {
+        Mix::V(a, b, c) => {
+            print_i64(a);
+            print_str("\n");
+            show(b);
+            print_i64(c);
+            print_str("\n");
+        },
+        Mix::Empty => { print_str("empty\n"); },
+    }
+}
+
+fn tail_count(t: Tail) -> i64 {
+    match t {
+        Tail::T(w, n) => { n },
+        Tail::Empty => { 0 },
+    }
+}
+
+fn tail_wide(t: Tail) -> i128 {
+    match t {
+        Tail::T(w, n) => { w as i128 },
+        Tail::Empty => { 0 },
+    }
+}
+
+fn main() -> () [io] {
+    show(wide_or_zero(Wide::Value(high_seed() + 5)));
+    show(wide_or_zero(Wide::Empty));
+    show_mix(Mix::V(7, high_seed() + 5, 9));
+    let t: Tail = Tail::T(18446744073709551619, 3);
+    print_i64(tail_count(t));
+    print_str(" ");
+    print_i64(hi_byte(tail_wide(t)) as i64);
+    print_str("\n");
+    show(-1);
+}

@@ -1,0 +1,21 @@
+// TEST: stdout "255 255\n"
+module HashMapValueOptionU128
+
+fn main() -> () [io, panic] {
+    let m: HashMap<i64, Option<u128>> = HashMap::new();
+    m.insert(1, Option::Some(340282366920938463463374607431768211455));
+    match m.get(1) {
+        Option::Some(slot) => {
+            match slot {
+                Option::Some(w) => {
+                    print_i64(u128_to_u8_wrap(w >> 64) as i64);
+                    print_str(" ");
+                    print_i64(u128_to_u8_wrap(w) as i64);
+                    print_str("\n");
+                },
+                Option::None => { print_str("inner none\n"); },
+            }
+        },
+        Option::None => { print_str("outer none\n"); },
+    }
+}

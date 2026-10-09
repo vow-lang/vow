@@ -1106,6 +1106,12 @@ fn lower_payload_slot_width(ty: i64) -> i64 {
     if ty == ITY_I128() || ty == ITY_U128() { 2 } else { 1 }
 }
 
+// Instruction data kind for an enum payload access: 128-bit payloads use the
+// explicit two-slot marker so codegen can tell them from a struct field.
+fn lower_payload_field_dk(ty: i64) -> i64 {
+    if lower_payload_slot_width(ty) == 2 { IDATA_WIDE_SLOT() } else { IDATA_FIELD() }
+}
+
 // Slot index (tag is slot 0) of payload `index` of a variant being built from
 // `payload_values`: each wide payload before it pushes it up by one slot.
 fn lctx_built_payload_slot(ctx: LowerCtx, payload_values: Vec<i64>, index: i64) -> i64 {
@@ -4390,7 +4396,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let pfs_args: Vec<i64> = Vec::new();
             pfs_args.push(ptr_id);
             pfs_args.push(val_id);
-            lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), pfs_args, IDATA_FIELD(), lctx_built_payload_slot(ctx, payload_values, pi), 0, String::from(""), origin);
+            lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), pfs_args, lower_payload_field_dk(lctx_inst_ty(ctx, val_id)), lctx_built_payload_slot(ctx, payload_values, pi), 0, String::from(""), origin);
             pi = pi + 1;
         }
         return ptr_id;
@@ -4738,7 +4744,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                         };
                         let fg2_args: Vec<i64> = Vec::new();
                         fg2_args.push(ptr_id);
-                        let field_val: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ty, fg2_args, IDATA_FIELD(), lctx_declared_payload_slot(ctx, en, vn, ii), 0, String::from(""), origin);
+                        let field_val: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ty, fg2_args, lower_payload_field_dk(field_ty), lctx_declared_payload_slot(ctx, en, vn, ii), 0, String::from(""), origin);
                         lctx_apply_pattern_aggregate_metadata(
                             ctx, field_val, inner_pid, aggregate_struct
                         );
@@ -5047,7 +5053,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
         };
         let payload_args: Vec<i64> = Vec::new();
         payload_args.push(inner_id);
-        let payload_id: i64 = lctx_emit(ctx, IOP_FIELD_GET(), payload_ty, payload_args, IDATA_FIELD(), 1, 0, String::from(""), origin);
+        let payload_id: i64 = lctx_emit(ctx, IOP_FIELD_GET(), payload_ty, payload_args, lower_payload_field_dk(payload_ty), 1, 0, String::from(""), origin);
         lctx_apply_question_aggregate_metadata(
             ctx, payload_id, eid, aggregate_name
         );
@@ -5241,7 +5247,7 @@ fn lower_unwrap(ctx: LowerCtx, eid: i64, recv_id: i64, empty_tag: i64) -> i64 {
     };
     let payload_args: Vec<i64> = Vec::new();
     payload_args.push(recv_id);
-    let payload_id: i64 = lctx_emit(ctx, IOP_FIELD_GET(), payload_ty, payload_args, IDATA_FIELD(), 1, 0, String::from(""), origin);
+    let payload_id: i64 = lctx_emit(ctx, IOP_FIELD_GET(), payload_ty, payload_args, lower_payload_field_dk(payload_ty), 1, 0, String::from(""), origin);
     lctx_apply_question_aggregate_metadata(ctx, payload_id, eid, aggregate_name);
     payload_id
 }

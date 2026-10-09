@@ -707,6 +707,7 @@ fn write_inst_data(out: Vec<i64>, inst: IrInst) {
         return;
     }
     if dk == IDATA_FIELD() { write_u8(out, 16); write_u32_le(out, inst.dv); return; }
+    if dk == IDATA_WIDE_SLOT() { write_u8(out, 22); write_u32_le(out, inst.dv); return; }
     if dk == IDATA_INTEGER() {
         write_u8(out, 17);
         if inst.dv == ITY_I8() { write_u8(out, 0); write_u8(out, 0); return; }
@@ -807,6 +808,9 @@ fn read_inst_data(r: ModuleReader) -> WireInstData {
         else { data.dk = IDATA_CONST_U128(); }
         data.dv = read_i64_bits(r);
         data.dv2 = read_i64_bits(r);
+    } else if tag == 22 {
+        data.dk = IDATA_WIDE_SLOT();
+        data.dv = reader_read_u32_le(r);
     } else {
         if r.err_kind == DEC_OK() {
             reader_fail(r, DEC_INVALID_KIND(), tag_at, String::from("InstData"), tag);

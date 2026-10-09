@@ -24,6 +24,7 @@ use crate::return_materialization::{
 };
 use crate::{Backend, BuildMode, CodegenError, CompiledObject, TraceMode};
 
+const WIDE_SLOT_TYPE_MSG: &str = "internal error: a two-slot enum payload access must carry a 128-bit value, but lowering produced a narrower type";
 const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields and enum payloads are not supported yet (epic #526): an aggregate \
      field slot is 8 bytes, so a 128-bit field would truncate or overwrite its neighbour";
 
@@ -1727,6 +1728,24 @@ fn lower_inst(
         // Struct / enum field access
         // ------------------------------------------------------------------
         Opcode::FieldGet => {
+            if let InstData::WideSlot(idx) = inst.data {
+                if !matches!(inst.ty, IrTy::I128 | IrTy::U128) {
+                    return Err(CodegenError::UnsupportedOpcode(
+                        WIDE_SLOT_TYPE_MSG.to_string(),
+                    ));
+                }
+                let base = ctx.value_map[&inst.args[0]];
+                let offset = (idx as i32) * 8;
+                let lo = builder
+                    .ins()
+                    .load(types::I64, MemFlagsData::trusted(), base, offset);
+                let hi = builder
+                    .ins()
+                    .load(types::I64, MemFlagsData::trusted(), base, offset + 8);
+                let wide = builder.ins().iconcat(lo, hi);
+                ctx.value_map.insert(inst.id, wide);
+                return Ok(());
+            }
             if matches!(inst.ty, IrTy::I128 | IrTy::U128) {
                 return Err(CodegenError::UnsupportedOpcode(
                     WIDE_AGGREGATE_FIELD_MSG.to_string(),
@@ -1753,7 +1772,30 @@ fn lower_inst(
             }
         }
         Opcode::FieldSet => {
-            if let InstData::FieldIndex(idx) = inst.data {
+            if let InstData::WideSlot(idx) = inst.data {
+                let source_ty = ctx
+                    .inst_ty_map
+                    .get(&inst.args[1])
+                    .copied()
+                    .unwrap_or(IrTy::I64);
+                if !matches!(source_ty, IrTy::I128 | IrTy::U128) {
+                    return Err(CodegenError::UnsupportedOpcode(
+                        WIDE_SLOT_TYPE_MSG.to_string(),
+                    ));
+                }
+                let base = ctx.value_map[&inst.args[0]];
+                let new_val = ctx.value_map[&inst.args[1]];
+                let offset = (idx as i32) * 8;
+                let (lo, hi) = builder.ins().isplit(new_val);
+                builder
+                    .ins()
+                    .store(MemFlagsData::trusted(), lo, base, offset);
+                builder
+                    .ins()
+                    .store(MemFlagsData::trusted(), hi, base, offset + 8);
+                let unit = builder.ins().iconst(types::I32, 0);
+                ctx.value_map.insert(inst.id, unit);
+            } else if let InstData::FieldIndex(idx) = inst.data {
                 let base = ctx.value_map[&inst.args[0]];
                 let new_val = ctx.value_map[&inst.args[1]];
                 let offset = (idx as i32) * 8;

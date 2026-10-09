@@ -230,6 +230,12 @@ pub enum InstData {
         align: u32,
     },
     FieldIndex(u32),
+    /// First of the two consecutive 8-byte slots (low limb, then high limb)
+    /// holding a 128-bit enum payload. Distinct from `FieldIndex` so that a
+    /// 128-bit access is only legal where lowering declared the two-slot
+    /// layout; a plain `FieldIndex` access of a 128-bit value (struct field,
+    /// anything lowering failed to mark) is still refused by codegen.
+    WideSlot(u32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

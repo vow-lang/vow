@@ -57,9 +57,11 @@ fn stored_slots_match(insts: Vec<IrInst>) -> bool {
     let mut seen: u64 = 0;
     let mut i: u64 = 0;
     while i < insts.len() {
-        if insts[i].op == IOP_FIELD_SET() && insts[i].dk == IDATA_FIELD() {
+        if insts[i].op == IOP_FIELD_SET() && (insts[i].dk == IDATA_FIELD() || insts[i].dk == IDATA_WIDE_SLOT()) {
             if seen >= want.len() { return false; }
             if insts[i].dv != want[seen] { return false; }
+            // Only the i128 payload (slot 2) goes through the two-slot marker.
+            if (insts[i].dk == IDATA_WIDE_SLOT()) != (insts[i].dv == 2) { return false; }
             seen = seen + 1;
         }
         i = i + 1;

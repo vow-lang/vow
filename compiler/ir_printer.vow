@@ -244,6 +244,11 @@ fn format_data(inst: IrInst) -> String {
         out.push_str(i64_to_string(inst.dv));
         return out;
     }
+    if dk == IDATA_WIDE_SLOT() {
+        let out: String = String::from("wide_slot_");
+        out.push_str(i64_to_string(inst.dv));
+        return out;
+    }
     if dk == IDATA_CONST_U64() {
         let out: String = uint_to_string(inst.dv as u64);
         out.push_str(String::from("u64"));

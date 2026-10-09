@@ -863,6 +863,16 @@ fn payload_slot_width(ty: Ty) -> u32 {
     }
 }
 
+/// Field data for an enum payload access at `slot`: 128-bit payloads use the
+/// explicit two-slot marker so codegen can tell them from a struct field.
+fn payload_field_data(ty: Ty, slot: u32) -> InstData {
+    if payload_slot_width(ty) == 2 {
+        InstData::WideSlot(slot)
+    } else {
+        InstData::FieldIndex(slot)
+    }
+}
+
 /// Slot index (tag is slot 0) of payload `index` given the preceding payload
 /// types: every wide payload before it pushes it up by one slot.
 fn payload_slot(payload_tys: &[Ty], index: usize) -> u32 {
@@ -3459,7 +3469,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     Opcode::FieldSet,
                     Ty::Unit,
                     vec![ptr_id, val_id],
-                    InstData::FieldIndex(payload_slot(&value_tys, i)),
+                    payload_field_data(value_tys[i], payload_slot(&value_tys, i)),
                     span,
                 );
             }
@@ -3584,7 +3594,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                     Opcode::FieldGet,
                                     field_ty,
                                     vec![ptr_id],
-                                    InstData::FieldIndex(payload_slot(&declared_payload_tys, i)),
+                                    payload_field_data(
+                                        field_ty,
+                                        payload_slot(&declared_payload_tys, i),
+                                    ),
                                     span,
                                 );
                                 if let Some(info) = aggregate {
@@ -4167,7 +4180,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 Opcode::FieldGet,
                 payload_ty,
                 vec![ptr_id],
-                InstData::FieldIndex(1),
+                payload_field_data(payload_ty, 1),
                 span,
             );
             if let Some(info) = aggregate {
@@ -4355,7 +4368,7 @@ fn lower_unwrap(ctx: &mut LowerCtx, expr: &Expr, recv_id: InstId, empty_tag: i64
         Opcode::FieldGet,
         payload_ty,
         vec![recv_id],
-        InstData::FieldIndex(1),
+        payload_field_data(payload_ty, 1),
         origin,
     );
     if let Some(info) = aggregate {
@@ -7353,7 +7366,7 @@ fn ok_limb(r: Result<i128, i64>) -> i64 {
                 insts_of(func)
                     .iter()
                     .any(|inst| inst.opcode == Opcode::FieldGet
-                        && inst.data == InstData::FieldIndex(slot)
+                        && inst.data == InstData::WideSlot(slot)
                         && inst.ty == expected),
                 "`{fn_name}` payload slot {slot} must lower as {expected:?}, not a truncated limb:\n{func:#?}"
             );
@@ -7410,11 +7423,17 @@ fn third(m: Mix) -> i64 {
             .iter()
             .filter(|inst| inst.opcode == Opcode::FieldSet)
             .filter_map(|inst| match inst.data {
-                InstData::FieldIndex(slot) => Some(slot),
+                InstData::FieldIndex(slot) | InstData::WideSlot(slot) => Some(slot),
                 _ => None,
             })
             .collect();
         assert_eq!(stored, vec![0, 1, 2, 4], "tag, a, b (2 slots), c");
+        assert!(
+            make_insts
+                .iter()
+                .any(|inst| inst.opcode == Opcode::FieldSet && inst.data == InstData::WideSlot(2)),
+            "the i128 payload must be stored through the explicit two-slot marker:\n{make:#?}"
+        );
 
         let third = find("third");
         assert!(
@@ -7463,7 +7482,7 @@ fn via_call(r0: Result<u128, i64>) -> i64 {
                 insts_of(func)
                     .iter()
                     .any(|inst| inst.opcode == Opcode::FieldGet
-                        && inst.data == InstData::FieldIndex(1)
+                        && inst.data == InstData::WideSlot(1)
                         && inst.ty == expected),
                 "`{fn_name}` must read the Ok slot as {expected:?}, not a truncated limb:\n{func:#?}"
             );
