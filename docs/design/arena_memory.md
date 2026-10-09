@@ -653,9 +653,8 @@ hooks as the root wrappers). It does turn arena close into a use-after-free
 oracle: closing an arena marks every tracked descriptor inside its chunks freed,
 so a `Vec` operation after its region closed reports `UseAfterFree`, which is
 how a region-analysis placement bug surfaces. The same programs stay flat under
-it; Section
-5c of `full_test.sh` builds the container-growth and effect-outlives fixtures in
-sanitize mode with both compilers and checks their output.
+it; Section 5c of `full_test.sh` builds the container-growth and effect-outlives
+fixtures in sanitize mode with both compilers and checks their output.
 
 `HashMap` and `BTreeMap` receivers need no region at all: a map grows in the
 arena recorded in its own header, so the receiver of `insert` is never the

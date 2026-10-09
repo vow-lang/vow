@@ -1672,10 +1672,12 @@ pub unsafe extern "C" fn __vow_vec_push(
     elem_size: usize,
     elem_align: usize,
 ) {
+    // The growth arena is read out of the descriptor, so the sanitizer has to
+    // look at the address first; the no-sanitize helper avoids a second check.
     sanitize_on_push(vec as usize);
     unsafe {
         with_growth_arena(vec, |arena| {
-            __vow_vec_push_in_arena(arena, vec, elem, elem_size, elem_align)
+            vec_push_no_sanitize_in_arena(arena, vec, elem, elem_size, elem_align, "Vec::push")
         })
     }
 }
@@ -1718,8 +1720,7 @@ pub unsafe extern "C" fn __vow_vec_push_val_in_arena(
     // Sanitize + cap-check here with the precise operation name. Delegating
     // the whole path to __vow_vec_push would (a) double-sanitize and (b)
     // report the trap as "Vec::push" instead of "Vec::push_val". Delegate
-    // the actual push to the no-sanitize helper so the shadow table records
-    // a single generation per appended element.
+    // the actual push to the no-sanitize helper.
     sanitize_on_push(vec as usize);
     let bytes = value.to_ne_bytes();
     unsafe { vec_push_no_sanitize_in_arena(arena, vec, bytes.as_ptr(), 8, 8, "Vec::push_val") };
@@ -1728,7 +1729,12 @@ pub unsafe extern "C" fn __vow_vec_push_val_in_arena(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
     sanitize_on_push(vec as usize);
-    unsafe { with_growth_arena(vec, |arena| __vow_vec_push_val_in_arena(arena, vec, value)) }
+    let bytes = value.to_ne_bytes();
+    unsafe {
+        with_growth_arena(vec, |arena| {
+            vec_push_no_sanitize_in_arena(arena, vec, bytes.as_ptr(), 8, 8, "Vec::push_val")
+        })
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -2124,9 +2130,11 @@ pub unsafe extern "C" fn __vow_string_push_str_in_candidate_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_str(dest: *mut u8, src: *const u8) {
+    sanitize_on_read(dest as usize, 0);
+    sanitize_on_read(src as usize, 0);
     unsafe {
         with_growth_arena(dest, |arena| {
-            __vow_string_push_str_in_arena(arena, dest, src)
+            string_push_str_in_arena_no_sanitize(arena, dest, src)
         })
     }
 }
@@ -2218,8 +2226,8 @@ pub unsafe extern "C" fn __vow_string_push_byte_in_arena(
     }
     // Sanitize once here, then delegate to the no-sanitize inner helper with
     // a type-specific operation name. This keeps both orderings correct:
-    // sanitizer runs before any dereference (UAF detected first), and the
-    // shadow table records a single generation for the one appended byte.
+    // sanitizer runs before any dereference (UAF detected first) and checks
+    // the descriptor once.
     sanitize_on_push(s as usize);
     unsafe { string_push_byte_in_arena_no_sanitize(arena, s, byte as u8) };
 }
@@ -2251,7 +2259,12 @@ pub unsafe extern "C" fn __vow_string_push_byte_in_candidate_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_byte(s: *mut u8, byte: u64) {
-    unsafe { with_growth_arena(s, |arena| __vow_string_push_byte_in_arena(arena, s, byte)) }
+    sanitize_on_push(s as usize);
+    unsafe {
+        with_growth_arena(s, |arena| {
+            string_push_byte_in_arena_no_sanitize(arena, s, byte as u8)
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -8890,6 +8903,8 @@ mod tests {
                 "truncate" => unsafe { __vow_vec_truncate(v, 0) },
                 "len" => drop(unsafe { __vow_vec_len(v) }),
                 "get" => drop(unsafe { __vow_vec_get_val(v, 0) }),
+                "string_push_byte" => unsafe { __vow_string_push_byte(v, 65) },
+                "string_push_str" => unsafe { __vow_string_push_str(v, v) },
                 other => panic!("unknown sanitize_uaf hook {other}"),
             }
             eprintln!("rodata_trap_worker: use after arena close did NOT trap");
@@ -9237,6 +9252,8 @@ mod tests {
             ("truncate", "truncate"),
             ("len", "read"),
             ("get", "read"),
+            ("string_push_byte", "push"),
+            ("string_push_str", "read"),
         ] {
             let (out, stderr) = spawn_trap_worker(&format!("sanitize_uaf_{hook}"));
             assert_eq!(
