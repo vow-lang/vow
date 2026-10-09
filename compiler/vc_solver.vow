@@ -1,0 +1,190 @@
+module VcSolver
+
+// Bitwuzla verdict and model parsing for the native verifier. Everything here
+// is pure; the child-process driver is appended by the slice that spawns the
+// solver. Anything that is not a recognised verdict, or a `sat` whose model is
+// unparsable or incomplete, is `VC_ANS_ERROR` -- never `unsat`.
+
+fn VC_ANS_SAT() -> i64 { 0 }
+fn VC_ANS_UNSAT() -> i64 { 1 }
+fn VC_ANS_UNKNOWN() -> i64 { 2 }
+fn VC_ANS_ERROR() -> i64 { 3 }
+fn VC_ANS_TIMEOUT() -> i64 { 4 }
+fn VC_ANS_NOT_FOUND() -> i64 { 5 }
+
+struct VcParsed {
+    ok: i64,
+    value: i64,
+}
+
+struct VcModel {
+    ok: i64,
+    values: Vec<i64>,
+}
+
+fn vc_is_ws(b: i64) -> bool {
+    b == 32 || b == 9 || b == 10 || b == 13
+}
+
+fn vc_trim(s: String) -> String {
+    let n: u64 = s.len();
+    let mut start: u64 = 0;
+    while start < n && vc_is_ws(s.byte_at(start)) {
+        start = start + 1;
+    }
+    if start >= n { return String::from(""); }
+    let mut end: u64 = n;
+    while end > start && vc_is_ws(s.byte_at(end - 1)) {
+        end = end - 1;
+    }
+    s.substring(start, end)
+}
+
+fn vc_first_line(s: String) -> String {
+    let n: u64 = s.len();
+    let mut i: u64 = 0;
+    while i < n && s.byte_at(i) != 10 {
+        i = i + 1;
+    }
+    vc_trim(s.substring(0, i))
+}
+
+fn vc_find_from(hay: String, from: u64, needle: String) -> i64 {
+    let hlen: u64 = hay.len();
+    let nlen: u64 = needle.len();
+    if nlen == 0 || nlen > hlen { return -1; }
+    let mut i: u64 = from;
+    while i + nlen <= hlen {
+        let mut j: u64 = 0;
+        let mut matched: bool = true;
+        while j < nlen && matched {
+            if hay.byte_at(i + j) != needle.byte_at(j) {
+                matched = false;
+            }
+            j = j + 1;
+        }
+        if matched { return i as i64; }
+        i = i + 1;
+    }
+    -1
+}
+
+// VC_ANS_SAT / UNSAT / UNKNOWN from the first stdout line; VC_ANS_ERROR for
+// anything else, including empty output.
+fn vc_parse_check_sat(out: String) -> i64 {
+    let line: String = vc_first_line(out);
+    if line == String::from("sat") { return VC_ANS_SAT(); }
+    if line == String::from("unsat") { return VC_ANS_UNSAT(); }
+    if line == String::from("unknown") { return VC_ANS_UNKNOWN(); }
+    VC_ANS_ERROR()
+}
+
+fn vc_digit(b: i64, base: u64) -> i64 {
+    let mut d: i64 = -1;
+    if b >= 48 && b <= 57 {
+        d = b - 48;
+    } else if b >= 97 && b <= 102 {
+        d = b - 87;
+    } else if b >= 65 && b <= 70 {
+        d = b - 55;
+    }
+    if d >= base as i64 { return -1; }
+    d
+}
+
+fn vc_value_end_ok(out: String, i: u64) -> bool {
+    if i >= out.len() { return true; }
+    let b: i64 = out.byte_at(i);
+    vc_is_ws(b) || b == 41
+}
+
+fn vc_parse_radix_value(out: String, start: u64, base: u64, want_digits: u64) -> VcParsed {
+    let n: u64 = out.len();
+    let mut j: u64 = start;
+    let mut acc: u64 = 0;
+    let mut digits: u64 = 0;
+    let mut going: bool = true;
+    while j < n && going {
+        let d: i64 = vc_digit(out.byte_at(j), base);
+        if d < 0 {
+            going = false;
+        } else {
+            acc = acc * base + d as u64;
+            digits = digits + 1;
+            j = j + 1;
+        }
+    }
+    if digits != want_digits || !vc_value_end_ok(out, j) {
+        return VcParsed { ok: 0, value: 0 };
+    }
+    VcParsed { ok: 1, value: acc as i64 }
+}
+
+// `(_ bv<N> 64)` starting at the opening parenthesis.
+fn vc_parse_bv_app(out: String, start: u64) -> VcParsed {
+    let prefix: String = String::from("(_ bv");
+    let n: u64 = out.len();
+    let plen: u64 = prefix.len();
+    if start + plen > n || out.substring(start, start + plen) != prefix {
+        return VcParsed { ok: 0, value: 0 };
+    }
+    let mut j: u64 = start + plen;
+    while j < n && out.byte_at(j) >= 48 && out.byte_at(j) <= 57 {
+        j = j + 1;
+    }
+    if j == start + plen {
+        return VcParsed { ok: 0, value: 0 };
+    }
+    let tail: String = String::from(" 64)");
+    if j + tail.len() > n || out.substring(j, j + tail.len()) != tail {
+        return VcParsed { ok: 0, value: 0 };
+    }
+    match out.substring(start + plen, j).parse_u64() {
+        Option::Some(v) => VcParsed { ok: 1, value: v as i64 },
+        Option::None => VcParsed { ok: 0, value: 0 },
+    }
+}
+
+// A 64-bit bit-vector literal at `pos` (after optional whitespace): `#b`, `#x`
+// or `(_ bvN 64)`, read as a two's-complement i64.
+fn vc_parse_value_at(out: String, pos: u64) -> VcParsed {
+    let n: u64 = out.len();
+    let mut i: u64 = pos;
+    while i < n && vc_is_ws(out.byte_at(i)) {
+        i = i + 1;
+    }
+    if i + 2 < n && out.byte_at(i) == 35 {
+        let kind: i64 = out.byte_at(i + 1);
+        if kind == 98 { return vc_parse_radix_value(out, i + 2, 2, 64); }
+        if kind == 120 { return vc_parse_radix_value(out, i + 2, 16, 16); }
+        return VcParsed { ok: 0, value: 0 };
+    }
+    if i < n && out.byte_at(i) == 40 {
+        return vc_parse_bv_app(out, i);
+    }
+    VcParsed { ok: 0, value: 0 }
+}
+
+// Values for `names`, in order, from a `get-value` answer. Every name must be
+// present with a well-formed 64-bit value; otherwise `ok` is 0.
+fn vc_parse_model(out: String, names: Vec<String>) -> VcModel {
+    let values: Vec<i64> = Vec::new();
+    let mut ok: i64 = 1;
+    let mut k: u64 = 0;
+    while k < names.len() {
+        let key: String = String::from("(");
+        key.push_str(names[k]);
+        key.push_str(String::from(" "));
+        let at: i64 = vc_find_from(out, 0, key);
+        if at < 0 {
+            ok = 0;
+            values.push(0);
+        } else {
+            let p: VcParsed = vc_parse_value_at(out, at as u64 + key.len());
+            if p.ok == 0 { ok = 0; }
+            values.push(p.value);
+        }
+        k = k + 1;
+    }
+    VcModel { ok: ok, values: values }
+}
