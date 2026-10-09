@@ -721,6 +721,13 @@ mod tests {
         }
     }
 
+    fn block_expr(stmts: Vec<Stmt>) -> Expr {
+        Expr {
+            kind: ExprKind::Block(Box::new(block_with_stmts(stmts))),
+            span: dummy_span(),
+        }
+    }
+
     fn true_expr() -> Expr {
         Expr {
             kind: ExprKind::Lit(Lit::Bool(true)),
@@ -1594,25 +1601,15 @@ mod tests {
             kind: ExprKind::If {
                 condition: Box::new(true_expr()),
                 then_branch: Box::new(block_with_stmts(then_stmts)),
-                else_branch: else_stmts.map(|stmts| {
-                    Box::new(Expr {
-                        kind: ExprKind::Block(Box::new(block_with_stmts(stmts))),
-                        span: dummy_span(),
-                    })
-                }),
+                else_branch: else_stmts.map(|stmts| Box::new(block_expr(stmts))),
             },
             span: dummy_span(),
         }
     }
 
-    fn run_linear(stmts: Vec<Stmt>, trailing: Option<Expr>) -> Vec<Diagnostic> {
+    fn run_linear(stmts: Vec<Stmt>) -> Vec<Diagnostic> {
         let env = make_env_with_linear_struct("FileHandle");
-        let body = Block {
-            stmts,
-            trailing_expr: trailing.map(Box::new),
-            span: dummy_span(),
-        };
-        let fn_def = make_fn_def(vec![], body);
+        let fn_def = make_fn_def(vec![], block_with_stmts(stmts));
         let mut emitter = TestEmitter(vec![]);
         check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
         emitter.0
@@ -1624,14 +1621,12 @@ mod tests {
 
     #[test]
     fn test_assign_after_consume_rearms_linear() {
-        let diags = run_linear(
-            vec![
-                let_local("h", named_type("FileHandle"), "open"),
-                consume_stmt(),
-                assign_stmt("h", "open"),
-            ],
-            Some(call_with("consume", "h")),
-        );
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            assign_stmt("h", "open"),
+            consume_stmt(),
+        ]);
 
         assert!(diags.is_empty(), "Got: {diags:?}");
     }
@@ -1639,49 +1634,40 @@ mod tests {
     #[test]
     fn test_assign_self_wrap_rearms_once() {
         let wrap_assign = expr_stmt(assign_expr(ident_expr("h"), call_with("wrap", "h")));
-        let ok = run_linear(
-            vec![
-                let_local("h", named_type("FileHandle"), "open"),
-                wrap_assign.clone(),
-            ],
-            Some(call_with("consume", "h")),
-        );
+        let ok = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            wrap_assign.clone(),
+            consume_stmt(),
+        ]);
         assert!(ok.is_empty(), "Got: {ok:?}");
 
-        let leaked = run_linear(
-            vec![
-                let_local("h", named_type("FileHandle"), "open"),
-                wrap_assign,
-            ],
-            None,
-        );
+        let leaked = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            wrap_assign,
+        ]);
         assert_eq!(leaked.len(), 1, "Got: {leaked:?}");
         assert!(leaked[0].message.contains("never consumed"));
     }
 
     #[test]
     fn test_assign_over_available_is_deferred_to_region_check() {
-        let diags = run_linear(
-            vec![
-                let_local("h", named_type("FileHandle"), "open"),
-                assign_stmt("h", "open2"),
-            ],
-            Some(call_with("consume", "h")),
-        );
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            assign_stmt("h", "open2"),
+            consume_stmt(),
+        ]);
 
         assert!(diags.is_empty(), "Got: {diags:?}");
     }
 
     #[test]
     fn test_assign_in_else_less_if_after_consume_stays_consumed() {
-        let diags = run_linear(
-            vec![
-                let_local("h", named_type("FileHandle"), "open"),
-                consume_stmt(),
-                expr_stmt(if_expr(vec![assign_stmt("h", "open")], None)),
-            ],
-            Some(call_with("consume", "h")),
-        );
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            expr_stmt(if_expr(vec![assign_stmt("h", "open")], None)),
+            consume_stmt(),
+        ]);
 
         assert_eq!(diags.len(), 1, "Got: {diags:?}");
         assert!(diags[0].message.contains("already consumed"));
@@ -1689,14 +1675,12 @@ mod tests {
 
     #[test]
     fn test_assign_in_one_arm_with_else_after_consume_is_maybe_consumed() {
-        let diags = run_linear(
-            vec![
-                let_local("h", named_type("FileHandle"), "open"),
-                consume_stmt(),
-                expr_stmt(if_expr(vec![assign_stmt("h", "open")], Some(vec![]))),
-            ],
-            Some(call_with("consume", "h")),
-        );
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            expr_stmt(if_expr(vec![assign_stmt("h", "open")], Some(vec![]))),
+            consume_stmt(),
+        ]);
 
         assert_eq!(diags.len(), 2, "Got: {diags:?}");
         assert!(diags[0].message.contains("may already be consumed"));
@@ -1709,17 +1693,15 @@ mod tests {
 
     #[test]
     fn test_assign_in_both_branches_after_consume_rearms() {
-        let diags = run_linear(
-            vec![
-                let_local("h", named_type("FileHandle"), "open"),
-                consume_stmt(),
-                expr_stmt(if_expr(
-                    vec![assign_stmt("h", "open")],
-                    Some(vec![assign_stmt("h", "open")]),
-                )),
-            ],
-            Some(call_with("consume", "h")),
-        );
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            expr_stmt(if_expr(
+                vec![assign_stmt("h", "open")],
+                Some(vec![assign_stmt("h", "open")]),
+            )),
+            consume_stmt(),
+        ]);
 
         assert!(diags.is_empty(), "Got: {diags:?}");
     }
@@ -1739,14 +1721,12 @@ mod tests {
                 span: dummy_span(),
             },
         ));
-        let diags = run_linear(
-            vec![
-                let_local("h", named_type("FileHandle"), "open"),
-                consume_stmt(),
-                field_assign,
-            ],
-            Some(call_with("consume", "h")),
-        );
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            field_assign,
+            consume_stmt(),
+        ]);
 
         assert_eq!(diags.len(), 1, "Got: {diags:?}");
         assert!(diags[0].message.contains("already consumed"));
@@ -1754,15 +1734,12 @@ mod tests {
 
     #[test]
     fn test_shadowing_nonlinear_let_over_consumed_linear_not_rearmed() {
-        let diags = run_linear(
-            vec![
-                let_local("h", named_type("FileHandle"), "open"),
-                consume_stmt(),
-                let_local("h", named_type("i64"), "zero"),
-                assign_stmt("h", "one"),
-            ],
-            None,
-        );
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            let_local("h", named_type("i64"), "zero"),
+            assign_stmt("h", "one"),
+        ]);
 
         assert!(diags.is_empty(), "Got: {diags:?}");
     }
@@ -1804,30 +1781,24 @@ mod tests {
             init: Box::new(ident_expr("zero")),
             span: dummy_span(),
         };
-        let diags = run_linear(
-            vec![
-                let_local("h", named_type("FileHandle"), "open"),
-                consume_stmt(),
-                tuple_let,
-                assign_stmt("h", "one"),
-            ],
-            None,
-        );
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            tuple_let,
+            assign_stmt("h", "one"),
+        ]);
 
         assert!(diags.is_empty(), "Got: {diags:?}");
     }
 
     #[test]
     fn test_assign_in_while_after_consume_is_maybe_consumed_after_loop() {
-        let diags = run_linear(
-            vec![
-                let_local("h", named_type("FileHandle"), "open"),
-                consume_stmt(),
-                expr_stmt(while_expr(vec![assign_stmt("h", "open")])),
-                consume_stmt(),
-            ],
-            None,
-        );
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            expr_stmt(while_expr(vec![assign_stmt("h", "open")])),
+            consume_stmt(),
+        ]);
 
         assert_eq!(diags.len(), 2, "Got: {diags:?}");
         assert!(diags[0].message.contains("may already be consumed"));
@@ -1835,23 +1806,13 @@ mod tests {
 
     #[test]
     fn test_inner_block_shadow_does_not_forget_outer_consumed_linear() {
-        let inner = expr_stmt(Expr {
-            kind: ExprKind::Block(Box::new(block_with_stmts(vec![let_local(
-                "h",
-                named_type("i64"),
-                "zero",
-            )]))),
-            span: dummy_span(),
-        });
-        let diags = run_linear(
-            vec![
-                let_local("h", named_type("FileHandle"), "open"),
-                consume_stmt(),
-                inner,
-                consume_stmt(),
-            ],
-            None,
-        );
+        let inner = expr_stmt(block_expr(vec![let_local("h", named_type("i64"), "zero")]));
+        let diags = run_linear(vec![
+            let_local("h", named_type("FileHandle"), "open"),
+            consume_stmt(),
+            inner,
+            consume_stmt(),
+        ]);
 
         assert_eq!(diags.len(), 1, "Got: {diags:?}");
         assert!(diags[0].message.contains("already consumed"));
