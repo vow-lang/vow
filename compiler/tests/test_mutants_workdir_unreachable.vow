@@ -23,6 +23,14 @@ fn main() -> i32 [io, read, write] {
     let rc_missing: i64 = run_shell(cd_with_log(missing, String::from("true"), log, String::from("tier1"), false), 10000);
     if rc_missing != 125 { return 10; }
 
+    let bad_log: String = String::from("");
+    bad_log.push_str(scratch);
+    bad_log.push_str(String::from("/no/such/dir/oracle.log"));
+    let rc_bad_log: i64 = run_shell(cd_with_log(scratch, String::from("true"), bad_log, String::from("tier1"), false), 10000);
+    if rc_bad_log != 125 { return 16; }
+    let rc_bad_log_append: i64 = run_shell(cd_with_log(scratch, String::from("true"), bad_log, String::from("tier1"), true), 10000);
+    if rc_bad_log_append != 125 { return 17; }
+
     let rc_ok: i64 = run_shell(cd_with_log(scratch, String::from("true"), log, String::from("tier1"), false), 10000);
     if rc_ok != 0 { return 11; }
     let rc_three: i64 = run_shell(cd_with_log(scratch, String::from("exit 3"), log, String::from("tier1"), false), 10000);
