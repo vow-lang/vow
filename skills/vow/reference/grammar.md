@@ -923,6 +923,9 @@ A linear value that is no longer needed is discharged with the intrinsic
 function that consumes it, returning it, or matching it are the other ways to
 satisfy the obligation; there is no implicit end-of-scope discharge, so a live
 obligation at scope exit is `RegionLinear`.
+Assigning a new value to a `mut` linear local whose previous value was already
+consumed starts a fresh obligation that must itself be consumed; overwriting a
+value that is still live discards it and is reported as `RegionLinear`.
 An unbound `_` match catchall cannot discard a still-reachable linear payload:
 every variant that owns a linear payload must first have an explicit arm that
 binds and consumes or transfers that payload.

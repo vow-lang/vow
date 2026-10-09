@@ -1,0 +1,17 @@
+// TEST: error-code RegionLinear
+module LinearReassignOverwritesLive
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn open(fd: i64) -> Handle {
+    Handle { fd: fd }
+}
+
+fn main() -> i64 {
+    let mut h: Handle = open(1);
+    h = open(2);
+    drop(h);
+    0
+}

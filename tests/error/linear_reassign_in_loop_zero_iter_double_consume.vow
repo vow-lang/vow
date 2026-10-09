@@ -1,0 +1,23 @@
+// TEST: error-code LinearTypeViolation
+module LinearReassignInLoopZeroIterDoubleConsume
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn open(fd: i64) -> Handle {
+    Handle { fd: fd }
+}
+
+fn main() -> i64 {
+    let mut h: Handle = open(1);
+    let mut i: i64 = 0;
+    let n: i64 = 0;
+    drop(h);
+    while i < n {
+        h = open(2);
+        i = i + 1;
+    }
+    drop(h);
+    0
+}
