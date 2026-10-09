@@ -84,7 +84,33 @@ fn peek_infix_op(parser: &Parser) -> Option<(BinOp, usize)> {
 }
 
 impl Parser {
+    // Whether the unary chain `lhs`, which began at token `start`, ended in an
+    // unparenthesised block-like operand. That operand ends the expression, so
+    // no postfix operator or cast may follow the chain.
+    fn unary_chain_ends_in_block(&self, start: usize, lhs: &Expr) -> bool {
+        let mut i = start;
+        while matches!(
+            self.tokens[i].kind,
+            TokenKind::Minus
+                | TokenKind::Bang
+                | TokenKind::Amp
+                | TokenKind::AmpAmp
+                | TokenKind::KwMut
+        ) {
+            i += 1;
+        }
+        if self.tokens[i].kind == TokenKind::LParen {
+            return false;
+        }
+        let mut leaf = lhs;
+        while let ExprKind::UnaryOp { operand, .. } = &leaf.kind {
+            leaf = operand;
+        }
+        leaf.kind.is_block_like()
+    }
+
     pub fn parse_expr_inner(&mut self, min_bp: u8) -> Expr {
+        let start_cursor = self.cursor;
         let parenthesised = self.at(&TokenKind::LParen);
         let mut lhs = self.parse_prefix();
 
@@ -92,10 +118,13 @@ impl Parser {
             return lhs;
         }
 
-        // A postfix operator never applies to a whole unary, binary or
-        // assignment expression: when one follows, its operand ended in an
+        // A postfix operator never applies to a whole binary or assignment
+        // expression, nor to a unary one whose operand ended in an
         // unparenthesised block-like expression, which ends the expression.
-        let mut postfix_ok = parenthesised || !matches!(lhs.kind, ExprKind::UnaryOp { .. });
+        // `as` is the one postfix operator that binds looser than a prefix
+        // operator: it applies to the finished unary (`-x as u64` is
+        // `(-x) as u64`), so a prefix operand leaves it for the caller.
+        let mut postfix_ok = !matches!(lhs.kind, ExprKind::UnaryOp { .. });
 
         loop {
             let kind = self.peek_kind().clone();
@@ -108,6 +137,12 @@ impl Parser {
                     | TokenKind::LBracket
                     | TokenKind::KwAs
             ) {
+                if kind == TokenKind::KwAs && min_bp >= PREFIX_BINDING_POWER {
+                    break;
+                }
+                if !postfix_ok && matches!(lhs.kind, ExprKind::UnaryOp { .. }) {
+                    postfix_ok = !self.unary_chain_ends_in_block(start_cursor, &lhs);
+                }
                 if !postfix_ok {
                     break;
                 }
@@ -1476,8 +1511,25 @@ mod tests {
         ("x as u64 << 1", "x as u64 << 1"),
         ("x as u64 >> 1 == 0", "x as u64 >> 1 == 0"),
         ("x as u64 as i64", "x as u64 as i64"),
-        ("-x as u64", "-x as u64"),
+        ("-x as u64", "(-x) as u64"),
         ("(-x) as u64", "(-x) as u64"),
+        ("-(x as u64)", "-(x as u64)"),
+        ("!x as i64", "(!x) as i64"),
+        ("-1 as i8", "(-1) as i8"),
+        ("--x as u64", "(--x) as u64"),
+        ("-x as u64 + 1", "(-x) as u64 + 1"),
+        ("a - b as u64", "a - b as u64"),
+        ("a - -b as u64", "a - (-b) as u64"),
+        ("-x as u64 as i64", "(-x) as u64 as i64"),
+        ("-x as u64 < y", "(-x) as u64 < y"),
+        ("-x as u64 << 1", "(-x) as u64 << 1"),
+        ("-x.f as u64", "(-x.f) as u64"),
+        ("-v[0] as i64", "(-v[0]) as i64"),
+        ("-f(a) as i64", "(-f(a)) as i64"),
+        (
+            "-(if c { 1 } else { 2 }) as u64",
+            "(-if c {\n    1\n} else {\n    2\n}) as u64",
+        ),
         ("(x + 1) as i64", "(x + 1) as i64"),
         ("x + 1 as i64", "x + 1 as i64"),
         ("v.len() as i64 + 1", "v.len() as i64 + 1"),
@@ -1494,6 +1546,65 @@ mod tests {
             let reprinted = crate::printer::print_expr(&parse_no_errors(&printed));
             assert_eq!(reprinted, printed, "re-printing {src:?}");
         }
+    }
+
+    #[test]
+    fn unary_minus_and_not_bind_tighter_than_cast() {
+        for (src, op) in [("-a as u64", UnOp::Neg), ("!x as i64", UnOp::Not)] {
+            match &parse_no_errors(src).kind {
+                ExprKind::Cast { expr, .. } => match &expr.kind {
+                    ExprKind::UnaryOp { op: got, operand } => {
+                        assert_eq!(*got, op, "{src:?}");
+                        assert!(matches!(operand.kind, ExprKind::Ident(_)), "{src:?}");
+                    }
+                    other => panic!("{src:?}: expected UnaryOp under Cast, got {other:?}"),
+                },
+                other => panic!("{src:?}: expected Cast, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn explicitly_parenthesised_cast_stays_under_the_unary() {
+        match &parse_no_errors("-(a as u64)").kind {
+            ExprKind::UnaryOp { op, operand } => {
+                assert_eq!(*op, UnOp::Neg);
+                assert!(matches!(operand.kind, ExprKind::Cast { .. }));
+            }
+            other => panic!("expected UnaryOp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cast_of_unary_chains_and_composes_with_binary_operators() {
+        match &parse_no_errors("-x as u64 + 1").kind {
+            ExprKind::BinaryOp { op, lhs, .. } => {
+                assert_eq!(*op, BinOp::Add);
+                assert!(matches!(&lhs.kind, ExprKind::Cast { expr, .. }
+                    if matches!(expr.kind, ExprKind::UnaryOp { .. })));
+            }
+            other => panic!("expected Add, got {other:?}"),
+        }
+        match &parse_no_errors("a - b as u64").kind {
+            ExprKind::BinaryOp { op, rhs, .. } => {
+                assert_eq!(*op, BinOp::Sub);
+                assert!(matches!(rhs.kind, ExprKind::Cast { .. }));
+            }
+            other => panic!("expected Sub, got {other:?}"),
+        }
+        match &parse_no_errors("--x as u64").kind {
+            ExprKind::Cast { expr, .. } => match &expr.kind {
+                ExprKind::UnaryOp { operand, .. } => {
+                    assert!(matches!(operand.kind, ExprKind::UnaryOp { .. }))
+                }
+                other => panic!("expected nested UnaryOp, got {other:?}"),
+            },
+            other => panic!("expected Cast, got {other:?}"),
+        }
+        assert!(matches!(
+            parse_no_errors("-x as u64?").kind,
+            ExprKind::Question { .. }
+        ));
     }
 
     #[test]
@@ -1553,6 +1664,7 @@ mod tests {
     fn postfix_after_an_operand_ending_in_a_block_like_expression_is_rejected() {
         for body in [
             "-if c { 1 } else { 2 } as u64",
+            "!-if c { 1 } else { 2 } as u64",
             "3 * if c { 1 } else { 2 } as u64",
             "3 * if c { 1 } else { 2 }.len()",
             "x = if c { 1 } else { 2 } as u64",

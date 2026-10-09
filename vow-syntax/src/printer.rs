@@ -570,7 +570,7 @@ fn print_expr_at(expr: &Expr, level: usize) -> String {
             };
             // `-!` would lex as the checked-subtraction token.
             let needs_parens = match &operand.kind {
-                ExprKind::BinaryOp { .. } => true,
+                ExprKind::BinaryOp { .. } | ExprKind::Cast { .. } => true,
                 ExprKind::UnaryOp { op: inner_op, .. } => {
                     matches!((op, inner_op), (UnOp::Neg, UnOp::Not))
                 }
@@ -1291,7 +1291,7 @@ mod tests {
     }
 
     #[test]
-    fn test_neg_of_cast_needs_no_parens() {
+    fn test_unary_of_cast_is_parenthesised() {
         let cast = Expr {
             kind: ExprKind::Cast {
                 expr: Box::new(ident_expr("a")),
@@ -1299,7 +1299,24 @@ mod tests {
             },
             span: s(),
         };
-        assert_eq!(print_expr(&unary_expr(UnOp::Neg, cast)), "-a as u64");
+        assert_eq!(
+            print_expr(&unary_expr(UnOp::Neg, cast.clone())),
+            "-(a as u64)"
+        );
+        assert_eq!(print_expr(&unary_expr(UnOp::Not, cast)), "!(a as u64)");
+    }
+
+    #[test]
+    fn test_cast_of_unary_is_parenthesised() {
+        let neg = unary_expr(UnOp::Neg, ident_expr("a"));
+        let cast = Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(neg),
+                target_ty: Box::new(named_ty("u64")),
+            },
+            span: s(),
+        };
+        assert_eq!(print_expr(&cast), "(-a) as u64");
     }
 
     fn question_expr(inner: Expr) -> Expr {
