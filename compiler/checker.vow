@@ -4621,12 +4621,20 @@ fn check_effects_fn(e: CheckEnv, m: Module, fid: i64) [io] {
                     let mut bit: i64 = 1;
                     while bit <= 16 {
                         if has_eff_bit(needed_eff, bit) && !effect_covered(declared_eff, bit) {
+                            let ename: String = effect_bit_name(bit);
+                            let msg: String = String::from("function `");
+                            msg.push_str(fname);
+                            msg.push_str(String::from("` calls `"));
+                            msg.push_str(cname);
+                            msg.push_str(String::from("` which requires effect `"));
+                            msg.push_str(ename);
+                            msg.push_str(String::from("`"));
                             let hint: String = String::from("add '");
-                            hint.push_str(effect_bit_name(bit));
+                            hint.push_str(ename);
                             hint.push_str(String::from("' to `"));
                             hint.push_str(fname);
                             hint.push_str(String::from("`'s effect list"));
-                            env_emit_error_code_hint(e, EC_EFFECT_VIOLATION(), String::from("effectful call from pure function"), fn_span(a, fid), hint);
+                            env_emit_error_code_hint(e, EC_EFFECT_VIOLATION(), msg, fn_span(a, fid), hint);
                         }
                         bit = bit * 2;
                     }
