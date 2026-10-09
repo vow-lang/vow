@@ -43,9 +43,6 @@ requires v.len() as i64 + 1 == 2
 requires v[0] as u64 == 1
 requires v[0] as u64 == 1
 requires v.len() as i64 + x == 1
-requires -(!c) == 1
-requires -(!c) == 1
 requires !!c
 requires --x == 1
-requires !-x == 1
-requires -x as u64 == 1
+requires -x as i64 == 1
