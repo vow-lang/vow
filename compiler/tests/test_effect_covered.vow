@@ -1,0 +1,34 @@
+module TestEffectCovered
+
+use env
+
+fn main() -> i32 {
+    let io: i64 = 1;
+    let panic: i64 = 2;
+    let read: i64 = 4;
+    let unsafe_: i64 = 8;
+    let write: i64 = 16;
+
+    if !effect_covered(0, 0) { return 1; }
+    if !effect_covered(io, 0) { return 2; }
+    if !effect_covered(io, io) { return 3; }
+    if effect_covered(0, io) { return 4; }
+
+    if effect_covered(io, read) { return 5; }
+    if effect_covered(io, write) { return 6; }
+    if effect_covered(read, io) { return 7; }
+    if effect_covered(write, io) { return 8; }
+    if effect_covered(read, write) { return 9; }
+
+    if !effect_covered(io + read, read) { return 10; }
+    if !effect_covered(io + write, write) { return 11; }
+    if !effect_covered(io + read + write, io + read + write) { return 12; }
+    if effect_covered(io + read, io + write) { return 13; }
+
+    if effect_covered(io, panic) { return 14; }
+    if !effect_covered(panic, panic) { return 15; }
+    if effect_covered(io + read, unsafe_) { return 16; }
+    if !effect_covered(unsafe_, unsafe_) { return 17; }
+
+    0
+}

@@ -1,0 +1,13 @@
+// TEST: error-code EffectViolation
+//
+// Issue #635: `io` is independent of `read`; a function that reads must
+// declare `[read]` (e.g. `[io, read]`) even when it already declares `[io]`.
+module io_does_not_cover_read
+
+fn load(path: String) -> String [io] {
+    fs_read(path)
+}
+
+fn main() -> i32 [io] {
+    0
+}

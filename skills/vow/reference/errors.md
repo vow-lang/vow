@@ -266,7 +266,7 @@ fn f() -> () {
 }
 ```
 
-**Fix:** Add the required effect to the function signature: `fn f() -> () [io]`.
+**Fix:** Add the required effect to the function signature: `fn f() -> () [io]`. Effects are independent: `[io]` does not cover `read` or `write`, so a function that prints and reads a file declares `[io, read]`.
 
 ```vow
 fn mark(p: Point) -> bool {

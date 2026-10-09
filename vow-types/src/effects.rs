@@ -343,13 +343,7 @@ fn collect_loop_vows_in_expr<'a>(expr: &'a Expr, out: &mut Vec<&'a VowBlock>) {
 }
 
 fn effect_covered(declared: &[Effect], needed: &Effect) -> bool {
-    if declared.contains(needed) {
-        return true;
-    }
-    if (needed == &Effect::Read || needed == &Effect::Write) && declared.contains(&Effect::IO) {
-        return true;
-    }
-    false
+    declared.contains(needed)
 }
 
 // Panic sites are builtin aborts the verifier cannot model: `.unwrap()` only.
@@ -754,16 +748,18 @@ mod tests {
     }
 
     #[test]
-    fn io_subsumes_read() {
+    fn io_does_not_cover_read() {
         let env = env_with_read_file();
         let caller = make_fn("caller", vec![Effect::IO], simple_body("read_file"));
         let mut emitter = TestEmitter(vec![]);
         check_fn_effects(&caller, &env, "test.vow", &mut emitter);
-        assert!(emitter.0.is_empty());
+        assert_eq!(emitter.0.len(), 1);
+        assert_eq!(emitter.0[0].code, ErrorCode::EffectViolation);
+        assert!(emitter.0[0].message.contains("read_file"));
     }
 
     #[test]
-    fn io_subsumes_write() {
+    fn io_does_not_cover_write() {
         let mut env = TypeEnv::new();
         env.define_fn(
             "write_file",
@@ -774,6 +770,21 @@ mod tests {
             },
         );
         let caller = make_fn("caller", vec![Effect::IO], simple_body("write_file"));
+        let mut emitter = TestEmitter(vec![]);
+        check_fn_effects(&caller, &env, "test.vow", &mut emitter);
+        assert_eq!(emitter.0.len(), 1);
+        assert_eq!(emitter.0[0].code, ErrorCode::EffectViolation);
+        assert!(emitter.0[0].message.contains("write_file"));
+    }
+
+    #[test]
+    fn io_and_read_declared_together_cover_read() {
+        let env = env_with_read_file();
+        let caller = make_fn(
+            "caller",
+            vec![Effect::IO, Effect::Read],
+            simple_body("read_file"),
+        );
         let mut emitter = TestEmitter(vec![]);
         check_fn_effects(&caller, &env, "test.vow", &mut emitter);
         assert!(emitter.0.is_empty());
