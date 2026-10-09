@@ -863,7 +863,7 @@ fn skill_json() -> String {
     "let_binding": "let name: Type = expr; or let mut name: Type = expr;",
     "function": "fn <name>(<params>) -> <RetTy> [<effects>] { <body> }",
     "public_function": "pub fn <name>(<params>) -> <RetTy> [<effects>] { <body> }",
-    "vow_function": "fn <name>(<params>) -> <RetTy> vow { requires: <expr>; ensures: <expr> } { <body> }",
+    "vow_function": "fn <name>(<params>) -> <RetTy> vow { requires: <expr>, ensures: <expr> } { <body> }",
     "while_with_invariant": "while <cond> vow { invariant: <expr> } { <body> }",
     "literals": {
       "integer": "42 | -1 | 42u64 (unsuffixed integers default to i64)",
@@ -1490,7 +1490,7 @@ The `vow` block sits between the signature and the body. Clauses:
 - `ensures: <expr>` — postcondition (blame: Callee); use `result` for the return value
 - `invariant: <expr>` — loop invariant (blame: Callee)
 
-Multiple clauses are separated by commas:
+Multiple clauses are separated by commas; the comma may be omitted. A semicolon between clauses is a parse error:
 
 ```vow
 fn clamp(x: i64, lo: i64, hi: i64) -> i64 vow {
@@ -7406,7 +7406,7 @@ The `vow` block sits between the signature and the body. Clauses:
 - `ensures: <expr>` — postcondition (blame: Callee); use `result` for the return value
 - `invariant: <expr>` — loop invariant (blame: Callee)
 
-Multiple clauses are separated by commas:
+Multiple clauses are separated by commas; the comma may be omitted. A semicolon between clauses is a parse error:
 
 ```vow
 fn clamp(x: i64, lo: i64, hi: i64) -> i64 vow {
