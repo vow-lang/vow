@@ -1,4 +1,3 @@
-// TEST: category native-fail
 // TEST: counterexample-fn "divide"
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-blame none

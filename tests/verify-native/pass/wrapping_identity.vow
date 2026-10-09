@@ -1,4 +1,3 @@
-// TEST: category native-pass
 module WrappingIdentity
 
 fn plus(a: i64, b: i64) -> i64 vow {

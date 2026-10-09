@@ -1,4 +1,3 @@
-// TEST: category native-fail
 // TEST: counterexample-fn "rem"
 // TEST: counterexample-vow-id 4294967293
 // TEST: counterexample-blame none

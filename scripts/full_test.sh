@@ -1375,6 +1375,78 @@ print(cx[0].get('blame', '') if cx else '')
 done
 echo ""
 
+# ─── Section 4g: Native Verifier (tests/verify-native/, #1408) ────
+#
+# `vowc verify --backend native` exists only in the self-hosted compiler (epic
+# #1398, ADR-2026-10-08-1421), so there is no Rust twin and no parity check:
+# each fixture is asserted against its directory (pass/ -> Verified, fail/ ->
+# VerifyFailed with the `counterexample-*` directives, skip/ -> Skipped, never
+# Verified). The wiring tier uses a fake Bitwuzla and always runs; the
+# real-solver tier is skipped, not passed, when `bitwuzla` is not on PATH.
+# tests/verify-native/ is deliberately outside Section 2c's explicit globs.
+
+section_begin "Section 4g: Native Verifier (self-hosted only)"
+native_wiring_log="$TMPDIR/verify-native-wiring.log"
+if VOWC_BIN="$SELF" bash tests/verify-native/tests.sh >"$native_wiring_log" 2>&1; then
+    pass "verify-native/wiring"
+else
+    fail "verify-native/wiring" "$(tail -20 "$native_wiring_log")"
+fi
+
+if command -v bitwuzla >/dev/null 2>&1; then
+    for vow_file in tests/verify-native/pass/*.vow tests/verify-native/fail/*.vow tests/verify-native/skip/*.vow; do
+        [ -f "$vow_file" ] || continue
+        name=$(basename "$vow_file" .vow)
+        native_dir=$(basename "$(dirname "$vow_file")")
+        case "$native_dir" in
+            pass) native_want_status="Verified"; native_want_exit=0 ;;
+            fail) native_want_status="VerifyFailed"; native_want_exit=1 ;;
+            *) native_want_status="Skipped"; native_want_exit=1 ;;
+        esac
+        native_json="" native_exit=0
+        native_json=$(run_self verify --backend native --no-cache "$vow_file" 2>/dev/null) || native_exit=$?
+        native_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$native_json" 2>/dev/null) || native_status=""
+        if [ "$native_status" != "$native_want_status" ] || [ "$native_exit" -ne "$native_want_exit" ]; then
+            fail "verify-native/${native_dir}/${name}" "expected $native_want_status (exit $native_want_exit), got '$native_status' (exit $native_exit)"
+            continue
+        fi
+        native_errors=()
+        if [ "$native_dir" = "fail" ]; then
+            for native_field in fn vow-id blame violation; do
+                native_expected=$(sed -n "s|^// TEST: counterexample-${native_field} \"\?\([^\"]*\)\"\?\$|\1|p" "$vow_file" | head -1)
+                [ -n "$native_expected" ] || continue
+                native_actual=$(python3 -c "
+import json, sys
+cx = json.loads(sys.argv[1]).get('counterexamples') or []
+key = {'fn': 'function', 'vow-id': 'vow_id', 'blame': 'blame', 'violation': 'violation'}[sys.argv[2]]
+print(cx[0].get(key, '') if cx else '')
+" "$native_json" "$native_field" 2>/dev/null) || native_actual="<unparseable>"
+                if [ "$native_actual" != "$native_expected" ]; then
+                    native_errors+=("counterexample-${native_field}: expected '$native_expected', got '$native_actual'")
+                fi
+            done
+            native_replay_json=$(run_self verify --backend native --no-cache --replay-cex "$vow_file" 2>/dev/null) || true
+            native_replay=$(python3 -c "
+import json, sys
+cx = json.loads(sys.argv[1]).get('counterexamples') or []
+print(cx[0].get('replay', '') if cx else '')
+" "$native_replay_json" 2>/dev/null) || native_replay=""
+            case "$native_replay" in
+                confirmed|skipped) ;;
+                *) native_errors+=("--replay-cex: expected confirmed or skipped, got '$native_replay'") ;;
+            esac
+        fi
+        if [ ${#native_errors[@]} -eq 0 ]; then
+            pass "verify-native/${native_dir}/${name}"
+        else
+            fail "verify-native/${native_dir}/${name}" "$(IFS='; '; echo "${native_errors[*]}")"
+        fi
+    done
+else
+    skip "verify-native/fixtures" "bitwuzla not on PATH"
+fi
+echo ""
+
 # ─── Section 5: Debug Mode ─────────────────────────────────────────
 
 section_begin "Section 5: Debug Mode"
