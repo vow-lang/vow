@@ -7520,7 +7520,16 @@ fn sum(v: Vec<i64>) -> i64 {
         }
         let mut doms: HashMap<BlockId, HashSet<BlockId>> = reachable
             .iter()
-            .map(|&b| (b, if b == entry { HashSet::from([b]) } else { reachable.clone() }))
+            .map(|&b| {
+                (
+                    b,
+                    if b == entry {
+                        HashSet::from([b])
+                    } else {
+                        reachable.clone()
+                    },
+                )
+            })
             .collect();
         loop {
             let mut changed = false;
@@ -7550,7 +7559,7 @@ fn sum(v: Vec<i64>) -> i64 {
     /// Operands whose defining instruction does not dominate the use.
     fn non_dominating_reads(func: &Function) -> Vec<(InstId, InstId)> {
         let doms = dominators(func);
-                let mut def_site: HashMap<InstId, (BlockId, usize)> = HashMap::new();
+        let mut def_site: HashMap<InstId, (BlockId, usize)> = HashMap::new();
         for block in &func.blocks {
             for (idx, inst) in block.insts.iter().enumerate() {
                 def_site.insert(inst.id, (block.id, idx));
@@ -7610,12 +7619,19 @@ fn sum(v: Vec<i64>) -> i64 {
                 .find(|i| i.opcode == Opcode::WrappingAdd)
                 .unwrap_or_else(|| panic!("`x + ..` in `{name}`"));
             let x = insts.iter().find(|i| i.id == add.args[0]).unwrap();
-            assert_eq!(x.opcode, Opcode::Phi, "`x` read after the merge in `{name}`");
+            assert_eq!(
+                x.opcode,
+                Opcode::Phi,
+                "`x` read after the merge in `{name}`"
+            );
         }
         assert!(phis("and_rhs_assign") >= 2, "result Phi plus `x` Phi");
         assert!(phis("or_rhs_assign") >= 2, "result Phi plus `x` Phi");
         assert!(phis("if_cond_assign") >= 2, "result Phi plus `x` Phi");
-        assert!(phis("nested_assign") >= 5, "three result Phis plus `x`, `y`");
+        assert!(
+            phis("nested_assign") >= 5,
+            "three result Phis plus `x`, `y`"
+        );
     }
 
     /// `v[i] = rhs` must evaluate `base`/`index` before `rhs` (issue #1502):

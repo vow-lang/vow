@@ -65,11 +65,13 @@ fn main() -> i32 [read] {
     if lowered.functions.len() == 0 { return 2; }
 
     let mut fi: u64 = 0;
+    let mut code: i32 = 0;
     while fi < lowered.functions.len() {
         let f: IrFunction = lowered.functions[fi];
-        if ir_non_dominating_read(f).len() > 0 { return 10 + fi as i32; }
-        if count_phis(f) < min_phis(f.name) { return 100 + fi as i32; }
+        if ir_non_dominating_read(f).len() > 0 { return 10 + code; }
+        if count_phis(f) < min_phis(f.name) { return 100 + code; }
         fi = fi + 1;
+        code = code + 1;
     }
     0
 }

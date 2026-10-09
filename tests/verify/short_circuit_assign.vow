@@ -1,0 +1,14 @@
+// TEST: category model-drift
+// A variable assigned in the right-hand side of `&&` is defined on that path
+// only; the verifier's C model must read it through the merge Phi (#1407),
+// not through the right-hand side's own value.
+module ShortCircuitAssign
+
+fn gated_store(a: bool) -> i64 vow {
+  ensures: result == 5 || result == 9
+} {
+  let mut x: i64 = 5;
+  let ok: bool = a && { x = 9; true };
+  if ok { x = x + 0; }
+  x
+}
