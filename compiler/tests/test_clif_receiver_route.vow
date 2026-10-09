@@ -43,8 +43,7 @@ fn two_blocks(first: Vec<IrInst>, second: Vec<IrInst>) -> IrFunction {
 }
 
 fn routed(f: IrFunction, call: IrInst) -> String {
-    let flat: Vec<IrInst> = clif_flat_insts(f);
-    clif_routed_extern_symbol(f, flat, clif_inst_pos(flat), clif_phi_chain_head(flat), clif_phi_chain_next(flat), call)
+    clif_routed_extern_symbol(f, clif_fn_index(f), call)
 }
 
 fn single(insts: Vec<IrInst>, call: IrInst) -> String {
@@ -124,17 +123,18 @@ fn check_index_builders() -> i64 {
     second.push(mk_inst_phi(11, ITY_PTR()));
     second.push(mk_inst_upsilon(12, 7, 8));
     let f: IrFunction = two_blocks(first, second);
-    let flat: Vec<IrInst> = clif_flat_insts(f);
+    let ix: ClifFnIndex = clif_fn_index(f);
+    let flat: Vec<IrInst> = ix.flat;
     if flat.len() != 7u64 { return 1; }
-    let pos: HashMap<i64, i64> = clif_inst_pos(flat);
+    let pos: HashMap<i64, i64> = ix.pos;
     if clif_map_get_or(pos, 7, -1) != 0 { return 2; }
     if clif_map_get_or(pos, 8, -1) != 1 { return 3; }
     if clif_map_get_or(pos, 12, -1) != 6 { return 4; }
     if clif_map_get_or(pos, 99, -1) != -1 { return 5; }
-    if clif_find_inst(flat, pos, 7).dv != 0 { return 6; }
-    if clif_find_inst(flat, pos, 99).id != -1 { return 7; }
-    let head: HashMap<i64, i64> = clif_phi_chain_head(flat);
-    let next: Vec<i64> = clif_phi_chain_next(flat);
+    if clif_find_inst(ix, 7).dv != 0 { return 6; }
+    if clif_find_inst(ix, 99).id != -1 { return 7; }
+    let head: HashMap<i64, i64> = ix.phi_head;
+    let next: Vec<i64> = ix.phi_next;
     if clif_map_get_or(head, 8, -1) != 2 { return 8; }
     if clif_map_get_or(head, 11, -1) != -1 { return 9; }
     if next[2u64] != 4 { return 10; }
