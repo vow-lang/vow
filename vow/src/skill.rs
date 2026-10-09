@@ -240,7 +240,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--mode <debug|release|profile|sanitize>",
-          "description": "Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking (default: release)",
+          "description": "Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + use-after-region-close detection for Vecs (default: release)",
           "long": "--mode",
           "value_name": "debug|release|profile|sanitize",
           "value_kind": "enum",
@@ -737,7 +737,7 @@ fn skill_json() -> String {
   },
   "build_options": {
     "-o, --output <path>": "Output executable path (default: build/<stem>)",
-    "--mode <debug|release|profile|sanitize>": "Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking (default: release)",
+    "--mode <debug|release|profile|sanitize>": "Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + use-after-region-close detection for Vecs (default: release)",
     "--no-verify": "Skip ESBMC static verification",
     "--dump-ir": "Print IR text to stdout and exit (no JSON output, no codegen)",
     "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
@@ -1165,7 +1165,7 @@ USAGE
 
 BUILD OPTIONS
   -o, --output <path>     Output executable path (default: build/<stem>)
-  --mode <debug|release|profile|sanitize>  Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking (default: release)
+  --mode <debug|release|profile|sanitize>  Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + use-after-region-close detection for Vecs (default: release)
   --no-verify             Skip ESBMC static verification
   --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)
   --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)
@@ -3015,7 +3015,7 @@ The bare `vow <source.vow>` form is exactly `vow build`: it verifies by default,
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `-o, --output`    | `build/<stem>` | Output executable path                  |
-| `--mode <debug\|release\|profile\|sanitize>` | `release` | Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking |
+| `--mode <debug\|release\|profile\|sanitize>` | `release` | Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + use-after-region-close detection for Vecs |
 | `--no-verify`     | (off)       | Skip ESBMC static verification            |
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
@@ -3685,23 +3685,11 @@ release included.
 {"error":"UseAfterFree","op":"push","vec":"0x55a1b2c3d4e0"}
 ```
 
-Emitted when a Vec operation is attempted on a Vec that has already been freed.
-
-### DoubleFree (sanitize mode only)
-
-```json
-{"error":"DoubleFree","vec":"0x55a1b2c3d4e0"}
-```
-
-Emitted when a Vec is freed twice.
-
-### StaleIndex (sanitize mode only)
-
-```json
-{"error":"StaleIndex","index":5,"expected_gen":3,"actual_gen":7,"vec":"0x55a1b2c3d4e0"}
-```
-
-Emitted when `__vow_sanitize_check_generation` detects that a Vec slot's generation counter does not match the expected value, indicating the slot was overwritten since the index was recorded.
+Emitted when a Vec or String operation is attempted after the region that owns it
+has been closed. Vow has no per-value free, so closing a region is the only event that
+reclaims a Vec's descriptor and backing store; a later access is a use-after-free and
+means region analysis placed the value too deep. `op` is one of `push`, `set`, `pop`,
+`clear`, `truncate`, or `read`. Exit code 134.
 
 ## Agent Decision Tree
 
@@ -9042,7 +9030,7 @@ The bare `vow <source.vow>` form is exactly `vow build`: it verifies by default,
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `-o, --output`    | `build/<stem>` | Output executable path                  |
-| `--mode <debug\|release\|profile\|sanitize>` | `release` | Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking |
+| `--mode <debug\|release\|profile\|sanitize>` | `release` | Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + use-after-region-close detection for Vecs |
 | `--no-verify`     | (off)       | Skip ESBMC static verification            |
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
@@ -9712,23 +9700,11 @@ release included.
 {"error":"UseAfterFree","op":"push","vec":"0x55a1b2c3d4e0"}
 ```
 
-Emitted when a Vec operation is attempted on a Vec that has already been freed.
-
-### DoubleFree (sanitize mode only)
-
-```json
-{"error":"DoubleFree","vec":"0x55a1b2c3d4e0"}
-```
-
-Emitted when a Vec is freed twice.
-
-### StaleIndex (sanitize mode only)
-
-```json
-{"error":"StaleIndex","index":5,"expected_gen":3,"actual_gen":7,"vec":"0x55a1b2c3d4e0"}
-```
-
-Emitted when `__vow_sanitize_check_generation` detects that a Vec slot's generation counter does not match the expected value, indicating the slot was overwritten since the index was recorded.
+Emitted when a Vec or String operation is attempted after the region that owns it
+has been closed. Vow has no per-value free, so closing a region is the only event that
+reclaims a Vec's descriptor and backing store; a later access is a use-after-free and
+means region analysis placed the value too deep. `op` is one of `push`, `set`, `pop`,
+`clear`, `truncate`, or `read`. Exit code 134.
 
 ## Agent Decision Tree
 

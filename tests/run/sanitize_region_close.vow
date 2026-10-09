@@ -1,0 +1,43 @@
+// TEST: stdout "total=2550 rows=50 longest=50\n"
+// Vecs built inside a loop body live in a region that closes every iteration,
+// and a Vec returned from a callee moves up one region. Sanitize mode reports
+// a use-after-free for any Vec touched after its region closed, so this must
+// run clean and print what the release build prints.
+module SanitizeRegionClose
+
+fn squares(n: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n {
+        out.push(i * i);
+        i = i + 1;
+    }
+    out
+}
+
+fn main() -> i32 [io] {
+    let mut total: i64 = 0;
+    let mut rows: i64 = 0;
+    let mut longest: u64 = 0;
+    let mut i: i64 = 1;
+    while i <= 50 {
+        let row: Vec<i64> = squares(i);
+        let scratch: Vec<i64> = Vec::new();
+        scratch.push(row.len() as i64);
+        scratch.push(i);
+        total = total + scratch[0] + scratch[1];
+        if row.len() > longest {
+            longest = row.len();
+        }
+        rows = rows + 1;
+        i = i + 1;
+    }
+    print_str(String::from("total="));
+    print_i64(total);
+    print_str(String::from(" rows="));
+    print_i64(rows);
+    print_str(String::from(" longest="));
+    print_u64(longest);
+    print_str(String::from("\n"));
+    0
+}

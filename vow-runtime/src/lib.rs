@@ -6,7 +6,7 @@ mod violation;
 
 use profile::render_profile_report;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::{CStr, c_char};
 use std::io::Write as _;
 use std::ptr::NonNull;
@@ -831,6 +831,7 @@ fn memory_note_alloc_request() {
 unsafe fn alloc_chunk(total: usize, oversized: bool) -> *mut u8 {
     let base = unsafe { libc::malloc(total) } as *mut u8;
     if !base.is_null() {
+        sanitize_on_chunk_alloc(base, total);
         unsafe { set_next_chunk(base, core::ptr::null_mut()) };
         let flag = if oversized { CHUNK_OVERSIZED_FLAG } else { 0 };
         unsafe { set_chunk_total_word(base, total | flag) };
@@ -1010,6 +1011,7 @@ pub unsafe extern "C" fn __vow_arena_close(a: *mut VowArena) {
     let mut chunk = arena.first_chunk;
     while !chunk.is_null() {
         let next = unsafe { next_chunk(chunk) };
+        sanitize_on_chunk_free(chunk);
         unsafe { libc::free(chunk as *mut libc::c_void) };
         chunk = next;
     }
@@ -1432,7 +1434,9 @@ unsafe fn alloc_owned_vow_vec_descriptor(arena: *mut VowArena) -> *mut VowVec {
             cap: VOW_CAP_RUNTIME_OWNED,
         };
     }
-    unsafe { core::ptr::addr_of_mut!((*owned_ptr).desc) }
+    let desc = unsafe { core::ptr::addr_of_mut!((*owned_ptr).desc) };
+    sanitize_on_vec_new(desc as usize);
+    desc
 }
 
 struct StdinLineScratch {
@@ -1516,7 +1520,6 @@ pub unsafe extern "C" fn __vow_vec_new_in_arena(
         (*header_ptr).len = 0;
         set_vow_vec_capacity(&mut *header_ptr, 0, "Vec::new");
     }
-    sanitize_on_vec_new(header_ptr as usize);
     header_ptr as *mut u8
 }
 
@@ -1658,7 +1661,7 @@ pub unsafe extern "C" fn __vow_vec_push_in_arena(
     // Sanitizer first — consults the shadow table by pointer value and
     // diagnoses UseAfterFree without dereferencing. The cap check must
     // dereference, so it has to run after the sanitizer.
-    sanitize_on_push(vec as usize);
+    sanitize_check_live(vec as usize, "push");
     unsafe { vec_push_no_sanitize_in_arena(arena, vec, elem, elem_size, elem_align, "Vec::push") };
 }
 
@@ -1669,9 +1672,12 @@ pub unsafe extern "C" fn __vow_vec_push(
     elem_size: usize,
     elem_align: usize,
 ) {
+    // The growth arena is read out of the descriptor, so the sanitizer has to
+    // look at the address first; the no-sanitize helper avoids a second check.
+    sanitize_check_live(vec as usize, "push");
     unsafe {
         with_growth_arena(vec, |arena| {
-            __vow_vec_push_in_arena(arena, vec, elem, elem_size, elem_align)
+            vec_push_no_sanitize_in_arena(arena, vec, elem, elem_size, elem_align, "Vec::push")
         })
     }
 }
@@ -1702,6 +1708,11 @@ pub unsafe extern "C" fn __vow_vec_len(vec: *const u8) -> usize {
     v.len
 }
 
+unsafe fn vec_push_val_no_sanitize_in_arena(arena: *mut VowArena, vec: *mut u8, value: i64) {
+    let bytes = value.to_ne_bytes();
+    unsafe { vec_push_no_sanitize_in_arena(arena, vec, bytes.as_ptr(), 8, 8, "Vec::push_val") };
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_push_val_in_arena(
     arena: *mut VowArena,
@@ -1714,16 +1725,19 @@ pub unsafe extern "C" fn __vow_vec_push_val_in_arena(
     // Sanitize + cap-check here with the precise operation name. Delegating
     // the whole path to __vow_vec_push would (a) double-sanitize and (b)
     // report the trap as "Vec::push" instead of "Vec::push_val". Delegate
-    // the actual push to the no-sanitize helper so the shadow table records
-    // a single generation per appended element.
-    sanitize_on_push(vec as usize);
-    let bytes = value.to_ne_bytes();
-    unsafe { vec_push_no_sanitize_in_arena(arena, vec, bytes.as_ptr(), 8, 8, "Vec::push_val") };
+    // the actual push to the no-sanitize helper.
+    sanitize_check_live(vec as usize, "push");
+    unsafe { vec_push_val_no_sanitize_in_arena(arena, vec, value) };
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
-    unsafe { with_growth_arena(vec, |arena| __vow_vec_push_val_in_arena(arena, vec, value)) }
+    sanitize_check_live(vec as usize, "push");
+    unsafe {
+        with_growth_arena(vec, |arena| {
+            vec_push_val_no_sanitize_in_arena(arena, vec, value)
+        })
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1734,7 +1748,7 @@ pub unsafe extern "C" fn __vow_vec_get_val(vec: *const u8, index: usize) -> i64 
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_pop(vec: *mut u8) {
-    sanitize_on_pop(vec as usize);
+    sanitize_check_live(vec as usize, "pop");
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::pop");
@@ -1748,7 +1762,7 @@ pub unsafe extern "C" fn __vow_vec_pop(vec: *mut u8) {
 /// the region closes; the header remains valid and can be reused with push().
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_clear(vec: *mut u8) {
-    sanitize_on_clear(vec as usize);
+    sanitize_check_live(vec as usize, "clear");
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::clear");
@@ -1760,7 +1774,7 @@ pub unsafe extern "C" fn __vow_vec_clear(vec: *mut u8) {
 /// shrunk; their storage is reclaimed when the containing region closes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
-    sanitize_on_truncate(vec as usize, new_len);
+    sanitize_check_live(vec as usize, "truncate");
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::truncate");
@@ -1773,7 +1787,7 @@ pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i64) {
-    sanitize_on_set(vec as usize, index);
+    sanitize_check_live(vec as usize, "set");
     let v = unsafe { &*(vec as *const VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::set");
@@ -2119,9 +2133,11 @@ pub unsafe extern "C" fn __vow_string_push_str_in_candidate_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_str(dest: *mut u8, src: *const u8) {
+    sanitize_on_read(dest as usize, 0);
+    sanitize_on_read(src as usize, 0);
     unsafe {
         with_growth_arena(dest, |arena| {
-            __vow_string_push_str_in_arena(arena, dest, src)
+            string_push_str_in_arena_no_sanitize(arena, dest, src)
         })
     }
 }
@@ -2213,9 +2229,9 @@ pub unsafe extern "C" fn __vow_string_push_byte_in_arena(
     }
     // Sanitize once here, then delegate to the no-sanitize inner helper with
     // a type-specific operation name. This keeps both orderings correct:
-    // sanitizer runs before any dereference (UAF detected first), and the
-    // shadow table records a single generation for the one appended byte.
-    sanitize_on_push(s as usize);
+    // sanitizer runs before any dereference (UAF detected first) and checks
+    // the descriptor once.
+    sanitize_check_live(s as usize, "push");
     unsafe { string_push_byte_in_arena_no_sanitize(arena, s, byte as u8) };
 }
 
@@ -2236,7 +2252,7 @@ pub unsafe extern "C" fn __vow_string_push_byte_in_candidate_arena(
     if candidate.is_null() {
         null_arena_trap("String::push_byte");
     }
-    sanitize_on_push(s as usize);
+    sanitize_check_live(s as usize, "push");
     if !arena_is_root(candidate) && unsafe { vow_vec_is_owned_by(s, candidate) } {
         unsafe { string_push_byte_in_arena_no_sanitize(candidate, s, byte as u8) };
         return;
@@ -2246,7 +2262,12 @@ pub unsafe extern "C" fn __vow_string_push_byte_in_candidate_arena(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_byte(s: *mut u8, byte: u64) {
-    unsafe { with_growth_arena(s, |arena| __vow_string_push_byte_in_arena(arena, s, byte)) }
+    sanitize_check_live(s as usize, "push");
+    unsafe {
+        with_growth_arena(s, |arena| {
+            string_push_byte_in_arena_no_sanitize(arena, s, byte as u8)
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -5291,30 +5312,23 @@ pub unsafe extern "C" fn __vow_btreemap_contains(map: *const u8, key: i64) -> bo
 }
 
 // ---------------------------------------------------------------------------
-// Sanitize mode — Vec provenance tracking
+// Sanitize mode — use-after-region-close detection for Vecs
 // ---------------------------------------------------------------------------
 
 static SANITIZE_ENABLED: AtomicBool = AtomicBool::new(false);
-static SANITIZE_GLOBAL_GEN: AtomicU64 = AtomicU64::new(1);
 
 struct ShadowVec {
-    generations: Vec<u64>,
     freed: bool,
 }
 
-static SHADOW_TABLE: Mutex<Option<HashMap<usize, ShadowVec>>> = Mutex::new(None);
-
-fn shadow_table_get_or_init(
-    table: &mut Option<HashMap<usize, ShadowVec>>,
-) -> &mut HashMap<usize, ShadowVec> {
-    table.get_or_insert_with(HashMap::new)
-}
+// Ordered so a freed or reallocated arena chunk can be matched against the
+// Vec descriptors inside its address range.
+static SHADOW_TABLE: Mutex<BTreeMap<usize, ShadowVec>> = Mutex::new(BTreeMap::new());
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_sanitize_init() {
     SANITIZE_ENABLED.store(true, Ordering::SeqCst);
-    let mut table = SHADOW_TABLE.lock().unwrap();
-    *table = Some(HashMap::new());
+    SHADOW_TABLE.lock().unwrap().clear();
 }
 
 fn sanitize_is_enabled() -> bool {
@@ -5331,156 +5345,59 @@ fn sanitize_on_vec_new(vec_addr: usize) {
     if !sanitize_is_enabled() {
         return;
     }
-    let mut table = SHADOW_TABLE.lock().unwrap();
-    let map = shadow_table_get_or_init(&mut table);
-    map.insert(
-        vec_addr,
-        ShadowVec {
-            generations: Vec::new(),
-            freed: false,
-        },
-    );
+    SHADOW_TABLE
+        .lock()
+        .unwrap()
+        .insert(vec_addr, ShadowVec { freed: false });
 }
 
-fn sanitize_on_push(vec_addr: usize) {
+// Called with a chunk that is about to be returned to libc: every tracked
+// Vec descriptor inside it is dangling from here on.
+fn sanitize_on_chunk_free(base: *const u8) {
     if !sanitize_is_enabled() {
         return;
     }
-    let generation = SANITIZE_GLOBAL_GEN.fetch_add(1, Ordering::Relaxed);
+    let start = base as usize;
+    let end = start + unsafe { chunk_total(base) };
     let mut table = SHADOW_TABLE.lock().unwrap();
-    let map = shadow_table_get_or_init(&mut table);
-    if let Some(shadow) = map.get_mut(&vec_addr) {
-        if shadow.freed {
-            sanitize_emit_error(
-                "UseAfterFree",
-                &format!("\"op\":\"push\",\"vec\":\"0x{vec_addr:x}\""),
-            );
-        }
-        shadow.generations.push(generation);
+    for (_, shadow) in table.range_mut(start..end) {
+        shadow.freed = true;
     }
 }
 
-fn sanitize_on_set(vec_addr: usize, index: usize) {
+// Called with a freshly malloc'd chunk: libc may have recycled the address of
+// a freed chunk, so tombstones inside the new range no longer describe
+// anything and must not flag the new occupant.
+fn sanitize_on_chunk_alloc(base: *const u8, total: usize) {
     if !sanitize_is_enabled() {
         return;
     }
-    let generation = SANITIZE_GLOBAL_GEN.fetch_add(1, Ordering::Relaxed);
+    let start = base as usize;
     let mut table = SHADOW_TABLE.lock().unwrap();
-    let map = shadow_table_get_or_init(&mut table);
-    if let Some(shadow) = map.get_mut(&vec_addr) {
-        if shadow.freed {
-            sanitize_emit_error(
-                "UseAfterFree",
-                &format!("\"op\":\"set\",\"vec\":\"0x{vec_addr:x}\""),
-            );
-        }
-        if index < shadow.generations.len() {
-            shadow.generations[index] = generation;
-        }
+    let stale: Vec<usize> = table.range(start..start + total).map(|(k, _)| *k).collect();
+    for addr in stale {
+        table.remove(&addr);
     }
 }
 
-fn sanitize_on_truncate(vec_addr: usize, new_len: usize) {
+fn sanitize_check_live(vec_addr: usize, op: &str) {
     if !sanitize_is_enabled() {
         return;
     }
-    let mut table = SHADOW_TABLE.lock().unwrap();
-    let map = shadow_table_get_or_init(&mut table);
-    if let Some(shadow) = map.get_mut(&vec_addr) {
-        if shadow.freed {
-            sanitize_emit_error(
-                "UseAfterFree",
-                &format!("\"op\":\"truncate\",\"vec\":\"0x{vec_addr:x}\""),
-            );
-        }
-        shadow.generations.truncate(new_len);
-    }
-}
-
-fn sanitize_on_clear(vec_addr: usize) {
-    if !sanitize_is_enabled() {
-        return;
-    }
-    let mut table = SHADOW_TABLE.lock().unwrap();
-    let map = shadow_table_get_or_init(&mut table);
-    if let Some(shadow) = map.get_mut(&vec_addr) {
-        if shadow.freed {
-            sanitize_emit_error(
-                "UseAfterFree",
-                &format!("\"op\":\"clear\",\"vec\":\"0x{vec_addr:x}\""),
-            );
-        }
-        shadow.generations.clear();
-    }
-}
-
-fn sanitize_on_pop(vec_addr: usize) {
-    if !sanitize_is_enabled() {
-        return;
-    }
-    let mut table = SHADOW_TABLE.lock().unwrap();
-    let map = shadow_table_get_or_init(&mut table);
-    if let Some(shadow) = map.get_mut(&vec_addr) {
-        if shadow.freed {
-            sanitize_emit_error(
-                "UseAfterFree",
-                &format!("\"op\":\"pop\",\"vec\":\"0x{vec_addr:x}\""),
-            );
-        }
-        shadow.generations.pop();
+    let table = SHADOW_TABLE.lock().unwrap();
+    if let Some(shadow) = table.get(&vec_addr)
+        && shadow.freed
+    {
+        drop(table);
+        sanitize_emit_error(
+            "UseAfterFree",
+            &format!("\"op\":\"{op}\",\"vec\":\"0x{vec_addr:x}\""),
+        );
     }
 }
 
 fn sanitize_on_read(vec_addr: usize, _index: usize) {
-    if !sanitize_is_enabled() {
-        return;
-    }
-    let table = SHADOW_TABLE.lock().unwrap();
-    if let Some(map) = table.as_ref()
-        && let Some(shadow) = map.get(&vec_addr)
-        && shadow.freed
-    {
-        sanitize_emit_error(
-            "UseAfterFree",
-            &format!("\"op\":\"read\",\"vec\":\"0x{vec_addr:x}\""),
-        );
-    }
-}
-
-/// Query the generation of a Vec slot. Returns 0 if unknown.
-#[unsafe(no_mangle)]
-pub extern "C" fn __vow_sanitize_vec_generation(vec: *const u8, index: usize) -> u64 {
-    if !sanitize_is_enabled() || vec.is_null() {
-        return 0;
-    }
-    let vec_addr = vec as usize;
-    let table = SHADOW_TABLE.lock().unwrap();
-    if let Some(map) = table.as_ref()
-        && let Some(shadow) = map.get(&vec_addr)
-        && index < shadow.generations.len()
-    {
-        return shadow.generations[index];
-    }
-    0
-}
-
-/// Check that a Vec slot's generation matches the expected value.
-/// Aborts with StaleIndex error if it doesn't match.
-#[unsafe(no_mangle)]
-pub extern "C" fn __vow_sanitize_check_generation(vec: *const u8, index: usize, expected_gen: u64) {
-    if !sanitize_is_enabled() || vec.is_null() {
-        return;
-    }
-    let actual = __vow_sanitize_vec_generation(vec, index);
-    if actual != expected_gen && expected_gen != 0 {
-        sanitize_emit_error(
-            "StaleIndex",
-            &format!(
-                "\"index\":{index},\"expected_gen\":{expected_gen},\"actual_gen\":{actual},\"vec\":\"0x{:x}\"",
-                vec as usize
-            ),
-        );
-    }
+    sanitize_check_live(vec_addr, "read");
 }
 
 #[cfg(test)]
@@ -6429,66 +6346,17 @@ mod tests {
         assert_eq!(unsafe { __vow_vec_get_val(v, 2) }, 2);
     }
 
-    // All sanitize tests consolidated into one test to avoid parallel test races
-    // on the global SANITIZE_ENABLED flag.
+    /// Runs in a worker process: the sanitizer flag and shadow table are
+    /// process-global, so enabling them in the shared test binary would make a
+    /// parallel arena test abort on a tracked Vec it closed.
     #[test]
-    fn sanitize_generation_tracking() {
-        __vow_sanitize_init();
-
-        // -- Push generation tracking --
-        let v = __vow_vec_new_val();
-        unsafe { __vow_vec_push_val(v, 10) };
-        unsafe { __vow_vec_push_val(v, 20) };
-        let gen0 = __vow_sanitize_vec_generation(v, 0);
-        let gen1 = __vow_sanitize_vec_generation(v, 1);
-        assert!(gen0 > 0, "generation should be nonzero after push");
-        assert!(gen1 > gen0, "second push should have higher generation");
-
-        // -- Set increments generation --
-        unsafe { __vow_vec_set_val(v, 0, 99) };
-        let gen0_after = __vow_sanitize_vec_generation(v, 0);
-        assert!(gen0_after > gen0, "set should increment generation");
+    fn sanitize_live_vec_operations_do_not_abort() {
+        let (out, stderr) = spawn_trap_worker("sanitize_live_vec_ops");
         assert_eq!(
-            __vow_sanitize_vec_generation(v, 1),
-            gen1,
-            "unmodified slot should keep its generation"
+            out.status.code(),
+            Some(0),
+            "operations on a live tracked Vec must not abort; stderr:\n{stderr}"
         );
-
-        // -- Check generation pass --
-        let slot_gen = __vow_sanitize_vec_generation(v, 0);
-        __vow_sanitize_check_generation(v, 0, slot_gen);
-
-        // -- Truncate clears generations --
-        let v2 = __vow_vec_new_val();
-        unsafe { __vow_vec_push_val(v2, 1) };
-        unsafe { __vow_vec_push_val(v2, 2) };
-        unsafe { __vow_vec_push_val(v2, 3) };
-        assert!(
-            __vow_sanitize_vec_generation(v2, 2) > 0,
-            "slot 2 should have generation"
-        );
-        unsafe { __vow_vec_truncate(v2, 1) };
-        assert_eq!(
-            __vow_sanitize_vec_generation(v2, 2),
-            0,
-            "truncated slot should have no generation"
-        );
-
-        // -- Pop removes generation --
-        let v3 = __vow_vec_new_val();
-        unsafe { __vow_vec_push_val(v3, 1) };
-        unsafe { __vow_vec_push_val(v3, 2) };
-        assert!(__vow_sanitize_vec_generation(v3, 1) > 0);
-        unsafe { __vow_vec_pop(v3) };
-        assert_eq!(
-            __vow_sanitize_vec_generation(v3, 1),
-            0,
-            "popped slot should have no generation"
-        );
-
-        // -- Vec operations work without crash when sanitize enabled --
-        let v4 = __vow_vec_new_val();
-        unsafe { __vow_vec_push_val(v4, 42) };
     }
 
     // -----------------------------------------------------------------------
@@ -8733,13 +8601,7 @@ mod tests {
             // deadlocks the worker.
             {
                 let mut table = SHADOW_TABLE.lock().unwrap();
-                shadow_table_get_or_init(&mut table).insert(
-                    vec_addr,
-                    ShadowVec {
-                        generations: Vec::new(),
-                        freed: true,
-                    },
-                );
+                table.insert(vec_addr, ShadowVec { freed: true });
             }
             unsafe { __vow_perf_count_vec_sort(vec_addr as *const u8) };
             eprintln!("rodata_trap_worker: perf Vec::sort UAF did NOT trap");
@@ -8983,6 +8845,108 @@ mod tests {
             eprintln!("rodata_trap_worker: null owner map growth did NOT trap");
             std::process::exit(42);
         }
+        if op == "sanitize_live_vec_ops" {
+            __vow_sanitize_init();
+            let mut a = empty_arena_header();
+            let ap: *mut VowArena = &mut a;
+            unsafe { __vow_arena_open(ap) };
+            let v = unsafe { __vow_vec_new_in_arena(ap, 8, 8) };
+            unsafe { __vow_vec_push_val_in_arena(ap, v, 1) };
+            unsafe { __vow_vec_push_val(v, 2) };
+            unsafe { __vow_vec_set_val(v, 0, 9) };
+            let sum = unsafe { __vow_vec_get_val(v, 0) + __vow_vec_get_val(v, 1) };
+            unsafe { __vow_vec_pop(v) };
+            unsafe { __vow_vec_truncate(v, 0) };
+            unsafe { __vow_vec_clear(v) };
+            let len = unsafe { __vow_vec_len(v) };
+            unsafe { __vow_arena_close(ap) };
+            std::process::exit(if sum == 11 && len == 0 { 0 } else { 45 });
+        }
+        if let Some(hook) = op.strip_prefix("sanitize_uaf_") {
+            __vow_sanitize_init();
+            let mut a = empty_arena_header();
+            let ap: *mut VowArena = &mut a;
+            unsafe { __vow_arena_open(ap) };
+            let v = unsafe { __vow_vec_new_in_arena(ap, 8, 8) };
+            unsafe { __vow_vec_push_val_in_arena(ap, v, 1) };
+            unsafe { __vow_arena_close(ap) };
+            match hook {
+                "push" => unsafe { __vow_vec_push_val(v, 2) },
+                "set" => unsafe { __vow_vec_set_val(v, 0, 3) },
+                "pop" => unsafe { __vow_vec_pop(v) },
+                "clear" => unsafe { __vow_vec_clear(v) },
+                "truncate" => unsafe { __vow_vec_truncate(v, 0) },
+                "len" => drop(unsafe { __vow_vec_len(v) }),
+                "get" => drop(unsafe { __vow_vec_get_val(v, 0) }),
+                "string_push_byte" => unsafe { __vow_string_push_byte(v, 65) },
+                "string_push_str" => unsafe { __vow_string_push_str(v, v) },
+                other => panic!("unknown sanitize_uaf hook {other}"),
+            }
+            eprintln!("rodata_trap_worker: use after arena close did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "sanitize_sibling_arena_live" {
+            __vow_sanitize_init();
+            let mut a = empty_arena_header();
+            let mut b = empty_arena_header();
+            let (ap, bp): (*mut VowArena, *mut VowArena) = (&mut a, &mut b);
+            unsafe { __vow_arena_open(ap) };
+            unsafe { __vow_arena_open(bp) };
+            let va = unsafe { __vow_vec_new_in_arena(ap, 8, 8) };
+            let vb = unsafe { __vow_vec_new_in_arena(bp, 8, 8) };
+            unsafe { __vow_vec_push_val_in_arena(ap, va, 1) };
+            unsafe { __vow_vec_push_val_in_arena(bp, vb, 7) };
+            unsafe { __vow_arena_close(ap) };
+            unsafe { __vow_vec_push_val(vb, 8) };
+            let sum = unsafe { __vow_vec_get_val(vb, 0) + __vow_vec_get_val(vb, 1) };
+            unsafe { __vow_arena_close(bp) };
+            std::process::exit(if sum == 15 { 0 } else { 46 });
+        }
+        if op == "sanitize_recycled_chunk" {
+            __vow_sanitize_init();
+            // A tombstone left at an address that libc later hands out as a
+            // fresh chunk must be purged, so the new occupant is not flagged.
+            let vec = VowVec {
+                ptr: std::ptr::dangling_mut(),
+                len: 4,
+                cap: 4,
+            };
+            let vec_addr = &raw const vec as usize;
+            {
+                let mut table = SHADOW_TABLE.lock().unwrap();
+                table.insert(vec_addr, ShadowVec { freed: true });
+            }
+            sanitize_on_chunk_alloc(vec_addr as *const u8, core::mem::size_of::<VowVec>());
+            if unsafe { __vow_vec_len(vec_addr as *const u8) } != 4 {
+                std::process::exit(47);
+            }
+            // The same cycle through real arenas: close, reopen, rebuild.
+            let mut a = empty_arena_header();
+            let ap: *mut VowArena = &mut a;
+            for round in 0..4 {
+                unsafe { __vow_arena_open(ap) };
+                let v = unsafe { __vow_vec_new_in_arena(ap, 8, 8) };
+                unsafe { __vow_vec_push_val_in_arena(ap, v, round) };
+                unsafe { __vow_vec_push_val(v, round + 1) };
+                if unsafe { __vow_vec_get_val(v, 1) } != round + 1 {
+                    std::process::exit(48);
+                }
+                unsafe { __vow_arena_close(ap) };
+            }
+            std::process::exit(0);
+        }
+        if op == "sanitize_string_clone_tracked" {
+            __vow_sanitize_init();
+            let mut a = empty_arena_header();
+            let ap: *mut VowArena = &mut a;
+            unsafe { __vow_arena_open(ap) };
+            let src = unsafe { __vow_string_new_in_arena(ap, c"abc".as_ptr(), 3) };
+            let copy = unsafe { __vow_string_clone_into_arena(ap, src) };
+            unsafe { __vow_arena_close(ap) };
+            unsafe { __vow_string_len(copy) };
+            eprintln!("rodata_trap_worker: cloned String after close did NOT trap");
+            std::process::exit(42);
+        }
         if op == "option_cells_shadow_untracked" {
             __vow_sanitize_init();
             let mut a = empty_arena_header();
@@ -8997,8 +8961,8 @@ mod tests {
                 unsafe { __vow_i64_to_u8_try_in_arena(ap, 3) },
             ];
             let control = unsafe { __vow_vec_new_in_arena(ap, 8, 8) };
-            let mut table = SHADOW_TABLE.lock().unwrap();
-            let shadows = shadow_table_get_or_init(&mut table);
+            let table = SHADOW_TABLE.lock().unwrap();
+            let shadows = &*table;
             if !shadows.contains_key(&(control as usize)) {
                 eprintln!("worker: sanitize shadow tracking is not active for Vecs");
                 std::process::exit(44);
@@ -9248,6 +9212,73 @@ mod tests {
 
     fn assert_runtime_invariant_null_arena(op: &str, expected_op_in_json: &str) {
         assert_runtime_invariant(op, expected_op_in_json, "null arena");
+    }
+
+    /// A Vec's descriptor and backing both live in its owner arena, so any
+    /// operation after `__vow_arena_close` is a use-after-free that the
+    /// sanitizer must report with the operation that touched it.
+    #[test]
+    fn sanitize_reports_use_after_arena_close_per_operation() {
+        for (hook, expected_op) in [
+            ("push", "push"),
+            ("set", "set"),
+            ("pop", "pop"),
+            ("clear", "clear"),
+            ("truncate", "truncate"),
+            ("len", "read"),
+            ("get", "read"),
+            ("string_push_byte", "push"),
+            ("string_push_str", "read"),
+        ] {
+            let (out, stderr) = spawn_trap_worker(&format!("sanitize_uaf_{hook}"));
+            assert_eq!(
+                out.status.code(),
+                Some(VOW_RUNTIME_ABORT_EXIT),
+                "{hook} after arena close must abort; stderr:\n{stderr}"
+            );
+            assert!(
+                stderr.contains(r#""error":"UseAfterFree""#),
+                "{hook}: stderr missing UseAfterFree:\n{stderr}"
+            );
+            assert!(
+                stderr.contains(&format!(r#""op":"{expected_op}""#)),
+                "{hook}: stderr missing op={expected_op}:\n{stderr}"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_arena_close_leaves_sibling_arena_vecs_live() {
+        let (out, stderr) = spawn_trap_worker("sanitize_sibling_arena_live");
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "closing one arena must not poison a Vec in another; stderr:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn sanitize_recycled_chunk_address_is_not_flagged() {
+        let (out, stderr) = spawn_trap_worker("sanitize_recycled_chunk");
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "a recycled chunk address must not report UseAfterFree; stderr:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn sanitize_tracks_cloned_string_descriptors() {
+        let (out, stderr) = spawn_trap_worker("sanitize_string_clone_tracked");
+        assert_eq!(
+            out.status.code(),
+            Some(VOW_RUNTIME_ABORT_EXIT),
+            "a cloned String used after its arena closed must abort; stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(r#""error":"UseAfterFree""#),
+            "stderr missing UseAfterFree:\n{stderr}"
+        );
     }
 
     #[test]

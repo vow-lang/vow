@@ -1743,8 +1743,9 @@ print(next((d.get('file', '') for d in docs if d.get('error') == 'VowViolation')
 done
 
 # Nested-container growth and escaping stores route allocations through owner
-# arenas; sanitize mode must run them cleanly and print what the plain runs print.
-for sanitize_fixture in container_growth_owner_arena region_container_effect_outlives; do
+# arenas, and loop-local Vecs die with their region every iteration; sanitize
+# mode must run them cleanly (no UseAfterFree) and print what the plain runs print.
+for sanitize_fixture in container_growth_owner_arena region_container_effect_outlives sanitize_region_close; do
     sanitize_src="tests/run/${sanitize_fixture}.vow"
     $RUST build --mode sanitize --no-verify "$sanitize_src" -o "$TMPDIR/rust_sanitize_${sanitize_fixture}" >/dev/null 2>/dev/null
     run_self build --mode sanitize --no-verify "$sanitize_src" -o "$TMPDIR/self_sanitize_${sanitize_fixture}" >/dev/null 2>/dev/null

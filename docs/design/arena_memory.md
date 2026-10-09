@@ -647,11 +647,14 @@ escaping results that are live (the `alloc_escape_btreemap_get` and
 `alloc_escape_hashmap_get` programs keep 10^6 of them in one container) grow,
 and only by the live set. `scripts/check_memory_bounds.py` runs the whole
 directory against both compilers in `scripts/full_test.sh`. `--mode sanitize`
-adds nothing region-specific for these routes (the shadow table tracks `Vec`
+adds no route-specific checks for these routes (the shadow table tracks `Vec`
 descriptors by address and the owner-arena entry points call the same sanitizer
-hooks as the root wrappers), and the same programs stay flat under it; Section
-5c of `full_test.sh` builds the container-growth and effect-outlives fixtures in
-sanitize mode with both compilers and checks their output.
+hooks as the root wrappers). It does turn arena close into a use-after-free
+oracle: closing an arena marks every tracked descriptor inside its chunks freed,
+so a `Vec` operation after its region closed reports `UseAfterFree`, which is
+how a region-analysis placement bug surfaces. The same programs stay flat under
+it; Section 5c of `full_test.sh` builds the container-growth and effect-outlives
+fixtures in sanitize mode with both compilers and checks their output.
 
 `HashMap` and `BTreeMap` receivers need no region at all: a map grows in the
 arena recorded in its own header, so the receiver of `insert` is never the
