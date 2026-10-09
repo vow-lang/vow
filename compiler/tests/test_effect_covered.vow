@@ -1,34 +1,35 @@
 module TestEffectCovered
 
+use ast
 use env
 
 fn main() -> i32 {
-    let io: i64 = 1;
-    let panic: i64 = 2;
-    let read: i64 = 4;
-    let unsafe_: i64 = 8;
-    let write: i64 = 16;
+    let e_io: i64 = 1;
+    let e_panic: i64 = 2;
+    let e_read: i64 = 4;
+    let e_unsafe: i64 = 8;
+    let e_write: i64 = 16;
 
     if !effect_covered(0, 0) { return 1; }
-    if !effect_covered(io, 0) { return 2; }
-    if !effect_covered(io, io) { return 3; }
-    if effect_covered(0, io) { return 4; }
+    if !effect_covered(e_io, 0) { return 2; }
+    if !effect_covered(e_io, e_io) { return 3; }
+    if effect_covered(0, e_io) { return 4; }
 
-    if effect_covered(io, read) { return 5; }
-    if effect_covered(io, write) { return 6; }
-    if effect_covered(read, io) { return 7; }
-    if effect_covered(write, io) { return 8; }
-    if effect_covered(read, write) { return 9; }
+    if effect_covered(e_io, e_read) { return 5; }
+    if effect_covered(e_io, e_write) { return 6; }
+    if effect_covered(e_read, e_io) { return 7; }
+    if effect_covered(e_write, e_io) { return 8; }
+    if effect_covered(e_read, e_write) { return 9; }
 
-    if !effect_covered(io + read, read) { return 10; }
-    if !effect_covered(io + write, write) { return 11; }
-    if !effect_covered(io + read + write, io + read + write) { return 12; }
-    if effect_covered(io + read, io + write) { return 13; }
+    if !effect_covered(e_io + e_read, e_read) { return 10; }
+    if !effect_covered(e_io + e_write, e_write) { return 11; }
+    if !effect_covered(e_io + e_read + e_write, e_io + e_read + e_write) { return 12; }
+    if effect_covered(e_io + e_read, e_io + e_write) { return 13; }
 
-    if effect_covered(io, panic) { return 14; }
-    if !effect_covered(panic, panic) { return 15; }
-    if effect_covered(io + read, unsafe_) { return 16; }
-    if !effect_covered(unsafe_, unsafe_) { return 17; }
+    if effect_covered(e_io, e_panic) { return 14; }
+    if !effect_covered(e_panic, e_panic) { return 15; }
+    if effect_covered(e_io + e_read, e_unsafe) { return 16; }
+    if !effect_covered(e_unsafe, e_unsafe) { return 17; }
 
     0
 }
