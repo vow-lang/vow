@@ -1,4 +1,4 @@
-// TEST: stdout "11\n0\n0\n12\n0\n9\n0\n15\n0\n40\n0\n11\n0\n11\n0\n"
+// TEST: stdout "11\n0\n0\n12\n0\n9\n0\n15\n0\n40\n0\n11\n0\n11\n0\n306\n3\n294\n33\n33\n"
 module AssignInOperandPosition
 
 fn id(x: i64) -> i64 {
@@ -72,6 +72,61 @@ fn assign_rhs(outer: bool) -> i64 {
     count * 10 + total
 }
 
+fn loop_call_arg(n: i64) -> i64 {
+    let mut count: i64 = 0;
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n {
+        total = total + id({ count = count + 1; count });
+        i = i + 1;
+    }
+    count * 100 + total
+}
+
+fn loop_binop(n: i64) -> i64 {
+    let mut count: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n {
+        i = i + 1 + { count = count + 1; 0 };
+    }
+    count
+}
+
+fn loop_unop(n: i64) -> i64 {
+    let mut count: i64 = 0;
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n {
+        total = total + -{ count = count + 1; count };
+        i = i + 1;
+    }
+    count * 100 + total
+}
+
+fn loop_method_argument(n: i64) -> i64 {
+    let mut count: i64 = 0;
+    let mut i: i64 = 0;
+    let v: Vec<i64> = Vec::new();
+    while i < n {
+        v.push({ count = count + 1; count });
+        i = i + 1;
+    }
+    count * 10 + v.len() as i64
+}
+
+fn loop_if_condition(n: i64) -> i64 {
+    let mut count: i64 = 0;
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n {
+        if { count = count + 1; true } {
+            total = total + 1;
+        }
+        i = i + 1;
+    }
+    count * 10 + total
+}
+
 fn show(n: i64) [io] {
     print_i64(n);
     print_str(String::from("\n"));
@@ -95,5 +150,12 @@ fn main() -> i32 [io] {
     show(method_argument(false));
     show(assign_rhs(true));
     show(assign_rhs(false));
+    // The same assignments inside a loop body must be carried around the
+    // back edge, so every iteration sees the value of the previous one.
+    show(loop_call_arg(3));
+    show(loop_binop(3));
+    show(loop_unop(3));
+    show(loop_method_argument(3));
+    show(loop_if_condition(3));
     0
 }
