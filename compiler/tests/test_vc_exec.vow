@@ -212,6 +212,236 @@ fn check_bool_operators() -> i64 {
     0
 }
 
+fn mk_const_bool(id: i64, v: i64) -> IrInst {
+    ir_inst_new(id, IOP_CONST_BOOL(), ITY_BOOL(), Vec::new(), IDATA_CONST_BOOL(), v, 0, String::from(""))
+}
+
+fn params1() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    p
+}
+
+// pick(x): ensures result >= 0 over `if x > 0 { x } else { 0 }`.
+fn pick_function() -> IrFunction {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_arg(0, ITY_I64(), 0));
+    a.push(mk_inst_const_i64(1, 0));
+    a.push(mk_inst(2, IOP_GT(), ITY_BOOL(), args2(0, 1)));
+    a.push(mk_inst_branch(3, 2, 1, 2));
+    let t: Vec<IrInst> = Vec::new();
+    t.push(mk_inst_upsilon(4, 0, 9));
+    t.push(mk_inst_jump(5, 3));
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_const_i64(6, 0));
+    e.push(mk_inst_upsilon(7, 6, 9));
+    e.push(mk_inst_jump(8, 3));
+    let m: Vec<IrInst> = Vec::new();
+    m.push(mk_inst_phi(9, ITY_I64()));
+    m.push(mk_inst_const_i64(10, 0));
+    m.push(mk_inst(11, IOP_GE(), ITY_BOOL(), args2(9, 10)));
+    m.push(mk_vow(12, IOP_VOW_ENS(), 11, 0));
+    m.push(mk_inst_return(13, 9));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, a));
+    blocks.push(mk_block(1, t));
+    blocks.push(mk_block(2, e));
+    blocks.push(mk_block(3, m));
+    mk_function(1, String::from("pick"), params1(), ITY_I64(), blocks)
+}
+
+fn check_diamond_phi_is_ite() -> i64 {
+    let f: IrFunction = pick_function();
+    if vc_skip_reason(f).len() != 0 { return 80; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 81; }
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(define-fun g0 () Bool (not v2))\n")) { return 82; }
+    if !q.contains(String::from("(define-fun g1 () Bool (or v2 g0))\n")) { return 83; }
+    if !q.contains(String::from("(define-fun v9 () (_ BitVec 64) (ite g0 v6 v0))\n")) { return 84; }
+    if !q.contains(String::from("(assert (and g1 (not v11)))\n")) { return 85; }
+    0
+}
+
+// Two returning arms, each with its own ensures: a claim holds only under its
+// own path condition.
+fn check_early_return_claims_carry_path_condition() -> i64 {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_arg(0, ITY_I64(), 0));
+    a.push(mk_inst_const_i64(1, 0));
+    a.push(mk_inst(2, IOP_LT(), ITY_BOOL(), args2(0, 1)));
+    a.push(mk_inst_branch(3, 2, 1, 2));
+    let neg: Vec<IrInst> = Vec::new();
+    neg.push(mk_inst(4, IOP_GE(), ITY_BOOL(), args2(0, 1)));
+    neg.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    neg.push(mk_inst_return(6, 0));
+    let pos: Vec<IrInst> = Vec::new();
+    pos.push(mk_inst(7, IOP_GE(), ITY_BOOL(), args2(0, 1)));
+    pos.push(mk_vow(8, IOP_VOW_ENS(), 7, 1));
+    pos.push(mk_inst_return(9, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, a));
+    blocks.push(mk_block(1, neg));
+    blocks.push(mk_block(2, pos));
+    let f: IrFunction = mk_function(1, String::from("early"), params1(), ITY_I64(), blocks);
+    if vc_skip_reason(f).len() != 0 { return 90; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 2 { return 91; }
+    let mut neg_k: u64 = 0;
+    if cs.vow_ids[1] == 0 { neg_k = 1; }
+    let pos_k: u64 = 1 - neg_k;
+    if cs.vow_ids[neg_k] != 0 || cs.vow_ids[pos_k] != 1 { return 92; }
+    if !query(cs, neg_k).contains(String::from("(assert (and v2 (not v4)))\n")) { return 93; }
+    if !query(cs, pos_k).contains(String::from("(assert (and g0 (not v7)))\n")) { return 94; }
+    0
+}
+
+// A guard the path already decided leaves the other arm unexecuted.
+fn check_constant_guard_prunes_dead_arm() -> i64 {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_arg(0, ITY_I64(), 0));
+    a.push(mk_const_bool(1, 1));
+    a.push(mk_inst_branch(2, 1, 1, 2));
+    let t: Vec<IrInst> = Vec::new();
+    t.push(mk_const_bool(3, 1));
+    t.push(mk_vow(4, IOP_VOW_ENS(), 3, 0));
+    t.push(mk_inst_return(5, 0));
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_const_bool(6, 0));
+    e.push(mk_vow(7, IOP_VOW_ENS(), 6, 1));
+    e.push(mk_inst_return(8, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, a));
+    blocks.push(mk_block(1, t));
+    blocks.push(mk_block(2, e));
+    let cs: VcClaims = vc_claims(mk_function(1, String::from("k"), params1(), ITY_I64(), blocks));
+    if cs.kinds.len() != 1 { return 100; }
+    if cs.vow_ids[0] != 0 { return 101; }
+    0
+}
+
+fn check_repeated_guard_prunes_inner_else() -> i64 {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_arg(0, ITY_I64(), 0));
+    a.push(mk_inst_const_i64(1, 0));
+    a.push(mk_inst(2, IOP_GT(), ITY_BOOL(), args2(0, 1)));
+    a.push(mk_inst_branch(3, 2, 1, 2));
+    let outer_then: Vec<IrInst> = Vec::new();
+    outer_then.push(mk_inst_branch(4, 2, 3, 4));
+    let outer_else: Vec<IrInst> = Vec::new();
+    outer_else.push(mk_inst_return(5, 0));
+    let inner_then: Vec<IrInst> = Vec::new();
+    inner_then.push(mk_vow(6, IOP_VOW_ENS(), 2, 0));
+    inner_then.push(mk_inst_return(7, 0));
+    let inner_else: Vec<IrInst> = Vec::new();
+    inner_else.push(mk_const_bool(8, 0));
+    inner_else.push(mk_vow(9, IOP_VOW_ENS(), 8, 1));
+    inner_else.push(mk_inst_return(10, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, a));
+    blocks.push(mk_block(1, outer_then));
+    blocks.push(mk_block(2, outer_else));
+    blocks.push(mk_block(3, inner_then));
+    blocks.push(mk_block(4, inner_else));
+    let cs: VcClaims = vc_claims(mk_function(1, String::from("rep"), params1(), ITY_I64(), blocks));
+    if cs.kinds.len() != 1 { return 110; }
+    if cs.vow_ids[0] != 0 { return 111; }
+    0
+}
+
+// A division in one arm is guarded only on that arm: the other arm, and the
+// code after the merge, are not constrained by it beyond the implication.
+fn check_arm_division_assumption_is_guarded() -> i64 {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_arg(0, ITY_I64(), 0));
+    a.push(mk_inst_arg(1, ITY_I64(), 1));
+    a.push(mk_inst_const_i64(2, 0));
+    a.push(mk_inst(3, IOP_GT(), ITY_BOOL(), args2(0, 2)));
+    a.push(mk_inst_branch(4, 3, 1, 2));
+    let t: Vec<IrInst> = Vec::new();
+    t.push(mk_inst(5, IOP_WDIV(), ITY_I64(), args2(0, 1)));
+    t.push(mk_inst_upsilon(6, 5, 9));
+    t.push(mk_inst_jump(7, 3));
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_upsilon(8, 2, 9));
+    e.push(mk_inst_jump(10, 3));
+    let m: Vec<IrInst> = Vec::new();
+    m.push(mk_inst_phi(9, ITY_I64()));
+    m.push(mk_inst_return(11, 9));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, a));
+    blocks.push(mk_block(1, t));
+    blocks.push(mk_block(2, e));
+    blocks.push(mk_block(3, m));
+    let cs: VcClaims = vc_claims(mk_function(1, String::from("armdiv"), params2(), ITY_I64(), blocks));
+    if cs.kinds.len() != 2 { return 120; }
+    if !query(cs, 0).contains(String::from("(assert (and v3 (not (distinct v1 (_ bv0 64)))))\n")) { return 121; }
+    if !query(cs, 1).contains(String::from("(assert (or (not v3) (distinct v1 (_ bv0 64))))\n")) { return 122; }
+    0
+}
+
+// `n` sequential `if x > 0 { acc = acc + x }` joined by Phis; ends with an
+// ensures on the final accumulator.
+fn stress_function(n: i64) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    let mut id: i64 = 3;
+    let mut acc: i64 = 2;
+    let mut cur: Vec<IrInst> = Vec::new();
+    cur.push(mk_inst_arg(0, ITY_I64(), 0));
+    cur.push(mk_inst_const_i64(1, 0));
+    cur.push(mk_inst_const_i64(2, 0));
+    let mut i: i64 = 0;
+    while i < n {
+        let cond: i64 = id;
+        let br: i64 = id + 1;
+        let sum: i64 = id + 2;
+        let up_t: i64 = id + 3;
+        let jt: i64 = id + 4;
+        let up_e: i64 = id + 5;
+        let je: i64 = id + 6;
+        let phi: i64 = id + 7;
+        id = id + 8;
+        cur.push(mk_inst(cond, IOP_GT(), ITY_BOOL(), args2(0, 1)));
+        cur.push(mk_inst_branch(br, cond, 3 * i + 1, 3 * i + 2));
+        blocks.push(mk_block(3 * i, cur));
+        let t: Vec<IrInst> = Vec::new();
+        t.push(mk_inst_add(sum, acc, 0));
+        t.push(mk_inst_upsilon(up_t, sum, phi));
+        t.push(mk_inst_jump(jt, 3 * i + 3));
+        blocks.push(mk_block(3 * i + 1, t));
+        let e: Vec<IrInst> = Vec::new();
+        e.push(mk_inst_upsilon(up_e, acc, phi));
+        e.push(mk_inst_jump(je, 3 * i + 3));
+        blocks.push(mk_block(3 * i + 2, e));
+        cur = Vec::new();
+        cur.push(mk_inst_phi(phi, ITY_I64()));
+        acc = phi;
+        i = i + 1;
+    }
+    cur.push(mk_inst(id, IOP_EQ(), ITY_BOOL(), args2(acc, acc)));
+    cur.push(mk_vow(id + 1, IOP_VOW_ENS(), id, 0));
+    cur.push(mk_inst_return(id + 2, acc));
+    blocks.push(mk_block(3 * n, cur));
+    mk_function(1, String::from("stress"), params1(), ITY_I64(), blocks)
+}
+
+// The query grows with the number of changed names and edges, not with the
+// number of paths (2^n here).
+fn check_query_size_is_linear_in_nesting() -> i64 {
+    let f8: IrFunction = stress_function(8);
+    let f16: IrFunction = stress_function(16);
+    if vc_skip_reason(f8).len() != 0 { return 130; }
+    if vc_skip_reason(f16).len() != 0 { return 131; }
+    let c8: VcClaims = vc_claims(f8);
+    let c16: VcClaims = vc_claims(f16);
+    if c8.kinds.len() != 1 || c16.kinds.len() != 1 { return 132; }
+    let s8: i64 = query(c8, 0).len() as i64;
+    let s16: i64 = query(c16, 0).len() as i64;
+    if s16 > 3 * s8 { return 133; }
+    if count_of(query(c16, 0), String::from("(define-fun v")) < 2 * count_of(query(c8, 0), String::from("(define-fun v")) - 4 { return 134; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_divide_with_requires();
     if r == 0 { r = check_rem_has_only_zero_claim(); }
@@ -221,5 +451,11 @@ fn main() -> i32 {
     if r == 0 { r = check_division_in_requires_is_positional(); }
     if r == 0 { r = check_names_are_internal(); }
     if r == 0 { r = check_bool_operators(); }
+    if r == 0 { r = check_diamond_phi_is_ite(); }
+    if r == 0 { r = check_early_return_claims_carry_path_condition(); }
+    if r == 0 { r = check_constant_guard_prunes_dead_arm(); }
+    if r == 0 { r = check_repeated_guard_prunes_inner_else(); }
+    if r == 0 { r = check_arm_division_assumption_is_guarded(); }
+    if r == 0 { r = check_query_size_is_linear_in_nesting(); }
     i64_to_i32_wrap(r)
 }

@@ -1,0 +1,18 @@
+// TEST: category unverifiable
+module LoopSkipped
+
+fn count(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == n
+} {
+  let mut i: i64 = 0;
+  while i < n {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_i64(count(3));
+  0
+}

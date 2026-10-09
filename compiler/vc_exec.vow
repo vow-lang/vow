@@ -4,14 +4,21 @@ use ir
 use vc_term
 use vc_smt
 use vc_gate
+use vc_flow
+use ir_dominance
 
-// Symbolic execution of a straight-line i64/Bool function (one that
-// `vc_skip_reason` accepts) into proof obligations. Each IR value becomes a
-// `define-fun`; each `requires` is an assumption for the claims that follow it;
-// each `ensures` and each division/remainder abort condition is a claim, in IR
-// order. SMT division is total, so the aborts the language specifies (zero
-// divisor; signed MIN / -1 for `/`) are separate claims, and a later claim
-// always assumes the guards of earlier ones: an aborting run never reaches it.
+// Symbolic execution of an acyclic i64/Bool function (one that
+// `vc_skip_reason` accepts) into proof obligations. Blocks are walked in
+// reverse postorder (`vc_flow` holds the path conditions and merges). Each IR
+// value becomes a `define-fun`; each `requires` is an assumption for the claims
+// that follow it; each `ensures` and each division/remainder abort condition is
+// a claim, in walk order. A claim is only asked on the paths that reach it: its
+// query asserts the block's path condition next to the negated goal, and an
+// assumption made in a block is the implication `path condition => assumption`.
+// SMT division is total, so the aborts the language specifies (zero divisor;
+// signed MIN / -1 for `/`) are separate claims, and a later claim always
+// assumes the guards of earlier ones on its path: an aborting run never
+// reaches it.
 
 fn VC_CLAIM_ENSURES() -> i64 { 0 }
 fn VC_CLAIM_DIV_ZERO() -> i64 { 1 }
@@ -75,14 +82,29 @@ fn vc_sort_of(ty: i64) -> i64 {
     VC_SORT_BV64()
 }
 
-fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, goal: i64) {
+fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, pc: i64, goal: i64) {
     let hdr: SmtScript = cs.header;
     cs.kinds.push(kind);
     cs.vow_ids.push(vow_id);
     cs.labels.push(label);
-    cs.negated_goals.push(vc_tm_app1(cs.arena, VC_OP_NOT(), goal));
+    let ar: VcArena = cs.arena;
+    let negated: i64 = vc_tm_app1(ar, VC_OP_NOT(), goal);
+    if vc_tm_is_true(ar, pc) {
+        cs.negated_goals.push(negated);
+    } else {
+        cs.negated_goals.push(vc_tm_app2(ar, VC_OP_AND(), pc, negated));
+    }
     cs.header_lens.push(hdr.kinds.len() as i64);
     cs.assumed_lens.push(cs.assumed.len() as i64);
+}
+
+fn vc_assume(cs: VcClaims, pc: i64, t: i64) {
+    let ar: VcArena = cs.arena;
+    if vc_tm_is_true(ar, pc) {
+        cs.assumed.push(t);
+    } else {
+        cs.assumed.push(vc_tm_app2(ar, VC_OP_OR(), vc_tm_app1(ar, VC_OP_NOT(), pc), t));
+    }
 }
 
 // The self-contained query that decides claim `k`.
@@ -101,7 +123,135 @@ fn vc_claim_script(cs: VcClaims, k: u64) -> SmtScript {
     s
 }
 
-// Obligations for a function inside the native subset, in IR order.
+// Symbolic state shared by the block walk.
+struct VcWalk {
+    cs: VcClaims,
+    fl: VcFlow,
+    var_of: Vec<i64>,
+    def_of: Vec<i64>,
+    tys: Vec<i64>,
+}
+
+fn vc_define(w: VcWalk, inst: IrInst, t: i64) {
+    let cs: VcClaims = w.cs;
+    let ar: VcArena = cs.arena;
+    vc_script_define_fun(cs.header, vc_value_name(inst.id), vc_sort_of(inst.ty), t);
+    w.def_of[inst.id as u64] = t;
+    w.var_of[inst.id as u64] = vc_tm_var(ar, vc_value_name(inst.id));
+}
+
+fn vc_arith_claims(w: VcWalk, inst: IrInst, pc: i64) {
+    let cs: VcClaims = w.cs;
+    let ar: VcArena = cs.arena;
+    let lhs: i64 = w.var_of[inst.args[0] as u64];
+    let rhs: i64 = w.var_of[inst.args[1] as u64];
+    let zero: i64 = vc_tm_bv_const(ar, 0);
+    let nonzero: i64 = vc_tm_app2(ar, VC_OP_DISTINCT(), rhs, zero);
+    vc_add_claim(cs, VC_CLAIM_DIV_ZERO(), -1, VC_LABEL_DIV_ZERO(), pc, nonzero);
+    vc_assume(cs, pc, nonzero);
+    if inst.op == IOP_WDIV() {
+        let min: i64 = vc_tm_bv_const(ar, -9223372036854775807 - 1);
+        let minus_one: i64 = vc_tm_bv_const(ar, -1);
+        let hits_min: i64 = vc_tm_app2(ar, VC_OP_EQ(), lhs, min);
+        let by_minus_one: i64 = vc_tm_app2(ar, VC_OP_EQ(), rhs, minus_one);
+        let overflow: i64 = vc_tm_app2(ar, VC_OP_AND(), hits_min, by_minus_one);
+        let no_overflow: i64 = vc_tm_app1(ar, VC_OP_NOT(), overflow);
+        vc_add_claim(cs, VC_CLAIM_DIV_OVERFLOW(), -1, VC_LABEL_DIV_OVERFLOW(), pc, no_overflow);
+        vc_assume(cs, pc, no_overflow);
+    }
+}
+
+// Outcome of branching on `cond_id` at a block with path condition `pc` and
+// known outcomes `foff`/`flen`: 1 taken, 0 not taken, -1 undecided.
+fn vc_branch_outcome(w: VcWalk, cond_id: i64, foff: i64, flen: i64) -> i64 {
+    let cs: VcClaims = w.cs;
+    let ar: VcArena = cs.arena;
+    let fl: VcFlow = w.fl;
+    let def: i64 = w.def_of[cond_id as u64];
+    if vc_tm_is_true(ar, def) { return 1; }
+    if vc_tm_is_false(ar, def) { return 0; }
+    if vc_flow_has_fact(fl, foff, flen, vc_flow_fact_lit(cond_id, true)) { return 1; }
+    if vc_flow_has_fact(fl, foff, flen, vc_flow_fact_lit(cond_id, false)) { return 0; }
+    -1
+}
+
+fn vc_walk_branch(w: VcWalk, inst: IrInst, bi: u64, pc: i64, foff: i64, flen: i64, then_idx: i64, else_idx: i64) {
+    let cs: VcClaims = w.cs;
+    let ar: VcArena = cs.arena;
+    let fl: VcFlow = w.fl;
+    let hdr: SmtScript = cs.header;
+    let cond_id: i64 = inst.args[0];
+    let outcome: i64 = vc_branch_outcome(w, cond_id, foff, flen);
+    if outcome != 0 {
+        let c: i64 = w.var_of[cond_id as u64];
+        let mut ec: i64 = pc;
+        let mut off: i64 = foff;
+        let mut len: i64 = flen;
+        if outcome < 0 {
+            ec = vc_flow_and(fl, ar, hdr, pc, c);
+            off = vc_flow_extend_facts(fl, foff, flen, vc_flow_fact_lit(cond_id, true));
+            len = vc_flow_extended_len(flen);
+        }
+        vc_flow_add_edge(fl, then_idx as u64, bi as i64, ec, off, len);
+    }
+    if outcome != 1 {
+        let c: i64 = w.var_of[cond_id as u64];
+        let mut ec: i64 = pc;
+        let mut off: i64 = foff;
+        let mut len: i64 = flen;
+        if outcome < 0 {
+            ec = vc_flow_and(fl, ar, hdr, pc, vc_flow_not(fl, ar, hdr, c));
+            off = vc_flow_extend_facts(fl, foff, flen, vc_flow_fact_lit(cond_id, false));
+            len = vc_flow_extended_len(flen);
+        }
+        vc_flow_add_edge(fl, else_idx as u64, bi as i64, ec, off, len);
+    }
+}
+
+fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
+    let cs: VcClaims = w.cs;
+    let ar: VcArena = cs.arena;
+    let fl: VcFlow = w.fl;
+    let pc: i64 = fl.block_pc[bi];
+    let op: i64 = inst.op;
+    // Unit carries no value: a Unit constant, Phi or Upsilon defines nothing.
+    if op == IOP_CONST_UNIT() || (op == IOP_PHI() && inst.ty == ITY_UNIT()) {
+        return;
+    }
+    if op == IOP_UPSILON() && w.tys[inst.args[0] as u64] == ITY_UNIT() {
+        return;
+    }
+    if op == IOP_CONST_I64() {
+        vc_define(w, inst, vc_tm_bv_const(ar, inst.dv));
+    } else if op == IOP_CONST_BOOL() {
+        vc_define(w, inst, vc_tm_bool_const(ar, inst.dv != 0));
+    } else if op == IOP_GET_ARG() {
+        vc_define(w, inst, vc_tm_var(ar, vc_param_name(inst.dv)));
+    } else if op == IOP_NOT() {
+        vc_define(w, inst, vc_tm_app1(ar, VC_OP_NOT(), w.var_of[inst.args[0] as u64]));
+    } else if op == IOP_PHI() {
+        vc_define(w, inst, vc_flow_phi_value(fl, ar, bi, inst.id));
+    } else if op == IOP_UPSILON() {
+        vc_flow_add_upsilon(fl, inst.dv, bi as i64, w.var_of[inst.args[0] as u64]);
+    } else if op == IOP_VOW_REQ() {
+        vc_assume(cs, pc, w.var_of[inst.args[0] as u64]);
+    } else if op == IOP_VOW_ENS() {
+        vc_add_claim(cs, VC_CLAIM_ENSURES(), inst.dv, String::from(""), pc, w.var_of[inst.args[0] as u64]);
+    } else if op == IOP_JUMP() {
+        vc_flow_add_edge(fl, succ[bi * 2] as u64, bi as i64, pc, fl.block_foff[bi], fl.block_flen[bi]);
+    } else if op == IOP_BRANCH() {
+        vc_walk_branch(w, inst, bi, pc, fl.block_foff[bi], fl.block_flen[bi], succ[bi * 2], succ[bi * 2 + 1]);
+    } else if op != IOP_RETURN() {
+        let lhs: i64 = w.var_of[inst.args[0] as u64];
+        let rhs: i64 = w.var_of[inst.args[1] as u64];
+        if op == IOP_WDIV() || op == IOP_WREM() {
+            vc_arith_claims(w, inst, pc);
+        }
+        vc_define(w, inst, vc_tm_app2(ar, vc_smt_op(op), lhs, rhs));
+    }
+}
+
+// Obligations for a function inside the native subset, in walk order.
 fn vc_claims(f: IrFunction) -> VcClaims {
     let ar: VcArena = vc_arena_new();
     let hdr: SmtScript = vc_script_new();
@@ -132,57 +282,38 @@ fn vc_claims(f: IrFunction) -> VcClaims {
     }
 
     let tys: Vec<i64> = vc_ty_table(f);
-    let var_of: Vec<i64> = Vec::new();
-    let mut k: u64 = 0;
-    while k < tys.len() {
-        var_of.push(-1);
-        k = k + 1;
-    }
-    let zero: i64 = vc_tm_bv_const(ar, 0);
-    let min: i64 = vc_tm_bv_const(ar, -9223372036854775807 - 1);
-    let minus_one: i64 = vc_tm_bv_const(ar, -1);
+    let nb: u64 = f.blocks.len();
+    let w: VcWalk = VcWalk {
+        cs: cs,
+        fl: vc_flow_new(nb, tys.len()),
+        var_of: dom_fill(tys.len(), -1),
+        def_of: dom_fill(tys.len(), -1),
+        tys: tys,
+    };
+    let id_to_idx: Vec<i64> = dom_block_id_table(f);
+    let succ: Vec<i64> = dom_successors(f, id_to_idx);
+    let order: Vec<i64> = dom_rpo_order(dom_rpo_numbers(nb, succ));
+    let fl: VcFlow = w.fl;
 
-    let entry: IrBlock = f.blocks[0];
-    let mut ii: u64 = 0;
-    while ii < entry.insts.len() {
-        let inst: IrInst = entry.insts[ii];
-        let op: i64 = inst.op;
-        let mut defined: i64 = -1;
-        if op == IOP_CONST_I64() {
-            defined = vc_tm_bv_const(ar, inst.dv);
-        } else if op == IOP_CONST_BOOL() {
-            defined = vc_tm_bool_const(ar, inst.dv != 0);
-        } else if op == IOP_GET_ARG() {
-            defined = vc_tm_var(ar, vc_param_name(inst.dv));
-        } else if op == IOP_NOT() {
-            defined = vc_tm_app1(ar, VC_OP_NOT(), var_of[inst.args[0] as u64]);
-        } else if op == IOP_VOW_REQ() {
-            assumed.push(var_of[inst.args[0] as u64]);
-        } else if op == IOP_VOW_ENS() {
-            vc_add_claim(cs, VC_CLAIM_ENSURES(), inst.dv, String::from(""), var_of[inst.args[0] as u64]);
-        } else if op != IOP_RETURN() {
-            let lhs: i64 = var_of[inst.args[0] as u64];
-            let rhs: i64 = var_of[inst.args[1] as u64];
-            defined = vc_tm_app2(ar, vc_smt_op(op), lhs, rhs);
-            if op == IOP_WDIV() || op == IOP_WREM() {
-                let nonzero: i64 = vc_tm_app2(ar, VC_OP_DISTINCT(), rhs, zero);
-                vc_add_claim(cs, VC_CLAIM_DIV_ZERO(), -1, VC_LABEL_DIV_ZERO(), nonzero);
-                assumed.push(nonzero);
-                if op == IOP_WDIV() {
-                    let hits_min: i64 = vc_tm_app2(ar, VC_OP_EQ(), lhs, min);
-                    let by_minus_one: i64 = vc_tm_app2(ar, VC_OP_EQ(), rhs, minus_one);
-                    let overflow: i64 = vc_tm_app2(ar, VC_OP_AND(), hits_min, by_minus_one);
-                    let no_overflow: i64 = vc_tm_app1(ar, VC_OP_NOT(), overflow);
-                    vc_add_claim(cs, VC_CLAIM_DIV_OVERFLOW(), -1, VC_LABEL_DIV_OVERFLOW(), no_overflow);
-                    assumed.push(no_overflow);
-                }
+    let mut oi: u64 = 0;
+    while oi < order.len() {
+        let bi: u64 = order[oi] as u64;
+        let mut live: bool = true;
+        if bi == 0 {
+            fl.block_pc[0] = vc_tm_bool_const(ar, true);
+        } else {
+            live = vc_flow_enter(fl, ar, hdr, bi);
+        }
+        if live {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                vc_walk_inst(w, bi, inst, succ);
+                ii = ii + 1;
             }
         }
-        if defined >= 0 {
-            vc_script_define_fun(hdr, vc_value_name(inst.id), vc_sort_of(inst.ty), defined);
-            var_of[inst.id as u64] = vc_tm_var(ar, vc_value_name(inst.id));
-        }
-        ii = ii + 1;
+        oi = oi + 1;
     }
     cs
 }

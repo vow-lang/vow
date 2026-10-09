@@ -1,0 +1,222 @@
+module VcFlow
+
+use vc_term
+use vc_smt
+
+// Control-flow state of the native symbolic executor over an acyclic CFG.
+// Blocks are visited in reverse postorder, so every predecessor is done before
+// a block is entered. A block is entered through the edges its live
+// predecessors registered; each edge carries the condition under which it is
+// taken (path condition of the source, conjoined with the branch outcome) and
+// the branch outcomes already known on that path. Composite conditions are
+// bound to a `define-fun` name, so a term is printed once and the query grows
+// with the number of edges and Phis, never with the number of paths.
+//
+// A branch whose condition is a constant, or an SSA value whose outcome the path
+// already fixed, has a single live edge: the other target gets no edge and is
+// never executed. A Phi is the `ite` over its incoming edges of the value each
+// predecessor's Upsilon supplied, and collapses to that value when every
+// predecessor supplied the same one.
+
+fn VC_FACT_CAP() -> i64 { 32 }
+
+struct VcFlow {
+    block_pc: Vec<i64>,
+    block_foff: Vec<i64>,
+    block_flen: Vec<i64>,
+    in_head: Vec<i64>,
+    e_src: Vec<i64>,
+    e_cond: Vec<i64>,
+    e_next: Vec<i64>,
+    e_foff: Vec<i64>,
+    e_flen: Vec<i64>,
+    pool: Vec<i64>,
+    up_head: Vec<i64>,
+    up_next: Vec<i64>,
+    up_blk: Vec<i64>,
+    up_val: Vec<i64>,
+    names: i64,
+}
+
+fn vc_flow_fill(n: u64, v: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < n {
+        out.push(v);
+        i = i + 1;
+    }
+    out
+}
+
+fn vc_flow_new(n_blocks: u64, n_ids: u64) -> VcFlow {
+    VcFlow {
+        block_pc: vc_flow_fill(n_blocks, -1),
+        block_foff: vc_flow_fill(n_blocks, 0),
+        block_flen: vc_flow_fill(n_blocks, 0),
+        in_head: vc_flow_fill(n_blocks, -1),
+        e_src: Vec::new(),
+        e_cond: Vec::new(),
+        e_next: Vec::new(),
+        e_foff: Vec::new(),
+        e_flen: Vec::new(),
+        pool: Vec::new(),
+        up_head: vc_flow_fill(n_ids, -1),
+        up_next: Vec::new(),
+        up_blk: Vec::new(),
+        up_val: Vec::new(),
+        names: 0,
+    }
+}
+
+// `t` bound to a fresh name when it is composite; leaves and names are shared.
+fn vc_flow_name(fl: VcFlow, ar: VcArena, hdr: SmtScript, sort: i64, t: i64) -> i64 {
+    if ar.kinds[t as u64] != VC_T_APP() {
+        return t;
+    }
+    let name: String = String::from("g");
+    name.push_str(i64_to_string(fl.names));
+    fl.names = fl.names + 1;
+    vc_script_define_fun(hdr, name, sort, t);
+    vc_tm_var(ar, name)
+}
+
+fn vc_flow_and(fl: VcFlow, ar: VcArena, hdr: SmtScript, a: i64, b: i64) -> i64 {
+    if vc_tm_is_true(ar, a) { return b; }
+    if vc_tm_is_true(ar, b) { return a; }
+    vc_flow_name(fl, ar, hdr, VC_SORT_BOOL(), vc_tm_app2(ar, VC_OP_AND(), a, b))
+}
+
+fn vc_flow_not(fl: VcFlow, ar: VcArena, hdr: SmtScript, a: i64) -> i64 {
+    vc_flow_name(fl, ar, hdr, VC_SORT_BOOL(), vc_tm_app1(ar, VC_OP_NOT(), a))
+}
+
+fn vc_flow_has_fact(fl: VcFlow, off: i64, len: i64, lit: i64) -> bool {
+    let mut i: i64 = 0;
+    while i < len {
+        if fl.pool[(off + i) as u64] == lit {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn vc_flow_fact_lit(cond_id: i64, outcome: bool) -> i64 {
+    if outcome { cond_id * 2 + 1 } else { cond_id * 2 }
+}
+
+// Length of a fact set extended by one literal, newest facts kept at the cap.
+fn vc_flow_extended_len(len: i64) -> i64 {
+    if len >= VC_FACT_CAP() { VC_FACT_CAP() } else { len + 1 }
+}
+
+// Offset of a copy of the fact set `off`/`len` extended by `lit`.
+fn vc_flow_extend_facts(fl: VcFlow, off: i64, len: i64, lit: i64) -> i64 {
+    let start: i64 = fl.pool.len() as i64;
+    let mut from: i64 = 0;
+    if len >= VC_FACT_CAP() {
+        from = len - VC_FACT_CAP() + 1;
+    }
+    let mut i: i64 = from;
+    while i < len {
+        fl.pool.push(fl.pool[(off + i) as u64]);
+        i = i + 1;
+    }
+    fl.pool.push(lit);
+    start
+}
+
+fn vc_flow_add_edge(fl: VcFlow, dst: u64, src: i64, cond: i64, foff: i64, flen: i64) {
+    let id: i64 = fl.e_src.len() as i64;
+    fl.e_src.push(src);
+    fl.e_cond.push(cond);
+    fl.e_next.push(fl.in_head[dst]);
+    fl.e_foff.push(foff);
+    fl.e_flen.push(flen);
+    fl.in_head[dst] = id;
+}
+
+// Path condition and known outcomes of block `bi`, from the edges registered
+// into it. False when no live edge reaches it.
+fn vc_flow_enter(fl: VcFlow, ar: VcArena, hdr: SmtScript, bi: u64) -> bool {
+    let first: i64 = fl.in_head[bi];
+    if first < 0 {
+        return false;
+    }
+    if fl.e_next[first as u64] < 0 {
+        fl.block_pc[bi] = fl.e_cond[first as u64];
+        fl.block_foff[bi] = fl.e_foff[first as u64];
+        fl.block_flen[bi] = fl.e_flen[first as u64];
+        return true;
+    }
+    let mut pc: i64 = fl.e_cond[first as u64];
+    let mut e: i64 = fl.e_next[first as u64];
+    while e >= 0 {
+        let c: i64 = fl.e_cond[e as u64];
+        if vc_tm_is_true(ar, pc) || vc_tm_is_true(ar, c) {
+            pc = vc_tm_bool_const(ar, true);
+        } else {
+            pc = vc_tm_app2(ar, VC_OP_OR(), pc, c);
+        }
+        e = fl.e_next[e as u64];
+    }
+    fl.block_pc[bi] = vc_flow_name(fl, ar, hdr, VC_SORT_BOOL(), pc);
+
+    let start: i64 = fl.pool.len() as i64;
+    let foff: i64 = fl.e_foff[first as u64];
+    let flen: i64 = fl.e_flen[first as u64];
+    let mut k: i64 = 0;
+    while k < flen {
+        let lit: i64 = fl.pool[(foff + k) as u64];
+        let mut in_all: bool = true;
+        let mut o: i64 = fl.e_next[first as u64];
+        while o >= 0 && in_all {
+            if !vc_flow_has_fact(fl, fl.e_foff[o as u64], fl.e_flen[o as u64], lit) {
+                in_all = false;
+            }
+            o = fl.e_next[o as u64];
+        }
+        if in_all {
+            fl.pool.push(lit);
+        }
+        k = k + 1;
+    }
+    fl.block_foff[bi] = start;
+    fl.block_flen[bi] = fl.pool.len() as i64 - start;
+    true
+}
+
+fn vc_flow_add_upsilon(fl: VcFlow, phi_id: i64, blk: i64, val: i64) {
+    let id: i64 = fl.up_blk.len() as i64;
+    fl.up_blk.push(blk);
+    fl.up_val.push(val);
+    fl.up_next.push(fl.up_head[phi_id as u64]);
+    fl.up_head[phi_id as u64] = id;
+}
+
+fn vc_flow_upsilon_from(fl: VcFlow, phi_id: i64, blk: i64) -> i64 {
+    let mut u: i64 = fl.up_head[phi_id as u64];
+    while u >= 0 {
+        if fl.up_blk[u as u64] == blk {
+            return fl.up_val[u as u64];
+        }
+        u = fl.up_next[u as u64];
+    }
+    -1
+}
+
+// Value of Phi `phi_id` at the head of block `bi`.
+fn vc_flow_phi_value(fl: VcFlow, ar: VcArena, bi: u64, phi_id: i64) -> i64 {
+    let first: i64 = fl.in_head[bi];
+    let base: i64 = vc_flow_upsilon_from(fl, phi_id, fl.e_src[first as u64]);
+    let mut acc: i64 = base;
+    let mut e: i64 = fl.e_next[first as u64];
+    while e >= 0 {
+        let v: i64 = vc_flow_upsilon_from(fl, phi_id, fl.e_src[e as u64]);
+        if v != acc {
+            acc = vc_tm_app3(ar, VC_OP_ITE(), fl.e_cond[e as u64], v, acc);
+        }
+        e = fl.e_next[e as u64];
+    }
+    acc
+}
