@@ -337,7 +337,7 @@ pub(crate) fn build_structured_counterexample_with_module(
 
     // Block ids are function-local C variables, so visits recorded for a
     // co-emitted callee cannot be told apart from the target's.
-    let callee_owned = resolved_callee_postcondition.is_some();
+    let callee_owned = ce.callee_postcondition.is_some();
 
     // Execution path from block visits
     let visited: std::collections::HashSet<u32> = ce.block_visits.iter().copied().collect();

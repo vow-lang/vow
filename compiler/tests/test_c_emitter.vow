@@ -1655,7 +1655,7 @@ fn main() -> i32 {
     if r48 != 0 { return i64_to_i32_wrap(r48); }
     let r49: i64 = check_callee_ensures_label_carries_function_id();
     if r49 != 0 { return i64_to_i32_wrap(r49); }
-    let r49: i64 = check_u64_literals_print_as_unsigned();
-    if r49 != 0 { return i64_to_i32_wrap(r49); }
+    let r50: i64 = check_u64_literals_print_as_unsigned();
+    if r50 != 0 { return i64_to_i32_wrap(r50); }
     0
 }
