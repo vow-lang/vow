@@ -32,6 +32,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -99,7 +100,7 @@ def compare_cex(esbmc_keys, native_keys):
     return MATCH, None
 
 
-def classify(truth, esbmc, native, esbmc_keys=(), native_keys=()):
+def classify(truth, esbmc, native, esbmc_keys=(), native_keys=(), native_status=None):
     """Classify one fixture from the two verdicts and the corpus ground truth.
 
     `truth` is the corpus-expected status (Verified / VerifyFailed / Skipped);
@@ -116,6 +117,12 @@ def classify(truth, esbmc, native, esbmc_keys=(), native_keys=()):
         )
     if native == PROVEN and esbmc == REFUTED:
         return SOUNDNESS, "native proves a program ESBMC refutes"
+
+    if native == INCONCLUSIVE and native_status in SOFT_FAILURES:
+        return (
+            WEAKER,
+            f"native failed with verify_status `{native_status}` (ESBMC: {esbmc})",
+        )
 
     if esbmc == native:
         if native == REFUTED:
@@ -146,18 +153,30 @@ def classify(truth, esbmc, native, esbmc_keys=(), native_keys=()):
 
 WATCHDOG_SLACK = 30
 
-WATCHDOG_TIMEOUT = {
-    "status": "VerifyFailed",
-    "verify_status": "timeout",
-    "counterexamples": [],
-}
+SOFT_FAILURES = ("panicked", "error", "crashed")
+
+
+def synthetic_failure(verify_status):
+    return {
+        "status": "VerifyFailed",
+        "verify_status": verify_status,
+        "counterexamples": [],
+    }
+
+
+def function_count(path):
+    """Upper bound on verify targets: `--timeout` is a per-function budget."""
+    with open(path, "r", encoding="utf-8") as fh:
+        return max(1, fh.read().count("fn "))
 
 
 def run_backend(vowc, backend, path, timeout):
-    """Run one backend under `--timeout`; a hung process counts as a timeout.
+    """Run one backend under `--timeout`; a hung or crashed process is inconclusive.
 
-    The slack lets the verifier's own budget fire first, so the watchdog only
-    reports a verifier that failed to honour it.
+    The watchdog scales with the number of functions and adds slack so the
+    verifier's own budget fires first; it only reports a verifier that failed
+    to honour it. The child runs in its own process group so a kill also
+    reaches the solver processes it spawned.
     """
     args = [
         vowc,
@@ -170,25 +189,34 @@ def run_backend(vowc, backend, path, timeout):
         path,
     ]
     start = time.monotonic()
+    proc = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=REPO_ROOT,
+        start_new_session=True,
+    )
     try:
-        proc = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            cwd=REPO_ROOT,
-            timeout=timeout + WATCHDOG_SLACK,
+        stdout, stderr = proc.communicate(
+            timeout=timeout * function_count(path) + WATCHDOG_SLACK
         )
     except subprocess.TimeoutExpired:
-        return WATCHDOG_TIMEOUT, time.monotonic() - start
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        return synthetic_failure("timeout"), time.monotonic() - start
+    elapsed = time.monotonic() - start
     try:
-        result = json.loads(proc.stdout.strip())
+        return json.loads(stdout.strip()), elapsed
     except json.JSONDecodeError:
-        print(
-            f"verify_diff: {backend} printed no JSON for {path}: {proc.stderr.rstrip()}",
-            file=sys.stderr,
-        )
-        result = None
-    return result, time.monotonic() - start
+        pass
+    if proc.returncode < 0 or proc.returncode >= 128:
+        return synthetic_failure("crashed"), elapsed
+    print(
+        f"verify_diff: {backend} printed no JSON for {path}: {stderr.rstrip()}",
+        file=sys.stderr,
+    )
+    return None, elapsed
 
 
 def summarize(result):
@@ -217,6 +245,7 @@ def diff_fixture(vowc, timeout, sub, exp):
         verdicts["native"],
         cex_keys(results["esbmc"]),
         cex_keys(results["native"]),
+        (results["native"] or {}).get("verify_status"),
     )
     row = {
         "fixture": f"{sub}/{exp.name}",
@@ -248,10 +277,10 @@ def build_report(vowc, rows):
 
 def exit_code(report):
     summary = report["summary"]
-    if summary[HARNESS]:
-        return 2
     if any(summary[c] for c in FAILING_CLASSES):
         return 1
+    if summary[HARNESS]:
+        return 2
     return 0
 
 
@@ -325,15 +354,22 @@ def main(argv=None):
             print(f"verify_diff: {p}", file=sys.stderr)
         return 2
 
-    fixtures = [
-        (sub, exp)
-        for sub, exp in verify_eval.collect(args.filter)
-        if not exp.skip_reason
-    ]
-    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        rows = list(
-            pool.map(lambda f: diff_fixture(args.vowc, args.timeout, *f), fixtures)
-        )
+    try:
+        fixtures = [
+            (sub, exp)
+            for sub, exp in verify_eval.collect(args.filter)
+            if not exp.skip_reason
+        ]
+        if not fixtures:
+            print("verify_diff: no fixtures selected", file=sys.stderr)
+            return 2
+        with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            rows = list(
+                pool.map(lambda f: diff_fixture(args.vowc, args.timeout, *f), fixtures)
+            )
+    except (OSError, ValueError) as err:
+        print(f"verify_diff: harness failure: {err}", file=sys.stderr)
+        return 2
 
     report = build_report(args.vowc, rows)
     text = json.dumps(report, indent=2) + "\n"

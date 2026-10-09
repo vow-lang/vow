@@ -63,6 +63,17 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(vd.HARNESS, self.cls("Verified", vd.ERROR, vd.PROVEN))
         self.assertEqual(vd.HARNESS, self.cls("Verified", vd.PROVEN, vd.ERROR))
 
+    def test_native_solver_failure_is_weaker_even_if_esbmc_is_inconclusive(self):
+        for status in ("panicked", "error", "crashed"):
+            cls, _ = vd.classify(
+                "Verified", vd.INCONCLUSIVE, vd.INCONCLUSIVE, native_status=status
+            )
+            self.assertEqual(vd.WEAKER, cls)
+        cls, _ = vd.classify(
+            "Verified", vd.INCONCLUSIVE, vd.INCONCLUSIVE, native_status="timeout"
+        )
+        self.assertEqual(vd.MATCH, cls)
+
     def test_counterexample_sets(self):
         other = ("f", "caller", 2)
         self.assertEqual(
@@ -127,7 +138,9 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(0, code(vd.MATCH, vd.MORE_PRECISE))
         self.assertEqual(1, code(vd.MATCH, vd.WEAKER))
         self.assertEqual(1, code(vd.SOUNDNESS))
-        self.assertEqual(2, code(vd.WEAKER, vd.HARNESS))
+        self.assertEqual(1, code(vd.WEAKER, vd.HARNESS))
+        self.assertEqual(1, code(vd.SOUNDNESS, vd.HARNESS))
+        self.assertEqual(2, code(vd.MATCH, vd.HARNESS))
 
     def test_summary_counts(self):
         report = vd.build_report("vowc", [fake_row(vd.MATCH), fake_row(vd.WEAKER)])
@@ -145,30 +158,56 @@ class ReportTest(unittest.TestCase):
 
 
 class RunBackendTest(unittest.TestCase):
-    def test_hung_verifier_is_an_inconclusive_timeout(self):
-        expired = vd.subprocess.TimeoutExpired(cmd="vowc", timeout=1)
-        with mock.patch.object(vd.subprocess, "run", side_effect=expired):
-            result, _ = vd.run_backend("vowc", "native", "x.vow", 1)
-        self.assertEqual(vd.INCONCLUSIVE, vd.verdict_of(result))
-
-    def test_non_json_output_is_an_error(self):
-        proc = mock.Mock(stdout="not json", stderr="boom")
+    def run_with(self, stdout="", returncode=0, expired=False):
+        proc = mock.Mock(returncode=returncode, pid=4242)
+        if expired:
+            proc.communicate.side_effect = [
+                vd.subprocess.TimeoutExpired(cmd="vowc", timeout=1),
+                ("", ""),
+            ]
+        else:
+            proc.communicate.return_value = (stdout, "boom")
         with (
-            mock.patch.object(vd.subprocess, "run", return_value=proc),
+            mock.patch.object(vd.subprocess, "Popen", return_value=proc) as popen,
+            mock.patch.object(vd, "function_count", return_value=1),
+            mock.patch.object(vd.os, "killpg") as killpg,
             mock.patch.object(sys, "stderr", io.StringIO()),
         ):
-            result, _ = vd.run_backend("vowc", "native", "x.vow", 1)
+            result, _ = vd.run_backend("vowc", "native", "x.vow", 7)
+        return result, popen, killpg
+
+    def test_hung_verifier_is_killed_as_a_group_and_times_out(self):
+        result, _, killpg = self.run_with(expired=True)
+        killpg.assert_called_once()
+        self.assertEqual(vd.INCONCLUSIVE, vd.verdict_of(result))
+        self.assertEqual("timeout", result["verify_status"])
+
+    def test_signal_death_is_a_crash_not_a_harness_error(self):
+        result, _, _ = self.run_with(returncode=-11)
+        self.assertEqual(vd.INCONCLUSIVE, vd.verdict_of(result))
+        self.assertEqual("crashed", result["verify_status"])
+
+    def test_non_json_output_is_an_error(self):
+        result, _, _ = self.run_with(stdout="not json", returncode=1)
         self.assertEqual(vd.ERROR, vd.verdict_of(result))
 
     def test_backend_and_timeout_are_passed_to_vowc(self):
-        proc = mock.Mock(stdout='{"status":"Verified"}', stderr="")
-        with mock.patch.object(vd.subprocess, "run", return_value=proc) as run:
-            vd.run_backend("vowc", "native", "x.vow", 7)
-        args = run.call_args.args[0]
+        _, popen, _ = self.run_with(stdout='{"status":"Verified"}')
+        args = popen.call_args.args[0]
         self.assertEqual(
-            ["--backend", "native", "--timeout", "7"],
-            args[3:7] if args[2] == "--no-cache" else None,
+            [
+                "vowc",
+                "verify",
+                "--no-cache",
+                "--backend",
+                "native",
+                "--timeout",
+                "7",
+                "x.vow",
+            ],
+            args,
         )
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
 
 
 class MainTest(unittest.TestCase):
@@ -204,6 +243,26 @@ class MainTest(unittest.TestCase):
         )
         self.assertEqual(0, code)
         self.assertEqual(1, json.loads(out)["summary"]["match"])
+
+    def test_empty_selection_is_a_harness_failure(self):
+        with (
+            mock.patch.object(vd, "preflight", return_value=[]),
+            mock.patch.object(vd.verify_eval, "collect", return_value=[]),
+            mock.patch.object(sys, "stderr", io.StringIO()),
+        ):
+            self.assertEqual(2, vd.main(["--filter", "typo"]))
+
+    def test_worker_exception_is_a_harness_failure(self):
+        exp = vd.verify_eval.Expect("tests/verify/x.vow", "Verified")
+        with (
+            mock.patch.object(vd, "preflight", return_value=[]),
+            mock.patch.object(
+                vd.verify_eval, "collect", return_value=[("verify", exp)]
+            ),
+            mock.patch.object(vd, "run_backend", side_effect=PermissionError("denied")),
+            mock.patch.object(sys, "stderr", io.StringIO()),
+        ):
+            self.assertEqual(2, vd.main([]))
 
     def test_missing_tools_are_a_harness_failure(self):
         with (

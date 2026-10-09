@@ -167,13 +167,20 @@ every fixture:
 | `more_precise` | Native concludes where ESBMC does not, reports an extra counterexample, or refutes a program ESBMC proves and the corpus labels incorrect. |
 | `weaker` | Native is `Skipped`/`unknown`/`timeout`/`tool_not_found` where ESBMC proves or refutes, drops or re-attributes a counterexample, or refutes a program the corpus labels correct. **Fails the script.** |
 | `soundness` | Native proves a program ESBMC refutes, or one the corpus labels incorrect. **Fails the script.** |
+| `harness` | A backend printed no parseable JSON, so the row says nothing about the verifiers. A backend that hangs (killed at its budget) or dies from a signal is not a `harness` row: it is inconclusive (`verify_status` `timeout` / `crashed`). |
+
+Native `verify_status` of `panicked`, `error` or `crashed` is `weaker` even when
+ESBMC is also inconclusive. File-level status is per module: native reports
+`Skipped` for a file when any one function is outside its subset, so a partly
+modelable file reads as `weaker` against an ESBMC `Verified` until the subset
+grows.
 
 The report is one JSON document (`schema_version`, `summary`, `rows[]` with both
 backends' verdict, `verify_status`, counterexamples and wall-clock seconds) on
 stdout or in `--output FILE`; a human summary of non-`match` rows goes to
-stderr. Exit codes: `0` clean, `1` any `weaker`/`soundness` row, `2` the harness
-could not run (missing `vowc`, `esbmc` or `bitwuzla`, or unparseable verifier
-output).
+stderr. Exit codes: `0` clean, `1` any `weaker`/`soundness` row (takes precedence), `2`
+the harness could not run or only found `harness` rows (missing `vowc`, `esbmc`
+or `bitwuzla`, unparseable verifier output, no fixture selected, or an I/O error).
 
 ```bash
 python3 scripts/verify_diff.py --vowc build/vowc --output /tmp/verify-diff.json
