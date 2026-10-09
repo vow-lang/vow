@@ -36,19 +36,13 @@ case "$FAKE_BW_MODE" in
     exit1) echo "[error] boom" >&2; exit 1 ;;
     hang) echo $$ > "$FAKE_BW_DIR/pid"; exec sleep 29 ;;
     sat_empty) printf 'sat\n(\n)\n' ;;
-    sat_zero)
+    sat|sat_zero)
+        val=7
+        [ "$FAKE_BW_MODE" = sat_zero ] && val=0
         echo sat
         echo "("
         grep -o '^(declare-const p[0-9]*' "$file" | sed 's/(declare-const //' | while read -r name; do
-            echo "  ($name (_ bv0 64))"
-        done
-        echo ")"
-        ;;
-    sat)
-        echo sat
-        echo "("
-        grep -o '^(declare-const p[0-9]*' "$file" | sed 's/(declare-const //' | while read -r name; do
-            echo "  ($name (_ bv7 64))"
+            echo "  ($name (_ bv$val 64))"
         done
         echo ")"
         ;;

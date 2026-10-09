@@ -1440,8 +1440,7 @@ import json, sys
 j = json.loads(sys.argv[1])
 cx = j.get('counterexamples') or []
 bad = [c.get('function', '?') + '=' + str(c.get('replay', '')) for c in cx if c.get('replay') != 'confirmed']
-bugs = [d for d in j.get('diagnostics') or [] if d.get('error_code') == 'VerifierBug']
-print('none' if not cx else ('bug' if bugs else (','.join(bad) if bad else 'confirmed')))
+print(','.join(bad) if bad else ('confirmed' if cx else 'none'))
 " "$native_replay_json" 2>/dev/null) || native_replay=""
         if [ "$native_replay" != "confirmed" ]; then
             native_errors+=("--replay-cex: every counterexample must replay as confirmed, got '$native_replay'")

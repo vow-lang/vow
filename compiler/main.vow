@@ -750,21 +750,20 @@ fn replay_abort(reason: String) -> ReplayVerdict {
     ReplayVerdict { status: String::from("aborted"), reason: reason }
 }
 
-fn replay_is_synthetic_id(vow_id: i64) -> bool {
-    vow_id == caller_precondition_vow_id() || vow_id == unsupported_op_vow_id() || vow_id == verifier_unattributed_vow_id()
+fn replay_confirm() -> ReplayVerdict {
+    ReplayVerdict { status: String::from("confirmed"), reason: String::from("") }
 }
 
-fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String, native: bool) -> ReplayVerdict [io] {
+fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String, abort_claims: bool) -> ReplayVerdict [io] {
     if ce.function == String::from("main") {
         return replay_skip(String::from("cannot replay the entry function `main`"));
     }
     // Synthetic verifier-only ids never match a runtime-emitted vow_id, so an
-    // exact id comparison would always diverge — skip them.
-    // The native backend's only unattributed claims are the language-specified
-    // arithmetic aborts (zero divisor, signed MIN / -1); those replay and are
-    // confirmed by a runtime ArithmeticOverflow abort.
-    let abort_claim: bool = native && ce.vow_id == verifier_unattributed_vow_id();
-    if !abort_claim && replay_is_synthetic_id(ce.vow_id) {
+    // exact id comparison would always diverge — skip them. The exception is
+    // the native backend's unattributed id, which marks the language-specified
+    // arithmetic aborts (zero divisor, signed MIN / -1) and replays.
+    let abort_claim: bool = abort_claims && ce.vow_id == verifier_unattributed_vow_id();
+    if !abort_claim && (ce.vow_id == caller_precondition_vow_id() || ce.vow_id == unsupported_op_vow_id() || ce.vow_id == verifier_unattributed_vow_id()) {
         return replay_skip(String::from("replay: synthetic counterexample id (caller-precondition / unsupported-op / unattributed-property sentinel)"));
     }
     let fi: i64 = replay_find_fn(fns, ce.function);
@@ -909,7 +908,7 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     let blame_needle: String = str3(String::from("\"blame\":\""), replay_blame_runtime_name(ce.blame), String::from("\""));
     if viol.len() > 0 && rrc == RUNTIME_ABORT_EXIT_CODE {
         if viol.contains(vowid_needle) && viol.contains(blame_needle) {
-            return ReplayVerdict { status: String::from("confirmed"), reason: String::from("") };
+            return replay_confirm();
         }
         return replay_diverge(String::from("runtime violation did not match predicted vow_id/blame"));
     }
@@ -928,20 +927,15 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     replay_diverge(String::from("runtime violation did not match predicted vow_id/blame"))
 }
 
-// Under the native backend a counterexample whose replay ran and disagreed
-// (`diverged`, or `aborted` through another mechanism) means the model and the
-// runtime differ, which is a verifier bug rather than a property of the user's
-// program. A `skipped` replay never ran, so it proves nothing and is not
-// reported. One error diagnostic per counterexample; the verdict is already
-// `VerifyFailed`, so the exit code holds.
-fn report_unreplayed_ces(dctx: DiagCtx, ces: Vec<VerifyCE>) [io] {
+// A native counterexample whose replay ran and disagreed means the model and
+// the runtime differ: a verifier bug. A `skipped` replay never ran, so it
+// proves nothing and is not reported.
+fn report_verifier_bug_ces(dctx: DiagCtx, ces: Vec<VerifyCE>) [io] {
     let mut i: u64 = 0;
     while i < ces.len() {
         let ce: VerifyCE = ces[i];
         if ce.replay == String::from("diverged") || ce.replay == String::from("aborted") {
-            let msg: String = str3(String::from("native verifier counterexample for `"), ce.function, String::from("` did not replay ("));
-            msg.push_str(ce.replay);
-            msg.push_str(String::from(": "));
+            let msg: String = str5(String::from("native verifier counterexample for `"), ce.function, String::from("` did not replay ("), ce.replay, String::from(": "));
             msg.push_str(ce.replay_reason);
             msg.push_str(String::from(")"));
             let d: Diagnostic = diag_new(SEV_ERROR(), EC_VERIFIER_BUG(), msg, ce.source, ce.source_start, ce.source_len, DIAG_BLAME_NONE());
@@ -953,17 +947,17 @@ fn report_unreplayed_ces(dctx: DiagCtx, ces: Vec<VerifyCE>) [io] {
 }
 
 // Verdict for a native abort-claim counterexample: the predicted outcome is the
-// runtime's `ArithmeticOverflow` abort (the one envelope for a zero divisor and
-// for signed MIN / -1), never a VowViolation.
+// runtime's `ArithmeticOverflow` abort (one envelope for a zero divisor and for
+// signed MIN / -1, so it confirms the kind of failure, not the operation).
 fn replay_abort_claim_verdict(scan: ReplayScan, rrc: i64) -> ReplayVerdict {
     if rrc == RUNTIME_ABORT_EXIT_CODE && scan.abort_kind == String::from("ArithmeticOverflow") {
-        return ReplayVerdict { status: String::from("confirmed"), reason: String::from("") };
+        return replay_confirm();
     }
     if rrc == 0 {
         return replay_diverge(String::from("harness exited cleanly; the predicted ArithmeticOverflow abort did not occur"));
     }
     if rrc == RUNTIME_ABORT_EXIT_CODE && scan.abort_kind.len() > 0 {
-        return replay_abort(str2(String::from("runtime aborted with "), str2(scan.abort_kind, String::from(" instead of the predicted ArithmeticOverflow"))));
+        return replay_abort(str3(String::from("runtime aborted with "), scan.abort_kind, String::from(" instead of the predicted ArithmeticOverflow")));
     }
     if rrc == RUNTIME_ABORT_EXIT_CODE && scan.violation_line.len() > 0 {
         return replay_diverge(String::from("runtime fired a VowViolation (a contract was violated by the counterexample inputs) instead of the predicted ArithmeticOverflow"));
@@ -1040,12 +1034,12 @@ fn replay_last_error_kind_in_line(line: String) -> String {
     found
 }
 
-fn replay_all(ces: Vec<VerifyCE>, fns: Vec<IrFunction>, path: String, argv0: String, native: bool) -> Vec<VerifyCE> [io] {
+fn replay_all(ces: Vec<VerifyCE>, fns: Vec<IrFunction>, path: String, argv0: String, abort_claims: bool) -> Vec<VerifyCE> [io] {
     let out: Vec<VerifyCE> = Vec::new();
     let mut i: u64 = 0;
     while i < ces.len() {
         let ce: VerifyCE = ces[i];
-        let v: ReplayVerdict = replay_one_ce(ce, fns, path, argv0, native);
+        let v: ReplayVerdict = replay_one_ce(ce, fns, path, argv0, abort_claims);
         let reason: String = {
             if v.status == String::from("confirmed") { String::from("") }
             else { v.reason }
@@ -1738,7 +1732,7 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
         else if any_skipped { String::from("Skipped") }
         else { String::from("Verified") }
     };
-    verify_finish(argv, fns, path, dctx, tctx, status_str, ces, soft_meta, !all_proven || any_skipped, true)
+    verify_finish(argv, fns, path, dctx, tctx, status_str, ces, soft_meta, !all_proven || any_skipped)
 }
 
 fn run_verify(argv: Vec<String>) -> i32 [io] {
@@ -1804,12 +1798,13 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         else if outcome == 2 { String::from("Skipped") }
         else { String::from("VerifyFailed") }
     };
-    verify_finish(argv, fns, path, dctx, tctx, status_str, ces, soft_meta, outcome != 0, false)
+    verify_finish(argv, fns, path, dctx, tctx, status_str, ces, soft_meta, outcome != 0)
 }
 
 // Shared tail of `verify`: counterexample selection, replay, trace output and
 // the JSON result. Returns the process exit code.
-fn verify_finish(argv: Vec<String>, fns: Vec<IrFunction>, path: String, dctx: DiagCtx, tctx: TraceCtx, status_str: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, failed: bool, native: bool) -> i32 [io] {
+fn verify_finish(argv: Vec<String>, fns: Vec<IrFunction>, path: String, dctx: DiagCtx, tctx: TraceCtx, status_str: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, failed: bool) -> i32 [io] {
+    let native: bool = get_flag_arg(argv, "--backend") == "native";
     let mut ces_final: Vec<VerifyCE> = Vec::new();
     let ce_wins: bool = vf_prefers_counterexample(ces, soft_meta, fns);
     if ce_wins {
@@ -1829,8 +1824,8 @@ fn verify_finish(argv: Vec<String>, fns: Vec<IrFunction>, path: String, dctx: Di
     }
     trace_write(tctx);
     vf_add_ce_diagnostics(dctx, ces_final);
-    if native && has_flag(argv, "--replay-cex") {
-        report_unreplayed_ces(dctx, ces_final);
+    if native {
+        report_verifier_bug_ces(dctx, ces_final);
     }
     diag_emit_verify_json_full(status_str, dctx, ces_final, vstatus, vmsg, vf_func, vf_ce);
     if failed {
