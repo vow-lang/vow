@@ -698,12 +698,18 @@ fn fresh_arena_base_extern(sym: String) -> bool {
         }
     }
     if n == 22 {
-        let c0: i64 = sym.byte_at(13);
-        if c0 == 102 {
+        let c0: i64 = sym.byte_at(18);
+        if c0 == 99 {
             return sym == String::from("__vow_string_from_cstr");
         }
-        if c0 == 115 {
+        if c0 == 105 {
+            return sym == String::from("__vow_string_from_i128");
+        }
+        if c0 == 114 {
             return sym == String::from("__vow_string_substring");
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_string_from_u128");
         }
     }
     if n == 23 {

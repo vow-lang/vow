@@ -602,20 +602,29 @@ For the `u8` target, the available narrowing source types are `i16`, `i32`,
 forms, for example `u16_to_u8_try`, `u16_to_u8_wrap`, and `u16_to_u8_sat`.
 
 For the `i32` target, the available narrowing source types are `i64`, `u32`,
-and `u64`, each providing all three forms: `i64_to_i32_try`/`_wrap`/`_sat`,
-`u32_to_i32_try`/`_wrap`/`_sat`, and `u64_to_i32_try`/`_wrap`/`_sat`.
+`u64`, `i128`, and `u128`, each providing all three forms:
+`i64_to_i32_try`/`_wrap`/`_sat`, `u32_to_i32_try`/`_wrap`/`_sat`,
+`u64_to_i32_try`/`_wrap`/`_sat`, `i128_to_i32_try`/`_wrap`/`_sat`, and
+`u128_to_i32_try`/`_wrap`/`_sat`.
 
 The remaining executable sub-64-bit targets expose these complete families:
 
 | Target | Narrowing source types |
 |--------|------------------------|
-| `i8`   | `i16`, `u16`, `i32`, `u32`, `i64`, `u64` |
-| `i16`  | `i32`, `u32`, `i64`, `u64` |
-| `u16`  | `i32`, `u32`, `i64`, `u64` |
-| `u32`  | `i64`, `u64` |
+| `i8`   | `i16`, `u16`, `i32`, `u32`, `i64`, `u64`, `i128`, `u128` |
+| `i16`  | `i32`, `u32`, `i64`, `u64`, `i128`, `u128` |
+| `u16`  | `i32`, `u32`, `i64`, `u64`, `i128`, `u128` |
+| `u32`  | `i64`, `u64`, `i128`, `u128` |
 
 Every listed source/target pair provides `_try`, `_wrap`, and `_sat`. Same-width
 signedness changes use `as`; they are bit reinterpretations, not narrowing.
+
+`i128` and `u128` appear in these tables only as sources: they are the widest
+integer types, so no other width narrows into them. The one conversion between
+them is the same-width sign change, which has `i128_to_u128_wrap`/`_sat` and
+`u128_to_i128_wrap`/`_sat` (no `_try`, because 128-bit enum payloads are not
+supported yet). There is no `i128`/`u128` to `i64`/`u64` narrowing family; use
+`int128_to_string`/`uint128_to_string` to observe a full 128-bit value.
 
 No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The
 operands must already have the same type. The compiler does not coerce
@@ -1358,13 +1367,21 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 #### Conversion
 
-**Formatting** uses two baselines; widen via `as` for narrower types:
+**Formatting** uses four baselines; widen via `as` for narrower types. The
+128-bit formatters exist because most 128-bit values do not fit `i64`/`u64`, so
+they cannot be formatted by narrowing first:
 
-| Function         | Signature                                  | Effects    |
-|------------------|--------------------------------------------|------------|
-| `int_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
-| `uint_to_string` | `fn(v: u64) -> String`                     | `[]`       |
-| `i64_to_string`  | `fn(v: i64) -> String` (alias of `int_to_string`) | `[]` |
+| Function            | Signature                                  | Effects    |
+|---------------------|--------------------------------------------|------------|
+| `int_to_string`     | `fn(v: i64) -> String`                     | `[]`       |
+| `uint_to_string`    | `fn(v: u64) -> String`                     | `[]`       |
+| `i64_to_string`     | `fn(v: i64) -> String` (alias of `int_to_string`) | `[]` |
+| `int128_to_string`  | `fn(v: i128) -> String`                    | `[]`       |
+| `uint128_to_string` | `fn(v: u128) -> String`                    | `[]`       |
+
+The 128-bit formatters render the full decimal value (`i128::MIN` is 40
+characters, `u128::MAX` is 39). The verifier has no model of their result, so a
+function that calls one is reported `Skipped` rather than proven.
 
 ```vow
 let small: u8 = 42;

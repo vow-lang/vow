@@ -1,0 +1,22 @@
+// TEST: category unverifiable
+module Int128FormatCallSkipped
+
+// `int128_to_string` and `uint128_to_string` are unmodeled externs: a function
+// that calls one is Skipped (fail-closed), not proven against an invented string.
+fn render_signed(v: i128) -> String vow {
+  ensures: result.len() > 0
+} {
+  int128_to_string(v)
+}
+
+fn render_unsigned(v: u128) -> String vow {
+  ensures: result.len() > 0
+} {
+  uint128_to_string(v)
+}
+
+fn main() -> i32 [io] {
+  print_str(render_signed(-1i128));
+  print_str(render_unsigned(1u128));
+  0
+}

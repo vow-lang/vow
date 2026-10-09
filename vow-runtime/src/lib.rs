@@ -2148,6 +2148,34 @@ pub unsafe extern "C" fn __vow_string_from_u64(v: u64) -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_from_i128_in_arena(arena: *mut VowArena, v: i128) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("String::from_i128");
+    }
+    let s = v.to_string();
+    unsafe { __vow_string_new_in_arena(arena, s.as_ptr() as *const c_char, s.len()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_from_i128(v: i128) -> *mut u8 {
+    unsafe { with_root_arena(|root| __vow_string_from_i128_in_arena(root, v)) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_from_u128_in_arena(arena: *mut VowArena, v: u128) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("String::from_u128");
+    }
+    let s = v.to_string();
+    unsafe { __vow_string_new_in_arena(arena, s.as_ptr() as *const c_char, s.len()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_from_u128(v: u128) -> *mut u8 {
+    unsafe { with_root_arena(|root| __vow_string_from_u128_in_arena(root, v)) }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_print(s: *const u8) {
     sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
@@ -7334,6 +7362,18 @@ mod tests {
             unsafe { std::slice::from_raw_parts(unsigned_max_header.ptr, unsigned_max_header.len) };
         assert_eq!(unsigned_max_bytes, b"18446744073709551615");
 
+        let wide_min = unsafe { __vow_string_from_i128_in_arena(&mut a, i128::MIN) };
+        let wide_min_header = unsafe { &*(wide_min as *const VowVec) };
+        let wide_min_bytes =
+            unsafe { std::slice::from_raw_parts(wide_min_header.ptr, wide_min_header.len) };
+        assert_eq!(wide_min_bytes, b"-170141183460469231731687303715884105728");
+
+        let wide_umax = unsafe { __vow_string_from_u128_in_arena(&mut a, u128::MAX) };
+        let wide_umax_header = unsafe { &*(wide_umax as *const VowVec) };
+        let wide_umax_bytes =
+            unsafe { std::slice::from_raw_parts(wide_umax_header.ptr, wide_umax_header.len) };
+        assert_eq!(wide_umax_bytes, b"340282366920938463463374607431768211455");
+
         unsafe { __vow_arena_close(&mut a) };
     }
 
@@ -8496,6 +8536,16 @@ mod tests {
             eprintln!("rodata_trap_worker: null arena string from_u64 did NOT trap");
             std::process::exit(42);
         }
+        if op == "String::from_i128_in_arena_null" {
+            let _ = unsafe { __vow_string_from_i128_in_arena(std::ptr::null_mut(), 1) };
+            eprintln!("rodata_trap_worker: null arena string from_i128 did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "String::from_u128_in_arena_null" {
+            let _ = unsafe { __vow_string_from_u128_in_arena(std::ptr::null_mut(), 1) };
+            eprintln!("rodata_trap_worker: null arena string from_u128 did NOT trap");
+            std::process::exit(42);
+        }
         if op == "String::split_in_arena_null" {
             let _ = unsafe {
                 __vow_string_split_in_arena(
@@ -8946,6 +8996,16 @@ mod tests {
     #[test]
     fn explicit_arena_string_from_u64_null_arena_traps() {
         assert_runtime_invariant_null_arena("String::from_u64_in_arena_null", "String::from_u64");
+    }
+
+    #[test]
+    fn explicit_arena_string_from_i128_null_arena_traps() {
+        assert_runtime_invariant_null_arena("String::from_i128_in_arena_null", "String::from_i128");
+    }
+
+    #[test]
+    fn explicit_arena_string_from_u128_null_arena_traps() {
+        assert_runtime_invariant_null_arena("String::from_u128_in_arena_null", "String::from_u128");
     }
 
     #[test]
