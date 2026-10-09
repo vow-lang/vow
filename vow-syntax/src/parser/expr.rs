@@ -176,32 +176,18 @@ impl Parser {
             }
             TokenKind::LitIntSuffixed { value, suffix } => {
                 self.advance();
-                use crate::token::IntSuffix;
-                if matches!(suffix, IntSuffix::U64 | IntSuffix::I128 | IntSuffix::U128) {
-                    let target_name = match suffix {
-                        IntSuffix::U64 => "u64",
-                        IntSuffix::I128 => "i128",
-                        IntSuffix::U128 => "u128",
-                        _ => unreachable!(),
-                    };
-                    Expr {
-                        kind: ExprKind::Cast {
-                            expr: Box::new(Expr {
-                                kind: ExprKind::Lit(Lit::Int(value)),
-                                span: start,
-                            }),
-                            target_ty: Box::new(Type::Named {
-                                name: target_name.to_string(),
-                                span: start,
-                            }),
-                        },
-                        span: start,
-                    }
-                } else {
-                    Expr {
-                        kind: ExprKind::Lit(Lit::Int(value)),
-                        span: start,
-                    }
+                Expr {
+                    kind: ExprKind::Cast {
+                        expr: Box::new(Expr {
+                            kind: ExprKind::Lit(Lit::Int(value)),
+                            span: start,
+                        }),
+                        target_ty: Box::new(Type::Named {
+                            name: suffix.type_name().to_string(),
+                            span: start,
+                        }),
+                    },
+                    span: start,
                 }
             }
             TokenKind::LitFloat(v) => {
@@ -1282,9 +1268,12 @@ mod tests {
     }
 
     #[test]
-    fn explicit_wide_integer_suffixes_produce_typed_ast_nodes() {
-        for (source, expected_type) in [("1u64", "u64"), ("1i128", "i128"), ("1u128", "u128")] {
-            let expr = parse_no_errors(source);
+    fn every_integer_suffix_produces_a_typed_ast_node() {
+        for expected_type in [
+            "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128",
+        ] {
+            let source = format!("1{expected_type}");
+            let expr = parse_no_errors(&source);
             match &expr.kind {
                 ExprKind::Cast { expr, target_ty } => {
                     assert!(matches!(&expr.kind, ExprKind::Lit(Lit::Int(1))));
@@ -1296,12 +1285,6 @@ mod tests {
                 other => panic!("expected typed integer literal AST for {source}, got {other:?}"),
             }
         }
-    }
-
-    #[test]
-    fn preexisting_narrow_integer_suffixes_remain_untyped() {
-        let expr = parse_no_errors("1u8");
-        assert!(matches!(expr.kind, ExprKind::Lit(Lit::Int(1))));
     }
 
     #[test]

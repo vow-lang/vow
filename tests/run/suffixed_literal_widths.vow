@@ -1,0 +1,34 @@
+// TEST: exit 0
+module SuffixedLiteralWidths
+
+fn add_u8(x: u8) -> u8 {
+    x + 1u8
+}
+
+fn main() -> i32 {
+    let a: i8 = -128i8;
+    let b: i8 = 127i8;
+    let c: i16 = -32768i16;
+    let d: u16 = 65535u16;
+    let e: i32 = -2147483648i32;
+    let f: u32 = 4294967295u32;
+    let g: i64 = -9223372036854775808i64;
+    let h: u8 = 255u8;
+    let i: u64 = 18446744073709551615u64;
+    let j: i128 = -170141183460469231731687303715884105728i128;
+    let k: u128 = 340282366920938463463374607431768211455u128;
+    if a as i64 != -128 { return 1; }
+    if b as i64 != 127 { return 2; }
+    if c as i64 != -32768 { return 3; }
+    if d as i64 != 65535 { return 4; }
+    if e as i64 != -2147483648 { return 5; }
+    if f as i64 != 4294967295 { return 6; }
+    if g != -9223372036854775807 - 1 { return 7; }
+    if h as i64 != 255 { return 8; }
+    if i != 18446744073709551615u64 { return 9; }
+    if j >= 0i128 { return 10; }
+    if k == 0u128 { return 11; }
+    if add_u8(41u8) != 42u8 { return 12; }
+    if add_u8(254u8) != 255u8 { return 13; }
+    0
+}

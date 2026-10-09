@@ -3093,11 +3093,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             let target_ast_tid: i64 = expr_b(a, operand_eid);
             let target_tid: i64 = resolve_ast_ty(e, m, target_ast_tid);
             let target_tag: i64 = ty_tag(e.ts, target_tid);
-            let is_signed_wide: bool = target_tag == CTY_I128();
-            let is_unsigned_zero: bool = target_tag == CTY_U128() &&
+            let is_signed_int: bool = ty_is_integer(e.ts, target_tid) && !ty_is_unsigned(e.ts, target_tid);
+            let is_unsigned_zero: bool = ty_is_unsigned(e.ts, target_tid) &&
                 expr_tag(a, inner_eid) == EXPR_LIT_INT() &&
                 expr_int_lo(a, inner_eid) == 0u64 && expr_int_hi(a, inner_eid) == 0u64;
-            if (is_signed_wide || is_unsigned_zero) && expr_tag(a, inner_eid) == EXPR_LIT_INT() {
+            if (is_signed_int || is_unsigned_zero) && expr_tag(a, inner_eid) == EXPR_LIT_INT() {
                 if integer_literal_out_of_range(a, eid, target_tag) {
                     emit_literal_out_of_range(e, a, eid, target_tag);
                 }

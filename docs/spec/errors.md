@@ -169,6 +169,7 @@ fn ordered(a: i64, b: i64 where b > a) -> i64 {
 ```vow
 let x: u8 = 300;
 const NEG: u16 = -1;
+let y = 256u8;   // a suffixed literal is checked against its suffix type
 ```
 
 **Output:** `literal 300 does not fit in u8 (range 0..=255)`

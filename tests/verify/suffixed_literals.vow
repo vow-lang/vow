@@ -1,0 +1,25 @@
+// TEST: category overflow
+module SuffixedLiterals
+
+fn narrow_sum() -> i64 vow {
+    ensures: result == 5
+} {
+    let a: i8 = -128i8;
+    let b: i16 = 300i16;
+    let c: i32 = -2147483648i32;
+    let d: u16 = 65535u16;
+    let e: u32 = 4294967295u32;
+    let f: u8 = 255u8;
+    if a as i64 != -128 { return 0; }
+    if b as i64 != 300 { return 0; }
+    if c as i64 != -2147483648 { return 0; }
+    if d as i64 != 65535 { return 0; }
+    if e as i64 != 4294967295 { return 0; }
+    if f as i64 != 255 { return 0; }
+    5
+}
+
+fn main() -> i32 [io] {
+    print_i64(narrow_sum());
+    0
+}

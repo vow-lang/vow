@@ -1,0 +1,85 @@
+module TestParserSuffixLiterals
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+
+// Every integer-literal suffix desugars to the `NNN as T` cast it denotes, so
+// the printed contract text of `42<suffix>` is `42 as <T>` in both compilers.
+
+fn lower_source(source: String) -> IrModule {
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, diag_ctx_new(), String::from("forms.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut item_i: u64 = 0;
+    while item_i < parsed.items.len() {
+        item_files.push(String::from("forms.vow"));
+        item_i = item_i + 1;
+    }
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), item_files
+    )
+}
+
+fn description_of(clause: String) -> String {
+    let source: String = String::from("module T\nfn f(x: i64, c: bool) -> i64 vow {\n  requires: ");
+    source.push_str(clause);
+    source.push_str(String::from("\n} { x }\n"));
+    let m: IrModule = lower_source(source);
+    let f: IrFunction = m.functions[0];
+    let v: IrVowEntry = f.vows[0];
+    v.description
+}
+
+fn check_suffix(suffix: String, code: i64) -> i64 {
+    let clause: String = String::from("x == 42");
+    clause.push_str(suffix);
+    let want: String = String::from("requires x == 42 as ");
+    want.push_str(suffix);
+    if description_of(clause) != want { return code; }
+    0
+}
+
+fn const_value_tag(decl: String) -> i64 {
+    let arena: AstArena = arena_new();
+    let source: String = String::from("module T\n");
+    source.push_str(decl);
+    let parsed: Module = parse_module_into(
+        lex(source), arena, diag_ctx_new(), String::from("forms.vow")
+    );
+    expr_tag(arena, cdef_value_eid(arena, item_id(parsed.items[0])))
+}
+
+fn main() -> i32 {
+    let r1: i64 = check_suffix(String::from("i8"), 1);
+    if r1 != 0 { return i64_to_i32_wrap(r1); }
+    let r2: i64 = check_suffix(String::from("i16"), 2);
+    if r2 != 0 { return i64_to_i32_wrap(r2); }
+    let r3: i64 = check_suffix(String::from("i32"), 3);
+    if r3 != 0 { return i64_to_i32_wrap(r3); }
+    let r4: i64 = check_suffix(String::from("i64"), 4);
+    if r4 != 0 { return i64_to_i32_wrap(r4); }
+    let r5: i64 = check_suffix(String::from("i128"), 5);
+    if r5 != 0 { return i64_to_i32_wrap(r5); }
+    let r6: i64 = check_suffix(String::from("u8"), 6);
+    if r6 != 0 { return i64_to_i32_wrap(r6); }
+    let r7: i64 = check_suffix(String::from("u16"), 7);
+    if r7 != 0 { return i64_to_i32_wrap(r7); }
+    let r8: i64 = check_suffix(String::from("u32"), 8);
+    if r8 != 0 { return i64_to_i32_wrap(r8); }
+    let r9: i64 = check_suffix(String::from("u64"), 9);
+    if r9 != 0 { return i64_to_i32_wrap(r9); }
+    let r10: i64 = check_suffix(String::from("u128"), 10);
+    if r10 != 0 { return i64_to_i32_wrap(r10); }
+    if const_value_tag(String::from("const X: u8 = 200u8;\n")) != EXPR_LIT_INT() { return 11; }
+    if const_value_tag(String::from("const X: i32 = -5i32;\n")) != EXPR_UNOP() { return 12; }
+    if const_value_tag(String::from("const X: u32 = 5u8;\n")) != EXPR_CAST() { return 13; }
+    0
+}

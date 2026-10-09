@@ -4931,7 +4931,7 @@ fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<In
         ExprKind::UnaryOp {
             op: UnOp::Neg,
             operand,
-        } => {
+        } if expr_is_coercible_int_marker(operand) => {
             if let ExprKind::Lit(Lit::Int(value)) = &operand.kind
                 && !matches!(ty, Ty::I128 | Ty::U128)
             {

@@ -1,0 +1,7 @@
+// TEST: error-code TypeMismatch
+module SuffixDoesNotCoerce
+
+fn main() -> i32 {
+    let x: i64 = 5u8;
+    0
+}
