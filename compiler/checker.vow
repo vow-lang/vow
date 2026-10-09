@@ -4062,7 +4062,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 try_name.push_str(ty_tag_name(tgt_tag));
                 try_name.push_str(String::from("_try"));
                 let hint: String = String::from("");
-                if env_lookup_fn(e, clone_string(try_name)) >= 0 {
+                if env_lookup_fn(e, try_name) >= 0 {
                     hint.push_str(String::from("use a `"));
                     hint.push_str(try_name);
                     hint.push_str(String::from("`, `_wrap`, or `_sat` narrowing intrinsic"));
