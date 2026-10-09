@@ -88,6 +88,19 @@ pub(crate) fn lookup(handle: i64) -> Option<Arc<PipedChild>> {
     PIPED_MAP.lock().unwrap().as_ref()?.get(&handle).cloned()
 }
 
+/// Makes writes to `stdin` fail with `EPIPE` instead of raising SIGPIPE. Darwin
+/// directs that signal at the process, so blocking it on the writing thread (see
+/// `write_shielded`) does not stop another thread from taking it; the per-fd
+/// flag does, and leaves the process-wide disposition alone.
+#[cfg(target_vendor = "apple")]
+fn suppress_sigpipe(stdin: &ChildStdin) {
+    use std::os::fd::AsRawFd;
+    unsafe { libc::fcntl(stdin.as_raw_fd(), libc::F_SETNOSIGPIPE, 1) };
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn suppress_sigpipe(_stdin: &ChildStdin) {}
+
 /// Writes `data` with SIGPIPE blocked on this thread, so a child that stopped
 /// reading yields `EPIPE` instead of killing the program. The process-wide
 /// disposition is left alone: ignoring it globally would also keep a program
@@ -155,6 +168,7 @@ pub(crate) fn start(cmd: &str, args: &[String]) -> i64 {
         let _ = child.wait();
         return -1;
     };
+    suppress_sigpipe(&stdin);
     let (rx, stdout_thread) = spawn_stdout_reader(stdout);
     let stderr_thread = spawn_drain(Some(stderr));
     let piped = Arc::new(PipedChild {
