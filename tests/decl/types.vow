@@ -1,0 +1,38 @@
+module Types
+
+pub struct Point {
+    x: i64,
+    y: i64,
+}
+
+linear struct Token {
+    id: i64,
+}
+
+struct Empty {
+}
+
+pub enum Shape {
+    Dot,
+    Circle(i64),
+    Rect(i64, i64),
+}
+
+pub const LIMIT: i64 = 100;
+const NEG: i64 = -5;
+const FLAG: bool = true;
+
+type Alias = Vec<Option<i64>>;
+pub type Small = u8;
+
+extern "C" {
+    vow {
+        requires: true
+    }
+    fn write_thing(fd: i64, n: i64) -> i64 [io];
+    fn ping() [io];
+}
+
+fn main() -> i32 [io] {
+    0
+}

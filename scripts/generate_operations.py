@@ -10,6 +10,7 @@ Builtin Operations) and splices generated lookup functions into:
   - compiler/lower.vow                (catalogue_builtin_to_extern, catalogue_builtin_ret_ty)
   - vow-ir/src/region.rs              (FRESH_ARENA_VARIANTS)
   - compiler/ir.vow                   (fresh_arena_base_extern)
+  - compiler/vc_ops.vow               (catalogue_verifier_known)
 between `// GENERATE:OPERATIONS:START` / `// GENERATE:OPERATIONS:END` markers.
 
 Usage:
@@ -447,7 +448,9 @@ def _vow_symbol_set_fn(name: str, symbols: list[str]) -> str:
     position, and confirm with a single full comparison at each leaf. A lookup
     costs a few byte reads and at most one String allocation, not one
     comparison (and allocation) per symbol."""
-    lines = [f"fn {name}(sym: String) -> bool {{", "    let n: u64 = sym.len();"]
+    lines = [f"fn {name}(sym: String) -> bool {{"]
+    if symbols:
+        lines.append("    let n: u64 = sym.len();")
 
     def emit(group: list[str], depth: int, indent: str) -> None:
         if len(group) == 1:
@@ -478,6 +481,18 @@ def _vow_symbol_set_fn(name: str, symbols: list[str]) -> str:
 
 def gen_vow_ir_block(ops: list[dict], routes: list[str]) -> str:
     return _wrap_marker_block(_vow_symbol_set_fn("fresh_arena_base_extern", routes))
+
+
+def gen_vow_vc_ops_block(ops: list[dict], routes: list[str]) -> str:
+    """The native verifier's builtin model, keyed by runtime symbol (the gate
+    sees extern calls, not Vow builtin names). Only `known` needs a lookup: an
+    `unmodeled` entry and an absent symbol both skip the function, and
+    `check_verifier_models` already forces every entry to say which it is.
+    `known` is necessary but not sufficient to verify a call: until the
+    symbolic executor encodes calls, the gate still skips a `known` builtin as
+    `unsupported-opcode`."""
+    known = [op["runtime_symbol"] for op in ops if op.get("verifier_model") == "known"]
+    return _wrap_marker_block(_vow_symbol_set_fn("catalogue_verifier_known", known))
 
 
 def gen_vow_lower_block(ops: list[dict], routes: list[str]) -> str:
@@ -603,6 +618,18 @@ def extract_builtin_signatures_table(grammar_text: str) -> dict[str, tuple[str, 
     return table
 
 
+def check_verifier_models(ops: list[dict]) -> list[str]:
+    """Drift check: every catalogued builtin must say whether the native
+    verifier models it. A builtin added without a `verifier_model` would
+    otherwise be indistinguishable from one nobody has decided on."""
+    return [
+        f"docs/spec/operations.json: '{op['name']}' has no verifier_model "
+        "(set 'known' or an explicit 'unmodeled')"
+        for op in ops
+        if "verifier_model" not in op
+    ]
+
+
 def check_doc_facts(ops: list[dict], repo_root: Path) -> list[str]:
     """Cross-check each op's doc facts against grammar.md, main.vow and
     skill.rs. Collects every mismatch instead of failing on the first."""
@@ -647,6 +674,7 @@ TARGET_FILES = [
     (Path("compiler/lower.vow"), gen_vow_lower_block),
     (Path("vow-ir/src/region.rs"), gen_region_block),
     (Path("compiler/ir.vow"), gen_vow_ir_block),
+    (Path("compiler/vc_ops.vow"), gen_vow_vc_ops_block),
 ]
 
 
@@ -688,6 +716,12 @@ def main() -> None:
         routes = load_arena_routes(repo_root, ops)
     except (ValueError, json.JSONDecodeError) as e:
         print(str(e), file=sys.stderr)
+        sys.exit(1)
+
+    undecided = check_verifier_models(ops)
+    if undecided:
+        for m in undecided:
+            print(m, file=sys.stderr)
         sys.exit(1)
 
     if check_only:

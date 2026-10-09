@@ -8,8 +8,10 @@ Compile source to native executable. Verifies contracts by default.
 
 ```
 vow build [OPTIONS] <source.vow>
-vow [OPTIONS] <source.vow>          # legacy (equivalent)
+vow [OPTIONS] <source.vow>          # bare form (identical to `vow build`)
 ```
+
+The bare `vow <source.vow>` form is exactly `vow build`: it verifies by default, accepts the same flags, prints the same build-result JSON and fails closed (non-zero exit and `VerifyFailed` when verification fails). The former legacy-only `--emit-c` and `--verify` flags are not accepted and are rejected with the usage error (exit 2) like any unknown flag; `--no-verify` is the opt-out and `--dump-ir` prints the IR. Without `-o` the executable is written to `build/<stem>`.
 
 **Options:**
 
@@ -49,7 +51,7 @@ vow verify [OPTIONS] <source.vow>
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
-| `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is the in-process symbolic checker with Bitwuzla (epic #1398); self-hosted `vowc` only, see "Native backend" below. Accepted by `verify` only: `build`, `contracts`, `test` and the legacy `vowc <file> --verify` form reject `--backend native` with a usage error (exit 1) instead of silently running ESBMC. Any value other than `esbmc` or `native` is a usage error |
+| `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is the in-process symbolic checker with Bitwuzla (epic #1398); self-hosted `vowc` only, see "Native backend" below. Accepted by `verify` only: `build`, `contracts`, `test` and the bare `vowc <file>` form (identical to `build`) reject `--backend native` with a usage error (exit 1) instead of silently running ESBMC. Any value other than `esbmc` or `native` is a usage error |
 | `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
 | `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. |
 
@@ -57,11 +59,11 @@ vow verify [OPTIONS] <source.vow>
 
 Opt-in; the default stays `esbmc`. Implemented only by the self-hosted `vowc`: the Rust `vow` does not accept `--backend` until verification is delegated to a pinned seed `vowc`. Walking-skeleton scope (issue #1408):
 
-- **Subset.** A function is verified when it is pure, a single basic block, and uses only these operations on `i64` and `bool`: constants, `i64` parameters, wrapping `+ - * / %`, `& | ^`, comparisons (`i64`; `==`/`!=` also on `bool`), `!`, and `requires`/`ensures` clauses. Everything else (`if`, `&&`, `||`, loops, calls, effects, the checked `+!` family, shifts, casts, `u64` and other widths, `bool` parameters, floats, collections, `invariant`) is **`Skipped`**, never `Verified`. The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from ADR-1430 (`function-has-effects`, `ir-non-dominating-read`, `unsupported-opcode` with detail `Op[type]`, e.g. `CheckedAdd[i64]`). A machine-readable `reason_code` field is not emitted yet.
+- **Subset.** A function is verified when it is pure, a single basic block, and uses only these operations on `i64` and `bool`: constants, `i64` parameters, wrapping `+ - * / %`, `& | ^`, comparisons (`i64`; `==`/`!=` also on `bool`), `!`, and `requires`/`ensures` clauses. Everything else (`if`, `&&`, `||`, loops, calls, effects, the checked `+!` family, shifts, casts, `u64` and other widths, `bool` parameters, floats, collections, `invariant`) is **`Skipped`**, never `Verified`. The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from ADR-1430 (`function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`, `unmodeled-builtin` with detail the runtime symbol, `wide-aggregate-field`, `unsupported-opcode` with detail `Op[type]`, e.g. `CheckedAdd[i64]`). A machine-readable `reason_code` field is not emitted yet.
 - **Proof obligations.** One query per `ensures` clause and per `/` or `%` site, in IR order; a `requires` is an assumption only for the obligations after it. `/` and `%` follow the language: a zero divisor aborts, and signed `MIN / -1` aborts for `/` (`MIN % -1` is `0`). Each abort is its own obligation, reported with the unattributed vow id `4294967293` and blame `none`, violation text `division or remainder by zero` or `signed division overflow (MIN / -1)`. A function with no obligation is `Verified` without a solver call.
 - **Verdict divergence from ESBMC.** The ESBMC model does not check `MIN / -1` for `/`, so `examples/divide.vow` (`requires: y != 0`, body `x / y`) is `VerifyFailed` under `--backend native` (counterexample `x = i64::MIN`, `y = -1`) while ESBMC proves it.
 - **Solver.** `bitwuzla` is resolved from `PATH`; one self-contained `.smt2` per obligation is written to a private temp directory (removed on every path) and run as a child process. Only `unsat` is a proof. `unknown` is `verify_status: "unknown"`; a solver that outlives its budget is killed (`"timeout"`); a non-zero exit, `[error]` output, an unrecognised answer or an unparsable model is `"error"`. If `bitwuzla` is not on `PATH` and a function needs it, the result is `VerifyFailed` with `verify_status: "tool_not_found"` and no counterexample (ESBMC is not consulted). A module in which every function is `Skipped` needs no solver. The binary is not version- or hash-checked yet.
-- **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function across all of its solver runs; `--timeout 0` is an immediate `timeout` without spawning the solver. `--no-cache` and `--verify-jobs` are accepted and have no effect (the native driver is sequential and uncached). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--replay-cex` and `--perfetto` work as for ESBMC.
+- **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function across all of its solver runs; `--timeout 0` is an immediate `timeout` without spawning the solver. `--no-cache` and `--verify-jobs` are accepted and have no effect (the native driver is sequential and uncached). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--perfetto` works as for ESBMC. `--replay-cex` also replays the division and remainder abort counterexamples and reports a counterexample that does not reproduce as a `VerifierBug` diagnostic (see "Counterexample replay" below).
 
 ### `vow contracts`
 
@@ -105,7 +107,7 @@ vow skill install --global  # install to $HOME/.claude/skills/vow/ on Linux
 
 When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow/` and fails if `$HOME` is unset or empty.
 
-**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
+**Auto-install on build.** The first time `vow build` (or the bare `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
 
 ### `vow test`
 
@@ -191,6 +193,10 @@ vow decl [OPTIONS] <source.vow>
 |-------------------|-------------|--------------------------------------------|
 | `-o, --output`    | `<source>.vow.d` | Output declaration file path          |
 
+`decl` type-checks the source with its `use` dependencies, then writes one declaration stub for the merged module: dependency items first, the entry module's items last, with no `use` lines. Function bodies are dropped; signatures, effects, `vow` blocks, struct/enum/const/type-alias definitions and `extern "C"` blocks are kept. The path written is reported on stderr as `wrote <path>` and stdout stays empty. An existing output file is overwritten. Frontend diagnostics go to stderr, followed by `vow decl: <parse|module load|type> error`, and the exit code is 1 with no file written. `decl` accepts only `-o/--output`, `--help` and `--human`.
+
+The self-hosted compiler cannot print an `enum` with a struct-like variant (`V { f: T }`): its AST drops the field names. `vowc decl` exits 1 with `vow decl: enum <Name> has a struct-like variant, which the self-hosted compiler cannot print` instead of writing a stub with a different meaning.
+
 ### `vow mutants` (self-hosted only)
 
 Run mutation testing on a Vow source tree. Implemented in the self-hosted compiler only; the Rust bootstrap compiler emits an error pointing the user to `build/vowc`. See `docs/mutants.md` for full details on output schema, mutation kinds, skip-list, and known limitations.
@@ -202,7 +208,7 @@ vowc mutants run   [--root DIR] [--shard X/Y]
                    [--tier1-cmd 'cmd'] [--tier15-cmd 'cmd'] [--tier2-cmd 'cmd']
                    [--tier1-timeout-secs N] [--tier15-timeout-secs N] [--tier2-timeout-secs N]
                    [--tier2-budget-secs N]
-                   [--workdir DIR] [--output-dir DIR] [--force-unlock]
+                   [--workdir DIR] [--output-dir DIR] [--force-unlock] [--skip-baseline]
 ```
 
 | Flag | Default | Notes |
@@ -219,6 +225,7 @@ vowc mutants run   [--root DIR] [--shard X/Y]
 | `--workdir` | `/tmp/vow-mutants-<ms>` | Path of the throwaway `git worktree` used for all mutations. |
 | `--output-dir` | `mutants.out` | Directory for `mutants.json`, `outcomes.json`, status text files, `diff/`, `logs/`. |
 | `--force-unlock` | off | Remove a stale `output_dir/.lock` before starting. |
+| `--skip-baseline` | off | Skip the baseline run of Tier 1 and Tier 1.5 on the unmutated worktree. Without it, a failing baseline aborts the run with exit 1 — see `docs/mutants.md`. |
 
 Output schemas: see `docs/spec/schemas/mutants-result.schema.json`.
 
@@ -417,6 +424,15 @@ If `violating_args[].value` is `""`, Vow could not statically recover the
 caller argument value; `arg_offset` and `arg_length` still identify the
 argument expression.
 
+When a callee verified alongside its caller fails its own `ensures` or
+`invariant`, the counterexample is attributed to that callee: `function` names
+the callee, `violation`, `source` and `blame` (`"callee"`) are the callee's
+clause, and `vow_id` is the callee-local id. The outcome's top-level `function`
+remains the function being verified. Such a counterexample carries no
+`execution_path` or `branch_decisions` (block ids are not attributable to the
+callee), and `--replay-cex` reports it as `"skipped"` because its inputs are
+the caller's.
+
 When `blame` is `"none"`, `violation` describes the failed verifier-model check
 (such as division by zero, collection bounds or capacity, unwrap-on-None, or
 shift count) rather than exposing raw verifier output.
@@ -456,6 +472,8 @@ the structured diagnostics documented under [Runtime Errors](errors.md#runtime-e
 **v1 input scope.** Reconstruction supports scalar parameters (`i64`, `u64`, `bool`) and bounded `Vec` of those scalars. `String`, `HashMap`, `BTreeMap`, struct, reference, and nested-aggregate parameters are reported as `"skipped"` with a reason. The self-hosted compiler's v1 reconstructs scalars only and reports `Vec` parameters as `"skipped"` (the Rust compiler additionally reconstructs bounded `Vec`s); both report identical outcomes for scalar and aggregate-skip cases. Replaying a counterexample for a function whose entry file already defines `main` is `"skipped"` by the self-hosted compiler.
 
 `replay`/`replay_reason` are present on a counterexample only when `--replay-cex` was passed.
+
+**Native backend.** Under `vowc verify --backend native` the replay contract is stricter, because the native model is meant to be checked against the runtime rather than trusted. The counterexamples for a division or remainder abort (zero divisor; signed `MIN / -1`), which carry the reserved unattributed `vow_id` and blame `none`, are replayed instead of skipped: the harness calls the function with the counterexample's inputs and the replay is `"confirmed"` when the program aborts with `ArithmeticOverflow` (exit status `134`). The runtime envelope names the abort kind but not the site, so this confirms the kind of failure for those inputs, not which operation raised it. A native counterexample whose replay ends `"diverged"` or `"aborted"` additionally yields one [`VerifierBug`](errors.md#verifierbug) error diagnostic: the model and the runtime disagree, so the defect is in the verifier. `"skipped"` never ran and is not reported as a verifier bug. The `status` and exit code are unchanged. The ESBMC backend keeps skipping the unattributed ids.
 
 ## Contracts Output JSON
 

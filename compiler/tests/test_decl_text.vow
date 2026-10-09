@@ -1,0 +1,71 @@
+module TestDeclText
+
+use lexer
+use ast
+use diag
+use parser
+use decl_text
+
+fn decl_of(source: String) -> String [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(lex(source), arena, dctx, String::from("t.vow"));
+    decl_module_text(parsed, decl_entry_module_name(source))
+}
+
+fn check_fn_signature_and_contract() -> i32 [io] {
+    let got: String = decl_of(String::from("module M\npub fn f(x: i64 where x >= 0, y: i64) -> i64 [write, io] vow { requires: y > 0, ensures: result >= 0 } { x }"));
+    let want: String = String::from("module M\n\npub fn f(x: i64 where x >= 0, y: i64) -> i64 [io, write] vow {\n    requires: y > 0\n    ensures: result >= 0\n};\n");
+    if got != want { return 1; }
+    0
+}
+
+fn check_unit_return_and_privacy() -> i32 [io] {
+    let got: String = decl_of(String::from("module M\nfn a() -> () { }\npub fn b() { }"));
+    if got != String::from("module M\n\nfn a();\n\npub fn b();\n") { return 11; }
+    0
+}
+
+fn check_type_items() -> i32 [io] {
+    let got: String = decl_of(String::from("module M\nlinear struct T { id: i64 }\npub enum E { A, B(i64, bool) }\nconst N: i64 = -5;\ntype Al = Vec<i64>;"));
+    let want: String = String::from("module M\n\nlinear struct T {\n    id: i64,\n}\n\npub enum E {\n    A,\n    B(i64, bool),\n}\n\nconst N: i64 = -5;\n\ntype Al = Vec<i64>;\n");
+    if got != want { return 21; }
+    0
+}
+
+fn check_extern_block() -> i32 [io] {
+    let got: String = decl_of(String::from("module M\nextern \"C\" { vow { requires: true } fn ext(a: i64) -> i64 [io]; fn ping(); }"));
+    let want: String = String::from("module M\n\nextern \"C\" {\n    vow {\n        requires: true\n    }\n    fn ext(a: i64) -> i64 [io];\n    fn ping();\n}\n");
+    if got != want { return 31; }
+    0
+}
+
+fn check_default_output_and_stage() -> i32 [io] {
+    if decl_default_output(String::from("a/foo.vow")) != String::from("a/foo.vow.d") { return 41; }
+    if decl_default_output(String::from("foo")) != String::from("foo.d") { return 42; }
+    if decl_entry_module_name(String::from("module Abc\nfn f() { }")) != String::from("Abc") { return 43; }
+    if decl_entry_module_name(String::from("fn f() { }")) != String::from("") { return 44; }
+    0
+}
+
+fn check_struct_variant_enum_is_flagged() -> i32 [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(lex(String::from("module M\nenum E { A, V { f: i64 } }\nenum Ok { X(i64) }")), arena, dctx, String::from("t.vow"));
+    if decl_unprintable_enum(parsed) != String::from("E") { return 51; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let r1: i32 = check_fn_signature_and_contract();
+    if r1 != 0 { return r1; }
+    let r2: i32 = check_unit_return_and_privacy();
+    if r2 != 0 { return r2; }
+    let r3: i32 = check_type_items();
+    if r3 != 0 { return r3; }
+    let r4: i32 = check_extern_block();
+    if r4 != 0 { return r4; }
+    let r5: i32 = check_default_output_and_stage();
+    if r5 != 0 { return r5; }
+    check_struct_variant_enum_is_flagged()
+}

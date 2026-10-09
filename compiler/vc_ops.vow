@@ -1,0 +1,98 @@
+module VcOps
+
+use ir
+use ir_dominance
+
+// The native verifier's op-model table: the one place that says which IR
+// opcodes and runtime builtins the verifier models, and the closed set of
+// `Skipped` reason codes of ADR-2026-10-08-1430. Opcodes are listed here;
+// builtins come from `docs/spec/operations.json` (`verifier_model`) through the
+// generated lookups below. Anything not listed is not modelled: the gate skips
+// the function, it never guesses.
+
+fn VC_SKIP_FUNCTION_HAS_EFFECTS() -> String { String::from("function-has-effects") }
+fn VC_SKIP_RECURSION() -> String { String::from("recursion-unsupported") }
+fn VC_SKIP_FLOAT_REM() -> String { String::from("float-rem-unsupported") }
+fn VC_SKIP_NON_DOMINATING_READ() -> String { SKIP_IR_NON_DOMINATING_READ() }
+fn VC_SKIP_UNMODELED_BUILTIN() -> String { String::from("unmodeled-builtin") }
+fn VC_SKIP_UNSUPPORTED_OPCODE() -> String { String::from("unsupported-opcode") }
+fn VC_SKIP_NON_MODELABLE_CALLEE() -> String { String::from("non-modelable-callee") }
+fn VC_SKIP_RESERVED_SYMBOL() -> String { String::from("reserved-verifier-symbol") }
+fn VC_SKIP_WIDE_AGGREGATE_FIELD() -> String { String::from("wide-aggregate-field") }
+
+// The closed list; adding a code requires amending the ADR.
+fn vc_skip_code_valid(code: String) -> bool {
+    code == VC_SKIP_FUNCTION_HAS_EFFECTS()
+        || code == VC_SKIP_RECURSION()
+        || code == VC_SKIP_FLOAT_REM()
+        || code == VC_SKIP_NON_DOMINATING_READ()
+        || code == VC_SKIP_UNMODELED_BUILTIN()
+        || code == VC_SKIP_UNSUPPORTED_OPCODE()
+        || code == VC_SKIP_NON_MODELABLE_CALLEE()
+        || code == VC_SKIP_RESERVED_SYMBOL()
+        || code == VC_SKIP_WIDE_AGGREGATE_FIELD()
+}
+
+fn VC_OPM_UNCLASSIFIED() -> i64 { -1 }
+// The symbolic executor encodes the opcode (the gate still checks operand types).
+fn VC_OPM_MODELED() -> i64 { 0 }
+// Deliberately not modelled yet: `unsupported-opcode`.
+fn VC_OPM_UNSUPPORTED() -> i64 { 1 }
+// Decided per instruction: an extern call is looked up in the builtin model.
+fn VC_OPM_CALL() -> i64 { 2 }
+// Decided per instruction: `wide-aggregate-field` at 128-bit width.
+fn VC_OPM_FIELD() -> i64 { 3 }
+// `float-rem-unsupported` until codegen defines float `%`.
+fn VC_OPM_FLOAT_REM() -> i64 { 4 }
+
+fn vc_op_modeled(op: i64) -> bool {
+    op == IOP_CONST_I64() || op == IOP_CONST_BOOL() || op == IOP_GET_ARG()
+        || op == IOP_WADD() || op == IOP_WSUB() || op == IOP_WMUL() || op == IOP_WDIV() || op == IOP_WREM()
+        || op == IOP_BITAND() || op == IOP_BITOR() || op == IOP_BITXOR()
+        || op == IOP_EQ() || op == IOP_NE() || op == IOP_LT() || op == IOP_LE() || op == IOP_GT() || op == IOP_GE()
+        || op == IOP_NOT() || op == IOP_AND() || op == IOP_OR()
+        || op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_RETURN()
+}
+
+fn vc_op_unsupported(op: i64) -> bool {
+    op == IOP_CONST_I32() || op == IOP_CONST_F32() || op == IOP_CONST_F64() || op == IOP_CONST_STR()
+        || op == IOP_CONST_UNIT() || op == IOP_CONST_U64() || op == IOP_CONST_U8()
+        || op == IOP_CONST_I128() || op == IOP_CONST_U128()
+        || op == IOP_ADD_F32() || op == IOP_SUB_F32() || op == IOP_MUL_F32() || op == IOP_DIV_F32()
+        || op == IOP_EQ_F32() || op == IOP_NE_F32() || op == IOP_LT_F32() || op == IOP_LE_F32()
+        || op == IOP_GT_F32() || op == IOP_GE_F32()
+        || op == IOP_ADD_F64() || op == IOP_SUB_F64() || op == IOP_MUL_F64() || op == IOP_DIV_F64()
+        || op == IOP_EQ_F64() || op == IOP_NE_F64() || op == IOP_LT_F64() || op == IOP_LE_F64()
+        || op == IOP_GT_F64() || op == IOP_GE_F64()
+        || op == IOP_CADD() || op == IOP_CSUB() || op == IOP_CMUL() || op == IOP_CDIV() || op == IOP_CREM()
+        || op == IOP_SHL() || op == IOP_SHR() || op == IOP_INT_CAST()
+        || op == IOP_LOAD() || op == IOP_STORE()
+        || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_UNREACHABLE()
+        || op == IOP_PHI() || op == IOP_UPSILON() || op == IOP_VOW_INV()
+        || op == IOP_DEBUG_CALL()
+        || op == IOP_REGION_ALLOC() || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
+        || op == IOP_COMPLEXITY_DESCRIPTOR()
+        || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW()
+}
+
+// How the verifier treats an opcode. An opcode in none of the lists is
+// `VC_OPM_UNCLASSIFIED`, which the gate treats like an unsupported one; the
+// table test fails if an opcode of ir.vow is left unclassified. The per-
+// instruction classes come first: they are the ones the gate asks about.
+fn vc_op_model(op: i64) -> i64 {
+    if op == IOP_CALL() { return VC_OPM_CALL(); }
+    if op == IOP_FIELD_GET() || op == IOP_FIELD_SET() { return VC_OPM_FIELD(); }
+    if op == IOP_REM_F32() || op == IOP_REM_F64() { return VC_OPM_FLOAT_REM(); }
+    if vc_op_modeled(op) { return VC_OPM_MODELED(); }
+    if vc_op_unsupported(op) { return VC_OPM_UNSUPPORTED(); }
+    VC_OPM_UNCLASSIFIED()
+}
+
+// Builtins are modelled only when `catalogue_verifier_known` lists their runtime
+// symbol; an `unmodeled` entry and a symbol the catalogue lacks are skipped alike.
+
+// GENERATE:OPERATIONS:START
+fn catalogue_verifier_known(sym: String) -> bool {
+    return false;
+}
+// GENERATE:OPERATIONS:END

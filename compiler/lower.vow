@@ -1634,6 +1634,7 @@ fn builtin_result_tag(name: String) -> i64 {
        name == String::from("string_replace") || name == String::from("string_join") ||
        name == String::from("int_to_string") || name == String::from("uint_to_string") ||
        name == String::from("i64_to_string") || name == String::from("hex_encode") ||
+       name == String::from("int128_to_string") || name == String::from("uint128_to_string") ||
        name == String::from("format_f64_bits") || name == String::from("proc_sample") {
         return BRT_STRING();
     }
@@ -1982,6 +1983,8 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("int_to_string") { return String::from("__vow_string_from_i64"); }
     if name == String::from("uint_to_string") { return String::from("__vow_string_from_u64"); }
     if name == String::from("i64_to_string") { return String::from("__vow_string_from_i64"); }
+    if name == String::from("int128_to_string") { return String::from("__vow_string_from_i128"); }
+    if name == String::from("uint128_to_string") { return String::from("__vow_string_from_u128"); }
     if name == String::from("vec_sort") { return String::from("__vow_vec_sort"); }
     if name == String::from("time_unix") { return String::from("__vow_time_unix"); }
     if name == String::from("time_unix_ms") { return String::from("__vow_time_unix_ms"); }
@@ -2060,6 +2063,8 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("int_to_string") { return ITY_PTR(); }
     if name == String::from("uint_to_string") { return ITY_PTR(); }
     if name == String::from("i64_to_string") { return ITY_PTR(); }
+    if name == String::from("int128_to_string") { return ITY_PTR(); }
+    if name == String::from("uint128_to_string") { return ITY_PTR(); }
     if name == String::from("vec_sort") { return ITY_PTR(); }
     if name == String::from("time_unix") { return ITY_I64(); }
     if name == String::from("time_unix_ms") { return ITY_I64(); }

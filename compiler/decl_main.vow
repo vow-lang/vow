@@ -1,0 +1,75 @@
+module DeclMain
+
+use ast
+use token
+use lexer
+use diag
+use frontend
+use decl_text
+
+// Which pipeline stage failed, named as the Rust driver's `failure_message`
+// does: lex/parse codes are a parse error, an unreadable file a module load
+// error, everything else a type error.
+fn decl_failure_stage(dctx: DiagCtx) -> String {
+    let ds: Vec<Diagnostic> = dctx.diags;
+    let n: u64 = ds.len();
+    let mut i: u64 = 0u64;
+    while i < n {
+        let d: Diagnostic = ds[i];
+        if d.severity == SEV_ERROR() {
+            if d.code == EC_IO_ERROR() { return String::from("module load error"); }
+            if d.code <= EC_MISSING_DELIMITER() { return String::from("parse error"); }
+            return String::from("type error");
+        }
+        i = i + 1u64;
+    }
+    String::from("type error")
+}
+
+fn decl_fail(msg: String) -> i32 [io] {
+    let line: String = String::from("vow decl: ");
+    line.push_str(msg);
+    eprintln_str(line);
+    1
+}
+
+fn run_decl(argv: Vec<String>) -> i32 [io, read, write] {
+    let path: String = frontend_path_from_argv(argv, true, String::from("decl"));
+    if fs_exists(path) != 1 {
+        let msg: String = String::from("cannot read ");
+        msg.push_str(path);
+        return decl_fail(msg);
+    }
+    let prep: FrontendPrep = frontend_prepare_path(path);
+    let checked: CheckedFrontend = prep.checked;
+    let dctx: DiagCtx = checked.dctx;
+    diag_ctx_print_all(dctx);
+    if checked.n_errors > 0 {
+        return decl_fail(decl_failure_stage(dctx));
+    }
+    let name: String = decl_entry_module_name(fs_read(path));
+    if name.len() == 0u64 {
+        return decl_fail(String::from("parse error: missing `module` declaration"));
+    }
+    let merged: Module = prep.merged;
+    let bad_enum: String = decl_unprintable_enum(merged);
+    if bad_enum.len() > 0u64 {
+        let msg: String = String::from("enum ");
+        msg.push_str(bad_enum);
+        msg.push_str(String::from(" has a struct-like variant, which the self-hosted compiler cannot print"));
+        return decl_fail(msg);
+    }
+    let out_flag: String = output_flag_value(argv);
+    let out_path: String = {
+        if out_flag.len() > 0u64 { out_flag } else { decl_default_output(path) }
+    };
+    if fs_write(out_path, decl_module_text(merged, name)) != 0 {
+        let msg: String = String::from("cannot write ");
+        msg.push_str(out_path);
+        return decl_fail(msg);
+    }
+    let done: String = String::from("wrote ");
+    done.push_str(out_path);
+    eprintln_str(done);
+    0
+}

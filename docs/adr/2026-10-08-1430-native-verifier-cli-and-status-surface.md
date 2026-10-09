@@ -50,7 +50,7 @@ Every verification-related flag in `docs/spec/cli.md`, for `build`, `verify`,
 | `--timeout <N>` | build, verify, contracts | **changed** | Seconds, per function. Remains the only user-facing resource knob. The default is one fixed 300 s; the 30 s `--encoding auto` special case goes away with `--encoding`. `--timeout 0` stays "kill immediately". Enforced by killing the `verify-worker` process group (D11). Expiry yields `timeout`. Both compilers already accept it on `contracts`, but `docs/spec/cli.md` does not list it there; P3 documents it. |
 | `--timeout <ms>` | test | kept, unrelated | Per-test execution timeout in milliseconds, unrelated to the verification `--timeout` despite the shared name. `test --verify` gets no separate verification-timeout knob. |
 | `--verify-jobs <N>` | build, verify, contracts, test | kept | Caps concurrent `verify-worker` subprocesses (was ESBMC processes). Default `num_cpus/2`. Still a no-op for `contracts`. |
-| `--replay-cex` | build, verify | kept | Semantics unchanged; "after ESBMC reports" becomes "after the verifier reports". The P5 oracle requires it. |
+| `--replay-cex` | build, verify | kept | Semantics unchanged; "after ESBMC reports" becomes "after the verifier reports". The P5 oracle requires it. Addendum (#1413): under `--backend native` the division/remainder abort counterexamples replay (confirmed by an `ArithmeticOverflow` abort) and a `diverged`/`aborted` replay adds a `VerifierBug` error diagnostic; status and exit code are unchanged. |
 | `--perfetto <path>` | build, verify | kept, spans changed | Per-function ESBMC proof spans become per-claim worker and Bitwuzla spans; the compiler-to-ESBMC handoff becomes a compiler-to-worker handoff; RSS is sampled per worker. Still a pure side artifact. |
 | `--max-k-step <N>` | build, verify, contracts, test | **removed** | The bound is internal (D5). |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | build, verify, contracts | **removed** | Bitwuzla only (D2). |
@@ -216,6 +216,26 @@ above unchanged. The first native backend emits the code only inside the human
 `VerificationSkipped` message (``skipped verification of `f`: <code>: <detail>``);
 the `reason_code` field and its schema edits are deferred to the follow-up that
 introduces the op-model table, so no schema changes in #1408.
+
+**Addendum (issue #1409, op-model table).** `compiler/vc_ops.vow` is the single
+op-model table and holds the closed code list (`vc_skip_code_valid`). Every opcode
+of `compiler/ir.vow` is classified there, and `compiler/tests/test_vc_ops.vow`
+fails when an opcode is added without a decision. The catalogue lookup is by
+`runtime_symbol` (`catalogue_verifier_known`, generated from `docs/spec/operations.json`), and `generate_operations.py --check`
+fails when a catalogued builtin has no `verifier_model`. All 45 catalogued
+builtins are `unmodeled` for now: the symbolic executor encodes no call, so a
+`known` entry alone would still be skipped as `unsupported-opcode`. The
+collection runtime symbols are not catalogued, so they are absent, which is
+`unmodeled-builtin` as well. When a function has several unsupported
+instructions, a specific code (`float-rem-unsupported`, `unmodeled-builtin`,
+`wide-aggregate-field`) is reported in preference to a generic
+`unsupported-opcode` that happens to come earlier. The per-function gate emits
+`function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`,
+`unmodeled-builtin`, `wide-aggregate-field` and `unsupported-opcode`. Three codes
+need information the per-function gate does not have and are defined but not yet
+emitted: `recursion-unsupported` and `non-modelable-callee` arrive with call
+inlining (P2), where a call graph exists, and `reserved-verifier-symbol` waits for
+the reserved set to be fixed (no native query contains a user function name).
 
 ### 5. Timeline
 

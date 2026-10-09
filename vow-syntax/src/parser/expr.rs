@@ -1616,6 +1616,33 @@ mod tests {
     }
 
     #[test]
+    fn lowercase_identifier_head_before_an_empty_block_parses_in_every_form() {
+        for body in [
+            "if x { }",
+            "if x { } else { }",
+            "while x { }",
+            "match x { }",
+            "for _i in x { }",
+        ] {
+            let src = format!("module M\nfn f(x: i64) -> i64 {{\n    {body}\n    0\n}}\n");
+            let (_, diagnostics) = crate::parser::parse_module(&src, "t.vow");
+            assert!(diagnostics.is_empty(), "{body:?}: {diagnostics:?}");
+        }
+    }
+
+    #[test]
+    fn empty_match_keeps_the_identifier_as_its_scrutinee() {
+        let expr = parse_no_errors("match x { }");
+        match &expr.kind {
+            ExprKind::Match { scrutinee, arms } => {
+                assert!(matches!(&scrutinee.kind, ExprKind::Ident(n) if n == "x"));
+                assert!(arms.is_empty());
+            }
+            other => panic!("expected Match, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn borrow_recovery_parses_the_operand() {
         let tokens = crate::lexer::Lexer::new("&x")
             .tokenize()

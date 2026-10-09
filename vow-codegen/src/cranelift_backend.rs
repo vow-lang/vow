@@ -2774,6 +2774,10 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // value
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
+        "__vow_string_from_i128" | "__vow_string_from_u128" => {
+            sig.params.push(AbiParam::new(types::I128)); // value
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
         "__vow_string_substr" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // start

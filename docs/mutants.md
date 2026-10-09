@@ -13,7 +13,7 @@ vowc mutants run   [--root DIR] [--shard X/Y]
                    [--tier1-cmd 'cmd'] [--tier15-cmd 'cmd'] [--tier2-cmd 'cmd']
                    [--tier1-timeout-secs N] [--tier15-timeout-secs N] [--tier2-timeout-secs N]
                    [--tier2-budget-secs N]
-                   [--workdir DIR] [--output-dir DIR] [--force-unlock]
+                   [--workdir DIR] [--output-dir DIR] [--force-unlock] [--skip-baseline]
 ```
 
 | Flag | Default | Notes |
@@ -30,6 +30,13 @@ vowc mutants run   [--root DIR] [--shard X/Y]
 | `--workdir` | `/tmp/vow-mutants-<ms>` | Path of the throwaway `git worktree` used for all mutations. Created at run start, removed at exit. |
 | `--output-dir` | `mutants.out` | Directory where `mutants.json`, `outcomes.json`, status text files, `diff/`, `logs/` are written. |
 | `--force-unlock` | off | Remove a stale `output_dir/.lock` before starting (recovery from a previous run that exited abnormally). |
+| `--skip-baseline` | off | Skip the baseline check (see Baseline check). Needed only for oracles that are deliberately failing or meaningful only on mutated trees. |
+
+### Baseline check
+
+Before the first mutant, `run` executes the Tier-1 and Tier-1.5 oracles once on the unmutated worktree. If either does not exit 0 (including spawn failure and timeout), the run aborts with exit 1 and `baseline oracle failed; mutation results would be meaningless`, without writing `mutants.json` or `outcomes.json`; the worktree and lock are released. Output of the baseline is kept in `logs/baseline.log`. Without this check a globally broken oracle (for example a fresh worktree with no `./target/release/vow`) fails every mutant identically, and every mutant is scored `caught`.
+
+Tier 2 is not baselined (a full suite run per shard is ~30-46 minutes); Tier 1.5 already runs the same `full_test.sh` prefix. The baseline reuses `--tier1-timeout-secs` and `--tier15-timeout-secs`, and costs one Tier-1 plus one Tier-1.5 run per shard. Pass `--skip-baseline` to bypass it.
 
 ### Tier 1.5
 
@@ -146,7 +153,7 @@ When a `missed.txt` entry appears, the actionable response is to either (a) writ
 - **Generic-type angle brackets are mutated.** The token-level scanner emits `< → >=` and `> → <=` op-flip sites for `<` and `>` everywhere they appear, including generic type positions (`Vec<i64>`, `Vec<String>`, etc.). Mutating these produces unparseable source, which the oracle classifies as `unviable`. The unviable count therefore inflates with the number of generic type uses in the target tree; this is correct but noisy.
 - **Unary minus produces unviable records.** The scanner emits `- → +` for every `-` not immediately followed by `>` (the return-type arrow), including unary positions (e.g., `let x: i64 = -5;`). Vow has no unary `+` operator, so these mutations produce unparseable source and the oracle classifies them as `unviable` — same shape as the angle-bracket case above.
 - **Op-flip coverage gap inside `vow { … }` blocks** when the function's return type is supported by `default_for_ty` (i64/bool/String/Vec/etc.). In that case `try_emit_body_replace` consumes the vow block via `scan_vow_block_contracts` (contract sites only) and the outer scanner skips ahead to the body, so operator mutations *inside* contract clauses (e.g. `b == 0` inside `requires: b != 0`) aren't enumerated. Functions with unsupported return types don't have this gap because the outer scan walks through the vow block naturally.
-- **Build-vs-test failures both classify as `caught`.** When a Tier-1 oracle's exit code is nonzero, `vowc mutants` records the mutant as `caught` regardless of whether the failure was a real test detecting the mutation or a build failure (e.g., the mutated source is unparseable). cargo-mutants distinguishes these via parse-time checks; we don't currently. Practically, angle-bracket and unary-minus noise inflates the `caught` bucket; equivalent-mutant analysis would require deeper integration with the Vow parser.
+- **Build-vs-test failures both classify as `caught`.** When a Tier-1 oracle's exit code is nonzero, `vowc mutants` records the mutant as `caught` regardless of whether the failure was a real test detecting the mutation or a build failure (e.g., the mutated source is unparseable). cargo-mutants distinguishes these via parse-time checks; we don't currently. Practically, angle-bracket and unary-minus noise inflates the `caught` bucket; equivalent-mutant analysis would require deeper integration with the Vow parser. The baseline check guards only against a *globally* broken oracle; a mutant that merely fails to build is still `caught`.
 - **Unsupported return types**: function bodies whose return type doesn't match the supported set produce no `body-replace` site (silent skip).
 - **Sequential within a shard**: one mutant at a time. Parallel workers per shard would require multiple worktrees; deferred to a follow-up.
 - **Quadratic line/column lookup**: each `Site` constructor calls `line_col_at(src, off)` independently, walking from byte 0 every time. For ~24 K LOC of `compiler/*.vow` this is observable in `list` wall-clock but small in absolute terms; a single-pass running accumulator threaded through the scanner would make site enumeration O(file_size) instead of O(file_size × site_count). Deferred.

@@ -485,6 +485,19 @@ mod tests {
     }
 
     #[test]
+    fn type_refinement_print_parse_round_trips() {
+        for src in [
+            "{ x: i64 || x > 0 }",
+            "{ x: i64 || x > 0 || x < 5 }",
+            "{ v: Vec<i64> || v }",
+        ] {
+            let printed = crate::printer::print_type(&parse_type(src));
+            assert_eq!(printed, src);
+            assert_eq!(crate::printer::print_type(&parse_type(&printed)), printed);
+        }
+    }
+
+    #[test]
     fn type_multi_generic() {
         let ty = parse_type("Map<i64, bool>");
         match ty {

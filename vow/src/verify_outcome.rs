@@ -550,6 +550,7 @@ mod tests {
             replay_reason: None,
             replay_raw_values: vec![],
             replay_raw_output: String::new(),
+            replay_callee_owned: false,
         }
     }
 

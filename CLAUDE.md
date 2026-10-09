@@ -205,6 +205,9 @@ same marker convention `scripts/generate_help.py` uses for `// GENERATE:SKILL_*`
 - `vow-ir/src/lower/mod.rs` (`catalogue_builtin_to_runtime`)
 - `vow-codegen/src/cranelift_backend.rs` and `vow-clif-shim/src/lib.rs` (`catalogue_extern_sig`)
 - `compiler/lower.vow` (`catalogue_builtin_to_extern`, `catalogue_builtin_ret_ty`)
+- `compiler/vc_ops.vow` (`catalogue_verifier_known`, the native verifier's
+  builtin model keyed by runtime symbol; `generate_operations.py` fails when an entry has no `verifier_model`;
+  `known` alone does not make a call verifiable until the executor encodes calls)
 - `vow-ir/src/region.rs`, `vow-clif-shim/src/lib.rs` and `compiler/ir.vow` (the `arena_routes` section, a
   plain list of the base symbols of every fresh-aggregate builtin; the variant is always
   `<symbol>_in_arena`. Rust gets the `FRESH_ARENA_VARIANTS` table with hand-written lookups over it, Vow
@@ -219,9 +222,9 @@ match `^\[(token(, token)*)?\]$` against the closed vocabulary `{read, write, io
 tokens in alphabetical order (matching `vow-syntax/src/printer.rs`'s `print_effects`, which sorts the
 same way); `doc_signature` must parse as `fn(...) -> Type` with arity and
 per-parameter/return types matching `params`/`return` (`String`/`Vec<...>` both denote `ptr`); the
-optional `verifier_model` (`known`/`unmodeled`) and `arena_routing` (`none`/`heap_fresh`) fields, when
-present, must be in their closed sets; and any field name not in the recognized set (required or
-optional) is rejected outright, so a misspelled field can never silently defeat its own check. All
+`verifier_model` (`known`/`unmodeled`; `main()` rejects an entry without one) and the optional
+`arena_routing` (`none`/`heap_fresh`) fields, when present, must be in their closed sets; and any field
+name not in the recognized set (required or optional) is rejected outright, so a misspelled field can never silently defeat its own check. All
 violations across all entries are collected and reported together, not just the first. `main()` never
 lets a bad catalogue surface as a raw Python traceback — a malformed `operations.json` or a rejected
 entry prints a clean message to stderr and exits 1. `scripts/full_test.sh` runs
@@ -291,8 +294,8 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 
 ```bash
 build/vowc build --no-verify compiler/main.vow -o /tmp/vow_main  # compile self-hosted compiler
-/tmp/vow_main compiler/lexer.vow                             # type-check, print IR
-/tmp/vow_main -o /tmp/lexer compiler/lexer.vow               # compile to native binary
+/tmp/vow_main build --no-verify --dump-ir compiler/lexer.vow               # type-check, print IR
+/tmp/vow_main build --no-verify -o /tmp/lexer compiler/lexer.vow            # compile to native binary
 ```
 
 The self-hosted compiler supports DFS module loading via `use` declarations.
@@ -311,8 +314,8 @@ select by file stem.
 ```bash
 ./scripts/concat_vow.sh clif > /tmp/compiler_clif.vow
 ./target/release/vow --no-verify /tmp/compiler_clif.vow -o /tmp/compiler_a  # Stage 0: Rust → Binary A
-/tmp/compiler_a -o /tmp/compiler_b /tmp/compiler_clif.vow                   # Stage 1: A → B
-/tmp/compiler_b -o /tmp/compiler_c /tmp/compiler_clif.vow                   # Stage 2: B → C
+/tmp/compiler_a build --no-verify -o /tmp/compiler_b /tmp/compiler_clif.vow  # Stage 1: A → B
+/tmp/compiler_b build --no-verify -o /tmp/compiler_c /tmp/compiler_clif.vow  # Stage 2: B → C
 sha256sum /tmp/compiler_b /tmp/compiler_c              # must be identical (binary fixed point)
 ```
 
