@@ -568,18 +568,19 @@ fn print_expr_at(expr: &Expr, level: usize) -> String {
                 UnOp::Neg => "-",
                 UnOp::Not => "!",
             };
+            // `-!` would lex as the checked-subtraction token.
             let needs_parens = match &operand.kind {
                 ExprKind::BinaryOp { .. } => true,
                 ExprKind::UnaryOp { op: inner_op, .. } => {
-                    *op == UnOp::Neg && *inner_op == UnOp::Not
+                    matches!((op, inner_op), (UnOp::Neg, UnOp::Not))
                 }
                 _ => false,
             };
             let inner = print_expr_at(operand, level);
             if needs_parens {
-                format!("{}({})", op_str, inner)
+                format!("{op_str}({inner})")
             } else {
-                format!("{}{}", op_str, inner)
+                format!("{op_str}{inner}")
             }
         }
         ExprKind::Call { callee, args } => {
@@ -1263,7 +1264,7 @@ mod tests {
         assert_eq!(print_expr(&expr), "(a + b) as u64");
     }
 
-    fn unary_expr(op: crate::ast::UnOp, operand: Expr) -> Expr {
+    fn unary_expr(op: UnOp, operand: Expr) -> Expr {
         Expr {
             kind: ExprKind::UnaryOp {
                 op,
@@ -1275,14 +1276,12 @@ mod tests {
 
     #[test]
     fn test_neg_of_not_is_parenthesized() {
-        use crate::ast::UnOp;
         let expr = unary_expr(UnOp::Neg, unary_expr(UnOp::Not, ident_expr("a")));
         assert_eq!(print_expr(&expr), "-(!a)");
     }
 
     #[test]
     fn test_nested_unary_without_checked_token_needs_no_parens() {
-        use crate::ast::UnOp;
         let not_not = unary_expr(UnOp::Not, unary_expr(UnOp::Not, ident_expr("a")));
         assert_eq!(print_expr(&not_not), "!!a");
         let neg_neg = unary_expr(UnOp::Neg, unary_expr(UnOp::Neg, ident_expr("a")));
@@ -1293,7 +1292,6 @@ mod tests {
 
     #[test]
     fn test_neg_of_cast_needs_no_parens() {
-        use crate::ast::UnOp;
         let cast = Expr {
             kind: ExprKind::Cast {
                 expr: Box::new(ident_expr("a")),
@@ -1321,13 +1319,7 @@ mod tests {
 
     #[test]
     fn test_question_parens_unary_operand() {
-        let neg = Expr {
-            kind: ExprKind::UnaryOp {
-                op: crate::ast::UnOp::Neg,
-                operand: Box::new(ident_expr("a")),
-            },
-            span: s(),
-        };
+        let neg = unary_expr(UnOp::Neg, ident_expr("a"));
         assert_eq!(print_expr(&question_expr(neg)), "(-a)?");
     }
 

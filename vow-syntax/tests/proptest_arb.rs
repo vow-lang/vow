@@ -30,10 +30,7 @@ pub fn arb_type_name() -> impl Strategy<Value = String> {
 }
 
 fn arb_scalar_type_name() -> impl Strategy<Value = String> {
-    prop::sample::select(&[
-        "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f32", "f64", "bool",
-    ])
-    .prop_map(|s| s.to_string())
+    arb_type_name().prop_filter("str is not a scalar cast target", |n| n != "str")
 }
 
 pub fn arb_user_type_name() -> impl Strategy<Value = String> {
