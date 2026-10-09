@@ -1,0 +1,46 @@
+module TestParserPatterns
+
+use lexer
+use ast
+use diag
+use parser
+
+// String literal match patterns parse to PAT_LIT carrying EXPR_LIT_STR with the
+// interned literal, like the Rust parser. The checker rejects them later.
+// Failures return a distinct exit code per case: 1xx plain, 2xx empty, 3xx escape.
+
+fn parse_match_source(arms: String) -> AstArena {
+    let arena: AstArena = arena_new();
+    let dctx: DiagCtx = diag_ctx_new();
+    let src: String = String::from("module M\nfn f(s: String) -> i64 {\n    match s {\n");
+    src.push_str(arms);
+    src.push_str(String::from("        _ => 0,\n    }\n}\n"));
+    let _parsed: Module = parse_module_into(lex(src), arena, dctx, String::from("pat.vow"));
+    if dctx.error_count != 0 {
+        return arena_new();
+    }
+    arena
+}
+
+fn check_string_pattern(arms: String, want: String, code: i64) -> i64 {
+    let a: AstArena = parse_match_source(arms);
+    if a.pat_data.len() != 8 { return code; }
+    if pat_tag(a, 0) != PAT_LIT() { return code + 1; }
+    if pat_a(a, 0) != EXPR_LIT_STR() { return code + 2; }
+    if arena_str(a, pat_b(a, 0)) != want { return code + 3; }
+    if pat_tag(a, 1) != PAT_WILD() { return code + 4; }
+    0
+}
+
+fn main() -> i32 {
+    let r1: i64 = check_string_pattern(
+        String::from("        \"hello\" => 1,\n"), String::from("hello"), 100);
+    if r1 != 0 { return i64_to_i32_wrap(r1); }
+    let r2: i64 = check_string_pattern(
+        String::from("        \"\" => 1,\n"), String::from(""), 200);
+    if r2 != 0 { return i64_to_i32_wrap(r2); }
+    let r3: i64 = check_string_pattern(
+        String::from("        \"a\\\"b\" => 1,\n"), String::from("a\"b"), 300);
+    if r3 != 0 { return i64_to_i32_wrap(r3); }
+    0
+}

@@ -1268,6 +1268,10 @@ fn parse_pattern(p: Parser) -> i64 {
     } else if tag == tok_lit_bool() {
         let _adv: Token = advance(p);
         arena_add_pat(p.arena, PAT_LIT(), EXPR_LIT_BOOL(), t.int_val, span_pack_to_here(p, span_start))
+    } else if tag == tok_lit_string() {
+        let _adv: Token = advance(p);
+        let sid: i64 = arena_intern_str(p.arena, t.str_val);
+        arena_add_pat(p.arena, PAT_LIT(), EXPR_LIT_STR(), sid, span_pack_to_here(p, span_start))
     } else if tag == tok_ident() {
         let _adv: Token = advance(p);
         let sid: i64 = arena_intern_str(p.arena, t.str_val);
