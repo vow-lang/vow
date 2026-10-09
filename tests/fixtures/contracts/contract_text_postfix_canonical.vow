@@ -169,7 +169,8 @@ fn postfix(x: i64, c: bool, v: Vec<i64>, w: Vec<i64>) -> i64 vow {
 fn unary_chains(x: i64, c: bool) -> i64 vow {
   requires: !!c
   requires: --x == 1
-  requires: -x as i64 == 1
+  requires: (-x) as i64 == 1
+  requires: -(x as i64) == 1
 } {
   x
 }

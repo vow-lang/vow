@@ -78,6 +78,7 @@ fn unary_chains(x: i64, c: bool) -> i64 vow {
   requires: !!c
   requires: - -x == 1
   requires: -x as i64 == 1
+  requires: -(x as i64) == 1
 } {
   x
 }

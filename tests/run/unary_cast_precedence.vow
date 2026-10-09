@@ -1,0 +1,37 @@
+// TEST: stdout "18446744073709551611\n-5\n-4\n-1\n-128\n18446744073709551615\n5\n-2147483648\n"
+module UnaryCastPrecedence
+
+// Prefix `-` and `!` bind tighter than `as`, so `-x as u64` is `(-x) as u64`
+// and a negated cast is spelled `-(x as i64)` (issue #674).
+fn wrap_neg(x: i64) -> u64 {
+    -x as u64
+}
+
+fn neg_of_cast(x: i32) -> i64 {
+    -(x as i64)
+}
+
+fn neg_widen(x: i32) -> i64 {
+    -x as i64
+}
+
+fn main() -> i32 [io] {
+    let x: i64 = 5;
+    print_u64(wrap_neg(x));
+    print_str("\n");
+    print_i64(-x as i64);
+    print_str("\n");
+    print_i64(-x as i64 + 1);
+    print_str("\n");
+    print_i64(-1 as i8 as i64);
+    print_str("\n");
+    print_i64(-128 as i8 as i64);
+    print_str("\n");
+    print_u64(-1 as i64 as u64);
+    print_str("\n");
+    print_i64(neg_of_cast(-5));
+    print_str("\n");
+    print_i64(neg_widen(2147483647) - 1);
+    print_str("\n");
+    0
+}

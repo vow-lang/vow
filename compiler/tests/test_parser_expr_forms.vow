@@ -99,6 +99,46 @@ fn check_accepted() -> i64 {
         String::from("(if c { true } else { false }) && c"),
         String::from("(if c {\n    true\n} else {\n    false\n}) && c"), 112);
     if r12 != 0 { return r12; }
+    let r113: i64 = check_pair(
+        String::from("-x as u64 == 1"),
+        String::from("(-x) as u64 == 1"), 113);
+    if r113 != 0 { return r113; }
+    let r114: i64 = check_pair(
+        String::from("-(x as u64) == 1"),
+        String::from("-(x as u64) == 1"), 114);
+    if r114 != 0 { return r114; }
+    let r115: i64 = check_pair(
+        String::from("!c as i64 == 1"),
+        String::from("(!c) as i64 == 1"), 115);
+    if r115 != 0 { return r115; }
+    let r116: i64 = check_pair(
+        String::from("--x as u64 == 1"),
+        String::from("(--x) as u64 == 1"), 116);
+    if r116 != 0 { return r116; }
+    let r117: i64 = check_pair(
+        String::from("-x as u64 + 1 == 2"),
+        String::from("(-x) as u64 + 1 == 2"), 117);
+    if r117 != 0 { return r117; }
+    let r118: i64 = check_pair(
+        String::from("x - y as u64 == 1"),
+        String::from("x - y as u64 == 1"), 118);
+    if r118 != 0 { return r118; }
+    let r119: i64 = check_pair(
+        String::from("x - -y as u64 == 1"),
+        String::from("x - (-y) as u64 == 1"), 119);
+    if r119 != 0 { return r119; }
+    let r120: i64 = check_pair(
+        String::from("-x as u64 as i64 == 1"),
+        String::from("(-x) as u64 as i64 == 1"), 120);
+    if r120 != 0 { return r120; }
+    let r121: i64 = check_pair(
+        String::from("-x.f as u64 == 1"),
+        String::from("(-x.f) as u64 == 1"), 121);
+    if r121 != 0 { return r121; }
+    let r122: i64 = check_pair(
+        String::from("-(if c { 1 } else { 2 }) as u64 == 1"),
+        String::from("(-if c {\n    1\n} else {\n    2\n}) as u64 == 1"), 122);
+    if r122 != 0 { return r122; }
     0
 }
 
@@ -154,6 +194,8 @@ fn check_unparenthesised_block() -> i64 {
     if c.error_count == 0 { return 420; }
     let d: DiagCtx = parse_errors(String::from("module T\nfn f(c: bool) -> u64 { let y: u64 = -if c { 1 } else { 2 } as u64; y }\n"));
     if d.error_count == 0 { return 430; }
+    let e: DiagCtx = parse_errors(String::from("module T\nfn f(c: bool) -> u64 { let y: u64 = !-if c { 1 } else { 2 } as u64; y }\n"));
+    if e.error_count == 0 { return 440; }
     0
 }
 
