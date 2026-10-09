@@ -313,6 +313,10 @@ false
 
 Supported escape sequences: `\n`, `\t`, `\r`, `\\`, `\"`, `\0`.
 
+A literal that reaches end of file without a closing quote, or a trailing `\`
+with nothing to escape, is an `UnterminatedString` error. A byte that starts no
+token is an `InvalidCharacter` error. Neither is skipped silently.
+
 String literals have type `String` and are backed by a read-only static
 descriptor. Passing or returning a literal does not allocate. To obtain a
 mutable, arena-owned copy, use `String::from("...")`.

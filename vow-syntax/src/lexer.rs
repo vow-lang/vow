@@ -397,7 +397,7 @@ impl<'src> Lexer<'src> {
                 return Err(LexError {
                     message: "unterminated string literal".to_string(),
                     span: Span::new(start as u32, (self.pos - start) as u32),
-                    code: ErrorCode::InvalidCharacter,
+                    code: ErrorCode::UnterminatedString,
                 });
             }
             let b = self.current_byte();
@@ -419,7 +419,7 @@ impl<'src> Lexer<'src> {
                     return Err(LexError {
                         message: "unterminated string escape".to_string(),
                         span: Span::new(start as u32, (self.pos - start) as u32),
-                        code: ErrorCode::InvalidCharacter,
+                        code: ErrorCode::UnterminatedString,
                     });
                 }
                 let esc = self.current_byte();
@@ -571,14 +571,28 @@ mod tests {
         let err = Lexer::new("\"abc\\")
             .tokenize()
             .expect_err("a trailing escape must be rejected");
-        assert_eq!(err.code, ErrorCode::InvalidCharacter);
+        assert_eq!(err.code, ErrorCode::UnterminatedString);
         assert_eq!(err.message, "unterminated string escape");
     }
 
     #[test]
     fn lex_unterminated_string_is_error() {
-        let result = Lexer::new("\"unterminated").tokenize();
-        assert!(result.is_err());
+        let err = Lexer::new("\"unterminated")
+            .tokenize()
+            .expect_err("an unclosed string must be rejected");
+        assert_eq!(err.code, ErrorCode::UnterminatedString);
+        assert_eq!(err.message, "unterminated string literal");
+        assert_eq!((err.span.start, err.span.len), (0, 13));
+    }
+
+    #[test]
+    fn lex_unexpected_character_reports_span_and_message() {
+        let err = Lexer::new("x @ y")
+            .tokenize()
+            .expect_err("an unknown character must be rejected");
+        assert_eq!(err.code, ErrorCode::InvalidCharacter);
+        assert_eq!(err.message, "unexpected character '@'");
+        assert_eq!((err.span.start, err.span.len), (2, 1));
     }
 
     #[test]

@@ -1,0 +1,11 @@
+// TEST: error-code InvalidCharacter
+// TEST: error-count 1
+// TEST: stderr "unexpected character '@'"
+// A byte that starts no token is a lex error in both compilers; the
+// self-hosted lexer used to skip it silently.
+module UnexpectedCharacter
+
+fn main() -> i32 {
+  let x: i64 = 1 @ 2;
+  0
+}

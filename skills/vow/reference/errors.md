@@ -9,7 +9,10 @@ These appear in the `diagnostics` array of the build output JSON.
 ### UnterminatedString
 
 **Phase:** Lexer
-**Meaning:** A string literal was opened with `"` but never closed.
+**Meaning:** A string literal was opened with `"` but never closed before the
+end of the file, or the file ends with a `\` escape that has nothing to escape
+(`unterminated string escape`). An escaped quote (`"abc\"`) does not close the
+literal.
 
 ```vow
 fn f() -> () [io] {
@@ -22,7 +25,9 @@ fn f() -> () [io] {
 ### InvalidCharacter
 
 **Phase:** Lexer
-**Meaning:** The source contains a character the lexer does not recognize.
+**Meaning:** The source contains a character the lexer does not recognize. The
+message is `unexpected character '<c>'` and the span covers that one byte.
+Lexing stops at the first lexical error.
 
 ```vow
 fn f() -> i64 {
