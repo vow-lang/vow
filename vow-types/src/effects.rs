@@ -342,10 +342,6 @@ fn collect_loop_vows_in_expr<'a>(expr: &'a Expr, out: &mut Vec<&'a VowBlock>) {
     }
 }
 
-fn effect_covered(declared: &[Effect], needed: &Effect) -> bool {
-    declared.contains(needed)
-}
-
 // Panic sites are builtin aborts the verifier cannot model: `.unwrap()` only.
 // Index, checked-arithmetic and `/ %` aborts are verifier-modelled obligations
 // of pure functions and deliberately not sites (docs/adr/2026-10-09-0900-panic-effect-scope.md).
@@ -499,7 +495,7 @@ pub fn check_fn_effects(
     for (callee_expr, callee_name) in &calls {
         if let Some(sig) = env.lookup_fn(callee_name) {
             for effect in &sig.effects {
-                if !effect_covered(&fn_def.effects, effect) {
+                if !fn_def.effects.contains(effect) {
                     let msg = format!(
                         "function `{}` is declared with effects {} but calls `{}` which requires effect `{}`",
                         fn_def.name,
@@ -530,7 +526,7 @@ pub fn check_fn_effects(
         }
     }
 
-    if !panic_exprs.is_empty() && !effect_covered(&fn_def.effects, &Effect::Panic) {
+    if !panic_exprs.is_empty() && !fn_def.effects.contains(&Effect::Panic) {
         for panic_expr in &panic_exprs {
             let msg = format!(
                 "function `{}` is declared with effects {} but calls `.unwrap()` which requires effect `Panic`",
