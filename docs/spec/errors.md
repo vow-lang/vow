@@ -566,7 +566,7 @@ fn f(u: ()) -> i64 { 0 }
 
 **Fix:** Remove the parameter.
 
-A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
+A 128-bit integer as an `Option`, `Result`, or `enum` payload (`Option<u128>`) is supported, including as a map value. A 128-bit struct field or `Vec` element is not a map restriction: those aggregate positions cannot hold a 128-bit value yet, so codegen rejects them with `CodegenUnsupported` wherever they appear.
 
 ### BTreeMapKeyTypeMustBeI64
 

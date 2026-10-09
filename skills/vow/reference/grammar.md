@@ -171,17 +171,21 @@ index expression has exactly the type `u64` (see [Indexing](#indexing)), so
 `matches_literal_at`) are `u64` too, and `push_byte` takes a `u8`; see
 [String offsets](#string-offsets).
 
-**128-bit implementation status:** `i128`/`u128` types and full-range literal
-representation are available to the frontend and IR. Native code generation,
-arithmetic, and ESBMC modelling remain unsupported; builds and verification
-fail closed when those deferred operations reach a backend. Later numeric-tower
-work will complete those paths. Never weaken contracts to fit the verifier.
+**128-bit implementation status:** `i128`/`u128` are executable end to end:
+full-range literals, arithmetic, casts, narrowing, and `parse_i128`/`parse_u128`
+compile natively. A 128-bit value may be an `Option`, `Result`, or `enum`
+payload; it may not yet be a struct field or a `Vec` element (see the layout
+below). ESBMC modelling of 128-bit aggregates and constants is not available, so
+verification reports `Skipped` rather than an unsound result. Never weaken
+contracts to fit the verifier.
 
-**Struct field layout:** the current aggregate representation assigns one
-8-byte slot to every field regardless of declared type (narrow ints are
-padded). The two-slot layout for `i128`/`u128` accepted by
-[ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) is not implemented yet,
-so the compiler refuses reads and writes of 128-bit fields instead of storing
+**Aggregate layout:** every struct field and enum payload occupies one 8-byte
+slot regardless of declared type (narrow ints are padded). An `i128`/`u128`
+**enum payload** occupies two consecutive 8-byte slots, low limb first
+([ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) decision 9), so every
+payload after it moves up by one slot. The two-slot layout is not implemented
+for struct fields or `Vec` elements: the compiler refuses reads and writes of
+128-bit struct fields and `Vec<i128>`/`Vec<u128>` elements instead of storing
 them in an undersized slot. There is no packing or natural-alignment layout
 today; FFI structs that need a specific C layout must shim through `Vec<u8>` or
 extern wrappers.
@@ -371,30 +375,31 @@ remainder by zero aborts at every width, as does signed `/` and `/!` on
 `MIN / -1`, whose quotient is not representable. `MIN % -1` is `0` and does
 not abort.
 
-128-bit values are also **scalar-only** for now. Locals, parameters, returns,
-and temporaries carry both limbs correctly, but a 128-bit value placed inside
-an aggregate does not: `Vec<i128>`/`Vec<u128>` elements are refused because the
-element helpers are i64-only, and reading or writing a 128-bit struct field —
-or constructing a 128-bit enum, `Option`, or `Result` payload — fails codegen
-with a named limitation rather than a raw backend verifier dump, before an
-8-byte slot can truncate the value or a 16-byte store can overwrite its
-neighbour. The refusal is at the access, not the declaration: a struct or enum
-may declare a 128-bit member and still compile as long as nothing touches it.
-The refusal does not depend on where the value came from: a 128-bit payload
-read out of an `enum`, `Option`, or `Result` value the function never built —
-a parameter, or a value handed back by a call — is refused on the declared
-payload width, at every payload position rather than just the first, and
-whether the read goes through a `match` arm or `.unwrap()`. Do not store
-128-bit values in aggregates yet.
+128-bit values carry both limbs through locals, parameters, returns,
+temporaries, and the payloads of `enum`, `Option`, and `Result` values (stored in
+two consecutive slots, see the aggregate layout above). The payload width comes
+from the checker, so it holds wherever the value came from: built in the same
+function, received as a parameter, handed back by a call, or read out of a
+`Vec` element or a struct field holding the enum, through a `match` arm, `?`, or `.unwrap()`, and
+at every payload position.
 
-These are backend gaps, not language rules; the type checker accepts all of
-these at 128-bit width. Verification is a separate matter: a contracted
+Two aggregate positions are not supported yet: `Vec<i128>`/`Vec<u128>`
+elements (the element helpers are i64-only) and `i128`/`u128` struct fields.
+Reading or writing either fails codegen with `CodegenUnsupported` and a named
+limitation rather than a raw backend verifier dump, before an 8-byte slot can
+truncate the value or a 16-byte store can overwrite its neighbour. The refusal
+is at the access, not the declaration: a struct may declare a 128-bit member
+and still compile as long as nothing touches it. These are backend gaps, not
+language rules; the type checker accepts both at 128-bit width. Verification is
+a separate matter: a contracted
 function whose body contains a 128-bit *constant* is reported as `Skipped`
 with `unsupported opcode ConstI128`, because `ConstI128`/`ConstU128` are not
 yet modelled in the verifier. A contracted function that reads or writes a
-128-bit aggregate field is likewise reported `Skipped`, with `FieldGet at
-128-bit width` or `FieldSet at 128-bit width`, rather than being modelled through
-the verifier's 8-byte heap slot. Contracts over 128-bit parameters alone do
+128-bit aggregate field or enum payload is likewise reported `Skipped`, with
+`FieldGet at 128-bit width` or `FieldSet at 128-bit width`, rather than being
+modelled through the verifier's 8-byte heap slot; so is a call to `parse_i128` or
+`parse_u128`, whose `Option` result the verifier's 64-bit `Option` model cannot
+represent. Contracts over 128-bit parameters alone do
 verify.
 
 Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
@@ -601,18 +606,20 @@ For the `u8` target, the available narrowing source types are `i16`, `i32`,
 `i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three
 forms, for example `u16_to_u8_try`, `u16_to_u8_wrap`, and `u16_to_u8_sat`.
 
-For the `i32` target, the available narrowing source types are `i64`, `u32`,
-and `u64`, each providing all three forms: `i64_to_i32_try`/`_wrap`/`_sat`,
-`u32_to_i32_try`/`_wrap`/`_sat`, and `u64_to_i32_try`/`_wrap`/`_sat`.
+For the `i32` target, the available narrowing source types are `i64`, `i128`,
+`u32`, `u64`, and `u128`, each providing all three forms:
+`i64_to_i32_try`/`_wrap`/`_sat`, `u32_to_i32_try`/`_wrap`/`_sat`,
+`u64_to_i32_try`/`_wrap`/`_sat`, `i128_to_i32_try`/`_wrap`/`_sat`, and
+`u128_to_i32_try`/`_wrap`/`_sat`.
 
 The remaining executable sub-64-bit targets expose these complete families:
 
 | Target | Narrowing source types |
 |--------|------------------------|
-| `i8`   | `i16`, `u16`, `i32`, `u32`, `i64`, `u64` |
-| `i16`  | `i32`, `u32`, `i64`, `u64` |
-| `u16`  | `i32`, `u32`, `i64`, `u64` |
-| `u32`  | `i64`, `u64` |
+| `i8`   | `i16`, `u16`, `i32`, `u32`, `i64`, `u64`, `i128`, `u128` |
+| `i16`  | `i32`, `u32`, `i64`, `u64`, `i128`, `u128` |
+| `u16`  | `i32`, `u32`, `i64`, `u64`, `i128`, `u128` |
+| `u32`  | `i64`, `u64`, `i128`, `u128` |
 
 Every listed source/target pair provides `_try`, `_wrap`, and `_sat`. Same-width
 signedness changes use `as`; they are bit reinterpretations, not narrowing.
@@ -1390,7 +1397,14 @@ sentinel for failure; callers that need a fallback must choose it explicitly
 when handling `Option::None`.
 
 In particular, `parse_i8`, `parse_i16`, `parse_u8`, `parse_u16`, `parse_i32`,
-and `parse_u32` enforce their exact signed or unsigned fixed-width ranges.
+`parse_u32`, `parse_i128`, and `parse_u128` enforce their exact signed or
+unsigned fixed-width ranges.
+
+Every `parse_X` shares one set of lexical rules, identical at every width:
+surrounding Unicode whitespace is trimmed first; a leading `+` and leading zeros
+are accepted (`"+7"` and `"0007"` parse as `7`); `"-0"` is `Some(0)` for a signed
+type and `None` for an unsigned one; and `"+"`, `"-"`, the empty string, and any
+interior non-digit (`"1 2"`) are `None`.
 
 **Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing
 pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and

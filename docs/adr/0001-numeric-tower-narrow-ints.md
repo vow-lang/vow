@@ -155,3 +155,12 @@ BigInt subprojects.
   and wider shifts mask the count to the operand width. Both compilers behave
   identically. For 64- and 128-bit left operands a count of the left operand's
   own type is also accepted (`docs/spec/grammar.md`, "Shift count type").
+- **2026-10-09 — Decisions 8 and 9.** Decision 9's two-slot layout is
+  implemented for `i128`/`u128` **enum payloads** (`Option`, `Result`, user
+  enums): the low limb sits in the payload's slot and the high limb in the next
+  one, so later payloads move up by one slot, and lowering marks these accesses
+  with a distinct `WideSlot` instruction datum. Struct fields and `Vec` elements
+  keep the 8-byte-slot representation and are still refused at codegen. The
+  runtime's 128-bit `Option` cell is `[tag, lo, hi]`. Decision 8's
+  `parse_i128`/`parse_u128` ship with it and remain unknown to the verifier's
+  64-bit `Option` model, so functions using them are `Skipped`. See #1543.
