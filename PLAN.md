@@ -8,9 +8,15 @@ conversion, matching native codegen (`vow-codegen/src/cranelift_backend.rs:462-4
 byte-identical across the two compilers. Closes the "unsupported" caveat in `docs/spec/grammar.md`.
 
 ## Current behaviour (verified by reading)
-- `Option::Some(2.5)` / `Result::Ok(x)` / struct fields lower to `RegionAlloc` + `FieldSet`/`FieldGet`
-  over the per-function `int64_t __vow_heap[]`. Rust: `c_emitter.rs:2129-2177`; Vow:
-  `c_emitter.vow:1985-2052`.
+- Enum construction lowers to `RegionAlloc` + `FieldSet` idx 0 (tag, `ConstI64`) + one `FieldSet` per
+  payload with `payload_field_data(ty, slot)` (`vow-ir/src/lower/mod.rs:3447-3490`; Vow
+  `compiler/lower.vow:4364-4372`, payload slot is `payload_slots[pi]`, not always 1). Payload reads are
+  `FieldGet` carrying the declared payload type (`compiler/lower.vow:4723`, `5033`, `5227`; the Rust twin
+  in `vow-ir/src/lower/mod.rs`). Only 128-bit payloads use `IDATA_WIDE_SLOT`
+  (`lower_payload_field_dk`, `compiler/lower.vow:1107`); floats use plain `IDATA_FIELD`/`FieldIndex`.
+  Struct fields use the same ops (`compiler/lower.vow:4035`, `4115`, `4186`). Emitter side
+  over the per-function `int64_t __vow_heap[]`: Rust `c_emitter.rs:2129-2177`; Vow
+  `c_emitter.vow:1985-2052`. Step 0 below confirms the C actually emitted.
 - `FieldSet` emits `__vow_heap[vB + i] = vV;` and `FieldGet` emits `vN = __vow_heap[vB + i];`:
   a C double<->int64 conversion. `2.5` is stored as `2`, so `ensures: result == 2.5` yields a
   spurious counterexample and a false `result == 2.0` is "proved". No gate refuses it
@@ -21,6 +27,13 @@ byte-identical across the two compilers. Closes the "unsupported" caveat in `doc
   and `float<->uint32_t` punning round-trips exactly and distinguishes 2.5 from 2.0, including through
   `static inline` helper functions and nondet doubles; `memcpy(&int64_slot, &double, 8)` gave a spurious
   FAILED. So use unions.
+- Re-probed with the pipeline's real flags (`vow-verify/src/esbmc.rs:465-471`, `solver_strategy.rs:101-117`):
+  base `--no-bounds-check --no-pointer-check --incremental-bmc --max-k-step 7 --64`, plus each of
+  default (Boolector), `--z3`, `--bitwuzla`, `--multi-property`, `--error-label vow_reach`: the helper
+  program (f64 const, nondet f32/f64 round-trips via heap slots) proves, and the same program with a
+  false `== 2.0` clause fails. Under `--z3 --ir` (timeout/memory retry only) the *correct* program reports
+  a spurious failure: IR encoding does not model float punning. That is safe: `combine_retry`
+  (`solver_strategy.rs:304`) discards IR counterexamples and an IR proof is only labelled `ProvenIr`.
 
 ## Assumptions
 - Union-based `static inline` helpers (not `memcpy`, not inline compound-literal unions): the only
@@ -28,10 +41,10 @@ byte-identical across the two compilers. Closes the "unsupported" caveat in `doc
 - Helpers are emitted only when a module uses them, via the existing `ModelHelpers`
   (`c_emitter.rs:2772-2785`) / `append_model_helpers` (`c_emitter.vow:3586`) mechanism, so the C for
   every existing non-float fixture is unchanged (no cache/parity churn).
-- Vec/HashMap/BTreeMap float elements are included (slice 4). Reason: the Option projection
+- Vec/HashMap/BTreeMap float elements are included (Slice 2). Reason: the Option projection
   (`FieldGet` on `option_vars`) is fed by map `get`; decoding there without encoding map inserts would be
-  inconsistent, and `Vec<f64>` has the same bug. Slices are independently committable; slice 4 may be
-  dropped without breaking 1-3.
+  inconsistent, and `Vec<f64>` has the same bug. Slices are independently committable; Slice 2 may be
+  dropped without breaking Slices 1 and 3.
 - NaN: `ensures: result == x` is false for NaN `x` under IEEE; fixtures use the existing finite
   guard idiom `requires: x - x == x - x` (see `tests/verify/float_arithmetic.vow`). That is a semantic
   precondition, not an ESBMC bound.
@@ -50,6 +63,14 @@ byte-identical across the two compilers. Closes the "unsupported" caveat in `doc
 | `compiler/tests/test_c_emitter.vow` | self-hosted emitter unit tests | n/a |
 
 ## Steps (TDD slices; each = red test, minimal green, commit)
+
+### Slice 0 - reproduce (no commit)
+`cargo build --release -p vow -j4`, write the Slice 1 fixture, then
+`VOW_VERIFY_DEBUG=1 ./target/release/vow verify tests/verify/float_enum_payload.vow` and inspect
+`/tmp/vow-verify-debug/<fn>.c`. Confirm: the function is not skipped as unmodelable, the lossy
+`__vow_heap[vB + 1] = vN;` / `vM = __vow_heap[vB + 1];` assignments are present, and the fixture is red
+today (spurious counterexample on `result == 2.5`; the false `== 2.0` wrongly proved). If a function is
+skipped, the slice must first find which gate refuses it.
 
 ### Slice 1 - heap path: struct fields and enum payloads (FieldSet/FieldGet), both compilers
 1. Red (Rust): unit tests in `vow-verify/src/c_emitter.rs` `mod tests` next to `emit_float_arithmetic`
@@ -83,12 +104,16 @@ byte-identical across the two compilers. Closes the "unsupported" caveat in `doc
    `vec_contains_i64`, `str3`/`str6`. Vow has no closures/generics: use a flat `fn` returning an `i64` kind.
 5. Fixtures (`tests/verify/`, picked up by `full_test.sh` Section 2c parity glob automatically):
    - `float_enum_payload.vow` [new], header `// TEST: category model-drift`: `fn some_f64(x: f64) -> f64`
-     with `requires: x - x == x - x`, `ensures: result == x`, body `match Option::Some(x) {...}`; a
-     constant case `ensures: result == 2.5`; `Result<f64, f32>` Ok/Err extraction for both widths; a user
-     struct with an `f64` field set then read. These fail today with a spurious CE and pass after.
-   - `tests/verify-fail/float_enum_payload_wrong.vow` [new]: `ensures: result == 2.0` on a body that
-     returns `Option::Some(2.5)`'s payload; must report a counterexample (copy the
-     `counterexample-*` directive set from `tests/verify-fail/clamp_wrong_op.vow`). Today it wrongly proves.
+     with `requires: x - x == x - x`, `ensures: result == x`, body `match Option::Some(x) {...}`;
+     a `requires: x == 2.5, ensures: result == 2.5` variant; `Result<f64, f32>` Ok/Err extraction for both
+     widths; a user struct with an `f64` field set then read. Keep every function parameterised so
+     `const_fold` cannot decide it without ESBMC. These fail today with a spurious CE and pass after.
+   - `tests/verify-fail/float_enum_payload_wrong.vow` [new]: `requires: x == 2.5`, `ensures: result == 2.0`,
+     body `match Option::Some(x) { Option::Some(v) => v, Option::None => 0.0 }`. Wrongly proved today
+     (2.5 truncates to 2), refuted after: exactly the integer-conversion discriminator. Copy the
+     `counterexample-*` directives from `tests/verify-fail/clamp_wrong_op.vow`; check
+     `compiler/contract_text.vow` / `vow-syntax/src/printer.rs` for how `2.0` renders before writing
+     `counterexample-violation`.
 6. Commit: `fix(verify): preserve float bits in aggregate slot model` (subject lower-case, <100 chars).
 
 ### Slice 2 - Option projection + containers (Rust + Vow together; optional/separable)
@@ -147,6 +172,15 @@ Fixtures under `tests/verify/` and `tests/verify-fail/` grow; no `tests/run/` or
 - Bootstrap fixed point: Vow emitter change must avoid HashMap iteration order; use ordered scans
   (existing code uses index loops) so `build/vowc` stays byte-identical.
 - Clippy `--all-targets` gate covers new tests; keep new functions small (<40 lines each).
+- codecov/patch is a blocking 95% gate and `.vow` fixtures run an uninstrumented binary: every new Rust
+  line (`float_slot_kind`, `scan_float_slot_needs`, the helper-emission branch, the f32 path, the
+  option-projection and vec/map sites) needs a Rust unit test. Do not re-indent existing lines.
+- Regression watch: only `tests/verify/float_arithmetic.vow` and `float_literal_contract.vow` mention
+  floats, neither with float aggregates, so no existing fixture should move. But nondeterministic heap
+  contents behind struct/enum params can now decode to NaN/inf where the integer conversion only gave
+  integer-valued doubles; any new CE in a float-field fixture is expected IEEE behaviour, not a bug.
+- `--z3 --ir` retry cannot model punning (probed): spurious IR failures are discarded by
+  `combine_retry`; do not "fix" by changing the retry ladder.
 - Unrelated pre-existing failures to verify against clean `origin/main` before blaming this change:
   u64_marker_propagation / contracts_tmp_cleanup, concrete-block-region-parity, ~8 vow-crate run tests in sandbox.
 - Coordination with epic #1398: ESBMC emitters are deleted at P6; this is a bounded fix that stays
