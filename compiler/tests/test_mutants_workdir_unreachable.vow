@@ -33,14 +33,12 @@ fn main() -> i32 [io, read, write] {
 
     let rc_ok: i64 = run_shell(cd_with_log(scratch, String::from("true"), log, String::from("tier1"), false), 10000);
     if rc_ok != 0 { return 11; }
+    let has_marker: bool = fs_read(log).contains(String::from("--- tier1 ---"));
     let rc_three: i64 = run_shell(cd_with_log(scratch, String::from("exit 3"), log, String::from("tier1"), false), 10000);
     if rc_three != 3 { return 12; }
     let rc_fail: i64 = run_shell(cd_with_log(scratch, String::from("false"), log, String::from("tier1"), false), 10000);
     if rc_fail != 1 { return 13; }
 
-    let rc_marker: i64 = run_shell(cd_with_log(scratch, String::from("true"), log, String::from("tier1"), false), 10000);
-    if rc_marker != 0 { return 14; }
-    let has_marker: bool = fs_read(log).contains(String::from("--- tier1 ---"));
     fs_remove_dir_all(scratch);
     if !has_marker { return 15; }
     0

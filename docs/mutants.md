@@ -40,7 +40,7 @@ Tier 2 is not baselined (a full suite run per shard is ~30-46 minutes); Tier 1.5
 
 ### Infrastructure failures
 
-Each oracle command runs as `cd <workdir> || exit 125; true > log || exit 125; (...) > log`. If `cd` fails (the worktree vanished or became unreadable) or the log cannot be opened, the oracle never ran, so exit code 125 is reserved: `run` aborts with exit 1 and `oracle workdir unreachable (cd failed); aborting shard` instead of scoring the mutant `caught`; the mutated file is restored best-effort and the worktree and lock are released. An oracle command that itself exits 125 is indistinguishable and aborts the run the same way.
+Each oracle command runs through a wrapper that first enters the worktree and opens the oracle log. If `cd` fails (the worktree vanished or became unreadable) or the log cannot be opened, the oracle never ran, so exit code 125 is reserved: `run` aborts with exit 1 and `oracle workdir unreachable (cd or log open failed); aborting shard` instead of scoring the mutant `caught`; the mutated file is restored best-effort and the worktree and lock are released. An oracle command that itself exits 125 is indistinguishable and aborts the run the same way.
 
 ### Tier 1.5
 

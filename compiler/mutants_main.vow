@@ -260,11 +260,11 @@ fn classify_oracle_rc(rc: i64) -> i64 {
 }
 
 // Abort path shared by every tier when the oracle wrapper reports that
-// `cd <workdir>` failed: restore the mutated file best-effort, release the
-// worktree and lock, and let the caller return exit code 1.
+// `cd <workdir>` or the log open failed: restore the mutated file best-effort,
+// release the worktree and lock, and let the caller return exit code 1.
 fn abort_workdir_unreachable(workdir: String, abs_path: String, original: String, lock_path: String) -> i32 [io, read, write] {
     fs_write(abs_path, original);
-    eprintln_str("vow-mutants: oracle workdir unreachable (cd failed); aborting shard");
+    eprintln_str("vow-mutants: oracle workdir unreachable (cd or log open failed); aborting shard");
     eprintln_str(workdir);
     worktree_remove(workdir);
     fs_remove_dir(lock_path);
