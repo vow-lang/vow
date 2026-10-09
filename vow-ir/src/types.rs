@@ -362,7 +362,16 @@ pub struct StructLayout {
 
 impl StructLayout {
     pub fn size_bytes(&self) -> u32 {
-        (self.fields.len() as u32) * 8
+        self.fields
+            .iter()
+            .map(|f| {
+                if matches!(f.ty, Ty::I128 | Ty::U128) {
+                    16
+                } else {
+                    8
+                }
+            })
+            .sum()
     }
 
     pub fn field_index(&self, field_name: &str) -> Option<u32> {

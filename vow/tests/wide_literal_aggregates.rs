@@ -436,21 +436,54 @@ fn wide_values_in_aggregates_fail_closed() {
     );
 }
 
+/// 128-bit struct fields occupy two consecutive slots, so both limbs must
+/// survive a store/load round trip and the narrow fields around the wide one
+/// must not overlap it.
 #[test]
-fn wide_struct_fields_fail_closed_with_a_named_limitation() {
-    assert_build_fails_closed(
-        "wide_struct",
+fn wide_struct_fields_round_trip_both_limbs() {
+    ensure_runtime_archive();
+    let dir = tempfile::TempDir::new().unwrap();
+    let source_path = dir.path().join("wide_struct.vow");
+    let output_path = dir.path().join("wide_struct");
+    fs::write(
+        &source_path,
         r#"module WideStruct
-struct Box { v: i128 }
+struct S { a: i64, w: u128, c: i64 }
 fn main() -> () [io] {
-    let b: Box = Box { v: 3154393236604333326336 };
-    let got: i128 = b.v;
-    print_i64(u128_to_u8_wrap((got as u128) >> 64) as i64);
+    let s: S = S { a: 1, w: 340282366920938463463374607431768211454, c: 2 };
+    s.a = 3;
+    s.c = 4;
+    let r: u128 = s.w - (s.a as u128) - (s.c as u128);
+    print_i64(u128_to_u8_wrap(r >> 120) as i64);
+    print_str(" ");
+    print_i64(u128_to_u8_wrap(r) as i64);
 }
 "#,
-        "128-bit struct fields",
-        "128-bit struct fields",
+    )
+    .unwrap();
+
+    let output = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            source_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "build failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run compiled program");
+    assert_eq!(run.status.code(), Some(0), "program aborted");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "255 247");
 }
 
 /// 128-bit enum payloads occupy two consecutive slots, so the high limb must

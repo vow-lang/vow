@@ -207,10 +207,11 @@ fn report_narrowed_wide_argument() {
     );
 }
 
-const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields are not supported yet (epic #526): an aggregate \
-     field slot is 8 bytes, so a 128-bit field would truncate or overwrite its neighbour";
+const WIDE_AGGREGATE_FIELD_MSG: &str = "internal error: a 128-bit value reached a single-slot aggregate access \
+     (epic #526); lowering must emit the two-slot form, because an 8-byte slot would truncate it \
+     or overwrite its neighbour";
 
-const WIDE_SLOT_TYPE_MSG: &str = "internal error: a two-slot enum payload access must carry a 128-bit value, but lowering produced a narrower type";
+const WIDE_SLOT_TYPE_MSG: &str = "internal error: a two-slot aggregate access must carry a 128-bit value, but lowering produced a narrower type";
 
 fn reject_wide_aggregate_field() -> i64 {
     eprintln!("clif_shim: {WIDE_AGGREGATE_FIELD_MSG}");

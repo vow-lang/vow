@@ -1,0 +1,89 @@
+module TestLowerWideStructLayout
+
+use frontend
+use clif
+use ir
+
+// Twin of wide_struct_field_shifts_later_slots_and_grows_allocation in
+// vow-ir/src/lower/mod.rs: an i128 field takes two 8-byte slots, so later
+// fields move up one slot and the struct allocation grows with it.
+
+fn lower_layout() -> IrModule [io] {
+    let lowered: LoweredFrontend = frontend_lower_path_with_root(
+        String::from("tests/fixtures/wide_struct_layout.vow"), String::from("")
+    );
+    lowered.ir_mod
+}
+
+fn insts_of(m: IrModule, name: String) -> Vec<IrInst> {
+    let out: Vec<IrInst> = Vec::new();
+    let mut fi: u64 = 0;
+    while fi < m.functions.len() {
+        let function: IrFunction = m.functions[fi];
+        if function.name == name {
+            let mut bi: u64 = 0;
+            while bi < function.blocks.len() {
+                let block: IrBlock = function.blocks[bi];
+                let mut ii: u64 = 0;
+                while ii < block.insts.len() {
+                    out.push(block.insts[ii]);
+                    ii = ii + 1;
+                }
+                bi = bi + 1;
+            }
+        }
+        fi = fi + 1;
+    }
+    out
+}
+
+// 1 + 2 + 1 field slots + guard slot = 5 slots = 40 bytes.
+fn alloc_size_is_40(insts: Vec<IrInst>) -> bool {
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        if insts[i].op == IOP_REGION_ALLOC() { return insts[i].dv == 40; }
+        i = i + 1;
+    }
+    false
+}
+
+// FieldSet slots, in order: a 0, b 1 (two slots), c 3.
+fn stored_slots_match(insts: Vec<IrInst>) -> bool {
+    let want: Vec<i64> = Vec::new();
+    want.push(0);
+    want.push(1);
+    want.push(3);
+    let mut seen: u64 = 0;
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        if insts[i].op == IOP_FIELD_SET() && (insts[i].dk == IDATA_FIELD() || insts[i].dk == IDATA_WIDE_SLOT()) {
+            if seen >= want.len() { return false; }
+            if insts[i].dv != want[seen] { return false; }
+            // Only the i128 field (slot 1) goes through the two-slot marker.
+            if (insts[i].dk == IDATA_WIDE_SLOT()) != (insts[i].dv == 1) { return false; }
+            seen = seen + 1;
+        }
+        i = i + 1;
+    }
+    seen == want.len()
+}
+
+fn reads_slot_3(insts: Vec<IrInst>) -> bool {
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        if insts[i].op == IOP_FIELD_GET() && insts[i].dk == IDATA_FIELD() && insts[i].dv == 3 {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn main() -> i32 [io] {
+    let m: IrModule = lower_layout();
+    let make: Vec<IrInst> = insts_of(m, String::from("make"));
+    if !alloc_size_is_40(make) { return 1; }
+    if !stored_slots_match(make) { return 2; }
+    if !reads_slot_3(insts_of(m, String::from("third"))) { return 3; }
+    0
+}

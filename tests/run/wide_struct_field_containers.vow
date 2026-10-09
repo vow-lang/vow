@@ -1,0 +1,60 @@
+// TEST: stdout "171 5 40\n171 5 41\n1 2 42\n"
+module WideStructFieldContainers
+
+// Wide struct fields survive the paths that move a struct around: a type
+// alias for the field type, a Vec of structs, and a struct nested in a struct.
+type Big = u128;
+
+struct Cell {
+    id: u8,
+    big: Big,
+    tail: i64,
+}
+
+struct Holder {
+    first: Cell,
+    pad: i128,
+    last: i64,
+}
+
+fn hi(v: u128) -> u8 {
+    u128_to_u8_wrap(v >> 64)
+}
+
+fn lo(v: u128) -> u8 {
+    u128_to_u8_wrap(v)
+}
+
+fn show(c: Cell) -> () [io] {
+    print_i64(hi(c.big) as i64);
+    print_str(" ");
+    print_i64(lo(c.big) as i64);
+    print_str(" ");
+    print_i64(c.tail);
+    print_str("\n");
+}
+
+fn main() -> i32 [io] {
+    let cells: Vec<Cell> = Vec::new();
+    let seed: u128 = 3154393236604333326336;
+    cells.push(Cell { id: 1, big: seed + 5, tail: 40 });
+    cells.push(Cell { id: 2, big: seed + 5, tail: 40 });
+    let second: Cell = cells[1];
+    second.tail = 41;
+    show(cells[0]);
+    show(second);
+
+    let h: Holder = Holder {
+        first: Cell { id: 3, big: 1, tail: 2 },
+        pad: 0 - 7,
+        last: 42,
+    };
+    let inner: Cell = h.first;
+    print_i64(hi(inner.big << 64) as i64);
+    print_str(" ");
+    print_i64(inner.tail);
+    print_str(" ");
+    print_i64(h.last);
+    print_str("\n");
+    0
+}

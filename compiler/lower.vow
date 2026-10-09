@@ -1108,6 +1108,34 @@ fn lower_payload_field_dk(ty: i64) -> i64 {
     if lower_payload_slot_width(ty) == 2 { IDATA_WIDE_SLOT() } else { IDATA_FIELD() }
 }
 
+fn lower_field_type_slot_width(type_name: String) -> i64 {
+    if type_name == String::from("i128") || type_name == String::from("u128") { 2 } else { 1 }
+}
+
+// First 8-byte slot of struct field `ordinal`. Structs have no tag, so slots
+// start at 0 and every field after a 128-bit one moves up by one.
+fn lctx_struct_field_slot(ctx: LowerCtx, struct_name: String, ordinal: i64) -> i64 {
+    let sidx: i64 = lctx_find_struct(ctx, struct_name);
+    if sidx == -1 { return ordinal; }
+    let type_names: Vec<String> = ctx.struct_field_type_names[sidx as u64];
+    let mut slot: i64 = 0;
+    let mut i: i64 = 0;
+    while i < ordinal {
+        if i < type_names.len() as i64 {
+            slot = slot + lower_field_type_slot_width(type_names[i as u64]);
+        } else {
+            slot = slot + 1;
+        }
+        i = i + 1;
+    }
+    slot
+}
+
+fn lctx_struct_field_dk(ctx: LowerCtx, struct_name: String, ordinal: i64) -> i64 {
+    let type_name: String = lctx_struct_field_type(ctx, struct_name, ordinal);
+    if lower_field_type_slot_width(type_name) == 2 { IDATA_WIDE_SLOT() } else { IDATA_FIELD() }
+}
+
 fn lctx_variant_payload_ast_tid(
     ctx: LowerCtx, enum_name: String, variant_name: String, payload_index: i64
 ) -> i64 {
@@ -4034,7 +4062,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                 let fs_args: Vec<i64> = Vec::new();
                 fs_args.push(recv_id);
                 fs_args.push(val_id);
-                return lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""), origin);
+                return lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, lctx_struct_field_dk(ctx, recv_tag_str, fidx), lctx_struct_field_slot(ctx, recv_tag_str, fidx), 0, String::from(""), origin);
             }
             return lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from(""), origin);
         }
@@ -4114,7 +4142,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
         fg_args.push(recv_id);
         let field_type: String = lctx_struct_field_type(ctx, recv_tag_str, fidx);
         let field_ity: i64 = ity_for_scalar_type_name(field_type);
-        let result: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ity, fg_args, IDATA_FIELD(), fidx, 0, String::from(""), origin);
+        let result: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ity, fg_args, lctx_struct_field_dk(ctx, recv_tag_str, fidx), lctx_struct_field_slot(ctx, recv_tag_str, fidx), 0, String::from(""), origin);
         lctx_tag_declared_ast_tid(
             ctx, result, lctx_struct_field_ast_tid(ctx, recv_tag_str, fidx)
         );
@@ -4148,7 +4176,11 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
         let actual_n: i64 = {
             if n_fields > nlit { n_fields } else { nlit }
         };
-        let alloc_size: i64 = (actual_n + 1) * 8;
+        let n_slots: i64 = {
+            let counted: i64 = lctx_struct_field_slot(ctx, struct_name, n_fields);
+            if counted > actual_n { counted } else { actual_n }
+        };
+        let alloc_size: i64 = (n_slots + 1) * 8;
         let alloc_args: Vec<i64> = Vec::new();
         let alloc_ty: i64 = {
             if vec_contains_str(ctx.linear_owner_names, struct_name) {
@@ -4185,7 +4217,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                 let fs_args: Vec<i64> = Vec::new();
                 fs_args.push(ptr_id);
                 fs_args.push(val_id);
-                lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""), origin);
+                lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, lctx_struct_field_dk(ctx, struct_name, fidx), lctx_struct_field_slot(ctx, struct_name, fidx), 0, String::from(""), origin);
             }
             fi = fi + 1;
         }
@@ -5612,7 +5644,7 @@ fn lower_vow_bindings(ctx: LowerCtx, eid: i64, span: i64, out_names: Vec<String>
                     }
                     if found != -1 && found < field_types.len() as i64 && binding_is_primitive_field(field_types[found as u64]) {
                         out_names.push(name);
-                        out_ids.push(emit_binding_field_get(ctx, inst_id, found, span));
+                        out_ids.push(emit_binding_field_get(ctx, inst_id, lctx_struct_field_slot(ctx, struct_name, found), span));
                     }
                 } else {
                     let mut fi: u64 = 0u64;
@@ -5623,7 +5655,7 @@ fn lower_vow_bindings(ctx: LowerCtx, eid: i64, span: i64, out_names: Vec<String>
                             dotted.push_str(String::from("."));
                             dotted.push_str(field_names[fi]);
                             out_names.push(dotted);
-                            out_ids.push(emit_binding_field_get(ctx, inst_id, fi as i64, span));
+                            out_ids.push(emit_binding_field_get(ctx, inst_id, lctx_struct_field_slot(ctx, struct_name, fi as i64), span));
                         }
                         fi = fi + 1;
                     }

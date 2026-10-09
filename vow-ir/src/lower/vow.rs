@@ -171,7 +171,7 @@ fn expand_ptr_bindings(
                         Opcode::FieldGet,
                         Ty::I64,
                         vec![inst_id],
-                        InstData::FieldIndex(idx as u32),
+                        InstData::FieldIndex(super::struct_field_slot(ctx, &struct_name, idx)),
                         span,
                     );
                     result.push((name, field_id));
@@ -188,7 +188,7 @@ fn expand_ptr_bindings(
                         Opcode::FieldGet,
                         Ty::I64,
                         vec![inst_id],
-                        InstData::FieldIndex(idx as u32),
+                        InstData::FieldIndex(super::struct_field_slot(ctx, &struct_name, idx)),
                         span,
                     );
                     result.push((dotted, field_id));

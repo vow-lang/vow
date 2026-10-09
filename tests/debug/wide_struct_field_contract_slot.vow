@@ -1,0 +1,24 @@
+// TEST: exit 134
+// TEST: stderr "VowViolation"
+// TEST: stderr ""p.after":2"
+module WideStructFieldContractSlot
+
+// A contract over a narrow field that follows a 128-bit one must read the
+// shifted slot: reading the declared ordinal would see the wide field's high
+// limb and report the wrong value (or satisfy the clause).
+struct Padded {
+    wide: i128,
+    after: i64,
+}
+
+fn check(p: Padded) -> i64 vow {
+    requires: p.after > 100
+} {
+    p.after
+}
+
+fn main() -> i32 [io] {
+    let p: Padded = Padded { wide: 3154393236604333326336, after: 2 };
+    check(p);
+    0
+}

@@ -894,6 +894,44 @@ fn payload_slot(payload_tys: &[Ty], index: usize) -> u32 {
         .sum::<u32>()
 }
 
+fn field_type_slot_width(type_name: &str) -> u32 {
+    if matches!(type_name, "i128" | "u128") {
+        2
+    } else {
+        1
+    }
+}
+
+/// First 8-byte slot of struct field `index`. Structs have no tag, so slots
+/// start at 0 and every field after a 128-bit one moves up by one.
+fn struct_field_slot(ctx: &LowerCtx, struct_name: &str, index: usize) -> u32 {
+    let Some(type_names) = ctx.struct_field_type_names.get(struct_name) else {
+        return index as u32;
+    };
+    (0..index)
+        .map(|i| type_names.get(i).map_or(1, |n| field_type_slot_width(n)))
+        .sum()
+}
+
+/// Number of 8-byte slots the fields of `struct_name` occupy.
+fn struct_slot_count(ctx: &LowerCtx, struct_name: &str, n_fields: usize) -> u32 {
+    struct_field_slot(ctx, struct_name, n_fields)
+}
+
+fn struct_field_data(ctx: &LowerCtx, struct_name: &str, index: usize) -> InstData {
+    let slot = struct_field_slot(ctx, struct_name, index);
+    let wide = ctx
+        .struct_field_type_names
+        .get(struct_name)
+        .and_then(|names| names.get(index))
+        .is_some_and(|name| field_type_slot_width(name) == 2);
+    if wide {
+        InstData::WideSlot(slot)
+    } else {
+        InstData::FieldIndex(slot)
+    }
+}
+
 /// Declared 128-bit width of an enum variant's payload slot, by enum name.
 ///
 /// The per-instruction payload maps only know a width when the scrutinee was
@@ -2453,7 +2491,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             Opcode::FieldSet,
                             Ty::Unit,
                             vec![ptr_id, new_val],
-                            InstData::FieldIndex(field_idx),
+                            struct_field_data(ctx, &struct_name, field_idx as usize),
                             span,
                         );
                     }
@@ -3146,7 +3184,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     Opcode::FieldGet,
                     field_ty,
                     vec![ptr_id],
-                    InstData::FieldIndex(field_idx),
+                    struct_field_data(ctx, &struct_name, field_idx as usize),
                     span,
                 );
                 if let Some(ast_type) = ctx
@@ -3184,6 +3222,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 vec![]
             };
             let n_fields = field_names.len().max(fields.len());
+            let n_slots = (struct_slot_count(ctx, name, field_names.len()) as usize).max(n_fields);
             let result_ty = if ctx.linear_owner_names.contains(name) {
                 Ty::LinearPtr
             } else {
@@ -3194,7 +3233,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 result_ty,
                 vec![],
                 InstData::AllocSize {
-                    size: (n_fields as u32 + 1) * 8,
+                    size: (n_slots as u32 + 1) * 8,
                     align: 8,
                 },
                 span,
@@ -3241,7 +3280,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         Opcode::FieldSet,
                         Ty::Unit,
                         vec![ptr_id, val_id],
-                        InstData::FieldIndex(idx),
+                        struct_field_data(ctx, name, idx as usize),
                         span,
                     );
                 }
@@ -7492,6 +7531,73 @@ fn third(m: Mix) -> i64 {
             insts_of(third).iter().any(|inst| inst.opcode == Opcode::FieldGet
                 && inst.data == InstData::FieldIndex(4)),
             "`z` must be read from slot 4, past the wide member:\n{third:#?}"
+        );
+    }
+
+    /// A struct has no tag, so its slots start at 0: an `i128` field takes two
+    /// consecutive slots, every later field moves up by one, and the allocation
+    /// grows with it (3 fields + 1 wide slot + the guard slot).
+    #[test]
+    fn wide_struct_field_shifts_later_slots_and_grows_allocation() {
+        let module = lower_source_to_module(
+            r#"
+module WideStructLayout
+
+struct Mix {
+    a: i64,
+    b: i128,
+    c: i64,
+}
+
+fn make(a: i64, b: i128, c: i64) -> Mix {
+    Mix { a: a, b: b, c: c }
+}
+
+fn third(m: Mix) -> i64 {
+    m.c
+}
+"#,
+            "wide_struct_layout.vow",
+        );
+        let find = |name: &str| {
+            module
+                .functions
+                .iter()
+                .find(|f| f.name == name)
+                .unwrap_or_else(|| panic!("missing function `{name}`"))
+        };
+
+        let make = find("make");
+        let make_insts = insts_of(make);
+        let alloc = make_insts
+            .iter()
+            .find(|inst| inst.opcode == Opcode::RegionAlloc)
+            .expect("struct allocation");
+        assert_eq!(
+            alloc.data,
+            InstData::AllocSize { size: 40, align: 8 },
+            "1 + 2 + 1 field slots + guard slot:\n{make:#?}"
+        );
+        let stored: Vec<InstData> = make_insts
+            .iter()
+            .filter(|inst| inst.opcode == Opcode::FieldSet)
+            .map(|inst| inst.data.clone())
+            .collect();
+        assert_eq!(
+            stored,
+            vec![
+                InstData::FieldIndex(0),
+                InstData::WideSlot(1),
+                InstData::FieldIndex(3),
+            ],
+            "a, b (2 slots, explicit marker), c"
+        );
+
+        let third = find("third");
+        assert!(
+            insts_of(third).iter().any(|inst| inst.opcode == Opcode::FieldGet
+                && inst.data == InstData::FieldIndex(3)),
+            "`c` must be read from slot 3, past the wide member:\n{third:#?}"
         );
     }
 
