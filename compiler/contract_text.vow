@@ -11,9 +11,9 @@ use diag
 // vow-syntax/src/printer.rs, including how it indents nested blocks (4 spaces per
 // nesting level, a closing brace aligned with its opener). Every node a contract
 // can reach is covered; forms the parser cannot build (borrow, refinement types)
-// and forms the checker rejects inside a contract have no arm here. The checker rejects tuple expressions directly
-// (`contract_depth`); a tuple pattern is rejected indirectly, because it needs a
-// syntactic tuple-literal initializer.
+// and forms the checker rejects inside a contract have no arm here. The checker
+// rejects tuple expressions directly (`contract_depth`); a tuple pattern is
+// rejected indirectly, because it needs a syntactic tuple-literal initializer.
 
 // Render an AST type node as source text, mirroring `print_type` in
 // vow-syntax/src/printer.rs. The parser has no refinement type (`{ x: T | p }`
