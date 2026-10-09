@@ -1,0 +1,12 @@
+// TEST: counterexample-fn "twice"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame callee
+// TEST: counterexample-violation "ensures result > x"
+module OverflowEnsures
+
+fn twice(x: i64) -> i64 vow {
+  requires: x > 0
+  ensures: result > x
+} {
+  x + x
+}

@@ -1,0 +1,100 @@
+module TestVcCex
+
+use ir
+use verifier
+use vc_solver
+use vc_exec
+use vc_smt
+use vc_term
+use vc_cex
+use tests.builders
+
+fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
+    let cs: VcClaims = VcClaims {
+        arena: vc_arena_new(),
+        header: vc_script_new(),
+        assumed: Vec::new(),
+        kinds: Vec::new(),
+        vow_ids: Vec::new(),
+        labels: Vec::new(),
+        negated_goals: Vec::new(),
+        header_lens: Vec::new(),
+        assumed_lens: Vec::new(),
+        model_names: Vec::new(),
+        model_params: Vec::new(),
+    };
+    cs.kinds.push(kind);
+    cs.vow_ids.push(vow_id);
+    cs.labels.push(label);
+    cs.model_names.push(String::from("p0"));
+    cs.model_names.push(String::from("p1"));
+    cs.model_params.push(0);
+    cs.model_params.push(1);
+    cs
+}
+
+fn answer(verdict: i64, a: i64, b: i64) -> VcSolverAnswer {
+    let values: Vec<i64> = Vec::new();
+    values.push(a);
+    values.push(b);
+    VcSolverAnswer { verdict: verdict, values: values, raw: String::from("raw text") }
+}
+
+fn fn_xy() -> IrFunction {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    p.push(ITY_I64());
+    let f: IrFunction = mk_function(1, String::from("f"), p, ITY_I64(), Vec::new());
+    f.param_names[0] = String::from("x");
+    f.param_names[1] = String::from("y");
+    f
+}
+
+fn check_sat_ensures() -> i64 {
+    let f: IrFunction = fn_xy();
+    let cs: VcClaims = claims_with(VC_CLAIM_ENSURES(), 3, String::from(""));
+    let r: VerifyResult = vc_claim_result(f, cs, 0, answer(VC_ANS_SAT(), -5, 9223372036854775807));
+    if r.status != VERIFY_FAILED() { return 1; }
+    if r.vow_id != 3 { return 2; }
+    if r.var_names[0] != String::from("x") || r.var_names[1] != String::from("y") { return 3; }
+    if r.var_values[0] != String::from("-5") { return 4; }
+    if r.var_values[1] != String::from("9223372036854775807") { return 5; }
+    if r.raw_output.len() != 0 { return 6; }
+    if r.callee_precondition_func_id != -1 { return 7; }
+    0
+}
+
+fn check_sat_abort_claims() -> i64 {
+    let f: IrFunction = fn_xy();
+    let z: VcClaims = claims_with(VC_CLAIM_DIV_ZERO(), -1, String::from("division by zero"));
+    let r: VerifyResult = vc_claim_result(f, z, 0, answer(VC_ANS_SAT(), 1, 0));
+    if r.status != VERIFY_FAILED() { return 10; }
+    if r.vow_id != -1 { return 11; }
+    if parse_assert_label(r.raw_output) != String::from("division or remainder by zero") { return 12; }
+    let o: VcClaims = claims_with(VC_CLAIM_DIV_OVERFLOW(), -1, String::from("division overflow"));
+    let r2: VerifyResult = vc_claim_result(f, o, 0, answer(VC_ANS_SAT(), -9223372036854775807 - 1, -1));
+    if parse_assert_label(r2.raw_output) != String::from("signed division overflow (MIN / -1)") { return 13; }
+    if r2.var_values[0] != String::from("-9223372036854775808") { return 14; }
+    0
+}
+
+fn check_non_sat_verdicts() -> i64 {
+    let f: IrFunction = fn_xy();
+    let cs: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    if vc_claim_result(f, cs, 0, answer(VC_ANS_UNKNOWN(), 0, 0)).status != VERIFY_UNKNOWN() { return 20; }
+    if vc_claim_result(f, cs, 0, answer(VC_ANS_TIMEOUT(), 0, 0)).status != VERIFY_TIMEOUT() { return 21; }
+    if vc_claim_result(f, cs, 0, answer(VC_ANS_NOT_FOUND(), 0, 0)).status != VERIFY_NOT_FOUND() { return 22; }
+    let e: VerifyResult = vc_claim_result(f, cs, 0, answer(VC_ANS_ERROR(), 0, 0));
+    if e.status != VERIFY_ERROR() { return 23; }
+    if e.raw_output != String::from("raw text") { return 24; }
+    if vc_claim_result(f, cs, 0, answer(VC_ANS_UNSAT(), 0, 0)).status == VERIFY_PROVEN() { return 25; }
+    if vc_proven_result().status != VERIFY_PROVEN() { return 26; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_sat_ensures();
+    if r == 0 { r = check_sat_abort_claims(); }
+    if r == 0 { r = check_non_sat_verdicts(); }
+    i64_to_i32_wrap(r)
+}

@@ -1,0 +1,205 @@
+module TestVcGate
+
+use ir
+use ir_printer
+use vc_gate
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn params2() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    p.push(ITY_I64());
+    p
+}
+
+fn mk_vow(id: i64, op: i64, pred: i64, vow_id: i64) -> IrInst {
+    ir_inst_new(id, op, ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+fn one_block(name: String, params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, name, params, ret, blocks)
+}
+
+// fn divide(x, y) requires y > 0 { x / y }
+fn divide_insts() -> Vec<IrInst> {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_arg(1, ITY_I64(), 1));
+    i.push(mk_inst_const_i64(2, 0));
+    i.push(mk_inst(3, IOP_GT(), ITY_BOOL(), args2(1, 2)));
+    i.push(mk_vow(4, IOP_VOW_REQ(), 3, 0));
+    i.push(mk_inst(5, IOP_WDIV(), ITY_I64(), args2(0, 1)));
+    i.push(mk_inst_return(6, 5));
+    i
+}
+
+fn check_accepted() -> i64 {
+    let f: IrFunction = one_block(String::from("divide"), params2(), ITY_I64(), divide_insts());
+    let r: String = vc_skip_reason(f);
+    if r.len() != 0 { return 1; }
+
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_arg(1, ITY_I64(), 1));
+    i.push(mk_inst_add(2, 0, 1));
+    i.push(mk_inst(3, IOP_EQ(), ITY_BOOL(), args2(2, 2)));
+    i.push(mk_inst(4, IOP_NOT(), ITY_BOOL(), args1(3)));
+    i.push(mk_inst(5, IOP_NE(), ITY_BOOL(), args2(3, 4)));
+    i.push(mk_vow(6, IOP_VOW_ENS(), 5, 0));
+    i.push(mk_inst_return(7, 2));
+    if vc_skip_reason(one_block(String::from("add"), params2(), ITY_I64(), i)).len() != 0 { return 2; }
+    0
+}
+
+fn check_effects() -> i64 {
+    let f: IrFunction = one_block(String::from("divide"), params2(), ITY_I64(), divide_insts());
+    f.effects = 1;
+    let r: String = vc_skip_reason(f);
+    if !r.contains(String::from("function-has-effects")) { return 10; }
+    0
+}
+
+fn check_multi_block() -> i64 {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_arg(0, ITY_I64(), 0));
+    a.push(mk_inst(1, IOP_GT(), ITY_BOOL(), args2(0, 0)));
+    a.push(mk_inst_branch(2, 1, 1, 1));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(mk_inst_return(3, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, a));
+    blocks.push(mk_block(1, b));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    let f: IrFunction = mk_function(1, String::from("br"), p, ITY_I64(), blocks);
+    if vc_skip_reason(f) != String::from("unsupported-opcode: Branch") { return 20; }
+    0
+}
+
+fn check_op_details() -> i64 {
+    let c: Vec<IrInst> = Vec::new();
+    c.push(mk_inst_arg(0, ITY_I64(), 0));
+    c.push(mk_inst(1, IOP_CADD(), ITY_I64(), args2(0, 0)));
+    c.push(mk_inst_return(2, 1));
+    let p1: Vec<i64> = Vec::new();
+    p1.push(ITY_I64());
+    if vc_skip_reason(one_block(String::from("c"), p1, ITY_I64(), c)) != String::from("unsupported-opcode: CheckedAdd[i64]") { return 30; }
+
+    let u: Vec<IrInst> = Vec::new();
+    u.push(mk_inst_arg(0, ITY_U64(), 0));
+    u.push(mk_inst(1, IOP_WADD(), ITY_U64(), args2(0, 0)));
+    u.push(mk_inst_return(2, 1));
+    let pu: Vec<i64> = Vec::new();
+    pu.push(ITY_U64());
+    let r: String = vc_skip_reason(one_block(String::from("u"), pu, ITY_U64(), u));
+    if r != String::from("unsupported-opcode: GetArg[u64]") { return 31; }
+
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_const_i64(0, 1));
+    w.push(ir_inst_new(1, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 1, 0, String::from("")));
+    w.push(mk_inst(2, IOP_WADD(), ITY_U64(), args2(1, 1)));
+    w.push(mk_inst_return(3, 2));
+    let r2: String = vc_skip_reason(one_block(String::from("w"), Vec::new(), ITY_U64(), w));
+    if r2 != String::from("unsupported-opcode: ConstU64[u64]") { return 32; }
+
+    let k: Vec<IrInst> = Vec::new();
+    k.push(mk_inst_call_target(0, ITY_I64(), Vec::new(), 7));
+    k.push(mk_inst_return(1, 0));
+    if vc_skip_reason(one_block(String::from("k"), Vec::new(), ITY_I64(), k)) != String::from("unsupported-opcode: Call[i64]") { return 33; }
+
+    let v: Vec<IrInst> = Vec::new();
+    v.push(mk_inst_const_i64(0, 1));
+    v.push(mk_inst(1, IOP_EQ(), ITY_BOOL(), args2(0, 0)));
+    v.push(mk_vow(2, IOP_VOW_INV(), 1, 0));
+    v.push(mk_inst_return(3, 0));
+    if vc_skip_reason(one_block(String::from("v"), Vec::new(), ITY_I64(), v)) != String::from("unsupported-opcode: VowInvariant") { return 34; }
+
+    let unk: Vec<IrInst> = Vec::new();
+    unk.push(mk_inst(0, 9999, ITY_I64(), Vec::new()));
+    unk.push(mk_inst_return(1, 0));
+    if vc_skip_reason(one_block(String::from("unk"), Vec::new(), ITY_I64(), unk)) != String::from("unsupported-opcode: ???[i64]") { return 35; }
+    0
+}
+
+fn check_bool_param() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_BOOL(), 0));
+    i.push(mk_inst_return(1, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_BOOL());
+    if vc_skip_reason(one_block(String::from("b"), p, ITY_BOOL(), i)) != String::from("unsupported-opcode: GetArg[Bool]") { return 40; }
+    0
+}
+
+fn check_get_arg_must_match_param_type() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_return(1, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_BOOL());
+    if vc_skip_reason(one_block(String::from("m"), p, ITY_I64(), i)) != String::from("unsupported-opcode: GetArg[i64]") { return 45; }
+    0
+}
+
+fn check_unsigned_compare_names_operand_type() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(ir_inst_new(0, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 1, 0, String::from("")));
+    i.push(mk_inst(1, IOP_LT(), ITY_BOOL(), args2(0, 0)));
+    i.push(mk_inst_return(2, 1));
+    let r: String = vc_skip_reason(one_block(String::from("c"), Vec::new(), ITY_BOOL(), i));
+    if r != String::from("unsupported-opcode: ConstU64[u64]") { return 50; }
+    0
+}
+
+fn check_non_dominating_read() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_return(1, 7));
+    let r: String = vc_skip_reason(one_block(String::from("bad"), Vec::new(), ITY_I64(), i));
+    if !r.contains(String::from("ir-non-dominating-read")) { return 60; }
+    0
+}
+
+fn check_shape() -> i64 {
+    let none: Vec<IrInst> = Vec::new();
+    let r: String = vc_skip_reason(one_block(String::from("e"), Vec::new(), ITY_I64(), none));
+    if !r.contains(String::from("unsupported-opcode")) { return 70; }
+    let nr: Vec<IrInst> = Vec::new();
+    nr.push(mk_inst_const_i64(0, 1));
+    let r2: String = vc_skip_reason(one_block(String::from("nr"), Vec::new(), ITY_I64(), nr));
+    if !r2.contains(String::from("unsupported-opcode")) { return 71; }
+    let bad_ret: Vec<IrInst> = Vec::new();
+    bad_ret.push(mk_inst_const_i64(0, 1));
+    bad_ret.push(mk_inst(1, IOP_EQ(), ITY_BOOL(), args2(0, 0)));
+    bad_ret.push(mk_inst_return(2, 1));
+    let r3: String = vc_skip_reason(one_block(String::from("br"), Vec::new(), ITY_I64(), bad_ret));
+    if !r3.contains(String::from("Return")) { return 72; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_accepted();
+    if r == 0 { r = check_effects(); }
+    if r == 0 { r = check_multi_block(); }
+    if r == 0 { r = check_op_details(); }
+    if r == 0 { r = check_bool_param(); }
+    if r == 0 { r = check_get_arg_must_match_param_type(); }
+    if r == 0 { r = check_unsigned_compare_names_operand_type(); }
+    if r == 0 { r = check_non_dominating_read(); }
+    if r == 0 { r = check_shape(); }
+    i64_to_i32_wrap(r)
+}

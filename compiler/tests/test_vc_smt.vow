@@ -1,0 +1,147 @@
+module TestVcSmt
+
+use vc_term
+use vc_smt
+
+fn check_golden_script() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let s: SmtScript = vc_script_new();
+    vc_script_set_logic(s, String::from("QF_BV"));
+    vc_script_set_option(s, String::from(":produce-models"), String::from("true"));
+    vc_script_declare_const(s, String::from("p0"), VC_SORT_BV64());
+    vc_script_declare_const(s, String::from("p1"), VC_SORT_BV64());
+    let p0: i64 = vc_tm_var(ar, String::from("p0"));
+    let p1: i64 = vc_tm_var(ar, String::from("p1"));
+    let sum: i64 = vc_tm_app2(ar, VC_OP_BVADD(), p0, p1);
+    vc_script_define_fun(s, String::from("v2"), VC_SORT_BV64(), sum);
+    let v2: i64 = vc_tm_var(ar, String::from("v2"));
+    let q: i64 = vc_tm_app2(ar, VC_OP_BVSDIV(), v2, p1);
+    vc_script_define_fun(s, String::from("v3"), VC_SORT_BV64(), q);
+    let v3: i64 = vc_tm_var(ar, String::from("v3"));
+    let lt: i64 = vc_tm_app2(ar, VC_OP_BVSLT(), v3, p0);
+    vc_script_define_fun(s, String::from("v4"), VC_SORT_BOOL(), lt);
+    let v4: i64 = vc_tm_var(ar, String::from("v4"));
+    vc_script_assert(s, vc_tm_app1(ar, VC_OP_NOT(), v4));
+    vc_script_check_sat(s);
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("p0"));
+    names.push(String::from("p1"));
+    vc_script_get_value(s, names);
+
+    let want: String = String::from("(set-logic QF_BV)\n");
+    want.push_str(String::from("(set-option :produce-models true)\n"));
+    want.push_str(String::from("(declare-const p0 (_ BitVec 64))\n"));
+    want.push_str(String::from("(declare-const p1 (_ BitVec 64))\n"));
+    want.push_str(String::from("(define-fun v2 () (_ BitVec 64) (bvadd p0 p1))\n"));
+    want.push_str(String::from("(define-fun v3 () (_ BitVec 64) (bvsdiv v2 p1))\n"));
+    want.push_str(String::from("(define-fun v4 () Bool (bvslt v3 p0))\n"));
+    want.push_str(String::from("(assert (not v4))\n"));
+    want.push_str(String::from("(check-sat)\n"));
+    want.push_str(String::from("(get-value (p0 p1))\n"));
+    let got: String = vc_smt_render(ar, s);
+    if got != want { return 1; }
+    0
+}
+
+fn check_constants() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let s: SmtScript = vc_script_new();
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_bv_const(ar, -1), vc_tm_bv_const(ar, 7)));
+    vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_bv_const(ar, -9223372036854775807 - 1), vc_tm_bv_const(ar, 9223372036854775807)));
+    vc_script_assert(s, vc_tm_bool_const(ar, true));
+    vc_script_assert(s, vc_tm_bool_const(ar, false));
+    let want: String = String::from("(assert (= (_ bv18446744073709551615 64) (_ bv7 64)))\n");
+    want.push_str(String::from("(assert (= (_ bv9223372036854775808 64) (_ bv9223372036854775807 64)))\n"));
+    want.push_str(String::from("(assert true)\n"));
+    want.push_str(String::from("(assert false)\n"));
+    if vc_smt_render(ar, s) != want { return 10; }
+    0
+}
+
+fn check_every_operator_has_a_symbol() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let x: i64 = vc_tm_var(ar, String::from("x"));
+    let y: i64 = vc_tm_var(ar, String::from("y"));
+    let ops: Vec<i64> = Vec::new();
+    ops.push(VC_OP_BVSUB());
+    ops.push(VC_OP_BVMUL());
+    ops.push(VC_OP_BVSREM());
+    ops.push(VC_OP_BVAND());
+    ops.push(VC_OP_BVOR());
+    ops.push(VC_OP_BVXOR());
+    ops.push(VC_OP_DISTINCT());
+    ops.push(VC_OP_BVSLE());
+    ops.push(VC_OP_BVSGT());
+    ops.push(VC_OP_BVSGE());
+    ops.push(VC_OP_AND());
+    ops.push(VC_OP_OR());
+    let syms: Vec<String> = Vec::new();
+    syms.push(String::from("bvsub"));
+    syms.push(String::from("bvmul"));
+    syms.push(String::from("bvsrem"));
+    syms.push(String::from("bvand"));
+    syms.push(String::from("bvor"));
+    syms.push(String::from("bvxor"));
+    syms.push(String::from("distinct"));
+    syms.push(String::from("bvsle"));
+    syms.push(String::from("bvsgt"));
+    syms.push(String::from("bvsge"));
+    syms.push(String::from("and"));
+    syms.push(String::from("or"));
+    let mut i: u64 = 0;
+    while i < ops.len() {
+        let s: SmtScript = vc_script_new();
+        vc_script_assert(s, vc_tm_app2(ar, ops[i], x, y));
+        let want: String = String::from("(assert (");
+        want.push_str(syms[i]);
+        want.push_str(String::from(" x y))\n"));
+        if vc_smt_render(ar, s) != want { return 20 + i as i64; }
+        i = i + 1;
+    }
+    0
+}
+
+fn check_prefix_is_independent() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let s: SmtScript = vc_script_new();
+    vc_script_check_sat(s);
+    vc_script_set_logic(s, String::from("QF_BV"));
+    let c: SmtScript = vc_script_prefix(s, 1);
+    vc_script_check_sat(c);
+    if vc_smt_render(ar, s) != String::from("(check-sat)\n(set-logic QF_BV)\n") { return 40; }
+    if vc_smt_render(ar, c) != String::from("(check-sat)\n(check-sat)\n") { return 41; }
+    if vc_smt_render(ar, vc_script_prefix(s, 99)) != vc_smt_render(ar, s) { return 42; }
+    let empty: SmtScript = vc_script_prefix(s, 0);
+    if empty.kinds.len() != 0 { return 43; }
+    0
+}
+
+fn check_get_value_without_names_is_omitted() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let s: SmtScript = vc_script_new();
+    vc_script_check_sat(s);
+    vc_script_get_value(s, Vec::new());
+    if vc_smt_render(ar, s) != String::from("(check-sat)\n") { return 50; }
+    0
+}
+
+fn check_unmapped_operator_is_not_a_known_symbol() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let x: i64 = vc_tm_var(ar, String::from("x"));
+    let s: SmtScript = vc_script_new();
+    vc_script_assert(s, vc_tm_app2(ar, -1, x, x));
+    let got: String = vc_smt_render(ar, s);
+    if got.contains(String::from("(or ")) || got.contains(String::from("(and ")) { return 60; }
+    if !got.contains(String::from("vc-unmapped-operator")) { return 61; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_golden_script();
+    if r == 0 { r = check_constants(); }
+    if r == 0 { r = check_every_operator_has_a_symbol(); }
+    if r == 0 { r = check_prefix_is_independent(); }
+    if r == 0 { r = check_get_value_without_names_is_omitted(); }
+    if r == 0 { r = check_unmapped_operator_is_not_a_known_symbol(); }
+    i64_to_i32_wrap(r)
+}

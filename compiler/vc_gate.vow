@@ -1,0 +1,168 @@
+module VcGate
+
+use ir
+use ir_printer
+use ir_dominance
+
+// Fail-closed subset gate for the native verifier. `vc_skip_reason` returns ""
+// only for a pure, single-block function built from the i64/Bool operations the
+// symbolic executor models; every other function is `Skipped` with
+// "<code>: <detail>" using the closed codes of ADR-1430. An unknown opcode is
+// never accepted.
+
+fn VC_SKIP_FUNCTION_HAS_EFFECTS() -> String { String::from("function-has-effects") }
+fn VC_SKIP_UNSUPPORTED_OPCODE() -> String { String::from("unsupported-opcode") }
+
+fn vc_reason(code: String, detail: String) -> String {
+    let out: String = String::from(code);
+    out.push_str(String::from(": "));
+    out.push_str(detail);
+    out
+}
+
+// Type of every defined value, indexed by instruction id; -1 when undefined.
+fn vc_ty_table(f: IrFunction) -> Vec<i64> {
+    let mut max_id: i64 = -1;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id > max_id { max_id = inst.id; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    let tys: Vec<i64> = Vec::new();
+    let mut k: i64 = 0;
+    while k <= max_id {
+        tys.push(-1);
+        k = k + 1;
+    }
+    bi = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id >= 0 {
+                tys[inst.id as u64] = inst.ty;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    tys
+}
+
+fn vc_arg_ty(tys: Vec<i64>, inst: IrInst, k: u64) -> i64 {
+    if k >= inst.args.len() { return -1; }
+    let id: i64 = inst.args[k];
+    if id < 0 || id >= tys.len() as i64 { return -1; }
+    tys[id as u64]
+}
+
+fn vc_is_cmp_op(op: i64) -> bool {
+    op == IOP_EQ() || op == IOP_NE() || op == IOP_LT() || op == IOP_LE() || op == IOP_GT() || op == IOP_GE()
+}
+
+fn vc_is_arith_op(op: i64) -> bool {
+    op == IOP_WADD() || op == IOP_WSUB() || op == IOP_WMUL() || op == IOP_WDIV() || op == IOP_WREM()
+        || op == IOP_BITAND() || op == IOP_BITOR() || op == IOP_BITXOR()
+}
+
+// True when the instruction is one the symbolic executor models, given the
+// types of the values it reads.
+fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>) -> bool {
+    let op: i64 = inst.op;
+    let n: u64 = inst.args.len();
+    let t0: i64 = vc_arg_ty(tys, inst, 0);
+    let t1: i64 = vc_arg_ty(tys, inst, 1);
+    if op == IOP_CONST_I64() { return inst.ty == ITY_I64() && n == 0; }
+    if op == IOP_CONST_BOOL() { return inst.ty == ITY_BOOL() && n == 0; }
+    if op == IOP_GET_ARG() {
+        return inst.ty == ITY_I64() && n == 0 && inst.dv >= 0 && inst.dv < f.params.len() as i64
+            && f.params[inst.dv as u64] == ITY_I64();
+    }
+    if vc_is_arith_op(op) {
+        return inst.ty == ITY_I64() && n == 2 && t0 == ITY_I64() && t1 == ITY_I64();
+    }
+    if op == IOP_EQ() || op == IOP_NE() {
+        return inst.ty == ITY_BOOL() && n == 2 && t0 == t1 && (t0 == ITY_I64() || t0 == ITY_BOOL());
+    }
+    if vc_is_cmp_op(op) {
+        return inst.ty == ITY_BOOL() && n == 2 && t0 == ITY_I64() && t1 == ITY_I64();
+    }
+    if op == IOP_NOT() { return inst.ty == ITY_BOOL() && n == 1 && t0 == ITY_BOOL(); }
+    if op == IOP_AND() || op == IOP_OR() {
+        return inst.ty == ITY_BOOL() && n == 2 && t0 == ITY_BOOL() && t1 == ITY_BOOL();
+    }
+    if op == IOP_VOW_REQ() || op == IOP_VOW_ENS() {
+        return n == 1 && t0 == ITY_BOOL() && inst.dk == IDATA_VOW_ID();
+    }
+    if op == IOP_RETURN() {
+        if f.return_ty == ITY_UNIT() { return n == 0; }
+        return n == 1 && t0 == f.return_ty && (f.return_ty == ITY_I64() || f.return_ty == ITY_BOOL());
+    }
+    false
+}
+
+fn vc_unsupported_detail(inst: IrInst, tys: Vec<i64>) -> String {
+    let out: String = opcode_name(inst.op);
+    let mut shown: i64 = inst.ty;
+    if vc_is_cmp_op(inst.op) && vc_arg_ty(tys, inst, 0) >= 0 {
+        shown = vc_arg_ty(tys, inst, 0);
+    }
+    if shown != ITY_UNIT() {
+        out.push_str(String::from("["));
+        out.push_str(ir_ty_str(shown));
+        out.push_str(String::from("]"));
+    }
+    out
+}
+
+// "" when `f` is inside the native subset, else "<code>: <detail>".
+fn vc_skip_reason(f: IrFunction) -> String {
+    if f.effects != 0 {
+        return vc_reason(VC_SKIP_FUNCTION_HAS_EFFECTS(), effects_str(f.effects));
+    }
+    let dom: String = ir_non_dominating_read(f);
+    if dom.len() > 0 {
+        return dom;
+    }
+    if f.blocks.len() == 0 {
+        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("empty function body"));
+    }
+    let tys: Vec<i64> = vc_ty_table(f);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if !vc_inst_supported(f, inst, tys) {
+                return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), vc_unsupported_detail(inst, tys));
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    if f.blocks.len() != 1 {
+        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("more than one basic block"));
+    }
+    let entry: IrBlock = f.blocks[0];
+    let mut ii: u64 = 0;
+    while ii < entry.insts.len() {
+        let inst: IrInst = entry.insts[ii];
+        let is_last: bool = ii + 1 == entry.insts.len();
+        if (inst.op == IOP_RETURN()) != is_last {
+            return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("block does not end in a single Return"));
+        }
+        ii = ii + 1;
+    }
+    if entry.insts.len() == 0 {
+        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("empty function body"));
+    }
+    String::from("")
+}

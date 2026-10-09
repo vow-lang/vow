@@ -1,0 +1,16 @@
+// TEST: counterexample-fn "rem"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame none
+// TEST: counterexample-violation "division or remainder by zero"
+module RemUnguarded
+
+fn rem(a: i64, b: i64) -> i64 vow {
+  ensures: result == result
+} {
+  a % b
+}
+
+fn main() -> i32 [io] {
+  print_i64(rem(7, 2));
+  0
+}

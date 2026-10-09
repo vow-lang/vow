@@ -209,6 +209,14 @@ exists the build must report the failure as an `error` (`VerifyFailed` with
 `verify_status: "error"`; clause status `error`) instead of skipping, so the
 gate cannot be widened silently.
 
+**Addendum (issue #1408, walking skeleton).** For `unsupported-opcode` the
+`detail` may carry the operand type as `OpName[ty]` (`CheckedAdd[i64]`,
+`WrappingAdd[u64]`, `GetArg[Bool]`; no suffix for `Void`), which keeps the table
+above unchanged. The first native backend emits the code only inside the human
+`VerificationSkipped` message (``skipped verification of `f`: <code>: <detail>``);
+the `reason_code` field and its schema edits are deferred to the follow-up that
+introduces the op-model table, so no schema changes in #1408.
+
 ### 5. Timeline
 
 | Phase | Effect on this surface |
