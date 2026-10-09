@@ -2409,10 +2409,11 @@ let some: Option<i64> = Option::Some(42);
 `Result<T, E>` has variants `Ok(T)` and `Err(E)`.
 For scalar payloads supported by native aggregate codegen, `match` and
 `.unwrap()` extract the declared type, including `f32` and `f64`; `?`
-currently propagates `Option` payloads only. The ESBMC C model still
-uses integer slots for enum payloads and does not preserve float bits on a
-store and load. Verification of contracts involving float enum payloads is
-therefore unsupported until that model represents float payloads faithfully.
+currently propagates `Option` payloads only. The ESBMC C model moves `f32`
+and `f64` enum payloads and struct fields through its integer slots by
+IEEE-754 bit pattern (an `f64` as its raw 64 bits, an `f32` as its 32 bits
+zero-extended), as native codegen does, so contracts over float payloads
+verify. Float equality follows IEEE-754: a NaN payload does not equal itself.
 
 ## Pattern Matching
 
@@ -8425,10 +8426,11 @@ let some: Option<i64> = Option::Some(42);
 `Result<T, E>` has variants `Ok(T)` and `Err(E)`.
 For scalar payloads supported by native aggregate codegen, `match` and
 `.unwrap()` extract the declared type, including `f32` and `f64`; `?`
-currently propagates `Option` payloads only. The ESBMC C model still
-uses integer slots for enum payloads and does not preserve float bits on a
-store and load. Verification of contracts involving float enum payloads is
-therefore unsupported until that model represents float payloads faithfully.
+currently propagates `Option` payloads only. The ESBMC C model moves `f32`
+and `f64` enum payloads and struct fields through its integer slots by
+IEEE-754 bit pattern (an `f64` as its raw 64 bits, an `f32` as its 32 bits
+zero-extended), as native codegen does, so contracts over float payloads
+verify. Float equality follows IEEE-754: a NaN payload does not equal itself.
 
 ## Pattern Matching
 

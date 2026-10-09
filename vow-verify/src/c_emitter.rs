@@ -5628,7 +5628,13 @@ mod tests {
                     vec![1, 0],
                     InstData::FieldIndex(1),
                 ),
-                inst(3, Opcode::FieldGet, Ty::I64, vec![1], InstData::FieldIndex(1)),
+                inst(
+                    3,
+                    Opcode::FieldGet,
+                    Ty::I64,
+                    vec![1],
+                    InstData::FieldIndex(1),
+                ),
                 inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
             ],
         );
