@@ -298,13 +298,13 @@ fn check_merged_read_is_ite_and_none_payload_is_junk() -> i64 {
     let cs: VcClaims = vc_claims(merged_fn(0));
     let hdr: SmtScript = cs.header;
     let all: String = vc_smt_render(cs.arena, hdr);
-    if !all.contains(String::from("(define-fun v21 () (_ BitVec 64) (ite ")) { return 100; }
+    if !all.contains(String::from("(define-fun m0 () (_ BitVec 64) (ite ")) { return 100; }
     if all.contains(String::from("declare-const j")) { return 101; }
     // Only the then-arm set field 1: the else-arm's slot is an unconstrained constant.
     let cs1: VcClaims = vc_claims(merged_fn(1));
     let all1: String = vc_smt_render(cs1.arena, cs1.header);
     if !all1.contains(String::from("(declare-const j0 (_ BitVec 64))")) { return 102; }
-    if !all1.contains(String::from("(define-fun v21 () (_ BitVec 64) (ite ")) { return 103; }
+    if !all1.contains(String::from("(define-fun m0 () (_ BitVec 64) (ite ")) { return 103; }
     0
 }
 

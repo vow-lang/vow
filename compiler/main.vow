@@ -992,7 +992,7 @@ fn report_verifier_bug_ces(dctx: DiagCtx, ces: Vec<VerifyCE>) [io] {
 // The abort a native abort-claim counterexample predicts: `UnwrapOnNone` for the
 // unwrap claim, `ArithmeticOverflow` for the division and remainder claims.
 fn replay_predicted_abort(violation: String) -> String {
-    if violation == String::from("unwrap() called on None") {
+    if violation == unwrap_none_description() {
         return String::from("UnwrapOnNone");
     }
     String::from("ArithmeticOverflow")
@@ -1010,12 +1010,12 @@ fn replay_abort_claim_verdict(scan: ReplayScan, rrc: i64, predicted: String) -> 
         return replay_diverge(str3(String::from("harness exited cleanly; the predicted "), predicted, String::from(" abort did not occur")));
     }
     if rrc == RUNTIME_ABORT_EXIT_CODE && scan.abort_kind.len() > 0 {
-        return replay_abort(str5(String::from("runtime aborted with "), scan.abort_kind, String::from(" instead of the predicted "), predicted, String::from("")));
+        return replay_abort(str4(String::from("runtime aborted with "), scan.abort_kind, String::from(" instead of the predicted "), predicted));
     }
     if rrc == RUNTIME_ABORT_EXIT_CODE && scan.violation_line.len() > 0 {
-        return replay_diverge(str3(String::from("runtime fired a VowViolation (a contract was violated by the counterexample inputs) instead of the predicted "), predicted, String::from("")));
+        return replay_diverge(str2(String::from("runtime fired a VowViolation (a contract was violated by the counterexample inputs) instead of the predicted "), predicted));
     }
-    replay_diverge(str3(String::from("runtime did not abort with the predicted "), predicted, String::from("")))
+    replay_diverge(str2(String::from("runtime did not abort with the predicted "), predicted))
 }
 
 // Scans stderr once for both the VowViolation marker (confirm/diverge) and a

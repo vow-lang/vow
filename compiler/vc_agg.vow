@@ -43,6 +43,7 @@ struct VcAgg {
     sl_sort: Vec<i64>,
     sl_term: Vec<i64>,
     junk: i64,
+    names: i64,
 }
 
 fn vc_agg_new() -> VcAgg {
@@ -59,6 +60,7 @@ fn vc_agg_new() -> VcAgg {
         sl_sort: Vec::new(),
         sl_term: Vec::new(),
         junk: 0,
+        names: 0,
     }
 }
 
@@ -160,12 +162,26 @@ fn vc_agg_get(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: 
     if kind == VC_OBJ_PARAM() {
         t = vc_agg_param_symbol(ar, hdr, ag.owners[obj as u64], idx, sort);
     } else if kind == VC_OBJ_PHI() {
-        t = vc_agg_phi_read(ag, ar, hdr, obj, idx, sort);
+        t = vc_agg_name(ag, ar, hdr, sort, vc_agg_phi_read(ag, ar, hdr, obj, idx, sort));
     } else {
         t = vc_agg_junk(ag, ar, hdr, sort);
     }
     vc_agg_store(ag, obj, idx, sort, t);
     t
+}
+
+// A composite term bound to a `define-fun`, as `vc_define` does for a scalar
+// Phi: merges of merges would otherwise print every shared subterm once per use
+// and the query would grow exponentially with the nesting.
+fn vc_agg_name(ag: VcAgg, ar: VcArena, hdr: SmtScript, sort: i64, t: i64) -> i64 {
+    if ar.kinds[t as u64] != VC_T_APP() {
+        return t;
+    }
+    let name: String = String::from("m");
+    name.push_str(i64_to_string(ag.names));
+    ag.names = ag.names + 1;
+    vc_script_define_fun(hdr, name, sort, t);
+    vc_tm_var(ar, name)
 }
 
 // The `ite` chain `vc_flow_phi_value` builds, over the slot of each incoming object.

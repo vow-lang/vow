@@ -7,6 +7,7 @@ use vc_ops
 use vc_int
 use vc_cfg
 use vc_agg
+use ast
 
 // Fail-closed subset gate for the native verifier. `vc_skip_reason` returns ""
 // only for a loop-free function whose only effect is `panic` (the effect of
@@ -133,10 +134,9 @@ fn vc_is_field_ty(ty: i64) -> bool {
 }
 
 // The function's only effect may be `panic`: `.unwrap()` needs it, and the
-// abort is the claim the executor makes of it. The effect set is a bitmask in
-// which `panic` is 2.
+// abort is the claim the executor makes of it.
 fn vc_effects_modeled(effects: i64) -> bool {
-    effects == 0 || effects == 2
+    effects == 0 || effects == EFF_PANIC()
 }
 
 fn vc_arg_ty(tys: Vec<i64>, inst: IrInst, k: u64) -> i64 {
