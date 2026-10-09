@@ -1,0 +1,142 @@
+module TestLexerDiagnostics
+
+use lexer
+use token
+use diag
+
+fn lex_errors(src: String) -> DiagCtx {
+    let dctx: DiagCtx = diag_ctx_new();
+    let toks: Vec<Token> = lex_into(src, dctx, String::from("f.vow"));
+    dctx
+}
+
+fn only_eof(src: String) -> bool {
+    let dctx: DiagCtx = diag_ctx_new();
+    let toks: Vec<Token> = lex_into(src, dctx, String::from("f.vow"));
+    if toks.len() != 1 { return false; }
+    let t0: Token = toks[0];
+    t0.tag == tok_eof()
+}
+
+fn expect_error(src: String, code: i64, msg: String, start: i64, len: i64) -> i32 {
+    let dctx: DiagCtx = lex_errors(src);
+    if dctx.error_count != 1 { return 1; }
+    let ds: Vec<Diagnostic> = dctx.diags;
+    let d: Diagnostic = ds[0];
+    if d.code != code { return 2; }
+    if d.message != msg { return 3; }
+    if d.span_start != start { return 4; }
+    if d.span_len != len { return 5; }
+    if d.file != String::from("f.vow") { return 6; }
+    0
+}
+
+fn quote() -> String {
+    let q: String = empty_str();
+    q.push_byte(34);
+    q
+}
+
+fn backslash() -> String {
+    let q: String = empty_str();
+    q.push_byte(92);
+    q
+}
+
+fn check_valid_string_clean() -> i32 {
+    let src: String = quote();
+    src.push_str(String::from("abc"));
+    src.push_str(quote());
+    let dctx: DiagCtx = diag_ctx_new();
+    let toks: Vec<Token> = lex_into(src, dctx, String::from("f.vow"));
+    if dctx.error_count != 0 { return 1; }
+    if toks.len() != 2 { return 2; }
+    0
+}
+
+fn check_unterminated_string() -> i32 {
+    let src: String = quote();
+    src.push_str(String::from("abc"));
+    let r: i32 = expect_error(src, EC_UNTERMINATED_STRING(), String::from("unterminated string literal"), 0, 4);
+    if r != 0 { return 10 + r; }
+    if !only_eof(src) { return 20; }
+    0
+}
+
+fn check_escaped_quote_then_eof() -> i32 {
+    let src: String = quote();
+    src.push_str(String::from("abc"));
+    src.push_str(backslash());
+    src.push_str(quote());
+    expect_error(src, EC_UNTERMINATED_STRING(), String::from("unterminated string literal"), 0, 6)
+}
+
+fn check_unterminated_escape() -> i32 {
+    let src: String = quote();
+    src.push_str(String::from("abc"));
+    src.push_str(backslash());
+    expect_error(src, EC_UNTERMINATED_STRING(), String::from("unterminated string escape"), 0, 5)
+}
+
+fn check_unknown_character() -> i32 {
+    let r: i32 = expect_error(String::from("@"), EC_INVALID_CHARACTER(), String::from("unexpected character '@'"), 0, 1);
+    if r != 0 { return r; }
+    let r2: i32 = expect_error(String::from("a $ b"), EC_INVALID_CHARACTER(), String::from("unexpected character '$'"), 2, 1);
+    if r2 != 0 { return 10 + r2; }
+    0
+}
+
+fn check_non_ascii_byte() -> i32 {
+    let src: String = String::from("x ");
+    src.push_byte(195);
+    let msg: String = String::from("unexpected character '");
+    msg.push_byte(195);
+    msg.push_byte(131);
+    msg.push_str(String::from("'"));
+    expect_error(src, EC_INVALID_CHARACTER(), msg, 2, 1)
+}
+
+fn check_non_ascii_in_string_and_comment_ok() -> i32 {
+    let in_str: String = quote();
+    in_str.push_byte(195);
+    in_str.push_byte(169);
+    in_str.push_str(quote());
+    let d1: DiagCtx = lex_errors(in_str);
+    if d1.error_count != 0 { return 1; }
+    let in_cmt: String = String::from("// ");
+    in_cmt.push_byte(195);
+    in_cmt.push_byte(169);
+    in_cmt.push_str(String::from("\nfn"));
+    let d2: DiagCtx = lex_errors(in_cmt);
+    if d2.error_count != 0 { return 2; }
+    0
+}
+
+fn check_all_operators_and_crlf_clean() -> i32 {
+    let src: String = String::from("fn main() -> i32 {\r\n let x_1: i64 = 1 +! 2 -! 3 *! 4 + 5 - 6 * 7 / 8 % 9; // c\r\n x <= 1 >= 2 == 3 != 4 && 5 || 6 ^ 7 & 8 | 9 ! 0 . : ; , ? [ ] { } ( ) < > = 1.5\r\n}\r\n");
+    src.push_str(quote());
+    src.push_str(String::from("s"));
+    src.push_str(quote());
+    let dctx: DiagCtx = lex_errors(src);
+    i64_to_i32_wrap(dctx.error_count)
+}
+
+fn main() -> i32 {
+    let a: i32 = check_valid_string_clean();
+    if a != 0 { return 100 + a; }
+    let b: i32 = check_unterminated_string();
+    if b != 0 { return 200 + b; }
+    let c: i32 = check_escaped_quote_then_eof();
+    if c != 0 { return 300 + c; }
+    let d: i32 = check_unterminated_escape();
+    if d != 0 { return 400 + d; }
+    let e: i32 = check_unknown_character();
+    if e != 0 { return 500 + e; }
+    let f: i32 = check_non_ascii_byte();
+    if f != 0 { return 600 + f; }
+    let g: i32 = check_non_ascii_in_string_and_comment_ok();
+    if g != 0 { return 700 + g; }
+    let h: i32 = check_all_operators_and_crlf_clean();
+    if h != 0 { return 800 + h; }
+    0
+}

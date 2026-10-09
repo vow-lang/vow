@@ -251,7 +251,35 @@ fn span_len(pos: u64, start: i64) -> i64 vow {
     (pos as i64) -! start
 }
 
+// A lexical error stops lexing, like the Rust lexer: the diagnostic is
+// emitted and only EOF is returned, so the parser sees an empty module and adds
+// no cascading errors.
+fn lex_fail(dctx: DiagCtx, file: String, code: i64, msg: String, start: i64, len: i64) -> Vec<Token> {
+    diag_ctx_emit(dctx, diag_error(code, msg, file, start, len));
+    let tokens: Vec<Token> = Vec::new();
+    tokens.push(make_token(tok_eof(), 0, 0, empty_str(), start + len, 0));
+    tokens
+}
+
+// The Rust lexer prints the offending byte as a `char`, so a byte >= 128 shows
+// as the Latin-1 code point of the same value, encoded as two UTF-8 bytes.
+fn unexpected_char_msg(b: i64) -> String {
+    let msg: String = String::from("unexpected character '");
+    if b < 128 {
+        msg.push_byte(i64_to_u8_wrap(b));
+    } else {
+        msg.push_byte(i64_to_u8_wrap(192 | (b >> 6)));
+        msg.push_byte(i64_to_u8_wrap(128 | (b & 63)));
+    }
+    msg.push_str(String::from("'"));
+    msg
+}
+
 fn lex(src: String) -> Vec<Token> {
+    lex_into(src, diag_ctx_new(), empty_str())
+}
+
+fn lex_into(src: String, dctx: DiagCtx, file: String) -> Vec<Token> {
     let mut pos: u64 = 0u64;
     let src_len: u64 = src.len();
     let tokens: Vec<Token> = Vec::new();
@@ -331,7 +359,10 @@ fn lex(src: String) -> Vec<Token> {
             pos = pos + 1;
             let s: String = empty_str();
             while pos < src_len && src.byte_at(pos) != 34 {
-                if src.byte_at(pos) == 92 && pos + 1 < src_len {
+                if src.byte_at(pos) == 92 {
+                    if pos + 1 >= src_len {
+                        return lex_fail(dctx, file, EC_UNTERMINATED_STRING(), String::from("unterminated string escape"), start, (src_len as i64) - start);
+                    }
                     pos = pos + 1;
                     let escu: u8 = byte_at_u8(src, pos);
                     let esc: i64 = escu as i64;
@@ -348,9 +379,10 @@ fn lex(src: String) -> Vec<Token> {
                     pos = pos + 1;
                 }
             }
-            if pos < src_len {
-                pos = pos + 1;
+            if pos >= src_len {
+                return lex_fail(dctx, file, EC_UNTERMINATED_STRING(), String::from("unterminated string literal"), start, (src_len as i64) - start);
             }
+            pos = pos + 1;
             let tok: Token = make_token(tok_lit_string(), 0, 0, s, start, span_len(pos, start));
             tokens.push(tok);
         } else if b == 43 {
@@ -543,7 +575,7 @@ fn lex(src: String) -> Vec<Token> {
             let tok: Token = make_token(tok_caret(), 0, 0, empty_str(), start, 1);
             tokens.push(tok);
         } else {
-            pos = pos + 1;
+            return lex_fail(dctx, file, EC_INVALID_CHARACTER(), unexpected_char_msg(b), start, 1);
         }
     }
 
