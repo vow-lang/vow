@@ -5730,6 +5730,90 @@ mod tests {
         }
     }
 
+    #[test]
+    fn wide_slot_round_trip_compiles_through_the_streamed_ffi() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "wide_slot_round_trip", ITY_I128, false);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I128, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            0,
+            IOP_REGION_ALLOC,
+            ITY_PTR,
+            IDATA_ALLOC_SIZE,
+            32,
+            8,
+            &[],
+        );
+        add_test_inst(
+            ctx,
+            1,
+            IOP_CONST_I128,
+            ITY_I128,
+            IDATA_CONST_I128,
+            0,
+            1 << 16,
+            &[],
+        );
+        add_test_inst(
+            ctx,
+            2,
+            IOP_FIELD_SET,
+            ITY_UNIT,
+            IDATA_WIDE_SLOT,
+            1,
+            0,
+            &[0, 1],
+        );
+        add_test_inst(ctx, 3, IOP_FIELD_GET, ITY_I128, IDATA_WIDE_SLOT, 1, 0, &[0]);
+        add_test_inst(ctx, 4, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[3]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn wide_slot_access_of_a_narrow_type_is_rejected_through_the_streamed_ffi() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "wide_slot_narrow_store", ITY_UNIT, false);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            0,
+            IOP_REGION_ALLOC,
+            ITY_PTR,
+            IDATA_ALLOC_SIZE,
+            32,
+            8,
+            &[],
+        );
+        add_test_inst(ctx, 1, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 7, 0, &[]);
+        add_test_inst(
+            ctx,
+            2,
+            IOP_FIELD_SET,
+            ITY_UNIT,
+            IDATA_WIDE_SLOT,
+            1,
+            0,
+            &[0, 1],
+        );
+        add_test_inst(ctx, 3, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), -1);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
     /// A 128-bit value handed to an i64-only extern must be refused, not
     /// truncated. Covers both the ordinary call path and the debug-call path,
     /// which coerce arguments through separate code.

@@ -209,9 +209,6 @@ fn IDATA_CONST_U8() -> i64 { 19 }
 fn IDATA_INTEGER_CAST() -> i64 { 20 }
 fn IDATA_CONST_I128() -> i64 { 21 }
 fn IDATA_CONST_U128() -> i64 { 22 }
-// First of the two consecutive 8-byte slots holding a 128-bit enum payload.
-// Distinct from IDATA_FIELD so codegen only accepts a 128-bit field access
-// where lowering declared the two-slot layout.
 fn IDATA_WIDE_SLOT() -> i64 { 23 }
 
 fn BLAME_CALLER() -> i64 { 0 }

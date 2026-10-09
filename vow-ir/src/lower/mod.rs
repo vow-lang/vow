@@ -857,8 +857,6 @@ fn variant_payload_ty(ctx: &LowerCtx, inst: InstId, tag: i64) -> Option<Ty> {
         .flatten()
 }
 
-/// Number of 8-byte slots an enum payload of type `ty` occupies: two for
-/// `i128`/`u128` (ADR 0001 decision 9), one for everything else.
 fn payload_slot_width(ty: Ty) -> u32 {
     if matches!(ty, Ty::I128 | Ty::U128) {
         2
@@ -867,8 +865,6 @@ fn payload_slot_width(ty: Ty) -> u32 {
     }
 }
 
-/// Field data for an enum payload access at `slot`: 128-bit payloads use the
-/// explicit two-slot marker so codegen can tell them from a struct field.
 fn payload_field_data(ty: Ty, slot: u32) -> InstData {
     if payload_slot_width(ty) == 2 {
         InstData::WideSlot(slot)
@@ -877,8 +873,6 @@ fn payload_field_data(ty: Ty, slot: u32) -> InstData {
     }
 }
 
-/// Slot index (tag is slot 0) of payload `index` given the preceding payload
-/// types: every wide payload before it pushes it up by one slot.
 fn payload_slot(payload_tys: &[Ty], index: usize) -> u32 {
     1 + payload_tys
         .iter()
@@ -3428,7 +3422,19 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 || payload_values
                     .iter()
                     .any(|value| ctx.inst_ty(*value) == Ty::LinearPtr);
-            let value_tys: Vec<Ty> = payload_values.iter().map(|v| ctx.inst_ty(*v)).collect();
+            // The declaration decides the layout, exactly as it does for every
+            // read; a value whose lowered type disagrees then fails closed in
+            // codegen instead of being stored with a different slot map.
+            let value_tys: Vec<Ty> = payload_values
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    payload_tys
+                        .get(i)
+                        .copied()
+                        .unwrap_or_else(|| ctx.inst_ty(*v))
+                })
+                .collect();
             let payload_slots: u32 = value_tys.iter().map(|ty| payload_slot_width(*ty)).sum();
             let size = (2 + payload_slots) * 8;
             let ptr_id = ctx.emit(
