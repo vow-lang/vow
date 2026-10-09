@@ -1,0 +1,348 @@
+module TestRegionDominance
+
+use ir
+use region
+use tests.builders
+
+// Differential pin for the block dominator tree (#658): twin of
+// `vow-ir/src/region/dominance_tests.rs`.
+//
+// `build_block_parent` reaches the immediate-dominator tree of the DFS-forward
+// graph with an incremental-LCA fixpoint (O(n) memory); `BlockTree` in Rust
+// intersects dominator sets (O(n^2)). They agree because the forward graph is
+// a DAG: parents start as DFS-discovery predecessors, so every dominator of a
+// block is always one of its tree ancestors (an LCA only moves a block to an
+// ancestor of its old parent, and a dominator of the block dominates or equals
+// every predecessor), and at the fixpoint the parent is an ancestor of every
+// predecessor, so every ancestor dominates the block. Ancestors == dominators,
+// hence parent == idom.
+//
+// The named cases below are the Rust golden tables verbatim; the exhaustive
+// 4-block and LCG 5/6-block corpora are folded into digests that must equal
+// the constants pinned in the Rust file. Check helpers return `i64` (not `i32`)
+// to dodge the latent Cranelift `if call_returning_i32 == lit` codegen bug
+// noted in test_region.vow.
+
+fn domt_mod() -> i64 { 72057594037927936 }
+fn domt_seed() -> i64 { 7 }
+fn domt_lcg_seed() -> i64 { 20240607 }
+fn domt_digest_exhaustive_4() -> i64 { 46900383860154851 }
+fn domt_digest_lcg_5() -> i64 { 7220846967842058 }
+fn domt_digest_lcg_6() -> i64 { 3581780127454291 }
+
+// ---------- CFG construction -------------------------------------------------
+
+// `kind`: 0 = Return, 1 = Jump(a), 2 = Branch(a, b). Targets are block ids.
+fn domt_block(id: i64, kind: i64, a: i64, b: i64) -> IrBlock {
+    let insts: Vec<IrInst> = Vec::new();
+    if kind == 0 {
+        insts.push(mk_inst_return(0, 0));
+    } else if kind == 1 {
+        insts.push(mk_inst_jump(0, a));
+    } else {
+        insts.push(mk_inst_branch(0, 0, a, b));
+    }
+    mk_block(id, insts)
+}
+
+fn domt_function(blocks: Vec<IrBlock>) -> IrFunction {
+    mk_function(0, String::from("f"), Vec::new(), ITY_UNIT(), blocks)
+}
+
+// ---------- Spec strings (`id>succ,succ;...`, `r` = root) ---------------------
+
+// One row per `;`-separated block; a row is its numbers in order, `r` is -1.
+fn domt_rows(spec: String) -> Vec<Vec<i64>> {
+    let rows: Vec<Vec<i64>> = Vec::new();
+    let row: Vec<i64> = Vec::new();
+    let mut cur: i64 = 0;
+    let mut have: bool = false;
+    let mut i: u64 = 0;
+    while i <= spec.len() {
+        let c: i64 = spec.byte_at(i);
+        if c >= 48 && c <= 57 {
+            cur = cur * 10 + (c - 48);
+            have = true;
+        } else {
+            if have {
+                row.push(cur);
+                cur = 0;
+                have = false;
+            }
+            if c == 114 {
+                row.push(-1);
+            }
+            if c == 59 || c == -1 {
+                rows.push(domt_copy(row));
+                row.clear();
+            }
+        }
+        i = i + 1;
+    }
+    rows
+}
+
+fn domt_copy(v: Vec<i64>) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < v.len() {
+        out.push(v[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn domt_blocks_from_rows(rows: Vec<Vec<i64>>) -> Vec<IrBlock> {
+    let blocks: Vec<IrBlock> = Vec::new();
+    let mut i: u64 = 0;
+    while i < rows.len() {
+        let row: Vec<i64> = rows[i];
+        let width: u64 = row.len();
+        if width == 1 {
+            blocks.push(domt_block(row[0], 0, 0, 0));
+        } else if width == 2 {
+            blocks.push(domt_block(row[0], 1, row[1], 0));
+        } else {
+            blocks.push(domt_block(row[0], 2, row[1], row[2]));
+        }
+        i = i + 1;
+    }
+    blocks
+}
+
+// Fails (non-zero) unless every listed block's parent equals the expectation
+// and no unlisted id below the maximum carries a block.
+fn domt_check_named(code: i64, cfg: String, expected: String) -> i64 {
+    let f: IrFunction = domt_function(domt_blocks_from_rows(domt_rows(cfg)));
+    let parent: Vec<i64> = build_block_parent(f);
+    let want: Vec<Vec<i64>> = domt_rows(expected);
+    let mut present: i64 = 0;
+    let mut k: u64 = 0;
+    while k < parent.len() {
+        if parent[k] != -2 {
+            present = present + 1;
+        }
+        k = k + 1;
+    }
+    if present != want.len() as i64 { return code; }
+    let mut i: u64 = 0;
+    while i < want.len() {
+        let row: Vec<i64> = want[i];
+        let id: i64 = row[0];
+        if id >= parent.len() as i64 { return code; }
+        if parent[id as u64] != row[1] { return code; }
+        i = i + 1;
+    }
+    let depth: Vec<i64> = build_block_depth(parent);
+    let mut d: u64 = 0;
+    while d < parent.len() {
+        if parent[d] != -2 && depth[d] < 0 { return code; }
+        d = d + 1;
+    }
+    0
+}
+
+// ---------- Named CFG shapes (same tables as the Rust goldens) ----------------
+
+fn domt_check_goldens() -> i64 {
+    let mut r: i64 = domt_check_named(1, String::from("0>1;1>2;2>3;3"), String::from("0>r;1>0;2>1;3>2"));
+    if r != 0 { return r; }
+    r = domt_check_named(2, String::from("0>1,2;1>3;2>3;3"), String::from("0>r;1>0;2>0;3>0"));
+    if r != 0 { return r; }
+    r = domt_check_named(3, String::from("0>1,2;1>2;2"), String::from("0>r;1>0;2>0"));
+    if r != 0 { return r; }
+    r = domt_check_named(4, String::from("0>1,2;1>3,4;3>5;4>5;5>6;2>6;6"), String::from("0>r;1>0;2>0;3>1;4>1;5>1;6>0"));
+    if r != 0 { return r; }
+    r = domt_check_named(5, String::from("0>1,4;1>2;2>3;3>5;4>5;5"), String::from("0>r;1>0;2>1;3>2;4>0;5>0"));
+    if r != 0 { return r; }
+    r = domt_check_named(6, String::from("0>1,5;1>2,3;2>4;3>4;4>6;5>6;6"), String::from("0>r;1>0;2>1;3>1;4>1;5>0;6>0"));
+    if r != 0 { return r; }
+    r = domt_check_named(7, String::from("0>1;1>2,3;2>1;3"), String::from("0>r;1>0;2>1;3>1"));
+    if r != 0 { return r; }
+    r = domt_check_named(8, String::from("0>1;1>2,6;2>3;3>4,5;4>3;5>1;6"), String::from("0>r;1>0;2>1;3>2;4>3;5>3;6>1"));
+    if r != 0 { return r; }
+    r = domt_check_named(9, String::from("0>1;1>2,4;2>3,4;3>1;4"), String::from("0>r;1>0;2>1;3>2;4>1"));
+    if r != 0 { return r; }
+    r = domt_check_named(10, String::from("0>1;1>2,5;2>3,4;3>1;4>1;5"), String::from("0>r;1>0;2>1;3>2;4>2;5>1"));
+    if r != 0 { return r; }
+    r = domt_check_named(11, String::from("0>1,2;1>1,2;2"), String::from("0>r;1>0;2>0"));
+    if r != 0 { return r; }
+    r = domt_check_named(12, String::from("0>1,2;1;2"), String::from("0>r;1>0;2>0"));
+    if r != 0 { return r; }
+    r = domt_check_named(13, String::from("0>1,1;1"), String::from("0>r;1>0"));
+    if r != 0 { return r; }
+    r = domt_check_named(14, String::from("0>1,9999;1"), String::from("0>r;1>0"));
+    if r != 0 { return r; }
+    r = domt_check_named(15, String::from("5>3,4;3>1;4>1;1>2;2"), String::from("5>r;3>5;4>5;1>5;2>1"));
+    if r != 0 { return r; }
+    r = domt_check_named(16, String::from("9>1,2;1>3;2>3;3>4,5;4>6;5>6;6"), String::from("9>r;1>9;2>9;3>9;4>3;5>3;6>3"));
+    if r != 0 { return r; }
+    r = domt_check_named(17, String::from("10>20,30;20>40;30>40;40"), String::from("10>r;20>10;30>10;40>10"));
+    if r != 0 { return r; }
+    r = domt_check_named(18, String::from("0;1>2;2"), String::from("0>r;1>r;2>1"));
+    if r != 0 { return r; }
+    r = domt_check_named(19, String::from("0>3;1>2;2>3;3"), String::from("0>r;1>r;2>1;3>0"));
+    if r != 0 { return r; }
+    r = domt_check_named(20, String::from("0;1>3;2>3;3"), String::from("0>r;1>r;2>r;3>1"));
+    if r != 0 { return r; }
+    r = domt_check_named(21, String::from("0>1,2;1>2;2>1;3"), String::from("0>r;1>0;2>0;3>r"));
+    if r != 0 { return r; }
+    r = domt_check_named(22, String::from("0>1,2;1>3;2>3;3>1,2"), String::from("0>r;1>0;2>0;3>1"));
+    if r != 0 { return r; }
+    0
+}
+
+// ---------- Corpora tied to the Rust pass by digest ---------------------------
+
+// Logical block `i` is block id `ids[i]` (identity or reversed); `digit` is
+// the per-block code: 0 Return, 1..=n Jump(digit-1), then Branch over the
+// lexicographic unordered pairs (a, b), a < b.
+fn domt_decode_block(n: i64, digit: i64, ids: Vec<i64>, logical: i64) -> IrBlock {
+    let id: i64 = ids[logical as u64];
+    if digit == 0 {
+        return domt_block(id, 0, 0, 0);
+    }
+    if digit <= n {
+        return domt_block(id, 1, ids[(digit - 1) as u64], 0);
+    }
+    let mut want: i64 = digit - n - 1;
+    let mut a: i64 = 0;
+    while a < n {
+        let mut b: i64 = a + 1;
+        while b < n {
+            if want == 0 {
+                return domt_block(id, 2, ids[a as u64], ids[b as u64]);
+            }
+            want = want - 1;
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    domt_block(id, 0, 0, 0)
+}
+
+fn domt_ids(n: i64, reversed: bool) -> Vec<i64> {
+    let ids: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n {
+        if reversed {
+            ids.push(n - 1 - i);
+        } else {
+            ids.push(i);
+        }
+        i = i + 1;
+    }
+    ids
+}
+
+// -1 when the tree is malformed: a block missing, or a parent chain that
+// leaves the table or does not reach a root within n steps.
+fn domt_fold_tree(digest: i64, parent: Vec<i64>, n: i64) -> i64 {
+    let mut h: i64 = digest;
+    let mut id: i64 = 0;
+    while id < n {
+        let mut cur: i64 = parent[id as u64];
+        if cur == -2 { return -1; }
+        let mut steps: i64 = 0;
+        while cur >= 0 {
+            if cur >= n { return -1; }
+            let next: i64 = parent[cur as u64];
+            if next == -2 { return -1; }
+            cur = next;
+            steps = steps + 1;
+            if steps > n { return -1; }
+        }
+        h = (h * 61 + (parent[id as u64] + 3)) % domt_mod();
+        id = id + 1;
+    }
+    h
+}
+
+// Folds one graph (given as per-block digits) under both id maps.
+fn domt_fold_graph(digest: i64, n: i64, digits: Vec<i64>, identity: Vec<i64>, reversed: Vec<i64>) -> i64 {
+    let mut h: i64 = digest;
+    let mut pass: i64 = 0;
+    while pass < 2 {
+        let ids: Vec<i64> = if pass == 0 { identity } else { reversed };
+        let blocks: Vec<IrBlock> = Vec::new();
+        let mut i: i64 = 0;
+        while i < n {
+            blocks.push(domt_decode_block(n, digits[i as u64], ids, i));
+            i = i + 1;
+        }
+        let parent: Vec<i64> = build_block_parent(domt_function(blocks));
+        h = domt_fold_tree(h, parent, n);
+        if h < 0 { return -1; }
+        pass = pass + 1;
+    }
+    h
+}
+
+fn domt_base(n: i64) -> i64 {
+    1 + n + n * (n - 1) / 2
+}
+
+fn domt_exhaustive_digest(n: i64) -> i64 {
+    let base: i64 = domt_base(n);
+    let identity: Vec<i64> = domt_ids(n, false);
+    let reversed: Vec<i64> = domt_ids(n, true);
+    let mut total: i64 = 1;
+    let mut p: i64 = 0;
+    while p < n {
+        total = total * base;
+        p = p + 1;
+    }
+    let mut h: i64 = domt_seed();
+    let mut graph: i64 = 0;
+    while graph < total {
+        let digits: Vec<i64> = Vec::new();
+        let mut rest: i64 = graph;
+        let mut i: i64 = 0;
+        while i < n {
+            digits.push(rest % base);
+            rest = rest / base;
+            i = i + 1;
+        }
+        h = domt_fold_graph(h, n, digits, identity, reversed);
+        if h < 0 { return -1; }
+        graph = graph + 1;
+    }
+    h
+}
+
+fn domt_lcg_digest(n: i64, count: i64) -> i64 {
+    let base: i64 = domt_base(n);
+    let identity: Vec<i64> = domt_ids(n, false);
+    let reversed: Vec<i64> = domt_ids(n, true);
+    let mut state: i64 = domt_lcg_seed();
+    let mut h: i64 = domt_seed();
+    let mut graph: i64 = 0;
+    while graph < count {
+        let digits: Vec<i64> = Vec::new();
+        let mut i: i64 = 0;
+        while i < n {
+            state = (state * 1103515245 + 12345) % 2147483648;
+            digits.push((state / 65536) % base);
+            i = i + 1;
+        }
+        h = domt_fold_graph(h, n, digits, identity, reversed);
+        if h < 0 { return -1; }
+        graph = graph + 1;
+    }
+    h
+}
+
+fn domt_check_digests() -> i64 {
+    if domt_exhaustive_digest(4) != domt_digest_exhaustive_4() { return 1; }
+    if domt_lcg_digest(5, 1000) != domt_digest_lcg_5() { return 2; }
+    if domt_lcg_digest(6, 1000) != domt_digest_lcg_6() { return 3; }
+    0
+}
+
+fn main() -> i32 {
+    let r1: i64 = domt_check_goldens();
+    if r1 != 0 { return i64_to_i32_wrap(r1); }
+    let r2: i64 = domt_check_digests();
+    if r2 != 0 { return i64_to_i32_wrap(100 + r2); }
+    0
+}
