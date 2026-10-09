@@ -602,3 +602,14 @@ fn nested_loop_vow_clauses_indent_by_depth() {
         "{out}"
     );
 }
+
+#[test]
+fn extern_param_where_block_indents_by_depth() {
+    let out = printed(
+        "module M\nextern \"C\" {\n    fn g(x: i64 where if x > 0 { true } else { false }) -> i64;\n}\n",
+    );
+    assert!(
+        out.contains("    fn g(x: i64 where if x > 0 {\n        true\n    } else {\n        false\n    }) -> i64;\n"),
+        "{out}"
+    );
+}
