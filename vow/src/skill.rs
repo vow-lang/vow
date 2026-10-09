@@ -5580,7 +5580,7 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 ### VerifierAssertionUnattributed
 
 **Phase:** Verification
-**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.
+**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero, a dynamic shift count that exceeds the operand's bit width, and (native backend only) `unwrap()` called on `None` or `Err`.
 
 ```json
 {
@@ -5593,12 +5593,12 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 
 The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
 
-**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
+**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For `unwrap() called on None`, match on the value or require its discriminant instead of unwrapping. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
 
 ### VerifierBug
 
 **Phase:** Verification (self-hosted `vowc verify --backend native --replay-cex` only)
-**Meaning:** Under the native backend, a counterexample did not replay: the `--mode debug` harness built from its concrete inputs did not reproduce the predicted `VowViolation` (same `vow_id` and blame) or, for a division or remainder abort, the predicted `ArithmeticOverflow` abort. The counterexample's `replay` is `"diverged"` or `"aborted"` and `replay_reason` says why. A `"skipped"` replay (a harness limitation such as an unsupported parameter type) never ran and is not reported. The verifier model and the runtime disagree, so this is a defect in the verifier, not in the program. One diagnostic is emitted per such counterexample; the `status` stays `VerifyFailed` and the exit code stays 1.
+**Meaning:** Under the native backend, a counterexample did not replay: the `--mode debug` harness built from its concrete inputs did not reproduce the predicted `VowViolation` (same `vow_id` and blame) or, for a division or remainder abort, the predicted `ArithmeticOverflow` abort, or, for an `unwrap()` abort, the predicted `UnwrapOnNone` abort. The counterexample's `replay` is `"diverged"` or `"aborted"` and `replay_reason` says why. A `"skipped"` replay (a harness limitation such as an unsupported parameter type) never ran and is not reported. The verifier model and the runtime disagree, so this is a defect in the verifier, not in the program. One diagnostic is emitted per such counterexample; the `status` stays `VerifyFailed` and the exit code stays 1.
 
 ```json
 {
@@ -11612,7 +11612,7 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 ### VerifierAssertionUnattributed
 
 **Phase:** Verification
-**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.
+**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero, a dynamic shift count that exceeds the operand's bit width, and (native backend only) `unwrap()` called on `None` or `Err`.
 
 ```json
 {
@@ -11625,12 +11625,12 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 
 The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
 
-**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
+**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For `unwrap() called on None`, match on the value or require its discriminant instead of unwrapping. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
 
 ### VerifierBug
 
 **Phase:** Verification (self-hosted `vowc verify --backend native --replay-cex` only)
-**Meaning:** Under the native backend, a counterexample did not replay: the `--mode debug` harness built from its concrete inputs did not reproduce the predicted `VowViolation` (same `vow_id` and blame) or, for a division or remainder abort, the predicted `ArithmeticOverflow` abort. The counterexample's `replay` is `"diverged"` or `"aborted"` and `replay_reason` says why. A `"skipped"` replay (a harness limitation such as an unsupported parameter type) never ran and is not reported. The verifier model and the runtime disagree, so this is a defect in the verifier, not in the program. One diagnostic is emitted per such counterexample; the `status` stays `VerifyFailed` and the exit code stays 1.
+**Meaning:** Under the native backend, a counterexample did not replay: the `--mode debug` harness built from its concrete inputs did not reproduce the predicted `VowViolation` (same `vow_id` and blame) or, for a division or remainder abort, the predicted `ArithmeticOverflow` abort, or, for an `unwrap()` abort, the predicted `UnwrapOnNone` abort. The counterexample's `replay` is `"diverged"` or `"aborted"` and `replay_reason` says why. A `"skipped"` replay (a harness limitation such as an unsupported parameter type) never ran and is not reported. The verifier model and the runtime disagree, so this is a defect in the verifier, not in the program. One diagnostic is emitted per such counterexample; the `status` stays `VerifyFailed` and the exit code stays 1.
 
 ```json
 {

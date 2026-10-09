@@ -168,11 +168,11 @@ fn check_unsupported_aggregate_shapes() -> i64 {
 }
 
 // unwrap(o): tag == 0 ? abort : payload
-fn unwrap_fn(close_region: bool, with_abort: bool) -> IrFunction {
+fn unwrap_fn(close_region: bool, with_abort: bool, empty_tag: i64) -> IrFunction {
     let a: Vec<IrInst> = Vec::new();
     a.push(mk_inst_arg(0, ITY_PTR(), 0));
     a.push(mk_fget(1, ITY_I64(), 0, 0));
-    a.push(mk_inst_const_i64(2, 0));
+    a.push(mk_inst_const_i64(2, empty_tag));
     a.push(mk_inst(3, IOP_EQ(), ITY_BOOL(), args2(1, 2)));
     a.push(mk_inst_branch(4, 3, 1, 2));
     let p: Vec<IrInst> = Vec::new();
@@ -196,20 +196,20 @@ fn unwrap_fn(close_region: bool, with_abort: bool) -> IrFunction {
 }
 
 fn check_effects_and_unwrap_shape() -> i64 {
-    if vc_skip_reason(unwrap_fn(false, true)).len() != 0 { return 40; }
-    if vc_skip_reason(unwrap_fn(true, true)).len() != 0 { return 41; }
-    if vc_skip_reason(unwrap_fn(false, false)) != String::from("unsupported-opcode: Unreachable") { return 42; }
-    let with_io: IrFunction = unwrap_fn(false, true);
+    if vc_skip_reason(unwrap_fn(false, true, 0)).len() != 0 { return 40; }
+    if vc_skip_reason(unwrap_fn(true, true, 0)).len() != 0 { return 41; }
+    if vc_skip_reason(unwrap_fn(false, false, 0)) != String::from("unsupported-opcode: Unreachable") { return 42; }
+    let with_io: IrFunction = unwrap_fn(false, true, 0);
     with_io.effects = 3;
     if !vc_skip_reason(with_io).contains(String::from("function-has-effects")) { return 43; }
-    let noisy: IrFunction = unwrap_fn(false, true);
+    let noisy: IrFunction = unwrap_fn(false, true, 0);
     noisy.effects = 1;
     if !vc_skip_reason(noisy).contains(String::from("function-has-effects")) { return 44; }
     0
 }
 
 fn check_unwrap_claim() -> i64 {
-    let cs: VcClaims = vc_claims(unwrap_fn(true, true));
+    let cs: VcClaims = vc_claims(unwrap_fn(true, true, 0));
     if cs.kinds.len() != 1 { return 50; }
     if cs.kinds[0] != VC_CLAIM_UNWRAP_NONE() { return 51; }
     if cs.vow_ids[0] != -1 { return 52; }
@@ -218,6 +218,10 @@ fn check_unwrap_claim() -> i64 {
     if !q.contains(String::from("(declare-const p0f0 (_ BitVec 64))")) { return 54; }
     if !q.contains(String::from("(define-fun v1 () (_ BitVec 64) p0f0)")) { return 55; }
     if !q.contains(String::from("(assert (and v3 (not false)))")) { return 56; }
+    // `Result::unwrap` aborts on `Err`, whose tag is 1: the claim follows the tag it compares.
+    let err: String = query(vc_claims(unwrap_fn(true, true, 1)), 0);
+    if !err.contains(String::from("(define-fun v2 () (_ BitVec 64) (_ bv1 64))")) { return 57; }
+    if !err.contains(String::from("(assert (and v3 (not false)))")) { return 58; }
     0
 }
 
