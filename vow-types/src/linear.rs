@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 use vow_diag::{Blame, Diagnostic, DiagnosticEmitter, ErrorCode, Severity, SourceLocation};
@@ -184,14 +185,21 @@ fn register_pattern_linear(
         return vec![];
     }
     // The tracker is name-keyed: a non-linear rebinding must not leave a stale consumed entry that a later assignment would re-arm.
+    if !tracker
+        .vars
+        .values()
+        .any(|state| matches!(state, ConsumeState::Consumed(_)))
+    {
+        return vec![];
+    }
     let mut names = vec![];
     collect_pattern_binding_names(pat, &mut names);
     let mut removed = vec![];
     for name in names {
-        if matches!(tracker.vars.get(&name), Some(ConsumeState::Consumed(_)))
-            && let Some(state) = tracker.vars.remove(&name)
+        if let Entry::Occupied(entry) = tracker.vars.entry(name)
+            && matches!(entry.get(), ConsumeState::Consumed(_))
         {
-            removed.push((name, state));
+            removed.push(entry.remove_entry());
         }
     }
     removed
@@ -268,11 +276,9 @@ fn check_expr(
             check_expr(rhs, tracker, env, file, emitter, true);
             // Visiting the RHS first lets `h = wrap(h)` consume the old value before the new one is armed.
             if let ExprKind::Ident(name) = &lhs.kind
-                && tracker.vars.contains_key(name)
+                && let Some(state) = tracker.vars.get_mut(name)
             {
-                tracker
-                    .vars
-                    .insert(name.clone(), ConsumeState::Available(lhs.span));
+                *state = ConsumeState::Available(lhs.span);
             }
         }
         ExprKind::BinaryOp { lhs, rhs, .. } => {
@@ -344,8 +350,8 @@ fn check_loop_body(
     tracker.in_loop = was_in_loop;
     // A body that may run zero times cannot unconditionally re-arm a value consumed before the loop.
     for (name, span) in consumed_before {
-        if matches!(tracker.vars.get(&name), Some(ConsumeState::Available(_))) {
-            tracker.vars.insert(name, ConsumeState::MaybeConsumed(span));
+        if let Some(state @ ConsumeState::Available(_)) = tracker.vars.get_mut(&name) {
+            *state = ConsumeState::MaybeConsumed(span);
         }
     }
 }
@@ -703,6 +709,21 @@ mod tests {
         Block {
             stmts: vec![],
             trailing_expr: Some(Box::new(expr)),
+            span: dummy_span(),
+        }
+    }
+
+    fn block_with_stmts(stmts: Vec<Stmt>) -> Block {
+        Block {
+            stmts,
+            trailing_expr: None,
+            span: dummy_span(),
+        }
+    }
+
+    fn true_expr() -> Expr {
+        Expr {
+            kind: ExprKind::Lit(Lit::Bool(true)),
             span: dummy_span(),
         }
     }
@@ -1569,21 +1590,13 @@ mod tests {
     }
 
     fn if_expr(then_stmts: Vec<Stmt>, else_stmts: Option<Vec<Stmt>>) -> Expr {
-        let block = |stmts| Block {
-            stmts,
-            trailing_expr: None,
-            span: dummy_span(),
-        };
         Expr {
             kind: ExprKind::If {
-                condition: Box::new(Expr {
-                    kind: ExprKind::Lit(Lit::Bool(true)),
-                    span: dummy_span(),
-                }),
-                then_branch: Box::new(block(then_stmts)),
+                condition: Box::new(true_expr()),
+                then_branch: Box::new(block_with_stmts(then_stmts)),
                 else_branch: else_stmts.map(|stmts| {
                     Box::new(Expr {
-                        kind: ExprKind::Block(Box::new(block(stmts))),
+                        kind: ExprKind::Block(Box::new(block_with_stmts(stmts))),
                         span: dummy_span(),
                     })
                 }),
@@ -1757,16 +1770,9 @@ mod tests {
     fn while_expr(stmts: Vec<Stmt>) -> Expr {
         Expr {
             kind: ExprKind::While {
-                condition: Box::new(Expr {
-                    kind: ExprKind::Lit(Lit::Bool(true)),
-                    span: dummy_span(),
-                }),
+                condition: Box::new(true_expr()),
                 vow: None,
-                body: Box::new(Block {
-                    stmts,
-                    trailing_expr: None,
-                    span: dummy_span(),
-                }),
+                body: Box::new(block_with_stmts(stmts)),
             },
             span: dummy_span(),
         }
@@ -1830,11 +1836,11 @@ mod tests {
     #[test]
     fn test_inner_block_shadow_does_not_forget_outer_consumed_linear() {
         let inner = expr_stmt(Expr {
-            kind: ExprKind::Block(Box::new(Block {
-                stmts: vec![let_local("h", named_type("i64"), "zero")],
-                trailing_expr: None,
-                span: dummy_span(),
-            })),
+            kind: ExprKind::Block(Box::new(block_with_stmts(vec![let_local(
+                "h",
+                named_type("i64"),
+                "zero",
+            )]))),
             span: dummy_span(),
         });
         let diags = run_linear(
