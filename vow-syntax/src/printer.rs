@@ -610,7 +610,8 @@ fn print_expr_at(expr: &Expr, level: usize) -> String {
             for arm in arms {
                 out.push_str(&print_match_arm(arm, level + 1));
             }
-            out.push_str(&format!("{}}}", indent(level)));
+            out.push_str(&indent(level));
+            out.push('}');
             out
         }
         ExprKind::If {
