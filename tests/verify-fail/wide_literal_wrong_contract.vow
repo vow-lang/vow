@@ -1,0 +1,16 @@
+// TEST: category callee-blame
+// TEST: counterexample-fn "at_least_one"
+// TEST: counterexample-blame callee
+// TEST: counterexample-violation "ensures result >= 18446744073709551616 as u128"
+module WideLiteralWrongContract
+
+fn at_least_one(x: u128) -> u128 vow {
+    ensures: result >= 18446744073709551616u128
+} {
+    x
+}
+
+fn main() -> i32 [io] {
+    at_least_one(18446744073709551616u128);
+    0
+}

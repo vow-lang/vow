@@ -1,0 +1,58 @@
+// TEST: category callee-blame
+module WideLiteralContracts
+
+fn at_least_one(x: u128) -> u128 vow {
+    requires: x >= 1u128,
+    ensures: result >= 1u128
+} {
+    x
+}
+
+fn u128_max() -> u128 vow {
+    ensures: result == 340282366920938463463374607431768211455u128
+} {
+    340282366920938463463374607431768211455u128
+}
+
+fn above_two_pow_64() -> u128 vow {
+    ensures: result > 18446744073709551615u128,
+    ensures: result == 18446744073709551616u128
+} {
+    18446744073709551616u128
+}
+
+fn i128_max() -> i128 vow {
+    ensures: result == 170141183460469231731687303715884105727i128
+} {
+    170141183460469231731687303715884105727i128
+}
+
+fn i128_min() -> i128 vow {
+    ensures: result == -170141183460469231731687303715884105728i128
+} {
+    -170141183460469231731687303715884105728i128
+}
+
+fn negative_one() -> i128 vow {
+    ensures: result < 0i128,
+    ensures: result == -1i128
+} {
+    -1i128
+}
+
+fn is_zero(x: u128) -> bool vow {
+    ensures: result == (x == 0u128)
+} {
+    x == 0u128
+}
+
+fn main() -> i32 [io] {
+    at_least_one(1u128);
+    u128_max();
+    above_two_pow_64();
+    i128_max();
+    i128_min();
+    negative_one();
+    is_zero(0u128);
+    0
+}

@@ -4920,6 +4920,9 @@ fn emit_integer_zero(ctx: &mut LowerCtx, ty: Ty, span: Span) -> InstId {
 /// preserves the original operators -- especially checked arithmetic --
 /// instead of folding the whole expression into a wrapping constant.
 fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<InstId> {
+    if !expr_is_coercible_int_marker(expr) {
+        return None;
+    }
     match &expr.kind {
         ExprKind::Lit(Lit::Int(value)) => {
             Some(emit_narrow_integer_constant(ctx, *value, ty, expr.span))
@@ -4948,7 +4951,7 @@ fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<In
                 expr.span,
             ))
         }
-        ExprKind::BinaryOp { op, lhs, rhs } if expr_is_coercible_int_marker(expr) => {
+        ExprKind::BinaryOp { op, lhs, rhs } => {
             let lhs = lower_integer_marker_as(ctx, lhs, ty)?;
             let rhs_ty = if matches!(op, BinOp::Shl | BinOp::Shr) {
                 Ty::U32
@@ -6845,6 +6848,21 @@ fn unsigned_max() -> u128 {
                     && inst.ty == Ty::U128
                     && inst.data == InstData::ConstU128(u128::MAX))
         );
+    }
+
+    #[test]
+    fn wide_negation_of_non_marker_emits_no_dead_zero() {
+        let module = lower_source_to_module(
+            "module Neg\nfn d(x: i128) -> i128 { -x }\nfn main() -> i32 [io] { 0 }\n",
+            "neg.vow",
+        );
+        let zeros = module.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .filter(|inst| inst.opcode == Opcode::ConstI128)
+            .count();
+        assert_eq!(zeros, 1, "only the negation's own zero may be emitted");
     }
 
     fn lower_source_to_module(source: &str, file: &str) -> Module {

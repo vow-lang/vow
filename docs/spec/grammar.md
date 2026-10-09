@@ -391,10 +391,11 @@ truncate the value or a 16-byte store can overwrite its neighbour. The refusal
 is at the access, not the declaration: a struct may declare a 128-bit member
 and still compile as long as nothing touches it. These are backend gaps, not
 language rules; the type checker accepts both at 128-bit width. Verification
-is a separate matter: a contracted function whose body contains a 128-bit
-*constant* is reported as `Skipped` with `unsupported opcode ConstI128`, because
-`ConstI128`/`ConstU128` are not yet modelled in the verifier. A contracted
-function that reads or writes a 128-bit aggregate field or enum payload is
+is a separate matter: 128-bit literals (in a body or in
+`requires`/`ensures`/`invariant`) are verifiable, and are modelled exactly under
+the bit-vector encoding, `i128::MIN`, `i128::MAX` and `u128::MAX` included; a
+proof obtained by the `--encoding ir` timeout fallback is reported as `ProvenIr`
+and is weaker. A contracted function that reads or writes a 128-bit aggregate field or enum payload is
 likewise reported `Skipped`, with `FieldGet at 128-bit width` or `FieldSet at
 128-bit width`, rather than being modelled through the verifier's 8-byte heap
 slot; so is a call to `parse_i128` or `parse_u128`, whose `Option` result the

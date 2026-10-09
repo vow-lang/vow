@@ -4,16 +4,11 @@
 // TEST: counterexample-vow-id 0
 module NarrowingBounds128WrongContract
 
-// Pass-side bounds contracts on i128/u128 params cannot reach `Verified`
-// today: every contract literal alongside a 128-bit value widens to
-// ConstI128/ConstU128, which both verifier C emitters treat as unmodelable
-// (see the note in tests/verify/shift_count_wide_bounds.vow). This fixture
-// pins the new seam's saturation models from the fail side instead: the
+// Pins the saturation models of the i128-to-i8 seam from the fail side: the
 // contract below is an identity claim, false precisely because
 // `i128_to_i8_sat` saturates. If either compiler's C model regressed to the
 // identity (unclamped) conversion, the claim would hold, the counterexample
-// would vanish, and the expected VerifyFailed below would fail. The claim
-// uses no literals, so the fixture never trips the ConstI128 gap.
+// would vanish, and the expected VerifyFailed below would fail.
 
 fn wrong_identity_claim(value: i128) -> i8 vow {
     ensures: result as i128 == value
