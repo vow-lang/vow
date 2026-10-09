@@ -466,6 +466,23 @@ mod tests {
         );
     }
 
+    fn jump_inst(id: u32, target: u32) -> Inst {
+        make_inst(
+            id,
+            Opcode::Jump,
+            Ty::Unit,
+            vec![],
+            InstData::JumpTarget(BlockId(target)),
+        )
+    }
+
+    fn block(id: u32, insts: Vec<Inst>) -> BasicBlock {
+        BasicBlock {
+            id: BlockId(id),
+            insts,
+        }
+    }
+
     fn module_of(func: Function) -> Module {
         Module {
             name: "m".to_string(),
@@ -492,38 +509,32 @@ mod tests {
 
     #[test]
     fn cross_block_reference_is_valid() {
-        let b0 = BasicBlock {
-            id: BlockId(0),
-            insts: vec![
+        let b0 = block(
+            0,
+            vec![
                 make_inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
-                make_inst(
-                    1,
-                    Opcode::Jump,
-                    Ty::Unit,
-                    vec![],
-                    InstData::JumpTarget(BlockId(1)),
-                ),
+                jump_inst(1, 1),
             ],
-        };
-        let b1 = BasicBlock {
-            id: BlockId(1),
-            insts: vec![make_inst(
+        );
+        let b1 = block(
+            1,
+            vec![make_inst(
                 2,
                 Opcode::Return,
                 Ty::Unit,
                 vec![InstId(0)],
                 InstData::None,
             )],
-        };
+        );
         let func = make_func(0, "cross", vec![b0, b1]);
         assert!(validate(&module_of(func)).is_ok());
     }
 
     #[test]
     fn cross_block_upsilon_to_header_phi_is_valid() {
-        let entry = BasicBlock {
-            id: BlockId(0),
-            insts: vec![
+        let entry = block(
+            0,
+            vec![
                 make_inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                 make_inst(
                     1,
@@ -532,31 +543,19 @@ mod tests {
                     vec![InstId(0)],
                     InstData::PhiTarget(InstId(2)),
                 ),
-                make_inst(
-                    3,
-                    Opcode::Jump,
-                    Ty::Unit,
-                    vec![],
-                    InstData::JumpTarget(BlockId(1)),
-                ),
+                jump_inst(3, 1),
             ],
-        };
-        let header = BasicBlock {
-            id: BlockId(1),
-            insts: vec![
+        );
+        let header = block(
+            1,
+            vec![
                 make_inst(2, Opcode::Phi, Ty::I64, vec![], InstData::None),
-                make_inst(
-                    4,
-                    Opcode::Jump,
-                    Ty::Unit,
-                    vec![],
-                    InstData::JumpTarget(BlockId(2)),
-                ),
+                jump_inst(4, 2),
             ],
-        };
-        let body = BasicBlock {
-            id: BlockId(2),
-            insts: vec![
+        );
+        let body = block(
+            2,
+            vec![
                 make_inst(
                     5,
                     Opcode::Upsilon,
@@ -564,41 +563,26 @@ mod tests {
                     vec![InstId(2)],
                     InstData::PhiTarget(InstId(2)),
                 ),
-                make_inst(
-                    6,
-                    Opcode::Jump,
-                    Ty::Unit,
-                    vec![],
-                    InstData::JumpTarget(BlockId(1)),
-                ),
+                jump_inst(6, 1),
             ],
-        };
+        );
         let func = make_func(0, "loop", vec![entry, header, body]);
         assert!(validate(&module_of(func)).is_ok());
     }
 
     #[test]
     fn undefined_reference_still_reported_in_multi_block_function() {
-        let b0 = BasicBlock {
-            id: BlockId(0),
-            insts: vec![make_inst(
-                0,
-                Opcode::Jump,
-                Ty::Unit,
-                vec![],
-                InstData::JumpTarget(BlockId(1)),
-            )],
-        };
-        let b1 = BasicBlock {
-            id: BlockId(1),
-            insts: vec![make_inst(
+        let b0 = block(0, vec![jump_inst(0, 1)]);
+        let b1 = block(
+            1,
+            vec![make_inst(
                 1,
                 Opcode::Return,
                 Ty::Unit,
                 vec![InstId(99)],
                 InstData::None,
             )],
-        };
+        );
         let func = make_func(0, "undef", vec![b0, b1]);
         let result = validate(&module_of(func));
         assert_eq!(undefined_refs(&result), vec![(1, 99)]);
@@ -607,22 +591,16 @@ mod tests {
     #[test]
     fn branch_condition_type_checked_across_blocks() {
         let build = |cond_ty: Ty| {
-            let b0 = BasicBlock {
-                id: BlockId(0),
-                insts: vec![
+            let b0 = block(
+                0,
+                vec![
                     make_inst(0, Opcode::GetArg, cond_ty, vec![], InstData::ArgIndex(0)),
-                    make_inst(
-                        1,
-                        Opcode::Jump,
-                        Ty::Unit,
-                        vec![],
-                        InstData::JumpTarget(BlockId(1)),
-                    ),
+                    jump_inst(1, 1),
                 ],
-            };
-            let b1 = BasicBlock {
-                id: BlockId(1),
-                insts: vec![make_inst(
+            );
+            let b1 = block(
+                1,
+                vec![make_inst(
                     2,
                     Opcode::Branch,
                     Ty::Unit,
@@ -632,17 +610,17 @@ mod tests {
                         else_block: BlockId(2),
                     },
                 )],
-            };
-            let b2 = BasicBlock {
-                id: BlockId(2),
-                insts: vec![make_inst(
+            );
+            let b2 = block(
+                2,
+                vec![make_inst(
                     3,
                     Opcode::Return,
                     Ty::Unit,
                     vec![],
                     InstData::None,
                 )],
-            };
+            );
             module_of(make_func(0, "branch", vec![b0, b1, b2]))
         };
         assert!(validate(&build(Ty::Bool)).is_ok());
