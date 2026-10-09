@@ -479,7 +479,7 @@ fn passes_structured_arg(
 /// result is always `i64` in the IR, so only classification can flag it.
 /// Self-hosted mirror: `compiler/c_emitter.vow::collection_op_carries_non_scalar`.
 fn collection_op_carries_non_scalar(name: &str, inst: &Inst, facts: &ModelFacts) -> bool {
-    let is_non_scalar = |id: u32| {
+    let is_structured = |id: u32| {
         is_structured_value_id(
             id,
             &facts.vec_vars,
@@ -487,17 +487,10 @@ fn collection_op_carries_non_scalar(name: &str, inst: &Inst, facts: &ModelFacts)
             &facts.hashmap_vars,
             &facts.btreemap_vars,
             &facts.option_vars,
-        ) || facts.ptr_vars.contains(&id)
+        )
     };
     if name == "__vow_vec_get_val" {
-        return is_structured_value_id(
-            inst.id.0,
-            &facts.vec_vars,
-            &facts.string_vars,
-            &facts.hashmap_vars,
-            &facts.btreemap_vars,
-            &facts.option_vars,
-        );
+        return is_structured(inst.id.0);
     }
     [
         ModelArgRole::VecValue,
@@ -507,7 +500,7 @@ fn collection_op_carries_non_scalar(name: &str, inst: &Inst, facts: &ModelFacts)
     .into_iter()
     .filter_map(|role| model_arg_index(name, role))
     .filter_map(|arg_idx| inst.args.get(arg_idx))
-    .any(|arg| is_non_scalar(arg.0))
+    .any(|arg| is_structured(arg.0) || facts.ptr_vars.contains(&arg.0))
 }
 
 fn is_map_model_creator(name: &str) -> bool {
