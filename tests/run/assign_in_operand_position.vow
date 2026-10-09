@@ -1,4 +1,8 @@
 // TEST: stdout "11\n0\n0\n12\n0\n9\n0\n15\n0\n40\n0\n11\n0\n11\n0\n306\n3\n294\n33\n33\n"
+// Regression test for #655: a mutation buried in an operand (call argument,
+// binary/unary operand, method argument, assignment RHS, if/while condition)
+// must be collected as assigned, so it merges after a branch and carries
+// around a loop back edge.
 module AssignInOperandPosition
 
 fn id(x: i64) -> i64 {
