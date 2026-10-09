@@ -1249,6 +1249,80 @@ mod tests {
         assert_eq!(print_expr(&expr), "(a + b) as u64");
     }
 
+    fn question_expr(inner: Expr) -> Expr {
+        Expr {
+            kind: ExprKind::Question {
+                expr: Box::new(inner),
+            },
+            span: s(),
+        }
+    }
+
+    #[test]
+    fn test_question_parens_binary_operand() {
+        let sum = binop_expr(BinOp::Add, ident_expr("a"), ident_expr("b"));
+        assert_eq!(print_expr(&question_expr(sum)), "(a + b)?");
+    }
+
+    #[test]
+    fn test_question_parens_unary_operand() {
+        let neg = Expr {
+            kind: ExprKind::UnaryOp {
+                op: crate::ast::UnOp::Neg,
+                operand: Box::new(ident_expr("a")),
+            },
+            span: s(),
+        };
+        assert_eq!(print_expr(&question_expr(neg)), "(-a)?");
+    }
+
+    #[test]
+    fn test_question_parens_assign_operand() {
+        let assign = Expr {
+            kind: ExprKind::Assign {
+                lhs: Box::new(ident_expr("a")),
+                rhs: Box::new(ident_expr("b")),
+            },
+            span: s(),
+        };
+        assert_eq!(print_expr(&question_expr(assign)), "(a = b)?");
+    }
+
+    #[test]
+    fn test_question_no_parens_for_postfix_operands() {
+        let call = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(ident_expr("f")),
+                args: vec![ident_expr("x")],
+            },
+            span: s(),
+        };
+        assert_eq!(print_expr(&question_expr(call)), "f(x)?");
+        assert_eq!(print_expr(&question_expr(ident_expr("a"))), "a?");
+        assert_eq!(
+            print_expr(&question_expr(question_expr(ident_expr("a")))),
+            "a??"
+        );
+    }
+
+    #[test]
+    fn test_question_cast_operand_needs_no_parens() {
+        let cast = Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(ident_expr("a")),
+                target_ty: Box::new(named_ty("u64")),
+            },
+            span: s(),
+        };
+        assert_eq!(print_expr(&question_expr(cast)), "a as u64?");
+    }
+
+    #[test]
+    fn test_question_inside_binary_operand_stays_distinct() {
+        let sum = binop_expr(BinOp::Add, ident_expr("a"), question_expr(ident_expr("b")));
+        assert_eq!(print_expr(&sum), "a + b?");
+    }
+
     #[test]
     fn test_all_binop_strings() {
         let pairs: &[(BinOp, &str)] = &[
