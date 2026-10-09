@@ -230,6 +230,10 @@ pub enum InstData {
         align: u32,
     },
     FieldIndex(u32),
+    /// First of two consecutive slots (low limb, high limb) of a 128-bit enum
+    /// payload, never a pointer (region analysis ignores it); a 128-bit access
+    /// through plain `FieldIndex` is still refused.
+    WideSlot(u32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

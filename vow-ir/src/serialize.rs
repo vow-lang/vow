@@ -565,6 +565,10 @@ fn write_inst_data(out: &mut Vec<u8>, d: &InstData) {
             out.push(16);
             out.extend_from_slice(&i.to_le_bytes());
         }
+        InstData::WideSlot(i) => {
+            out.push(22);
+            out.extend_from_slice(&i.to_le_bytes());
+        }
     }
 }
 
@@ -620,6 +624,7 @@ fn read_inst_data(r: &mut Reader) -> Result<InstData, DecodeError> {
             let hi = u128::from(r.u64()?);
             Ok(InstData::ConstU128((hi << 64) | lo))
         }
+        22 => Ok(InstData::WideSlot(r.u32()?)),
         _ => Err(DecodeError::InvalidKind("InstData", tag as u32)),
     }
 }

@@ -2566,6 +2566,31 @@ unsafe fn alloc_option_in_arena(
     cell as *mut u8
 }
 
+/// A fresh `Option<i128>`/`Option<u128>` cell owned by `arena`: `[tag, lo, hi]`,
+/// the layout the compilers read for a two-slot 128-bit payload (low limb at
+/// slot 1, high limb at slot 2). A `#[repr(C)]` 128-bit field would sit at
+/// offset 16 and disagree, so the limbs are written as separate words.
+unsafe fn alloc_wide_option_in_arena(
+    arena: *mut VowArena,
+    operation: &'static str,
+    value: Option<u128>,
+) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap(operation);
+    }
+    let cell = unsafe { __vow_arena_alloc(arena, 24, 8) } as *mut u64;
+    let (tag, bits) = match value {
+        Some(bits) => (1, bits),
+        None => (0, 0),
+    };
+    unsafe {
+        *cell = tag;
+        *cell.add(1) = bits as u64;
+        *cell.add(2) = (bits >> 64) as u64;
+    }
+    cell as *mut u8
+}
+
 unsafe fn parse_string_arg<T: std::str::FromStr>(s: *const u8) -> Option<T> {
     if s.is_null() {
         return None;
@@ -2584,14 +2609,23 @@ unsafe fn parse_string_arg<T: std::str::FromStr>(s: *const u8) -> Option<T> {
 // the function).
 macro_rules! define_option_parser {
     ($parse_name:ident, $parse_arena_name:ident, $ty:ty) => {
+        define_option_parser!(
+            $parse_name,
+            $parse_arena_name,
+            $ty,
+            alloc_option_in_arena,
+            i64
+        );
+    };
+    ($parse_name:ident, $parse_arena_name:ident, $ty:ty, $alloc:ident, $repr:ty) => {
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $parse_arena_name(arena: *mut VowArena, s: *const u8) -> *mut u8 {
             let value = unsafe { parse_string_arg::<$ty>(s) };
             unsafe {
-                alloc_option_in_arena(
+                $alloc(
                     arena,
                     stringify!($parse_arena_name),
-                    value.map(|v| v as i64),
+                    value.map(|v| v as $repr),
                 )
             }
         }
@@ -2642,6 +2676,21 @@ define_option_parser!(
     __vow_string_parse_u32_opt,
     __vow_string_parse_u32_opt_in_arena,
     u32
+);
+
+define_option_parser!(
+    __vow_string_parse_i128_opt,
+    __vow_string_parse_i128_opt_in_arena,
+    i128,
+    alloc_wide_option_in_arena,
+    u128
+);
+define_option_parser!(
+    __vow_string_parse_u128_opt,
+    __vow_string_parse_u128_opt_in_arena,
+    u128,
+    alloc_wide_option_in_arena,
+    u128
 );
 
 macro_rules! define_try_conversion {
@@ -5470,6 +5519,85 @@ mod tests {
         assert_eq!(
             unsafe { option_parts(__vow_string_parse_i8_opt(std::ptr::null())) },
             (0, 0)
+        );
+    }
+
+    unsafe fn wide_option_parts(ptr: *const u8) -> (i64, u64, u64) {
+        let words = ptr as *const u64;
+        unsafe { (*words as i64, *words.add(1), *words.add(2)) }
+    }
+
+    /// The compilers address a 128-bit payload as two consecutive 8-byte slots
+    /// after the tag (low limb at `1 * 8`, high limb at `2 * 8`), so the runtime
+    /// cell must be exactly `[tag, lo, hi]` — a Rust `#[repr(C)]` `u128` field
+    /// would sit at offset 16 and disagree.
+    #[test]
+    fn wide_option_cell_is_tag_then_low_then_high_limb() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+
+        let big: u128 = (0xABu128 << 64) | 5;
+        let some = unsafe { alloc_wide_option_in_arena(&mut a, "test", Some(big)) };
+        let none = unsafe { alloc_wide_option_in_arena(&mut a, "test", None) };
+        assert_eq!(unsafe { wide_option_parts(some) }, (1, 5, 0xAB));
+        assert_eq!(unsafe { wide_option_parts(none) }, (0, 0, 0));
+        assert_eq!(none as usize - some as usize, 24, "24 bytes per cell");
+
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn wide_parsers_accept_bounds_and_reject_out_of_range_values() {
+        type ParseFn = unsafe extern "C" fn(*const u8) -> *mut u8;
+        let i128_min = i128::MIN.to_string();
+        let i128_max = i128::MAX.to_string();
+        let u128_max = u128::MAX.to_string();
+        let below_i128_min = "-170141183460469231731687303715884105729";
+        let above_i128_max = "170141183460469231731687303715884105728";
+        let above_u128_max = "340282366920938463463374607431768211456";
+        let cases: [(ParseFn, &str, u128, bool); 10] = [
+            (
+                __vow_string_parse_i128_opt,
+                &i128_min,
+                i128::MIN as u128,
+                true,
+            ),
+            (
+                __vow_string_parse_i128_opt,
+                &i128_max,
+                i128::MAX as u128,
+                true,
+            ),
+            (__vow_string_parse_i128_opt, "-1", u128::MAX, true),
+            (__vow_string_parse_i128_opt, below_i128_min, 0, false),
+            (__vow_string_parse_i128_opt, above_i128_max, 0, false),
+            (__vow_string_parse_u128_opt, &u128_max, u128::MAX, true),
+            (
+                __vow_string_parse_u128_opt,
+                "18446744073709551616",
+                1u128 << 64,
+                true,
+            ),
+            (__vow_string_parse_u128_opt, above_u128_max, 0, false),
+            (__vow_string_parse_u128_opt, "-1", 0, false),
+            (__vow_string_parse_u128_opt, "", 0, false),
+        ];
+
+        for (parse, text, expected, valid) in cases {
+            let text_vec = borrowed_vow_string(text);
+            let (tag, lo, hi) =
+                unsafe { wide_option_parts(parse(&raw const text_vec as *const u8)) };
+            if valid {
+                assert_eq!(tag, 1, "{text:?} must parse");
+                assert_eq!(((hi as u128) << 64) | lo as u128, expected, "{text:?}");
+            } else {
+                assert_eq!((tag, lo, hi), (0, 0, 0), "{text:?} must be None");
+            }
+        }
+
+        assert_eq!(
+            unsafe { wide_option_parts(__vow_string_parse_u128_opt(std::ptr::null())) },
+            (0, 0, 0)
         );
     }
 

@@ -52,11 +52,13 @@ fn vc_op_modeled(op: i64) -> bool {
         || op == IOP_EQ() || op == IOP_NE() || op == IOP_LT() || op == IOP_LE() || op == IOP_GT() || op == IOP_GE()
         || op == IOP_NOT() || op == IOP_AND() || op == IOP_OR()
         || op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_RETURN()
+        || op == IOP_CONST_UNIT() || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_UNREACHABLE()
+        || op == IOP_PHI() || op == IOP_UPSILON()
 }
 
 fn vc_op_unsupported(op: i64) -> bool {
     op == IOP_CONST_I32() || op == IOP_CONST_F32() || op == IOP_CONST_F64() || op == IOP_CONST_STR()
-        || op == IOP_CONST_UNIT() || op == IOP_CONST_U64() || op == IOP_CONST_U8()
+        || op == IOP_CONST_U64() || op == IOP_CONST_U8()
         || op == IOP_CONST_I128() || op == IOP_CONST_U128()
         || op == IOP_ADD_F32() || op == IOP_SUB_F32() || op == IOP_MUL_F32() || op == IOP_DIV_F32()
         || op == IOP_EQ_F32() || op == IOP_NE_F32() || op == IOP_LT_F32() || op == IOP_LE_F32()
@@ -67,8 +69,7 @@ fn vc_op_unsupported(op: i64) -> bool {
         || op == IOP_CADD() || op == IOP_CSUB() || op == IOP_CMUL() || op == IOP_CDIV() || op == IOP_CREM()
         || op == IOP_SHL() || op == IOP_SHR() || op == IOP_INT_CAST()
         || op == IOP_LOAD() || op == IOP_STORE()
-        || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_UNREACHABLE()
-        || op == IOP_PHI() || op == IOP_UPSILON() || op == IOP_VOW_INV()
+        || op == IOP_VOW_INV()
         || op == IOP_DEBUG_CALL()
         || op == IOP_REGION_ALLOC() || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
         || op == IOP_COMPLEXITY_DESCRIPTOR()

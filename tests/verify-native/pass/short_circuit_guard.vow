@@ -1,0 +1,16 @@
+module ShortCircuitGuard
+
+fn pick(x: i64, y: i64) -> i64 vow {
+  ensures: result >= 1
+} {
+  if x > 0 && y != 0 && 10 / y > 1 {
+    1
+  } else {
+    2
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(pick(1, 2));
+  0
+}

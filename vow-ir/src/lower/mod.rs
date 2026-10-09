@@ -115,6 +115,8 @@ fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "parse_i16" => Some(("__vow_string_parse_i16_opt", Ty::Ptr)),
         "parse_u16" => Some(("__vow_string_parse_u16_opt", Ty::Ptr)),
         "parse_u32" => Some(("__vow_string_parse_u32_opt", Ty::Ptr)),
+        "parse_i128" => Some(("__vow_string_parse_i128_opt", Ty::Ptr)),
+        "parse_u128" => Some(("__vow_string_parse_u128_opt", Ty::Ptr)),
         "i16_to_u8_try" => Some(("__vow_i16_to_u8_try", Ty::Ptr)),
         "i16_to_u8_wrap" => Some(("__vow_i16_to_u8_wrap", Ty::U8)),
         "i16_to_u8_sat" => Some(("__vow_i16_to_u8_sat", Ty::U8)),
@@ -271,6 +273,8 @@ fn builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
         "parse_i16" => Some(BuiltinResultTag::OptionOf(Ty::I16)),
         "parse_u16" => Some(BuiltinResultTag::OptionOf(Ty::U16)),
         "parse_u32" => Some(BuiltinResultTag::OptionOf(Ty::U32)),
+        "parse_i128" => Some(BuiltinResultTag::OptionOf(Ty::I128)),
+        "parse_u128" => Some(BuiltinResultTag::OptionOf(Ty::U128)),
         "parse_u8" | "i16_to_u8_try" | "i32_to_u8_try" | "i64_to_u8_try" | "i128_to_u8_try"
         | "u16_to_u8_try" | "u32_to_u8_try" | "u64_to_u8_try" | "u128_to_u8_try" => {
             Some(BuiltinResultTag::OptionOf(Ty::U8))
@@ -854,6 +858,38 @@ fn variant_payload_ty(ctx: &LowerCtx, inst: InstId, tag: i64) -> Option<Ty> {
         .and_then(|variants| variants.get(tag))
         .copied()
         .flatten()
+}
+
+fn declared_payload_tys(ctx: &LowerCtx, enum_name: &str, tag: i64) -> Vec<Ty> {
+    usize::try_from(tag)
+        .ok()
+        .and_then(|tag| ctx.enum_variant_payload_tys.get(enum_name)?.get(tag))
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn payload_slot_width(ty: Ty) -> u32 {
+    if matches!(ty, Ty::I128 | Ty::U128) {
+        2
+    } else {
+        1
+    }
+}
+
+fn payload_field_data(ty: Ty, slot: u32) -> InstData {
+    if payload_slot_width(ty) == 2 {
+        InstData::WideSlot(slot)
+    } else {
+        InstData::FieldIndex(slot)
+    }
+}
+
+fn payload_slot(payload_tys: &[Ty], index: usize) -> u32 {
+    1 + payload_tys
+        .iter()
+        .take(index)
+        .map(|ty| payload_slot_width(*ty))
+        .sum::<u32>()
 }
 
 /// Declared 128-bit width of an enum variant's payload slot, by enum name.
@@ -3355,12 +3391,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .get(enum_name)
                 .and_then(|vs| vs.iter().position(|v| v == variant_name))
                 .unwrap_or(0) as i64;
-            let payload_tys = ctx
-                .enum_variant_payload_tys
-                .get(enum_name)
-                .and_then(|variants| variants.get(tag as usize))
-                .cloned()
-                .unwrap_or_default();
+            let payload_tys = declared_payload_tys(ctx, enum_name, tag);
             let payload_ast_types = ctx
                 .enum_variant_payload_ast_types
                 .get(enum_name)
@@ -3397,8 +3428,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 || payload_values
                     .iter()
                     .any(|value| ctx.inst_ty(*value) == Ty::LinearPtr);
-            let n_payload = payload_values.len();
-            let size = (2 + n_payload) as u32 * 8;
+            // The declaration decides the layout, exactly as it does for every
+            // read; a value whose lowered type disagrees then fails closed in
+            // codegen instead of being stored with a different slot map.
+            let value_tys: Vec<Ty> = payload_values
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    payload_tys
+                        .get(i)
+                        .copied()
+                        .unwrap_or_else(|| ctx.inst_ty(*v))
+                })
+                .collect();
+            let size = (payload_slot(&value_tys, value_tys.len()) + 1) * 8;
             let ptr_id = ctx.emit(
                 Opcode::RegionAlloc,
                 if owns_linear { Ty::LinearPtr } else { Ty::Ptr },
@@ -3441,7 +3484,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     Opcode::FieldSet,
                     Ty::Unit,
                     vec![ptr_id, val_id],
-                    InstData::FieldIndex(1 + i as u32),
+                    payload_field_data(value_tys[i], payload_slot(&value_tys, i)),
                     span,
                 );
             }
@@ -3532,6 +3575,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         let payload_ty = variant_payload_ty(ctx, ptr_id, expected_tag)
                             .or_else(|| ctx.inst_option_elem_ty.get(&ptr_id).copied())
                             .unwrap_or(Ty::I64);
+                        let declared_payload_tys =
+                            declared_payload_tys(ctx, enum_name, expected_tag);
                         for (i, inner_pat) in inner.iter().enumerate() {
                             if let PatKind::Ident { name, .. } = &inner_pat.kind {
                                 let aggregate = ctx
@@ -3560,7 +3605,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                     Opcode::FieldGet,
                                     field_ty,
                                     vec![ptr_id],
-                                    InstData::FieldIndex(1 + i as u32),
+                                    payload_field_data(
+                                        field_ty,
+                                        payload_slot(&declared_payload_tys, i),
+                                    ),
                                     span,
                                 );
                                 if let Some(info) = aggregate {
@@ -4143,7 +4191,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 Opcode::FieldGet,
                 payload_ty,
                 vec![ptr_id],
-                InstData::FieldIndex(1),
+                payload_field_data(payload_ty, 1),
                 span,
             );
             if let Some(info) = aggregate {
@@ -4331,7 +4379,7 @@ fn lower_unwrap(ctx: &mut LowerCtx, expr: &Expr, recv_id: InstId, empty_tag: i64
         Opcode::FieldGet,
         payload_ty,
         vec![recv_id],
-        InstData::FieldIndex(1),
+        payload_field_data(payload_ty, 1),
         origin,
     );
     if let Some(info) = aggregate {
@@ -6077,6 +6125,8 @@ mod tests {
             ("parse_i16", Ty::I16),
             ("parse_u16", Ty::U16),
             ("parse_u32", Ty::U32),
+            ("parse_i128", Ty::I128),
+            ("parse_u128", Ty::U128),
             ("parse_i64", Ty::I64),
             ("parse_u8", Ty::U8),
             ("i16_to_u8_try", Ty::U8),
@@ -6473,14 +6523,21 @@ type PairView = PairAlias;
 
     #[test]
     fn phase3_parser_calls_preserve_runtime_symbols() {
-        let mut stmts: Vec<Stmt> = ["parse_i8", "parse_i16", "parse_u16", "parse_u32"]
-            .into_iter()
-            .map(|name| Stmt::Expr {
-                expr: call_expr(name, vec![string_expr("0")]),
-                has_semicolon: true,
-                span: sp(),
-            })
-            .collect();
+        let mut stmts: Vec<Stmt> = [
+            "parse_i8",
+            "parse_i16",
+            "parse_u16",
+            "parse_u32",
+            "parse_i128",
+            "parse_u128",
+        ]
+        .into_iter()
+        .map(|name| Stmt::Expr {
+            expr: call_expr(name, vec![string_expr("0")]),
+            has_semicolon: true,
+            span: sp(),
+        })
+        .collect();
         stmts.push(Stmt::Expr {
             expr: call_expr("i16_to_i8_try", vec![int_expr(0)]),
             has_semicolon: true,
@@ -6524,6 +6581,8 @@ type PairView = PairAlias;
             "__vow_string_parse_i8_opt",
             "__vow_string_parse_i16_opt",
             "__vow_string_parse_u16_opt",
+            "__vow_string_parse_i128_opt",
+            "__vow_string_parse_u128_opt",
             "__vow_string_parse_u32_opt",
             "__vow_i16_to_i8_try",
         ] {
@@ -7351,11 +7410,81 @@ fn ok_limb(r: Result<i128, i64>) -> i64 {
                 insts_of(func)
                     .iter()
                     .any(|inst| inst.opcode == Opcode::FieldGet
-                        && inst.data == InstData::FieldIndex(slot)
+                        && inst.data == InstData::WideSlot(slot)
                         && inst.ty == expected),
                 "`{fn_name}` payload slot {slot} must lower as {expected:?}, not a truncated limb:\n{func:#?}"
             );
         }
+    }
+
+    /// A 128-bit payload occupies two consecutive 8-byte slots (ADR 0001
+    /// decision 9), so every payload after it moves up by one slot and the
+    /// allocation grows with it: tag + 4 payload slots + the guard slot.
+    #[test]
+    fn wide_enum_payload_shifts_later_slots_and_grows_allocation() {
+        let module = lower_source_to_module(
+            r#"
+module WideSlotLayout
+
+enum Mix {
+    V(i64, i128, i64),
+    Empty,
+}
+
+fn make(a: i64, b: i128, c: i64) -> Mix {
+    Mix::V(a, b, c)
+}
+
+fn third(m: Mix) -> i64 {
+    match m {
+        Mix::V(x, y, z) => { z },
+        Mix::Empty => { 0 },
+    }
+}
+"#,
+            "wide_slot_layout.vow",
+        );
+        let find = |name: &str| {
+            module
+                .functions
+                .iter()
+                .find(|f| f.name == name)
+                .unwrap_or_else(|| panic!("missing function `{name}`"))
+        };
+
+        let make = find("make");
+        let make_insts = insts_of(make);
+        let alloc = make_insts
+            .iter()
+            .find(|inst| inst.opcode == Opcode::RegionAlloc)
+            .expect("enum allocation");
+        assert_eq!(
+            alloc.data,
+            InstData::AllocSize { size: 48, align: 8 },
+            "tag + 1 + 2 + 1 payload slots + guard slot:\n{make:#?}"
+        );
+        let stored: Vec<u32> = make_insts
+            .iter()
+            .filter(|inst| inst.opcode == Opcode::FieldSet)
+            .filter_map(|inst| match inst.data {
+                InstData::FieldIndex(slot) | InstData::WideSlot(slot) => Some(slot),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stored, vec![0, 1, 2, 4], "tag, a, b (2 slots), c");
+        assert!(
+            make_insts
+                .iter()
+                .any(|inst| inst.opcode == Opcode::FieldSet && inst.data == InstData::WideSlot(2)),
+            "the i128 payload must be stored through the explicit two-slot marker:\n{make:#?}"
+        );
+
+        let third = find("third");
+        assert!(
+            insts_of(third).iter().any(|inst| inst.opcode == Opcode::FieldGet
+                && inst.data == InstData::FieldIndex(4)),
+            "`z` must be read from slot 4, past the wide member:\n{third:#?}"
+        );
     }
 
     /// `Result` is built in, so it has no declaration for the match arm to
@@ -7397,7 +7526,7 @@ fn via_call(r0: Result<u128, i64>) -> i64 {
                 insts_of(func)
                     .iter()
                     .any(|inst| inst.opcode == Opcode::FieldGet
-                        && inst.data == InstData::FieldIndex(1)
+                        && inst.data == InstData::WideSlot(1)
                         && inst.ty == expected),
                 "`{fn_name}` must read the Ok slot as {expected:?}, not a truncated limb:\n{func:#?}"
             );

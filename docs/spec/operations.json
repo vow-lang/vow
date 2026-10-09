@@ -423,6 +423,8 @@
     "__vow_string_parse_u16_opt",
     "__vow_string_parse_i32_opt",
     "__vow_string_parse_u32_opt",
+    "__vow_string_parse_i128_opt",
+    "__vow_string_parse_u128_opt",
     "__vow_map_get",
     "__vow_btreemap_get",
     "__vow_btreemap_insert",

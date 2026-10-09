@@ -209,6 +209,7 @@ fn IDATA_CONST_U8() -> i64 { 19 }
 fn IDATA_INTEGER_CAST() -> i64 { 20 }
 fn IDATA_CONST_I128() -> i64 { 21 }
 fn IDATA_CONST_U128() -> i64 { 22 }
+fn IDATA_WIDE_SLOT() -> i64 { 23 }
 
 fn BLAME_CALLER() -> i64 { 0 }
 fn BLAME_CALLEE() -> i64 { 1 }
@@ -770,6 +771,15 @@ fn fresh_arena_base_extern(sym: String) -> bool {
             if c1 == 117 {
                 return sym == String::from("__vow_string_parse_u64_opt");
             }
+        }
+    }
+    if n == 27 {
+        let c0: i64 = sym.byte_at(19);
+        if c0 == 105 {
+            return sym == String::from("__vow_string_parse_i128_opt");
+        }
+        if c0 == 117 {
+            return sym == String::from("__vow_string_parse_u128_opt");
         }
     }
     return false;

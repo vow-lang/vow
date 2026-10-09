@@ -4,11 +4,12 @@ use ir
 use ir_printer
 use ir_dominance
 use vc_ops
+use vc_cfg
 
 // Fail-closed subset gate for the native verifier. `vc_skip_reason` returns ""
-// only for a pure, single-block function built from the i64/Bool operations the
-// symbolic executor models; every other function is `Skipped` with
-// "<code>: <detail>" using the closed codes of ADR-1430 (listed in `vc_ops`).
+// only for a pure, loop-free function built from the i64/Bool operations the
+// symbolic executor models, with the control-flow shape `vc_cfg_detail` accepts;
+// every other function is `Skipped` with "<code>: <detail>" using the closed codes of ADR-1430 (listed in `vc_ops`).
 // An unknown opcode is never accepted.
 
 fn vc_reason(code: String, detail: String) -> String {
@@ -65,6 +66,12 @@ fn vc_ty_table(f: IrFunction) -> Vec<i64> {
     tys
 }
 
+// Types a Phi may carry. Unit is accepted for the statement-position `if`,
+// whose arms each feed a Unit Phi; the executor models no value for it.
+fn vc_is_merge_ty(ty: i64) -> bool {
+    ty == ITY_I64() || ty == ITY_BOOL() || ty == ITY_UNIT()
+}
+
 fn vc_arg_ty(tys: Vec<i64>, inst: IrInst, k: u64) -> i64 {
     if k >= inst.args.len() { return -1; }
     let id: i64 = inst.args[k];
@@ -91,6 +98,12 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>) -> bool {
     let t1: i64 = vc_arg_ty(tys, inst, 1);
     if op == IOP_CONST_I64() { return inst.ty == ITY_I64() && n == 0; }
     if op == IOP_CONST_BOOL() { return inst.ty == ITY_BOOL() && n == 0; }
+    if op == IOP_CONST_UNIT() { return inst.ty == ITY_UNIT() && n == 0; }
+    if op == IOP_BRANCH() { return n == 1 && t0 == ITY_BOOL() && inst.dk == IDATA_BRANCH_TARGETS(); }
+    if op == IOP_JUMP() { return n == 0 && inst.dk == IDATA_JUMP_TARGET(); }
+    if op == IOP_UNREACHABLE() { return n == 0; }
+    if op == IOP_PHI() { return n == 0 && vc_is_merge_ty(inst.ty); }
+    if op == IOP_UPSILON() { return n == 1 && inst.dk == IDATA_PHI_TARGET() && vc_is_merge_ty(t0); }
     if op == IOP_GET_ARG() {
         return inst.ty == ITY_I64() && n == 0 && inst.dv >= 0 && inst.dv < f.params.len() as i64
             && f.params[inst.dv as u64] == ITY_I64();
@@ -201,21 +214,9 @@ fn vc_skip_reason(f: IrFunction) -> String {
         bi = bi + 1;
     }
     if have_generic { return generic; }
-    if f.blocks.len() != 1 {
-        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("more than one basic block"));
-    }
-    let entry: IrBlock = f.blocks[0];
-    let mut ii: u64 = 0;
-    while ii < entry.insts.len() {
-        let inst: IrInst = entry.insts[ii];
-        let is_last: bool = ii + 1 == entry.insts.len();
-        if (inst.op == IOP_RETURN()) != is_last {
-            return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("block does not end in a single Return"));
-        }
-        ii = ii + 1;
-    }
-    if entry.insts.len() == 0 {
-        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("empty function body"));
+    let cfg: String = vc_cfg_detail(f, tys);
+    if cfg.len() > 0 {
+        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), cfg);
     }
     String::from("")
 }

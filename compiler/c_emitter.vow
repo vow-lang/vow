@@ -1304,6 +1304,9 @@ fn collect_ptr_vars(f: IrFunction) -> Vec<i64> {
 // refused.
 fn field_access_is_wide(inst: IrInst, wide_vars: Vec<i64>) -> bool {
     let op: i64 = inst.op;
+    if inst.dk == IDATA_WIDE_SLOT() {
+        return op == IOP_FIELD_GET() || op == IOP_FIELD_SET();
+    }
     if op == IOP_FIELD_GET() {
         return ity_is_wide(inst.ty);
     }

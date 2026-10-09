@@ -1,5 +1,5 @@
 use crate::types::{BasicBlock, BlockId, FuncId, Function, InstData, InstId, Module, Opcode, Ty};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
 pub enum ValidationError {
@@ -40,8 +40,15 @@ pub fn validate_function(func: &Function) -> ValidationResult {
         return ValidationResult { errors };
     }
 
+    let defs: HashMap<InstId, Ty> = func
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter())
+        .map(|i| (i.id, i.ty))
+        .collect();
+
     for block in &func.blocks {
-        validate_block(block, &mut errors);
+        validate_block(block, &defs, &mut errors);
     }
 
     let phi_ids: HashSet<InstId> = func
@@ -89,7 +96,6 @@ pub fn validate_function(func: &Function) -> ValidationResult {
 }
 
 fn check_linear_types(func: &Function, errors: &mut Vec<ValidationError>) {
-    use std::collections::HashMap;
     let mut consume_count: HashMap<InstId, usize> = func
         .blocks
         .iter()
@@ -120,8 +126,14 @@ fn check_linear_types(func: &Function, errors: &mut Vec<ValidationError>) {
     }
 }
 
-fn validate_block(block: &BasicBlock, errors: &mut Vec<ValidationError>) {
-    let inst_ids: HashSet<InstId> = block.insts.iter().map(|i| i.id).collect();
+// Operands resolve against the whole function: SSA values cross blocks via
+// dominance and Upsilon. This validator does not check dominance or in-block
+// def-before-use ordering; only the self-hosted compiler's ir_dominance does.
+fn validate_block(
+    block: &BasicBlock,
+    defs: &HashMap<InstId, Ty>,
+    errors: &mut Vec<ValidationError>,
+) {
     let mut found_terminal = false;
 
     for inst in &block.insts {
@@ -134,7 +146,7 @@ fn validate_block(block: &BasicBlock, errors: &mut Vec<ValidationError>) {
         }
 
         for &arg in &inst.args {
-            if !inst_ids.contains(&arg) {
+            if !defs.contains_key(&arg) {
                 errors.push(ValidationError::UndefinedInstRef {
                     user: inst.id,
                     referenced: arg,
@@ -144,13 +156,13 @@ fn validate_block(block: &BasicBlock, errors: &mut Vec<ValidationError>) {
 
         if inst.opcode == Opcode::Branch
             && let Some(&cond_id) = inst.args.first()
-            && let Some(cond_inst) = block.insts.iter().find(|i| i.id == cond_id)
-            && cond_inst.ty != Ty::Bool
+            && let Some(&cond_ty) = defs.get(&cond_id)
+            && cond_ty != Ty::Bool
         {
             errors.push(ValidationError::TypeMismatch {
                 inst: inst.id,
                 expected: Ty::Bool,
-                got: cond_inst.ty,
+                got: cond_ty,
             });
         }
     }
@@ -452,5 +464,172 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, ValidationError::MultipleTerminators(_)))
         );
+    }
+
+    fn jump_inst(id: u32, target: u32) -> Inst {
+        make_inst(
+            id,
+            Opcode::Jump,
+            Ty::Unit,
+            vec![],
+            InstData::JumpTarget(BlockId(target)),
+        )
+    }
+
+    fn block(id: u32, insts: Vec<Inst>) -> BasicBlock {
+        BasicBlock {
+            id: BlockId(id),
+            insts,
+        }
+    }
+
+    fn module_of(func: Function) -> Module {
+        Module {
+            name: "m".to_string(),
+            functions: vec![func],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        }
+    }
+
+    fn undefined_refs(result: &ValidationResult) -> Vec<(u32, u32)> {
+        result
+            .errors
+            .iter()
+            .filter_map(|e| match e {
+                ValidationError::UndefinedInstRef { user, referenced } => {
+                    Some((user.0, referenced.0))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cross_block_reference_is_valid() {
+        let b0 = block(
+            0,
+            vec![
+                make_inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                jump_inst(1, 1),
+            ],
+        );
+        let b1 = block(
+            1,
+            vec![make_inst(
+                2,
+                Opcode::Return,
+                Ty::Unit,
+                vec![InstId(0)],
+                InstData::None,
+            )],
+        );
+        let func = make_func(0, "cross", vec![b0, b1]);
+        assert!(validate(&module_of(func)).is_ok());
+    }
+
+    #[test]
+    fn cross_block_upsilon_to_header_phi_is_valid() {
+        let entry = block(
+            0,
+            vec![
+                make_inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                make_inst(
+                    1,
+                    Opcode::Upsilon,
+                    Ty::Unit,
+                    vec![InstId(0)],
+                    InstData::PhiTarget(InstId(2)),
+                ),
+                jump_inst(3, 1),
+            ],
+        );
+        let header = block(
+            1,
+            vec![
+                make_inst(2, Opcode::Phi, Ty::I64, vec![], InstData::None),
+                jump_inst(4, 2),
+            ],
+        );
+        let body = block(
+            2,
+            vec![
+                make_inst(
+                    5,
+                    Opcode::Upsilon,
+                    Ty::Unit,
+                    vec![InstId(2)],
+                    InstData::PhiTarget(InstId(2)),
+                ),
+                jump_inst(6, 1),
+            ],
+        );
+        let func = make_func(0, "loop", vec![entry, header, body]);
+        assert!(validate(&module_of(func)).is_ok());
+    }
+
+    #[test]
+    fn undefined_reference_still_reported_in_multi_block_function() {
+        let b0 = block(0, vec![jump_inst(0, 1)]);
+        let b1 = block(
+            1,
+            vec![make_inst(
+                1,
+                Opcode::Return,
+                Ty::Unit,
+                vec![InstId(99)],
+                InstData::None,
+            )],
+        );
+        let func = make_func(0, "undef", vec![b0, b1]);
+        let result = validate(&module_of(func));
+        assert_eq!(undefined_refs(&result), vec![(1, 99)]);
+    }
+
+    #[test]
+    fn branch_condition_type_checked_across_blocks() {
+        let build = |cond_ty: Ty| {
+            let b0 = block(
+                0,
+                vec![
+                    make_inst(0, Opcode::GetArg, cond_ty, vec![], InstData::ArgIndex(0)),
+                    jump_inst(1, 1),
+                ],
+            );
+            let b1 = block(
+                1,
+                vec![make_inst(
+                    2,
+                    Opcode::Branch,
+                    Ty::Unit,
+                    vec![InstId(0)],
+                    InstData::BranchTargets {
+                        then_block: BlockId(2),
+                        else_block: BlockId(2),
+                    },
+                )],
+            );
+            let b2 = block(
+                2,
+                vec![make_inst(
+                    3,
+                    Opcode::Return,
+                    Ty::Unit,
+                    vec![],
+                    InstData::None,
+                )],
+            );
+            module_of(make_func(0, "branch", vec![b0, b1, b2]))
+        };
+        assert!(validate(&build(Ty::Bool)).is_ok());
+        let bad = validate(&build(Ty::I64));
+        assert!(
+            bad.errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::TypeMismatch { .. }))
+        );
+        assert!(undefined_refs(&bad).is_empty());
     }
 }

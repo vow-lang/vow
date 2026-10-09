@@ -168,6 +168,7 @@ fn format_data(data: &InstData) -> Option<String> {
         InstData::VowId(vid) => Some(format!("vow_{}", vid.0)),
         InstData::AllocSize { size, align } => Some(format!("size={size},align={align}")),
         InstData::FieldIndex(idx) => Some(format!("field_{idx}")),
+        InstData::WideSlot(idx) => Some(format!("wide_slot_{idx}")),
     }
 }
 

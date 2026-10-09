@@ -1,0 +1,18 @@
+module BranchGuardsDivision
+
+fn share(x: i64, y: i64) -> i64 vow {
+  requires: x >= 0
+  ensures: result >= 0
+  ensures: result <= x
+} {
+  if y > 1 {
+    x / y
+  } else {
+    x
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(share(10, 3));
+  0
+}

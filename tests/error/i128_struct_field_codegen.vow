@@ -1,6 +1,6 @@
 // TEST: error-code CodegenUnsupported
 // TEST: error-count 1
-// TEST: build-json '128-bit struct fields and enum payloads' in x.get('message', '')
+// TEST: build-json '128-bit struct fields' in x.get('message', '')
 module I128StructFieldCodegen
 
 struct Box {

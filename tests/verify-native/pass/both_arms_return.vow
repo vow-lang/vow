@@ -1,0 +1,17 @@
+module BothArmsReturn
+
+fn sign(x: i64) -> i64 vow {
+  ensures: result >= 0 - 1
+  ensures: result <= 1
+} {
+  if x > 0 {
+    return 1;
+  } else {
+    return 0 - 1;
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(sign(5));
+  0
+}

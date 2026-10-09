@@ -24,7 +24,8 @@ use crate::return_materialization::{
 };
 use crate::{Backend, BuildMode, CodegenError, CompiledObject, TraceMode};
 
-const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields and enum payloads are not supported yet (epic #526): an aggregate \
+const WIDE_SLOT_TYPE_MSG: &str = "internal error: a two-slot enum payload access must carry a 128-bit value, but lowering produced a narrower type";
+const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields are not supported yet (epic #526): an aggregate \
      field slot is 8 bytes, so a 128-bit field would truncate or overwrite its neighbour";
 
 pub struct CraneliftBackend;
@@ -1727,6 +1728,24 @@ fn lower_inst(
         // Struct / enum field access
         // ------------------------------------------------------------------
         Opcode::FieldGet => {
+            if let InstData::WideSlot(idx) = inst.data {
+                if !matches!(inst.ty, IrTy::I128 | IrTy::U128) {
+                    return Err(CodegenError::UnsupportedOpcode(
+                        WIDE_SLOT_TYPE_MSG.to_string(),
+                    ));
+                }
+                let base = ctx.value_map[&inst.args[0]];
+                let offset = (idx as i32) * 8;
+                let lo = builder
+                    .ins()
+                    .load(types::I64, MemFlagsData::trusted(), base, offset);
+                let hi = builder
+                    .ins()
+                    .load(types::I64, MemFlagsData::trusted(), base, offset + 8);
+                let wide = builder.ins().iconcat(lo, hi);
+                ctx.value_map.insert(inst.id, wide);
+                return Ok(());
+            }
             if matches!(inst.ty, IrTy::I128 | IrTy::U128) {
                 return Err(CodegenError::UnsupportedOpcode(
                     WIDE_AGGREGATE_FIELD_MSG.to_string(),
@@ -1753,6 +1772,31 @@ fn lower_inst(
             }
         }
         Opcode::FieldSet => {
+            if let InstData::WideSlot(idx) = inst.data {
+                let source_ty = ctx
+                    .inst_ty_map
+                    .get(&inst.args[1])
+                    .copied()
+                    .unwrap_or(IrTy::I64);
+                if !matches!(source_ty, IrTy::I128 | IrTy::U128) {
+                    return Err(CodegenError::UnsupportedOpcode(
+                        WIDE_SLOT_TYPE_MSG.to_string(),
+                    ));
+                }
+                let base = ctx.value_map[&inst.args[0]];
+                let new_val = ctx.value_map[&inst.args[1]];
+                let offset = (idx as i32) * 8;
+                let (lo, hi) = builder.ins().isplit(new_val);
+                builder
+                    .ins()
+                    .store(MemFlagsData::trusted(), lo, base, offset);
+                builder
+                    .ins()
+                    .store(MemFlagsData::trusted(), hi, base, offset + 8);
+                let unit = builder.ins().iconst(types::I32, 0);
+                ctx.value_map.insert(inst.id, unit);
+                return Ok(());
+            }
             if let InstData::FieldIndex(idx) = inst.data {
                 let base = ctx.value_map[&inst.args[0]];
                 let new_val = ctx.value_map[&inst.args[1]];
@@ -2797,7 +2841,9 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         | "__vow_string_parse_i16_opt"
         | "__vow_string_parse_u16_opt"
         | "__vow_string_parse_u32_opt"
-        | "__vow_string_parse_i32_opt" => {
+        | "__vow_string_parse_i32_opt"
+        | "__vow_string_parse_i128_opt"
+        | "__vow_string_parse_u128_opt" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
         }
@@ -6283,10 +6329,7 @@ mod tests {
         let Err(CodegenError::UnsupportedOpcode(message)) = result else {
             panic!("128-bit field loads must be rejected before Cranelift verification");
         };
-        assert!(
-            message.contains("128-bit struct fields and enum payloads"),
-            "{message}"
-        );
+        assert!(message.contains("128-bit struct fields"), "{message}");
     }
 
     #[test]
@@ -6330,10 +6373,95 @@ mod tests {
         let Err(CodegenError::UnsupportedOpcode(message)) = result else {
             panic!("128-bit field stores must be rejected before they can overwrite a slot");
         };
-        assert!(
-            message.contains("128-bit struct fields and enum payloads"),
-            "{message}"
+        assert!(message.contains("128-bit struct fields"), "{message}");
+    }
+
+    fn wide_slot_module(ret: Ty, value: Inst, load_ty: Option<Ty>) -> Module {
+        let mut insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 32, align: 8 },
+            ),
+            value,
+            inst(
+                2,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 1],
+                InstData::WideSlot(1),
+            ),
+        ];
+        match load_ty {
+            Some(ty) => {
+                insts.push(inst(
+                    3,
+                    Opcode::FieldGet,
+                    ty,
+                    vec![0],
+                    InstData::WideSlot(1),
+                ));
+                insts.push(inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None));
+            }
+            None => insts.push(inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None)),
+        }
+        make_module("test", vec![simple_fn(0, "f", vec![], ret, insts)])
+    }
+
+    #[test]
+    fn wide_slot_round_trip_compiles() {
+        let module = wide_slot_module(
+            Ty::I128,
+            inst(
+                1,
+                Opcode::ConstI128,
+                Ty::I128,
+                vec![],
+                InstData::ConstI128(1_i128 << 80),
+            ),
+            Some(Ty::I128),
         );
+        CraneliftBackend::new()
+            .compile_module(&module, BuildMode::Debug, TraceMode::Off)
+            .expect("a two-slot enum payload access must compile");
+    }
+
+    #[test]
+    fn wide_slot_store_of_a_narrow_value_is_refused() {
+        let module = wide_slot_module(
+            Ty::Unit,
+            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(7)),
+            None,
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        let Err(CodegenError::UnsupportedOpcode(message)) = result else {
+            panic!("a narrow value must not be stored into a two-slot payload");
+        };
+        assert!(message.contains("two-slot enum payload"), "{message}");
+    }
+
+    #[test]
+    fn wide_slot_load_of_a_narrow_type_is_refused() {
+        let module = wide_slot_module(
+            Ty::I64,
+            inst(
+                1,
+                Opcode::ConstI128,
+                Ty::I128,
+                vec![],
+                InstData::ConstI128(5),
+            ),
+            Some(Ty::I64),
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        let Err(CodegenError::UnsupportedOpcode(message)) = result else {
+            panic!("a two-slot payload must not be loaded at a narrow type");
+        };
+        assert!(message.contains("two-slot enum payload"), "{message}");
     }
 
     #[test]

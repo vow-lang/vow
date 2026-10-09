@@ -666,6 +666,9 @@ fn collect_ptr_vars(func: &Function) -> HashSet<u32> {
 // and its diagnostic both read this, so `is_modelable` and
 // `first_unsupported_opcode` cannot drift apart on which accesses are refused.
 fn field_access_is_wide(inst: &Inst, wide_vars: &HashSet<u32>) -> bool {
+    if matches!(inst.data, InstData::WideSlot(_)) {
+        return matches!(inst.opcode, Opcode::FieldGet | Opcode::FieldSet);
+    }
     match inst.opcode {
         Opcode::FieldGet => matches!(inst.ty, Ty::I128 | Ty::U128),
         Opcode::FieldSet => inst

@@ -1567,17 +1567,21 @@ index expression has exactly the type `u64` (see [Indexing](#indexing)), so
 `matches_literal_at`) are `u64` too, and `push_byte` takes a `u8`; see
 [String offsets](#string-offsets).
 
-**128-bit implementation status:** `i128`/`u128` types and full-range literal
-representation are available to the frontend and IR. Native code generation,
-arithmetic, and ESBMC modelling remain unsupported; builds and verification
-fail closed when those deferred operations reach a backend. Later numeric-tower
-work will complete those paths. Never weaken contracts to fit the verifier.
+**128-bit implementation status:** `i128`/`u128` are executable end to end:
+full-range literals, arithmetic, casts, narrowing, and `parse_i128`/`parse_u128`
+compile natively. A 128-bit value may be an `Option`, `Result`, or `enum`
+payload; it may not yet be a struct field or a `Vec` element (see the layout
+below). ESBMC modelling of 128-bit aggregates and constants is not available, so
+verification reports `Skipped` rather than an unsound result. Never weaken
+contracts to fit the verifier.
 
-**Struct field layout:** the current aggregate representation assigns one
-8-byte slot to every field regardless of declared type (narrow ints are
-padded). The two-slot layout for `i128`/`u128` accepted by
-[ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) is not implemented yet,
-so the compiler refuses reads and writes of 128-bit fields instead of storing
+**Aggregate layout:** every struct field and enum payload occupies one 8-byte
+slot regardless of declared type (narrow ints are padded). An `i128`/`u128`
+**enum payload** occupies two consecutive 8-byte slots, low limb first
+([ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) decision 9), so every
+payload after it moves up by one slot. The two-slot layout is not implemented
+for struct fields or `Vec` elements: the compiler refuses reads and writes of
+128-bit struct fields and `Vec<i128>`/`Vec<u128>` elements instead of storing
 them in an undersized slot. There is no packing or natural-alignment layout
 today; FFI structs that need a specific C layout must shim through `Vec<u8>` or
 extern wrappers.
@@ -1767,31 +1771,32 @@ remainder by zero aborts at every width, as does signed `/` and `/!` on
 `MIN / -1`, whose quotient is not representable. `MIN % -1` is `0` and does
 not abort.
 
-128-bit values are also **scalar-only** for now. Locals, parameters, returns,
-and temporaries carry both limbs correctly, but a 128-bit value placed inside
-an aggregate does not: `Vec<i128>`/`Vec<u128>` elements are refused because the
-element helpers are i64-only, and reading or writing a 128-bit struct field —
-or constructing a 128-bit enum, `Option`, or `Result` payload — fails codegen
-with a named limitation rather than a raw backend verifier dump, before an
-8-byte slot can truncate the value or a 16-byte store can overwrite its
-neighbour. The refusal is at the access, not the declaration: a struct or enum
-may declare a 128-bit member and still compile as long as nothing touches it.
-The refusal does not depend on where the value came from: a 128-bit payload
-read out of an `enum`, `Option`, or `Result` value the function never built —
-a parameter, or a value handed back by a call — is refused on the declared
-payload width, at every payload position rather than just the first, and
-whether the read goes through a `match` arm or `.unwrap()`. Do not store
-128-bit values in aggregates yet.
+128-bit values carry both limbs through locals, parameters, returns,
+temporaries, and the payloads of `enum`, `Option`, and `Result` values (stored
+in two consecutive slots, see the aggregate layout above). The payload width
+comes from the checker, so it holds wherever the value came from: built in the
+same function, received as a parameter, handed back by a call, or read out of a
+`Vec` element or a struct field holding the enum; through a `match` arm, `?`, or
+`.unwrap()`; and at every payload position.
 
-These are backend gaps, not language rules; the type checker accepts all of
-these at 128-bit width. Verification is a separate matter: 128-bit literals
-(in a body or in `requires`/`ensures`/`invariant`) are verifiable, and are
-modelled exactly under the bit-vector encoding, `i128::MIN`, `i128::MAX` and
-`u128::MAX` included; a proof obtained by the `--encoding ir` timeout fallback
-is reported as `ProvenIr` and is weaker. A
-contracted function that reads or writes a 128-bit aggregate field is reported
-`Skipped`, with `FieldGet at 128-bit width` or `FieldSet at 128-bit width`,
-rather than being modelled through the verifier's 8-byte heap slot.
+Two aggregate positions are not supported yet: `Vec<i128>`/`Vec<u128>`
+elements (the element helpers are i64-only) and `i128`/`u128` struct fields.
+Reading or writing either fails codegen with `CodegenUnsupported` and a named
+limitation rather than a raw backend verifier dump, before an 8-byte slot can
+truncate the value or a 16-byte store can overwrite its neighbour. The refusal
+is at the access, not the declaration: a struct may declare a 128-bit member
+and still compile as long as nothing touches it. These are backend gaps, not
+language rules; the type checker accepts both at 128-bit width. Verification
+is a separate matter: 128-bit literals (in a body or in
+`requires`/`ensures`/`invariant`) are verifiable, and are modelled exactly under
+the bit-vector encoding, `i128::MIN`, `i128::MAX` and `u128::MAX` included; a
+proof obtained by the `--encoding ir` timeout fallback is reported as `ProvenIr`
+and is weaker. A contracted function that reads or writes a 128-bit aggregate field or enum payload is
+likewise reported `Skipped`, with `FieldGet at 128-bit width` or `FieldSet at
+128-bit width`, rather than being modelled through the verifier's 8-byte heap
+slot; so is a call to `parse_i128` or `parse_u128`, whose `Option` result the
+verifier's 64-bit `Option` model cannot represent. Contracts over 128-bit
+parameters alone do verify.
 
 Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
 binding captured by a `vow` block reports its full value in the runtime
@@ -2805,7 +2810,14 @@ sentinel for failure; callers that need a fallback must choose it explicitly
 when handling `Option::None`.
 
 In particular, `parse_i8`, `parse_i16`, `parse_u8`, `parse_u16`, `parse_i32`,
-and `parse_u32` enforce their exact signed or unsigned fixed-width ranges.
+`parse_u32`, `parse_i128`, and `parse_u128` enforce their exact signed or
+unsigned fixed-width ranges.
+
+Every `parse_X` shares one set of lexical rules, identical at every width:
+surrounding Unicode whitespace is trimmed first; a leading `+` and leading zeros
+are accepted (`"+7"` and `"0007"` parse as `7`); `"-0"` is `Some(0)` for a signed
+type and `None` for an unsigned one; and `"+"`, `"-"`, the empty string, and any
+interior non-digit (`"1 2"`) are `None`.
 
 **Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing
 pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and
@@ -3027,8 +3039,8 @@ vow verify [OPTIONS] <source.vow>
 
 Opt-in; the default stays `esbmc`. Implemented only by the self-hosted `vowc`: the Rust `vow` does not accept `--backend` until verification is delegated to a pinned seed `vowc`. Walking-skeleton scope (issue #1408):
 
-- **Subset.** A function is verified when it is pure, a single basic block, and uses only these operations on `i64` and `bool`: constants, `i64` parameters, wrapping `+ - * / %`, `& | ^`, comparisons (`i64`; `==`/`!=` also on `bool`), `!`, and `requires`/`ensures` clauses. Everything else (`if`, `&&`, `||`, loops, calls, effects, the checked `+!` family, shifts, casts, `u64` and other widths, `bool` parameters, floats, collections, `invariant`) is **`Skipped`**, never `Verified`. The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from ADR-1430 (`function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`, `unmodeled-builtin` with detail the runtime symbol, `wide-aggregate-field`, `unsupported-opcode` with detail `Op[type]`, e.g. `CheckedAdd[i64]`). A machine-readable `reason_code` field is not emitted yet.
-- **Proof obligations.** One query per `ensures` clause and per `/` or `%` site, in IR order; a `requires` is an assumption only for the obligations after it. `/` and `%` follow the language: a zero divisor aborts, and signed `MIN / -1` aborts for `/` (`MIN % -1` is `0`). Each abort is its own obligation, reported with the unattributed vow id `4294967293` and blame `none`, violation text `division or remainder by zero` or `signed division overflow (MIN / -1)`. A function with no obligation is `Verified` without a solver call.
+- **Subset.** A function is verified when it is pure, its control flow is acyclic, and it uses only these operations on `i64` and `bool`: constants, `i64` parameters, wrapping `+ - * / %`, `& | ^`, comparisons (`i64`; `==`/`!=` also on `bool`), `!`, `if`/`else` (including nested, early `return`, and the `&&`/`||` that lower to branches) with the variables they update, and `requires`/`ensures` clauses. Everything else (loops, calls, effects, the checked `+!` family, shifts, casts, `u64` and other widths, `bool` parameters, floats, collections, enum and struct values and so the `match` over them, `invariant`) is **`Skipped`**, never `Verified`. The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from ADR-1430 (`function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`, `unmodeled-builtin` with detail the runtime symbol, `wide-aggregate-field`, `unsupported-opcode` with detail `Op[type]`, e.g. `CheckedAdd[i64]`, or a control-flow shape such as `loop (back edge in the control-flow graph)`). A machine-readable `reason_code` field is not emitted yet.
+- **Proof obligations.** One query per `ensures` clause and per `/` or `%` site, in walk order (blocks in reverse postorder); a `requires` is an assumption only for the obligations after it. An obligation is asked only on the paths that reach it: its query asserts the block's path condition, and an assumption made inside a branch holds only under that branch's condition. A variable updated in a branch is merged with one `ite` over the incoming edges, and only when the arms supply different values; a branch whose condition is constant, or was already decided by an enclosing branch on the same value, leaves the other arm unexecuted. The query grows with the number of branches and updated variables, not with the number of paths. `/` and `%` follow the language: a zero divisor aborts, and signed `MIN / -1` aborts for `/` (`MIN % -1` is `0`). Each abort is its own obligation, reported with the unattributed vow id `4294967293` and blame `none`, violation text `division or remainder by zero` or `signed division overflow (MIN / -1)`. A function with no obligation is `Verified` without a solver call.
 - **Verdict divergence from ESBMC.** The ESBMC model does not check `MIN / -1` for `/`, so `examples/divide.vow` (`requires: y != 0`, body `x / y`) is `VerifyFailed` under `--backend native` (counterexample `x = i64::MIN`, `y = -1`) while ESBMC proves it.
 - **Solver.** `bitwuzla` is resolved from `PATH`; one self-contained `.smt2` per obligation is written to a private temp directory (removed on every path) and run as a child process. Only `unsat` is a proof. `unknown` is `verify_status: "unknown"`; a solver that outlives its budget is killed (`"timeout"`); a non-zero exit, `[error]` output, an unrecognised answer or an unparsable model is `"error"`. If `bitwuzla` is not on `PATH` and a function needs it, the result is `VerifyFailed` with `verify_status: "tool_not_found"` and no counterexample (ESBMC is not consulted). A module in which every function is `Skipped` needs no solver. The binary is not version- or hash-checked yet.
 - **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function across all of its solver runs; `--timeout 0` is an immediate `timeout` without spawning the solver. `--no-cache` and `--verify-jobs` are accepted and have no effect (the native driver is sequential and uncached). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--perfetto` works as for ESBMC. `--replay-cex` also replays the division and remainder abort counterexamples and reports a counterexample that does not reproduce as a `VerifierBug` diagnostic (see "Counterexample replay" below).
@@ -5244,7 +5256,7 @@ fn f(u: ()) -> i64 { 0 }
 
 **Fix:** Remove the parameter.
 
-A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
+A 128-bit integer as an `Option`, `Result`, or `enum` payload is supported, so `HashMap<i64, Option<u128>>` is a valid map type (the map stores a pointer to the payload cell). A bare `u128` or `i128` map value is still rejected with the error above, because a map value occupies a single 64-bit slot. A 128-bit struct field or `Vec` element is not a map restriction: those aggregate positions cannot hold a 128-bit value yet, so codegen rejects them with `CodegenUnsupported` wherever they appear.
 
 ### BTreeMapKeyTypeMustBeI64
 
@@ -7546,17 +7558,21 @@ index expression has exactly the type `u64` (see [Indexing](#indexing)), so
 `matches_literal_at`) are `u64` too, and `push_byte` takes a `u8`; see
 [String offsets](#string-offsets).
 
-**128-bit implementation status:** `i128`/`u128` types and full-range literal
-representation are available to the frontend and IR. Native code generation,
-arithmetic, and ESBMC modelling remain unsupported; builds and verification
-fail closed when those deferred operations reach a backend. Later numeric-tower
-work will complete those paths. Never weaken contracts to fit the verifier.
+**128-bit implementation status:** `i128`/`u128` are executable end to end:
+full-range literals, arithmetic, casts, narrowing, and `parse_i128`/`parse_u128`
+compile natively. A 128-bit value may be an `Option`, `Result`, or `enum`
+payload; it may not yet be a struct field or a `Vec` element (see the layout
+below). ESBMC modelling of 128-bit aggregates and constants is not available, so
+verification reports `Skipped` rather than an unsound result. Never weaken
+contracts to fit the verifier.
 
-**Struct field layout:** the current aggregate representation assigns one
-8-byte slot to every field regardless of declared type (narrow ints are
-padded). The two-slot layout for `i128`/`u128` accepted by
-[ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) is not implemented yet,
-so the compiler refuses reads and writes of 128-bit fields instead of storing
+**Aggregate layout:** every struct field and enum payload occupies one 8-byte
+slot regardless of declared type (narrow ints are padded). An `i128`/`u128`
+**enum payload** occupies two consecutive 8-byte slots, low limb first
+([ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) decision 9), so every
+payload after it moves up by one slot. The two-slot layout is not implemented
+for struct fields or `Vec` elements: the compiler refuses reads and writes of
+128-bit struct fields and `Vec<i128>`/`Vec<u128>` elements instead of storing
 them in an undersized slot. There is no packing or natural-alignment layout
 today; FFI structs that need a specific C layout must shim through `Vec<u8>` or
 extern wrappers.
@@ -7746,31 +7762,32 @@ remainder by zero aborts at every width, as does signed `/` and `/!` on
 `MIN / -1`, whose quotient is not representable. `MIN % -1` is `0` and does
 not abort.
 
-128-bit values are also **scalar-only** for now. Locals, parameters, returns,
-and temporaries carry both limbs correctly, but a 128-bit value placed inside
-an aggregate does not: `Vec<i128>`/`Vec<u128>` elements are refused because the
-element helpers are i64-only, and reading or writing a 128-bit struct field —
-or constructing a 128-bit enum, `Option`, or `Result` payload — fails codegen
-with a named limitation rather than a raw backend verifier dump, before an
-8-byte slot can truncate the value or a 16-byte store can overwrite its
-neighbour. The refusal is at the access, not the declaration: a struct or enum
-may declare a 128-bit member and still compile as long as nothing touches it.
-The refusal does not depend on where the value came from: a 128-bit payload
-read out of an `enum`, `Option`, or `Result` value the function never built —
-a parameter, or a value handed back by a call — is refused on the declared
-payload width, at every payload position rather than just the first, and
-whether the read goes through a `match` arm or `.unwrap()`. Do not store
-128-bit values in aggregates yet.
+128-bit values carry both limbs through locals, parameters, returns,
+temporaries, and the payloads of `enum`, `Option`, and `Result` values (stored
+in two consecutive slots, see the aggregate layout above). The payload width
+comes from the checker, so it holds wherever the value came from: built in the
+same function, received as a parameter, handed back by a call, or read out of a
+`Vec` element or a struct field holding the enum; through a `match` arm, `?`, or
+`.unwrap()`; and at every payload position.
 
-These are backend gaps, not language rules; the type checker accepts all of
-these at 128-bit width. Verification is a separate matter: 128-bit literals
-(in a body or in `requires`/`ensures`/`invariant`) are verifiable, and are
-modelled exactly under the bit-vector encoding, `i128::MIN`, `i128::MAX` and
-`u128::MAX` included; a proof obtained by the `--encoding ir` timeout fallback
-is reported as `ProvenIr` and is weaker. A
-contracted function that reads or writes a 128-bit aggregate field is reported
-`Skipped`, with `FieldGet at 128-bit width` or `FieldSet at 128-bit width`,
-rather than being modelled through the verifier's 8-byte heap slot.
+Two aggregate positions are not supported yet: `Vec<i128>`/`Vec<u128>`
+elements (the element helpers are i64-only) and `i128`/`u128` struct fields.
+Reading or writing either fails codegen with `CodegenUnsupported` and a named
+limitation rather than a raw backend verifier dump, before an 8-byte slot can
+truncate the value or a 16-byte store can overwrite its neighbour. The refusal
+is at the access, not the declaration: a struct may declare a 128-bit member
+and still compile as long as nothing touches it. These are backend gaps, not
+language rules; the type checker accepts both at 128-bit width. Verification
+is a separate matter: 128-bit literals (in a body or in
+`requires`/`ensures`/`invariant`) are verifiable, and are modelled exactly under
+the bit-vector encoding, `i128::MIN`, `i128::MAX` and `u128::MAX` included; a
+proof obtained by the `--encoding ir` timeout fallback is reported as `ProvenIr`
+and is weaker. A contracted function that reads or writes a 128-bit aggregate field or enum payload is
+likewise reported `Skipped`, with `FieldGet at 128-bit width` or `FieldSet at
+128-bit width`, rather than being modelled through the verifier's 8-byte heap
+slot; so is a call to `parse_i128` or `parse_u128`, whose `Option` result the
+verifier's 64-bit `Option` model cannot represent. Contracts over 128-bit
+parameters alone do verify.
 
 Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
 binding captured by a `vow` block reports its full value in the runtime
@@ -8784,7 +8801,14 @@ sentinel for failure; callers that need a fallback must choose it explicitly
 when handling `Option::None`.
 
 In particular, `parse_i8`, `parse_i16`, `parse_u8`, `parse_u16`, `parse_i32`,
-and `parse_u32` enforce their exact signed or unsigned fixed-width ranges.
+`parse_u32`, `parse_i128`, and `parse_u128` enforce their exact signed or
+unsigned fixed-width ranges.
+
+Every `parse_X` shares one set of lexical rules, identical at every width:
+surrounding Unicode whitespace is trimmed first; a leading `+` and leading zeros
+are accepted (`"+7"` and `"0007"` parse as `7`); `"-0"` is `Some(0)` for a signed
+type and `None` for an unsigned one; and `"+"`, `"-"`, the empty string, and any
+interior non-digit (`"1 2"`) are `None`.
 
 **Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing
 pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and
@@ -9007,8 +9031,8 @@ vow verify [OPTIONS] <source.vow>
 
 Opt-in; the default stays `esbmc`. Implemented only by the self-hosted `vowc`: the Rust `vow` does not accept `--backend` until verification is delegated to a pinned seed `vowc`. Walking-skeleton scope (issue #1408):
 
-- **Subset.** A function is verified when it is pure, a single basic block, and uses only these operations on `i64` and `bool`: constants, `i64` parameters, wrapping `+ - * / %`, `& | ^`, comparisons (`i64`; `==`/`!=` also on `bool`), `!`, and `requires`/`ensures` clauses. Everything else (`if`, `&&`, `||`, loops, calls, effects, the checked `+!` family, shifts, casts, `u64` and other widths, `bool` parameters, floats, collections, `invariant`) is **`Skipped`**, never `Verified`. The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from ADR-1430 (`function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`, `unmodeled-builtin` with detail the runtime symbol, `wide-aggregate-field`, `unsupported-opcode` with detail `Op[type]`, e.g. `CheckedAdd[i64]`). A machine-readable `reason_code` field is not emitted yet.
-- **Proof obligations.** One query per `ensures` clause and per `/` or `%` site, in IR order; a `requires` is an assumption only for the obligations after it. `/` and `%` follow the language: a zero divisor aborts, and signed `MIN / -1` aborts for `/` (`MIN % -1` is `0`). Each abort is its own obligation, reported with the unattributed vow id `4294967293` and blame `none`, violation text `division or remainder by zero` or `signed division overflow (MIN / -1)`. A function with no obligation is `Verified` without a solver call.
+- **Subset.** A function is verified when it is pure, its control flow is acyclic, and it uses only these operations on `i64` and `bool`: constants, `i64` parameters, wrapping `+ - * / %`, `& | ^`, comparisons (`i64`; `==`/`!=` also on `bool`), `!`, `if`/`else` (including nested, early `return`, and the `&&`/`||` that lower to branches) with the variables they update, and `requires`/`ensures` clauses. Everything else (loops, calls, effects, the checked `+!` family, shifts, casts, `u64` and other widths, `bool` parameters, floats, collections, enum and struct values and so the `match` over them, `invariant`) is **`Skipped`**, never `Verified`. The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from ADR-1430 (`function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`, `unmodeled-builtin` with detail the runtime symbol, `wide-aggregate-field`, `unsupported-opcode` with detail `Op[type]`, e.g. `CheckedAdd[i64]`, or a control-flow shape such as `loop (back edge in the control-flow graph)`). A machine-readable `reason_code` field is not emitted yet.
+- **Proof obligations.** One query per `ensures` clause and per `/` or `%` site, in walk order (blocks in reverse postorder); a `requires` is an assumption only for the obligations after it. An obligation is asked only on the paths that reach it: its query asserts the block's path condition, and an assumption made inside a branch holds only under that branch's condition. A variable updated in a branch is merged with one `ite` over the incoming edges, and only when the arms supply different values; a branch whose condition is constant, or was already decided by an enclosing branch on the same value, leaves the other arm unexecuted. The query grows with the number of branches and updated variables, not with the number of paths. `/` and `%` follow the language: a zero divisor aborts, and signed `MIN / -1` aborts for `/` (`MIN % -1` is `0`). Each abort is its own obligation, reported with the unattributed vow id `4294967293` and blame `none`, violation text `division or remainder by zero` or `signed division overflow (MIN / -1)`. A function with no obligation is `Verified` without a solver call.
 - **Verdict divergence from ESBMC.** The ESBMC model does not check `MIN / -1` for `/`, so `examples/divide.vow` (`requires: y != 0`, body `x / y`) is `VerifyFailed` under `--backend native` (counterexample `x = i64::MIN`, `y = -1`) while ESBMC proves it.
 - **Solver.** `bitwuzla` is resolved from `PATH`; one self-contained `.smt2` per obligation is written to a private temp directory (removed on every path) and run as a child process. Only `unsat` is a proof. `unknown` is `verify_status: "unknown"`; a solver that outlives its budget is killed (`"timeout"`); a non-zero exit, `[error]` output, an unrecognised answer or an unparsable model is `"error"`. If `bitwuzla` is not on `PATH` and a function needs it, the result is `VerifyFailed` with `verify_status: "tool_not_found"` and no counterexample (ESBMC is not consulted). A module in which every function is `Skipped` needs no solver. The binary is not version- or hash-checked yet.
 - **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function across all of its solver runs; `--timeout 0` is an immediate `timeout` without spawning the solver. `--no-cache` and `--verify-jobs` are accepted and have no effect (the native driver is sequential and uncached). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--perfetto` works as for ESBMC. `--replay-cex` also replays the division and remainder abort counterexamples and reports a counterexample that does not reproduce as a `VerifierBug` diagnostic (see "Counterexample replay" below).
@@ -11227,7 +11251,7 @@ fn f(u: ()) -> i64 { 0 }
 
 **Fix:** Remove the parameter.
 
-A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
+A 128-bit integer as an `Option`, `Result`, or `enum` payload is supported, so `HashMap<i64, Option<u128>>` is a valid map type (the map stores a pointer to the payload cell). A bare `u128` or `i128` map value is still rejected with the error above, because a map value occupies a single 64-bit slot. A 128-bit struct field or `Vec` element is not a map restriction: those aggregate positions cannot hold a 128-bit value yet, so codegen rejects them with `CodegenUnsupported` wherever they appear.
 
 ### BTreeMapKeyTypeMustBeI64
 

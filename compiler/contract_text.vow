@@ -246,6 +246,10 @@ fn print_expr_text_at(a: AstArena, eid: i64, level: i64) -> String {
         if expr_tag(a, operand_eid) == EXPR_BINOP() {
             inner_s = parenthesize_text(inner_s);
         }
+        // `-!x` would lex as the checked-subtraction token `-!`.
+        if op != UNOP_NOT() && expr_tag(a, operand_eid) == EXPR_UNOP() && expr_a(a, operand_eid) == UNOP_NOT() {
+            inner_s = parenthesize_text(inner_s);
+        }
         if op == UNOP_NOT() {
             let result: String = String::from("!");
             result.push_str(inner_s);

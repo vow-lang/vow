@@ -1,0 +1,64 @@
+// TEST: stdout "T\nT\nT\nN\nN\nT\nT\nT\nT\nN\nN\nN\nN\nN\n171 5\n"
+module ParseI128
+
+// Each valid parse is compared against an exact expected 128-bit value, so a
+// payload read that kept only the low limb fails on the high limb.
+fn show_eq(value: Option<i128>, want: i128) [io] {
+    match value {
+        Option::Some(v) => {
+            if v == want {
+                print_str(String::from("T\n"));
+            } else {
+                print_str(String::from("F\n"));
+            }
+        },
+        Option::None => print_str(String::from("N\n")),
+    }
+}
+
+fn show_none(value: Option<i128>) [io] {
+    match value {
+        Option::Some(v) => print_str(String::from("S\n")),
+        Option::None => print_str(String::from("N\n")),
+    }
+}
+
+fn i128_max() -> i128 {
+    170141183460469231731687303715884105727
+}
+
+fn i128_min() -> i128 {
+    -170141183460469231731687303715884105727 - 1
+}
+
+fn main() -> i32 [io] {
+    show_eq(parse_i128(String::from("0")), 0);
+    show_eq(parse_i128(String::from("170141183460469231731687303715884105727")), i128_max());
+    show_eq(parse_i128(String::from("-170141183460469231731687303715884105728")), i128_min());
+    show_none(parse_i128(String::from("170141183460469231731687303715884105728")));
+    show_none(parse_i128(String::from("-170141183460469231731687303715884105729")));
+
+    // Inherited parse_string_arg semantics, shared by every width: Unicode
+    // whitespace is trimmed, a leading '+' and leading zeros are accepted, and
+    // "-0" is zero for a signed type.
+    show_eq(parse_i128(String::from("  42  ")), 42);
+    show_eq(parse_i128(String::from("+7")), 7);
+    show_eq(parse_i128(String::from("0007")), 7);
+    show_eq(parse_i128(String::from("-0")), 0);
+    show_none(parse_i128(String::from("")));
+    show_none(parse_i128(String::from("+")));
+    show_none(parse_i128(String::from("-")));
+    show_none(parse_i128(String::from("abc")));
+    show_none(parse_i128(String::from("1 2")));
+
+    match parse_i128(String::from("3154393236604333326341")) {
+        Option::Some(v) => {
+            print_i64(u128_to_u8_wrap((v as u128) >> 64) as i64);
+            print_str(String::from(" "));
+            print_i64(u128_to_u8_wrap(v as u128) as i64);
+            print_str(String::from("\n"));
+        },
+        Option::None => print_str(String::from("N\n")),
+    }
+    0
+}

@@ -207,8 +207,10 @@ fn report_narrowed_wide_argument() {
     );
 }
 
-const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields and enum payloads are not supported yet (epic #526): an aggregate \
+const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields are not supported yet (epic #526): an aggregate \
      field slot is 8 bytes, so a 128-bit field would truncate or overwrite its neighbour";
+
+const WIDE_SLOT_TYPE_MSG: &str = "internal error: a two-slot enum payload access must carry a 128-bit value, but lowering produced a narrower type";
 
 fn reject_wide_aggregate_field() -> i64 {
     eprintln!("clif_shim: {WIDE_AGGREGATE_FIELD_MSG}");
@@ -824,6 +826,7 @@ const IDATA_CONST_U8: i64 = 19;
 const IDATA_INTEGER_CAST: i64 = 20;
 const IDATA_CONST_I128: i64 = 21;
 const IDATA_CONST_U128: i64 = 22;
+const IDATA_WIDE_SLOT: i64 = 23;
 
 // ---------------------------------------------------------------------------
 // Module context (opaque handle passed through FFI)
@@ -2737,6 +2740,27 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
 
                 // Struct / enum field access
                 IOP_FIELD_GET => {
+                    if dk == IDATA_WIDE_SLOT {
+                        if !ity_is_wide(ity) {
+                            eprintln!("clif_shim: {WIDE_SLOT_TYPE_MSG}");
+                            return -1;
+                        }
+                        let base = arg!(0);
+                        let offset = (dv as i32) * 8;
+                        let lo =
+                            builder
+                                .ins()
+                                .load(types::I64, MemFlagsData::trusted(), base, offset);
+                        let hi = builder.ins().load(
+                            types::I64,
+                            MemFlagsData::trusted(),
+                            base,
+                            offset + 8,
+                        );
+                        let wide = builder.ins().iconcat(lo, hi);
+                        set_val!(iid, wide);
+                        continue;
+                    }
                     if ity_is_wide(ity) {
                         return reject_wide_aggregate_field();
                     }
@@ -2765,6 +2789,29 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     }
                 }
                 IOP_FIELD_SET => {
+                    if dk == IDATA_WIDE_SLOT {
+                        let source_ty = inst_ty_map
+                            .get(&all_args[aoff + 1])
+                            .copied()
+                            .unwrap_or(ITY_I64);
+                        if !ity_is_wide(source_ty) {
+                            eprintln!("clif_shim: {WIDE_SLOT_TYPE_MSG}");
+                            return -1;
+                        }
+                        let base = arg!(0);
+                        let new_val = arg!(1);
+                        let offset = (dv as i32) * 8;
+                        let (lo, hi) = builder.ins().isplit(new_val);
+                        builder
+                            .ins()
+                            .store(MemFlagsData::trusted(), lo, base, offset);
+                        builder
+                            .ins()
+                            .store(MemFlagsData::trusted(), hi, base, offset + 8);
+                        let unit = builder.ins().iconst(types::I32, 0);
+                        set_val!(iid, unit);
+                        continue;
+                    }
                     if dk == IDATA_FIELD {
                         let idx = dv;
                         let base = arg!(0);
@@ -3529,6 +3576,14 @@ const FRESH_ARENA_VARIANTS: &[(&str, &str)] = &[
         "__vow_string_parse_u32_opt",
         "__vow_string_parse_u32_opt_in_arena",
     ),
+    (
+        "__vow_string_parse_i128_opt",
+        "__vow_string_parse_i128_opt_in_arena",
+    ),
+    (
+        "__vow_string_parse_u128_opt",
+        "__vow_string_parse_u128_opt_in_arena",
+    ),
     ("__vow_map_get", "__vow_map_get_in_arena"),
     ("__vow_btreemap_get", "__vow_btreemap_get_in_arena"),
     ("__vow_btreemap_insert", "__vow_btreemap_insert_in_arena"),
@@ -3864,7 +3919,9 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         | "__vow_string_parse_i16_opt"
         | "__vow_string_parse_u16_opt"
         | "__vow_string_parse_u32_opt"
-        | "__vow_string_parse_i32_opt" => {
+        | "__vow_string_parse_i32_opt"
+        | "__vow_string_parse_i128_opt"
+        | "__vow_string_parse_u128_opt" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
@@ -5675,6 +5732,90 @@ mod tests {
         add_test_inst(ctx, 3, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
         unsafe {
             assert_eq!(__vow_clif_fn_end(ctx), CLIF_ERR_WIDE_AGGREGATE_FIELD);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn wide_slot_round_trip_compiles_through_the_streamed_ffi() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "wide_slot_round_trip", ITY_I128, false);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I128, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            0,
+            IOP_REGION_ALLOC,
+            ITY_PTR,
+            IDATA_ALLOC_SIZE,
+            32,
+            8,
+            &[],
+        );
+        add_test_inst(
+            ctx,
+            1,
+            IOP_CONST_I128,
+            ITY_I128,
+            IDATA_CONST_I128,
+            0,
+            1 << 16,
+            &[],
+        );
+        add_test_inst(
+            ctx,
+            2,
+            IOP_FIELD_SET,
+            ITY_UNIT,
+            IDATA_WIDE_SLOT,
+            1,
+            0,
+            &[0, 1],
+        );
+        add_test_inst(ctx, 3, IOP_FIELD_GET, ITY_I128, IDATA_WIDE_SLOT, 1, 0, &[0]);
+        add_test_inst(ctx, 4, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[3]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn wide_slot_access_of_a_narrow_type_is_rejected_through_the_streamed_ffi() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "wide_slot_narrow_store", ITY_UNIT, false);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            0,
+            IOP_REGION_ALLOC,
+            ITY_PTR,
+            IDATA_ALLOC_SIZE,
+            32,
+            8,
+            &[],
+        );
+        add_test_inst(ctx, 1, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 7, 0, &[]);
+        add_test_inst(
+            ctx,
+            2,
+            IOP_FIELD_SET,
+            ITY_UNIT,
+            IDATA_WIDE_SLOT,
+            1,
+            0,
+            &[0, 1],
+        );
+        add_test_inst(ctx, 3, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), -1);
             __vow_clif_destroy(ctx);
         }
     }
