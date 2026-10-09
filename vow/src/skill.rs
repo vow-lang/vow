@@ -1782,14 +1782,12 @@ whether the read goes through a `match` arm or `.unwrap()`. Do not store
 128-bit values in aggregates yet.
 
 These are backend gaps, not language rules; the type checker accepts all of
-these at 128-bit width. Verification is a separate matter: a contracted
-function whose body contains a 128-bit *constant* is reported as `Skipped`
-with `unsupported opcode ConstI128`, because `ConstI128`/`ConstU128` are not
-yet modelled in the verifier. A contracted function that reads or writes a
-128-bit aggregate field is likewise reported `Skipped`, with `FieldGet at
-128-bit width` or `FieldSet at 128-bit width`, rather than being modelled through
-the verifier's 8-byte heap slot. Contracts over 128-bit parameters alone do
-verify.
+these at 128-bit width. Verification is a separate matter: 128-bit literals
+(in a body or in `requires`/`ensures`/`invariant`) are verifiable, and are
+modelled exactly, `i128::MIN`, `i128::MAX` and `u128::MAX` included. A
+contracted function that reads or writes a 128-bit aggregate field is reported
+`Skipped`, with `FieldGet at 128-bit width` or `FieldSet at 128-bit width`,
+rather than being modelled through the verifier's 8-byte heap slot.
 
 Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
 binding captured by a `vow` block reports its full value in the runtime
@@ -4145,6 +4143,24 @@ vow {
 ```
 
 ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
+
+## 128-bit Integer Contracts
+
+`i128`/`u128` literals work in contracts and bodies. The verifier builds each
+literal from its two 64-bit limbs, so every value is exact (`i128::MIN`,
+`i128::MAX` and `u128::MAX` included) and a counterexample reports the full
+128-bit value:
+
+```vow
+fn at_least_one(x: u128) -> u128
+vow {
+    requires: x >= 1u128
+    ensures: result >= 1u128
+}
+{
+    x
+}
+```
 
 ## Extern Block Contracts
 
@@ -7676,14 +7692,12 @@ whether the read goes through a `match` arm or `.unwrap()`. Do not store
 128-bit values in aggregates yet.
 
 These are backend gaps, not language rules; the type checker accepts all of
-these at 128-bit width. Verification is a separate matter: a contracted
-function whose body contains a 128-bit *constant* is reported as `Skipped`
-with `unsupported opcode ConstI128`, because `ConstI128`/`ConstU128` are not
-yet modelled in the verifier. A contracted function that reads or writes a
-128-bit aggregate field is likewise reported `Skipped`, with `FieldGet at
-128-bit width` or `FieldSet at 128-bit width`, rather than being modelled through
-the verifier's 8-byte heap slot. Contracts over 128-bit parameters alone do
-verify.
+these at 128-bit width. Verification is a separate matter: 128-bit literals
+(in a body or in `requires`/`ensures`/`invariant`) are verifiable, and are
+modelled exactly, `i128::MIN`, `i128::MAX` and `u128::MAX` included. A
+contracted function that reads or writes a 128-bit aggregate field is reported
+`Skipped`, with `FieldGet at 128-bit width` or `FieldSet at 128-bit width`,
+rather than being modelled through the verifier's 8-byte heap slot.
 
 Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
 binding captured by a `vow` block reports its full value in the runtime
@@ -10041,6 +10055,24 @@ vow {
 ```
 
 ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
+
+## 128-bit Integer Contracts
+
+`i128`/`u128` literals work in contracts and bodies. The verifier builds each
+literal from its two 64-bit limbs, so every value is exact (`i128::MIN`,
+`i128::MAX` and `u128::MAX` included) and a counterexample reports the full
+128-bit value:
+
+```vow
+fn at_least_one(x: u128) -> u128
+vow {
+    requires: x >= 1u128
+    ensures: result >= 1u128
+}
+{
+    x
+}
+```
 
 ## Extern Block Contracts
 

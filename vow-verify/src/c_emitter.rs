@@ -151,6 +151,19 @@ fn ir_ty_to_c(ty: Ty) -> &'static str {
     }
 }
 
+/// C has no 128-bit literal, so a wide constant is built from its two 64-bit
+/// limbs; the signed form reinterprets the same bits, which is exact for
+/// `i128::MIN`/`MAX` under ESBMC's two's-complement bit-vector encoding.
+fn wide_const_assignment(id: u32, ty: Ty, bits: u128) -> String {
+    format!(
+        "  v{} = ({})((((unsigned __int128){}ULL) << 64) | (unsigned __int128){}ULL);\n",
+        id,
+        ir_ty_to_c(ty),
+        (bits >> 64) as u64,
+        bits as u64
+    )
+}
+
 fn ty_is_unsigned(ty: Ty) -> bool {
     matches!(ty, Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64 | Ty::U128)
 }
@@ -915,6 +928,8 @@ fn modelability_issue<'a>(
         | Opcode::Or
         | Opcode::ConstU64
         | Opcode::ConstU8
+        | Opcode::ConstI128
+        | Opcode::ConstU128
         | Opcode::VowRequires
         | Opcode::VowEnsures
         | Opcode::VowInvariant
@@ -974,13 +989,9 @@ fn modelability_issue<'a>(
         | Opcode::CheckedRem => checked_integer_type(inst)
             .is_none()
             .then_some(ModelIssue::Wide),
-        Opcode::RemF32
-        | Opcode::RemF64
-        | Opcode::ConstI128
-        | Opcode::ConstU128
-        | Opcode::Load
-        | Opcode::Store
-        | Opcode::LinearBorrow => Some(ModelIssue::Unsupported),
+        Opcode::RemF32 | Opcode::RemF64 | Opcode::Load | Opcode::Store | Opcode::LinearBorrow => {
+            Some(ModelIssue::Unsupported)
+        }
     }
 }
 
@@ -1178,8 +1189,17 @@ fn emit_inst(
                 out.push_str(&format!("  v{} = {}LL;\n", id, v));
             }
         }
-        // Epic #526: wide constant verification is implemented by a later seam.
-        Opcode::ConstI128 | Opcode::ConstU128 => emit_unmodelled(inst, out),
+        Opcode::ConstI128 | Opcode::ConstU128 => {
+            let bits = match inst.data {
+                InstData::ConstI128(v) => Some(v as u128),
+                InstData::ConstU128(v) => Some(v),
+                _ => None,
+            };
+            match bits {
+                Some(bits) => out.push_str(&wide_const_assignment(id, inst.ty, bits)),
+                None => emit_unmodelled(inst, out),
+            }
+        }
         Opcode::ConstF32 => {
             if let InstData::ConstF32(v) = inst.data {
                 out.push_str(&format!("  v{} = {}f;\n", id, v));
@@ -3699,7 +3719,7 @@ mod tests {
 
     // 128-bit checked arithmetic has no guard, so it must fail closed as
     // non-modelable (reported `Skipped`) rather than silently fall back to the
-    // wrapping model. `ConstI128` already set this precedent.
+    // wrapping model.
     #[test]
     fn modelability_issue_classifies_instruction_policy() {
         let (f, m) = one_block_func_module(
@@ -5078,13 +5098,26 @@ mod tests {
         assert!(c.contains("v5 = 0;"), "ConstUnit assign: {c}");
         assert!(c.contains("int64_t v6;"), "ConstStr decl: {c}");
         assert!(c.contains("v6 = 0;"), "ConstStr assign: {c}");
+        assert!(c.contains("__int128 v7;"), "ConstI128 decl: {c}");
         assert!(
-            c.contains("/* opcode ConstI128 not modelled */"),
-            "ConstI128 must use the deferred verifier fallback: {c}"
+            c.contains(
+                "v7 = (__int128)((((unsigned __int128)9223372036854775807ULL) << 64) | (unsigned __int128)18446744073709551615ULL);"
+            ),
+            "ConstI128 assign: {c}"
         );
         assert!(
-            c.contains("/* opcode ConstU128 not modelled */"),
-            "ConstU128 must use the deferred verifier fallback: {c}"
+            c.contains(
+                "v8 = (unsigned __int128)((((unsigned __int128)18446744073709551615ULL) << 64) | (unsigned __int128)18446744073709551615ULL);"
+            ),
+            "ConstU128 assign: {c}"
+        );
+        assert!(
+            !c.contains("opcode ConstI128"),
+            "ConstI128 is modelled: {c}"
+        );
+        assert!(
+            !c.contains("opcode ConstU128"),
+            "ConstU128 is modelled: {c}"
         );
     }
 
@@ -5117,19 +5150,31 @@ mod tests {
     }
 
     #[test]
-    fn wide_constants_report_the_unsupported_opcode() {
-        for (opcode, ty, data, name) in [
+    fn wide_constants_are_modelable_and_exact() {
+        for (opcode, ty, data, expected) in [
             (
                 Opcode::ConstI128,
                 Ty::I128,
-                InstData::ConstI128(i128::MAX),
-                "ConstI128",
+                InstData::ConstI128(i128::MIN),
+                "v0 = (__int128)((((unsigned __int128)9223372036854775808ULL) << 64) | (unsigned __int128)0ULL);",
+            ),
+            (
+                Opcode::ConstI128,
+                Ty::I128,
+                InstData::ConstI128(-1),
+                "v0 = (__int128)((((unsigned __int128)18446744073709551615ULL) << 64) | (unsigned __int128)18446744073709551615ULL);",
+            ),
+            (
+                Opcode::ConstU128,
+                Ty::U128,
+                InstData::ConstU128(1),
+                "v0 = (unsigned __int128)((((unsigned __int128)0ULL) << 64) | (unsigned __int128)1ULL);",
             ),
             (
                 Opcode::ConstU128,
                 Ty::U128,
                 InstData::ConstU128(u128::MAX),
-                "ConstU128",
+                "v0 = (unsigned __int128)((((unsigned __int128)18446744073709551615ULL) << 64) | (unsigned __int128)18446744073709551615ULL);",
             ),
         ] {
             let (func, module) = one_block_func_module(
@@ -5140,12 +5185,24 @@ mod tests {
                     inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                 ],
             );
-            let reason = non_modelable_reason(&func, &module, &HashMap::new());
-            assert!(
-                matches!(reason.as_deref(), Some(reason) if reason.contains(name)),
-                "wide constant reason should name {name}: {reason:?}"
-            );
+            assert_eq!(non_modelable_reason(&func, &module, &HashMap::new()), None);
+            let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+            assert!(c.contains(expected), "expected {expected} in:\n{c}");
         }
+    }
+
+    #[test]
+    fn malformed_wide_constant_still_fails_closed() {
+        let (func, _) = one_block_func_module(
+            "wide_bad",
+            Ty::I128,
+            vec![
+                inst(0, Opcode::ConstI128, Ty::I128, vec![], InstData::None),
+                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(c.contains("/* opcode ConstI128 not modelled */"), "{c}");
     }
 
     #[test]

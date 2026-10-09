@@ -111,8 +111,7 @@ itself asserted as a distinct property.
 
 The widths the guard covers are `i8`/`u8` through `i64`/`u64`. 128-bit checked
 arithmetic has no guard, so it fails closed as non-modelable (`Skipped`) rather
-than reverting to the wrapping model — the same fail-closed precedent as
-`ConstI128`.
+than reverting to the wrapping model.
 
 ## Inventory of emitted assumes
 

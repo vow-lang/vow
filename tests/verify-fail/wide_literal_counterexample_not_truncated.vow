@@ -1,0 +1,17 @@
+// TEST: category callee-blame
+// TEST: counterexample-fn "narrow_claim"
+// TEST: counterexample-blame callee
+// TEST: counterexample-violation "ensures result < 18446744073709551616 as u128"
+module WideLiteralCounterexampleNotTruncated
+
+fn narrow_claim(x: u128) -> u128 vow {
+    requires: x >= 340282366920938463444927863358058659840u128,
+    ensures: result < 18446744073709551616u128
+} {
+    x
+}
+
+fn main() -> i32 [io] {
+    narrow_claim(340282366920938463463374607431768211455u128);
+    0
+}

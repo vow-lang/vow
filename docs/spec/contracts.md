@@ -497,6 +497,24 @@ vow {
 
 ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
 
+## 128-bit Integer Contracts
+
+`i128`/`u128` literals work in contracts and bodies. The verifier builds each
+literal from its two 64-bit limbs, so every value is exact (`i128::MIN`,
+`i128::MAX` and `u128::MAX` included) and a counterexample reports the full
+128-bit value:
+
+```vow
+fn at_least_one(x: u128) -> u128
+vow {
+    requires: x >= 1u128
+    ensures: result >= 1u128
+}
+{
+    x
+}
+```
+
 ## Extern Block Contracts
 
 Every `extern "C"` block **must** include a `vow { ... }` contract specifying the expected behavior of foreign functions. Omitting the contract is a `MissingContract` error.

@@ -4876,7 +4876,7 @@ fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<In
         ExprKind::UnaryOp {
             op: UnOp::Neg,
             operand,
-        } => {
+        } if expr_is_coercible_int_marker(expr) => {
             if let ExprKind::Lit(Lit::Int(value)) = &operand.kind
                 && !matches!(ty, Ty::I128 | Ty::U128)
             {
@@ -6779,6 +6779,21 @@ fn unsigned_max() -> u128 {
                     && inst.ty == Ty::U128
                     && inst.data == InstData::ConstU128(u128::MAX))
         );
+    }
+
+    #[test]
+    fn wide_negation_of_non_marker_emits_no_dead_zero() {
+        let module = lower_source_to_module(
+            "module Neg\nfn d(x: i128) -> i128 { -x }\nfn main() -> i32 [io] { 0 }\n",
+            "neg.vow",
+        );
+        let zeros = module.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .filter(|inst| inst.opcode == Opcode::ConstI128)
+            .count();
+        assert_eq!(zeros, 1, "only the negation's own zero may be emitted");
     }
 
     fn lower_source_to_module(source: &str, file: &str) -> Module {
