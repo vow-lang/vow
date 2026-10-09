@@ -812,25 +812,25 @@ impl ModelFacts {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ModelIssue {
+enum ModelIssue<'a> {
     Unsupported,
     Wide,
-    UnknownExtern,
-    NonScalarExtern,
+    UnknownExtern(&'a str),
+    NonScalarExtern(&'a str),
     StructuredTarget,
-    NonModelableTarget,
+    NonModelableTarget(FuncId),
     InvalidCall,
 }
 
 // The gate and the skip diagnostic share this instruction policy. The caller
 // owns the recursion cache; formatting happens only for a rejected function.
-fn modelability_issue(
-    inst: &Inst,
+fn modelability_issue<'a>(
+    inst: &'a Inst,
     facts: &ModelFacts,
     module: &Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
     cache: &mut HashMap<FuncId, bool>,
-) -> Option<ModelIssue> {
+) -> Option<ModelIssue<'a>> {
     match inst.opcode {
         Opcode::ConstI32
         | Opcode::ConstI64
@@ -900,7 +900,7 @@ fn modelability_issue(
         Opcode::Call => match &inst.data {
             InstData::CallExtern(name) => {
                 if !is_known_builtin(name) {
-                    Some(ModelIssue::UnknownExtern)
+                    Some(ModelIssue::UnknownExtern(name))
                 } else if vec_op_carries_non_scalar(
                     name,
                     inst,
@@ -910,7 +910,7 @@ fn modelability_issue(
                     &facts.btreemap_vars,
                     &facts.option_vars,
                 ) {
-                    Some(ModelIssue::NonScalarExtern)
+                    Some(ModelIssue::NonScalarExtern(name))
                 } else {
                     None
                 }
@@ -934,7 +934,7 @@ fn modelability_issue(
                 {
                     None
                 } else {
-                    Some(ModelIssue::NonModelableTarget)
+                    Some(ModelIssue::NonModelableTarget(*fid))
                 }
             }
             _ => Some(ModelIssue::InvalidCall),
@@ -1037,30 +1037,21 @@ fn first_unsupported_opcode(
                 let name = match issue {
                     ModelIssue::Unsupported => format!("{:?}", inst.opcode),
                     ModelIssue::Wide => format!("{:?} at 128-bit width", inst.opcode),
-                    ModelIssue::UnknownExtern => match &inst.data {
-                        InstData::CallExtern(name) => format!("Call extern `{name}`"),
-                        _ => unreachable!(),
-                    },
-                    ModelIssue::NonScalarExtern => match &inst.data {
-                        InstData::CallExtern(name) => {
-                            format!("Call extern `{name}` with non-scalar element")
-                        }
-                        _ => unreachable!(),
-                    },
+                    ModelIssue::UnknownExtern(name) => format!("Call extern `{name}`"),
+                    ModelIssue::NonScalarExtern(name) => {
+                        format!("Call extern `{name}` with non-scalar element")
+                    }
                     ModelIssue::StructuredTarget => {
                         "Call target with a collection argument".to_string()
                     }
-                    ModelIssue::NonModelableTarget => match &inst.data {
-                        InstData::CallTarget(fid) => {
-                            let target = module
-                                .functions
-                                .iter()
-                                .find(|f| f.id == *fid)
-                                .map_or_else(|| format!("FuncId({})", fid.0), |f| f.name.clone());
-                            format!("Call target `{target}`")
-                        }
-                        _ => unreachable!(),
-                    },
+                    ModelIssue::NonModelableTarget(fid) => {
+                        let target = module
+                            .functions
+                            .iter()
+                            .find(|f| f.id == fid)
+                            .map_or_else(|| format!("FuncId({})", fid.0), |f| f.name.clone());
+                        format!("Call target `{target}`")
+                    }
                     ModelIssue::InvalidCall => format!("Call ({:?})", inst.data),
                 };
                 return Some(name);
@@ -3710,6 +3701,102 @@ mod tests {
                 &mut cache
             ),
             Some(ModelIssue::Wide)
+        );
+    }
+
+    #[test]
+    fn non_modelable_reason_names_each_issue() {
+        fn call(id: u32, data: InstData, args: Vec<u32>) -> Inst {
+            inst(id, Opcode::Call, Ty::I64, args, data)
+        }
+        fn reason(name: &str, insts: Vec<Inst>, callee: Option<Function>) -> String {
+            let (f, mut m) = one_block_func_module(name, Ty::I64, insts);
+            if let Some(callee) = callee {
+                m.functions.push(callee);
+            }
+            non_modelable_reason(&f, &m, &HashMap::new()).expect("must be non-modelable")
+        }
+        let ret = |id: u32| inst(id, Opcode::Return, Ty::Unit, vec![0], InstData::None);
+        let c0 = inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1));
+
+        let load = reason(
+            "uses_load",
+            vec![
+                c0.clone(),
+                inst(1, Opcode::Load, Ty::I64, vec![0], InstData::None),
+                ret(2),
+            ],
+            None,
+        );
+        assert!(load.contains("unsupported opcode `Load`"), "{load}");
+
+        let unknown = reason(
+            "unknown_extern",
+            vec![
+                c0.clone(),
+                call(1, InstData::CallExtern("__not_a_builtin".into()), vec![0]),
+                ret(2),
+            ],
+            None,
+        );
+        assert!(
+            unknown.contains("Call extern `__not_a_builtin`"),
+            "{unknown}"
+        );
+
+        let invalid = reason(
+            "invalid_call",
+            vec![c0.clone(), call(1, InstData::None, vec![0]), ret(2)],
+            None,
+        );
+        assert!(invalid.contains("Call (None)"), "{invalid}");
+
+        let missing = reason(
+            "missing_target",
+            vec![
+                c0.clone(),
+                call(1, InstData::CallTarget(FuncId(99)), vec![0]),
+                ret(2),
+            ],
+            None,
+        );
+        assert!(missing.contains("Call target `FuncId(99)`"), "{missing}");
+
+        let (mut callee, _) = one_block_func_module(
+            "bad_callee",
+            Ty::I64,
+            vec![
+                c0.clone(),
+                inst(1, Opcode::Load, Ty::I64, vec![0], InstData::None),
+                ret(2),
+            ],
+        );
+        callee.id = FuncId(1);
+        let named = reason(
+            "calls_bad_callee",
+            vec![
+                c0.clone(),
+                call(1, InstData::CallTarget(FuncId(1)), vec![0]),
+                ret(2),
+            ],
+            Some(callee),
+        );
+        assert!(named.contains("Call target `bad_callee`"), "{named}");
+
+        let structured = reason(
+            "passes_collection",
+            vec![
+                c0.clone(),
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                call(2, InstData::CallExtern("__vow_vec_new".into()), vec![0, 1]),
+                call(3, InstData::CallTarget(FuncId(0)), vec![2]),
+                ret(4),
+            ],
+            None,
+        );
+        assert!(
+            structured.contains("Call target with a collection argument"),
+            "{structured}"
         );
     }
 
