@@ -1,0 +1,203 @@
+module VcSmt
+
+use vc_term
+
+// SMT-LIB command list and its writer. This is the only module that prints
+// SMT text: the symbolic executor builds `SmtScript`s and `vc_smt_render`
+// turns one into the self-contained query handed to the solver.
+
+fn VC_CMD_SET_LOGIC() -> i64 { 0 }
+fn VC_CMD_SET_OPTION() -> i64 { 1 }
+fn VC_CMD_DECLARE_CONST() -> i64 { 2 }
+fn VC_CMD_DEFINE_FUN() -> i64 { 3 }
+fn VC_CMD_ASSERT() -> i64 { 4 }
+fn VC_CMD_CHECK_SAT() -> i64 { 5 }
+fn VC_CMD_GET_VALUE() -> i64 { 6 }
+
+struct SmtScript {
+    kinds: Vec<i64>,
+    names: Vec<String>,
+    vals: Vec<String>,
+    sorts: Vec<i64>,
+    terms: Vec<i64>,
+}
+
+fn vc_script_new() -> SmtScript {
+    SmtScript {
+        kinds: Vec::new(),
+        names: Vec::new(),
+        vals: Vec::new(),
+        sorts: Vec::new(),
+        terms: Vec::new(),
+    }
+}
+
+fn vc_script_copy(s: SmtScript) -> SmtScript {
+    let out: SmtScript = vc_script_new();
+    let mut i: u64 = 0;
+    while i < s.kinds.len() {
+        out.kinds.push(s.kinds[i]);
+        out.names.push(s.names[i]);
+        out.vals.push(s.vals[i]);
+        out.sorts.push(s.sorts[i]);
+        out.terms.push(s.terms[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn vc_script_push(s: SmtScript, kind: i64, name: String, val: String, sort: i64, term: i64) {
+    s.kinds.push(kind);
+    s.names.push(name);
+    s.vals.push(val);
+    s.sorts.push(sort);
+    s.terms.push(term);
+}
+
+fn vc_script_set_logic(s: SmtScript, logic: String) {
+    vc_script_push(s, VC_CMD_SET_LOGIC(), logic, String::from(""), 0, -1);
+}
+
+fn vc_script_set_option(s: SmtScript, key: String, val: String) {
+    vc_script_push(s, VC_CMD_SET_OPTION(), key, val, 0, -1);
+}
+
+fn vc_script_declare_const(s: SmtScript, name: String, sort: i64) {
+    vc_script_push(s, VC_CMD_DECLARE_CONST(), name, String::from(""), sort, -1);
+}
+
+fn vc_script_define_fun(s: SmtScript, name: String, sort: i64, term: i64) {
+    vc_script_push(s, VC_CMD_DEFINE_FUN(), name, String::from(""), sort, term);
+}
+
+fn vc_script_assert(s: SmtScript, term: i64) {
+    vc_script_push(s, VC_CMD_ASSERT(), String::from(""), String::from(""), 0, term);
+}
+
+fn vc_script_check_sat(s: SmtScript) {
+    vc_script_push(s, VC_CMD_CHECK_SAT(), String::from(""), String::from(""), 0, -1);
+}
+
+fn vc_script_get_value(s: SmtScript, names: Vec<String>) {
+    let joined: String = String::from("");
+    let mut i: u64 = 0;
+    while i < names.len() {
+        if i > 0 {
+            joined.push_str(String::from(" "));
+        }
+        joined.push_str(names[i]);
+        i = i + 1;
+    }
+    vc_script_push(s, VC_CMD_GET_VALUE(), String::from(""), joined, 0, -1);
+}
+
+fn vc_op_symbol(op: i64) -> String {
+    if op == VC_OP_BVADD() { return String::from("bvadd"); }
+    if op == VC_OP_BVSUB() { return String::from("bvsub"); }
+    if op == VC_OP_BVMUL() { return String::from("bvmul"); }
+    if op == VC_OP_BVSDIV() { return String::from("bvsdiv"); }
+    if op == VC_OP_BVSREM() { return String::from("bvsrem"); }
+    if op == VC_OP_BVAND() { return String::from("bvand"); }
+    if op == VC_OP_BVOR() { return String::from("bvor"); }
+    if op == VC_OP_BVXOR() { return String::from("bvxor"); }
+    if op == VC_OP_EQ() { return String::from("="); }
+    if op == VC_OP_DISTINCT() { return String::from("distinct"); }
+    if op == VC_OP_BVSLT() { return String::from("bvslt"); }
+    if op == VC_OP_BVSLE() { return String::from("bvsle"); }
+    if op == VC_OP_BVSGT() { return String::from("bvsgt"); }
+    if op == VC_OP_BVSGE() { return String::from("bvsge"); }
+    if op == VC_OP_NOT() { return String::from("not"); }
+    if op == VC_OP_AND() { return String::from("and"); }
+    String::from("or")
+}
+
+fn vc_sort_text(sort: i64) -> String {
+    if sort == VC_SORT_BOOL() {
+        return String::from("Bool");
+    }
+    String::from("(_ BitVec 64)")
+}
+
+fn vc_term_text(ar: VcArena, t: i64) -> String {
+    let kind: i64 = ar.kinds[t as u64];
+    let aux: i64 = ar.aux[t as u64];
+    if kind == VC_T_VAR() {
+        return String::from(ar.strs[aux as u64]);
+    }
+    if kind == VC_T_BV() {
+        let out: String = String::from("(_ bv");
+        out.push_str(uint_to_string(aux as u64));
+        out.push_str(String::from(" 64)"));
+        return out;
+    }
+    if kind == VC_T_BOOL() {
+        if aux == 0 {
+            return String::from("false");
+        }
+        return String::from("true");
+    }
+    let out: String = String::from("(");
+    out.push_str(vc_op_symbol(aux));
+    out.push_str(String::from(" "));
+    out.push_str(vc_term_text(ar, ar.a[t as u64]));
+    let rhs: i64 = ar.b[t as u64];
+    if rhs >= 0 {
+        out.push_str(String::from(" "));
+        out.push_str(vc_term_text(ar, rhs));
+    }
+    out.push_str(String::from(")"));
+    out
+}
+
+fn vc_command_text(ar: VcArena, s: SmtScript, i: u64) -> String {
+    let kind: i64 = s.kinds[i];
+    let out: String = String::from("");
+    if kind == VC_CMD_SET_LOGIC() {
+        out.push_str(String::from("(set-logic "));
+        out.push_str(s.names[i]);
+        out.push_str(String::from(")"));
+    } else if kind == VC_CMD_SET_OPTION() {
+        out.push_str(String::from("(set-option "));
+        out.push_str(s.names[i]);
+        out.push_str(String::from(" "));
+        out.push_str(s.vals[i]);
+        out.push_str(String::from(")"));
+    } else if kind == VC_CMD_DECLARE_CONST() {
+        out.push_str(String::from("(declare-const "));
+        out.push_str(s.names[i]);
+        out.push_str(String::from(" "));
+        out.push_str(vc_sort_text(s.sorts[i]));
+        out.push_str(String::from(")"));
+    } else if kind == VC_CMD_DEFINE_FUN() {
+        out.push_str(String::from("(define-fun "));
+        out.push_str(s.names[i]);
+        out.push_str(String::from(" () "));
+        out.push_str(vc_sort_text(s.sorts[i]));
+        out.push_str(String::from(" "));
+        out.push_str(vc_term_text(ar, s.terms[i]));
+        out.push_str(String::from(")"));
+    } else if kind == VC_CMD_ASSERT() {
+        out.push_str(String::from("(assert "));
+        out.push_str(vc_term_text(ar, s.terms[i]));
+        out.push_str(String::from(")"));
+    } else if kind == VC_CMD_CHECK_SAT() {
+        out.push_str(String::from("(check-sat)"));
+    } else {
+        out.push_str(String::from("(get-value ("));
+        out.push_str(s.vals[i]);
+        out.push_str(String::from("))"));
+    }
+    out
+}
+
+// One command per line, each line newline-terminated.
+fn vc_smt_render(ar: VcArena, s: SmtScript) -> String {
+    let out: String = String::from("");
+    let mut i: u64 = 0;
+    while i < s.kinds.len() {
+        out.push_str(vc_command_text(ar, s, i));
+        out.push_str(String::from("\n"));
+        i = i + 1;
+    }
+    out
+}

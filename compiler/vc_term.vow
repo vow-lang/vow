@@ -1,0 +1,82 @@
+module VcTerm
+
+// Term arena for the native verifier. Terms live in parallel vectors and are
+// referred to by index; there is no hash-consing or simplification. All SMT
+// text is produced by `vc_smt`, which maps the operator codes below to
+// symbols.
+
+fn VC_SORT_BOOL() -> i64 { 0 }
+fn VC_SORT_BV64() -> i64 { 1 }
+
+fn VC_T_VAR() -> i64 { 0 }
+fn VC_T_BV() -> i64 { 1 }
+fn VC_T_BOOL() -> i64 { 2 }
+fn VC_T_APP() -> i64 { 3 }
+
+fn VC_OP_BVADD() -> i64 { 0 }
+fn VC_OP_BVSUB() -> i64 { 1 }
+fn VC_OP_BVMUL() -> i64 { 2 }
+fn VC_OP_BVSDIV() -> i64 { 3 }
+fn VC_OP_BVSREM() -> i64 { 4 }
+fn VC_OP_BVAND() -> i64 { 5 }
+fn VC_OP_BVOR() -> i64 { 6 }
+fn VC_OP_BVXOR() -> i64 { 7 }
+fn VC_OP_EQ() -> i64 { 8 }
+fn VC_OP_DISTINCT() -> i64 { 9 }
+fn VC_OP_BVSLT() -> i64 { 10 }
+fn VC_OP_BVSLE() -> i64 { 11 }
+fn VC_OP_BVSGT() -> i64 { 12 }
+fn VC_OP_BVSGE() -> i64 { 13 }
+fn VC_OP_NOT() -> i64 { 14 }
+fn VC_OP_AND() -> i64 { 15 }
+fn VC_OP_OR() -> i64 { 16 }
+
+struct VcArena {
+    kinds: Vec<i64>,
+    a: Vec<i64>,
+    b: Vec<i64>,
+    aux: Vec<i64>,
+    strs: Vec<String>,
+}
+
+fn vc_arena_new() -> VcArena {
+    VcArena {
+        kinds: Vec::new(),
+        a: Vec::new(),
+        b: Vec::new(),
+        aux: Vec::new(),
+        strs: Vec::new(),
+    }
+}
+
+fn vc_arena_push(ar: VcArena, kind: i64, a: i64, b: i64, aux: i64) -> i64 {
+    let id: i64 = ar.kinds.len() as i64;
+    ar.kinds.push(kind);
+    ar.a.push(a);
+    ar.b.push(b);
+    ar.aux.push(aux);
+    id
+}
+
+fn vc_tm_var(ar: VcArena, name: String) -> i64 {
+    let si: i64 = ar.strs.len() as i64;
+    ar.strs.push(name);
+    vc_arena_push(ar, VC_T_VAR(), -1, -1, si)
+}
+
+fn vc_tm_bv_const(ar: VcArena, value: i64) -> i64 {
+    vc_arena_push(ar, VC_T_BV(), -1, -1, value)
+}
+
+fn vc_tm_bool_const(ar: VcArena, value: bool) -> i64 {
+    let flag: i64 = { if value { 1 } else { 0 } };
+    vc_arena_push(ar, VC_T_BOOL(), -1, -1, flag)
+}
+
+fn vc_tm_app1(ar: VcArena, op: i64, x: i64) -> i64 {
+    vc_arena_push(ar, VC_T_APP(), x, -1, op)
+}
+
+fn vc_tm_app2(ar: VcArena, op: i64, x: i64, y: i64) -> i64 {
+    vc_arena_push(ar, VC_T_APP(), x, y, op)
+}
