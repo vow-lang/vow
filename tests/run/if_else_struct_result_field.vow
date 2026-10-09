@@ -1,0 +1,39 @@
+// TEST: stdout "2\n1\n7\n"
+module IfElseStructResultField
+
+struct Pair {
+    a: i64,
+    b: i64,
+}
+
+fn pick(c: bool) -> Pair vow {
+    ensures: result.a == 2 || result.a == 1
+} {
+    if c {
+        Pair { a: 2, b: 7 }
+    } else {
+        Pair { a: 1, b: 7 }
+    }
+}
+
+fn spin(n: i64) -> i64 {
+    let mut p = Pair { a: 0, b: 7 };
+    let mut i: i64 = 0;
+    while i < n {
+        p = Pair { a: p.a + 1, b: p.b };
+        i = i + 1;
+    }
+    p.b
+}
+
+fn main() -> i32 [io] {
+    let t = pick(true);
+    let f = pick(false);
+    print_i64(t.a);
+    print_str("\n");
+    print_i64(f.a);
+    print_str("\n");
+    print_i64(spin(3));
+    print_str("\n");
+    0
+}

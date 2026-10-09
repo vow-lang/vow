@@ -3311,6 +3311,9 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let result_ty: i64 = lctx_inst_ty(ctx, else_result);
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""), origin);
             backpatch_upsilon(ctx, else_exit_block, else_up_id, phi_id);
+            let if_srcs: Vec<i64> = Vec::new();
+            if_srcs.push(else_result);
+            lctx_merge_compatible_aggregate_metadata(ctx, if_srcs, phi_id);
             return phi_id;
         }
         if else_terminated {
@@ -3318,6 +3321,9 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let result_ty: i64 = lctx_inst_ty(ctx, then_result);
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""), origin);
             backpatch_upsilon(ctx, then_exit_block, then_up_id, phi_id);
+            let if_srcs: Vec<i64> = Vec::new();
+            if_srcs.push(then_result);
+            lctx_merge_compatible_aggregate_metadata(ctx, if_srcs, phi_id);
             return phi_id;
         }
         let then_ty: i64 = lctx_inst_ty(ctx, then_result);
@@ -3351,6 +3357,10 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
         let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""), origin);
         backpatch_upsilon(ctx, then_exit_block, final_then_up_id, phi_id);
         backpatch_upsilon(ctx, else_exit_block, final_else_up_id, phi_id);
+        let if_srcs: Vec<i64> = Vec::new();
+        if_srcs.push(then_result);
+        if_srcs.push(else_result);
+        lctx_merge_compatible_aggregate_metadata(ctx, if_srcs, phi_id);
         return phi_id;
     }
 
@@ -3396,6 +3406,9 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let phi_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let phi_args: Vec<i64> = Vec::new();
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), phi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""), origin);
+            let phi_srcs: Vec<i64> = Vec::new();
+            phi_srcs.push(cur_val);
+            lctx_merge_compatible_aggregate_metadata(ctx, phi_srcs, phi_id);
             phi_ids.push(phi_id);
             lctx_assign(ctx, vname, phi_id);
             ai2 = ai2 + 1;
@@ -3417,6 +3430,9 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let ep_args: Vec<i64> = Vec::new();
             let ep_ty: i64 = lctx_inst_ty(ctx, phi_ids[epi]);
             let ep_id: i64 = lctx_emit(ctx, IOP_PHI(), ep_ty, ep_args, IDATA_NONE(), 0, 0, String::from(""), origin);
+            let ep_srcs: Vec<i64> = Vec::new();
+            ep_srcs.push(phi_ids[epi]);
+            lctx_merge_compatible_aggregate_metadata(ctx, ep_srcs, ep_id);
             exit_phi_ids.push(ep_id);
             exit_phi_names.push(assigned[epi]);
             epi = epi + 1;
@@ -3554,6 +3570,9 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let phi_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let phi_args: Vec<i64> = Vec::new();
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), phi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""), origin);
+            let phi_srcs: Vec<i64> = Vec::new();
+            phi_srcs.push(cur_val);
+            lctx_merge_compatible_aggregate_metadata(ctx, phi_srcs, phi_id);
             phi_ids.push(phi_id);
             lctx_assign(ctx, vname, phi_id);
             ai2 = ai2 + 1;
@@ -3578,6 +3597,9 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let lep_args: Vec<i64> = Vec::new();
             let lep_ty: i64 = lctx_inst_ty(ctx, phi_ids[lepi]);
             let lep_id: i64 = lctx_emit(ctx, IOP_PHI(), lep_ty, lep_args, IDATA_NONE(), 0, 0, String::from(""), origin);
+            let lep_srcs: Vec<i64> = Vec::new();
+            lep_srcs.push(phi_ids[lepi]);
+            lctx_merge_compatible_aggregate_metadata(ctx, lep_srcs, lep_id);
             l_exit_phi_ids.push(lep_id);
             l_exit_phi_names.push(assigned[lepi]);
             lepi = lepi + 1;
@@ -3734,6 +3756,9 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let phi_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let phi_args: Vec<i64> = Vec::new();
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), phi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""), origin);
+            let phi_srcs: Vec<i64> = Vec::new();
+            phi_srcs.push(cur_val);
+            lctx_merge_compatible_aggregate_metadata(ctx, phi_srcs, phi_id);
             phi_ids.push(phi_id);
             lctx_assign(ctx, vname, phi_id);
             ai2 = ai2 + 1;
@@ -3757,6 +3782,9 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             let fep_args: Vec<i64> = Vec::new();
             let fep_ty: i64 = lctx_inst_ty(ctx, phi_ids[fepi]);
             let fep_id: i64 = lctx_emit(ctx, IOP_PHI(), fep_ty, fep_args, IDATA_NONE(), 0, 0, String::from(""), origin);
+            let fep_srcs: Vec<i64> = Vec::new();
+            fep_srcs.push(phi_ids[fepi]);
+            lctx_merge_compatible_aggregate_metadata(ctx, fep_srcs, fep_id);
             f_exit_phi_ids.push(fep_id);
             f_exit_phi_names.push(assigned[fepi]);
             fepi = fepi + 1;

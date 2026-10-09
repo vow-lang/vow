@@ -1,0 +1,40 @@
+// TEST: exit 0
+module IfElseStructEnsuresTrue
+
+struct Heap {
+    data: Vec<i64>,
+    size: u64,
+}
+
+fn pop(h: Heap) -> Heap vow {
+    requires: h.size > 0,
+    requires: h.size == h.data.len(),
+    ensures: result.size == h.size - 1,
+    ensures: result.size == result.data.len()
+} {
+    let d: Vec<i64> = h.data;
+    let n: u64 = h.size;
+    if n == 1 {
+        d.pop();
+        Heap { data: d, size: 0 }
+    } else {
+        let last: i64 = d[n - 1];
+        d[0] = last;
+        d.pop();
+        Heap { data: d, size: n - 1 }
+    }
+}
+
+fn main() -> i32 [io] {
+    let d: Vec<i64> = Vec::new();
+    d.push(5);
+    d.push(7);
+    d.push(9);
+    let h = Heap { data: d, size: 3 };
+    let h2 = pop(h);
+    let h3 = pop(h2);
+    let h4 = pop(h3);
+    print_u64(h4.size);
+    print_str("\n");
+    0
+}

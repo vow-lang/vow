@@ -1,0 +1,53 @@
+module PhiAggregateMetadata
+
+struct P {
+    a: i64,
+    b: i64,
+}
+
+fn pick_if_else(c: bool) -> P vow {
+    ensures: result.a == 1 || result.a == 2
+} {
+    if c { P { a: 1, b: 0 } } else { P { a: 2, b: 0 } }
+}
+
+fn pick_chain(n: i64) -> P vow {
+    ensures: result.a >= 0
+} {
+    if n == 0 { P { a: 0, b: 0 } } else if n == 1 { P { a: 1, b: 0 } } else { P { a: 2, b: 0 } }
+}
+
+fn pick_then_returns(c: bool) -> P vow {
+    ensures: result.a == 1
+} {
+    if c { return P { a: 1, b: 0 }; } else { P { a: 1, b: 2 } }
+}
+
+fn pick_else_returns(c: bool) -> P vow {
+    ensures: result.a == 1
+} {
+    if c { P { a: 1, b: 0 } } else { return P { a: 1, b: 2 }; }
+}
+
+fn spin_while(n: i64) -> i64 {
+    let mut p = P { a: 0, b: 7 };
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: p.a >= 0
+    } {
+        p = P { a: p.a + 1, b: p.b };
+        i = i + 1;
+    }
+    p.b
+}
+
+fn spin_loop(n: i64) -> i64 {
+    let mut p = P { a: 0, b: 7 };
+    let mut i: i64 = 0;
+    loop {
+        if i >= n { break; }
+        p = P { a: p.a + 1, b: p.b };
+        i = i + 1;
+    }
+    p.b
+}

@@ -2176,12 +2176,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     let phi_ty = ctx.inst_ty(then_val);
                     let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
                     backpatch_upsilon(ctx, then_upsilon_block, t_up, phi_id);
+                    merge_compatible_aggregate_metadata(ctx, &[then_val], phi_id);
                     phi_id
                 }
                 (None, Some(e_up)) => {
                     let phi_ty = ctx.inst_ty(else_val);
                     let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
                     backpatch_upsilon(ctx, else_upsilon_block, e_up, phi_id);
+                    merge_compatible_aggregate_metadata(ctx, &[else_val], phi_id);
                     phi_id
                 }
                 (Some(t_up), Some(e_up)) => {
@@ -2232,6 +2234,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
                     backpatch_upsilon(ctx, then_upsilon_block, t_up, phi_id);
                     backpatch_upsilon(ctx, else_upsilon_block, e_up, phi_id);
+                    merge_compatible_aggregate_metadata(ctx, &[then_val, else_val], phi_id);
                     phi_id
                 }
             }
@@ -2416,6 +2419,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             for (name, pre_val) in &loop_vars {
                 let ty = ctx.inst_ty(*pre_val);
                 let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                merge_compatible_aggregate_metadata(ctx, &[*pre_val], phi_id);
                 phi_ids.push((name.clone(), phi_id));
             }
             for (name, up_id) in &upsilon_ids {
@@ -2446,6 +2450,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             for (name, pre_val) in &loop_vars {
                 let ty = ctx.inst_ty(*pre_val);
                 let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                merge_compatible_aggregate_metadata(ctx, &[*pre_val], phi_id);
                 exit_phi_ids.push((name.clone(), phi_id));
             }
             ctx.switch_to_block(cond_block);
@@ -2601,6 +2606,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             for (name, pre_val) in &loop_vars {
                 let ty = ctx.inst_ty(*pre_val);
                 let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                merge_compatible_aggregate_metadata(ctx, &[*pre_val], phi_id);
                 phi_ids.push((name.clone(), phi_id));
             }
             for (name, up_id) in &upsilon_ids {
@@ -2634,6 +2640,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             for (name, pre_val) in &loop_vars {
                 let ty = ctx.inst_ty(*pre_val);
                 let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                merge_compatible_aggregate_metadata(ctx, &[*pre_val], phi_id);
                 exit_phi_ids.push((name.clone(), phi_id));
             }
             ctx.switch_to_block(header_block);
@@ -2786,6 +2793,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             for (name, pre_val) in &loop_vars {
                 let ty = ctx.inst_ty(*pre_val);
                 let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                merge_compatible_aggregate_metadata(ctx, &[*pre_val], phi_id);
                 phi_ids.push((name.clone(), phi_id));
             }
             for (name, up_id) in &upsilon_ids {
@@ -2807,6 +2815,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             for (name, pre_val) in &loop_vars {
                 let ty = ctx.inst_ty(*pre_val);
                 let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                merge_compatible_aggregate_metadata(ctx, &[*pre_val], phi_id);
                 exit_phi_ids.push((name.clone(), phi_id));
             }
             ctx.switch_to_block(header_block);
@@ -6748,6 +6757,73 @@ fn unsigned_max() -> u128 {
             .into_iter()
             .find(|func| func.name == name)
             .unwrap_or_else(|| panic!("function `{name}`"))
+    }
+
+    fn assert_no_lowering_warnings(source: &str) -> Module {
+        let module = lower_source_to_module(source, "phi_metadata_probe.vow");
+        assert!(module.warnings.is_empty(), "{:?}", module.warnings);
+        module
+    }
+
+    #[test]
+    fn if_else_struct_result_phi_keeps_aggregate_metadata() {
+        let both_live = concat!(
+            "module M\n",
+            "struct P { a: i64, b: i64 }\n",
+            "fn pick(c: bool) -> P vow { ensures: result.a == 1 || result.a == 2 } {\n",
+            "  if c { P { a: 1, b: 0 } } else { P { a: 2, b: 0 } }\n",
+            "}\n",
+        );
+        let module = assert_no_lowering_warnings(both_live);
+        let func = module.functions.iter().find(|f| f.name == "pick").unwrap();
+        assert!(
+            insts_of(func)
+                .iter()
+                .any(|inst| inst.opcode == Opcode::FieldGet),
+            "ensures must read result.a through a real FieldGet"
+        );
+
+        assert_no_lowering_warnings(concat!(
+            "module M\n",
+            "struct P { a: i64, b: i64 }\n",
+            "fn pick(n: i64) -> P vow { ensures: result.a >= 0 } {\n",
+            "  if n == 0 { P { a: 0, b: 0 } } else if n == 1 { P { a: 1, b: 0 } } else { P { a: 2, b: 0 } }\n",
+            "}\n",
+        ));
+        assert_no_lowering_warnings(concat!(
+            "module M\n",
+            "struct P { a: i64, b: i64 }\n",
+            "fn pick(c: bool) -> P vow { ensures: result.a == 1 } {\n",
+            "  if c { return P { a: 1, b: 0 }; } else { P { a: 1, b: 2 } }\n",
+            "}\n",
+        ));
+        assert_no_lowering_warnings(concat!(
+            "module M\n",
+            "struct P { a: i64, b: i64 }\n",
+            "fn pick(c: bool) -> P vow { ensures: result.a == 1 } {\n",
+            "  if c { P { a: 1, b: 0 } } else { return P { a: 1, b: 2 }; }\n",
+            "}\n",
+        ));
+    }
+
+    #[test]
+    fn loop_carried_struct_phis_keep_aggregate_metadata() {
+        for (kind, body) in [
+            (
+                "while",
+                "while i < n vow { invariant: p.a >= 0 } { p = P { a: p.a + 1, b: p.b }; i = i + 1; }",
+            ),
+            (
+                "loop",
+                "loop { if i >= n { break; } p = P { a: p.a + 1, b: p.b }; i = i + 1; }",
+            ),
+        ] {
+            let source = format!(
+                "module M\nstruct P {{ a: i64, b: i64 }}\nfn run(n: i64) -> i64 {{\n  let mut p = P {{ a: 0, b: 7 }};\n  let mut i: i64 = 0;\n  {body}\n  p.b\n}}\n"
+            );
+            let module = lower_source_to_module(&source, "phi_metadata_probe.vow");
+            assert!(module.warnings.is_empty(), "{kind}: {:?}", module.warnings);
+        }
     }
 
     #[test]

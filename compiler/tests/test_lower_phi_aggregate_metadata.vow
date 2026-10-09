@@ -1,0 +1,39 @@
+module TestLowerPhiAggregateMetadata
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+
+// Self-hosted twin of `if_else_struct_result_phi_keeps_aggregate_metadata` and
+// `loop_carried_struct_phis_keep_aggregate_metadata` in vow-ir/src/lower/mod.rs. Lowers
+// tests/fixtures/phi_aggregate_metadata.vow and requires zero lowering warnings: an
+// untagged if/else result Phi or loop header/exit Phi makes `result.a` / `p.a` an
+// untagged FieldGet (issue #403).
+
+fn lower_fixture(source: String, file: String) -> IrModule {
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(lex(source), arena, diag_ctx_new(), file);
+    let item_files: Vec<String> = Vec::new();
+    let mut fi: u64 = 0;
+    while fi < parsed.items.len() {
+        item_files.push(file);
+        fi = fi + 1;
+    }
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), item_files
+    )
+}
+
+fn main() -> i32 [read] {
+    let src: String = fs_read(String::from("tests/fixtures/phi_aggregate_metadata.vow"));
+    if src.len() == 0 { return 1; }
+    let lowered: IrModule = lower_fixture(src, String::from("phi_aggregate_metadata.vow"));
+    if lowered.functions.len() != 6 { return 2; }
+    if lowered.warnings.len() != 0 { return 3; }
+    0
+}
