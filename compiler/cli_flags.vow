@@ -1,0 +1,152 @@
+module CliFlags
+
+fn CMD_NONE() -> i64 { 0 }
+fn CMD_BUILD() -> i64 { 1 }
+fn CMD_VERIFY() -> i64 { 2 }
+fn CMD_TEST() -> i64 { 3 }
+fn CMD_CONTRACTS() -> i64 { 4 }
+fn CMD_SKILL() -> i64 { 5 }
+fn CMD_MUTANTS() -> i64 { 6 }
+fn CMD_COMPLEXITY() -> i64 { 7 }
+
+fn CF_UNKNOWN() -> i64 { 0 }
+fn CF_BOOL() -> i64 { 1 }
+fn CF_VALUE() -> i64 { 2 }
+
+fn cf_is_help(f: String) -> bool {
+    f == "--help" || f == "--human"
+}
+
+fn cf_is_prover_value(f: String) -> bool {
+    f == "--max-k-step" || f == "--solver" || f == "--encoding" || f == "--timeout" || f == "--verify-jobs" || f == "--backend"
+}
+
+fn cf_is_build_bool(f: String) -> bool {
+    f == "--no-verify" || f == "--dump-ir" || f == "--no-cache" || f == "--replay-cex"
+}
+
+fn cf_is_build_value(f: String) -> bool {
+    f == "-o" || f == "--output" || f == "--mode" || f == "--debug-trace" || f == "--perfetto"
+}
+
+fn cf_is_test_value(f: String) -> bool {
+    f == "--filter" || f == "--module-root" || f == "--mode" || f == "--timeout" || f == "--max-k-step" || f == "--verify-jobs" || f == "--jobs" || f == "--worker-entry" || f == "--backend"
+}
+
+fn cf_is_complexity_value(f: String) -> bool {
+    f == "--cog-anchor" || f == "--nloc-anchor" || f == "--max-score" || f == "--max-cognitive" || f == "--max-cyclomatic"
+}
+
+fn cf_kind_build(f: String, legacy: bool) -> i64 {
+    if cf_is_help(f) || cf_is_build_bool(f) { return CF_BOOL(); }
+    if legacy && (f == "--emit-c" || f == "--verify") { return CF_BOOL(); }
+    if cf_is_build_value(f) || cf_is_prover_value(f) { return CF_VALUE(); }
+    CF_UNKNOWN()
+}
+
+fn cf_kind_verify(f: String) -> i64 {
+    if cf_is_help(f) || f == "--no-cache" || f == "--replay-cex" { return CF_BOOL(); }
+    if cf_is_prover_value(f) || f == "--perfetto" { return CF_VALUE(); }
+    CF_UNKNOWN()
+}
+
+fn cf_kind_test(f: String) -> i64 {
+    if cf_is_help(f) || f == "--verify" { return CF_BOOL(); }
+    if cf_is_test_value(f) { return CF_VALUE(); }
+    CF_UNKNOWN()
+}
+
+fn cf_kind_contracts(f: String) -> i64 {
+    if cf_is_help(f) || f == "--verify" || f == "--no-cache" { return CF_BOOL(); }
+    if cf_is_prover_value(f) { return CF_VALUE(); }
+    CF_UNKNOWN()
+}
+
+fn cf_kind_complexity(f: String) -> i64 {
+    if cf_is_help(f) { return CF_BOOL(); }
+    if cf_is_complexity_value(f) { return CF_VALUE(); }
+    CF_UNKNOWN()
+}
+
+fn cf_kind_skill(f: String) -> i64 {
+    if cf_is_help(f) || f == "--bundle" || f == "--local" || f == "--global" { return CF_BOOL(); }
+    CF_UNKNOWN()
+}
+
+// How `cmd` treats `flag`: CF_BOOL, CF_VALUE (consumes the next token) or CF_UNKNOWN.
+// Each table is a superset of the matching clap struct in vow/src/cli.rs plus the
+// self-hosted-only extras; `mutants` owns its own flags and is never validated.
+fn cli_flag_kind(cmd: i64, flag: String) -> i64 {
+    if cmd == CMD_BUILD() { return cf_kind_build(flag, false); }
+    if cmd == CMD_NONE() { return cf_kind_build(flag, true); }
+    if cmd == CMD_VERIFY() { return cf_kind_verify(flag); }
+    if cmd == CMD_TEST() { return cf_kind_test(flag); }
+    if cmd == CMD_CONTRACTS() { return cf_kind_contracts(flag); }
+    if cmd == CMD_COMPLEXITY() { return cf_kind_complexity(flag); }
+    if cmd == CMD_SKILL() { return cf_kind_skill(flag); }
+    CF_UNKNOWN()
+}
+
+// Command-agnostic: does any subcommand take a value after `flag`? Used to skip
+// flag values when locating the source path.
+fn cli_flag_takes_value(flag: String) -> bool {
+    cf_is_build_value(flag) || cf_is_prover_value(flag) || cf_is_test_value(flag) || cf_is_complexity_value(flag)
+}
+
+fn cf_eq_index(tok: String) -> i64 {
+    let n: i64 = tok.len() as i64;
+    let mut i: i64 = 0;
+    while i < n {
+        if tok.byte_at(i as u64) == 61 { return i; }
+        i = i + 1;
+    }
+    -1
+}
+
+fn cf_unknown_message(cmd: i64, tok: String) -> String {
+    let msg: String = String::from("error: unexpected argument '");
+    msg.push_str(tok);
+    msg.push_str(String::from("' found"));
+    let eq: i64 = cf_eq_index(tok);
+    if eq > 0 {
+        let name: String = tok.substring(0 as u64, eq as u64);
+        if cli_flag_kind(cmd, name) == CF_VALUE() {
+            msg.push_str(String::from("\n  tip: use '"));
+            msg.push_str(name);
+            msg.push_str(String::from(" <value>', not '"));
+            msg.push_str(name);
+            msg.push_str(String::from("=<value>'"));
+        }
+    }
+    msg
+}
+
+fn cf_missing_value_message(tok: String) -> String {
+    let msg: String = String::from("error: a value is required for '");
+    msg.push_str(tok);
+    msg.push_str(String::from("' but none was supplied"));
+    msg
+}
+
+// Usage error for the first flag `cmd` does not implement, else "". Value flags
+// swallow the following token unconditionally, mirroring `get_flag_arg`.
+fn cli_flag_error(argv: Vec<String>, cmd: i64) -> String {
+    if cmd == CMD_MUTANTS() { return String::from(""); }
+    let n: i64 = argv.len() as i64;
+    let mut i: i64 = 2;
+    if cmd == CMD_NONE() { i = 1; }
+    while i < n {
+        let tok: String = argv[i as u64];
+        if tok == "--" { return String::from(""); }
+        if tok.len() > 1 && tok.byte_at(0 as u64) == 45 {
+            let kind: i64 = cli_flag_kind(cmd, tok);
+            if kind == CF_UNKNOWN() { return cf_unknown_message(cmd, tok); }
+            if kind == CF_VALUE() {
+                if i + 1 >= n { return cf_missing_value_message(tok); }
+                i = i + 1;
+            }
+        }
+        i = i + 1;
+    }
+    String::from("")
+}

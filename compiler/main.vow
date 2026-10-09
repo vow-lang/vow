@@ -19,6 +19,7 @@ use mutants_oracle
 use mutants_main
 use complexity
 use complexity_main
+use cli_flags
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
     let mut i: u64 = 1;
@@ -113,15 +114,6 @@ fn default_output(path: String) -> String {
     r.push_str(path.substring(start, end));
     r
 }
-
-fn CMD_NONE() -> i64 { 0 }
-fn CMD_BUILD() -> i64 { 1 }
-fn CMD_VERIFY() -> i64 { 2 }
-fn CMD_TEST() -> i64 { 3 }
-fn CMD_CONTRACTS() -> i64 { 4 }
-fn CMD_SKILL() -> i64 { 5 }
-fn CMD_MUTANTS() -> i64 { 6 }
-fn CMD_COMPLEXITY() -> i64 { 7 }
 
 fn get_subcommand(argv: Vec<String>) -> i64 {
     if argv.len() < 2 {
@@ -16273,6 +16265,11 @@ fn main() -> i32 [io, read, write] {
     if backend_error.len() > 0 {
         eprintln_str(backend_error);
         return 1;
+    }
+    let flag_error: String = cli_flag_error(argv, cmd);
+    if flag_error.len() > 0 {
+        eprintln_str(flag_error);
+        return 2;
     }
     if cmd == CMD_TEST() {
         return run_test(argv);

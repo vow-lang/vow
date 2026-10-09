@@ -1,0 +1,201 @@
+module TestCliFlags
+
+use cli_flags
+
+fn argv1(a: String) -> Vec<String> {
+    let v: Vec<String> = Vec::new();
+    v.push(String::from("vowc"));
+    v.push(a);
+    v
+}
+
+fn argv_cmd(sub: String, flag: String, val: String, src: String) -> Vec<String> {
+    let v: Vec<String> = argv1(sub);
+    if flag.len() > 0 { v.push(flag); }
+    if val.len() > 0 { v.push(val); }
+    v.push(src);
+    v
+}
+
+fn rejects(cmd: i64, sub: String, flag: String) -> bool {
+    let e: String = cli_flag_error(argv_cmd(sub, flag, String::from("10000"), String::from("f.vow")), cmd);
+    let want: String = String::from("error: unexpected argument '");
+    want.push_str(flag);
+    want.push_str(String::from("' found"));
+    e == want
+}
+
+fn accepts_bool(cmd: i64, sub: String, flag: String) -> bool {
+    cli_flag_error(argv_cmd(sub, flag, String::from(""), String::from("f.vow")), cmd).len() == 0
+}
+
+fn accepts_value(cmd: i64, sub: String, flag: String) -> bool {
+    cli_flag_error(argv_cmd(sub, flag, String::from("v"), String::from("f.vow")), cmd).len() == 0
+}
+
+fn check_retired_flags_rejected() -> i64 {
+    let flags: Vec<String> = Vec::new();
+    flags.push(String::from("--vec-max"));
+    flags.push(String::from("--string-max"));
+    flags.push(String::from("--hashmap-max"));
+    flags.push(String::from("--btreemap-max"));
+    let mut i: u64 = 0;
+    while i < flags.len() {
+        let f: String = flags[i];
+        if !rejects(CMD_BUILD(), String::from("build"), f) { return 1; }
+        if !rejects(CMD_VERIFY(), String::from("verify"), f) { return 2; }
+        if !rejects(CMD_TEST(), String::from("test"), f) { return 3; }
+        if !rejects(CMD_CONTRACTS(), String::from("contracts"), f) { return 4; }
+        if !rejects(CMD_COMPLEXITY(), String::from("complexity"), f) { return 5; }
+        if !rejects(CMD_SKILL(), String::from("skill"), f) { return 6; }
+        let v: Vec<String> = argv1(f);
+        v.push(String::from("10000"));
+        v.push(String::from("f.vow"));
+        if cli_flag_error(v, CMD_NONE()).len() == 0 { return 7; }
+        i = i + 1;
+    }
+    0
+}
+
+fn check_build_table() -> i64 {
+    let b: i64 = CMD_BUILD();
+    let s: String = String::from("build");
+    if !accepts_bool(b, s, String::from("--no-verify")) { return 1; }
+    if !accepts_bool(b, s, String::from("--dump-ir")) { return 2; }
+    if !accepts_bool(b, s, String::from("--no-cache")) { return 3; }
+    if !accepts_bool(b, s, String::from("--replay-cex")) { return 4; }
+    if !accepts_bool(b, s, String::from("--help")) { return 5; }
+    if !accepts_value(b, s, String::from("-o")) { return 6; }
+    if !accepts_value(b, s, String::from("--output")) { return 7; }
+    if !accepts_value(b, s, String::from("--mode")) { return 8; }
+    if !accepts_value(b, s, String::from("--debug-trace")) { return 9; }
+    if !accepts_value(b, s, String::from("--perfetto")) { return 10; }
+    if !accepts_value(b, s, String::from("--max-k-step")) { return 11; }
+    if !accepts_value(b, s, String::from("--solver")) { return 12; }
+    if !accepts_value(b, s, String::from("--encoding")) { return 13; }
+    if !accepts_value(b, s, String::from("--timeout")) { return 14; }
+    if !accepts_value(b, s, String::from("--verify-jobs")) { return 15; }
+    if !accepts_value(b, s, String::from("--backend")) { return 16; }
+    if !rejects(b, s, String::from("--verify")) { return 17; }
+    0
+}
+
+fn check_verify_table() -> i64 {
+    let c: i64 = CMD_VERIFY();
+    let s: String = String::from("verify");
+    if !accepts_bool(c, s, String::from("--no-cache")) { return 1; }
+    if !accepts_bool(c, s, String::from("--replay-cex")) { return 2; }
+    if !accepts_value(c, s, String::from("--max-k-step")) { return 3; }
+    if !accepts_value(c, s, String::from("--perfetto")) { return 4; }
+    if !accepts_value(c, s, String::from("--backend")) { return 5; }
+    if !rejects(c, s, String::from("--mode")) { return 6; }
+    if !rejects(c, s, String::from("-o")) { return 7; }
+    if !rejects(c, s, String::from("--no-verify")) { return 8; }
+    0
+}
+
+fn check_other_tables() -> i64 {
+    let t: String = String::from("test");
+    if !accepts_bool(CMD_TEST(), t, String::from("--verify")) { return 1; }
+    if !accepts_value(CMD_TEST(), t, String::from("--filter")) { return 2; }
+    if !accepts_value(CMD_TEST(), t, String::from("--module-root")) { return 3; }
+    if !accepts_value(CMD_TEST(), t, String::from("--jobs")) { return 4; }
+    if !accepts_value(CMD_TEST(), t, String::from("--worker-entry")) { return 5; }
+    if !rejects(CMD_TEST(), t, String::from("--no-verify")) { return 6; }
+    let k: String = String::from("contracts");
+    if !accepts_bool(CMD_CONTRACTS(), k, String::from("--verify")) { return 7; }
+    if !accepts_value(CMD_CONTRACTS(), k, String::from("--verify-jobs")) { return 8; }
+    if !rejects(CMD_CONTRACTS(), k, String::from("--mode")) { return 9; }
+    let x: String = String::from("complexity");
+    if !accepts_value(CMD_COMPLEXITY(), x, String::from("--cog-anchor")) { return 10; }
+    if !accepts_value(CMD_COMPLEXITY(), x, String::from("--max-cyclomatic")) { return 11; }
+    if !rejects(CMD_COMPLEXITY(), x, String::from("--verify")) { return 12; }
+    let sk: String = String::from("skill");
+    if !accepts_bool(CMD_SKILL(), sk, String::from("--bundle")) { return 13; }
+    if !accepts_bool(CMD_SKILL(), sk, String::from("--local")) { return 14; }
+    if !accepts_bool(CMD_SKILL(), sk, String::from("--global")) { return 15; }
+    if !rejects(CMD_SKILL(), sk, String::from("--foo")) { return 16; }
+    0
+}
+
+fn check_legacy_table() -> i64 {
+    let none: i64 = CMD_NONE();
+    let first: Vec<String> = argv1(String::from("--no-verify"));
+    first.push(String::from("f.vow"));
+    if cli_flag_error(first, none).len() != 0 { return 1; }
+    let emit: Vec<String> = argv1(String::from("--emit-c"));
+    emit.push(String::from("f.vow"));
+    if cli_flag_error(emit, none).len() != 0 { return 2; }
+    let both: Vec<String> = argv1(String::from("f.vow"));
+    both.push(String::from("--verify"));
+    both.push(String::from("-o"));
+    both.push(String::from("out"));
+    if cli_flag_error(both, none).len() != 0 { return 3; }
+    0
+}
+
+fn check_value_consumption() -> i64 {
+    let a: Vec<String> = argv_cmd(String::from("build"), String::from("--mode"), String::from("debug"), String::from("f.vow"));
+    if cli_flag_error(a, CMD_BUILD()).len() != 0 { return 1; }
+    let b: Vec<String> = argv_cmd(String::from("test"), String::from("--filter"), String::from("-x"), String::from("f.vow"));
+    if cli_flag_error(b, CMD_TEST()).len() != 0 { return 2; }
+    let c: Vec<String> = argv_cmd(String::from("build"), String::from(""), String::from(""), String::from("f.vow"));
+    c.push(String::from("--mode"));
+    if cli_flag_error(c, CMD_BUILD()) != "error: a value is required for '--mode' but none was supplied" { return 3; }
+    0
+}
+
+fn check_equals_form() -> i64 {
+    let a: Vec<String> = argv_cmd(String::from("build"), String::from("--mode=debug"), String::from(""), String::from("f.vow"));
+    let want: String = String::from("error: unexpected argument '--mode=debug' found\n  tip: use '--mode <value>', not '--mode=<value>'");
+    if cli_flag_error(a, CMD_BUILD()) != want { return 1; }
+    let b: Vec<String> = argv_cmd(String::from("build"), String::from("--bogus=1"), String::from(""), String::from("f.vow"));
+    if cli_flag_error(b, CMD_BUILD()) != "error: unexpected argument '--bogus=1' found" { return 2; }
+    0
+}
+
+fn check_mutants_and_positionals() -> i64 {
+    let m: Vec<String> = argv_cmd(String::from("mutants"), String::from("--anything"), String::from("x"), String::from("run"));
+    if cli_flag_error(m, CMD_MUTANTS()).len() != 0 { return 1; }
+    let s: Vec<String> = argv_cmd(String::from("skill"), String::from(""), String::from(""), String::from("print"));
+    s.push(String::from("--bundle"));
+    if cli_flag_error(s, CMD_SKILL()).len() != 0 { return 2; }
+    let d: Vec<String> = argv_cmd(String::from("build"), String::from("--"), String::from("--weird"), String::from("f.vow"));
+    if cli_flag_error(d, CMD_BUILD()).len() != 0 { return 3; }
+    let dash: Vec<String> = argv_cmd(String::from("build"), String::from("-"), String::from(""), String::from("f.vow"));
+    if cli_flag_error(dash, CMD_BUILD()).len() != 0 { return 4; }
+    0
+}
+
+fn check_takes_value_union() -> i64 {
+    if !cli_flag_takes_value(String::from("-o")) { return 1; }
+    if !cli_flag_takes_value(String::from("--output")) { return 2; }
+    if !cli_flag_takes_value(String::from("--jobs")) { return 3; }
+    if !cli_flag_takes_value(String::from("--worker-entry")) { return 4; }
+    if !cli_flag_takes_value(String::from("--max-score")) { return 5; }
+    if cli_flag_takes_value(String::from("--no-verify")) { return 6; }
+    if cli_flag_takes_value(String::from("--verify")) { return 7; }
+    0
+}
+
+fn main() -> i32 [io, read, write] {
+    let r1: i64 = check_retired_flags_rejected();
+    if r1 != 0 { return i64_to_i32_wrap(100 + r1); }
+    let r2: i64 = check_build_table();
+    if r2 != 0 { return i64_to_i32_wrap(200 + r2); }
+    let r3: i64 = check_verify_table();
+    if r3 != 0 { return i64_to_i32_wrap(300 + r3); }
+    let r4: i64 = check_other_tables();
+    if r4 != 0 { return i64_to_i32_wrap(400 + r4); }
+    let r5: i64 = check_legacy_table();
+    if r5 != 0 { return i64_to_i32_wrap(500 + r5); }
+    let r6: i64 = check_value_consumption();
+    if r6 != 0 { return i64_to_i32_wrap(600 + r6); }
+    let r7: i64 = check_equals_form();
+    if r7 != 0 { return i64_to_i32_wrap(700 + r7); }
+    let r8: i64 = check_mutants_and_positionals();
+    if r8 != 0 { return i64_to_i32_wrap(800 + r8); }
+    let r9: i64 = check_takes_value_union();
+    if r9 != 0 { return i64_to_i32_wrap(900 + r9); }
+    0
+}
