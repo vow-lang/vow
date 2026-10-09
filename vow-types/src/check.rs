@@ -3252,13 +3252,19 @@ impl<'e> Checker<'e> {
                         self.check_integer_literal_range(operand, &tgt_ty);
                     }
                     CastVerdict::Narrowing => {
+                        let try_name = format!("{src_ty}_to_{tgt_ty}_try");
+                        let hint = if self.env.lookup_fn(&try_name).is_some() {
+                            format!("use a `{try_name}`, `_wrap`, or `_sat` narrowing intrinsic")
+                        } else {
+                            format!(
+                                "no narrowing intrinsic from {src_ty} to {tgt_ty} exists; narrow to i32 or smaller with `{src_ty}_to_i32_try`, or keep the value as {src_ty}"
+                            )
+                        };
                         self.emit_error_with_hints(
                             ErrorCode::NarrowingCastNotAllowed,
                             format!("cannot cast {src_ty} to {tgt_ty} via as"),
                             operand.span,
-                            vec![format!(
-                                "use a `{src_ty}_to_{tgt_ty}_try`, `_wrap`, or `_sat` narrowing intrinsic"
-                            )],
+                            vec![hint],
                         );
                     }
                     CastVerdict::Mismatch => {
