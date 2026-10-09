@@ -99,7 +99,7 @@ fn routed_symbol(sym: String, arity: i64, receiver_rgn: i64, call_rgn: i64) -> S
     let params: Vec<i64> = Vec::new();
     params.push(ITY_PTR());
     let f: IrFunction = mk_function(0, String::from("f"), params, ITY_PTR(), blocks);
-    clif_routed_extern_symbol(f, call)
+    clif_routed_extern_symbol(f, clif_fn_index(f), call)
 }
 
 fn check_option_builtins_route_by_result_region() -> i64 {

@@ -10,19 +10,107 @@ fn str2(a: String, b: String) -> String {
     r
 }
 
-fn clif_find_inst(f: IrFunction, id: i64) -> IrInst {
+fn clif_flat_insts(f: IrFunction) -> Vec<IrInst> {
+    let out: Vec<IrInst> = Vec::new();
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: u64 = 0u64;
     while bi < blocks.len() {
         let insts: Vec<IrInst> = blocks[bi].insts;
         let mut ii: u64 = 0u64;
         while ii < insts.len() {
-            if insts[ii].id == id {
-                return insts[ii];
-            }
+            out.push(insts[ii]);
             ii = ii + 1;
         }
         bi = bi + 1;
+    }
+    out
+}
+
+fn clif_map_get_or(m: HashMap<i64, i64>, key: i64, dflt: i64) -> i64 {
+    match m.get(key) {
+        Option::Some(v) => { v },
+        Option::None => { dflt },
+    }
+}
+
+// Instruction id -> ordinal in `flat`. The first occurrence of an id wins.
+fn clif_inst_pos(flat: Vec<IrInst>) -> HashMap<i64, i64> {
+    let pos: HashMap<i64, i64> = HashMap::new();
+    let mut i: u64 = 0u64;
+    while i < flat.len() {
+        let id: i64 = flat[i].id;
+        if !pos.contains_key(id) {
+            pos.insert(id, i as i64);
+        }
+        i = i + 1;
+    }
+    pos
+}
+
+fn clif_is_phi_upsilon(inst: IrInst) -> bool {
+    inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET() && inst.args.len() > 0
+}
+
+// Phi id -> ordinal in `flat` of its first feeding Upsilon.
+fn clif_phi_chain_head(flat: Vec<IrInst>) -> HashMap<i64, i64> {
+    let head: HashMap<i64, i64> = HashMap::new();
+    let mut i: u64 = 0u64;
+    while i < flat.len() {
+        let up: IrInst = flat[i];
+        if clif_is_phi_upsilon(up) && !head.contains_key(up.dv) {
+            head.insert(up.dv, i as i64);
+        }
+        i = i + 1;
+    }
+    head
+}
+
+// For the Upsilon at ordinal `i`, the ordinal of the next Upsilon feeding the
+// same Phi in block/instruction order, or -1 at the end of the chain.
+fn clif_phi_chain_next(flat: Vec<IrInst>) -> Vec<i64> {
+    let next: Vec<i64> = Vec::new();
+    let mut k: u64 = 0u64;
+    while k < flat.len() {
+        next.push(-1);
+        k = k + 1;
+    }
+    let later: HashMap<i64, i64> = HashMap::new();
+    let mut i: u64 = flat.len();
+    while i > 0u64 {
+        i = i - 1u64;
+        let up: IrInst = flat[i];
+        if clif_is_phi_upsilon(up) {
+            next[i] = clif_map_get_or(later, up.dv, -1);
+            later.insert(up.dv, i as i64);
+        }
+    }
+    next
+}
+
+// Per-function lookup tables for receiver-route tracing, built once per function.
+struct ClifFnIndex {
+    flat: Vec<IrInst>,
+    pos: HashMap<i64, i64>,
+    phi_head: HashMap<i64, i64>,
+    phi_next: Vec<i64>,
+}
+
+fn clif_fn_index(f: IrFunction) -> ClifFnIndex {
+    let flat: Vec<IrInst> = clif_flat_insts(f);
+    ClifFnIndex {
+        flat: flat,
+        pos: clif_inst_pos(flat),
+        phi_head: clif_phi_chain_head(flat),
+        phi_next: clif_phi_chain_next(flat),
+    }
+}
+
+fn clif_find_inst(ix: ClifFnIndex, id: i64) -> IrInst {
+    let flat: Vec<IrInst> = ix.flat;
+    let pos: HashMap<i64, i64> = ix.pos;
+    let at: i64 = clif_map_get_or(pos, id, -1);
+    if at >= 0 {
+        return flat[at as u64];
     }
     ir_inst_new(-1, IOP_CONST_UNIT(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""))
 }
@@ -146,7 +234,7 @@ fn clif_route_region(route: i64) -> i64 {
 // FieldGet/Load/vec-get tracing obtains only a candidate container region.
 // String mutation uses the runtime descriptor-owner check before trusting it;
 // Vec/Map mutation keeps the conservative default route.
-fn clif_value_receiver_route(f: IrFunction, receiver: IrInst, seen: Vec<i64>) -> i64 {
+fn clif_value_receiver_route(f: IrFunction, ix: ClifFnIndex, receiver: IrInst, seen: Vec<i64>) -> i64 {
     if receiver.id < 0 {
         return region_root();
     }
@@ -162,8 +250,8 @@ fn clif_value_receiver_route(f: IrFunction, receiver: IrInst, seen: Vec<i64>) ->
         }
     }
     if (receiver.op == IOP_FIELD_GET() || receiver.op == IOP_LOAD()) && receiver.args.len() > 0 {
-        let container: IrInst = clif_find_inst(f, receiver.args[0]);
-        let container_route: i64 = clif_value_receiver_route(f, container, next_seen);
+        let container: IrInst = clif_find_inst(ix, receiver.args[0]);
+        let container_route: i64 = clif_value_receiver_route(f, ix, container, next_seen);
         let candidate: i64 = clif_route_region(container_route);
         let candidate_kind: i64 = region_kind(candidate);
         if candidate_kind == REGION_KIND_BLOCK() || candidate_kind == REGION_KIND_CALLER() {
@@ -175,8 +263,8 @@ fn clif_value_receiver_route(f: IrFunction, receiver: IrInst, seen: Vec<i64>) ->
         && receiver.dk == IDATA_CALL_EXTERN()
         && (receiver.ds == String::from("__vow_vec_get_val") || receiver.ds == String::from("__vow_vec_get"))
         && receiver.args.len() > 0 {
-        let vec_container: IrInst = clif_find_inst(f, receiver.args[0]);
-        let vec_route: i64 = clif_value_receiver_route(f, vec_container, next_seen);
+        let vec_container: IrInst = clif_find_inst(ix, receiver.args[0]);
+        let vec_route: i64 = clif_value_receiver_route(f, ix, vec_container, next_seen);
         let vec_candidate: i64 = clif_route_region(vec_route);
         let vec_candidate_kind: i64 = region_kind(vec_candidate);
         if vec_candidate_kind == REGION_KIND_BLOCK() || vec_candidate_kind == REGION_KIND_CALLER() {
@@ -185,38 +273,30 @@ fn clif_value_receiver_route(f: IrFunction, receiver: IrInst, seen: Vec<i64>) ->
         return receiver.rgn;
     }
     if receiver.op == IOP_PHI() {
-        let blocks: Vec<IrBlock> = f.blocks;
         let mut have: bool = false;
         let mut merged: i64 = region_root();
         let mut candidate_arm: bool = false;
-        let mut bi: u64 = 0u64;
-        while bi < blocks.len() {
-            let insts: Vec<IrInst> = blocks[bi].insts;
-            let mut ii: u64 = 0u64;
-            while ii < insts.len() {
-                let up: IrInst = insts[ii];
-                if up.op == IOP_UPSILON()
-                    && up.dk == IDATA_PHI_TARGET()
-                    && up.dv == receiver.id
-                    && up.args.len() > 0 {
-                    let src: IrInst = clif_find_inst(f, up.args[0]);
-                    let route: i64 = clif_value_receiver_route(f, src, clif_clone_i64_vec(next_seen));
-                    let rgn: i64 = clif_route_region(route);
-                    if !have {
-                        have = true;
-                        merged = rgn;
-                    } else if merged != rgn {
-                        // Divergent Phi arms cannot be unified safely. Fall back to the
-                        // receiver's own region, which is conservatively Root before routing.
-                        return receiver.rgn;
-                    }
-                    if clif_route_is_candidate(route) {
-                        candidate_arm = true;
-                    }
-                }
-                ii = ii + 1;
+        let flat: Vec<IrInst> = ix.flat;
+        let phi_head: HashMap<i64, i64> = ix.phi_head;
+        let phi_next: Vec<i64> = ix.phi_next;
+        let mut slot: i64 = clif_map_get_or(phi_head, receiver.id, -1);
+        while slot >= 0 {
+            let up: IrInst = flat[slot as u64];
+            let src: IrInst = clif_find_inst(ix, up.args[0]);
+            let route: i64 = clif_value_receiver_route(f, ix, src, clif_clone_i64_vec(next_seen));
+            let rgn: i64 = clif_route_region(route);
+            if !have {
+                have = true;
+                merged = rgn;
+            } else if merged != rgn {
+                // Divergent Phi arms cannot be unified safely. Fall back to the
+                // receiver's own region, which is conservatively Root before routing.
+                return receiver.rgn;
             }
-            bi = bi + 1;
+            if clif_route_is_candidate(route) {
+                candidate_arm = true;
+            }
+            slot = phi_next[slot as u64];
         }
         if have {
             if candidate_arm {
@@ -228,15 +308,15 @@ fn clif_value_receiver_route(f: IrFunction, receiver: IrInst, seen: Vec<i64>) ->
     receiver.rgn
 }
 
-fn clif_receiver_route(f: IrFunction, inst: IrInst) -> i64 {
+fn clif_receiver_route(f: IrFunction, ix: ClifFnIndex, inst: IrInst) -> i64 {
     if inst.args.len() == 0 {
         return region_root();
     }
-    let receiver: IrInst = clif_find_inst(f, inst.args[0]);
-    clif_value_receiver_route(f, receiver, Vec::new())
+    let receiver: IrInst = clif_find_inst(ix, inst.args[0]);
+    clif_value_receiver_route(f, ix, receiver, Vec::new())
 }
 
-fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
+fn clif_routed_extern_symbol(f: IrFunction, ix: ClifFnIndex, inst: IrInst) -> String {
     let sym: String = inst.ds;
     if sym == String::from("__vow_vec_new") {
         if region_kind(inst.rgn) == REGION_KIND_ROOT() {
@@ -251,7 +331,7 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         return String::from("__vow_vec_new_val_in_arena");
     }
     if sym == String::from("__vow_vec_push_val") {
-        let rr: i64 = clif_receiver_route(f, inst);
+        let rr: i64 = clif_receiver_route(f, ix, inst);
         if clif_route_is_candidate(rr) { return sym; }
         let rk: i64 = region_kind(rr);
         if rk == REGION_KIND_BLOCK() || rk == REGION_KIND_CALLER() {
@@ -260,7 +340,7 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         return sym;
     }
     if sym == String::from("__vow_vec_push") {
-        let rr2: i64 = clif_receiver_route(f, inst);
+        let rr2: i64 = clif_receiver_route(f, ix, inst);
         if clif_route_is_candidate(rr2) { return sym; }
         let rk2: i64 = region_kind(rr2);
         if rk2 == REGION_KIND_BLOCK() || rk2 == REGION_KIND_CALLER() {
@@ -275,7 +355,7 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         return fresh_arena_variant_name(sym);
     }
     if sym == String::from("__vow_string_push_str") {
-        let sr: i64 = clif_receiver_route(f, inst);
+        let sr: i64 = clif_receiver_route(f, ix, inst);
         let sr_region: i64 = clif_route_region(sr);
         let sk: i64 = region_kind(sr_region);
         if sk == REGION_KIND_BLOCK() || sk == REGION_KIND_CALLER() {
@@ -287,7 +367,7 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         return sym;
     }
     if sym == String::from("__vow_string_push_byte") {
-        let br: i64 = clif_receiver_route(f, inst);
+        let br: i64 = clif_receiver_route(f, ix, inst);
         let br_region: i64 = clif_route_region(br);
         let bk: i64 = region_kind(br_region);
         if bk == REGION_KIND_BLOCK() || bk == REGION_KIND_CALLER() {
@@ -299,7 +379,7 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         return sym;
     }
     if sym == String::from("__vow_map_insert") {
-        let mr: i64 = clif_receiver_route(f, inst);
+        let mr: i64 = clif_receiver_route(f, ix, inst);
         if clif_route_is_candidate(mr) { return sym; }
         let mk: i64 = region_kind(mr);
         if mk == REGION_KIND_BLOCK() || mk == REGION_KIND_CALLER() {
@@ -343,6 +423,7 @@ fn collect_extern_syms(m: IrModule, mode: i64) -> Vec<String> {
     let mut fi: u64 = 0u64;
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
+        let ix: ClifFnIndex = clif_fn_index(f);
         let blocks: Vec<IrBlock> = f.blocks;
         let mut bi: u64 = 0u64;
         while bi < blocks.len() {
@@ -353,7 +434,7 @@ fn collect_extern_syms(m: IrModule, mode: i64) -> Vec<String> {
                 let inst: IrInst = insts[ii];
                 let skip: bool = inst.op == IOP_DEBUG_CALL() && !has_debug;
                 if inst.dk == IDATA_CALL_EXTERN() && !skip && inst.ds != "__vow_string_literal" {
-                    let sym: String = clif_routed_extern_symbol(f, inst);
+                    let sym: String = clif_routed_extern_symbol(f, ix, inst);
                     if !vec_contains_str(result, sym) {
                         result.push(sym);
                     }

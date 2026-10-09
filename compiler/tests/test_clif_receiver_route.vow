@@ -1,0 +1,175 @@
+module TestClifReceiverRoute
+
+use ir
+use region
+use clif
+use tests.builders
+
+// Pins the receiver routing that `collect_extern_syms` uses to pick the
+// `_in_arena` / `_in_candidate_arena` import variants, and the per-function
+// indexes (instruction position, Phi -> Upsilon chain) that routing reads.
+// Each check returns 0 on pass and a non-zero code on failure.
+
+fn block3() -> i64 {
+    region_pack(REGION_KIND_BLOCK(), 3)
+}
+
+fn arg_in(id: i64, index: i64, rgn: i64) -> IrInst {
+    let a: IrInst = mk_inst_arg(id, ITY_PTR(), index);
+    a.rgn = rgn;
+    a
+}
+
+fn call1(id: i64, recv: i64, sym: String) -> IrInst {
+    let args: Vec<i64> = Vec::new();
+    args.push(recv);
+    mk_inst_call_extern(id, ITY_PTR(), args, sym)
+}
+
+fn projection(id: i64, op: i64, container: i64) -> IrInst {
+    let args: Vec<i64> = Vec::new();
+    args.push(container);
+    mk_inst(id, op, ITY_PTR(), args)
+}
+
+fn two_blocks(first: Vec<IrInst>, second: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, first));
+    blocks.push(mk_block(1, second));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    params.push(ITY_PTR());
+    mk_function(0, String::from("f"), params, ITY_PTR(), blocks)
+}
+
+fn routed(f: IrFunction, call: IrInst) -> String {
+    clif_routed_extern_symbol(f, clif_fn_index(f), call)
+}
+
+fn single(insts: Vec<IrInst>, call: IrInst) -> String {
+    insts.push(call);
+    routed(two_blocks(insts, Vec::new()), call)
+}
+
+fn check_direct_receivers() -> i64 {
+    let push: String = String::from("__vow_vec_push");
+    let a: Vec<IrInst> = Vec::new();
+    a.push(arg_in(0, 0, region_root()));
+    if !(single(a, call1(1, 0, push)) == push) { return 1; }
+    let b: Vec<IrInst> = Vec::new();
+    b.push(arg_in(0, 0, block3()));
+    if !(single(b, call1(1, 0, push)) == String::from("__vow_vec_push_in_arena")) { return 2; }
+    let c: Vec<IrInst> = Vec::new();
+    c.push(arg_in(0, 0, block3()));
+    c.push(projection(1, IOP_FIELD_GET(), 0));
+    let ps: String = String::from("__vow_string_push_str");
+    if !(single(c, call1(2, 1, ps)) == String::from("__vow_string_push_str_in_candidate_arena")) { return 3; }
+    let d: Vec<IrInst> = Vec::new();
+    d.push(arg_in(0, 0, block3()));
+    d.push(call1(1, 0, String::from("__vow_vec_get_val")));
+    if !(single(d, call1(2, 1, ps)) == String::from("__vow_string_push_str_in_candidate_arena")) { return 4; }
+    let e: Vec<IrInst> = Vec::new();
+    e.push(arg_in(0, 0, region_root()));
+    e.push(projection(1, IOP_FIELD_GET(), 0));
+    if !(single(e, call1(2, 1, ps)) == ps) { return 5; }
+    let m: Vec<IrInst> = Vec::new();
+    m.push(arg_in(0, 0, region_root()));
+    if !(single(m, call1(1, 99, push)) == push) { return 6; }
+    let dup: Vec<IrInst> = Vec::new();
+    dup.push(arg_in(0, 0, block3()));
+    dup.push(arg_in(0, 1, region_root()));
+    if !(single(dup, call1(1, 0, push)) == String::from("__vow_vec_push_in_arena")) { return 7; }
+    0
+}
+
+fn phi_symbol(arm0_rgn: i64, arm1_rgn: i64) -> String {
+    let first: Vec<IrInst> = Vec::new();
+    first.push(arg_in(0, 0, arm0_rgn));
+    first.push(arg_in(1, 1, arm1_rgn));
+    first.push(mk_inst_phi(2, ITY_PTR()));
+    first.push(mk_inst_upsilon(3, 0, 2));
+    let second: Vec<IrInst> = Vec::new();
+    second.push(mk_inst_upsilon(4, 1, 2));
+    let call: IrInst = call1(5, 2, String::from("__vow_vec_push"));
+    second.push(call);
+    routed(two_blocks(first, second), call)
+}
+
+fn check_phi_receivers() -> i64 {
+    let push: String = String::from("__vow_vec_push");
+    if !(phi_symbol(block3(), block3()) == String::from("__vow_vec_push_in_arena")) { return 1; }
+    if !(phi_symbol(block3(), region_root()) == push) { return 2; }
+    if !(phi_symbol(region_root(), block3()) == push) { return 3; }
+    if !(phi_symbol(region_root(), region_root()) == push) { return 4; }
+    let first: Vec<IrInst> = Vec::new();
+    first.push(arg_in(0, 0, block3()));
+    first.push(mk_inst_phi(1, ITY_PTR()));
+    first.push(mk_inst_upsilon(2, 0, 1));
+    first.push(mk_inst_upsilon(3, 1, 1));
+    let call: IrInst = call1(4, 1, push);
+    first.push(call);
+    if !(routed(two_blocks(first, Vec::new()), call) == push) { return 5; }
+    0
+}
+
+fn check_index_builders() -> i64 {
+    let first: Vec<IrInst> = Vec::new();
+    first.push(arg_in(7, 0, region_root()));
+    first.push(mk_inst_phi(8, ITY_PTR()));
+    first.push(mk_inst_upsilon(9, 7, 8));
+    first.push(arg_in(7, 1, region_root()));
+    let second: Vec<IrInst> = Vec::new();
+    second.push(mk_inst_upsilon(10, 7, 8));
+    second.push(mk_inst_phi(11, ITY_PTR()));
+    second.push(mk_inst_upsilon(12, 7, 8));
+    let f: IrFunction = two_blocks(first, second);
+    let ix: ClifFnIndex = clif_fn_index(f);
+    let flat: Vec<IrInst> = ix.flat;
+    if flat.len() != 7u64 { return 1; }
+    let pos: HashMap<i64, i64> = ix.pos;
+    if clif_map_get_or(pos, 7, -1) != 0 { return 2; }
+    if clif_map_get_or(pos, 8, -1) != 1 { return 3; }
+    if clif_map_get_or(pos, 12, -1) != 6 { return 4; }
+    if clif_map_get_or(pos, 99, -1) != -1 { return 5; }
+    if clif_find_inst(ix, 7).dv != 0 { return 6; }
+    if clif_find_inst(ix, 99).id != -1 { return 7; }
+    let head: HashMap<i64, i64> = ix.phi_head;
+    let next: Vec<i64> = ix.phi_next;
+    if clif_map_get_or(head, 8, -1) != 2 { return 8; }
+    if clif_map_get_or(head, 11, -1) != -1 { return 9; }
+    if next[2u64] != 4 { return 10; }
+    if next[4u64] != 6 { return 11; }
+    if next[6u64] != -1 { return 12; }
+    if next[0u64] != -1 { return 13; }
+    0
+}
+
+fn check_large_function_collects_one_symbol() -> i64 {
+    let first: Vec<IrInst> = Vec::new();
+    first.push(arg_in(0, 0, block3()));
+    first.push(mk_inst_phi(1, ITY_PTR()));
+    first.push(mk_inst_upsilon(2, 0, 1));
+    let mut n: i64 = 0;
+    while n < 2000 {
+        first.push(call1(10 + n, 1, String::from("__vow_vec_push")));
+        n = n + 1;
+    }
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(two_blocks(first, Vec::new()));
+    let syms: Vec<String> = collect_extern_syms(mk_module(funcs), 0);
+    if syms.len() != 1u64 { return 1; }
+    if !(syms[0u64] == String::from("__vow_vec_push_in_arena")) { return 2; }
+    0
+}
+
+fn main() -> i32 {
+    let r1: i64 = check_direct_receivers();
+    if r1 != 0 { return i64_to_i32_wrap(r1); }
+    let r2: i64 = check_phi_receivers();
+    if r2 != 0 { return i64_to_i32_wrap(100 + r2); }
+    let r3: i64 = check_index_builders();
+    if r3 != 0 { return i64_to_i32_wrap(200 + r3); }
+    let r4: i64 = check_large_function_collects_one_symbol();
+    if r4 != 0 { return i64_to_i32_wrap(300 + r4); }
+    0
+}
