@@ -338,11 +338,12 @@ pub(crate) fn build_structured_counterexample_with_module(
     // Block ids are function-local C variables, so visits recorded for a
     // co-emitted callee cannot be told apart from the target's.
     let callee_owned = ce.callee_postcondition.is_some();
+    let blocks: &[_] = if callee_owned { &[] } else { &func.blocks };
 
     // Execution path from block visits
     let visited: std::collections::HashSet<u32> = ce.block_visits.iter().copied().collect();
     let mut execution_path: Vec<CePathStep> = Vec::new();
-    for block in func.blocks.iter().filter(|_| !callee_owned) {
+    for block in blocks.iter() {
         if visited.contains(&block.id.0) {
             let span = block
                 .insts
@@ -367,7 +368,7 @@ pub(crate) fn build_structured_counterexample_with_module(
 
     // Branch decisions
     let mut branch_decisions: Vec<CeBranchDecision> = Vec::new();
-    for block in func.blocks.iter().filter(|_| !callee_owned) {
+    for block in blocks.iter() {
         for inst in &block.insts {
             if inst.opcode == vow_ir::Opcode::Branch
                 && let InstData::BranchTargets {
