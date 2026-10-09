@@ -95,7 +95,9 @@ pub(crate) fn lookup(handle: i64) -> Option<Arc<PipedChild>> {
 #[cfg(target_vendor = "apple")]
 fn suppress_sigpipe(stdin: &ChildStdin) {
     use std::os::fd::AsRawFd;
-    unsafe { libc::fcntl(stdin.as_raw_fd(), libc::F_SETNOSIGPIPE, 1) };
+    // Not exported by the libc crate; value from <sys/fcntl.h>.
+    const F_SETNOSIGPIPE: libc::c_int = 73;
+    unsafe { libc::fcntl(stdin.as_raw_fd(), F_SETNOSIGPIPE, 1) };
 }
 
 #[cfg(not(target_vendor = "apple"))]
