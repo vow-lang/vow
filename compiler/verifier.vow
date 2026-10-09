@@ -437,7 +437,7 @@ fn verify_tmp_path() -> String [io] {
     let path: String = String::from("");
     path.push_str(dir);
     // verify_tmp_dir_for_path hardcodes this suffix to recover the mktemp
-    // directory for fs_remove_dir; changing the filename here without updating
+    // directory for fs_remove_dir_all; changing the filename here without updating
     // it there silently makes cleanup_verify_tmp_path skip the directory and
     // leak the mktemp dir on disk.
     path.push_str(String::from("/esbmc.c"));
@@ -469,7 +469,7 @@ fn cleanup_verify_tmp_path(tmp_path: String) [io] {
     fs_remove(tmp_path);
     let tmp_dir: String = verify_tmp_dir_for_path(tmp_path);
     if tmp_dir.len() > 0 {
-        fs_remove_dir(tmp_dir);
+        fs_remove_dir_all(tmp_dir);
     }
 }
 

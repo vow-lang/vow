@@ -3336,6 +3336,11 @@ fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
             sig.returns.push(AbiParam::new(types::I64));
             true
         }
+        "__vow_fs_remove_dir_all" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+            true
+        }
         "__vow_fs_is_dir" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
@@ -4445,6 +4450,7 @@ mod tests {
             "__vow_fs_listdir",
             "__vow_fs_remove",
             "__vow_fs_remove_dir",
+            "__vow_fs_remove_dir_all",
             "__vow_fs_is_dir",
             "__vow_fs_is_symlink",
         ];

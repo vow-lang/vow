@@ -189,6 +189,7 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
         ),
         def("fs_remove", vec![Ty::Str], Ty::I64, &[Effect::IO]),
         def("fs_remove_dir", vec![Ty::Str], Ty::I64, &[Effect::IO]),
+        def("fs_remove_dir_all", vec![Ty::Str], Ty::I64, &[Effect::IO]),
         def("fs_is_dir", vec![Ty::Str], Ty::I64, &[Effect::Read]),
         def("fs_is_symlink", vec![Ty::Str], Ty::I64, &[Effect::Read]),
         def("fs_rename", vec![Ty::Str, Ty::Str], Ty::I64, &[Effect::IO]),
@@ -933,6 +934,7 @@ fs_read_line(I64) -> Str [Read]
 fs_read_status() -> I64 [Read]
 fs_remove(Str) -> I64 [IO]
 fs_remove_dir(Str) -> I64 [IO]
+fs_remove_dir_all(Str) -> I64 [IO]
 fs_rename(Str, Str) -> I64 [IO]
 fs_status(I64) -> I64 [Read]
 fs_write(Str, Str) -> I64 [Write]

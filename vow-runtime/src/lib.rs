@@ -4032,6 +4032,24 @@ pub unsafe extern "C" fn __vow_fs_remove_dir(path_ptr: *const u8) -> i64 {
         Ok(s) => s,
         Err(_) => return -1,
     };
+    match std::fs::remove_dir(path) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_fs_remove_dir_all(path_ptr: *const u8) -> i64 {
+    if path_ptr.is_null() {
+        return -1;
+    }
+    sanitize_on_read(path_ptr as usize, 0);
+    let v = unsafe { &*(path_ptr as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let path = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
     match std::fs::remove_dir_all(path) {
         Ok(_) => 0,
         Err(_) => -1,

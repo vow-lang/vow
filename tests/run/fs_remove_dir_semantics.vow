@@ -1,0 +1,83 @@
+// TEST: stdout "ok\n"
+module FsRemoveDirSemantics
+
+fn fail(msg: String) -> i32 [io] {
+    print_str(msg);
+    print_str(String::from("\n"));
+    1
+}
+
+fn join(dir: String, name: String) -> String {
+    let p: String = String::from(dir);
+    p.push_str(String::from("/"));
+    p.push_str(name);
+    p
+}
+
+fn main() -> i32 [read, io, write] {
+    let d: String = mktemp_dir(String::from("vow-476"));
+    if d.len() == 0 {
+        return fail(String::from("mktemp"));
+    }
+    let f: String = join(d, String::from("f.txt"));
+    if fs_write(f, String::from("x")) != 0 {
+        return fail(String::from("write"));
+    }
+    if fs_remove_dir(d) == 0 {
+        return fail(String::from("rmdir-nonempty-succeeded"));
+    }
+    if fs_exists(f) != 1 || fs_is_dir(d) != 1 {
+        return fail(String::from("rmdir-nonempty-destroyed"));
+    }
+    if fs_remove(f) != 0 {
+        return fail(String::from("remove-file"));
+    }
+    if fs_remove_dir(d) != 0 {
+        return fail(String::from("rmdir-empty"));
+    }
+    if fs_exists(d) != 0 {
+        return fail(String::from("rmdir-empty-left"));
+    }
+
+    let t: String = mktemp_dir(String::from("vow-476"));
+    if t.len() == 0 {
+        return fail(String::from("mktemp-tree"));
+    }
+    let sub: String = join(t, String::from("sub"));
+    if fs_mkdir(sub) != 0 {
+        return fail(String::from("mkdir-sub"));
+    }
+    if fs_write(join(sub, String::from("f.txt")), String::from("y")) != 0 {
+        return fail(String::from("write-nested"));
+    }
+    if fs_remove_dir(t) == 0 {
+        return fail(String::from("rmdir-tree-succeeded"));
+    }
+    if fs_remove_dir_all(t) != 0 {
+        return fail(String::from("remove-all"));
+    }
+    if fs_exists(t) != 0 {
+        return fail(String::from("remove-all-left"));
+    }
+
+    if fs_remove_dir(t) == 0 {
+        return fail(String::from("rmdir-missing"));
+    }
+    if fs_remove_dir_all(t) == 0 {
+        return fail(String::from("remove-all-missing"));
+    }
+
+    let g: String = mktemp_dir(String::from("vow-476"));
+    let gf: String = join(g, String::from("g.txt"));
+    if g.len() == 0 || fs_write(gf, String::from("z")) != 0 {
+        return fail(String::from("setup-file"));
+    }
+    if fs_remove_dir(gf) == 0 {
+        return fail(String::from("rmdir-on-file"));
+    }
+    if fs_remove_dir_all(g) != 0 {
+        return fail(String::from("cleanup"));
+    }
+    print_str(String::from("ok\n"));
+    0
+}

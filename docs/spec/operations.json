@@ -113,6 +113,14 @@
       "effects": "[io]"
     },
     {
+      "name": "fs_remove_dir_all",
+      "runtime_symbol": "__vow_fs_remove_dir_all",
+      "params": ["ptr"],
+      "return": "i64",
+      "doc_signature": "fn(path: String) -> i64",
+      "effects": "[io]"
+    },
+    {
       "name": "fs_is_dir",
       "runtime_symbol": "__vow_fs_is_dir",
       "params": ["ptr"],
