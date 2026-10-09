@@ -2604,12 +2604,12 @@ fn skill_json() -> String {
     r.push_str(String::from("      \"options\": [\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"-o, --output <path>\",\n"));
-    r.push_str(String::from("          \"description\": \"Output executable path (default: source without .vow extension)\",\n"));
+    r.push_str(String::from("          \"description\": \"Output executable path (default: build/<stem>)\",\n"));
     r.push_str(String::from("          \"short\": \"-o\",\n"));
     r.push_str(String::from("          \"long\": \"--output\",\n"));
     r.push_str(String::from("          \"value_name\": \"path\",\n"));
     r.push_str(String::from("          \"value_kind\": \"path\",\n"));
-    r.push_str(String::from("          \"default\": \"source without .vow extension\"\n"));
+    r.push_str(String::from("          \"default\": \"build/<stem>\"\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--mode <debug|release|profile|sanitize>\",\n"));
@@ -3109,7 +3109,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"build_options\": {\n"));
-    r.push_str(String::from("    \"-o, --output <path>\": \"Output executable path (default: source without .vow extension)\",\n"));
+    r.push_str(String::from("    \"-o, --output <path>\": \"Output executable path (default: build/<stem>)\",\n"));
     r.push_str(String::from("    \"--mode <debug|release|profile|sanitize>\": \"Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking (default: release)\",\n"));
     r.push_str(String::from("    \"--no-verify\": \"Skip ESBMC static verification\",\n"));
     r.push_str(String::from("    \"--dump-ir\": \"Print IR text to stdout and exit (no JSON output, no codegen)\",\n"));
@@ -3534,7 +3534,7 @@ fn skill_human() -> String {
     r.push_str(String::from("  vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("BUILD OPTIONS\n"));
-    r.push_str(String::from("  -o, --output <path>     Output executable path (default: source without .vow extension)\n"));
+    r.push_str(String::from("  -o, --output <path>     Output executable path (default: build/<stem>)\n"));
     r.push_str(String::from("  --mode <debug|release|profile|sanitize>  Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking (default: release)\n"));
     r.push_str(String::from("  --no-verify             Skip ESBMC static verification\n"));
     r.push_str(String::from("  --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)\n"));
