@@ -409,41 +409,43 @@ mod tests {
         assert!(c.span.len > 0);
     }
 
+    fn const_value(src: &str) -> ExprKind {
+        let Item::Const(c) = parse_item(src) else {
+            unreachable!()
+        };
+        c.value.kind
+    }
+
     #[test]
     fn const_value_drops_a_suffix_matching_the_declared_type() {
-        for (src, negated) in [
-            ("const X: u8 = 200u8;", false),
-            ("const X: i32 = -5i32;", true),
-        ] {
-            let c = match parse_item(src) {
-                Item::Const(c) => c,
-                other => panic!("expected const, got {:?}", other),
-            };
-            let lit = match (&c.value.kind, negated) {
-                (ExprKind::Lit(lit), false) => lit,
-                (
-                    ExprKind::UnaryOp {
-                        op: UnOp::Neg,
-                        operand,
-                    },
-                    true,
-                ) => match &operand.kind {
-                    ExprKind::Lit(lit) => lit,
-                    other => panic!("expected bare literal operand, got {:?}", other),
-                },
-                other => panic!("expected bare literal const value, got {:?}", other),
-            };
-            assert!(matches!(lit, Lit::Int(_)));
-        }
+        assert!(matches!(
+            const_value("const X: u8 = 200u8;"),
+            ExprKind::Lit(Lit::Int(_))
+        ));
+        let ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand,
+        } = const_value("const X: i32 = -5i32;")
+        else {
+            unreachable!()
+        };
+        assert!(matches!(operand.kind, ExprKind::Lit(Lit::Int(_))));
     }
 
     #[test]
     fn const_value_keeps_a_suffix_naming_another_type() {
-        let c = match parse_item("const X: u32 = 5u8;") {
-            Item::Const(c) => c,
-            other => panic!("expected const, got {:?}", other),
-        };
-        assert!(matches!(c.value.kind, ExprKind::Cast { .. }));
+        assert!(matches!(
+            const_value("const X: u32 = 5u8;"),
+            ExprKind::Cast { .. }
+        ));
+    }
+
+    #[test]
+    fn const_value_with_non_named_declared_type_is_left_alone() {
+        assert!(matches!(
+            const_value("const X: &u8 = 5u8;"),
+            ExprKind::Cast { .. }
+        ));
     }
 
     #[test]
