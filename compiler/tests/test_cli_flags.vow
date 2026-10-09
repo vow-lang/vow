@@ -125,12 +125,16 @@ fn check_legacy_table() -> i64 {
     if cli_flag_error(first, none).len() != 0 { return 1; }
     let emit: Vec<String> = argv1(String::from("--emit-c"));
     emit.push(String::from("f.vow"));
-    if cli_flag_error(emit, none).len() != 0 { return 2; }
+    if cli_flag_error(emit, none).len() == 0 { return 2; }
     let both: Vec<String> = argv1(String::from("f.vow"));
     both.push(String::from("--verify"));
     both.push(String::from("-o"));
     both.push(String::from("out"));
-    if cli_flag_error(both, none).len() != 0 { return 3; }
+    if cli_flag_error(both, none).len() == 0 { return 3; }
+    let out: Vec<String> = argv1(String::from("f.vow"));
+    out.push(String::from("-o"));
+    out.push(String::from("out"));
+    if cli_flag_error(out, none).len() != 0 { return 4; }
     0
 }
 

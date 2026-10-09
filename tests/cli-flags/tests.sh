@@ -92,6 +92,39 @@ rc=0
 "$VOWC_BIN" verify --no-cache "$FIXTURE" >/dev/null 2>&1 || rc=$?
 if [ "$rc" -eq 2 ]; then fail "verify --no-cache was rejected as a usage error"; fi
 
+# The bare `<file.vow>` form is `build` (issue #596): verify by default, fail
+# closed, emit a binary only on success, and reject legacy-only flags.
+unknown_flag --emit-c --emit-c "$FIXTURE"
+unknown_flag --verify "$FIXTURE" --verify
+
+if command -v esbmc >/dev/null 2>&1; then
+    bare_status() {
+        python3 -I -c 'import json,sys; print(json.loads(sys.stdin.read().strip().splitlines()[-1])["status"])'
+    }
+    BAD="tests/verify-fail/verify_jobs_ce_before_soft.vow"
+    GOOD="tests/verify/clamp.vow"
+
+    rc=0
+    out=$("$VOWC_BIN" --no-cache "$BAD" -o "$TMP_ROOT/bare_bad" 2>/dev/null) || rc=$?
+    if [ "$rc" -eq 0 ]; then fail "bare form exited 0 on a contract violation"; fi
+    expect "bare form status on a contract violation" "$(printf '%s' "$out" | bare_status)" "VerifyFailed"
+
+    rc=0
+    rm -f "$TMP_ROOT/bare_good"
+    out=$("$VOWC_BIN" --no-cache "$GOOD" -o "$TMP_ROOT/bare_good" 2>/dev/null) || rc=$?
+    expect "bare form exit on a verified program" "$rc" "0"
+    expect "bare form status on a verified program" "$(printf '%s' "$out" | bare_status)" "Verified"
+    if [ ! -x "$TMP_ROOT/bare_good" ]; then fail "bare form did not emit a binary for a verified program"; fi
+else
+    echo "cli-flags: esbmc not found; skipping bare-form verification checks" >&2
+fi
+
+rc=0
+rm -f "$TMP_ROOT/bare_nv"
+out=$("$VOWC_BIN" --no-verify --no-cache "$FIXTURE" -o "$TMP_ROOT/bare_nv" 2>/dev/null) || rc=$?
+expect "bare --no-verify exit" "$rc" "0"
+if [ ! -x "$TMP_ROOT/bare_nv" ]; then fail "bare --no-verify did not emit a binary"; fi
+
 if [ "$failures" -ne 0 ]; then
     echo "cli-flags: $failures failure(s)" >&2
     exit 1

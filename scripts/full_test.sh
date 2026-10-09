@@ -501,7 +501,7 @@ run_bootstrap_triple() {
     # Stage 1: A → B
     status=0
     stderr_log="$TMPDIR/bootstrap_stage1.stderr"
-    run_self_bin "$TMPDIR/compiler_a" -o "$TMPDIR/compiler_b" "$TMPDIR/compiler_clif.vow" >/dev/null 2>"$stderr_log" || status=$?
+    run_self_bin "$TMPDIR/compiler_a" build --no-verify --no-cache -o "$TMPDIR/compiler_b" "$TMPDIR/compiler_clif.vow" >/dev/null 2>"$stderr_log" || status=$?
     if [ "$status" -ne 0 ]; then
         bootstrap_stage_failure "Stage 1" "$status" "$stderr_log"
         return 0
@@ -514,7 +514,7 @@ run_bootstrap_triple() {
     # Stage 2: B → C
     status=0
     stderr_log="$TMPDIR/bootstrap_stage2.stderr"
-    run_self_bin "$TMPDIR/compiler_b" -o "$TMPDIR/compiler_c" "$TMPDIR/compiler_clif.vow" >/dev/null 2>"$stderr_log" || status=$?
+    run_self_bin "$TMPDIR/compiler_b" build --no-verify --no-cache -o "$TMPDIR/compiler_c" "$TMPDIR/compiler_clif.vow" >/dev/null 2>"$stderr_log" || status=$?
     if [ "$status" -ne 0 ]; then
         bootstrap_stage_failure "Stage 2" "$status" "$stderr_log"
         return 0
@@ -1004,7 +1004,7 @@ for mode in verify build legacy; do
             self_json=$(run_self build --verify-jobs 2 "$fixture" -o "$TMPDIR/ce_before_soft" 2>/dev/null) || self_exit=$?
             ;;
         legacy)
-            self_json=$(run_self --verify --verify-jobs 2 "$fixture" 2>/dev/null) || self_exit=$?
+            self_json=$(run_self --verify-jobs 2 "$fixture" -o "$TMPDIR/ce_before_soft_bare" 2>/dev/null) || self_exit=$?
             ;;
     esac
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$self_json" 2>/dev/null) || actual_status=""

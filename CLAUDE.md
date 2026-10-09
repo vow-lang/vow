@@ -291,8 +291,8 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 
 ```bash
 build/vowc build --no-verify compiler/main.vow -o /tmp/vow_main  # compile self-hosted compiler
-/tmp/vow_main compiler/lexer.vow                             # type-check, print IR
-/tmp/vow_main -o /tmp/lexer compiler/lexer.vow               # compile to native binary
+/tmp/vow_main build --no-verify --dump-ir compiler/lexer.vow               # type-check, print IR
+/tmp/vow_main build --no-verify -o /tmp/lexer compiler/lexer.vow            # compile to native binary
 ```
 
 The self-hosted compiler supports DFS module loading via `use` declarations.
@@ -311,8 +311,8 @@ select by file stem.
 ```bash
 ./scripts/concat_vow.sh clif > /tmp/compiler_clif.vow
 ./target/release/vow --no-verify /tmp/compiler_clif.vow -o /tmp/compiler_a  # Stage 0: Rust → Binary A
-/tmp/compiler_a -o /tmp/compiler_b /tmp/compiler_clif.vow                   # Stage 1: A → B
-/tmp/compiler_b -o /tmp/compiler_c /tmp/compiler_clif.vow                   # Stage 2: B → C
+/tmp/compiler_a build --no-verify -o /tmp/compiler_b /tmp/compiler_clif.vow  # Stage 1: A → B
+/tmp/compiler_b build --no-verify -o /tmp/compiler_c /tmp/compiler_clif.vow  # Stage 2: B → C
 sha256sum /tmp/compiler_b /tmp/compiler_c              # must be identical (binary fixed point)
 ```
 
