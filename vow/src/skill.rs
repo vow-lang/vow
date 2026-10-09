@@ -2413,7 +2413,9 @@ currently propagates `Option` payloads only. The ESBMC C model moves `f32`
 and `f64` enum payloads and struct fields through its integer slots by
 IEEE-754 bit pattern (an `f64` as its raw 64 bits, an `f32` as its 32 bits
 zero-extended), as native codegen does, so contracts over float payloads
-verify. Float equality follows IEEE-754: a NaN payload does not equal itself.
+verify under the default bit-vector encoding; `--encoding ir` does not
+model the reinterpretation and can report a spurious counterexample.
+Float equality follows IEEE-754: a NaN payload does not equal itself.
 
 ## Pattern Matching
 
@@ -8430,7 +8432,9 @@ currently propagates `Option` payloads only. The ESBMC C model moves `f32`
 and `f64` enum payloads and struct fields through its integer slots by
 IEEE-754 bit pattern (an `f64` as its raw 64 bits, an `f32` as its 32 bits
 zero-extended), as native codegen does, so contracts over float payloads
-verify. Float equality follows IEEE-754: a NaN payload does not equal itself.
+verify under the default bit-vector encoding; `--encoding ir` does not
+model the reinterpretation and can report a spurious counterexample.
+Float equality follows IEEE-754: a NaN payload does not equal itself.
 
 ## Pattern Matching
 

@@ -4856,7 +4856,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("and `f64` enum payloads and struct fields through its integer slots by\n"));
     r.push_str(String::from("IEEE-754 bit pattern (an `f64` as its raw 64 bits, an `f32` as its 32 bits\n"));
     r.push_str(String::from("zero-extended), as native codegen does, so contracts over float payloads\n"));
-    r.push_str(String::from("verify. Float equality follows IEEE-754: a NaN payload does not equal itself.\n"));
+    r.push_str(String::from("verify under the default bit-vector encoding; `--encoding ir` does not\n"));
+    r.push_str(String::from("model the reinterpretation and can report a spurious counterexample.\n"));
+    r.push_str(String::from("Float equality follows IEEE-754: a NaN payload does not equal itself.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Pattern Matching\n"));
     r.push_str(String::from("\n"));
@@ -10895,7 +10897,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("and `f64` enum payloads and struct fields through its integer slots by\n"));
     r.push_str(String::from("IEEE-754 bit pattern (an `f64` as its raw 64 bits, an `f32` as its 32 bits\n"));
     r.push_str(String::from("zero-extended), as native codegen does, so contracts over float payloads\n"));
-    r.push_str(String::from("verify. Float equality follows IEEE-754: a NaN payload does not equal itself.\n"));
+    r.push_str(String::from("verify under the default bit-vector encoding; `--encoding ir` does not\n"));
+    r.push_str(String::from("model the reinterpretation and can report a spurious counterexample.\n"));
+    r.push_str(String::from("Float equality follows IEEE-754: a NaN payload does not equal itself.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Pattern Matching\n"));
     r.push_str(String::from("\n"));
