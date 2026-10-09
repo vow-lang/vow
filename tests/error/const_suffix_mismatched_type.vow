@@ -1,0 +1,8 @@
+// TEST: error-code TypeMismatch
+module ConstSuffixMismatchedType
+
+const STEP: u32 = 5u8;
+
+fn main() -> i32 {
+    0
+}

@@ -376,6 +376,7 @@ impl Parser {
             kind: ExprKind::Lit(crate::ast::Lit::Int(0)),
             span: start,
         });
+        let value = strip_const_suffix_matching(value, &ty);
         let end = self.current_span();
         self.expect(TokenKind::Semicolon);
         Item::Const(ConstDef {
@@ -732,6 +733,42 @@ pub fn parse_module(source: &str, file: &str) -> (Module, Vec<Diagnostic>) {
     let mut parser = Parser::new(tokens, source.to_string(), file.to_string());
     let module = parser.parse_module_inner();
     (module, parser.diagnostics)
+}
+
+/// Drops an integer-literal suffix that merely restates the declared `const`
+/// type (`const X: u8 = 200u8;`, `const Y: i32 = -5i32;`), leaving the bare
+/// literal that const registration and lowering expect. A suffix naming a
+/// different type is kept so the checker still rejects it.
+fn strip_const_suffix_matching(value: Expr, declared: &Type) -> Expr {
+    let Type::Named {
+        name: declared_name,
+        ..
+    } = declared
+    else {
+        return value;
+    };
+    match value.kind {
+        ExprKind::Cast { expr, target_ty }
+            if matches!(expr.kind, ExprKind::Lit(crate::ast::Lit::Int(_)))
+                && matches!(target_ty.as_ref(), Type::Named { name, .. } if name == declared_name) =>
+        {
+            *expr
+        }
+        ExprKind::UnaryOp {
+            op: crate::ast::UnOp::Neg,
+            operand,
+        } => Expr {
+            kind: ExprKind::UnaryOp {
+                op: crate::ast::UnOp::Neg,
+                operand: Box::new(strip_const_suffix_matching(*operand, declared)),
+            },
+            span: value.span,
+        },
+        kind => Expr {
+            kind,
+            span: value.span,
+        },
+    }
 }
 
 #[cfg(test)]

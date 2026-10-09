@@ -348,7 +348,7 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::{Item, VariantKind, Visibility};
+    use crate::ast::{ExprKind, Item, Lit, UnOp, VariantKind, Visibility};
     use crate::parser::parse_item_source;
     use vow_diag::Diagnostic;
 
@@ -407,6 +407,43 @@ mod tests {
         assert_eq!(c.span.start, 0);
         assert_eq!(c.span.len as usize, src.len());
         assert!(c.span.len > 0);
+    }
+
+    #[test]
+    fn const_value_drops_a_suffix_matching_the_declared_type() {
+        for (src, negated) in [
+            ("const X: u8 = 200u8;", false),
+            ("const X: i32 = -5i32;", true),
+        ] {
+            let c = match parse_item(src) {
+                Item::Const(c) => c,
+                other => panic!("expected const, got {:?}", other),
+            };
+            let lit = match (&c.value.kind, negated) {
+                (ExprKind::Lit(lit), false) => lit,
+                (
+                    ExprKind::UnaryOp {
+                        op: UnOp::Neg,
+                        operand,
+                    },
+                    true,
+                ) => match &operand.kind {
+                    ExprKind::Lit(lit) => lit,
+                    other => panic!("expected bare literal operand, got {:?}", other),
+                },
+                other => panic!("expected bare literal const value, got {:?}", other),
+            };
+            assert!(matches!(lit, Lit::Int(_)));
+        }
+    }
+
+    #[test]
+    fn const_value_keeps_a_suffix_naming_another_type() {
+        let c = match parse_item("const X: u32 = 5u8;") {
+            Item::Const(c) => c,
+            other => panic!("expected const, got {:?}", other),
+        };
+        assert!(matches!(c.value.kind, ExprKind::Cast { .. }));
     }
 
     #[test]
