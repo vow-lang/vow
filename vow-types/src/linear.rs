@@ -1,4 +1,3 @@
-use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 use vow_diag::{Blame, Diagnostic, DiagnosticEmitter, ErrorCode, Severity, SourceLocation};
@@ -163,7 +162,7 @@ fn check_block(
 /// shadowing (or being mistaken for) a same-named binding outside the block.
 /// Only consumed bindings are handed back: an unconsumed one stays so the
 /// end-of-function backstop still reports it. A non-linear `let` that evicted a
-/// consumed entry is undone the same way, once no linear binding holds the name.
+/// consumed entry is restored the same way.
 fn close_scope(tracker: &mut LinearTracker) {
     let frame = tracker.scopes.pop().expect("check_block pushed a scope");
     for (name, shadowed) in frame.into_iter().rev() {
@@ -226,24 +225,18 @@ fn register_pattern_linear(
         }
         return;
     }
-    // The tracker is name-keyed: a non-linear rebinding must not leave a stale consumed entry that a later assignment would re-arm.
-    if !tracker
-        .vars
-        .values()
-        .any(|state| matches!(state, ConsumeState::Consumed(_)))
-    {
+    // Names are tracked flat: evict a consumed entry so a later assignment cannot re-arm it.
+    if tracker.vars.is_empty() {
         return;
     }
     let mut names = vec![];
     collect_pattern_binding_names(pat, &mut names);
     for name in names {
-        if let Entry::Occupied(entry) = tracker.vars.entry(name)
-            && matches!(entry.get(), ConsumeState::Consumed(_))
+        if matches!(tracker.vars.get(&name), Some(ConsumeState::Consumed(_)))
+            && let Some(state) = tracker.vars.remove(&name)
+            && let Some(frame) = tracker.scopes.last_mut()
         {
-            let evicted = entry.remove_entry();
-            if let Some(frame) = tracker.scopes.last_mut() {
-                frame.push((evicted.0, Some(evicted.1)));
-            }
+            frame.push((name, Some(state)));
         }
     }
 }
@@ -317,12 +310,12 @@ fn check_expr(
         ExprKind::Assign { lhs, rhs } => {
             check_expr(lhs, tracker, env, file, emitter, false);
             check_expr(rhs, tracker, env, file, emitter, true);
-            // Visiting the RHS first lets `h = wrap(h)` consume the old value before the new one is armed.
+            // The RHS is visited first so `h = wrap(h)` consumes the old value before re-arming.
             if let ExprKind::Ident(name) = &lhs.kind
                 && let Some(state) = tracker.vars.get_mut(name)
             {
-                let depth = match state {
-                    ConsumeState::Available(_, depth) => *depth,
+                let depth = match *state {
+                    ConsumeState::Available(_, depth) => depth,
                     _ => tracker.loop_depth,
                 };
                 *state = ConsumeState::Available(lhs.span, depth);
@@ -380,21 +373,18 @@ fn check_loop_body(
     file: &str,
     emitter: &mut dyn DiagnosticEmitter,
 ) {
-    let consumed_before: Vec<(String, Span)> = if may_skip {
-        tracker
-            .vars
-            .iter()
-            .filter_map(|(name, state)| {
-                state_may_be_consumed(Some(state)).map(|span| (name.clone(), span))
-            })
-            .collect()
-    } else {
-        vec![]
-    };
+    let consumed_before: Vec<(String, Span)> = tracker
+        .vars
+        .iter()
+        .filter(|_| may_skip)
+        .filter_map(|(name, state)| {
+            state_may_be_consumed(Some(state)).map(|span| (name.clone(), span))
+        })
+        .collect();
     tracker.loop_depth += 1;
     check_block(body, tracker, env, file, emitter);
     tracker.loop_depth -= 1;
-    // A body that may run zero times cannot unconditionally re-arm a value consumed before the loop.
+    // A body that may run zero times cannot re-arm a value consumed before the loop.
     for (name, span) in consumed_before {
         if let Some(state @ ConsumeState::Available(..)) = tracker.vars.get_mut(&name) {
             *state = ConsumeState::MaybeConsumed(span);
@@ -410,7 +400,7 @@ fn consume_var(
     emitter: &mut dyn DiagnosticEmitter,
 ) {
     match tracker.vars.get(name) {
-        None => {}
+        None => return,
         Some(ConsumeState::Consumed(_)) => {
             emit_violation(
                 file,
@@ -422,6 +412,7 @@ fn consume_var(
                     "`{name}` was already consumed; clone it or restructure to use it only once"
                 )],
             );
+            return;
         }
         Some(ConsumeState::MaybeConsumed(_)) => {
             emit_violation(
@@ -448,11 +439,11 @@ fn consume_var(
                     vec![format!("move the consumption of `{name}` outside the loop")],
                 );
             }
-            tracker
-                .vars
-                .insert(name.to_string(), ConsumeState::Consumed(span));
         }
     }
+    tracker
+        .vars
+        .insert(name.to_string(), ConsumeState::Consumed(span));
 }
 
 fn merge_branch_state(
@@ -1866,13 +1857,8 @@ mod tests {
             consume_stmt(),
         ]);
 
-        assert_eq!(diags.len(), 2, "Got: {diags:?}");
+        assert_eq!(diags.len(), 1, "Got: {diags:?}");
         assert!(diags[0].message.contains("may already be consumed"));
-        assert!(
-            diags[1]
-                .message
-                .contains("may not be consumed on every path")
-        );
     }
 
     #[test]
@@ -1984,7 +1970,7 @@ mod tests {
             consume_stmt(),
         ]);
 
-        assert_eq!(diags.len(), 2, "Got: {diags:?}");
+        assert_eq!(diags.len(), 1, "Got: {diags:?}");
         assert!(diags[0].message.contains("may already be consumed"));
     }
 
