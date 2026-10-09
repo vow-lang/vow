@@ -153,6 +153,7 @@ fn check_an_unknown_clause_has_no_source() -> i64 {
 fn counterexample(vow_id: i64, blame: i64) -> VerifyCE {
     VerifyCE {
         function: String::from("f"),
+        target_function: String::from("f"),
         var_names: Vec::new(),
         var_values: Vec::new(),
         violation: String::from("ensures result >= 0"),

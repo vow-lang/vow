@@ -39,9 +39,12 @@ class OutputDefaultTest(unittest.TestCase):
 
     def test_build_output_default_tracks_cli_md(self):
         cli = (SPEC / "cli.md").read_text()
-        self.assertIn("`build/<stem>`", cli)
+        row = "| `-o, --output`    | `build/<stem>` |"
+        self.assertIn(row, cli)
         option = _output_option(
-            _help_data(cli.replace("`build/<stem>`", "`out/<stem>.bin`", 1)),
+            _help_data(
+                cli.replace(row, row.replace("build/<stem>", "out/<stem>.bin"), 1)
+            ),
             "build",
         )
         self.assertEqual(option["default"], "out/<stem>.bin")

@@ -21,6 +21,8 @@ struct VerifyResult {
     vow_id: i64,
     callee_precondition_func_id: i64,
     callee_precondition_vow_id: i64,
+    callee_postcondition_func_id: i64,
+    callee_postcondition_vow_id: i64,
     var_names: Vec<String>,
     var_values: Vec<String>,
     block_visits: Vec<i64>,
@@ -31,6 +33,8 @@ struct ParsedVowLabel {
     vow_id: i64,
     callee_precondition_func_id: i64,
     callee_precondition_vow_id: i64,
+    callee_postcondition_func_id: i64,
+    callee_postcondition_vow_id: i64,
 }
 
 // A checked-arithmetic site whose ArithmeticOverflow abort ESBMC proved
@@ -790,6 +794,8 @@ fn parsed_vow_label_none() -> ParsedVowLabel {
         vow_id: -1,
         callee_precondition_func_id: -1,
         callee_precondition_vow_id: -1,
+        callee_postcondition_func_id: -1,
+        callee_postcondition_vow_id: -1,
     }
 }
 
@@ -809,6 +815,27 @@ fn parse_vow_label_text(rest: String) -> ParsedVowLabel {
             vow_id: vow_id,
             callee_precondition_func_id: func_id,
             callee_precondition_vow_id: vow_id,
+            callee_postcondition_func_id: -1,
+            callee_postcondition_vow_id: -1,
+        };
+    }
+    if str_starts_with(rest, String::from("post:")) {
+        let payload: String = str_substring(rest, 5, rest.len() as i64);
+        let sep: i64 = str_find_str(payload, String::from(":"));
+        if sep < 0 {
+            return parsed_vow_label_none();
+        }
+        let func_id: i64 = str_to_i64(str_substring(payload, 0, sep));
+        let vow_id: i64 = str_to_i64(str_substring(payload, sep + 1, payload.len() as i64));
+        if func_id < 0 || vow_id < 0 {
+            return parsed_vow_label_none();
+        }
+        return ParsedVowLabel {
+            vow_id: vow_id,
+            callee_precondition_func_id: -1,
+            callee_precondition_vow_id: -1,
+            callee_postcondition_func_id: func_id,
+            callee_postcondition_vow_id: vow_id,
         };
     }
     let id: i64 = str_to_i64(rest);
@@ -819,6 +846,8 @@ fn parse_vow_label_text(rest: String) -> ParsedVowLabel {
         vow_id: id,
         callee_precondition_func_id: -1,
         callee_precondition_vow_id: -1,
+        callee_postcondition_func_id: -1,
+        callee_postcondition_vow_id: -1,
     }
 }
 
@@ -1693,6 +1722,8 @@ fn build_verify_result(f: IrFunction, status: i64, combined: String) -> VerifyRe
         vow_id: vow_id,
         callee_precondition_func_id: label.callee_precondition_func_id,
         callee_precondition_vow_id: label.callee_precondition_vow_id,
+        callee_postcondition_func_id: label.callee_postcondition_func_id,
+        callee_postcondition_vow_id: label.callee_postcondition_vow_id,
         var_names: var_names,
         var_values: var_values,
         block_visits: block_visits,
@@ -1708,6 +1739,8 @@ fn verify_function_ir_fallback(esbmc_bin: String, f: IrFunction, m: IrModule, ma
             vow_id: -1,
             callee_precondition_func_id: -1,
             callee_precondition_vow_id: -1,
+            callee_postcondition_func_id: -1,
+            callee_postcondition_vow_id: -1,
             var_names: Vec::new(),
             var_values: Vec::new(),
             block_visits: Vec::new(),
@@ -1733,6 +1766,8 @@ fn verify_function_ir_fallback(esbmc_bin: String, f: IrFunction, m: IrModule, ma
             vow_id: -1,
             callee_precondition_func_id: -1,
             callee_precondition_vow_id: -1,
+            callee_postcondition_func_id: -1,
+            callee_postcondition_vow_id: -1,
             var_names: Vec::new(),
             var_values: Vec::new(),
             block_visits: Vec::new(),
@@ -1872,6 +1907,8 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_pat
             vow_id: -1,
             callee_precondition_func_id: -1,
             callee_precondition_vow_id: -1,
+            callee_postcondition_func_id: -1,
+            callee_postcondition_vow_id: -1,
             var_names: Vec::new(),
             var_values: Vec::new(),
             block_visits: Vec::new(),
@@ -1885,6 +1922,8 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_pat
             vow_id: -1,
             callee_precondition_func_id: -1,
             callee_precondition_vow_id: -1,
+            callee_postcondition_func_id: -1,
+            callee_postcondition_vow_id: -1,
             var_names: Vec::new(),
             var_values: Vec::new(),
             block_visits: Vec::new(),
@@ -1904,6 +1943,8 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_pat
             vow_id: -1,
             callee_precondition_func_id: -1,
             callee_precondition_vow_id: -1,
+            callee_postcondition_func_id: -1,
+            callee_postcondition_vow_id: -1,
             var_names: Vec::new(),
             var_values: Vec::new(),
             block_visits: Vec::new(),
@@ -1946,6 +1987,8 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_pat
         vow_id: vow_id,
         callee_precondition_func_id: label.callee_precondition_func_id,
         callee_precondition_vow_id: label.callee_precondition_vow_id,
+        callee_postcondition_func_id: label.callee_postcondition_func_id,
+        callee_postcondition_vow_id: label.callee_postcondition_vow_id,
         var_names: var_names,
         var_values: var_values,
         block_visits: block_visits,

@@ -501,7 +501,7 @@ run_bootstrap_triple() {
     # Stage 1: A → B
     status=0
     stderr_log="$TMPDIR/bootstrap_stage1.stderr"
-    run_self_bin "$TMPDIR/compiler_a" -o "$TMPDIR/compiler_b" "$TMPDIR/compiler_clif.vow" >/dev/null 2>"$stderr_log" || status=$?
+    run_self_bin "$TMPDIR/compiler_a" build --no-verify --no-cache -o "$TMPDIR/compiler_b" "$TMPDIR/compiler_clif.vow" >/dev/null 2>"$stderr_log" || status=$?
     if [ "$status" -ne 0 ]; then
         bootstrap_stage_failure "Stage 1" "$status" "$stderr_log"
         return 0
@@ -514,7 +514,7 @@ run_bootstrap_triple() {
     # Stage 2: B → C
     status=0
     stderr_log="$TMPDIR/bootstrap_stage2.stderr"
-    run_self_bin "$TMPDIR/compiler_b" -o "$TMPDIR/compiler_c" "$TMPDIR/compiler_clif.vow" >/dev/null 2>"$stderr_log" || status=$?
+    run_self_bin "$TMPDIR/compiler_b" build --no-verify --no-cache -o "$TMPDIR/compiler_c" "$TMPDIR/compiler_clif.vow" >/dev/null 2>"$stderr_log" || status=$?
     if [ "$status" -ne 0 ]; then
         bootstrap_stage_failure "Stage 2" "$status" "$stderr_log"
         return 0
@@ -1004,7 +1004,7 @@ for mode in verify build legacy; do
             self_json=$(run_self build --verify-jobs 2 "$fixture" -o "$TMPDIR/ce_before_soft" 2>/dev/null) || self_exit=$?
             ;;
         legacy)
-            self_json=$(run_self --verify --verify-jobs 2 "$fixture" 2>/dev/null) || self_exit=$?
+            self_json=$(run_self --verify-jobs 2 "$fixture" -o "$TMPDIR/ce_before_soft_bare" 2>/dev/null) || self_exit=$?
             ;;
     esac
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$self_json" 2>/dev/null) || actual_status=""
@@ -1437,13 +1437,14 @@ print(cx[0].get(key, '') if cx else '')
         native_replay_json=$(run_self verify --backend native --no-cache --replay-cex "$vow_file" 2>/dev/null) || true
         native_replay=$(python3 -c "
 import json, sys
-cx = json.loads(sys.argv[1]).get('counterexamples') or []
-print(cx[0].get('replay', '') if cx else '')
+j = json.loads(sys.argv[1])
+cx = j.get('counterexamples') or []
+bad = [c.get('function', '?') + '=' + str(c.get('replay', '')) for c in cx if c.get('replay') != 'confirmed']
+print(','.join(bad) if bad else ('confirmed' if cx else 'none'))
 " "$native_replay_json" 2>/dev/null) || native_replay=""
-        case "$native_replay" in
-            confirmed|skipped) ;;
-            *) native_errors+=("--replay-cex: expected confirmed or skipped, got '$native_replay'") ;;
-        esac
+        if [ "$native_replay" != "confirmed" ]; then
+            native_errors+=("--replay-cex: every counterexample must replay as confirmed, got '$native_replay'")
+        fi
     fi
     if [ ${#native_errors[@]} -eq 0 ]; then
         pass "verify-native/${native_dir}/${name}"
@@ -1471,6 +1472,26 @@ if VOWC_BIN="$SELF" VOWC_KIND=self bash tests/cli-flags/tests.sh >"$cli_flags_se
     pass "cli-flags/self-hosted"
 else
     fail "cli-flags/self-hosted" "$(tail -20 "$cli_flags_self_log")"
+fi
+echo ""
+
+# ─── Section 4i: `decl` declaration stubs (tests/decl/, #595) ──────
+#
+# Both compilers must write byte-identical `.vow.d` stubs for the same
+# source (goldens generated once from the Rust compiler).
+
+section_begin "Section 4i: decl declaration stubs"
+decl_rust_log="$TMPDIR/decl-rust.log"
+if VOWC_BIN="$RUST" VOWC_KIND=rust bash tests/decl/tests.sh >"$decl_rust_log" 2>&1; then
+    pass "decl/rust"
+else
+    fail "decl/rust" "$(tail -20 "$decl_rust_log")"
+fi
+decl_self_log="$TMPDIR/decl-self.log"
+if VOWC_BIN="$SELF" VOWC_KIND=self bash tests/decl/tests.sh >"$decl_self_log" 2>&1; then
+    pass "decl/self-hosted"
+else
+    fail "decl/self-hosted" "$(tail -20 "$decl_self_log")"
 fi
 echo ""
 

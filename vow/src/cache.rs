@@ -2,7 +2,9 @@ use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use vow_verify::{ArithOverflowSite, CalleePrecondition, Counterexample, SolverConfig};
+use vow_verify::{
+    ArithOverflowSite, CalleePostcondition, CalleePrecondition, Counterexample, SolverConfig,
+};
 
 use crate::frontend::DependencyManifest;
 
@@ -139,6 +141,7 @@ fn fnv1a_hash_reader<R: Read>(mut r: R) -> std::io::Result<u64> {
 struct CachedFailure {
     vow_id: Option<u32>,
     callee_precondition: Option<CalleePrecondition>,
+    callee_postcondition: Option<CalleePostcondition>,
     /// The `arith:` site is persisted explicitly rather than re-derived from
     /// tool output on replay, keeping cache semantics independent of ESBMC text.
     arith_overflow: Option<ArithOverflowSite>,
@@ -156,6 +159,10 @@ struct CachedFailureRecord {
     vow_id: Option<u32>,
     callee_precondition_func_id: Option<u32>,
     callee_precondition_vow_id: Option<u32>,
+    #[serde(default)]
+    callee_postcondition_func_id: Option<u32>,
+    #[serde(default)]
+    callee_postcondition_vow_id: Option<u32>,
     arith_cause: Option<String>,
     arith_func: Option<u32>,
     arith_start: Option<u32>,
@@ -176,6 +183,12 @@ impl From<&CachedFailure> for CachedFailureRecord {
             callee_precondition_vow_id: failure
                 .callee_precondition
                 .map(|precondition| precondition.vow_id),
+            callee_postcondition_func_id: failure
+                .callee_postcondition
+                .map(|postcondition| postcondition.func_id),
+            callee_postcondition_vow_id: failure
+                .callee_postcondition
+                .map(|postcondition| postcondition.vow_id),
             arith_cause: failure
                 .arith_overflow
                 .map(|site| site.abort.label().to_string()),
@@ -196,6 +209,10 @@ impl From<CachedFailureRecord> for CachedFailure {
             .callee_precondition_func_id
             .zip(record.callee_precondition_vow_id)
             .map(|(func_id, vow_id)| CalleePrecondition { func_id, vow_id });
+        let callee_postcondition = record
+            .callee_postcondition_func_id
+            .zip(record.callee_postcondition_vow_id)
+            .map(|(func_id, vow_id)| CalleePostcondition { func_id, vow_id });
         let arith_overflow = record
             .arith_cause
             .as_deref()
@@ -213,6 +230,7 @@ impl From<CachedFailureRecord> for CachedFailure {
         Self {
             vow_id: record.vow_id,
             callee_precondition,
+            callee_postcondition,
             arith_overflow,
             description: record.description,
             values: record.values,
@@ -228,6 +246,7 @@ impl CachedFailure {
             description: self.description.clone(),
             vow_id: self.vow_id,
             callee_precondition: self.callee_precondition,
+            callee_postcondition: self.callee_postcondition,
             arith_overflow: self.arith_overflow,
             values: self.values.clone(),
             block_visits: self.block_visits.clone(),
@@ -239,6 +258,7 @@ impl CachedFailure {
         CachedFailure {
             vow_id: ce.vow_id,
             callee_precondition: ce.callee_precondition,
+            callee_postcondition: ce.callee_postcondition,
             arith_overflow: ce.arith_overflow,
             description: ce.description.clone(),
             values: ce.values.clone(),
@@ -402,6 +422,10 @@ mod tests {
                 func_id: 2,
                 vow_id: 1,
             }),
+            callee_postcondition: Some(CalleePostcondition {
+                func_id: 9,
+                vow_id: 1,
+            }),
             values: vec![
                 ("x".to_string(), "9223372036854775807".to_string()),
                 ("y".to_string(), "1".to_string()),
@@ -482,6 +506,7 @@ mod tests {
         assert_eq!(got.description, ce.description);
         assert_eq!(got.vow_id, ce.vow_id);
         assert_eq!(got.callee_precondition, ce.callee_precondition);
+        assert_eq!(got.callee_postcondition, ce.callee_postcondition);
         assert_eq!(got.values, ce.values);
         assert_eq!(got.block_visits, ce.block_visits);
         assert_eq!(got.raw_output, ce.raw_output);
@@ -603,6 +628,10 @@ mod tests {
                 func_id: 7,
                 vow_id: 3,
             }),
+            callee_postcondition: Some(CalleePostcondition {
+                func_id: 9,
+                vow_id: 1,
+            }),
             arith_overflow: Some(ArithOverflowSite {
                 abort: vow_verify::ArithAbort::DivOverflow,
                 func_id: 2,
@@ -624,9 +653,24 @@ mod tests {
                 vow_id: 3,
             })
         );
+        assert_eq!(
+            parsed.callee_postcondition,
+            Some(CalleePostcondition {
+                func_id: 9,
+                vow_id: 1,
+            })
+        );
         assert_eq!(parsed.description, "test failure");
         assert_eq!(parsed.values.len(), 1);
         assert_eq!(parsed.block_visits, vec![0, 1, 3]);
+    }
+
+    #[test]
+    fn verify_cache_record_without_postcondition_keys_deserializes_as_none() {
+        let legacy = r#"{"vow_id":1,"callee_precondition_func_id":null,"callee_precondition_vow_id":null,"arith_cause":null,"arith_func":null,"arith_start":null,"arith_len":null,"description":"d","values":[],"block_visits":[],"raw_output":"r"}"#;
+        let record: CachedFailureRecord = serde_json::from_str(legacy).unwrap();
+        let failure = CachedFailure::from(record);
+        assert_eq!(failure.callee_postcondition, None);
     }
 
     #[test]

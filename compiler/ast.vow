@@ -109,6 +109,10 @@ struct AstArena {
     cdef_data: Vec<i64>,
     alias_data: Vec<i64>,
     ext_data: Vec<i64>,
+    // Packed item ids declared `pub`, and enum ids with a struct-like variant
+    // (whose field names the AST does not keep); only `vowc decl` reads them.
+    pub_items: Vec<i64>,
+    struct_variant_enums: Vec<i64>,
 }
 
 fn arena_new() -> AstArena {
@@ -129,6 +133,8 @@ fn arena_new() -> AstArena {
         cdef_data: Vec::new(),
         alias_data: Vec::new(),
         ext_data: Vec::new(),
+        pub_items: Vec::new(),
+        struct_variant_enums: Vec::new(),
     }
 }
 

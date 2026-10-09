@@ -36,11 +36,13 @@ case "$FAKE_BW_MODE" in
     exit1) echo "[error] boom" >&2; exit 1 ;;
     hang) echo $$ > "$FAKE_BW_DIR/pid"; exec sleep 29 ;;
     sat_empty) printf 'sat\n(\n)\n' ;;
-    sat)
+    sat|sat_zero)
+        val=7
+        [ "$FAKE_BW_MODE" = sat_zero ] && val=0
         echo sat
         echo "("
         grep -o '^(declare-const p[0-9]*' "$file" | sed 's/(declare-const //' | while read -r name; do
-            echo "  ($name (_ bv7 64))"
+            echo "  ($name (_ bv$val 64))"
         done
         echo ")"
         ;;
@@ -305,6 +307,44 @@ for shape in sequential nested; do
     fi
 done
 no_leftovers "stress"
+
+# --replay-cex: a counterexample the runtime reproduces is `confirmed`; one it
+# does not is a verifier bug. The fake solver answers b = 0 (a real divide-by-zero)
+# or b = 7 (a model the runtime disagrees with). The source defines no `main`:
+# the self-hosted replay harness cannot splice one in.
+REPLAY_SRC="$TMP_ROOT/replay.vow"
+cat > "$REPLAY_SRC" <<'SRC'
+module Replay
+
+fn quot(a: i64, b: i64) -> i64 vow {
+  ensures: result == result
+} {
+  a / b
+}
+SRC
+run_native sat_zero "$REPLAY_SRC" --replay-cex
+expect "replay confirmed status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "replay confirmed exit" "$RUN_RC" "1"
+expect "replay confirmed" "$(field "$RUN_OUT" counterexamples.0.replay)" "confirmed"
+expect "replay confirmed has no bug report" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
+no_leftovers "replay confirmed"
+
+run_native sat "$REPLAY_SRC" --replay-cex
+expect "replay diverged status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "replay diverged exit" "$RUN_RC" "1"
+expect "replay diverged" "$(field "$RUN_OUT" counterexamples.0.replay)" "diverged"
+expect "replay diverged keeps the violation diagnostic first" "$(field "$RUN_OUT" diagnostics.0.error_code)" "VerifierAssertionUnattributed"
+expect "replay diverged bug code" "$(field "$RUN_OUT" diagnostics.1.error_code)" "VerifierBug"
+no_leftovers "replay diverged"
+
+# a skipped replay never ran, so it is not a verifier bug (THREE_CLAIMS defines main).
+run_native sat_zero "$THREE_CLAIMS" --replay-cex
+expect "replay skipped" "$(field "$RUN_OUT" counterexamples.0.replay)" "skipped"
+expect "skipped replay is not a verifier bug" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
+
+run_native sat "$REPLAY_SRC"
+expect "no replay without the flag" "$(field "$RUN_OUT" counterexamples.0.replay)" ""
+expect "no bug report without the flag" "$(field "$RUN_OUT" diagnostics.0.error_code)" "VerifierAssertionUnattributed"
 
 # flag handling.
 usage_error() {

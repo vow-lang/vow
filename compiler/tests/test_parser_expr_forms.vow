@@ -13,7 +13,7 @@ use lower
 // and the Rust parser's twin of this table is in vow-syntax/src/parser/expr.rs.
 // Failures return a distinct exit code: 1xx accepted forms, 2xx idempotence,
 // 3xx borrow rejection, 4xx unparenthesised block-like rejection, 5xx
-// error-recovery termination, 6xx statement terminators.
+// error-recovery termination, 6xx statement terminators, 7xx empty-block heads.
 
 fn lower_source(source: String) -> IrModule {
     let arena: AstArena = arena_new();
@@ -179,6 +179,20 @@ fn check_recovery_terminates() -> i64 {
     0
 }
 
+fn check_empty_block_heads() -> i64 {
+    let a: DiagCtx = parse_errors(String::from("module T\nfn f(x: i64) -> i64 {\n    if x { }\n    0\n}\n"));
+    if a.error_count != 0 { return 700; }
+    let b: DiagCtx = parse_errors(String::from("module T\nfn f(x: i64) -> i64 {\n    if x { } else { }\n    0\n}\n"));
+    if b.error_count != 0 { return 710; }
+    let c: DiagCtx = parse_errors(String::from("module T\nfn f(x: i64) -> i64 {\n    while x { }\n    0\n}\n"));
+    if c.error_count != 0 { return 720; }
+    let d: DiagCtx = parse_errors(String::from("module T\nfn f(x: i64) -> i64 {\n    match x { }\n    0\n}\n"));
+    if d.error_count != 0 { return 730; }
+    let e: DiagCtx = parse_errors(String::from("module T\nfn f(x: i64) -> i64 {\n    for _i in x { }\n    0\n}\n"));
+    if e.error_count != 0 { return 740; }
+    0
+}
+
 fn main() -> i32 {
     let r1: i64 = check_accepted();
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -190,5 +204,7 @@ fn main() -> i32 {
     if r4 != 0 { return i64_to_i32_wrap(r4); }
     let r5: i64 = check_statement_terminators();
     if r5 != 0 { return i64_to_i32_wrap(r5); }
+    let r6: i64 = check_empty_block_heads();
+    if r6 != 0 { return i64_to_i32_wrap(r6); }
     0
 }

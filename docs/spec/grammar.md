@@ -96,7 +96,7 @@ The `vow` block sits between the signature and the body. Clauses:
 - `ensures: <expr>` — postcondition (blame: Callee); use `result` for the return value
 - `invariant: <expr>` — loop invariant (blame: Callee)
 
-Multiple clauses are separated by commas:
+Multiple clauses are separated by commas; the comma may be omitted. A semicolon between clauses is a parse error:
 
 ```vow
 fn clamp(x: i64, lo: i64, hi: i64) -> i64 vow {

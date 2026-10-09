@@ -323,6 +323,34 @@ fn check_model_bounds_mixed_capacities() -> i64 {
     0
 }
 
+fn check_parse_vow_label_post_and_malformed() -> i64 {
+    let ok: ParsedVowLabel = parse_vow_label_text(String::from("post:3:0"));
+    if ok.vow_id != 0 { return 800; }
+    if ok.callee_postcondition_func_id != 3 { return 801; }
+    if ok.callee_postcondition_vow_id != 0 { return 802; }
+    if ok.callee_precondition_func_id != -1 { return 803; }
+    let bad1: ParsedVowLabel = parse_vow_label_text(String::from("post:3"));
+    if bad1.vow_id != -1 || bad1.callee_postcondition_func_id != -1 { return 804; }
+    let bad2: ParsedVowLabel = parse_vow_label_text(String::from("post:x:0"));
+    if bad2.vow_id != -1 || bad2.callee_postcondition_func_id != -1 { return 805; }
+    let bad3: ParsedVowLabel = parse_vow_label_text(String::from("post:3:0:1"));
+    if bad3.callee_postcondition_func_id != -1 { return 806; }
+    let num: ParsedVowLabel = parse_vow_label_text(String::from("4"));
+    if num.vow_id != 4 || num.callee_postcondition_func_id != -1 { return 807; }
+    let out: String = String::from("[Counterexample]\n\nViolated property:\n  file t.c line 1 function g\n  vow:post:3:0\n\nVERIFICATION FAILED");
+    let parsed: ParsedVowLabel = parse_vow_label(out);
+    if parsed.callee_postcondition_func_id != 3 { return 808; }
+    0
+}
+
+fn check_caller_preconditions_projection_demotes_callee_postcondition() -> i64 {
+    let src: String = String::from("  __ESBMC_assert(v2, \"vow:post:3:0\");\n");
+    let projected: String = caller_preconditions_only_source(src);
+    if projected.contains(String::from("__ESBMC_assert(v2, \"vow:post:3:0\")")) { return 810; }
+    if !projected.contains(String::from("__vow_demoted_assert(v2, \"vow:post:3:0\")")) { return 811; }
+    0
+}
+
 fn main() -> i32 [io] {
     let r1: i64 = check_known_nondet_calls();
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -374,5 +402,9 @@ fn main() -> i32 [io] {
     if r24 != 0 { return i64_to_i32_wrap(r24); }
     let r25: i64 = check_model_bounds_mixed_capacities();
     if r25 != 0 { return i64_to_i32_wrap(r25); }
+    let r26: i64 = check_parse_vow_label_post_and_malformed();
+    if r26 != 0 { return i64_to_i32_wrap(r26); }
+    let r27: i64 = check_caller_preconditions_projection_demotes_callee_postcondition();
+    if r27 != 0 { return i64_to_i32_wrap(r27); }
     0
 }

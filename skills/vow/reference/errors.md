@@ -866,6 +866,24 @@ The structured counterexample's `violation` field carries the stable property de
 
 **Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
 
+### VerifierBug
+
+**Phase:** Verification (self-hosted `vowc verify --backend native --replay-cex` only)
+**Meaning:** Under the native backend, a counterexample did not replay: the `--mode debug` harness built from its concrete inputs did not reproduce the predicted `VowViolation` (same `vow_id` and blame) or, for a division or remainder abort, the predicted `ArithmeticOverflow` abort. The counterexample's `replay` is `"diverged"` or `"aborted"` and `replay_reason` says why. A `"skipped"` replay (a harness limitation such as an unsupported parameter type) never ran and is not reported. The verifier model and the runtime disagree, so this is a defect in the verifier, not in the program. One diagnostic is emitted per such counterexample; the `status` stays `VerifyFailed` and the exit code stays 1.
+
+```json
+{
+  "error_code": "VerifierBug",
+  "severity": "error",
+  "message": "native verifier counterexample for `rem` did not replay (diverged: harness exited cleanly; the predicted ArithmeticOverflow abort did not occur)",
+  "hints": [
+    "a counterexample that does not reproduce at runtime is a bug in the verifier model; report it"
+  ]
+}
+```
+
+**Fix:** Report the function, its counterexample `values` and `replay_reason` as a verifier bug. Do not weaken the contract to avoid the counterexample on the strength of this diagnostic alone.
+
 ### ModelCapacityAssumed
 
 **Phase:** Verification (Note; the build status stays `Verified`)

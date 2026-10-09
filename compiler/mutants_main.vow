@@ -313,6 +313,40 @@ fn cd_with_log(workdir: String, cmd: String, log_path: String, tier_label: Strin
     r
 }
 
+// Run the Tier-1 and Tier-1.5 oracles once on the unmutated worktree. A
+// globally broken oracle (e.g. a missing ./target/release/vow in a fresh
+// worktree) fails every mutant identically, which per-mutant
+// classification would otherwise score as `caught`. Returns 0 when both
+// pass, 1 after printing the reason otherwise.
+fn run_baseline(workdir: String, tier1_cmd: String, tier15_cmd: String, t1_to_ms: i64, t15_to_ms: i64, log_p: String) -> i64 [io, read, write] {
+    let rc1: i64 = run_shell(cd_with_log(workdir, tier1_cmd, log_p, String::from("baseline-tier1"), false), t1_to_ms);
+    let why1: String = baseline_failure_reason(rc1);
+    if why1.len() != 0 {
+        report_baseline_failure(String::from("1"), why1, log_p);
+        return 1;
+    }
+    let rc15: i64 = run_shell(cd_with_log(workdir, tier15_cmd, log_p, String::from("baseline-tier15"), true), t15_to_ms);
+    let why15: String = baseline_failure_reason(rc15);
+    if why15.len() != 0 {
+        report_baseline_failure(String::from("1.5"), why15, log_p);
+        return 1;
+    }
+    0
+}
+
+fn report_baseline_failure(tier: String, reason: String, log_p: String) [io] {
+    eprintln_str("vow-mutants run: baseline oracle failed; mutation results would be meaningless");
+    let l1: String = String::from("  tier ");
+    l1.push_str(tier);
+    l1.push_str(String::from(" baseline: "));
+    l1.push_str(reason);
+    eprintln_str(l1);
+    let l2: String = String::from("  see ");
+    l2.push_str(log_p);
+    eprintln_str(l2);
+    eprintln_str("  (raise --tier1-timeout-secs/--tier15-timeout-secs if it timed out on a cold worktree, or pass --skip-baseline to bypass this check)");
+}
+
 // Capture `git diff --no-color -- <file>` from inside `workdir` and write
 // the patch text to `diff_path`. Best-effort: returns 0 on success, or
 // process_run's exit code on failure (we don't propagate to the verdict).
@@ -532,6 +566,15 @@ fn run_mutants_run(argv: Vec<String>) -> i32 [io, read, write] {
         // user passes --force-unlock.
         fs_remove_dir(lock_path);
         return 1;
+    }
+
+    if !has_flag(argv, String::from("--skip-baseline")) {
+        let baseline_log: String = join_path(join_path(output_dir, String::from("logs")), String::from("baseline.log"));
+        if run_baseline(workdir, tier1_cmd, tier15_cmd, t1_to_ms, t15_to_ms, baseline_log) != 0 {
+            worktree_remove(workdir);
+            fs_remove_dir(lock_path);
+            return 1;
+        }
     }
 
     let read_root: String = join_workdir(workdir, root);

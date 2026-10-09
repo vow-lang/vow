@@ -753,6 +753,19 @@ mod tests {
     }
 
     #[test]
+    fn vow_clauses_accept_comma_or_nothing_but_not_semicolon() {
+        let parse = |sep: &str| {
+            let src = format!(
+                "module M fn f(x: i64) -> i64 vow {{ requires: x > 0{sep} ensures: result > 0 }} {{ x }}"
+            );
+            parse_module(&src, "<test>").1
+        };
+        assert!(parse(",").is_empty());
+        assert!(parse("").is_empty());
+        assert!(!parse(";").is_empty());
+    }
+
+    #[test]
     fn parse_let_tuple_pattern() {
         let kind = let_pattern("let (a, b): (i64, i64) = (1, 2);");
         match kind {

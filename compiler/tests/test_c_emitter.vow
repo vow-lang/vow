@@ -1499,6 +1499,61 @@ fn check_u64_literals_print_as_unsigned() -> i64 {
     0
 }
 
+fn ensures_after_eq(first_id: i64, ens_id: i64) -> Vec<IrInst> {
+    let insts: Vec<IrInst> = Vec::new();
+    let eq_args: Vec<i64> = Vec::new();
+    eq_args.push(0);
+    eq_args.push(0);
+    insts.push(ir_inst_new(first_id, IOP_EQ(), ITY_BOOL(), eq_args, IDATA_INTEGER(), ITY_I64(), 0, String::from("")));
+    let ens_args: Vec<i64> = Vec::new();
+    ens_args.push(first_id);
+    insts.push(ir_inst_new(ens_id, IOP_VOW_ENS(), ITY_UNIT(), ens_args, IDATA_VOW_ID(), 0, 0, String::from("")));
+    insts
+}
+
+fn check_callee_ensures_label_carries_function_id() -> i64 {
+    let callee_insts: Vec<IrInst> = Vec::new();
+    callee_insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    let callee_tail: Vec<IrInst> = ensures_after_eq(1, 2);
+    callee_insts.push(callee_tail[0]);
+    callee_insts.push(callee_tail[1]);
+    callee_insts.push(mk_inst_return(3, 0));
+    let callee_blocks: Vec<IrBlock> = Vec::new();
+    callee_blocks.push(mk_block(0, callee_insts));
+    let callee_params: Vec<i64> = Vec::new();
+    callee_params.push(ITY_I64());
+    let callee: IrFunction = mk_function(5, String::from("g"), callee_params, ITY_I64(), callee_blocks);
+
+    let target_insts: Vec<IrInst> = Vec::new();
+    target_insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(0);
+    target_insts.push(mk_inst_call_target(1, ITY_I64(), call_args, 5));
+    let target_tail: Vec<IrInst> = ensures_after_eq(2, 3);
+    target_insts.push(target_tail[0]);
+    target_insts.push(target_tail[1]);
+    target_insts.push(mk_inst_return(4, 1));
+    let target_blocks: Vec<IrBlock> = Vec::new();
+    target_blocks.push(mk_block(0, target_insts));
+    let target_params: Vec<i64> = Vec::new();
+    target_params.push(ITY_I64());
+    let target: IrFunction = mk_function(2, String::from("f"), target_params, ITY_I64(), target_blocks);
+
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(target);
+    funcs.push(callee);
+    let m: IrModule = mk_module(funcs);
+    let callee_fis: Vec<i64> = Vec::new();
+    callee_fis.push(5);
+    let modelable_fis: Vec<i64> = Vec::new();
+    modelable_fis.push(5);
+    let c: String = emit_c_module_with_callees(m, 2, callee_fis, modelable_fis, 16, 16, 16, 16, false, false);
+
+    if !c.contains(String::from("  __ESBMC_assert(v1, \"vow:post:5:0\");")) { return 700; }
+    if !c.contains(String::from("  __ESBMC_assert(v2, \"vow:0\");")) { return 701; }
+    0
+}
+
 fn main() -> i32 {
     let r1: i64 = check_name_modelable_and_mangled(String::from("abs"), 7, 1);
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -1598,7 +1653,9 @@ fn main() -> i32 {
     if r47 != 0 { return i64_to_i32_wrap(r47); }
     let r48: i64 = check_const_fn_len_folds_like_a_literal(String::from("__vow_string_from_raw_parts_copy"), String::from("string capacity"), 640);
     if r48 != 0 { return i64_to_i32_wrap(r48); }
-    let r49: i64 = check_u64_literals_print_as_unsigned();
+    let r49: i64 = check_callee_ensures_label_carries_function_id();
     if r49 != 0 { return i64_to_i32_wrap(r49); }
+    let r50: i64 = check_u64_literals_print_as_unsigned();
+    if r50 != 0 { return i64_to_i32_wrap(r50); }
     0
 }
