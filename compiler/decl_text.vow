@@ -267,8 +267,7 @@ fn decl_entry_module_name(src: String) -> String {
     nm.str_val
 }
 
-// `foo.vow` -> `foo.vow.d`, `foo` -> `foo.d`: the Rust driver appends `.d` to
-// the extension, or sets it when there is none.
+// `foo.vow` -> `foo.vow.d`, `foo` -> `foo.d`.
 fn decl_default_output(path: String) -> String {
     let result: String = String::from("");
     result.push_str(path);
