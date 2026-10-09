@@ -18,14 +18,16 @@ enum ConsumeState {
 #[derive(Debug, Clone)]
 struct LinearTracker {
     vars: HashMap<String, ConsumeState>,
-    in_loop: bool,
+    loop_depth: u32,
+    decl_depth: HashMap<String, u32>,
 }
 
 impl LinearTracker {
     fn new() -> Self {
         Self {
             vars: HashMap::new(),
-            in_loop: false,
+            loop_depth: 0,
+            decl_depth: HashMap::new(),
         }
     }
 }
@@ -43,6 +45,7 @@ pub fn check_linear_usage(
             tracker
                 .vars
                 .insert(param.name.clone(), ConsumeState::Available(param.span));
+            tracker.decl_depth.insert(param.name.clone(), 0);
         }
     }
 
@@ -175,6 +178,7 @@ fn register_pattern_linear(
             tracker
                 .vars
                 .insert(name.clone(), ConsumeState::Available(span));
+            tracker.decl_depth.insert(name.clone(), tracker.loop_depth);
         }
     }
 }
@@ -235,23 +239,14 @@ fn check_expr(
             condition, body, ..
         } => {
             check_expr(condition, tracker, env, file, emitter, false);
-            let was_in_loop = tracker.in_loop;
-            tracker.in_loop = true;
-            check_block(body, tracker, env, file, emitter);
-            tracker.in_loop = was_in_loop;
+            check_loop_body(body, tracker, env, file, emitter);
         }
         ExprKind::ForEach { iterable, body, .. } => {
             check_expr(iterable, tracker, env, file, emitter, false);
-            let was_in_loop = tracker.in_loop;
-            tracker.in_loop = true;
-            check_block(body, tracker, env, file, emitter);
-            tracker.in_loop = was_in_loop;
+            check_loop_body(body, tracker, env, file, emitter);
         }
         ExprKind::Loop { body, .. } => {
-            let was_in_loop = tracker.in_loop;
-            tracker.in_loop = true;
-            check_block(body, tracker, env, file, emitter);
-            tracker.in_loop = was_in_loop;
+            check_loop_body(body, tracker, env, file, emitter);
         }
         ExprKind::Block(block) => check_block(block, tracker, env, file, emitter),
         ExprKind::Assign { lhs, rhs } => {
@@ -302,6 +297,18 @@ fn check_expr(
     }
 }
 
+fn check_loop_body(
+    body: &Block,
+    tracker: &mut LinearTracker,
+    env: &TypeEnv,
+    file: &str,
+    emitter: &mut dyn DiagnosticEmitter,
+) {
+    tracker.loop_depth += 1;
+    check_block(body, tracker, env, file, emitter);
+    tracker.loop_depth -= 1;
+}
+
 fn consume_var(
     name: &str,
     span: Span,
@@ -336,7 +343,8 @@ fn consume_var(
             );
         }
         Some(ConsumeState::Available(_)) => {
-            if tracker.in_loop {
+            let decl_depth = tracker.decl_depth.get(name).copied().unwrap_or(0);
+            if tracker.loop_depth > decl_depth {
                 emit_violation(
                     file,
                     emitter,
@@ -793,6 +801,118 @@ mod tests {
         );
         assert!(emitter.0[0].message.contains("loop"));
         assert_eq!(emitter.0[0].code, ErrorCode::LinearTypeViolation);
+    }
+
+    fn let_linear(name: &str) -> Stmt {
+        Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: name.to_string(),
+                    is_mut: false,
+                },
+                span: dummy_span(),
+            },
+            ty: Some(named_type("FileHandle")),
+            init: Box::new(ident_expr("open")),
+            span: dummy_span(),
+        }
+    }
+
+    fn expr_stmt(expr: Expr) -> Stmt {
+        Stmt::Expr {
+            expr,
+            has_semicolon: true,
+            span: dummy_span(),
+        }
+    }
+
+    fn loop_expr(kind: &str, body: Block) -> Expr {
+        let body = Box::new(body);
+        let cond = || {
+            Box::new(Expr {
+                kind: ExprKind::Lit(Lit::Bool(true)),
+                span: dummy_span(),
+            })
+        };
+        let kind = match kind {
+            "loop" => ExprKind::Loop { vow: None, body },
+            "while" => ExprKind::While {
+                condition: cond(),
+                vow: None,
+                body,
+            },
+            "for" => ExprKind::ForEach {
+                binding: "i".to_string(),
+                iterable: cond(),
+                vow: None,
+                body,
+            },
+            other => panic!("unknown loop kind {other}"),
+        };
+        Expr {
+            kind,
+            span: dummy_span(),
+        }
+    }
+
+    fn stmts_block(stmts: Vec<Stmt>) -> Block {
+        Block {
+            stmts,
+            trailing_expr: None,
+            span: dummy_span(),
+        }
+    }
+
+    fn check_errors(body: Block) -> Vec<Diagnostic> {
+        let env = make_env_with_linear_struct("FileHandle");
+        let fn_def = make_fn_def(vec![], body);
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+        emitter.0
+    }
+
+    #[test]
+    fn test_loop_local_linear_create_and_consume_ok() {
+        for kind in ["loop", "while", "for"] {
+            let inner = stmts_block(vec![let_linear("h"), expr_stmt(call_with("consume", "h"))]);
+            let errors = check_errors(stmts_block(vec![expr_stmt(loop_expr(kind, inner))]));
+            assert!(errors.is_empty(), "{kind}: {errors:?}");
+        }
+    }
+
+    #[test]
+    fn test_loop_local_double_consume_still_error() {
+        let inner = stmts_block(vec![
+            let_linear("h"),
+            expr_stmt(call_with("consume", "h")),
+            expr_stmt(call_with("consume", "h")),
+        ]);
+        let errors = check_errors(stmts_block(vec![expr_stmt(loop_expr("loop", inner))]));
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].message.contains("already consumed"));
+    }
+
+    #[test]
+    fn test_outer_loop_decl_consumed_in_inner_loop_error() {
+        let innermost = stmts_block(vec![expr_stmt(call_with("consume", "h"))]);
+        let inner = stmts_block(vec![
+            let_linear("h"),
+            expr_stmt(loop_expr("loop", innermost)),
+        ]);
+        let errors = check_errors(stmts_block(vec![expr_stmt(loop_expr("loop", inner))]));
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].message.contains("loop"));
+    }
+
+    #[test]
+    fn test_outer_decl_consumed_in_loop_error() {
+        let inner = stmts_block(vec![expr_stmt(call_with("consume", "h"))]);
+        let errors = check_errors(stmts_block(vec![
+            let_linear("h"),
+            expr_stmt(loop_expr("while", inner)),
+        ]));
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].message.contains("loop"));
     }
 
     #[test]
@@ -1449,7 +1569,7 @@ mod tests {
             },
             span: dummy_span(),
         };
-        // Note: h is not in loop tracker since loop sets in_loop=true AFTER registering h
+        // Note: h is not in loop tracker since the loop body is deeper than h's declaration
         // but break with value from *outside* the loop is different; this tests the Break arm
         // We use h as a loop-external param consumed via break inside loop — should error (loop)
         let body = block_with_expr(loop_expr);
