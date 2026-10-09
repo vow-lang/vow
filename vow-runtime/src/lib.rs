@@ -6587,6 +6587,51 @@ mod tests {
     }
 
     #[test]
+    fn fs_remove_dir_is_rmdir_and_remove_dir_all_is_recursive() {
+        let root = std::env::temp_dir().join(format!("vow_rmdir_sem_{}", std::process::id()));
+        let tree = root.join("tree");
+        std::fs::create_dir_all(tree.join("sub")).unwrap();
+        std::fs::write(tree.join("sub").join("f.txt"), "x").unwrap();
+        let path_v = |p: &std::path::Path| {
+            let s = p.to_str().unwrap().to_string();
+            unsafe { __vow_string_new(s.as_ptr().cast(), s.len()) }
+        };
+
+        let tree_v = path_v(&tree);
+        assert_ne!(unsafe { __vow_fs_remove_dir(tree_v) }, 0);
+        assert!(tree.join("sub").join("f.txt").exists());
+        assert_ne!(
+            unsafe { __vow_fs_remove_dir(path_v(&tree.join("sub").join("f.txt"))) },
+            0
+        );
+        assert_ne!(unsafe { __vow_fs_remove_dir(std::ptr::null()) }, 0);
+        assert_ne!(unsafe { __vow_fs_remove_dir_all(std::ptr::null()) }, 0);
+
+        std::fs::remove_file(tree.join("sub").join("f.txt")).unwrap();
+        assert_eq!(unsafe { __vow_fs_remove_dir(path_v(&tree.join("sub"))) }, 0);
+        std::fs::create_dir_all(tree.join("sub")).unwrap();
+        std::fs::write(tree.join("sub").join("f.txt"), "x").unwrap();
+
+        #[cfg(unix)]
+        {
+            let keep = root.join("keep");
+            std::fs::create_dir_all(&keep).unwrap();
+            std::fs::write(keep.join("k.txt"), "k").unwrap();
+            let link = root.join("link");
+            std::os::unix::fs::symlink(&keep, &link).unwrap();
+            assert_eq!(unsafe { __vow_fs_remove_dir_all(path_v(&link)) }, 0);
+            assert!(!link.exists() && std::fs::symlink_metadata(&link).is_err());
+            assert!(keep.join("k.txt").exists());
+        }
+
+        assert_eq!(unsafe { __vow_fs_remove_dir_all(tree_v) }, 0);
+        assert!(!tree.exists());
+        assert_ne!(unsafe { __vow_fs_remove_dir_all(tree_v) }, 0);
+        assert_ne!(unsafe { __vow_fs_remove_dir(tree_v) }, 0);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn option_builtins_allocate_only_in_the_requested_arena() {
         let mut a = empty_arena_header();
         unsafe { __vow_arena_open(&mut a) };
