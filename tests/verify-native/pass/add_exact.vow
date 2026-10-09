@@ -1,0 +1,14 @@
+// TEST: category native-pass
+module AddExact
+
+fn add_one(x: i64) -> i64 vow {
+  requires: x < 9223372036854775807
+  ensures: result == x + 1
+} {
+  x + 1
+}
+
+fn main() -> i32 [io] {
+  print_i64(add_one(41));
+  0
+}

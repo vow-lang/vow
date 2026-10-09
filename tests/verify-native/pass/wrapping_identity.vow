@@ -1,0 +1,13 @@
+// TEST: category native-pass
+module WrappingIdentity
+
+fn plus(a: i64, b: i64) -> i64 vow {
+  ensures: result == a + b
+} {
+  a + b
+}
+
+fn main() -> i32 [io] {
+  print_i64(plus(1, 2));
+  0
+}

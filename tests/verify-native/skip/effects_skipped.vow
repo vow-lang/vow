@@ -1,0 +1,14 @@
+// TEST: category unverifiable
+module EffectsSkipped
+
+fn noisy(x: i64) -> i64 [io] vow {
+  ensures: result == x
+} {
+  print_i64(x);
+  x
+}
+
+fn main() -> i32 [io] {
+  print_i64(noisy(3));
+  0
+}

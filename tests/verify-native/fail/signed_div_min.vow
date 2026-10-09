@@ -1,0 +1,17 @@
+// TEST: category native-fail
+// TEST: counterexample-fn "divide"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame none
+// TEST: counterexample-violation "signed division overflow (MIN / -1)"
+module SignedDivMin
+
+fn divide(x: i64, y: i64) -> i64 vow {
+  requires: y != 0
+} {
+  x / y
+}
+
+fn main() -> i32 [io] {
+  print_i64(divide(10, 2));
+  0
+}

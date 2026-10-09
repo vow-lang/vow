@@ -1,0 +1,13 @@
+// TEST: category unverifiable
+module U64Skipped
+
+fn widen(x: u64) -> u64 vow {
+  ensures: result == x
+} {
+  x
+}
+
+fn main() -> i32 [io] {
+  print_u64(widen(3u64));
+  0
+}

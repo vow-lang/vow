@@ -91,6 +91,25 @@ fn check_incomplete_or_malformed_is_not_ok() -> i64 {
     0
 }
 
+fn check_classify_run() -> i64 {
+    let none: Vec<String> = Vec::new();
+    let ns: Vec<String> = Vec::new();
+    ns.push(String::from("p0"));
+    let sat: String = String::from("sat\n((p0 (_ bv5 64)))\n");
+    let a: VcSolverAnswer = vc_classify_run(0, sat, String::from(""), ns);
+    if a.verdict != VC_ANS_SAT() { return 80; }
+    if a.values[0] != 5 { return 81; }
+    if vc_classify_run(0, String::from("unsat\n"), String::from(""), none).verdict != VC_ANS_UNSAT() { return 82; }
+    if vc_classify_run(0, String::from("unknown\n"), String::from(""), none).verdict != VC_ANS_UNKNOWN() { return 83; }
+    if vc_classify_run(-2, String::from(""), String::from(""), none).verdict != VC_ANS_TIMEOUT() { return 84; }
+    if vc_classify_run(1, String::from("unsat\n"), String::from(""), none).verdict != VC_ANS_ERROR() { return 85; }
+    if vc_classify_run(-1, String::from("unsat\n"), String::from(""), none).verdict != VC_ANS_ERROR() { return 86; }
+    if vc_classify_run(0, String::from("unsat\n"), String::from("[error] boom\n"), none).verdict != VC_ANS_ERROR() { return 87; }
+    if vc_classify_run(0, String::from("sat\n"), String::from(""), ns).verdict != VC_ANS_ERROR() { return 88; }
+    if vc_classify_run(0, String::from("gibberish"), String::from(""), none).verdict != VC_ANS_ERROR() { return 89; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_verdicts();
     if r == 0 { r = check_multiline_model(); }
@@ -98,5 +117,6 @@ fn main() -> i32 {
     if r == 0 { r = check_binary_and_hex(); }
     if r == 0 { r = check_name_prefix_is_not_confused(); }
     if r == 0 { r = check_incomplete_or_malformed_is_not_ok(); }
+    if r == 0 { r = check_classify_run(); }
     i64_to_i32_wrap(r)
 }

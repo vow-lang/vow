@@ -188,3 +188,85 @@ fn vc_parse_model(out: String, names: Vec<String>) -> VcModel {
     }
     VcModel { ok: ok, values: values }
 }
+
+// ---------------------------------------------------------------------------
+// Child-process driver
+// ---------------------------------------------------------------------------
+
+struct VcSolverAnswer {
+    verdict: i64,
+    names: Vec<String>,
+    values: Vec<i64>,
+    raw: String,
+}
+
+fn vc_answer(verdict: i64, names: Vec<String>, values: Vec<i64>, raw: String) -> VcSolverAnswer {
+    VcSolverAnswer { verdict: verdict, names: names, values: values, raw: raw }
+}
+
+fn vc_answer_plain(verdict: i64, raw: String) -> VcSolverAnswer {
+    vc_answer(verdict, Vec::new(), Vec::new(), raw)
+}
+
+// Path of the `bitwuzla` executable on $PATH, or "".
+fn vc_solver_locate() -> String [read] {
+    path_lookup(String::from("bitwuzla"))
+}
+
+// Classify a finished solver run. `exit_code` is the child's exit status;
+// -2 is the runtime's watchdog kill and -1 a spawn failure or a signal.
+fn vc_classify_run(exit_code: i64, stdout: String, stderr: String, names: Vec<String>) -> VcSolverAnswer {
+    let raw: String = String::from(stdout);
+    raw.push_str(stderr);
+    if exit_code == -2 { return vc_answer_plain(VC_ANS_TIMEOUT(), raw); }
+    if exit_code != 0 { return vc_answer_plain(VC_ANS_ERROR(), raw); }
+    if stderr.contains(String::from("[error]")) { return vc_answer_plain(VC_ANS_ERROR(), raw); }
+    let verdict: i64 = vc_parse_check_sat(stdout);
+    if verdict != VC_ANS_SAT() { return vc_answer_plain(verdict, raw); }
+    let model: VcModel = vc_parse_model(stdout, names);
+    if model.ok == 0 { return vc_answer_plain(VC_ANS_ERROR(), raw); }
+    vc_answer(VC_ANS_SAT(), names, model.values, raw)
+}
+
+fn vc_solver_args(file: String) -> Vec<String> {
+    let args: Vec<String> = Vec::new();
+    args.push(String::from("--bv-output-format"));
+    args.push(String::from("10"));
+    args.push(file);
+    args
+}
+
+// Runs `bin` on one self-contained query and returns its classified answer.
+// `budget_ms` is a hard wall-clock limit enforced by the runtime watchdog; a
+// non-positive budget is a timeout without spawning. The query lives in a
+// private temp directory that is removed on every path, and the child's
+// process-table entry is always evicted.
+fn vc_solver_check(bin: String, query: String, names: Vec<String>, budget_ms: i64) -> VcSolverAnswer [io, read, write] {
+    if budget_ms <= 0 {
+        return vc_answer_plain(VC_ANS_TIMEOUT(), String::from("time budget exhausted"));
+    }
+    let dir: String = mktemp_dir(String::from("vow-native"));
+    if dir.len() == 0 {
+        return vc_answer_plain(VC_ANS_ERROR(), String::from("cannot create a temporary directory"));
+    }
+    let file: String = String::from(dir);
+    file.push_str(String::from("/query.smt2"));
+    if fs_write(file, query) != 0 {
+        fs_remove(file);
+        fs_remove_dir(dir);
+        return vc_answer_plain(VC_ANS_ERROR(), String::from("cannot write the solver query"));
+    }
+    let handle: i64 = process_start(bin, vc_solver_args(file));
+    if handle < 0 {
+        fs_remove(file);
+        fs_remove_dir(dir);
+        return vc_answer_plain(VC_ANS_ERROR(), String::from("failed to start the solver"));
+    }
+    let exit_code: i64 = process_wait_timeout(handle, budget_ms);
+    let stdout: String = process_stdout_for(handle);
+    let stderr: String = process_stderr_for(handle);
+    process_kill(handle);
+    fs_remove(file);
+    fs_remove_dir(dir);
+    vc_classify_run(exit_code, stdout, stderr, names)
+}

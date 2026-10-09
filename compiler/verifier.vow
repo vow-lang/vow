@@ -868,6 +868,9 @@ fn describe_assert_label(label: String) -> String {
     if label == String::from("division by zero") {
         return String::from("division or remainder by zero");
     }
+    if label == String::from("division overflow") {
+        return String::from("signed division overflow (MIN / -1)");
+    }
     String::from("")
 }
 

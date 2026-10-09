@@ -1,0 +1,75 @@
+module VcCex
+
+use ir
+use verifier
+use vc_solver
+use vc_exec
+
+// Maps a solver answer for one claim onto the `VerifyResult` the shared
+// counterexample reporting (`build_ce_from_result`) already consumes.
+// Abort claims have no vow id (-1, reported as the unattributed sentinel); their
+// `raw_output` carries the "Violated property:" label so the description comes
+// from `parse_assert_label`.
+
+fn vc_source_param_name(f: IrFunction, k: i64) -> String {
+    if k >= 0 && k < f.param_names.len() as i64 {
+        return f.param_names[k as u64];
+    }
+    let out: String = String::from("p");
+    out.push_str(i64_to_string(k));
+    out
+}
+
+fn vc_violated_property_text(label: String) -> String {
+    let out: String = String::from("Violated property:\n  ");
+    out.push_str(label);
+    out.push_str(String::from("\n"));
+    out
+}
+
+fn vc_verify_result(status: i64, vow_id: i64, names: Vec<String>, values: Vec<String>, raw: String) -> VerifyResult {
+    VerifyResult {
+        status: status,
+        vow_id: vow_id,
+        callee_precondition_func_id: -1,
+        callee_precondition_vow_id: -1,
+        var_names: names,
+        var_values: values,
+        block_visits: Vec::new(),
+        raw_output: raw,
+    }
+}
+
+fn vc_proven_result() -> VerifyResult {
+    vc_verify_result(VERIFY_PROVEN(), -1, Vec::new(), Vec::new(), String::from(""))
+}
+
+// Result for claim `k` of `cs` given the solver's answer for it. `sat` is a
+// counterexample; `unsat` is not handled here (the caller moves on).
+fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> VerifyResult {
+    if ans.verdict == VC_ANS_SAT() {
+        let names: Vec<String> = Vec::new();
+        let values: Vec<String> = Vec::new();
+        let mut j: u64 = 0;
+        while j < ans.values.len() {
+            names.push(vc_source_param_name(f, cs.model_params[j]));
+            values.push(i64_to_string(ans.values[j]));
+            j = j + 1;
+        }
+        let mut raw: String = String::from("");
+        if cs.kinds[k] != VC_CLAIM_ENSURES() {
+            raw = vc_violated_property_text(cs.labels[k]);
+        }
+        return vc_verify_result(VERIFY_FAILED(), cs.vow_ids[k], names, values, raw);
+    }
+    if ans.verdict == VC_ANS_UNKNOWN() {
+        return vc_verify_result(VERIFY_UNKNOWN(), -1, Vec::new(), Vec::new(), ans.raw);
+    }
+    if ans.verdict == VC_ANS_TIMEOUT() {
+        return vc_verify_result(VERIFY_TIMEOUT(), -1, Vec::new(), Vec::new(), ans.raw);
+    }
+    if ans.verdict == VC_ANS_NOT_FOUND() {
+        return vc_verify_result(VERIFY_NOT_FOUND(), -1, Vec::new(), Vec::new(), ans.raw);
+    }
+    vc_verify_result(VERIFY_ERROR(), -1, Vec::new(), Vec::new(), ans.raw)
+}

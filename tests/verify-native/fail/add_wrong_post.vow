@@ -1,0 +1,17 @@
+// TEST: category native-fail
+// TEST: counterexample-fn "add_wrong"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame callee
+// TEST: counterexample-violation "ensures result == a + b + 1"
+module AddWrongPost
+
+fn add_wrong(a: i64, b: i64) -> i64 vow {
+  ensures: result == a + b + 1
+} {
+  a + b
+}
+
+fn main() -> i32 [io] {
+  print_i64(add_wrong(1, 2));
+  0
+}

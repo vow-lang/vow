@@ -8,6 +8,9 @@ use clif
 use c_emitter
 use verifier
 use verify_report
+use vc_gate
+use vc_native
+use vc_solver
 use diag
 use perfetto
 use mutants_sites
@@ -50,7 +53,7 @@ fn get_source_path(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 1 {
                 let prev: String = argv[(i - 1) as u64];
-                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--verify-jobs" || prev == "--module-root" || prev == "--max-score" || prev == "--max-cognitive" || prev == "--max-cyclomatic" || prev == "--cog-anchor" || prev == "--nloc-anchor" || prev == "--perfetto" {
+                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--backend" || prev == "--solver" || prev == "--encoding" || prev == "--verify-jobs" || prev == "--module-root" || prev == "--max-score" || prev == "--max-cognitive" || prev == "--max-cyclomatic" || prev == "--cog-anchor" || prev == "--nloc-anchor" || prev == "--perfetto" {
                     i = i - 1;
                 } else {
                     return a;
@@ -73,7 +76,7 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 2 {
                 let prev: String = argv[(i - 1) as u64];
-                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--verify-jobs" || prev == "--jobs" || prev == "--worker-entry" || prev == "--module-root" || prev == "--max-score" || prev == "--max-cognitive" || prev == "--max-cyclomatic" || prev == "--cog-anchor" || prev == "--nloc-anchor" || prev == "--perfetto" {
+                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--backend" || prev == "--solver" || prev == "--encoding" || prev == "--verify-jobs" || prev == "--jobs" || prev == "--worker-entry" || prev == "--module-root" || prev == "--max-score" || prev == "--max-cognitive" || prev == "--max-cyclomatic" || prev == "--cog-anchor" || prev == "--nloc-anchor" || prev == "--perfetto" {
                     i = i - 1;
                 } else {
                     return a;
@@ -1297,7 +1300,11 @@ fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunct
             desc.push_str(String::from("esbmc error: "));
             desc.push_str(message);
         } else if status == String::from("tool_not_found") {
-            desc.push_str(String::from("ESBMC not found"));
+            if message.len() > 0 {
+                desc.push_str(message);
+            } else {
+                desc.push_str(String::from("ESBMC not found"));
+            }
         } else {
             desc.push_str(message);
         }
@@ -1579,6 +1586,107 @@ fn verify_collect_and_report(
     0
 }
 
+// Report one native-backend result for `f`. Returns 1 when proven, else 0
+// after recording the counterexample or the soft failure.
+fn native_report_result(f: IrFunction, ir_mod: IrModule, path: String, vr: VerifyResult, ces: Vec<VerifyCE>, soft_meta: Vec<String>) -> i64 [io] {
+    let st: i64 = vr.status;
+    if st == VERIFY_PROVEN() {
+        eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
+        return 1;
+    }
+    if st == VERIFY_FAILED() {
+        eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
+        emit_ce_vars(vr);
+        if ces.len() == 0 {
+            ces.push(build_ce_from_result(f, ir_mod, vr, path));
+        }
+        return 0;
+    }
+    if st == VERIFY_TIMEOUT() {
+        eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
+        record_soft_fail(soft_meta, String::from("timeout"), String::from(""), f.name);
+        return 0;
+    }
+    if st == VERIFY_UNKNOWN() {
+        eprintln_str(str3(String::from("  "), f.name, String::from(": UNKNOWN")));
+        record_soft_fail(soft_meta, String::from("unknown"), String::from("the solver answered unknown"), f.name);
+        return 0;
+    }
+    let detail: String = {
+        if vr.raw_output.len() > 0 { vr.raw_output } else { String::from("unrecognized Bitwuzla outcome") }
+    };
+    eprintln_str(str5(String::from("  "), f.name, String::from(": ERROR ("), vc_trim(detail), String::from(")")));
+    record_soft_fail(soft_meta, String::from("error"), vc_trim(detail), f.name);
+    0
+}
+
+fn native_skip_function(f: IrFunction, reason: String, dctx: DiagCtx) [io] {
+    eprintln_str(str3(String::from("  "), f.name, String::from(": SKIPPED (outside the native verifier subset)")));
+    let msg: String = str3(
+        String::from("skipped verification of `"),
+        f.name,
+        str2(String::from("`: "), reason),
+    );
+    let d: Diagnostic = diag_new(SEV_WARNING(), EC_VERIFICATION_SKIPPED(), msg, String::from(""), 0, 0, DIAG_BLAME_NONE());
+    diag_add_hint(d, String::from("the contract is documentary; runtime checks still apply in --mode debug"));
+    diag_ctx_emit(dctx, d);
+}
+
+// `verify --backend native`: sequential, in-process verification with Bitwuzla
+// of the straight-line i64 subset; every other function is `Skipped`.
+fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx: TraceCtx) -> i32 [io] {
+    let checked: CheckedFrontend = fr.checked;
+    let dctx: DiagCtx = checked.dctx;
+    let ir_mod: IrModule = fr.ir_mod;
+    emit_ir_warnings(ir_mod, dctx);
+    let fns: Vec<IrFunction> = ir_mod.functions;
+    let ces: Vec<VerifyCE> = Vec::new();
+    let soft_meta: Vec<String> = Vec::new();
+    let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
+    let timeout_ms: i64 = watchdog_ms_for(get_flag_arg(argv, "--timeout"));
+    let mut solver_bin: String = String::from("");
+    let mut solver_probed: bool = false;
+    let mut all_proven: bool = true;
+    let mut any_skipped: bool = false;
+    let t_verify: i64 = trace_now(tctx);
+    let mut fi: u64 = 0;
+    while fi < fns.len() {
+        let f: IrFunction = fns[fi];
+        if all_proven && is_verify_target(f, ir_mod, const_fn_indices) {
+            let reason: String = vc_skip_reason(f);
+            if reason.len() > 0 {
+                native_skip_function(f, reason, dctx);
+                any_skipped = true;
+            } else {
+                if !solver_probed {
+                    solver_bin = vc_solver_locate();
+                    solver_probed = true;
+                }
+                if solver_bin.len() == 0 {
+                    eprintln_str(String::from("error: Bitwuzla not found; install Bitwuzla to run native verification"));
+                    record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("Bitwuzla not found"), f.name);
+                    all_proven = false;
+                } else {
+                    eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
+                    let vr: VerifyResult = vc_verify_function(solver_bin, f, timeout_ms);
+                    if native_report_result(f, ir_mod, path, vr, ces, soft_meta) == 0 {
+                        all_proven = false;
+                    }
+                }
+            }
+        }
+        fi = fi + 1;
+    }
+    trace_span(tctx, String::from("verification"), PID_COMPILER(), TID_VERIFY_DRIVER(), t_verify, trace_now(tctx) - t_verify, String::from(""));
+    report_unchecked_calls(fns, ir_mod, const_fn_indices, dctx);
+    let status_str: String = {
+        if !all_proven { String::from("VerifyFailed") }
+        else if any_skipped { String::from("Skipped") }
+        else { String::from("Verified") }
+    };
+    verify_finish(argv, fns, path, dctx, tctx, status_str, ces, soft_meta, !all_proven || any_skipped)
+}
+
 fn run_verify(argv: Vec<String>) -> i32 [io] {
     let path: String = frontend_path_from_argv(argv, true, String::from("verify"));
     let tctx: TraceCtx = {
@@ -1595,6 +1703,9 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     if n_errors > 0 {
         diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
         return 1;
+    }
+    if get_flag_arg(argv, "--backend") == "native" {
+        return run_verify_native(argv, fr, path, tctx);
     }
     let max_k_step_str: String = get_flag_arg(argv, "--max-k-step");
     let max_k_step: String = {
@@ -1639,6 +1750,12 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         else if outcome == 2 { String::from("Skipped") }
         else { String::from("VerifyFailed") }
     };
+    verify_finish(argv, fns, path, dctx, tctx, status_str, ces, soft_meta, outcome != 0)
+}
+
+// Shared tail of `verify`: counterexample selection, replay, trace output and
+// the JSON result. Returns the process exit code.
+fn verify_finish(argv: Vec<String>, fns: Vec<IrFunction>, path: String, dctx: DiagCtx, tctx: TraceCtx, status_str: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, failed: bool) -> i32 [io] {
     let mut ces_final: Vec<VerifyCE> = Vec::new();
     let ce_wins: bool = vf_prefers_counterexample(ces, soft_meta, fns);
     if ce_wins {
@@ -1659,7 +1776,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     trace_write(tctx);
     vf_add_ce_diagnostics(dctx, ces_final);
     diag_emit_verify_json_full(status_str, dctx, ces_final, vstatus, vmsg, vf_func, vf_ce);
-    if outcome != 0 {
+    if failed {
         return 1;
     }
     0
@@ -16079,6 +16196,34 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     exit_code
 }
 
+// Usage error for a misplaced or malformed `--backend`, else "". Only `verify`
+// has a native backend; accepting the flag elsewhere would run ESBMC silently.
+fn backend_flag_error(argv: Vec<String>, cmd: i64) -> String {
+    if !has_flag(argv, "--backend") {
+        return String::from("");
+    }
+    let backend: String = get_flag_arg(argv, "--backend");
+    if backend != "esbmc" && backend != "native" {
+        return String::from("error: --backend must be `esbmc` or `native`");
+    }
+    if backend == "esbmc" {
+        return String::from("");
+    }
+    if cmd != CMD_VERIFY() {
+        return String::from("error: --backend native is only supported by `vowc verify`");
+    }
+    if has_flag(argv, "--max-k-step") {
+        return String::from("error: --max-k-step is not supported with --backend native");
+    }
+    if has_flag(argv, "--solver") {
+        return String::from("error: --solver is not supported with --backend native");
+    }
+    if has_flag(argv, "--encoding") {
+        return String::from("error: --encoding is not supported with --backend native");
+    }
+    String::from("")
+}
+
 fn main() -> i32 [io, read, write] {
     let argv: Vec<String> = args();
     if has_flag(argv, "--help") {
@@ -16094,6 +16239,11 @@ fn main() -> i32 [io, read, write] {
         return 1;
     }
     let cmd: i64 = get_subcommand(argv);
+    let backend_error: String = backend_flag_error(argv, cmd);
+    if backend_error.len() > 0 {
+        eprintln_str(backend_error);
+        return 1;
+    }
     if cmd == CMD_TEST() {
         return run_test(argv);
     }
