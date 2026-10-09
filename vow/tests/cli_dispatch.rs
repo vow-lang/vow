@@ -54,6 +54,27 @@ fn verify_jobs_zero_is_rejected_before_any_subcommand_work() {
 }
 
 #[test]
+fn retired_capacity_flags_are_rejected_as_unknown_arguments() {
+    for flag in [
+        "--vec-max",
+        "--string-max",
+        "--hashmap-max",
+        "--btreemap-max",
+    ] {
+        let out = Command::new(vow_bin())
+            .args(["build", flag, "10000", "does-not-need-to-exist.vow"])
+            .output()
+            .expect("failed to run vow");
+        assert_eq!(out.status.code(), Some(2), "{flag}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains(&format!("unexpected argument '{flag}' found")),
+            "expected unknown-argument error for {flag}, got: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn verify_subcommand_resolves_jobs_and_solver_config() {
     // Exercises the Command::Verify dispatch arm's jobs/config resolution,
     // which only runs via the real CLI entry point. The verify outcome

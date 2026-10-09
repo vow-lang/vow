@@ -19,6 +19,7 @@ use mutants_oracle
 use mutants_main
 use complexity
 use complexity_main
+use cli_flags
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
     let mut i: u64 = 1;
@@ -44,6 +45,16 @@ fn get_flag_arg(argv: Vec<String>, flag: String) -> String {
     String::from("")
 }
 
+// `-o` and `--output` are the same flag; `-o` wins when both are given.
+fn output_flag_value(argv: Vec<String>) -> String {
+    if has_flag(argv, "-o") { return get_flag_arg(argv, "-o"); }
+    get_flag_arg(argv, "--output")
+}
+
+fn has_output_flag(argv: Vec<String>) -> bool {
+    has_flag(argv, "-o") || has_flag(argv, "--output")
+}
+
 fn get_source_path(argv: Vec<String>) -> String {
     let argc: i64 = argv.len() as i64;
     let mut i: i64 = argc - 1;
@@ -53,7 +64,7 @@ fn get_source_path(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 1 {
                 let prev: String = argv[(i - 1) as u64];
-                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--backend" || prev == "--solver" || prev == "--encoding" || prev == "--verify-jobs" || prev == "--module-root" || prev == "--max-score" || prev == "--max-cognitive" || prev == "--max-cyclomatic" || prev == "--cog-anchor" || prev == "--nloc-anchor" || prev == "--perfetto" {
+                if cli_flag_takes_value(prev) {
                     i = i - 1;
                 } else {
                     return a;
@@ -76,7 +87,7 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 2 {
                 let prev: String = argv[(i - 1) as u64];
-                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--backend" || prev == "--solver" || prev == "--encoding" || prev == "--verify-jobs" || prev == "--jobs" || prev == "--worker-entry" || prev == "--module-root" || prev == "--max-score" || prev == "--max-cognitive" || prev == "--max-cyclomatic" || prev == "--cog-anchor" || prev == "--nloc-anchor" || prev == "--perfetto" {
+                if cli_flag_takes_value(prev) {
                     i = i - 1;
                 } else {
                     return a;
@@ -113,15 +124,6 @@ fn default_output(path: String) -> String {
     r.push_str(path.substring(start, end));
     r
 }
-
-fn CMD_NONE() -> i64 { 0 }
-fn CMD_BUILD() -> i64 { 1 }
-fn CMD_VERIFY() -> i64 { 2 }
-fn CMD_TEST() -> i64 { 3 }
-fn CMD_CONTRACTS() -> i64 { 4 }
-fn CMD_SKILL() -> i64 { 5 }
-fn CMD_MUTANTS() -> i64 { 6 }
-fn CMD_COMPLEXITY() -> i64 { 7 }
 
 fn get_subcommand(argv: Vec<String>) -> i64 {
     if argv.len() < 2 {
@@ -1932,8 +1934,8 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         return 1;
     }
     let out: String = {
-        if has_flag(argv, "-o") {
-            get_flag_arg(argv, "-o")
+        if has_output_flag(argv) {
+            output_flag_value(argv)
         } else {
             default_output(path)
         }
@@ -2423,7 +2425,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
 }
 
 fn run_legacy(argv: Vec<String>) -> i32 [io] {
-    let has_output: bool = has_flag(argv, "-o");
+    let has_output: bool = has_output_flag(argv);
     let path: String = get_source_path(argv);
     if path.len() == 0 {
         eprintln_str("vow: source file required (try --help or use a subcommand)");
@@ -2506,7 +2508,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             let c_code: String = emit_c_module(ir_mod, VOW_VEC_MAX(), VOW_STRING_MAX(), VOW_HASHMAP_MAX(), VOW_BTREEMAP_MAX());
             print_str(c_code);
         } else if has_output {
-            let out: String = get_flag_arg(argv, "-o");
+            let out: String = output_flag_value(argv);
             let mode_str: String = get_flag_arg(argv, "--mode");
             let mode: i64 = {
                 if mode_str == String::from("debug") { 1 }
@@ -5585,6 +5587,14 @@ fn skill_bundle() -> String {
     r.push_str(String::from("|------|------------------------------------------------------------------------------------|\n"));
     r.push_str(String::from("| `0`  | Success (`Verified` or `Unverified`)                                               |\n"));
     r.push_str(String::from("| `1`  | Failure (`CompileFailed`, `VerifyFailed`, or `Skipped`)                            |\n"));
+    r.push_str(String::from("| `2`  | Usage error: an unknown flag (`error: unexpected argument '<flag>' found`)         |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Both compilers reject a flag the selected subcommand does not implement before doing any work, with\n"));
+    r.push_str(String::from("exit `2` and `error: unexpected argument '<flag>' found` on stderr. This includes flags that were\n"));
+    r.push_str(String::from("retired prover-model flags and typos: they are never\n"));
+    r.push_str(String::from("silently ignored. The self-hosted `vowc` only accepts the `--flag value` form for value flags;\n"));
+    r.push_str(String::from("`--flag=value` is reported as an unknown argument with a hint. `vowc mutants` forwards its flags to\n"));
+    r.push_str(String::from("its own parser and is not validated by the driver.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`vow build` and `vow verify` both fail closed on `Skipped`: if ESBMC was asked to verify a vowed\n"));
     r.push_str(String::from("function but the verifier could not model the function body, the contract was not statically\n"));
@@ -11495,6 +11505,14 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("|------|------------------------------------------------------------------------------------|\n"));
     r.push_str(String::from("| `0`  | Success (`Verified` or `Unverified`)                                               |\n"));
     r.push_str(String::from("| `1`  | Failure (`CompileFailed`, `VerifyFailed`, or `Skipped`)                            |\n"));
+    r.push_str(String::from("| `2`  | Usage error: an unknown flag (`error: unexpected argument '<flag>' found`)         |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Both compilers reject a flag the selected subcommand does not implement before doing any work, with\n"));
+    r.push_str(String::from("exit `2` and `error: unexpected argument '<flag>' found` on stderr. This includes flags that were\n"));
+    r.push_str(String::from("retired prover-model flags and typos: they are never\n"));
+    r.push_str(String::from("silently ignored. The self-hosted `vowc` only accepts the `--flag value` form for value flags;\n"));
+    r.push_str(String::from("`--flag=value` is reported as an unknown argument with a hint. `vowc mutants` forwards its flags to\n"));
+    r.push_str(String::from("its own parser and is not validated by the driver.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`vow build` and `vow verify` both fail closed on `Skipped`: if ESBMC was asked to verify a vowed\n"));
     r.push_str(String::from("function but the verifier could not model the function body, the contract was not statically\n"));
@@ -16282,6 +16300,11 @@ fn main() -> i32 [io, read, write] {
     if backend_error.len() > 0 {
         eprintln_str(backend_error);
         return 1;
+    }
+    let flag_error: String = cli_flag_error(argv, cmd);
+    if flag_error.len() > 0 {
+        eprintln_str(flag_error);
+        return 2;
     }
     if cmd == CMD_TEST() {
         return run_test(argv);
