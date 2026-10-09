@@ -467,6 +467,30 @@ fn checked_payload_ty(ctx: &LowerCtx, key: usize) -> Option<Ty> {
         .map(pattern_scalar_ir_type)
 }
 
+/// The 128-bit element type of a `Vec` access (index read or write, `push`,
+/// `for` loop), as resolved by the checker for that expression.
+fn checked_wide_vec_elem(ctx: &LowerCtx, expr: &Expr) -> Option<Ty> {
+    checked_payload_ty(ctx, expr as *const Expr as usize)
+        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
+}
+
+/// Address of a `Vec` element through a bounds-checked helper, so the 128-bit
+/// value can be read or written with the two-slot `WideSlot` access.
+fn emit_wide_vec_elem_ptr(
+    ctx: &mut LowerCtx,
+    helper: &str,
+    args: Vec<InstId>,
+    span: Span,
+) -> InstId {
+    ctx.emit(
+        Opcode::Call,
+        Ty::Ptr,
+        args,
+        InstData::CallExtern(helper.to_string()),
+        span,
+    )
+}
+
 fn apply_pattern_aggregate_metadata(
     ctx: &mut LowerCtx,
     result: InstId,
@@ -2417,6 +2441,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 }
                 // Index store transfers a linear RHS into the heap container.
                 ctx.emit_linear_consume_if_needed(new_val, span);
+                if checked_wide_vec_elem(ctx, lhs).is_some() {
+                    let slot = emit_wide_vec_elem_ptr(
+                        ctx,
+                        "__vow_vec_set_wide_ptr",
+                        vec![vec_ptr, idx_id],
+                        span,
+                    );
+                    ctx.emit(
+                        Opcode::FieldSet,
+                        Ty::Unit,
+                        vec![slot, new_val],
+                        InstData::WideSlot(0),
+                        span,
+                    );
+                    return new_val;
+                }
                 ctx.emit(
                     Opcode::Call,
                     Ty::Unit,
@@ -2793,13 +2833,29 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Body: get element and bind to loop variable
             ctx.switch_to_block(body_block);
-            let elem_id = ctx.emit(
-                Opcode::Call,
-                Ty::I64,
-                vec![iter_id, idx_phi],
-                InstData::CallExtern("__vow_vec_get_val".to_string()),
-                span,
-            );
+            let elem_id = if let Some(wide_ty) = checked_wide_vec_elem(ctx, expr) {
+                let slot = emit_wide_vec_elem_ptr(
+                    ctx,
+                    "__vow_vec_get_wide_ptr",
+                    vec![iter_id, idx_phi],
+                    span,
+                );
+                ctx.emit(
+                    Opcode::FieldGet,
+                    wide_ty,
+                    vec![slot],
+                    InstData::WideSlot(0),
+                    span,
+                )
+            } else {
+                ctx.emit(
+                    Opcode::Call,
+                    Ty::I64,
+                    vec![iter_id, idx_phi],
+                    InstData::CallExtern("__vow_vec_get_val".to_string()),
+                    span,
+                )
+            };
             project_vec_index_metadata(ctx, iter_id, elem_id);
             record_collection_foreach_element(ctx, iter_id, elem_id);
 
@@ -4057,13 +4113,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     )
                 }
                 (_, "push") => {
-                    let elem_ty = ctx
-                        .inst_vec_elem_types
-                        .get(&recv_id)
-                        .and_then(|path| path.first())
-                        .filter(|name| is_scalar_field_type_name(name))
-                        .map(|name| scalar_ty_for_field_type_name(name))
-                        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128));
+                    let elem_ty = checked_wide_vec_elem(ctx, expr);
                     let elem_id = args
                         .first()
                         .map(|e| {
@@ -4078,6 +4128,21 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         .unwrap_or_else(|| {
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                         });
+                    if elem_ty.is_some() {
+                        let slot = emit_wide_vec_elem_ptr(
+                            ctx,
+                            "__vow_vec_push_wide_ptr",
+                            vec![recv_id],
+                            span,
+                        );
+                        return ctx.emit(
+                            Opcode::FieldSet,
+                            Ty::Unit,
+                            vec![slot, elem_id],
+                            InstData::WideSlot(0),
+                            span,
+                        );
+                    }
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
@@ -4112,6 +4177,25 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let elem_ast_type = known_expr_ast_type(ctx, expr);
             let vec_ptr = lower_expr(ctx, base);
             let idx_id = lower_expr(ctx, index);
+            if let Some(wide_ty) = checked_wide_vec_elem(ctx, expr) {
+                let slot = emit_wide_vec_elem_ptr(
+                    ctx,
+                    "__vow_vec_get_wide_ptr",
+                    vec![vec_ptr, idx_id],
+                    span,
+                );
+                let result = ctx.emit(
+                    Opcode::FieldGet,
+                    wide_ty,
+                    vec![slot],
+                    InstData::WideSlot(0),
+                    span,
+                );
+                if let Some(ast_type) = elem_ast_type {
+                    ctx.inst_declared_ast_types.insert(result, ast_type);
+                }
+                return result;
+            }
             let raw_result = ctx.emit(
                 Opcode::Call,
                 Ty::I64,
@@ -4715,6 +4799,9 @@ fn known_index_assignment_ty(ctx: &LowerCtx, lhs: &Expr) -> Option<Ty> {
     let ExprKind::Index { base, .. } = &lhs.kind else {
         return None;
     };
+    if let Some(wide) = checked_wide_vec_elem(ctx, lhs) {
+        return Some(wide);
+    }
     known_vec_element_path(ctx, base)
         .and_then(|path| path.first().cloned())
         .filter(|name| is_scalar_field_type_name(name))

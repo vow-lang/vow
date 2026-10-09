@@ -1,0 +1,91 @@
+module TestLowerWideVecLayout
+
+use frontend
+use clif
+use ir
+
+// Twin of wide_vec_accesses_use_element_address_helpers in
+// vow-ir/src/lower/mod.rs: a Vec<u128> element is two slots wide, so push,
+// index read, index write, and `for` go through the element-address helpers
+// and the two-slot WIDE_SLOT access instead of the 8-byte *_val helpers.
+
+fn lower_layout() -> IrModule [io] {
+    let lowered: LoweredFrontend = frontend_lower_path_with_root(
+        String::from("tests/fixtures/wide_vec_layout.vow"), String::from("")
+    );
+    lowered.ir_mod
+}
+
+fn insts_of(m: IrModule, name: String) -> Vec<IrInst> {
+    let out: Vec<IrInst> = Vec::new();
+    let mut fi: u64 = 0;
+    while fi < m.functions.len() {
+        let function: IrFunction = m.functions[fi];
+        if function.name == name {
+            let mut bi: u64 = 0;
+            while bi < function.blocks.len() {
+                let block: IrBlock = function.blocks[bi];
+                let mut ii: u64 = 0;
+                while ii < block.insts.len() {
+                    out.push(block.insts[ii]);
+                    ii = ii + 1;
+                }
+                bi = bi + 1;
+            }
+        }
+        fi = fi + 1;
+    }
+    out
+}
+
+fn count_calls(insts: Vec<IrInst>, symbol: String) -> i64 {
+    let mut n: i64 = 0;
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        if insts[i].op == IOP_CALL() && insts[i].dk == IDATA_CALL_EXTERN() && insts[i].ds == symbol {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+fn count_wide_slot(insts: Vec<IrInst>, op: i64) -> i64 {
+    let mut n: i64 = 0;
+    let mut i: u64 = 0;
+    while i < insts.len() {
+        if insts[i].op == op && insts[i].dk == IDATA_WIDE_SLOT() && insts[i].dv == 0 {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+fn main() -> i32 [io] {
+    let m: IrModule = lower_layout();
+
+    let push_one: Vec<IrInst> = insts_of(m, String::from("push_one"));
+    if count_calls(push_one, String::from("__vow_vec_push_wide_ptr")) != 1 { return 1; }
+    if count_wide_slot(push_one, IOP_FIELD_SET()) != 1 { return 2; }
+    if count_calls(push_one, String::from("__vow_vec_push_val")) != 0 { return 3; }
+
+    let read_one: Vec<IrInst> = insts_of(m, String::from("read_one"));
+    if count_calls(read_one, String::from("__vow_vec_get_wide_ptr")) != 1 { return 4; }
+    if count_wide_slot(read_one, IOP_FIELD_GET()) != 1 { return 5; }
+    if count_calls(read_one, String::from("__vow_vec_get_val")) != 0 { return 6; }
+
+    let write_one: Vec<IrInst> = insts_of(m, String::from("write_one"));
+    if count_calls(write_one, String::from("__vow_vec_set_wide_ptr")) != 1 { return 7; }
+    if count_wide_slot(write_one, IOP_FIELD_SET()) != 1 { return 8; }
+    if count_calls(write_one, String::from("__vow_vec_set_val")) != 0 { return 9; }
+
+    let sum: Vec<IrInst> = insts_of(m, String::from("sum"));
+    if count_calls(sum, String::from("__vow_vec_get_wide_ptr")) != 1 { return 10; }
+    if count_calls(sum, String::from("__vow_vec_get_val")) != 0 { return 11; }
+
+    let narrow: Vec<IrInst> = insts_of(m, String::from("narrow"));
+    if count_calls(narrow, String::from("__vow_vec_get_val")) != 1 { return 12; }
+    if count_calls(narrow, String::from("__vow_vec_get_wide_ptr")) != 0 { return 13; }
+    0
+}

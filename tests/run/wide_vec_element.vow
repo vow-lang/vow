@@ -1,0 +1,91 @@
+// TEST: stdout "171 5\n255 255\n0 0\n3 7 7\n100 1 0\n171 5 2\n171 5\n171 6\n"
+module WideVecElement
+
+// 128-bit `Vec` elements are 16 bytes wide. Every read prints both limbs
+// separately, so a helper that truncates to the low limb fails the high-limb
+// column, and a stride of 8 makes neighbouring elements overlap.
+struct Bag {
+    items: Vec<u128>,
+    tag: i64,
+}
+
+fn high_seed() -> i128 {
+    3154393236604333326336
+}
+
+fn hi_byte(v: i128) -> u8 {
+    u128_to_u8_wrap((v as u128) >> 64)
+}
+
+fn lo_byte(v: i128) -> u8 {
+    u128_to_u8_wrap(v as u128)
+}
+
+fn show(v: i128) -> () [io] {
+    print_i64(hi_byte(v) as i64);
+    print_str(" ");
+    print_i64(lo_byte(v) as i64);
+    print_str("\n");
+}
+
+fn build(n: u64) -> Vec<i128> {
+    let out: Vec<i128> = Vec::new();
+    let mut i: u64 = 0;
+    while i < n {
+        out.push(high_seed() + (i as i128));
+        i = i + 1;
+    }
+    out
+}
+
+fn sum_lo(values: Vec<i128>) -> i64 {
+    let mut total: i64 = 0;
+    for v in values {
+        total = total + (lo_byte(v) as i64);
+    }
+    total
+}
+
+fn main() -> i32 [io] {
+    let v: Vec<i128> = Vec::new();
+    v.push(high_seed() + 5);
+    v.push(0 - 1);
+    v.push(0);
+    show(v[0]);
+    show(v[1]);
+    show(v[2]);
+
+    v[2] = high_seed() + 7;
+    v[1] = 3;
+    print_i64(lo_byte(v[1]) as i64);
+    print_str(" ");
+    print_i64(lo_byte(v[2]) as i64);
+    print_str(" ");
+    print_i64(lo_byte(v[2]) as i64);
+    print_str("\n");
+
+    let big: Vec<i128> = build(150);
+    print_i64(big.len() as i64 - 50);
+    print_str(" ");
+    print_i64(sum_lo(build(2)));
+    print_str(" ");
+    print_i64(hi_byte(big[0]) as i64 - 171);
+    print_str("\n");
+
+    big.truncate(3);
+    big.push(high_seed() + 5);
+    print_i64(hi_byte(big[3]) as i64);
+    print_str(" ");
+    print_i64(lo_byte(big[3]) as i64);
+    print_str(" ");
+    print_i64(big.len() as i64 - 2);
+    print_str("\n");
+
+    let bag: Bag = Bag { items: Vec::new(), tag: 9 };
+    bag.items.push((high_seed() + 5) as u128);
+    show(bag.items[0] as i128);
+    let doubled: u128 = bag.items[0];
+    bag.items[0] = doubled + 1;
+    show(bag.items[0] as i128);
+    0
+}

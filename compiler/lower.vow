@@ -995,6 +995,36 @@ fn lctx_get_question_scalar_ty(ctx: LowerCtx, eid: i64) -> i64 {
     -1
 }
 
+// The 128-bit element type of a Vec access (index read or write, `push`, `for`
+// loop), as resolved by the checker for that expression; -1 when it is not wide.
+fn lctx_checked_wide_vec_elem(ctx: LowerCtx, eid: i64) -> i64 {
+    let ty: i64 = lctx_get_question_scalar_ty(ctx, eid);
+    if ty == ITY_I128() || ty == ITY_U128() { ty } else { -1 }
+}
+
+// Address of a Vec element through a bounds-checked helper, so the 128-bit
+// value can be read or written with the two-slot WIDE_SLOT access.
+fn lctx_emit_wide_vec_elem_ptr(ctx: LowerCtx, helper: String, args: Vec<i64>, origin: i64) -> i64 {
+    lctx_emit(ctx, IOP_CALL(), ITY_PTR(), args, IDATA_CALL_EXTERN(), 0, 0, helper, origin)
+}
+
+fn lctx_emit_wide_vec_elem_get(ctx: LowerCtx, vec_id: i64, idx_id: i64, wide_ty: i64, origin: i64) -> i64 {
+    let ptr_args: Vec<i64> = Vec::new();
+    ptr_args.push(vec_id);
+    ptr_args.push(idx_id);
+    let slot: i64 = lctx_emit_wide_vec_elem_ptr(ctx, String::from("__vow_vec_get_wide_ptr"), ptr_args, origin);
+    let fg_args: Vec<i64> = Vec::new();
+    fg_args.push(slot);
+    lctx_emit(ctx, IOP_FIELD_GET(), wide_ty, fg_args, IDATA_WIDE_SLOT(), 0, 0, String::from(""), origin)
+}
+
+fn lctx_emit_wide_slot_store(ctx: LowerCtx, slot: i64, val_id: i64, origin: i64) -> i64 {
+    let fs_args: Vec<i64> = Vec::new();
+    fs_args.push(slot);
+    fs_args.push(val_id);
+    lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_WIDE_SLOT(), 0, 0, String::from(""), origin)
+}
+
 fn lctx_get_question_vec_elem_path(ctx: LowerCtx, eid: i64) -> Vec<String> {
     if eid < ctx.question_vec_elem_paths.len() as i64 {
         return ctx.question_vec_elem_paths[eid as u64];
@@ -3901,7 +3931,12 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
         let get_args: Vec<i64> = Vec::new();
         get_args.push(iter_id);
         get_args.push(idx_phi);
-        let elem_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), get_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"), origin);
+        let foreach_wide_ty: i64 = lctx_checked_wide_vec_elem(ctx, eid);
+        let elem_id: i64 = if foreach_wide_ty != -1 {
+            lctx_emit_wide_vec_elem_get(ctx, iter_id, idx_phi, foreach_wide_ty, origin)
+        } else {
+            lctx_emit(ctx, IOP_CALL(), ITY_I64(), get_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"), origin)
+        };
         lctx_project_vec_index_metadata(ctx, iter_id, elem_id);
         let iter_elem_ast_tid: i64 = lctx_generic_ast_arg_tid(
             ctx, lctx_get_declared_ast_tid(ctx, iter_id), String::from("Vec"), 0
@@ -4077,7 +4112,12 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                     ctx, lctx_get_declared_ast_tid(ctx, recv_id), String::from("Vec"), 0
                 )
             );
-            let elem_ty: i64 = ity_for_scalar_type_name(lctx_get_vec_elem(ctx, recv_id));
+            let checked_wide_elem: i64 = lctx_checked_wide_vec_elem(ctx, lhs_eid);
+            let elem_ty: i64 = if checked_wide_elem != -1 {
+                checked_wide_elem
+            } else {
+                ity_for_scalar_type_name(lctx_get_vec_elem(ctx, recv_id))
+            };
             lctx_record_wide_control_flow_context(ctx, a, rhs_eid, elem_ty);
             let original: i64 = lower_expr(ctx, rhs_eid);
             let val_id: i64 = if elem_ty == ITY_I128() || elem_ty == ITY_U128() {
@@ -4087,6 +4127,14 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             };
             // Index store transfers a linear RHS into the heap container.
             lctx_emit_linear_consume_if_needed(ctx, val_id, expr_span(a, eid));
+            if checked_wide_elem != -1 {
+                let wide_set_args: Vec<i64> = Vec::new();
+                wide_set_args.push(recv_id);
+                wide_set_args.push(idx_id);
+                let wide_slot: i64 = lctx_emit_wide_vec_elem_ptr(ctx, String::from("__vow_vec_set_wide_ptr"), wide_set_args, origin);
+                lctx_emit_wide_slot_store(ctx, wide_slot, val_id, origin);
+                return val_id;
+            }
             let set_args: Vec<i64> = Vec::new();
             set_args.push(recv_id);
             set_args.push(idx_id);
@@ -4568,7 +4616,12 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
 
         if method_name == String::from("push") {
             let nargs: i64 = list_len(a, args_lid);
-            let elem_ty: i64 = ity_for_scalar_type_name(lctx_get_vec_elem(ctx, recv_id));
+            let push_wide_ty: i64 = lctx_checked_wide_vec_elem(ctx, eid);
+            let elem_ty: i64 = if push_wide_ty != -1 {
+                push_wide_ty
+            } else {
+                ity_for_scalar_type_name(lctx_get_vec_elem(ctx, recv_id))
+            };
             let elem_id: i64 = {
                 if nargs > 0 {
                     let ae: i64 = list_get(a, args_lid, 0);
@@ -4584,6 +4637,12 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                     lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""), origin)
                 }
             };
+            if push_wide_ty != -1 {
+                let wide_push_args: Vec<i64> = Vec::new();
+                wide_push_args.push(recv_id);
+                let wide_push_slot: i64 = lctx_emit_wide_vec_elem_ptr(ctx, String::from("__vow_vec_push_wide_ptr"), wide_push_args, origin);
+                return lctx_emit_wide_slot_store(ctx, wide_push_slot, elem_id, origin);
+            }
             let call_args: Vec<i64> = Vec::new();
             call_args.push(recv_id);
             call_args.push(elem_id);
@@ -4625,6 +4684,12 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
             ctx, lctx_get_declared_ast_tid(ctx, vec_ptr), String::from("Vec"), 0
         );
         let idx_id: i64 = lower_expr(ctx, index_eid);
+        let read_wide_ty: i64 = lctx_checked_wide_vec_elem(ctx, eid);
+        if read_wide_ty != -1 {
+            let wide_result: i64 = lctx_emit_wide_vec_elem_get(ctx, vec_ptr, idx_id, read_wide_ty, origin);
+            lctx_tag_declared_ast_tid(ctx, wide_result, elem_ast_tid);
+            return wide_result;
+        }
         let call_args: Vec<i64> = Vec::new();
         call_args.push(vec_ptr);
         call_args.push(idx_id);

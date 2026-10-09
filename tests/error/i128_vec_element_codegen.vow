@@ -1,9 +1,0 @@
-// TEST: error-code CodegenUnsupported
-// TEST: error-count 1
-module I128VecElementCodegen
-
-fn main() -> i32 {
-    let v: Vec<i128> = Vec::new();
-    v.push(1);
-    0
-}

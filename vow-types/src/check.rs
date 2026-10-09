@@ -243,10 +243,13 @@ fn is_flat_slot_ty(ty: &Ty) -> bool {
     )
 }
 
+/// A `Vec` whose elements are one 8-byte slot each. `Vec<i128>`/`Vec<u128>`
+/// elements take two, so the slot-copying `pin_to_root` and
+/// `Vec::from_raw_parts_copy` would halve them.
 fn is_flat_vec_ty(ty: &Ty) -> bool {
     ty.applied_args(NominalKind::Struct, "Vec")
         .and_then(|args| args.first())
-        .is_some_and(is_flat_slot_ty)
+        .is_some_and(|elem| is_flat_slot_ty(elem) && !matches!(elem, Ty::I128 | Ty::U128))
 }
 
 fn is_supported_pin_ty(ty: &Ty) -> bool {
@@ -1102,6 +1105,18 @@ impl<'e> Checker<'e> {
         )
     }
 
+    /// Records a `Vec` access whose element is 128 bits wide (an index read or
+    /// write, a `push`, or a `for` loop), keyed by its AST address. The element
+    /// helpers are 8-byte, so lowering needs the width from the checker rather
+    /// than from whatever metadata the receiver happens to carry.
+    fn record_wide_vec_site(&mut self, key: usize, elem_ty: &Ty) {
+        if matches!(elem_ty, Ty::I128 | Ty::U128)
+            && let Some(scalar) = pattern_scalar_type(elem_ty)
+        {
+            self.payload_scalars.insert(key, scalar);
+        }
+    }
+
     /// Records scalar and aggregate payload metadata for an extraction site
     /// (`?`, `.unwrap()`, or an identifier pattern), keyed by its AST address.
     fn record_payload_metadata(&mut self, key: usize, payload_ty: &Ty) {
@@ -1794,7 +1809,7 @@ impl<'e> Checker<'e> {
                                     ),
                                     ann.span(),
                                     vec![
-                                        "pointer-containing Vec payloads need a hand-written deep-copy wrapper".to_string(),
+                                        "pointer-containing Vec payloads need a hand-written deep-copy wrapper; 128-bit elements take two slots, so copy them with push".to_string(),
                                     ],
                                 );
                             }
@@ -2502,7 +2517,7 @@ impl<'e> Checker<'e> {
                             format!("pin_to_root does not support `{arg_ty}`"),
                             args[0].span,
                             vec![
-                                "supported forms are String and Vec<T> where T is a flat scalar slot; pointer-containing values need a hand-written deep-copy wrapper".to_string(),
+                                "supported forms are String and Vec<T> where T is a one-slot scalar (not i128/u128); pointer-containing values need a hand-written deep-copy wrapper".to_string(),
                             ],
                         );
                     }
@@ -2679,6 +2694,13 @@ impl<'e> Checker<'e> {
                 // `method_result_type` / `builtin_method_names` seams; the arm
                 // keeps only the diagnostics and side effects those cannot own.
                 let result_ty = method_result_type(&recv_ty, method);
+                if is_vec
+                    && method == "push"
+                    && let Some(args) = recv_ty.applied_args(NominalKind::Struct, "Vec")
+                    && let Some(elem_ty) = args.first()
+                {
+                    self.record_wide_vec_site(expr as *const Expr as usize, elem_ty);
+                }
 
                 if is_option_or_result {
                     // `unwrap` takes no arguments. Without this the lowerer
@@ -2813,7 +2835,9 @@ impl<'e> Checker<'e> {
                     );
                 }
                 if let Some(args) = base_ty.applied_args(NominalKind::Struct, "Vec") {
-                    args.first().cloned().unwrap_or(Ty::Unit)
+                    let elem_ty = args.first().cloned().unwrap_or(Ty::Unit);
+                    self.record_wide_vec_site(expr as *const Expr as usize, &elem_ty);
+                    elem_ty
                 } else {
                     match &base_ty {
                         Ty::Unknown => Ty::Unknown,
@@ -2987,6 +3011,7 @@ impl<'e> Checker<'e> {
                         Ty::I64
                     }
                 };
+                self.record_wide_vec_site(expr as *const Expr as usize, &elem_ty);
                 self.env.push_scope();
                 self.env.define(binding, elem_ty);
                 if let Some(vow) = vow {

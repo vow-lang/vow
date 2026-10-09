@@ -439,11 +439,12 @@ fn coerce_call_argument(
         // The builtins that legitimately narrow (`i128_to_u8_*` and friends)
         // declare an I128 parameter, so they never reach this branch — a
         // 128-bit value arriving at a narrower slot means the callee has no
-        // 128-bit-aware ABI yet (e.g. the i64-only `Vec` element helpers).
+        // 128-bit-aware ABI. (`Vec<i128>` elements never reach here: they go
+        // through the two-slot element-address helpers.)
         // Refuse rather than hand back a truncated value.
         if actual_ty == types::I128 {
             return Err(CodegenError::UnsupportedOpcode(
-                "128-bit values are not supported in aggregates or by this builtin yet \
+                "128-bit values are not supported by this builtin yet \
                  (epic #526); narrowing here would silently drop the high 64 bits"
                     .to_string(),
             ));
@@ -2735,6 +2736,15 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
             sig.params.push(AbiParam::new(types::I64)); // index
             sig.params.push(AbiParam::new(types::I64)); // value
+        }
+        "__vow_vec_push_wide_ptr" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.returns.push(AbiParam::new(types::I64)); // address of the new 16-byte element
+        }
+        "__vow_vec_get_wide_ptr" | "__vow_vec_set_wide_ptr" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.params.push(AbiParam::new(types::I64)); // index
+            sig.returns.push(AbiParam::new(types::I64)); // address of the 16-byte element
         }
         "__vow_vec_pop" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr

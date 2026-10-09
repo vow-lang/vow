@@ -1,0 +1,14 @@
+// TEST: exit 134
+// TEST: stderr "IndexOutOfBounds"
+module WideVecElementOutOfBounds
+
+// Reading one past the end of a `Vec<i128>` still traps: the 16-byte element
+// helpers keep the same bounds check as the 8-byte ones.
+fn main() -> i32 [io] {
+    let v: Vec<i128> = Vec::new();
+    v.push(1);
+    v.push(2);
+    let past: i128 = v[2];
+    print_i64(u128_to_u8_wrap(past as u128) as i64);
+    0
+}

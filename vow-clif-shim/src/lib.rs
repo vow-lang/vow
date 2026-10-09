@@ -202,7 +202,7 @@ fn coerce_call_argument(
 
 fn report_narrowed_wide_argument() {
     eprintln!(
-        "clif_shim: 128-bit values are not supported in aggregates or by this builtin yet \
+        "clif_shim: 128-bit values are not supported by this builtin yet \
          (epic #526); narrowing here would silently drop the high 64 bits"
     );
 }
@@ -3814,6 +3814,15 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_push_wide_ptr" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_get_wide_ptr" | "__vow_vec_set_wide_ptr" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_vec_pop" => {
             sig.params.push(AbiParam::new(types::I64));

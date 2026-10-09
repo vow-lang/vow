@@ -576,7 +576,7 @@ fn f(u: ()) -> i64 { 0 }
 
 **Fix:** Remove the parameter.
 
-A 128-bit integer as an `Option`, `Result`, or `enum` payload is supported, so `HashMap<i64, Option<u128>>` is a valid map type (the map stores a pointer to the payload cell). A bare `u128` or `i128` map value is still rejected with the error above, because a map value occupies a single 64-bit slot. A 128-bit struct field or `Vec` element is not a map restriction: those aggregate positions cannot hold a 128-bit value yet, so codegen rejects them with `CodegenUnsupported` wherever they appear.
+A 128-bit integer as an `Option`, `Result`, or `enum` payload is supported, so `HashMap<i64, Option<u128>>` is a valid map type (the map stores a pointer to the payload cell). A bare `u128` or `i128` map value is still rejected with the error above, because a map value occupies a single 64-bit slot. A 128-bit struct field or `Vec` element is not a map restriction: aggregates hold 128-bit values in two slots, so only a bare 128-bit map value is rejected.
 
 ### BTreeMapKeyTypeMustBeI64
 
@@ -743,10 +743,8 @@ output path existing. The diagnostic currently has a file-level span because
 backend errors do not carry an instruction origin.
 
 ```vow
-fn main() -> i32 {
-    let values: Vec<i128> = Vec::new();
-    values.push(1);
-    0
+fn remainder(a: f64, b: f64) -> f64 {
+    a % b
 }
 ```
 

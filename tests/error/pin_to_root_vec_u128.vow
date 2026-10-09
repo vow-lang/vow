@@ -1,0 +1,10 @@
+// TEST: stderr "pin_to_root"
+module PinToRootVecU128
+
+// A 128-bit `Vec` element takes two 8-byte slots; `pin_to_root` copies one
+// slot per element and would halve the buffer.
+fn main() -> i32 [io] {
+    let v: Vec<u128> = Vec::new();
+    let _pinned: Vec<u128> = pin_to_root(v);
+    0
+}

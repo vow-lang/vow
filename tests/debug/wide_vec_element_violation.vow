@@ -1,0 +1,22 @@
+// TEST: exit 134
+// TEST: stderr "VowViolation"
+// TEST: stderr ""x":3154393236604333326336"
+module WideVecElementViolation
+
+// 3154393236604333326336 is 171 * 2^64, so its low 64 bits are exactly zero.
+// The value is stored in and read back from a 16-byte `Vec` element; a helper
+// that kept only the low limb would report "x":0 and satisfy `x < 1`.
+fn requires_small(x: u128) -> u128 vow {
+    requires: x < 1
+} {
+    x
+}
+
+fn main() -> i32 [io] {
+    let v: Vec<u128> = Vec::new();
+    v.push(1);
+    v.push(2);
+    v[1] = 3154393236604333326336;
+    requires_small(v[1]);
+    0
+}
