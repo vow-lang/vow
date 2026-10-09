@@ -2032,7 +2032,9 @@ The remaining executable sub-64-bit targets expose these complete families:
 | `u32`  | `i64`, `u64`, `i128`, `u128` |
 
 Every listed source/target pair provides `_try`, `_wrap`, and `_sat`. Same-width
-signedness changes use `as`; they are bit reinterpretations, not narrowing.
+signedness changes use `as`, which reinterprets the bits and is not narrowing;
+`i128`/`u128` additionally have the explicit same-width intrinsics described
+below.
 
 `i128` and `u128` appear in these tables only as sources: they are the widest
 integer types, so no other width narrows into them. The one conversion between
@@ -4910,6 +4912,8 @@ fn f(big: i64) -> u8 {
 - `i64_to_u8_try(big) -> Option<u8>` — reject out-of-range with `None`
 - `i64_to_u8_wrap(big) -> u8` — truncate (keep low bits)
 - `i64_to_u8_sat(big) -> u8` — clamp to `0..=255`
+
+`i128`/`u128` to `i64`/`u64` has no narrowing intrinsic family; the diagnostic's hint says so instead of naming one. Narrow through `i32` or smaller with `i128_to_i32_try`-style intrinsics, or keep the value as `i128`/`u128`. See `grammar.md` §Type Cast.
 
 ### ShiftCountOutOfRange
 
@@ -8051,7 +8055,9 @@ The remaining executable sub-64-bit targets expose these complete families:
 | `u32`  | `i64`, `u64`, `i128`, `u128` |
 
 Every listed source/target pair provides `_try`, `_wrap`, and `_sat`. Same-width
-signedness changes use `as`; they are bit reinterpretations, not narrowing.
+signedness changes use `as`, which reinterprets the bits and is not narrowing;
+`i128`/`u128` additionally have the explicit same-width intrinsics described
+below.
 
 `i128` and `u128` appear in these tables only as sources: they are the widest
 integer types, so no other width narrows into them. The one conversion between
@@ -10933,6 +10939,8 @@ fn f(big: i64) -> u8 {
 - `i64_to_u8_try(big) -> Option<u8>` — reject out-of-range with `None`
 - `i64_to_u8_wrap(big) -> u8` — truncate (keep low bits)
 - `i64_to_u8_sat(big) -> u8` — clamp to `0..=255`
+
+`i128`/`u128` to `i64`/`u64` has no narrowing intrinsic family; the diagnostic's hint says so instead of naming one. Narrow through `i32` or smaller with `i128_to_i32_try`-style intrinsics, or keep the value as `i128`/`u128`. See `grammar.md` §Type Cast.
 
 ### ShiftCountOutOfRange
 

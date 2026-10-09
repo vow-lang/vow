@@ -199,6 +199,8 @@ fn f(big: i64) -> u8 {
 - `i64_to_u8_wrap(big) -> u8` — truncate (keep low bits)
 - `i64_to_u8_sat(big) -> u8` — clamp to `0..=255`
 
+`i128`/`u128` to `i64`/`u64` has no narrowing intrinsic family; the diagnostic's hint says so instead of naming one. Narrow through `i32` or smaller with `i128_to_i32_try`-style intrinsics, or keep the value as `i128`/`u128`. See `grammar.md` §Type Cast.
+
 ### ShiftCountOutOfRange
 
 **Phase:** Type Checker

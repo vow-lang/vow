@@ -4481,7 +4481,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `u32`  | `i64`, `u64`, `i128`, `u128` |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Every listed source/target pair provides `_try`, `_wrap`, and `_sat`. Same-width\n"));
-    r.push_str(String::from("signedness changes use `as`; they are bit reinterpretations, not narrowing.\n"));
+    r.push_str(String::from("signedness changes use `as`, which reinterprets the bits and is not narrowing;\n"));
+    r.push_str(String::from("`i128`/`u128` additionally have the explicit same-width intrinsics described\n"));
+    r.push_str(String::from("below.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`i128` and `u128` appear in these tables only as sources: they are the widest\n"));
     r.push_str(String::from("integer types, so no other width narrows into them. The one conversion between\n"));
@@ -7359,6 +7361,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("- `i64_to_u8_try(big) -> Option<u8>` -- reject out-of-range with `None`\n"));
     r.push_str(String::from("- `i64_to_u8_wrap(big) -> u8` -- truncate (keep low bits)\n"));
     r.push_str(String::from("- `i64_to_u8_sat(big) -> u8` -- clamp to `0..=255`\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`i128`/`u128` to `i64`/`u64` has no narrowing intrinsic family; the diagnostic's hint says so instead of naming one. Narrow through `i32` or smaller with `i128_to_i32_try`-style intrinsics, or keep the value as `i128`/`u128`. See `grammar.md` §Type Cast.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### ShiftCountOutOfRange\n"));
     r.push_str(String::from("\n"));
@@ -10522,7 +10526,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("| `u32`  | `i64`, `u64`, `i128`, `u128` |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Every listed source/target pair provides `_try`, `_wrap`, and `_sat`. Same-width\n"));
-    r.push_str(String::from("signedness changes use `as`; they are bit reinterpretations, not narrowing.\n"));
+    r.push_str(String::from("signedness changes use `as`, which reinterprets the bits and is not narrowing;\n"));
+    r.push_str(String::from("`i128`/`u128` additionally have the explicit same-width intrinsics described\n"));
+    r.push_str(String::from("below.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`i128` and `u128` appear in these tables only as sources: they are the widest\n"));
     r.push_str(String::from("integer types, so no other width narrows into them. The one conversion between\n"));
@@ -13408,6 +13414,8 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("- `i64_to_u8_try(big) -> Option<u8>` -- reject out-of-range with `None`\n"));
     r.push_str(String::from("- `i64_to_u8_wrap(big) -> u8` -- truncate (keep low bits)\n"));
     r.push_str(String::from("- `i64_to_u8_sat(big) -> u8` -- clamp to `0..=255`\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`i128`/`u128` to `i64`/`u64` has no narrowing intrinsic family; the diagnostic's hint says so instead of naming one. Narrow through `i32` or smaller with `i128_to_i32_try`-style intrinsics, or keep the value as `i128`/`u128`. See `grammar.md` §Type Cast.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### ShiftCountOutOfRange\n"));
     r.push_str(String::from("\n"));

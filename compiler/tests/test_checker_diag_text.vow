@@ -80,6 +80,31 @@ fn check_const_messages_use_backticks() -> i32 [io] {
     0
 }
 
+fn narrowing_cast_hint(src_ty: String, tgt_ty: String) -> String [io] {
+    let source: String = String::from("module DiagText\nfn probe(x: ");
+    source.push_str(clone_string(src_ty));
+    source.push_str(String::from(") -> "));
+    source.push_str(clone_string(tgt_ty));
+    source.push_str(String::from(" { x as "));
+    source.push_str(tgt_ty);
+    source.push_str(String::from(" }"));
+    let dctx: DiagCtx = checked_diags(source);
+    let hints: Vec<String> = first_hints(dctx);
+    hints[0]
+}
+
+fn check_narrowing_cast_hint_names_only_registered_intrinsics() -> i32 [io] {
+    let registered: String = narrowing_cast_hint(String::from("i64"), String::from("i32"));
+    if registered != String::from("use a `i64_to_i32_try`, `_wrap`, or `_sat` narrowing intrinsic") { return 41; }
+    let wide_registered: String = narrowing_cast_hint(String::from("u128"), String::from("u32"));
+    if wide_registered != String::from("use a `u128_to_u32_try`, `_wrap`, or `_sat` narrowing intrinsic") { return 42; }
+    let missing: String = narrowing_cast_hint(String::from("i128"), String::from("i64"));
+    if missing != String::from("no narrowing intrinsic from i128 to i64 exists; narrow to i32 or smaller with `i128_to_i32_try`, or keep the value as i128") { return 43; }
+    let missing_unsigned: String = narrowing_cast_hint(String::from("u128"), String::from("u64"));
+    if missing_unsigned != String::from("no narrowing intrinsic from u128 to u64 exists; narrow to i32 or smaller with `u128_to_i32_try`, or keep the value as u128") { return 44; }
+    0
+}
+
 fn main() -> i32 [io] {
     let index_result: i32 = check_index_message_uses_backticks();
     if index_result != 0 { return index_result; }
@@ -87,5 +112,7 @@ fn main() -> i32 [io] {
     if get_result != 0 { return get_result; }
     let truncate_result: i32 = check_truncate_message_names_the_method();
     if truncate_result != 0 { return truncate_result; }
-    check_const_messages_use_backticks()
+    let const_result: i32 = check_const_messages_use_backticks();
+    if const_result != 0 { return const_result; }
+    check_narrowing_cast_hint_names_only_registered_intrinsics()
 }

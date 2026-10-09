@@ -4057,11 +4057,25 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 message.push_str(String::from(" to "));
                 message.push_str(ty_tag_name(tgt_tag));
                 message.push_str(String::from(" via as"));
-                let hint: String = String::from("use a `");
-                hint.push_str(ty_tag_name(src_tag));
-                hint.push_str(String::from("_to_"));
-                hint.push_str(ty_tag_name(tgt_tag));
-                hint.push_str(String::from("_try`, `_wrap`, or `_sat` narrowing intrinsic"));
+                let try_name: String = ty_tag_name(src_tag);
+                try_name.push_str(String::from("_to_"));
+                try_name.push_str(ty_tag_name(tgt_tag));
+                try_name.push_str(String::from("_try"));
+                let hint: String = String::from("");
+                if env_lookup_fn(e, try_name) >= 0 {
+                    hint.push_str(String::from("use a `"));
+                    hint.push_str(try_name);
+                    hint.push_str(String::from("`, `_wrap`, or `_sat` narrowing intrinsic"));
+                } else {
+                    hint.push_str(String::from("no narrowing intrinsic from "));
+                    hint.push_str(ty_tag_name(src_tag));
+                    hint.push_str(String::from(" to "));
+                    hint.push_str(ty_tag_name(tgt_tag));
+                    hint.push_str(String::from(" exists; narrow to i32 or smaller with `"));
+                    hint.push_str(ty_tag_name(src_tag));
+                    hint.push_str(String::from("_to_i32_try`, or keep the value as "));
+                    hint.push_str(ty_tag_name(src_tag));
+                }
                 env_emit_error_code_hint(e, EC_NARROWING_CAST_NOT_ALLOWED(),
                     message,
                     expr_span(a, inner_eid), hint);
