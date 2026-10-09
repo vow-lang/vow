@@ -206,10 +206,19 @@ fn run_complexity(argv: Vec<String>) -> i32 [io, read] {
     let fr: LoweredFrontend = frontend_lower_path(path);
     let checked: CheckedFrontend = fr.checked;
     let dctx: DiagCtx = checked.dctx;
-    diag_ctx_print_all(dctx);
+    let emit_status: i64 = diag_ctx_print_all(dctx);
     let n_errors: i64 = checked.n_errors;
+    if emit_status == DIAG_EMIT_FAILED() {
+        let msg: String = String::from("vow complexity: ");
+        if n_errors > 0 {
+            msg.push_str(String::from("compile errors; "));
+        }
+        msg.push_str(diag_emission_failure_message());
+        diag_eprintln_best_effort(msg);
+        return 1;
+    }
     if n_errors > 0 {
-        eprintln_str(String::from("vow complexity: compile errors"));
+        diag_eprintln_best_effort(String::from("vow complexity: compile errors"));
         return 1;
     }
     let source_read: CxReadSource = cx_read_source(path);
@@ -220,7 +229,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io, read] {
             msg.push_str(String::from(": "));
             msg.push_str(source_read.err);
         }
-        eprintln_str(msg);
+        diag_eprintln_best_effort(msg);
         return 1;
     }
     let src: String = source_read.src;

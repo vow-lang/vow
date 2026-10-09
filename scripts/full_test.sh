@@ -1548,6 +1548,27 @@ else
 fi
 echo ""
 
+# ─── Section 4j: Frontend diagnostic I/O failures (tests/diag-io/, #957) ──
+#
+# A stderr that cannot be written (full disk, closed pipe) must leave the
+# frontend result unchanged for BrokenPipe and become a structured
+# CompileFailed otherwise, identically in both compilers.
+
+section_begin "Section 4j: Frontend diagnostic I/O failures"
+diag_io_rust_log="$TMPDIR/diag-io-rust.log"
+if VOWC_BIN="$RUST" VOWC_KIND=rust bash tests/diag-io/tests.sh >"$diag_io_rust_log" 2>&1; then
+    pass "diag-io/rust"
+else
+    fail "diag-io/rust" "$(tail -20 "$diag_io_rust_log")"
+fi
+diag_io_self_log="$TMPDIR/diag-io-self.log"
+if VOWC_BIN="$SELF" VOWC_KIND=self bash tests/diag-io/tests.sh >"$diag_io_self_log" 2>&1; then
+    pass "diag-io/self-hosted"
+else
+    fail "diag-io/self-hosted" "$(tail -20 "$diag_io_self_log")"
+fi
+echo ""
+
 # ─── Section 5: Debug Mode ─────────────────────────────────────────
 
 section_begin "Section 5: Debug Mode"

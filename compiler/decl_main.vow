@@ -29,7 +29,7 @@ fn decl_failure_stage(dctx: DiagCtx) -> String {
 fn decl_fail(msg: String) -> i32 [io] {
     let line: String = String::from("vow decl: ");
     line.push_str(msg);
-    eprintln_str(line);
+    diag_eprintln_best_effort(line);
     1
 }
 
@@ -43,7 +43,20 @@ fn run_decl(argv: Vec<String>) -> i32 [io, read, write] {
     let prep: FrontendPrep = frontend_prepare_path(path);
     let checked: CheckedFrontend = prep.checked;
     let dctx: DiagCtx = checked.dctx;
-    diag_ctx_print_all(dctx);
+    let emit_status: i64 = diag_ctx_print_all(dctx);
+    if emit_status == DIAG_EMIT_FAILED() {
+        let msg: String = {
+            if checked.n_errors > 0 {
+                let stage: String = decl_failure_stage(dctx);
+                stage.push_str(String::from("; "));
+                stage
+            } else {
+                String::from("")
+            }
+        };
+        msg.push_str(diag_emission_failure_message());
+        return decl_fail(msg);
+    }
     if checked.n_errors > 0 {
         return decl_fail(decl_failure_stage(dctx));
     }
@@ -70,6 +83,6 @@ fn run_decl(argv: Vec<String>) -> i32 [io, read, write] {
     }
     let done: String = String::from("wrote ");
     done.push_str(out_path);
-    eprintln_str(done);
+    diag_eprintln_best_effort(done);
     0
 }
