@@ -267,6 +267,14 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 |------|------------------------------------------------------------------------------------|
 | `0`  | Success (`Verified` or `Unverified`)                                               |
 | `1`  | Failure (`CompileFailed`, `VerifyFailed`, or `Skipped`)                            |
+| `2`  | Usage error: an unknown flag (`error: unexpected argument '<flag>' found`)         |
+
+Both compilers reject a flag the selected subcommand does not implement before doing any work, with
+exit `2` and `error: unexpected argument '<flag>' found` on stderr. This includes flags that were
+retired (`--vec-max`, `--string-max`, `--hashmap-max`, `--btreemap-max`) and typos: they are never
+silently ignored. The self-hosted `vowc` only accepts the `--flag value` form for value flags;
+`--flag=value` is reported as an unknown argument with a hint. `vowc mutants` forwards its flags to
+its own parser and is not validated by the driver.
 
 `vow build` and `vow verify` both fail closed on `Skipped`: if ESBMC was asked to verify a vowed
 function but the verifier could not model the function body, the contract was not statically

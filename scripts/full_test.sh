@@ -1453,6 +1453,27 @@ print(cx[0].get('replay', '') if cx else '')
 done
 echo ""
 
+# ─── Section 4h: Unknown CLI flags (tests/cli-flags/, #580) ────────
+#
+# Both compilers must reject a flag the subcommand does not implement with
+# exit 2 and `unexpected argument '<flag>' found` (clap in Rust,
+# compiler/cli_flags.vow in the self-hosted driver).
+
+section_begin "Section 4h: Unknown CLI flags"
+cli_flags_rust_log="$TMPDIR/cli-flags-rust.log"
+if VOWC_BIN="$RUST" VOWC_KIND=rust bash tests/cli-flags/tests.sh >"$cli_flags_rust_log" 2>&1; then
+    pass "cli-flags/rust"
+else
+    fail "cli-flags/rust" "$(tail -20 "$cli_flags_rust_log")"
+fi
+cli_flags_self_log="$TMPDIR/cli-flags-self.log"
+if VOWC_BIN="$SELF" VOWC_KIND=self bash tests/cli-flags/tests.sh >"$cli_flags_self_log" 2>&1; then
+    pass "cli-flags/self-hosted"
+else
+    fail "cli-flags/self-hosted" "$(tail -20 "$cli_flags_self_log")"
+fi
+echo ""
+
 # ─── Section 5: Debug Mode ─────────────────────────────────────────
 
 section_begin "Section 5: Debug Mode"
