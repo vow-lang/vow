@@ -1004,7 +1004,7 @@ for mode in verify build legacy; do
             self_json=$(run_self build --verify-jobs 2 "$fixture" -o "$TMPDIR/ce_before_soft" 2>/dev/null) || self_exit=$?
             ;;
         legacy)
-            self_json=$(run_self --verify-jobs 2 "$fixture" 2>/dev/null) || self_exit=$?
+            self_json=$(run_self --verify-jobs 2 "$fixture" -o "$TMPDIR/ce_before_soft_bare" 2>/dev/null) || self_exit=$?
             ;;
     esac
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$self_json" 2>/dev/null) || actual_status=""

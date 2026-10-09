@@ -103,7 +103,7 @@ if command -v esbmc >/dev/null 2>&1; then
     GOOD="tests/verify/clamp.vow"
 
     rc=0
-        out=$("$VOWC_BIN" --no-cache "$BAD" -o "$TMP_ROOT/bare_bad" 2>/dev/null) || rc=$?
+    out=$("$VOWC_BIN" --no-cache "$BAD" -o "$TMP_ROOT/bare_bad" 2>/dev/null) || rc=$?
     if [ "$rc" -eq 0 ]; then fail "bare form exited 0 on a contract violation"; fi
     expect "bare form status on a contract violation" "$(printf '%s' "$out" | bare_status)" "VerifyFailed"
 
