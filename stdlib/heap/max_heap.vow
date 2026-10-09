@@ -117,26 +117,30 @@ fn max_sift_down(data: Vec<i64>, n: u64, start: u64) vow {
 } {
     let mut i: u64 = start;
     let mut done: bool = false;
-    while !done && max_left_idx(i) < n vow {
+    while !done vow {
         invariant: i < n,
         invariant: n <= data.len()
     } {
         let l: u64 = max_left_idx(i);
-        let r: u64 = max_right_idx(i);
-        let mut largest: u64 = i;
-        if data[l] > data[largest] {
-            largest = l;
-        }
-        if r < n {
-            if data[r] > data[largest] {
-                largest = r;
-            }
-        }
-        if largest == i {
+        if l >= n {
             done = true;
         } else {
-            max_swap(data, i, largest);
-            i = largest;
+            let r: u64 = max_right_idx(i);
+            let mut largest: u64 = i;
+            if data[l] > data[largest] {
+                largest = l;
+            }
+            if r < n {
+                if data[r] > data[largest] {
+                    largest = r;
+                }
+            }
+            if largest == i {
+                done = true;
+            } else {
+                max_swap(data, i, largest);
+                i = largest;
+            }
         }
     }
 }
@@ -165,7 +169,7 @@ pub fn is_max_heap(h: MaxHeap) -> bool vow {
         invariant: i >= 1,
         invariant: i <= n
     } {
-        let p: u64 = (i - 1) / 2;
+        let p: u64 = max_parent_idx(i);
         if d[p] < d[i] {
             return false;
         }

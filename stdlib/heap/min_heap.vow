@@ -117,26 +117,30 @@ fn min_sift_down(data: Vec<i64>, n: u64, start: u64) vow {
 } {
     let mut i: u64 = start;
     let mut done: bool = false;
-    while !done && min_left_idx(i) < n vow {
+    while !done vow {
         invariant: i < n,
         invariant: n <= data.len()
     } {
         let l: u64 = min_left_idx(i);
-        let r: u64 = min_right_idx(i);
-        let mut smallest: u64 = i;
-        if data[l] < data[smallest] {
-            smallest = l;
-        }
-        if r < n {
-            if data[r] < data[smallest] {
-                smallest = r;
-            }
-        }
-        if smallest == i {
+        if l >= n {
             done = true;
         } else {
-            min_swap(data, i, smallest);
-            i = smallest;
+            let r: u64 = min_right_idx(i);
+            let mut smallest: u64 = i;
+            if data[l] < data[smallest] {
+                smallest = l;
+            }
+            if r < n {
+                if data[r] < data[smallest] {
+                    smallest = r;
+                }
+            }
+            if smallest == i {
+                done = true;
+            } else {
+                min_swap(data, i, smallest);
+                i = smallest;
+            }
         }
     }
 }
@@ -165,7 +169,7 @@ pub fn is_min_heap(h: MinHeap) -> bool vow {
         invariant: i >= 1,
         invariant: i <= n
     } {
-        let p: u64 = (i - 1) / 2;
+        let p: u64 = min_parent_idx(i);
         if d[p] > d[i] {
             return false;
         }
