@@ -84,33 +84,19 @@ fn peek_infix_op(parser: &Parser) -> Option<(BinOp, usize)> {
 }
 
 impl Parser {
-    // Whether the unary chain `lhs`, which began at token `start`, ended in an
+    // Whether the unary chain `lhs`, just parsed by `parse_prefix`, ended in an
     // unparenthesised block-like operand. That operand ends the expression, so
-    // no postfix operator or cast may follow the chain.
-    fn unary_chain_ends_in_block(&self, start: usize, lhs: &Expr) -> bool {
-        let mut i = start;
-        while matches!(
-            self.tokens[i].kind,
-            TokenKind::Minus
-                | TokenKind::Bang
-                | TokenKind::Amp
-                | TokenKind::AmpAmp
-                | TokenKind::KwMut
-        ) {
-            i += 1;
-        }
-        if self.tokens[i].kind == TokenKind::LParen {
-            return false;
-        }
+    // no postfix operator or cast may follow the chain. A block operand that
+    // was parenthesised ends in `)` rather than `}`.
+    fn unary_chain_ends_in_block(&self, lhs: &Expr) -> bool {
         let mut leaf = lhs;
         while let ExprKind::UnaryOp { operand, .. } = &leaf.kind {
             leaf = operand;
         }
-        leaf.kind.is_block_like()
+        leaf.kind.is_block_like() && self.tokens[self.cursor - 1].kind != TokenKind::RParen
     }
 
     pub fn parse_expr_inner(&mut self, min_bp: u8) -> Expr {
-        let start_cursor = self.cursor;
         let parenthesised = self.at(&TokenKind::LParen);
         let mut lhs = self.parse_prefix();
 
@@ -124,7 +110,7 @@ impl Parser {
         // `as` is the one postfix operator that binds looser than a prefix
         // operator: it applies to the finished unary (`-x as u64` is
         // `(-x) as u64`), so a prefix operand leaves it for the caller.
-        let mut postfix_ok = !matches!(lhs.kind, ExprKind::UnaryOp { .. });
+        let mut postfix_ok = parenthesised || !matches!(lhs.kind, ExprKind::UnaryOp { .. });
 
         loop {
             let kind = self.peek_kind().clone();
@@ -140,8 +126,11 @@ impl Parser {
                 if kind == TokenKind::KwAs && min_bp >= PREFIX_BINDING_POWER {
                     break;
                 }
-                if !postfix_ok && matches!(lhs.kind, ExprKind::UnaryOp { .. }) {
-                    postfix_ok = !self.unary_chain_ends_in_block(start_cursor, &lhs);
+                if kind == TokenKind::KwAs
+                    && !postfix_ok
+                    && matches!(lhs.kind, ExprKind::UnaryOp { .. })
+                {
+                    postfix_ok = !self.unary_chain_ends_in_block(&lhs);
                 }
                 if !postfix_ok {
                     break;

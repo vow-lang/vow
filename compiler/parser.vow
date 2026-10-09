@@ -243,14 +243,6 @@ fn parse_path(p: Parser) -> i64 {
     arena_add_list(p.arena, items)
 }
 
-fn is_int_literal_or_negation(a: AstArena, eid: i64) -> bool {
-    let tag: i64 = expr_tag(a, eid);
-    if tag == EXPR_LIT_INT() {
-        return true;
-    }
-    tag == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() && expr_tag(a, expr_b(a, eid)) == EXPR_LIT_INT()
-}
-
 // Drops an integer-literal suffix or cast that merely restates the declared
 // `const` type (`const X: u8 = 200u8;`, `const Y: i32 = -5i32;`,
 // `const Z: i64 = -1 as i64;`), leaving the bare literal that const
@@ -265,7 +257,7 @@ fn strip_const_suffix_matching(p: Parser, eid: i64, declared_tid: i64) -> i64 {
     if tag == EXPR_CAST() {
         let lit_eid: i64 = expr_a(a, eid);
         let target_tid: i64 = expr_b(a, eid);
-        if is_int_literal_or_negation(a, lit_eid) && type_tag(a, target_tid) == TY_NAMED()
+        if expr_is_const_int(a, lit_eid) && type_tag(a, target_tid) == TY_NAMED()
             && arena_str(a, type_a(a, target_tid)) == arena_str(a, type_a(a, declared_tid)) {
             return lit_eid;
         }
@@ -878,15 +870,7 @@ fn parse_expr_prec(p: Parser, min_prec: i64) -> i64 {
 }
 
 fn is_prefix_tag(tag: i64) -> bool {
-    tag == tok_bang() || tag == tok_minus() || tag == tok_amp() || tag == tok_amp_amp() || tag == tok_kw_mut()
-}
-
-fn prefix_run_ends_in_paren(p: Parser) -> bool {
-    let mut i: i64 = 0;
-    while is_prefix_tag(peek_offset(p, i).tag) {
-        i = i + 1;
-    }
-    peek_offset(p, i).tag == tok_lparen()
+    tag == tok_bang() || tag == tok_minus() || tag == tok_amp() || tag == tok_amp_amp()
 }
 
 fn unary_leaf_is_block(a: AstArena, eid: i64) -> bool {
@@ -900,17 +884,16 @@ fn unary_leaf_is_block(a: AstArena, eid: i64) -> bool {
 // `as` binds looser than a prefix operator, so a prefix operand stops before it
 // and the cast applies to the finished unary (`-x as u64` is `(-x) as u64`).
 // An operand that ended in an unparenthesised block-like expression ends the
-// expression, so no cast may follow it.
+// expression, so no cast may follow it; a block operand ending in `)` was
+// parenthesised.
 fn parse_unary(p: Parser) -> i64 {
-    let span_start: i64 = peek(p).span_start;
-    let prefixed: bool = at(p, tok_bang()) || at(p, tok_minus()) || at(p, tok_amp()) || at(p, tok_amp_amp());
-    if !prefixed {
+    if !is_prefix_tag(peek_tag(p)) {
         return parse_postfix(p, true);
     }
-    let paren_after_prefix: bool = prefix_run_ends_in_paren(p);
+    let span_start: i64 = peek(p).span_start;
     let e: i64 = parse_unary_operand(p);
-    if at(p, tok_kw_as()) && (paren_after_prefix || !unary_leaf_is_block(p.arena, e)) {
-        return parse_postfix_chain(p, e, span_start, true, true);
+    if at(p, tok_kw_as()) && (!unary_leaf_is_block(p.arena, e) || peek_offset(p, -1).tag == tok_rparen()) {
+        return parse_postfix_chain(p, e, span_start, true);
     }
     e
 }
@@ -953,13 +936,15 @@ fn parse_postfix(p: Parser, allow_cast: bool) -> i64 {
     let span_start: i64 = peek(p).span_start;
     let starts_with_paren: bool = at(p, tok_lparen());
     let e: i64 = parse_primary(p);
-    let cont: bool = starts_with_paren || !is_block_expr(p.arena, e);
-    parse_postfix_chain(p, e, span_start, cont, allow_cast)
+    if starts_with_paren || !is_block_expr(p.arena, e) {
+        return parse_postfix_chain(p, e, span_start, allow_cast);
+    }
+    e
 }
 
-fn parse_postfix_chain(p: Parser, start_e: i64, span_start: i64, start_cont: bool, allow_cast: bool) -> i64 {
+fn parse_postfix_chain(p: Parser, start_e: i64, span_start: i64, allow_cast: bool) -> i64 {
     let mut e: i64 = start_e;
-    let mut cont: bool = start_cont;
+    let mut cont: bool = true;
     while cont {
         if at(p, tok_dot()) {
             let _dot: Token = advance(p);
