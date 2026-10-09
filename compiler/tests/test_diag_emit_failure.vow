@@ -6,15 +6,6 @@ use diag
 // codes diag_ctx_print_all returns and the CompileFailed JSON the build, verify
 // and contracts drivers print when stderr cannot be written.
 
-fn contains(hay: String, needle: String) -> bool {
-    let mut i: u64 = 0;
-    while i + needle.len() <= hay.len() {
-        if string_substr(hay, i, needle.len()) == needle { return true; }
-        i = i + 1;
-    }
-    false
-}
-
 fn main() -> i32 {
     if DIAG_EMIT_OK() != 0 { return 1; }
     if DIAG_EMIT_BROKEN_PIPE() != 1 { return 2; }
@@ -25,14 +16,14 @@ fn main() -> i32 {
 
     let dctx: DiagCtx = diag_ctx_new();
     let json: String = diag_compile_failed_json(dctx, msg);
-    if !contains(json, String::from("\"status\":\"CompileFailed\"")) { return 5; }
-    if !contains(json, String::from("\"executable\":null")) { return 6; }
-    if !contains(json, String::from("\"diagnostics\":[]")) { return 7; }
-    if !contains(json, String::from("\"counterexamples\":[]")) { return 8; }
-    if !contains(json, String::from("\"message\":\"failed to emit frontend diagnostics: stderr write failed\"")) { return 9; }
+    if !json.contains(String::from("\"status\":\"CompileFailed\"")) { return 5; }
+    if !json.contains(String::from("\"executable\":null")) { return 6; }
+    if !json.contains(String::from("\"diagnostics\":[]")) { return 7; }
+    if !json.contains(String::from("\"counterexamples\":[]")) { return 8; }
+    if !json.contains(String::from("\"message\":\"failed to emit frontend diagnostics: stderr write failed\"")) { return 9; }
 
     let quoted: String = diag_compile_failed_json(dctx, String::from("a \"b\"\n"));
-    if !contains(quoted, String::from("\"message\":\"a \\\"b\\\"\\n\"")) { return 10; }
+    if !quoted.contains(String::from("\"message\":\"a \\\"b\\\"\\n\"")) { return 10; }
 
     0
 }

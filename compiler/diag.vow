@@ -603,7 +603,7 @@ fn diag_ctx_print_all(ctx: DiagCtx) -> i64 [io] {
 // Follow-on stderr line after a tolerated broken pipe: a bare eprintln_str
 // would raise SIGPIPE and kill the process the failed emission already survived.
 fn diag_eprintln_best_effort(s: String) [io] {
-    let st: i64 = try_eprintln_str(s);
+    try_eprintln_str(s);
 }
 
 fn diag_emission_failure_message() -> String {
@@ -619,8 +619,8 @@ fn diag_compile_failed_json(dctx: DiagCtx, message: String) -> String {
     r
 }
 
-fn diag_emit_compile_failed_json(dctx: DiagCtx, message: String) [io] {
-    print_str(diag_compile_failed_json(dctx, message));
+fn diag_emit_emission_failure_json(dctx: DiagCtx) [io] {
+    print_str(diag_compile_failed_json(dctx, diag_emission_failure_message()));
     print_str(String::from("\n"));
 }
 

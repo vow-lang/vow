@@ -1872,7 +1872,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io, read, write] {
     let n_items: i64 = checked.n_items;
     let n_errors: i64 = checked.n_errors;
     if diag_ctx_print_all(dctx) == DIAG_EMIT_FAILED() {
-        diag_emit_compile_failed_json(dctx, diag_emission_failure_message());
+        diag_emit_emission_failure_json(dctx);
         return 1;
     }
     diag_eprintln_best_effort(str4(i64_to_string(n_items), String::from(" items, "), i64_to_string(n_errors), String::from(" errors")));
@@ -2116,7 +2116,7 @@ fn run_build_cmd(argv: Vec<String>, sub: bool) -> i32 [io, read, write] {
     let n_items: i64 = checked.n_items;
     let n_errors: i64 = checked.n_errors;
     if diag_ctx_print_all(dctx) == DIAG_EMIT_FAILED() {
-        diag_emit_compile_failed_json(dctx, diag_emission_failure_message());
+        diag_emit_emission_failure_json(dctx);
         return 1;
     }
     diag_eprintln_best_effort(str4(i64_to_string(n_items), String::from(" items, "), i64_to_string(n_errors), String::from(" errors")));
@@ -2368,7 +2368,7 @@ fn run_test(argv: Vec<String>) -> i32 [io, read, write] {
         let checked: CheckedFrontend = fr.checked;
         if checked.n_errors > 0 {
             let duration: i64 = time_unix_ms() - start_time;
-            let emitted: i64 = diag_ctx_print_all(checked.dctx);
+            diag_ctx_print_all(checked.dctx);
             let diag_json: String = diag_ctx_to_json(checked.dctx);
             let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration, diag_json);
             entries_json.push(entry);
@@ -16305,7 +16305,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io, read, write] {
     let dctx: DiagCtx = checked.dctx;
     let n_errors: i64 = checked.n_errors;
     if diag_ctx_print_all(dctx) == DIAG_EMIT_FAILED() {
-        diag_emit_compile_failed_json(dctx, diag_emission_failure_message());
+        diag_emit_emission_failure_json(dctx);
         return 1;
     }
     if n_errors > 0 {
