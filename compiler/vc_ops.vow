@@ -134,8 +134,11 @@ fn vc_frame_mark(k: i64) -> String {
     out
 }
 
-// The frame an instruction was spliced from; -1 for the target's own.
+// The frame an instruction was spliced from; -1 for the target's own. The
+// unwrap abort keeps its extern name in `ds`, so its frame travels in `dv2`
+// (`frame + 1`; 0 for the target's own, which the lowerer emits with `dv2` 0).
 fn vc_frame_of(inst: IrInst) -> i64 {
+    if vc_is_unwrap_abort(inst) { return inst.dv2 - 1; }
     let pre: String = VC_FRAME_PREFIX();
     if inst.ds.len() <= pre.len() || inst.ds.substring(0 as u64, pre.len()) != pre {
         return -1;

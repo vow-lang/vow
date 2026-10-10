@@ -269,6 +269,8 @@ fn vc_map_inst(inst: IrInst, frame: i64, sub: Vec<i64>, vbase: i64, bbase: i64) 
     let out: IrInst = vc_clone_inst(inst, id, vc_map_args(inst, sub, vbase), dv, dv2);
     if vc_op_frame_marked(inst.op) {
         out.ds = vc_frame_mark(frame);
+    } else if vc_is_unwrap_abort(inst) {
+        out.dv2 = frame + 1;
     }
     out
 }

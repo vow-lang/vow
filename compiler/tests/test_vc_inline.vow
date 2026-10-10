@@ -345,6 +345,39 @@ fn check_frame_marks() -> i64 {
     0
 }
 
+// The unwrap abort keeps its extern name, so its frame travels in `dv2`: a
+// callee's abort is attributed to the callee's frame, the target's own is not.
+fn check_unwrap_abort_frame() -> i64 {
+    let ci: Vec<IrInst> = Vec::new();
+    ci.push(mk_inst_arg(0, ITY_I64(), 0));
+    ci.push(ir_inst_new(1, IOP_CALL(), ITY_UNIT(), Vec::new(), IDATA_CALL_EXTERN(), 0, 0, VC_INTERNAL_UNWRAP_PANIC()));
+    ci.push(mk_inst_return(2, 0));
+    let callee: IrFunction = fn_of(1, String::from("g"), ITY_I64(), one(mk_block(0, ci)));
+    let top: IrFunction = forwarder(0, String::from("top"), 1);
+    let m: IrModule = module3(top, callee, leaf(2, String::from("unused")));
+    let r: VcInlined = vc_inline(top, m, VC_INLINE_INST_CAP());
+    if r.status != VC_INLINE_OK() { return 1; }
+    let mut seen: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < r.f.blocks.len() {
+        let blk: IrBlock = r.f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if vc_is_unwrap_abort(inst) {
+                seen = seen + 1;
+                if vc_frame_of(inst) != 0 { return 2; }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    if seen != 1 { return 3; }
+    // The callee itself is untouched: the splice copies, it does not mark in place.
+    if vc_frame_of(callee.blocks[0].insts[1]) != -1 { return 4; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_cycles();
     if r == 0 { let d: i64 = check_diamond_is_acyclic(); if d != 0 { r = 100 + d; } }
@@ -355,5 +388,6 @@ fn main() -> i32 {
     if r == 0 { let d: i64 = check_module_reasons(); if d != 0 { r = 600 + d; } }
     if r == 0 { let d: i64 = check_budget(); if d != 0 { r = 700 + d; } }
     if r == 0 { let d: i64 = check_frame_marks(); if d != 0 { r = 800 + d; } }
+    if r == 0 { let d: i64 = check_unwrap_abort_frame(); if d != 0 { r = 900 + d; } }
     i64_to_i32_wrap(r)
 }
