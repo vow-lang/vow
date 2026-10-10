@@ -63,7 +63,7 @@ class OutputDefaultTest(unittest.TestCase):
 
 
 _LITERAL = re.compile(r'String::from\("((?:[^"\\]|\\.)*)"\)')
-_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", '"': '"', "0": "\0"}
+_ESCAPES = {"n": "\n", "\\": "\\", '"': '"'}
 
 
 def _decode(escaped: str) -> str:
@@ -83,8 +83,7 @@ def _function_bodies(source: str) -> dict[str, str]:
 
 
 def _emit(text: str) -> str:
-    first, rest = generate_help._vow_payload_stmts(text)
-    return f'let r: String = String::from("{first}");\n{rest}\n'
+    return generate_help._vow_payload_fn("payload", text)
 
 
 def _expected(text: str) -> str:
@@ -124,10 +123,11 @@ class VowPayloadEmissionTest(unittest.TestCase):
         self.assertIn(long_line + "\n", literals)
 
     def test_one_statement_per_source_line(self):
-        out = _emit("a\n" * 5000)
-        lines = out.rstrip("\n").split("\n")
-        self.assertTrue(lines[0].startswith('let r: String = String::from("'))
-        for line in lines[1:]:
+        lines = _emit("a\n" * 5000).split("\n")
+        self.assertEqual(lines[0], "fn payload() -> String {")
+        self.assertTrue(lines[1].startswith('    let r: String = String::from("'))
+        self.assertEqual(lines[-2:], ["    r", "}"])
+        for line in lines[2:-2]:
             self.assertTrue(line.startswith('    r.push_str(String::from("'), line)
             self.assertTrue(line.endswith('"));'), line)
         self.assertLess(len(lines), 100)
@@ -174,10 +174,7 @@ class VowPayloadEmissionTest(unittest.TestCase):
         self.assertCountEqual(texts, [_expected(t) for t in support.values()])
 
     def test_real_payload_chunks_never_exceed_longest_source_line(self):
-        grammar = (SPEC / "grammar.md").read_text()
-        cli = (SPEC / "cli.md").read_text()
-        contracts = (SPEC / "contracts.md").read_text()
-        data = generate_help.build_help_json(grammar, cli, contracts)
+        data = _help_data()
         texts = [
             json.dumps(data, indent=2),
             generate_help.build_help_human(data),
@@ -185,18 +182,21 @@ class VowPayloadEmissionTest(unittest.TestCase):
             generate_help.build_skill_bundle(),
             *generate_help.build_skill_support_files().values(),
         ]
-        statements = 0
+        statements = source_lines = 0
         for text in texts:
-            longest_line = (
-                max(len(line.encode()) for line in _expected(text).split("\n")) + 1
+            expected = _expected(text)
+            lines = expected.split("\n")
+            limit = max(
+                generate_help.VOW_LITERAL_CHUNK_BYTES,
+                max(len(line.encode()) for line in lines) + 1,
             )
-            limit = max(generate_help.VOW_LITERAL_CHUNK_BYTES, longest_line)
             lits = _literals(_emit(text))
             statements += len(lits)
-            self.assertEqual("".join(lits), _expected(text))
+            source_lines += len(lines)
+            self.assertEqual("".join(lits), expected)
             for lit in lits:
                 self.assertLessEqual(len(lit.encode()), limit)
-        self.assertLess(statements, 2000)
+        self.assertLess(statements, source_lines)
 
 
 if __name__ == "__main__":

@@ -900,37 +900,37 @@ def _vow_escape(chunk: str) -> str:
     return chunk.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
-def _vow_payload_stmts(text: str) -> tuple[str, str]:
-    """Convert a multiline string into Vow String::from first chunk + push_str rest.
+def _vow_payload_fn(name: str, text: str) -> str:
+    """Emit `fn name() -> String` building `text` from chunked string literals.
 
     The payload is `text` (em dashes become `--`) plus a trailing newline, packed
     into whole-line chunks of at most VOW_LITERAL_CHUNK_BYTES (a longer line is a
-    chunk of its own). Returns (first_chunk_escaped, rest_pushstr_lines).
+    chunk of its own).
     """
-    vow_text = text.replace("\u2014", "--") + "\n"
     chunks: list[str] = []
-    current: list[str] = []
-    size = 0
-    for line in vow_text.split("\n")[:-1]:
-        line_bytes = len(line.encode()) + 1
-        if current and size + line_bytes > VOW_LITERAL_CHUNK_BYTES:
-            chunks.append("".join(current))
-            current, size = [], 0
-        current.append(line + "\n")
-        size += line_bytes
-    chunks.append("".join(current))
-    first = _vow_escape(chunks[0])
-    rest = [
+    current = ""
+    for line in text.replace("\u2014", "--").split("\n"):
+        line += "\n"
+        if current and len((current + line).encode()) > VOW_LITERAL_CHUNK_BYTES:
+            chunks.append(current)
+            current = ""
+        current += line
+    chunks.append(current)
+    body = [f'    let r: String = String::from("{_vow_escape(chunks[0])}");']
+    body += [
         f'    r.push_str(String::from("{_vow_escape(chunk)}"));' for chunk in chunks[1:]
     ]
-    return first, "\n".join(rest)
+    return "\n".join([f"fn {name}() -> String {{", *body, "    r", "}"])
 
 
 def inject_vow(main_vow: Path, json_str: str, human_str: str) -> str:
     content = main_vow.read_text()
 
-    first_json, rest_json = _vow_payload_stmts(json_str)
-    json_fn = f'// GENERATE:SKILL_JSON:START\nfn skill_json() -> String {{\n    let r: String = String::from("{first_json}");\n{rest_json}\n    r\n}}\n// GENERATE:SKILL_JSON:END'
+    json_fn = (
+        "// GENERATE:SKILL_JSON:START\n"
+        + _vow_payload_fn("skill_json", json_str)
+        + "\n// GENERATE:SKILL_JSON:END"
+    )
     content = _replace_between_markers(
         content,
         "// GENERATE:SKILL_JSON:START",
@@ -938,8 +938,11 @@ def inject_vow(main_vow: Path, json_str: str, human_str: str) -> str:
         json_fn,
     )
 
-    first_human, rest_human = _vow_payload_stmts(human_str)
-    human_fn = f'// GENERATE:SKILL_HUMAN:START\nfn skill_human() -> String {{\n    let r: String = String::from("{first_human}");\n{rest_human}\n    r\n}}\n// GENERATE:SKILL_HUMAN:END'
+    human_fn = (
+        "// GENERATE:SKILL_HUMAN:START\n"
+        + _vow_payload_fn("skill_human", human_str)
+        + "\n// GENERATE:SKILL_HUMAN:END"
+    )
     content = _replace_between_markers(
         content,
         "// GENERATE:SKILL_HUMAN:START",
@@ -1145,8 +1148,6 @@ def inject_skill_vow(
     content: str, entrypoint_md: str, bundle_md: str, support_files: dict[str, str]
 ) -> str:
     """Inject generated skill helpers into self-hosted main.vow."""
-    first_entrypoint, rest_entrypoint = _vow_payload_stmts(entrypoint_md)
-    first_bundle, rest_bundle = _vow_payload_stmts(bundle_md)
     support_entries = [
         (path, body, _vow_skill_support_content_fn_name(path))
         for path, body in support_files.items()
@@ -1154,17 +1155,9 @@ def inject_skill_vow(
 
     sections = [
         "// GENERATE:SKILL_FULL:START",
-        "fn skill_entrypoint() -> String {",
-        f'    let r: String = String::from("{first_entrypoint}");',
-        rest_entrypoint,
-        "    r",
-        "}",
+        _vow_payload_fn("skill_entrypoint", entrypoint_md),
         "",
-        "fn skill_bundle() -> String {",
-        f'    let r: String = String::from("{first_bundle}");',
-        rest_bundle,
-        "    r",
-        "}",
+        _vow_payload_fn("skill_bundle", bundle_md),
         "",
         "fn skill_support_count() -> u64 {",
         f"    {len(support_entries)}",
@@ -1182,17 +1175,7 @@ def inject_skill_vow(
     sections.extend(['    String::from("")', "}", ""])
 
     for _, body, fn_name in support_entries:
-        first, rest = _vow_payload_stmts(body)
-        sections.extend(
-            [
-                f"fn {fn_name}() -> String {{",
-                f'    let r: String = String::from("{first}");',
-                rest,
-                "    r",
-                "}",
-                "",
-            ]
-        )
+        sections.extend([_vow_payload_fn(fn_name, body), ""])
 
     sections.extend(
         [
