@@ -100,6 +100,36 @@ fn vc_is_unwrap_abort(inst: IrInst) -> bool {
     inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_UNWRAP_PANIC()
 }
 
+// `Vec` operations the symbolic executor models as an array plus a symbolic
+// length (`vc_vec`). They are listed here by runtime symbol, like the unwrap
+// abort, and not in the builtin catalogue: the catalogue is keyed by Vow builtin
+// name and its entries need a grammar row. A symbol not listed (`clear`,
+// `truncate`, `reserve`, `from_raw_parts_copy`, the wide-slot variants, ...) is an
+// unmodelled builtin.
+fn VC_VEC_NONE() -> i64 { 0 }
+fn VC_VEC_NEW() -> i64 { 1 }
+fn VC_VEC_PUSH() -> i64 { 2 }
+fn VC_VEC_GET() -> i64 { 3 }
+fn VC_VEC_SET() -> i64 { 4 }
+fn VC_VEC_LEN() -> i64 { 5 }
+fn VC_VEC_POP() -> i64 { 6 }
+
+fn vc_vec_op_kind(sym: String) -> i64 {
+    if sym == String::from("__vow_vec_new") { return VC_VEC_NEW(); }
+    if sym == String::from("__vow_vec_push_val") { return VC_VEC_PUSH(); }
+    if sym == String::from("__vow_vec_get_val") { return VC_VEC_GET(); }
+    if sym == String::from("__vow_vec_set_val") { return VC_VEC_SET(); }
+    if sym == String::from("__vow_vec_len") { return VC_VEC_LEN(); }
+    if sym == String::from("__vow_vec_pop") { return VC_VEC_POP(); }
+    VC_VEC_NONE()
+}
+
+// The `Vec` operation an instruction is, or `VC_VEC_NONE`.
+fn vc_inst_vec_kind(inst: IrInst) -> i64 {
+    if inst.op != IOP_CALL() || inst.dk != IDATA_CALL_EXTERN() { return VC_VEC_NONE(); }
+    vc_vec_op_kind(inst.ds)
+}
+
 // The `Unreachable` the loop unroller puts where a back edge goes past the
 // bound. Reaching it means some run needs more iterations than the bound.
 fn VC_INTERNAL_UNWIND_SINK() -> String { String::from("__vc_unwind_sink") }
