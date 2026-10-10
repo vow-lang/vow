@@ -137,8 +137,9 @@ fn vc_has_site(sites: Vec<ParsedArithSite>, site: ParsedArithSite) -> bool {
 
 // `ended`: a hard claim was not `unsat` and `result` is the first such (or, in
 // all-claims mode with `halted`, the answer that stopped the round). `open`: the
-// unwinding claim was `sat`. `halted`: the solver gave an answer after which no
-// further claim is asked (timeout, memory, missing, error).
+// unwinding claim was `sat`. `halted`: the round is not closed and no larger one
+// is asked: the solver gave an answer after which no further claim is asked
+// (timeout, memory, missing, error), or it could not decide the unwinding claim.
 struct VcRound {
     result: VerifyResult,
     ended: bool,
@@ -209,6 +210,7 @@ fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, sites: Vec<ParsedAri
     let mut located: bool = false;
     let mut open: bool = false;
     let mut failed: bool = false;
+    let mut stuck: bool = false;
     let mut first: VerifyResult = vc_proven_result();
     let mut first_frame: i64 = -1;
     let mut k: u64 = 0;
@@ -238,6 +240,7 @@ fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, sites: Vec<ParsedAri
                 let mut verdict: i64 = VC_CLAUSE_UNDECIDED();
                 if ans.verdict == VC_ANS_SAT() { verdict = VC_CLAUSE_FAILED(); }
                 vc_note_clause(acc, cs, k, verdict);
+                if cs.kinds[k] == VC_CLAIM_UNWIND() { stuck = true; }
                 if !failed {
                     first = res;
                     first_frame = cs.frames[k];
@@ -251,7 +254,7 @@ fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, sites: Vec<ParsedAri
         k = k + 1;
     }
     if failed {
-        return vc_round(first, true, open, first_frame, false);
+        return vc_round(first, true, open, first_frame, stuck);
     }
     vc_round(vc_proven_result(), false, open, -1, false)
 }

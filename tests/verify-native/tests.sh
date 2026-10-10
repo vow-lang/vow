@@ -54,6 +54,13 @@ case "$FAKE_BW_MODE" in
         wait
         ;;
     slow_unsat) echo $$ >> "$FAKE_BW_DIR/pids"; sleep 0.3; echo unsat ;;
+    unknown_unwinding)
+        # `unsat` for a claim whose goal is a negation (an ensures or invariant),
+        # `unknown` for the unwinding claim, whose query ends in the bare path
+        # condition.
+        last=$(grep '^(assert' "$file" | tail -1)
+        case "$last" in *"(not "*) echo unsat ;; *) echo unknown ;; esac
+        ;;
     sat_if_contains|sat_unless_contains)
         hit=0
         grep -qF -- "$FAKE_BW_NEEDLE" "$file" && hit=1
@@ -880,6 +887,17 @@ SRC
     expect "real: failure in a late iteration" \
         "$(real_clauses tests/verify-native/fail/loop_bug_at_iteration_40.vow 0 trip)" "1 1 0:1,1:0,2:1"
 fi
+
+# An unwinding claim the solver cannot decide leaves the round open: nothing is
+# proven although every clause claim was `unsat` (rule 2 of
+# ADR-2026-10-08-1422), and the overall result is `unknown`.
+SYMBOLIC_LOOP="tests/verify-native/unknown/loop_symbolic_bound.vow"
+BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
+expect "undecided unwinding proves no clause" \
+    "$(PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE=unknown_unwinding FAKE_BW_DIR="$BW_DIR" \
+        "$VOWC_BIN" verify-worker "$SYMBOLIC_LOOP" --worker-index 0 --worker-name count \
+        --worker-budget-ms 60000 --worker-clauses 2>/dev/null | python3 "$WIRE_DECODE")" "6 -1 "
+no_leftovers "undecided unwinding"
 
 # A clause is only ever given 1/0 here; its status string comes from
 # `resolve_clause_status`, whose vocabulary must stay inside the schema's.
