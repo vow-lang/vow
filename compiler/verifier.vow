@@ -732,6 +732,10 @@ fn output_has_memory_limit(combined: String) -> bool {
         || str_find_str(lower, String::from("bad_alloc")) >= 0
 }
 
+fn bv_resource_limited(st: i64, raw_output: String) -> bool {
+    st == VERIFY_TIMEOUT() || (st == VERIFY_UNKNOWN() && output_has_memory_limit(raw_output))
+}
+
 // Extract the first `ERROR:`-prefixed line from ESBMC's combined output, or
 // "" if none is present. Mirrors `esbmc_tool_error_reason` in
 // vow-verify/src/esbmc.rs (ESBMC 8.4+ can print `VERIFICATION SUCCESSFUL`
@@ -1823,9 +1827,7 @@ fn verify_function_contracts_only(esbmc_bin: String, f: IrFunction, m: IrModule,
     // generic BV->IR path handle this instead would re-emit the un-suppressed
     // model, whose `arith:` assert IR can never violate — unbounded integers do
     // not overflow — so a timeout would launder into a proof.
-    let resource_limited: bool = st == VERIFY_TIMEOUT() ||
-        (st == VERIFY_UNKNOWN() && output_has_memory_limit(bv.raw_output));
-    if !resource_limited {
+    if !bv_resource_limited(st, bv.raw_output) {
         return bv;
     }
     let bv_solver: String = resolve_auto_bv_solver(solver);
