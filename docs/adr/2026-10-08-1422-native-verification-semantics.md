@@ -204,7 +204,8 @@ known limits.
   modular assume-guarantee verification is a separate future ADR.
 - **128-bit aggregates** (struct fields) stay gated. *Addendum (#1421):* struct
   fields and enum payloads of 128 bits are modelled, one 128-bit term each;
-  `Vec<i128>` elements stay `Skipped` until the collection model (#1423).
+  `Vec<i128>` elements stay `Skipped`: the collection model of #1423 covers
+  elements of up to 64 bits (see its addendum).
 - **Solver limits.** Timeout or memory exhaustion yields `unknown` with a
   structured reason, never `proven`.
 - **Floating-point cost.** FP queries bit-blast and can be slow; they time out
@@ -376,3 +377,93 @@ acyclic function.
   carried an invariant and was `unknown`; it is `pass/loop_literal_100_invariant.vow`
   now, and the `unknown/` fixture keeps the invariant-free loop. No ESBMC
   `proven` becomes weaker.
+
+## Addendum (#1423): `Vec` as an array plus a symbolic length
+
+Rule 3 is implemented for `Vec<T>` with `T` = `Bool` or an integer of at most 64
+bits, in `compiler/vc_vec.vow`. `String`, maps and wider elements are not part
+of this change and stay `Skipped`.
+
+- **Representation.** A Vec is a `vc_agg` object (so pointers still never become
+  terms) with a flow-sensitive state `(arr, len)`: `arr` is
+  `(Array (_ BitVec 64) (_ BitVec 64))`, `len` a 64-bit vector. `Vec::new()` is
+  length 0 over an unconstrained array; a parameter is an unconstrained array
+  and length declared at first use (`pK_varr`, `pK_vlen`). An element is the
+  8-byte slot the runtime keeps: sign-extended for a signed type,
+  zero-extended for an unsigned type, `ite(b, 1, 0)` for `Bool`. A function that
+  touches a Vec is queried in `QF_ABV`; every other function stays in `QF_BV`
+  byte for byte.
+- **Operations.** `new`, `push`, index read (`get`), index write (`set`), `len`
+  and `pop` (`len' = ite(len == 0, 0, len - 1)`). The bounds check of `get` and
+  `set` is a hard claim `idx <u len` (a negative `i64` index is a huge unsigned
+  one), labelled `vec bounds` like ESBMC's, unattributed (vow id `4294967293`,
+  blame `None`), and assumed afterwards. The index must be a 64-bit integer.
+  An element read is the raw slot as `i64`; the lowerer's own cast narrows it.
+  A `Vec<bool>` read reaches a `Branch` or `Return` as an `i64`, which the gate
+  already rejects, so it stays `Skipped` as `unsupported-opcode`.
+- **Merges.** Entering a block merges the exit states of its live in-edges with
+  the same `ite` chain a Phi uses, each merged term bound by a `define-fun`
+  (`vc_vec_enter`); a write replaces the state of the block being walked. State
+  is taken from edges only, never from the block walked before, so a push in one
+  arm is invisible in the other.
+- **Length invariant (the one length fact).** The runtime keeps a Vec's
+  capacity in 63 bits and `set_vow_vec_capacity` traps for a capacity of
+  `VOW_CAP_VALUE_MASK` (2^63 - 1) or more; the length never exceeds the
+  capacity. Every runtime Vec therefore has `len < 2^63 - 1`. A parameter's
+  length is assumed to satisfy it, and a `push` that returns is assumed to leave
+  the length below it (the push that would not is the runtime's `Vec::reserve`
+  trap, which never returns). This is a fact about the runtime's
+  representation, not a verifier cap: it passes the backend-independence test
+  (a stronger verifier would need exactly it) and it is what makes
+  `v.len() as i64 >= 0` true, which `tests/verify/string_param_verify.vow`
+  records for the ESBMC model as well. No other bound on a length, index or
+  capacity is introduced anywhere; in particular there is no `len <= 128`.
+- **Skipped classes, fail closed.** Any other `__vow_vec_*` symbol
+  (`clear`, `truncate`, `reserve`, `sort`, `from_raw_parts_copy`,
+  `pin_to_root`, the wide-slot variants, the `_in_arena` variants) is
+  `unmodeled-builtin`; a pushed or stored value, or a `get` result, that is not
+  `Bool` or an integer of up to 64 bits, and an index that is not 64-bit, is
+  `unsupported-opcode`. The shape rule (`vc_vec_shape_detail`) rejects, as
+  `unsupported-opcode`, a Vec used as a struct (`FieldGet`/`FieldSet`), a Vec
+  passed to a call, and a Vec merged by a Phi whose `Upsilon`s supply different
+  values (two model objects for one runtime Vec would diverge); a Phi that
+  always supplies the same value is a no-op. Only the length of a
+  `Vec<Vec<_>>`/`Vec<String>` is modelled (its elements are never read).
+- **Aliasing.** Two `Vec` parameters are distinct objects, as they are for
+  ESBMC and for every `vc_agg` parameter object.
+- **Op table.** The Vec symbols are listed by hand in `vc_vec_op_kind`, like
+  `__vow_unwrap_panic`, not in `docs/spec/operations.json`: the catalogue is
+  keyed by Vow builtin name and each entry needs a grammar row and help text.
+  A backfill by runtime symbol is the follow-up ADR-1430 anticipated.
+- **Frames.** A spliced `get`/`set` carries its frame in `dv2` (`frame + 1`),
+  the channel the unwrap abort uses (`vc_frame_in_dv2`), so a bounds failure in
+  an inlined callee has `call_sites` and the callee's function.
+- **Counterexamples.** Only integer parameters are listed; a Vec parameter's
+  length and contents are not reported (ESBMC does not either), and replay of a
+  bounds counterexample is `skipped`.
+
+*Verdict impact on the corpus* (`scripts/verify_diff.py`, native vs ESBMC, the
+only rows that moved relative to the previous native verifier):
+
+| fixture | ESBMC | native before | native now | class |
+| --- | --- | --- | --- | --- |
+| `verify/vec_fill` | proven | skipped | proven | match |
+| `verify/bounds_correct` | proven | skipped | proven | match |
+| `verify-fail/off_by_one_bounds` | refuted | skipped | refuted | match |
+| `verify-fail/vec_overcount` | refuted | skipped | refuted | match |
+| `verify-fail/replay_unattributed_bounds` | refuted | skipped | refuted | match |
+
+`verify/model_capacity_bound_note`, `raw_parts_copy_*` and the `String`/map
+fixtures stay `weaker` (file-level `Skipped`): they need `from_raw_parts_copy`,
+`String` or `HashMap`, which this change does not model. Capacity-only
+verdicts are explained per function, not per file, because the harness compares
+whole files: `tests/verify-native/pass/vec_param_len_unbounded.vow` and
+`vec_len_fits_i64.vow` are properties of an arbitrary-length parameter that
+ESBMC proves only for `len <= 128`, and the native result holds for every
+length.
+
+Follow-ups, not done here: `from_raw_parts_copy`/`pin_to_root` (and the harness
+decision for the `*_beyond_model_cap` fixtures, which would flip to class
+`soundness` because the corpus labels them failing only through ESBMC's cap),
+a Vec across a call boundary, `clear`/`truncate`, `Vec<i128>`, a Vec merged by a
+Phi, `String` (same model, exact `string_eq`), and the maps.
