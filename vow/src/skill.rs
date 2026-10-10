@@ -3211,6 +3211,10 @@ Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`
 
 Each test binary is run directly, with no memory limit, and is killed when `--timeout` elapses (status `timeout`). A binary that exits non-zero, or is killed by a signal, is `failed`; a signal death or a `timeout` has no `exit_code` (`null`, or omitted by the Rust compiler).
 
+A `timeout` counts toward `failed`, like `compile_error`, `verify_failed` and `contract_skipped`: a run containing one yields `TestsFailed` and exit code 1.
+
+A `<path>` that does not exist is itself a failure: the result is `TestsFailed` with `total: 1` and `failed: 1`, holding one synthetic `failed` entry whose `file` is the path as given and whose `stderr` names it, and the exit code is 1. `total` equals the length of `tests` in every result, so the synthetic entry is counted.
+
 `contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed — a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.
 
 ### `vow decl`
@@ -9256,6 +9260,10 @@ Test discovery: files matching `test_*.vow` or `*_test.vow` under the given dire
 Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.
 
 Each test binary is run directly, with no memory limit, and is killed when `--timeout` elapses (status `timeout`). A binary that exits non-zero, or is killed by a signal, is `failed`; a signal death or a `timeout` has no `exit_code` (`null`, or omitted by the Rust compiler).
+
+A `timeout` counts toward `failed`, like `compile_error`, `verify_failed` and `contract_skipped`: a run containing one yields `TestsFailed` and exit code 1.
+
+A `<path>` that does not exist is itself a failure: the result is `TestsFailed` with `total: 1` and `failed: 1`, holding one synthetic `failed` entry whose `file` is the path as given and whose `stderr` names it, and the exit code is 1. `total` equals the length of `tests` in every result, so the synthetic entry is counted.
 
 `contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed — a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.
 
