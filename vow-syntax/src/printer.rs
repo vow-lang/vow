@@ -511,8 +511,6 @@ fn expr_precedence(expr: &Expr) -> u8 {
     }
 }
 
-// An unparenthesised block-like expression ends the expression, so it needs
-// parentheses before any postfix operator and as a left binary operand.
 // True when printing `expr` leaves a struct literal outside every delimiter, i.e.
 // where the parser, inside an `if` / `while` / `for … in` / `match` head, would
 // read `Name {` as the start of the body. Deliberately an over-approximation: it
@@ -547,6 +545,8 @@ fn print_head(expr: &Expr, level: usize) -> String {
     }
 }
 
+// An unparenthesised block-like expression ends the expression, so it needs
+// parentheses before any postfix operator and as a left binary operand.
 fn print_postfix_base(expr: &Expr, level: usize) -> String {
     if expr.kind.is_block_like()
         || matches!(

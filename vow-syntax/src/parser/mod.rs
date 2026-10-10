@@ -462,10 +462,7 @@ impl Parser {
     }
 
     fn parse_vow_block(&mut self) -> Option<VowBlock> {
-        let saved = std::mem::replace(&mut self.no_struct, false);
-        let result = self.parse_vow_block_body();
-        self.no_struct = saved;
-        result
+        self.with_no_struct(false, Self::parse_vow_block_body)
     }
 
     fn parse_vow_block_body(&mut self) -> Option<VowBlock> {
@@ -537,10 +534,7 @@ impl Parser {
     }
 
     fn parse_block(&mut self) -> Option<Block> {
-        let saved = std::mem::replace(&mut self.no_struct, false);
-        let result = self.parse_block_body();
-        self.no_struct = saved;
-        result
+        self.with_no_struct(false, Self::parse_block_body)
     }
 
     fn parse_block_body(&mut self) -> Option<Block> {
