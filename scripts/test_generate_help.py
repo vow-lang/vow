@@ -224,7 +224,7 @@ class SkillDoNotsTest(unittest.TestCase):
             "Unverified",
             "--help",
             "stdout",
-            "--human",
+            "stderr",
         ):
             self.assertIn(needle, section)
 
