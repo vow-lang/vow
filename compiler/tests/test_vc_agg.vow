@@ -121,7 +121,41 @@ fn check_unsupported_aggregate_shapes() -> i64 {
     w.push(mk_inst_field_get(1, ITY_I128(), 0, 0));
     w.push(mk_inst_return(2, 0));
     let r: String = vc_skip_reason(one_block(String::from("wide"), ptr_param(), ITY_PTR(), w));
-    if !r.contains(String::from("wide-aggregate-field")) { return 31; }
+    if r != String::from("unsupported-opcode: FieldGet[i128]") { return 31; }
+
+    let ww: Vec<IrInst> = Vec::new();
+    ww.push(mk_inst_arg(0, ITY_PTR(), 0));
+    ww.push(mk_inst_field_get_wide(1, ITY_U128(), 0, 1));
+    ww.push(mk_inst_field_get_wide(2, ITY_I128(), 0, 3));
+    ww.push(mk_inst_return(3, 0));
+    if vc_skip_reason(one_block(String::from("wideok"), ptr_param(), ITY_PTR(), ww)).len() != 0 { return 120; }
+
+    let wn: Vec<IrInst> = Vec::new();
+    wn.push(mk_inst_arg(0, ITY_PTR(), 0));
+    wn.push(mk_inst_field_get_wide(1, ITY_I64(), 0, 0));
+    wn.push(mk_inst_return(2, 0));
+    if vc_skip_reason(one_block(String::from("widenarrow"), ptr_param(), ITY_PTR(), wn)) != String::from("unsupported-opcode: FieldGet[i64]") { return 121; }
+
+    let ws: Vec<IrInst> = Vec::new();
+    ws.push(mk_inst_alloc(0, 24));
+    ws.push(ir_inst_new(1, IOP_CONST_I128(), ITY_I128(), Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+    ws.push(mk_inst_field_set_wide(2, 0, 1, 1));
+    ws.push(mk_inst_return(3, 0));
+    if vc_skip_reason(one_block(String::from("widestore"), Vec::new(), ITY_PTR(), ws)).len() != 0 { return 122; }
+
+    let wm: Vec<IrInst> = Vec::new();
+    wm.push(mk_inst_alloc(0, 24));
+    wm.push(mk_inst_const_i64(1, 1));
+    wm.push(mk_inst_field_set_wide(2, 0, 1, 1));
+    wm.push(mk_inst_return(3, 0));
+    if vc_skip_reason(one_block(String::from("widestorenarrow"), Vec::new(), ITY_PTR(), wm)) != String::from("unsupported-opcode: FieldSet") { return 123; }
+
+    let wf: Vec<IrInst> = Vec::new();
+    wf.push(mk_inst_alloc(0, 24));
+    wf.push(ir_inst_new(1, IOP_CONST_I128(), ITY_I128(), Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+    wf.push(mk_inst_field_set(2, 0, 1, 1));
+    wf.push(mk_inst_return(3, 0));
+    if vc_skip_reason(one_block(String::from("narrowslotwide"), Vec::new(), ITY_PTR(), wf)) != String::from("unsupported-opcode: FieldSet") { return 124; }
 
     let l: Vec<IrInst> = Vec::new();
     l.push(mk_inst_arg(0, ITY_LPTR(), 0));

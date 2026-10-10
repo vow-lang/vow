@@ -24,7 +24,6 @@ fn check_classes_are_disjoint() -> i64 {
         if vc_op_modeled(op) { n = n + 1; }
         if vc_op_unsupported(op) { n = n + 1; }
         if op == IOP_CALL() { n = n + 1; }
-        if op == IOP_FIELD_GET() || op == IOP_FIELD_SET() { n = n + 1; }
         if op == IOP_REM_F32() || op == IOP_REM_F64() { n = n + 1; }
         if n > 1 { return 300 + op; }
         op = op + 1;
@@ -40,7 +39,8 @@ fn check_known_classes() -> i64 {
     if vc_op_model(IOP_INT_CAST()) != VC_OPM_MODELED() { return 609; }
     if vc_op_model(IOP_CONST_U128()) != VC_OPM_MODELED() { return 610; }
     if vc_op_model(IOP_CALL()) != VC_OPM_CALL() { return 602; }
-    if vc_op_model(IOP_FIELD_SET()) != VC_OPM_FIELD() { return 603; }
+    if vc_op_model(IOP_FIELD_SET()) != VC_OPM_MODELED() { return 603; }
+    if vc_op_model(IOP_FIELD_GET()) != VC_OPM_MODELED() { return 611; }
     if vc_op_model(IOP_REM_F32()) != VC_OPM_FLOAT_REM() { return 604; }
     if vc_op_model(IOP_REM_F64()) != VC_OPM_FLOAT_REM() { return 605; }
     if vc_op_model(9999) != VC_OPM_UNCLASSIFIED() { return 606; }
@@ -68,7 +68,7 @@ fn check_closed_code_list() -> i64 {
     if !vc_skip_code_valid(VC_SKIP_UNSUPPORTED_OPCODE()) { return 805; }
     if !vc_skip_code_valid(VC_SKIP_NON_MODELABLE_CALLEE()) { return 806; }
     if !vc_skip_code_valid(VC_SKIP_RESERVED_SYMBOL()) { return 807; }
-    if !vc_skip_code_valid(VC_SKIP_WIDE_AGGREGATE_FIELD()) { return 808; }
+    if vc_skip_code_valid(String::from("wide-aggregate-field")) { return 808; }
     if vc_skip_code_valid(String::from("something-else")) { return 809; }
     0
 }
