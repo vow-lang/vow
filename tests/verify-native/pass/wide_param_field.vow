@@ -1,3 +1,5 @@
+// Native-only: ESBMC reports 128-bit struct fields as Skipped, so this proof has
+// no ESBMC counterpart.
 module WideParamField
 
 struct Held { lo: i64, v: u128 }

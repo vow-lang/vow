@@ -1,3 +1,5 @@
+// Native-only: ESBMC reports 128-bit struct fields as Skipped, so this proof has
+// no ESBMC counterpart.
 module WideStructMixedSlots
 
 // A 128-bit field takes two slots, so `c` sits one slot later than its index.

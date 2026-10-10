@@ -1,3 +1,5 @@
+// Native-only: ESBMC reports 128-bit struct fields as Skipped, so this proof has
+// no ESBMC counterpart.
 module WideStructRoundtrip
 
 struct Wide { value: i128 }
