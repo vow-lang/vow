@@ -19,7 +19,8 @@ use vc_flow
 // the other arm of a `Some`/`None` merge would leave in the payload slot. Slots
 // are read lazily, so a parameter needs no layout. A slot is keyed by index and
 // sort (Bool or a bit-vector width), because one enum slot can hold an i64
-// payload in one variant and a Bool in another.
+// payload in one variant and a Bool in another. A 128-bit value is one term of
+// sort 128 that occupies slots `idx` and `idx + 1`.
 //
 // This is exact only because every write precedes every read of its object.
 // The gate (`vc_agg_shape_detail`) allows a `FieldSet` only on an object
@@ -112,12 +113,22 @@ fn vc_agg_store(ag: VcAgg, obj: i64, idx: i64, sort: i64, term: i64) {
     ag.heads[obj as u64] = id;
 }
 
-// Writes `term` into slot `idx`; the same slot read at any other sort is
-// overwritten too, so it reads as unconstrained again.
+// A 128-bit value takes two 8-byte slots, every other sort one.
+fn vc_agg_slot_width(sort: i64) -> i64 {
+    if sort == 128 { return 2; }
+    1
+}
+
+// Writes `term` into slot `idx` at `sort`; every other view of a slot the write
+// covers is overwritten too, so it reads as unconstrained again.
 fn vc_agg_set(ag: VcAgg, obj: i64, idx: i64, sort: i64, term: i64) {
+    let end: i64 = idx + vc_agg_slot_width(sort);
     let mut s: i64 = ag.heads[obj as u64];
     while s >= 0 {
-        if ag.sl_idx[s as u64] == idx && ag.sl_sort[s as u64] != sort {
+        let si: i64 = ag.sl_idx[s as u64];
+        let ss: i64 = ag.sl_sort[s as u64];
+        let overlaps: bool = si < end && idx < si + vc_agg_slot_width(ss);
+        if overlaps && !(si == idx && ss == sort) {
             ag.sl_term[s as u64] = -1;
         }
         s = ag.sl_next[s as u64];

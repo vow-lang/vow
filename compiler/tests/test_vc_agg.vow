@@ -341,6 +341,115 @@ fn check_slot_overwrite_and_sorts() -> i64 {
     0
 }
 
+fn mk_const128(id: i64, lo: i64, hi: i64) -> IrInst {
+    ir_inst_new(id, IOP_CONST_U128(), ITY_U128(), Vec::new(), IDATA_CONST_I64(), lo, hi, String::from(""))
+}
+
+// build(): W { v: 5 + 7 << 64 } at wide slot 1, ensures result.v == itself
+fn check_wide_slot_roundtrip_is_stored_term() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_alloc(0, 32));
+    i.push(mk_const128(1, 5, 7));
+    i.push(mk_inst_field_set_wide(2, 0, 1, 1));
+    i.push(mk_inst_field_get_wide(3, ITY_U128(), 0, 1));
+    i.push(mk_inst(4, IOP_EQ(), ITY_BOOL(), args2(3, 1)));
+    i.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    i.push(mk_inst_return(6, 0));
+    let f: IrFunction = one_block(String::from("w"), Vec::new(), ITY_PTR(), i);
+    if vc_skip_reason(f).len() != 0 { return 130; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 131; }
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(define-fun v3 () (_ BitVec 128) v1)")) { return 132; }
+    if q.contains(String::from("declare-const j")) { return 133; }
+    0
+}
+
+// g(p): reads p's wide slot 1 twice and its narrow slot 3 (after the wide pair).
+fn check_wide_param_symbols() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_field_get_wide(1, ITY_I128(), 0, 1));
+    i.push(mk_inst_field_get_wide(2, ITY_I128(), 0, 1));
+    i.push(mk_inst_field_get(3, ITY_U64(), 0, 3));
+    i.push(mk_inst(4, IOP_EQ(), ITY_BOOL(), args2(1, 2)));
+    i.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    i.push(mk_inst_return(6, 3));
+    let f: IrFunction = one_block(String::from("g"), ptr_param(), ITY_U64(), i);
+    if vc_skip_reason(f).len() != 0 { return 140; }
+    let cs: VcClaims = vc_claims(f);
+    let all: String = vc_smt_render(cs.arena, cs.header);
+    if count_of(all, String::from("(declare-const p0f1s128 (_ BitVec 128))")) != 1 { return 141; }
+    if count_of(all, String::from("(declare-const p0f3s64 (_ BitVec 64))")) != 1 { return 142; }
+    0
+}
+
+// pick(c): a wide payload set in the then-arm only; the else-arm's slot is unconstrained.
+fn check_wide_phi_merge() -> i64 {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_arg(0, ITY_I64(), 0));
+    e.push(mk_inst_const_i64(1, 0));
+    e.push(mk_inst(2, IOP_GT(), ITY_BOOL(), args2(0, 1)));
+    e.push(mk_inst_branch(3, 2, 1, 2));
+    let t: Vec<IrInst> = Vec::new();
+    t.push(mk_inst_alloc(4, 32));
+    t.push(mk_const128(5, 9, 0));
+    t.push(mk_inst_field_set_wide(6, 4, 1, 5));
+    t.push(mk_inst_upsilon(7, 4, 20));
+    t.push(mk_inst_jump(8, 3));
+    let f: Vec<IrInst> = Vec::new();
+    f.push(mk_inst_alloc(10, 16));
+    f.push(mk_inst_upsilon(11, 10, 20));
+    f.push(mk_inst_jump(12, 3));
+    let m: Vec<IrInst> = Vec::new();
+    m.push(mk_inst_phi(20, ITY_PTR()));
+    m.push(mk_inst_field_get_wide(21, ITY_U128(), 20, 1));
+    m.push(mk_inst(22, IOP_EQ(), ITY_BOOL(), args2(21, 21)));
+    m.push(mk_vow(23, IOP_VOW_ENS(), 22, 0));
+    m.push(mk_inst_return(24, 20));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, t));
+    blocks.push(mk_block(2, f));
+    blocks.push(mk_block(3, m));
+    let fun: IrFunction = mk_function(1, String::from("pick"), mk_params1(), ITY_PTR(), blocks);
+    if vc_skip_reason(fun).len() != 0 { return 150; }
+    let cs: VcClaims = vc_claims(fun);
+    let all: String = vc_smt_render(cs.arena, cs.header);
+    if !all.contains(String::from("(declare-const j0 (_ BitVec 128))")) { return 151; }
+    if !all.contains(String::from("() (_ BitVec 128) (ite ")) { return 152; }
+    0
+}
+
+fn check_wide_slot_overlap() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let hdr: SmtScript = vc_script_new();
+    let ag: VcAgg = vc_agg_new(vc_flow_new(1, 1));
+    let o: i64 = vc_agg_alloc(ag);
+    let w: i64 = vc_tm_bv(ar, 128, 1, 0);
+    let w2: i64 = vc_tm_bv(ar, 128, 2, 0);
+    let n: i64 = vc_tm_bv(ar, 64, 3, 0);
+    let n2: i64 = vc_tm_bv(ar, 64, 4, 0);
+    vc_agg_set(ag, o, 1, 128, w);
+    vc_agg_set(ag, o, 3, 64, n);
+    if vc_agg_get(ag, ar, hdr, o, 1, 128) != w { return 160; }
+    if vc_agg_get(ag, ar, hdr, o, 3, 64) != n { return 161; }
+    // A narrow write into the second half of a wide slot invalidates the wide value.
+    vc_agg_set(ag, o, 2, 64, n2);
+    if vc_agg_get(ag, ar, hdr, o, 2, 64) != n2 { return 162; }
+    if vc_agg_get(ag, ar, hdr, o, 1, 128) == w { return 163; }
+    // A wide write invalidates the narrow values it covers, and only those.
+    vc_agg_set(ag, o, 1, 128, w2);
+    if vc_agg_get(ag, ar, hdr, o, 1, 128) != w2 { return 164; }
+    if vc_agg_get(ag, ar, hdr, o, 2, 64) == n2 { return 165; }
+    if vc_agg_get(ag, ar, hdr, o, 3, 64) != n { return 166; }
+    // A wide write at slot 2 covers slots 2 and 3, so the slot-1 wide value goes too.
+    vc_agg_set(ag, o, 2, 128, w);
+    if vc_agg_get(ag, ar, hdr, o, 3, 64) == n { return 167; }
+    if vc_agg_get(ag, ar, hdr, o, 1, 128) == w2 { return 168; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_struct_gate_accepts();
     if r == 0 { r = check_param_read_accepted(); }
@@ -354,5 +463,9 @@ fn main() -> i32 {
     if r == 0 { r = check_phi_of_objects(); }
     if r == 0 { r = check_merged_read_is_ite_and_none_payload_is_junk(); }
     if r == 0 { r = check_slot_overwrite_and_sorts(); }
+    if r == 0 { r = check_wide_slot_roundtrip_is_stored_term(); }
+    if r == 0 { r = check_wide_param_symbols(); }
+    if r == 0 { r = check_wide_phi_merge(); }
+    if r == 0 { r = check_wide_slot_overlap(); }
     i64_to_i32_wrap(r)
 }
