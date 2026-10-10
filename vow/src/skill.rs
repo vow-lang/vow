@@ -5023,8 +5023,8 @@ fn f() -> i64 {
     42
 ```
 
-**Fix:** Add the missing closing delimiter. Both compilers currently report an unclosed block
-at end of file as `UnexpectedToken`; `MissingDelimiter` is reserved for delimiter-specific reporting.
+**Fix:** Add the missing closing delimiter. No compiler emits `MissingDelimiter` today: an
+unclosed block at end of file is reported as `UnexpectedToken`.
 
 **Right:**
 
@@ -5227,8 +5227,8 @@ fn f(x: u8) -> u8 {
 **Right:**
 
 ```vow
-fn f(x: u8) -> u8 {
-    u32_to_u8_wrap((x as u32) << 8)
+fn f(x: u8) -> u32 {
+    (x as u32) << 8
 }
 ```
 
@@ -6000,11 +6000,7 @@ fn max(a: i64, b: i64) -> i64 vow {
 fn max(a: i64, b: i64) -> i64 vow {
     ensures: result >= a && result >= b
 } {
-    if a > b {
-        a
-    } else {
-        b
-    }
+    if a > b { a } else { b }
 }
 ```
 
@@ -6027,7 +6023,7 @@ fn count_up() -> u64 {
 }
 ```
 
-**Fix:** Strengthen the invariant or fix the loop body. A loop-invariant counterexample is currently reported with `error_code` `VowEnsuresViolated`: the message reads ``contract violation in `f`: invariant <predicate>`` and the counterexample `violation` starts with `invariant`.
+**Fix:** Strengthen the invariant or fix the loop body. No compiler emits `VowInvariantViolated` today: a loop-invariant counterexample is reported with `error_code` `VowEnsuresViolated`, the message reads ``contract violation in `f`: invariant <predicate>``, and the counterexample `violation` starts with `invariant`.
 
 **Right:**
 
@@ -6097,7 +6093,7 @@ fn store_into(out: Vec<String>, prefix: String) [io] {
 
 **Fix:** Move the allocation to a wider scope, or copy the value into the target region (e.g., `String::from(s)` into the outer arena). For routings that compile cleanly but you'd like to know about (root-region placement), see `RegionRootEscape` below. See `docs/design/arena_memory.md` §4.4 for the full rejection vs. visibility distinction.
 
-The snippet above is the shape this check was written for, but the current inference accepts it (single-slot routings widen into the caller's arena; see the coverage note). Returning the value from the constructing function is the canonical shape and triggers neither `RegionConflict` nor `RegionRootEscape`:
+Neither compiler rejects the snippet above today: it compiles and carries only a `RegionRootEscape` note (the self-hosted frontend reaches `RegionConflict` only through an internal-compiler-error path). Returning the value from the constructing function is the canonical shape and triggers neither:
 
 **Right:**
 
@@ -6263,7 +6259,7 @@ use util.math
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) A call to a user function that passes a `Vec`, `String`, map or `Option` argument is also not modelable (`Call target with a collection argument`): the model has no representation for a collection crossing a user-function boundary. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — for example `RegionAlloc` and `FieldSet` from a struct construction the model does not cover (a struct of scalar fields is modelled), also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) A call to a user function that passes a `Vec`, `String`, map or `Option` argument is also not modelable (`Call target with a collection argument`): the model has no representation for a collection crossing a user-function boundary. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
 
 **Wrong:**
 
@@ -6566,7 +6562,9 @@ fn main() -> i32 {
 ```vow
 fn main() -> i32 {
     let a: i64 = 9223372036854775807;
-    let b: i64 = a + 1;
+    if a < 9223372036854775807 {
+        let b: i64 = a +! 1;
+    }
     0
 }
 ```
@@ -11904,8 +11902,8 @@ fn f() -> i64 {
     42
 ```
 
-**Fix:** Add the missing closing delimiter. Both compilers currently report an unclosed block
-at end of file as `UnexpectedToken`; `MissingDelimiter` is reserved for delimiter-specific reporting.
+**Fix:** Add the missing closing delimiter. No compiler emits `MissingDelimiter` today: an
+unclosed block at end of file is reported as `UnexpectedToken`.
 
 **Right:**
 
@@ -12108,8 +12106,8 @@ fn f(x: u8) -> u8 {
 **Right:**
 
 ```vow
-fn f(x: u8) -> u8 {
-    u32_to_u8_wrap((x as u32) << 8)
+fn f(x: u8) -> u32 {
+    (x as u32) << 8
 }
 ```
 
@@ -12881,11 +12879,7 @@ fn max(a: i64, b: i64) -> i64 vow {
 fn max(a: i64, b: i64) -> i64 vow {
     ensures: result >= a && result >= b
 } {
-    if a > b {
-        a
-    } else {
-        b
-    }
+    if a > b { a } else { b }
 }
 ```
 
@@ -12908,7 +12902,7 @@ fn count_up() -> u64 {
 }
 ```
 
-**Fix:** Strengthen the invariant or fix the loop body. A loop-invariant counterexample is currently reported with `error_code` `VowEnsuresViolated`: the message reads ``contract violation in `f`: invariant <predicate>`` and the counterexample `violation` starts with `invariant`.
+**Fix:** Strengthen the invariant or fix the loop body. No compiler emits `VowInvariantViolated` today: a loop-invariant counterexample is reported with `error_code` `VowEnsuresViolated`, the message reads ``contract violation in `f`: invariant <predicate>``, and the counterexample `violation` starts with `invariant`.
 
 **Right:**
 
@@ -12978,7 +12972,7 @@ fn store_into(out: Vec<String>, prefix: String) [io] {
 
 **Fix:** Move the allocation to a wider scope, or copy the value into the target region (e.g., `String::from(s)` into the outer arena). For routings that compile cleanly but you'd like to know about (root-region placement), see `RegionRootEscape` below. See `docs/design/arena_memory.md` §4.4 for the full rejection vs. visibility distinction.
 
-The snippet above is the shape this check was written for, but the current inference accepts it (single-slot routings widen into the caller's arena; see the coverage note). Returning the value from the constructing function is the canonical shape and triggers neither `RegionConflict` nor `RegionRootEscape`:
+Neither compiler rejects the snippet above today: it compiles and carries only a `RegionRootEscape` note (the self-hosted frontend reaches `RegionConflict` only through an internal-compiler-error path). Returning the value from the constructing function is the canonical shape and triggers neither:
 
 **Right:**
 
@@ -13144,7 +13138,7 @@ use util.math
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) A call to a user function that passes a `Vec`, `String`, map or `Option` argument is also not modelable (`Call target with a collection argument`): the model has no representation for a collection crossing a user-function boundary. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — for example `RegionAlloc` and `FieldSet` from a struct construction the model does not cover (a struct of scalar fields is modelled), also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) A call to a user function that passes a `Vec`, `String`, map or `Option` argument is also not modelable (`Call target with a collection argument`): the model has no representation for a collection crossing a user-function boundary. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
 
 **Wrong:**
 
@@ -13447,7 +13441,9 @@ fn main() -> i32 {
 ```vow
 fn main() -> i32 {
     let a: i64 = 9223372036854775807;
-    let b: i64 = a + 1;
+    if a < 9223372036854775807 {
+        let b: i64 = a +! 1;
+    }
     0
 }
 ```
