@@ -642,7 +642,7 @@ fn start_esbmc(esbmc_bin: String, c_source: String, max_k_step: String, tmp_path
     append_timeout_arg(esbmc_args, timeout_secs);
     append_memlimit_arg(esbmc_args, memlimit_arg);
     if esbmc_bin.len() == 0 {
-        // Cleanup is handled by the caller: verify_collect or run_test's sentinel branch.
+        // Cleanup is handled by the caller: verify_collect or cmd_test's sentinel branch (see verify_start).
         return -3;
     }
     let handle: i64 = process_start(esbmc_bin, esbmc_args);
@@ -1846,6 +1846,16 @@ fn verify_function_contracts_only(esbmc_bin: String, f: IrFunction, m: IrModule,
     bv
 }
 
+// verify_start never removes tmp_path, even when it returns a -1 (process_start
+// failed) or -3 (esbmc_bin empty) handle: verify_tmp_path has already created
+// the mktemp directory and start_esbmc has already written the C source into it
+// by then. The caller owns cleanup through cleanup_verify_tmp_path(tmp_path):
+// verify_collect on its -3 and -1 arms (and after a normal or timed-out wait),
+// and the `oh == -1 || oh == -3` branches in cmd_test, which skip verify_collect.
+// The only exception is the no-contracts early return, whose tmp_path is empty
+// and which cleanup_verify_tmp_path treats as a no-op. Any new consumer of
+// EsbmcStart must call cleanup_verify_tmp_path on every handle or the mktemp
+// directory leaks.
 fn verify_start(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                 vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> EsbmcStart [io, write] {
     if f.vows.len() == 0 && requires_callee_names(f, m).len() == 0 {
