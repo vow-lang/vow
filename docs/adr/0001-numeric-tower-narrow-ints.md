@@ -182,5 +182,7 @@ BigInt subprojects.
   `__vow_vec_set_wide_ptr`), so no 128-bit value crosses the extern ABI beside
   another argument. The element width comes from the checker, per `Vec` access.
   `pin_to_root` and `Vec::from_raw_parts_copy` copy one 8-byte slot per
-  element and therefore reject 128-bit element types. The verifier still skips
-  these accesses until #1421 models them.
+  element and therefore reject 128-bit element types. The ESBMC backend still
+  skips these accesses. `--backend native` models 128-bit struct fields and enum
+  payloads (#1421); `Vec` elements stay skipped until the native `Vec` model
+  (#1423) lands.
