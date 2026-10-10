@@ -162,14 +162,14 @@ cat > "$CALL_CLAIMS" <<'SRC'
 module Calls
 
 fn caller(y: i64) -> i64 vow {
-  ensures: result == y
+  ensures: result - y <= 0
 } {
   keep(y)
 }
 
 fn keep(x: i64) -> i64 vow {
   requires: x > 0
-  ensures: result == x
+  ensures: result - x == 0
 } {
   x
 }
