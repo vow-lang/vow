@@ -3767,12 +3767,13 @@ honest contract, report that limitation outside the contract.
 
 ## Verification Pipeline
 
-Codegen (Cranelift) and verification run in parallel:
+Codegen (Cranelift) and linking finish before verification starts, so peak memory is the larger of the two phases rather than their sum:
 
 ```
-Vow Source → Parse → Type Check → IR Lower ─┬─→ Cranelift → executable
-                                              └─→ C Emit → ESBMC → proof / counterexample
+Vow Source → Parse → Type Check → IR Lower → Cranelift → executable → C Emit → ESBMC → proof / counterexample
 ```
+
+A codegen or link failure ends the build before any ESBMC process is started. Verification itself runs up to `--verify-jobs` ESBMC processes at a time.
 
 Contract clauses become IR opcodes. The C emitter translates `requires` to `__ESBMC_assume()` (the verifier assumes preconditions hold) and `ensures`/`invariant` to `__ESBMC_assert()` (the verifier checks postconditions).
 
@@ -9811,12 +9812,13 @@ honest contract, report that limitation outside the contract.
 
 ## Verification Pipeline
 
-Codegen (Cranelift) and verification run in parallel:
+Codegen (Cranelift) and linking finish before verification starts, so peak memory is the larger of the two phases rather than their sum:
 
 ```
-Vow Source → Parse → Type Check → IR Lower ─┬─→ Cranelift → executable
-                                              └─→ C Emit → ESBMC → proof / counterexample
+Vow Source → Parse → Type Check → IR Lower → Cranelift → executable → C Emit → ESBMC → proof / counterexample
 ```
+
+A codegen or link failure ends the build before any ESBMC process is started. Verification itself runs up to `--verify-jobs` ESBMC processes at a time.
 
 Contract clauses become IR opcodes. The C emitter translates `requires` to `__ESBMC_assume()` (the verifier assumes preconditions hold) and `ensures`/`invariant` to `__ESBMC_assert()` (the verifier checks postconditions).
 

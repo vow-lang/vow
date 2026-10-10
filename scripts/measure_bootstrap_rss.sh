@@ -3,8 +3,9 @@
 # Used as baseline + post-refactor gate for issue #178 (driver lifetimes).
 #
 # Default: 3 samples of `--no-verify` compilation (the cleanest signal for
-# driver-side memory; ESBMC subprocesses dominate verify-mode RSS and are a
-# separate concern tracked in #175 / #179).
+# driver-side memory; ESBMC subprocesses dominate verify-mode RSS, and since #179
+# they start only after codegen, so --verify-jobs 1 peaks at max(codegen, verify)
+# rather than their sum; scripts/measure_build_tree_rss.py shows the tree sum).
 #
 # Env:
 #   VOW_RSS_SAMPLES         (default 3)  samples per configuration
