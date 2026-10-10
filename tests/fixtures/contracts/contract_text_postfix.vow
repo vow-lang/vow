@@ -9,6 +9,10 @@ module ContractTextPostfix
 
 enum Shape { Empty, Circle(i64) }
 
+struct Pt { a: i64, b: bool }
+struct Bag { items: Vec<i64> }
+struct Holder { s: Shape }
+
 fn casts(x: i64, c: bool) -> i64 vow {
   requires: (if c { 1 } else { 2 }) as u64 == 1
   requires: (if c { 1 } else { 2 }) as u64 as i64 == 1
@@ -79,6 +83,19 @@ fn unary_chains(x: i64, c: bool) -> i64 vow {
   requires: - -x == 1
   requires: -x as i64 == 1
   requires: -(x as i64) == 1
+} {
+  x
+}
+
+fn struct_heads(x: i64, c: bool, s: Shape, v: Vec<i64>) -> i64 vow {
+  requires: if (Pt { a: 1, b: c }).b { true } else { false }
+  requires: if x == (Pt { a: 1, b: c }).a { true } else { false }
+  requires: if !(Pt { a: 1, b: c }).b { true } else { false }
+  requires: if { Pt { a: 1, b: c }.b } { true } else { false }
+  requires: (loop { while (Pt { a: 1, b: c }).b { break; } break x; }) == 1
+  requires: (loop { for i in (Bag { items: v }).items { } break x; }) == 1
+  requires: match (Holder { s: s }).s { Shape::Empty => true, Shape::Circle(r) => r == 1 }
+  requires: match s { _ => Pt { a: 1, b: c }.b }
 } {
   x
 }

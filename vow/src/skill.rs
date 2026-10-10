@@ -2346,8 +2346,23 @@ Struct literal names must be PascalCase:
 let p: Point = Point { x: 1, y: 2 };
 ```
 
-Because of that, an identifier that does not start with an upper-case letter is
-never a struct literal: in `while c { }` and `if c { }` the `{` opens the body.
+An identifier that does not start with an upper-case letter is never a struct
+literal: in `while c { }` and `if c { }` the `{` opens the body.
+
+In the head of `if`, `while`, `for … in` and `match`, a `Name {` or
+`Path::Variant {` is never a struct literal or brace-form enum constructor; the
+`{` always opens the body. This is what lets `if DEBUG { }` and
+`if c == Color::Red { }` parse. To use a struct literal there, parenthesise it
+or bind it to a `let` first:
+
+```vow
+if (Point { x: 1, y: 2 }).x == 1 { }
+```
+
+Delimiters re-enable literals inside a head: `(…)`, call and method-call
+arguments, `[…]`, blocks, `match` arms and `vow { … }` blocks. The canonical
+printer parenthesises a head that would otherwise expose a struct literal, so
+`parse → print → parse` stays idempotent.
 
 ### Field Access
 
@@ -8373,8 +8388,23 @@ Struct literal names must be PascalCase:
 let p: Point = Point { x: 1, y: 2 };
 ```
 
-Because of that, an identifier that does not start with an upper-case letter is
-never a struct literal: in `while c { }` and `if c { }` the `{` opens the body.
+An identifier that does not start with an upper-case letter is never a struct
+literal: in `while c { }` and `if c { }` the `{` opens the body.
+
+In the head of `if`, `while`, `for … in` and `match`, a `Name {` or
+`Path::Variant {` is never a struct literal or brace-form enum constructor; the
+`{` always opens the body. This is what lets `if DEBUG { }` and
+`if c == Color::Red { }` parse. To use a struct literal there, parenthesise it
+or bind it to a `let` first:
+
+```vow
+if (Point { x: 1, y: 2 }).x == 1 { }
+```
+
+Delimiters re-enable literals inside a head: `(…)`, call and method-call
+arguments, `[…]`, blocks, `match` arms and `vow { … }` blocks. The canonical
+printer parenthesises a head that would otherwise expose a struct literal, so
+`parse → print → parse` stays idempotent.
 
 ### Field Access
 

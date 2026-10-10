@@ -1,0 +1,21 @@
+// TEST: stdout "done\n"
+module EmptyBlockAfterUpperIdent
+
+const DEBUG: bool = false;
+
+enum Color { Red, Green }
+
+fn main() [io] {
+    let c: Color = Color::Green;
+    if DEBUG { }
+    if DEBUG { } else { }
+    while DEBUG { }
+    if c == Color::Red { }
+    if c == Color::Red { } else { }
+    while c == Color::Red { }
+    match Color::Red {
+        Color::Red => { },
+        Color::Green => { },
+    }
+    print_str(String::from("done\n"));
+}

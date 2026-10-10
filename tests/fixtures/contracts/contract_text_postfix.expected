@@ -47,3 +47,11 @@ requires !!c
 requires --x == 1
 requires (-x) as i64 == 1
 requires -(x as i64) == 1
+requires if (Pt { a: 1, b: c }.b) {\n    true\n} else {\n    false\n}
+requires if (x == Pt { a: 1, b: c }.a) {\n    true\n} else {\n    false\n}
+requires if (!Pt { a: 1, b: c }.b) {\n    true\n} else {\n    false\n}
+requires if {\n    Pt { a: 1, b: c }.b\n} {\n    true\n} else {\n    false\n}
+requires (loop {\n    while (Pt { a: 1, b: c }.b) {\n        break;\n    }\n    break x;\n}) == 1
+requires (loop {\n    for i in (Bag { items: v }.items) {\n    }\n    break x;\n}) == 1
+requires match (Holder { s: s }.s) {\n    Shape::Empty => true,\n    Shape::Circle(r) => r == 1,\n}
+requires match s {\n    _ => Pt { a: 1, b: c }.b,\n}
