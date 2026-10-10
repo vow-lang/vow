@@ -1,6 +1,6 @@
 // TEST: counterexample-fn "classify"
 // TEST: counterexample-vow-id 0
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 module EnumWrongArm
 
 enum Shape { Circle(i64), Rect(i64), Empty }

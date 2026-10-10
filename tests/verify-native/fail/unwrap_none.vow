@@ -1,7 +1,7 @@
 // Native-only: ESBMC skips `[panic]` functions (see tests/verify-skip/unwrap_panic_effect.vow).
 // TEST: counterexample-fn "lookup"
 // TEST: counterexample-vow-id 4294967293
-// TEST: counterexample-blame none
+// TEST: counterexample-blame None
 // TEST: counterexample-violation "unwrap() called on None"
 module UnwrapNone
 

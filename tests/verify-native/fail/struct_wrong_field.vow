@@ -1,6 +1,6 @@
 // TEST: counterexample-fn "build"
 // TEST: counterexample-vow-id 0
-// TEST: counterexample-blame callee
+// TEST: counterexample-blame Callee
 module StructWrongField
 
 struct Pair { lo: i64, hi: i64 }
