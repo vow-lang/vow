@@ -14,6 +14,8 @@ end of the file, or the file ends with a `\` escape that has nothing to escape
 (`unterminated string escape`). An escaped quote (`"abc\"`) does not close the
 literal.
 
+**Wrong:**
+
 ```vow
 fn f() -> () [io] {
     print_str("hello);
@@ -22,12 +24,22 @@ fn f() -> () [io] {
 
 **Fix:** Close the string with a matching `"`.
 
+**Right:**
+
+```vow
+fn f() -> () [io] {
+    print_str("hello");
+}
+```
+
 ### InvalidCharacter
 
 **Phase:** Lexer
 **Meaning:** The source contains a character the lexer does not recognize. The
 message is `unexpected character '<c>'` and the span covers that one byte.
 Lexing stops at the first lexical error.
+
+**Wrong:**
 
 ```vow
 fn f() -> i64 {
@@ -37,10 +49,20 @@ fn f() -> i64 {
 
 **Fix:** Remove the invalid character. Vow has no `@` operator.
 
+**Right:**
+
+```vow
+fn f(x: i64, y: i64) -> i64 {
+    x + y
+}
+```
+
 A float literal whose decimal magnitude overflows `f64` (parses to
 infinity) is also an `InvalidCharacter` error, raised at lex time rather
 than allowed through to produce an uncompilable C `inf` token later in
 the pipeline:
+
+**Wrong:**
 
 ```vow
 fn f() -> f64 {
@@ -50,10 +72,20 @@ fn f() -> f64 {
 
 **Fix:** Use a literal whose magnitude is within `f64::MAX` (~1.7976931348623157e308).
 
+**Right:**
+
+```vow
+fn f() -> f64 {
+    1000000000000000000000.0
+}
+```
+
 ### InvalidIntSuffix
 
 **Phase:** Lexer
 **Meaning:** An integer literal carries a type suffix that names a type Vow does not have.
+
+**Wrong:**
 
 ```vow
 fn f() -> u64 {
@@ -68,10 +100,20 @@ design (see `docs/adr/0001-numeric-tower-narrow-ints.md`), so there is no `usize
 or `isize`; write `5u64` for a machine-word-sized unsigned value and `5i64` for a
 signed one.
 
+**Right:**
+
+```vow
+fn f() -> u64 {
+    5u64
+}
+```
+
 ### UnexpectedToken
 
 **Phase:** Parser
 **Meaning:** The parser encountered a token it did not expect at that position.
+
+**Wrong:**
 
 ```vow
 module M 123
@@ -79,23 +121,46 @@ module M 123
 
 **Fix:** Check the syntax around the reported span. Common causes: missing `{`, `}`, `(`, `)`, or a keyword in the wrong position.
 
+**Right:**
+
+```vow
+module M
+
+fn f() -> i64 {
+    123
+}
+```
+
 ### MissingDelimiter
 
 **Phase:** Parser
 **Meaning:** A matching delimiter (`}`, `)`, `]`) is missing.
+
+**Wrong:**
 
 ```vow
 fn f() -> i64 {
     42
 ```
 
-**Fix:** Add the missing closing delimiter.
+**Fix:** Add the missing closing delimiter. No compiler emits `MissingDelimiter` today: an
+unclosed block at end of file is reported as `UnexpectedToken`.
+
+**Right:**
+
+```vow
+fn f() -> i64 {
+    42
+}
+```
 
 ### TypeMismatch
 
 **Phase:** Type Checker
 **Meaning:** An expression has a different type than expected, or a qualified
 enum pattern names an enum other than the scrutinee's enum.
+
+**Wrong:**
 
 ```vow
 fn f() -> i32 {
@@ -108,6 +173,14 @@ fn f() -> i32 {
 **Fix:** Change the expression or declared type to match. For an enum pattern,
 qualify the variant with the scrutinee's enum name.
 
+**Right:**
+
+```vow
+fn f() -> bool {
+    true
+}
+```
+
 The `drop` intrinsic also reports `TypeMismatch` when it is called with an argument
 count other than one or with a value that is not a linear owner
 (``drop requires a linear value, found `i64` ``); see
@@ -117,6 +190,8 @@ A `Vec` index (`v[i]`, `v[i] = val`) and the `Vec::truncate`
 argument must have exactly the type `u64`. An index of any other integer type
 (for example an `i64` counter) or of a non-integer type is a `TypeMismatch`
 in both compilers:
+
+**Wrong:**
 
 ```vow
 fn f(v: Vec<i64>, i: i64) -> i64 {
@@ -133,6 +208,14 @@ coerce to `u64` without a cast. `String` offsets (`byte_at`, `substring`,
 and `push_byte` takes exactly `u8`; see
 [String offsets](grammar.md#string-offsets).
 
+**Right:**
+
+```vow
+fn f(v: Vec<i64>, i: u64) -> i64 {
+    v[i]
+}
+```
+
 Only `Vec<T>` has an index operator. Indexing any other type (`HashMap`,
 `BTreeMap`, `String`, `Option`, ...) is a `TypeMismatch` whose message begins
 `index operation on non-indexable type` and prints the full receiver type (for example `HashMap<i64, i64>` or `String`, identically in both compilers); read a map entry
@@ -142,6 +225,8 @@ with `m.get(k)` and a string byte with `s.byte_at(i)`.
 and value types from the binding's annotation. A method call on a collection
 whose type was never annotated is a `TypeMismatch` in both compilers, one per
 call:
+
+**Wrong:**
 
 ```vow
 fn f() -> () {
@@ -154,7 +239,18 @@ fn f() -> () {
 
 **Fix:** Annotate the binding: `let m: HashMap<i64, i64> = HashMap::new();`.
 
+**Right:**
+
+```vow
+fn f() -> () {
+    let m: HashMap<i64, i64> = HashMap::new();
+    m.insert(1, 2);
+}
+```
+
 An undefined name is a `TypeMismatch` whose message begins `undefined variable`, in both compilers, and the expression then has an error type so it does not cascade into further type errors. A parameter `where` clause is name-resolved in a scope holding only its own parameter, so a sibling parameter or `result` is an undefined name there; the hint says to move such a condition to `requires`/`ensures`.
+
+**Wrong:**
 
 ```vow
 fn ordered(a: i64, b: i64 where b > a) -> i64 {
@@ -166,10 +262,22 @@ fn ordered(a: i64, b: i64 where b > a) -> i64 {
 
 **Fix:** State the condition in `requires: b > a`.
 
+**Right:**
+
+```vow
+fn ordered(a: i64, b: i64) -> i64 vow {
+    requires: b > a
+} {
+    b
+}
+```
+
 ### LiteralOutOfRange
 
 **Phase:** Type Checker
 **Meaning:** An integer literal appears in a typed context (annotated `let`, function argument, struct field, or const declaration) whose target type cannot hold the literal's value. The check runs after context coercion, so the offending literal is the one written in the source, not a widened intermediate.
+
+**Wrong:**
 
 ```vow
 let x: u8 = 300;
@@ -181,10 +289,20 @@ let y = 256u8;   // a suffixed literal is checked against its suffix type
 
 **Fix:** Use a value within the target type's range, change the target type, or write an explicit narrowing intrinsic (`i64_to_u8_try`, `i64_to_u8_wrap`, `i64_to_u8_sat`) if you intend to convert a wider value at runtime.
 
+**Right:**
+
+```vow
+let x: u8 = 255;
+const NEG: i16 = -1;
+let y = 255u8;
+```
+
 ### NarrowingCastNotAllowed
 
 **Phase:** Type Checker
 **Meaning:** The `as` operator was used to convert a wider integer type to a narrower one. `as` is widening-only; narrowing must use a named intrinsic so the agent chooses an explicit semantics (range-checked vs. truncating vs. saturating). See `grammar.md` §Type Cast.
+
+**Wrong:**
 
 ```vow
 fn f(big: i64) -> u8 {
@@ -199,12 +317,22 @@ fn f(big: i64) -> u8 {
 - `i64_to_u8_wrap(big) -> u8` — truncate (keep low bits)
 - `i64_to_u8_sat(big) -> u8` — clamp to `0..=255`
 
+**Right:**
+
+```vow
+fn f(big: i64) -> u8 {
+    i64_to_u8_wrap(big)
+}
+```
+
 `i128`/`u128` to `i64`/`u64` has no narrowing intrinsic family; the diagnostic's hint says so instead of naming one. Narrow through `i32` or smaller with `i128_to_i32_try`-style intrinsics, or keep the value as `i128`/`u128`. See `grammar.md` §Type Cast.
 
 ### ShiftCountOutOfRange
 
 **Phase:** Type Checker
 **Meaning:** A constant-expression shift count is negative or greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) are checked by ESBMC, which requires `0 <= count < width` at the shift (a negative signed count is a violation). At runtime only 8-bit shifts trap: an `i8`/`u8` shift whose count is `>= 8` aborts with `ArithmeticOverflow` in every build mode. Wider shifts are not trapped; the hardware shift masks the count to the operand width (`(x: i64) << 65` is `x << 1`), so only verification excludes them.
+
+**Wrong:**
 
 ```vow
 fn f(x: u8) -> u8 {
@@ -216,12 +344,22 @@ fn f(x: u8) -> u8 {
 
 **Fix:** Use a count less than the LHS bit-width. To shift a narrow value by a larger amount, widen first: `(x as u32) << 8` is legal (it shifts the widened `u32` value by 8), but the result is `u32`; to get back to `u8`, use a narrowing intrinsic such as `u32_to_u8_wrap`.
 
+**Right:**
+
+```vow
+fn f(x: u8) -> u32 {
+    (x as u32) << 8
+}
+```
+
 ### TautologicalComparison
 
 **Phase:** Type Checker
 **Meaning:** A comparison against a constant `0` can never fail (or can never hold) because the other operand has an unsigned integer type. `x >= 0` and `0 <= x` are always true for unsigned `x`; `x < 0` and `0 > x` are always false. Such a clause admits every implementation while reading like a real bound, so it is rejected rather than warned about — there is no suppression form. The const fold sees through `as` casts, so `x >= 0 as u64` is caught too.
 
 `x > 0`, `x <= 0`, `x == 0` and `x != 0` all constrain an unsigned value and keep compiling. Signed operands are untouched.
+
+**Wrong:**
 
 ```vow
 fn sum(n: u64) -> u64 vow {
@@ -247,10 +385,22 @@ A chain does not hide it either: `(x as i32 as i64) >= 0` with `x: u32` is rejec
 
 **Fix:** Drop the dead clause, or state the bound you actually meant. An index invariant becomes `invariant: i < v.len()`; a lower bound that matters on an unsigned counter is `i > 0`, not `i >= 0`. If the subject really can be negative, its type should be signed.
 
+**Right:**
+
+```vow
+fn sum(n: u64) -> u64 vow {
+    ensures: result == n
+} {
+    n
+}
+```
+
 ### StaticLiteralRequired
 
 **Phase:** Type Checker
 **Meaning:** A compiler intrinsic requires a string literal operand so it can be lowered without allocation.
+
+**Wrong:**
 
 ```vow
 fn f(s: String, key: String) -> i64 {
@@ -262,10 +412,20 @@ fn f(s: String, key: String) -> i64 {
 
 **Fix:** Pass a literal directly, for example `string_matches_literal_at(s, 0, "name")`.
 
+**Right:**
+
+```vow
+fn f(s: String) -> i64 {
+    string_matches_literal_at(s, 0, "name")
+}
+```
+
 ### EffectViolation
 
 **Phase:** Type Checker
 **Meaning:** A function calls another function with effects not declared in its own signature, **or** a `requires`/`ensures`/`invariant` clause or parameter `where` clause calls a function or builtin method that writes through one of its arguments. The second form is blamed on the callee, even in a `requires` clause, because the clause itself is at fault for evaluating the write — not the caller.
+
+**Wrong:**
 
 ```vow
 fn f() -> () {
@@ -274,6 +434,16 @@ fn f() -> () {
 ```
 
 **Fix:** Add the required effect to the function signature: `fn f() -> () [io]`. Effects are independent: `[io]` does not cover `read` or `write`, so a function that prints and reads a file declares `[io, read]`.
+
+**Right:**
+
+```vow
+fn f() -> () [io] {
+    print_str("hi");
+}
+```
+
+**Wrong:**
 
 ```vow
 fn mark(p: Point) -> bool {
@@ -289,6 +459,18 @@ fn make_point(x: i64, y: i64) -> Point vow {
 ```
 
 **Fix:** Move the write out of the clause — contracts may only read, e.g. `ensures: result.x == x`. See `docs/spec/grammar.md` → "Contract Purity".
+
+**Right:**
+
+```vow
+struct Point { x: i64, y: i64 }
+
+fn make_point(x: i64, y: i64) -> Point vow {
+    ensures: result.x == x
+} {
+    Point { x: x, y: y }
+}
+```
 
 ### LinearTypeViolation
 
@@ -306,13 +488,14 @@ wrapper consumes it and transfers the obligation to the selected payload. An
 unbound `_` catchall also violates the rule while any unhandled enum variant can
 carry a linear payload.
 
+**Wrong:**
+
 ```vow
 linear struct Handle { fd: i64 }
 
-fn f(h: Handle) -> Handle {
-    let h2: Handle = h;
-    let h3: Handle = h;  // h was already consumed
-    h2
+fn f(h: Handle) -> () {
+    drop(h);
+    drop(h);  // h was already consumed
 }
 ```
 
@@ -322,10 +505,22 @@ supported. In a match, add explicit arms that bind and consume or transfer every
 linear payload before using `_`. Obligations that are simply left live at scope
 exit are reported later as `RegionLinear`.
 
+**Right:**
+
+```vow
+linear struct Handle { fd: i64 }
+
+fn f(h: Handle) -> () {
+    drop(h);
+}
+```
+
 ### RegionLinear
 
 **Phase:** Region Inference
 **Meaning:** A `linear struct` value can remain live when its owning region closes. Returning the value transfers the linear obligation to the caller; consuming it before the close satisfies the obligation.
+
+**Wrong:**
 
 ```vow
 linear struct Handle { fd: i64 }
@@ -338,10 +533,23 @@ fn f() -> i64 {
 
 **Fix:** Consume the value before the region closes, or return it so the caller receives the obligation.
 
+**Right:**
+
+```vow
+linear struct Handle { fd: i64 }
+
+fn f() -> Handle {
+    let h: Handle = Handle { fd: 1 };
+    h
+}
+```
+
 ### NonExhaustiveMatch
 
 **Phase:** Type Checker
 **Meaning:** A `match` expression does not cover all possible variants.
+
+**Wrong:**
 
 ```vow
 fn f(o: Option<i64>) -> i64 {
@@ -353,6 +561,17 @@ fn f(o: Option<i64>) -> i64 {
 
 **Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).
 
+**Right:**
+
+```vow
+fn f(o: Option<i64>) -> i64 {
+    match o {
+        Option::Some(x) => x,
+        Option::None => 0,
+    }
+}
+```
+
 ### UnsupportedPattern
 
 **Phase:** Type Checker
@@ -363,6 +582,8 @@ Match currently accepts enum-valued scrutinees, qualified unit variants,
 qualified tuple variants with `_` or immutable identifier payloads, and final
 catchall `_` or immutable identifier arms. A tuple-variant pattern must bind
 exactly the number of payloads declared by the variant.
+
+**Wrong:**
 
 ```vow
 fn f(n: i64) -> i64 {
@@ -380,9 +601,23 @@ payloads, provide exactly one `_` or immutable identifier for each declared
 payload and inspect bound values separately. Unsupported patterns fail before
 lowering and never produce an executable.
 
+**Right:**
+
+```vow
+fn f(n: i64) -> i64 {
+    if n == 0 {
+        5
+    } else {
+        9
+    }
+}
+```
+
 `let` only binds identifier, wildcard, and tuple patterns; all other pattern
 kinds (literals, enum variants, struct patterns, or-patterns) are refutable
 and rejected outright, since `let` requires the pattern to always match:
+
+**Wrong:**
 
 ```vow
 fn f(o: Option<i64>) -> i64 {
@@ -393,11 +628,26 @@ fn f(o: Option<i64>) -> i64 {
 
 **Output:** `let bindings only support identifier, wildcard, and tuple patterns`
 
+**Fix:** `match` the value and handle every variant.
+
+**Right:**
+
+```vow
+fn f(o: Option<i64>) -> i64 {
+    match o {
+        Option::Some(x) => x,
+        Option::None => 0,
+    }
+}
+```
+
 A tuple `let` pattern additionally requires the initializer to be a tuple
 literal of exactly the same arity, at every nesting level — tuple *values*
 have no runtime representation, so `let (a, b) = ...` is a compile-time
 desugaring into `let a = ...; let b = ...;`, never a projection out of a
 materialized tuple:
+
+**Wrong:**
 
 ```vow
 fn pair() -> (i64, i64) { (1, 2) }
@@ -416,12 +666,23 @@ elements once tuples are supported as first-class values (tracked separately;
 not yet implemented). A tuple `let` pattern also cannot bind a linear-typed
 element — bind the whole owner to a single identifier instead.
 
+**Right:**
+
+```vow
+fn f() -> i64 {
+    let (a, b) = (1, 2);
+    a + b
+}
+```
+
 ### ImmutableAssignment
 
 **Phase:** Type Checker
 **Meaning:** A binding not declared `mut` was reassigned. Bindings are immutable
 by default; `mut` is required only for whole-binding reassignment `x = e`. Field
 writes (`s.f = e`) and index writes (`v[i] = e`) are allowed through any binding.
+
+**Wrong:**
 
 ```vow
 fn f() -> i64 {
@@ -433,12 +694,24 @@ fn f() -> i64 {
 
 **Fix:** Declare the binding `mut`: `let mut x: i64 = 1;`.
 
+**Right:**
+
+```vow
+fn f() -> i64 {
+    let mut x: i64 = 1;
+    x = 2;
+    x
+}
+```
+
 ### UnusedMut
 
 **Phase:** Type Checker
 **Meaning:** A `let mut` binding is never reassigned, so the `mut` is dead. Only
 whole-binding reassignment counts as a use of `mut` — a binding mutated solely
 via `s.f = e`, `v[i] = e`, or a method call does not need `mut`.
+
+**Wrong:**
 
 ```vow
 fn f() -> i64 {
@@ -449,10 +722,21 @@ fn f() -> i64 {
 
 **Fix:** Remove `mut`: `let x: i64 = 1;`.
 
+**Right:**
+
+```vow
+fn f() -> i64 {
+    let x: i64 = 1;
+    x
+}
+```
+
 ### UnknownMethod
 
 **Phase:** Type Checker
 **Meaning:** A method call uses a name that does not exist on the receiver type.
+
+**Wrong:**
 
 ```vow
 fn f() -> () {
@@ -465,10 +749,21 @@ fn f() -> () {
 
 **Fix:** Check the method name for typos. Use `--help` to see available methods for each type. `Vec` has no `get` method: read an element with `v[i]` (see [Indexing](grammar.md#indexing)), and call `HashMap::get` or `BTreeMap::get` for maps. A `Vec` receiver calling `get` carries the structured hint ``use `v[i]` to read an element; `Vec` has no `get` `` in the diagnostic's `hints` array, identically in both compilers. Any other unknown method on a `String`, `Vec`, `HashMap`, `BTreeMap`, `Option` or `Result` receiver carries ``did you mean `push`?`` for the nearest builtin method within an edit distance of 3 (the earliest in the method list wins a tie; names over 128 bytes get none), and otherwise `available methods: len, push, pop, clear, truncate`, again identically in both compilers.
 
+**Right:**
+
+```vow
+fn f() -> () {
+    let v: Vec<i64> = Vec::new();
+    v.push(42);
+}
+```
+
 ### UnsupportedFeature
 
 **Phase:** Parser (`&expr`), Type Checker (everything else)
 **Meaning:** A language feature that is not supported in Vow was used, or a `HashMap`/`BTreeMap` was written with a key or value type the runtime cannot store (see [Map key and value types](#map-key-and-value-types)).
+
+**Wrong:**
 
 ```vow
 trait Foo {
@@ -480,9 +775,19 @@ trait Foo {
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
 
+**Right:**
+
+```vow
+fn bar() -> i64 {
+    0
+}
+```
+
 A prefix `&expr` (or `&mut expr`, `&&expr`) borrow expression is rejected by the parser, at the `&` or `&&` token, with
 the hint ``Vow has no borrow expressions: pass the value itself; `&` is only the binary bitwise
 AND operator``; the operand is still parsed, so the diagnostic is reported once:
+
+**Wrong:**
 
 ```vow
 fn f(x: i64) -> i64 {
@@ -495,8 +800,19 @@ fn f(x: i64) -> i64 {
 
 **Fix:** Use the value directly. `&` is the bitwise AND operator between two operands (`x & 1`).
 
+**Right:**
+
+```vow
+fn f(x: i64) -> i64 {
+    let r: i64 = x;
+    r
+}
+```
+
 A tuple expression, including the empty tuple `()`, inside a contract clause is also
 `UnsupportedFeature`, because tuples have no runtime or verifier representation:
+
+**Wrong:**
 
 ```vow
 fn f(a: i64, b: i64) -> i64 vow {
@@ -510,9 +826,21 @@ fn f(a: i64, b: i64) -> i64 vow {
 
 **Fix:** Compare the elements individually, e.g. `requires: a != 1 || b != 2`.
 
+**Right:**
+
+```vow
+fn f(a: i64, b: i64) -> i64 vow {
+    requires: a != 1 || b != 2
+} {
+    a
+}
+```
+
 #### Map key and value types
 
 The same code reports a map type whose key or value cannot be stored in the runtime's single 64-bit map slot: a `HashMap` key that is not an integer type of at most 64 bits or `bool`, a `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64`, and a `HashMap` value that is or contains a `linear struct` (see [HashMap key and value types](grammar.md#hashmap-methods)).
+
+**Wrong:**
 
 ```vow
 fn f() -> () {
@@ -524,9 +852,19 @@ fn f() -> () {
 
 **Fix:** Hash or intern the key to a `u64` at the call site and keep a side table for the originals. For a 128-bit value, store the two `u64` halves separately. For a linear value, keep it in a local binding and store only an integer handle in the map.
 
+**Right:**
+
+```vow
+fn f() -> () {
+    let m: HashMap<u64, i64> = HashMap::new();
+}
+```
+
 #### Linear collection elements
 
 The same code reports a `Vec<T>` whose element type is or contains a linear owner (a `linear struct`, or an `Option`, `Result`, or user enum wrapping one). Collections copy and shift elements bitwise, so a stored linear value would be duplicated or would escape the checker's consume-once tracking. A reference element (`Vec<&Token>`) borrows rather than owns and is accepted; a nested collection is reported once, where the innermost `Vec` is written, and a type alias once, at its definition.
+
+**Wrong:**
 
 ```vow
 linear struct Token { id: i64 }
@@ -540,9 +878,22 @@ fn f() -> () {
 
 **Fix:** Keep the linear value in a local binding and store an integer handle in the `Vec`. Consume a linear value that is no longer needed with `drop(value)`.
 
+**Right:**
+
+```vow
+linear struct Token { id: i64 }
+
+fn f(t: Token) -> () {
+    let ids: Vec<i64> = Vec::new();
+    drop(t);
+}
+```
+
 #### Slice types
 
 The same code reports a slice type `[T]` (see [Slice Types](grammar.md#slice-types)). Each bracket pair is reported once (`[[i64]]` gives two diagnostics, an alias once at its definition), with the hint ``use `Vec<T>` to hold a sequence of values``.
+
+**Wrong:**
 
 ```vow
 fn probe(sl: [i64]) -> i64 { 0 }
@@ -552,9 +903,17 @@ fn probe(sl: [i64]) -> i64 { 0 }
 
 **Fix:** Take a `Vec<T>` instead.
 
+**Right:**
+
+```vow
+fn probe(sl: Vec<i64>) -> i64 { 0 }
+```
+
 #### Reserved type names
 
 The same code reports a `struct`, `enum` or `type` alias named after a builtin type (see [User-Defined Types](grammar.md#user-defined-types)). It is reported once per declaration, at the declaration, with the hint `choose a different name for this type`.
+
+**Wrong:**
 
 ```vow
 struct Vec { x: i64 }
@@ -564,9 +923,17 @@ struct Vec { x: i64 }
 
 **Fix:** Rename the type.
 
+**Right:**
+
+```vow
+struct Coord { x: i64 }
+```
+
 #### Unit parameters
 
 The same code reports a parameter of type `()` (directly or through a type alias). The unit value carries no information and has no ABI slot, so such a parameter is rejected at the declaration.
+
+**Wrong:**
 
 ```vow
 fn f(u: ()) -> i64 { 0 }
@@ -576,12 +943,20 @@ fn f(u: ()) -> i64 { 0 }
 
 **Fix:** Remove the parameter.
 
+**Right:**
+
+```vow
+fn f() -> i64 { 0 }
+```
+
 A 128-bit integer as an `Option`, `Result`, or `enum` payload is supported, so `HashMap<i64, Option<u128>>` is a valid map type (the map stores a pointer to the payload cell). A bare `u128` or `i128` map value is still rejected with the error above, because a map value occupies a single 64-bit slot. A 128-bit struct field or `Vec` element is not a map restriction: aggregates hold 128-bit values in two slots, so only a bare 128-bit map value is rejected.
 
 ### BTreeMapKeyTypeMustBeI64
 
 **Phase:** Type Checker
 **Meaning:** A `BTreeMap<K, V>` was instantiated with `K` not equal to `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys; the runtime helpers and ESBMC C model are hard-coded to i64.
+
+**Wrong:**
 
 ```vow
 fn f() -> () {
@@ -594,10 +969,21 @@ fn f() -> () {
 
 **Fix:** Use `BTreeMap<i64, V>`. If you need string or struct keys, hash or intern them to `i64` at the call site and keep a side-table for the originals.
 
+**Right:**
+
+```vow
+fn f() -> () {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    m.insert(1, 1);
+}
+```
+
 ### BTreeMapValueMustBeNonLinear
 
 **Phase:** Type Checker
 **Meaning:** A `BTreeMap<K, V>` was instantiated with a `V` that is or transitively contains a `linear struct`. Non-linear containers like `BTreeMap`, `Vec`, and `HashMap` cannot hold linear values because their internal shift/copy operations are bitwise and would silently duplicate the linear ownership obligation.
+
+**Wrong:**
 
 ```vow
 linear struct Token { id: i64 }
@@ -610,14 +996,27 @@ fn f() -> () {
 
 **Fix:** Either drop the `linear` qualifier on the struct, or keep handles in a `Vec<i64>` indirection and consume the linear values via direct function calls outside the map.
 
+**Right:**
+
+```vow
+linear struct Token { id: i64 }
+
+fn f(t: Token) -> () {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    drop(t);
+}
+```
+
 ### MissingContract
 
 **Phase:** Type Checker
 **Meaning:** An `extern "C"` block was declared without a `vow { ... }` contract. Every foreign function call requires a mandatory contract specifying expected behavior.
 
+**Wrong:**
+
 ```vow
 extern "C" {
-    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io];
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
 }
 ```
 
@@ -625,10 +1024,23 @@ extern "C" {
 
 **Fix:** Add a `vow { ... }` block to the extern declaration with `requires` and/or `ensures` clauses.
 
+**Right:**
+
+```vow
+extern "C" {
+    vow {
+        requires: fd >= 0
+    }
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
+}
+```
+
 ### ContractTypeMismatch
 
 **Phase:** Type Checker
 **Meaning:** A `requires`, `ensures`, or `invariant` clause expression, or a parameter `where` clause, does not have type `bool`.
+
+**Wrong:**
 
 ```vow
 fn add(a: i64, b: i64) -> i64 vow {
@@ -642,33 +1054,129 @@ fn add(a: i64, b: i64) -> i64 vow {
 
 **Fix:** Ensure every contract clause is a boolean expression (comparison, logical operator, or a call to a predicate function returning `bool`).
 
+**Right:**
+
+```vow
+fn add(a: i64, b: i64) -> i64 vow {
+    requires: a >= 0 && b >= 0
+} {
+    a + b
+}
+```
+
 ### VowRequiresViolated
 
 **Phase:** Verification (ESBMC)
 **Meaning:** ESBMC found inputs that violate a `requires` precondition. This is a **static** verification error — it means the function's callers can reach it with invalid arguments.
 
-**Fix:** Strengthen the `requires` clause, or fix the callers to pass valid arguments.
+**Wrong:**
+
+```vow
+fn dec(n: u64) -> u64 vow {
+    requires: n > 0
+} {
+    n - 1
+}
+
+fn caller(x: u64) -> u64 {
+    dec(x)
+}
+```
+
+**Fix:** Fix the callers to pass valid arguments, or, if the function is correct on a wider domain, state that real domain in the `requires` clause.
+
+**Right:** (`dec` unchanged)
+
+```vow
+fn caller(x: u64) -> u64 {
+    if x > 0 {
+        dec(x)
+    } else {
+        0
+    }
+}
+```
 
 ### VowEnsuresViolated
 
 **Phase:** Verification (ESBMC)
 **Meaning:** ESBMC found inputs where the function's return value does not satisfy the `ensures` postcondition.
 
+**Wrong:**
+
+```vow
+fn max(a: i64, b: i64) -> i64 vow {
+    ensures: result >= a && result >= b
+} {
+    a
+}
+```
+
 **Fix:** Fix the function body to satisfy the postcondition, or weaken the `ensures` clause.
+
+**Right:**
+
+```vow
+fn max(a: i64, b: i64) -> i64 vow {
+    ensures: result >= a && result >= b
+} {
+    if a > b { a } else { b }
+}
+```
 
 ### VowInvariantViolated
 
 **Phase:** Verification (ESBMC)
 **Meaning:** ESBMC found a loop iteration where the `invariant` does not hold.
 
-**Fix:** Strengthen the invariant or fix the loop body.
+**Wrong:**
+
+```vow
+fn count_up() -> u64 {
+    let mut i: u64 = 0;
+    while i < 10 vow {
+        invariant: i <= 10
+    } {
+        i = i + 3;
+    }
+    i
+}
+```
+
+**Fix:** Strengthen the invariant or fix the loop body. No compiler emits `VowInvariantViolated` today: a loop-invariant counterexample is reported with `error_code` `VowEnsuresViolated`, the message reads ``contract violation in `f`: invariant <predicate>``, and the counterexample `violation` starts with `invariant`.
+
+**Right:**
+
+```vow
+fn count_up() -> u64 {
+    let mut i: u64 = 0;
+    while i < 10 vow {
+        invariant: i <= 10
+    } {
+        i = i + 1;
+    }
+    i
+}
+```
 
 ### EsbmcNotFound
 
 **Phase:** Verification
 **Meaning:** ESBMC is not installed or not on `$PATH`. When verification is enabled (the default for `vowc build`, always for `vowc verify`), the compiler checks for ESBMC upfront before compilation. If ESBMC is not found, the build aborts immediately with exit code 1.
 
+**Wrong:**
+
+```sh
+vowc build f.vow
+```
+
 **Fix:** Install ESBMC, or use `--no-verify` to skip verification: `vowc build --no-verify <file>`.
+
+**Right:**
+
+```sh
+vowc build --no-verify f.vow
+```
 
 ### RegionConflict
 
@@ -705,6 +1213,18 @@ fn store_into(out: Vec<String>, prefix: String) [io] {
 
 **Fix:** Move the allocation to a wider scope, or copy the value into the target region (e.g., `String::from(s)` into the outer arena). For routings that compile cleanly but you'd like to know about (root-region placement), see `RegionRootEscape` below. See `docs/design/arena_memory.md` §4.4 for the full rejection vs. visibility distinction.
 
+Neither compiler rejects the snippet above today: it compiles and carries only a `RegionRootEscape` note (the self-hosted frontend reaches `RegionConflict` only through an internal-compiler-error path). Returning the value from the constructing function is the canonical shape and triggers neither:
+
+**Right:**
+
+```vow
+fn make_greeting(prefix: String) -> String {
+    let s: String = String::from(prefix);
+    s.push_str(String::from(" world"));
+    s
+}
+```
+
 ### RegionRootEscape
 
 **Phase:** Region Inference (arena-per-scope, Phase 3)
@@ -717,6 +1237,14 @@ fn store_into(out: Vec<String>, prefix: String) [io] {
 This is a memory-cost decision the compiler surfaces visibly per `docs/design/arena_memory.md` §4.4: silent root-region placement caused growth-with-no-signal in earlier compiler versions, and the note restores that signal without conflating it with unsoundness (`RegionConflict`).
 
 The note is conservative — it fires for any qualifying allocation in a function that could route to a caller or that widens to root, even if the actual concrete chain in this program doesn't reach `main`. False positives are tolerated because the diagnostic is non-blocking. A widen-to-root allocation is flagged even when it is also returned: being returned does not undo a root-region placement.
+
+**Wrong:**
+
+```vow
+fn store_into(out: Vec<String>, prefix: String) {
+    out.push(String::from(prefix));
+}
+```
 
 ```json
 {
@@ -731,6 +1259,14 @@ The note is conservative — it fires for any qualifying allocation in a functio
 
 **Fix:** Often none — if the program is short-lived (a checker, a CLI tool) or the values are genuinely program-lifetime, the note is informational. To free the allocation earlier, restructure so the value is **returned** from the constructing function rather than stored into a parameter container; the canonical `FreshInCaller` return path (`fn make_X() -> X`) does not trigger the note for the returned value or any allocation installed as a field of the returned struct (e.g. `Item { name: String::from("hi") }`). The exemption applies only to the *currently-installed* field initializers — a field overwritten before the return (`x.f = A; x.f = B; return x`) does not suppress the dead allocation `A`, which fires the note as expected (per-block last-write dedup, issue #326).
 
+**Right:**
+
+```vow
+fn make_name(prefix: String) -> String {
+    String::from(prefix)
+}
+```
+
 ### CodegenUnsupported
 
 **Phase:** Code Generation
@@ -742,6 +1278,8 @@ build is left untouched, so branch on `status`/`executable` rather than on the
 output path existing. The diagnostic currently has a file-level span because
 backend errors do not carry an instruction origin.
 
+**Wrong:**
+
 ```vow
 fn remainder(a: f64, b: f64) -> f64 {
     a % b
@@ -751,6 +1289,14 @@ fn remainder(a: f64, b: f64) -> f64 {
 **Fix:** Restructure the program to avoid the named backend limitation, or use
 a supported representation until the backend implements it. Agents may branch
 on `CodegenUnsupported` without parsing the human-readable `message` field.
+
+**Right:**
+
+```vow
+fn remainder(a: i64, b: i64) -> i64 {
+    a % b
+}
+```
 
 ### CodegenFailed
 
@@ -764,6 +1310,8 @@ uses only documented supported operations, report a compiler bug with the
 source and diagnostic; changing source syntax or types may not resolve an
 internal backend failure.
 
+**Right:** No source rewrite applies; the program is not at fault. Keep it unchanged and report the bug.
+
 ### LinkFailed
 
 **Phase:** Linker
@@ -771,9 +1319,21 @@ internal backend failure.
 not create the executable. A missing `libvow_runtime.a` is also reported with
 this code.
 
+**Wrong:**
+
+```sh
+vowc build f.vow   # libvow_runtime.a not found
+```
+
 **Fix:** Inspect the diagnostic message and verify that the host linker and Vow
 runtime archive are installed and accessible. When building Vow itself, run
 `cargo build --release --all` or set `VOW_RUNTIME_PATH` to the runtime archive.
+
+**Right:**
+
+```sh
+VOW_RUNTIME_PATH=target/release/libvow_runtime.a vowc build f.vow
+```
 
 ### IoError
 
@@ -790,6 +1350,14 @@ the filesystem's answer rather than a backend defect — which is why it is not
 before type-checking, so diagnostics do not include follow-on errors for names
 from the missing module.
 
+**Wrong:**
+
+```vow
+module Main
+
+use util.mathh
+```
+
 **Fix:** Check the path in the diagnostic message. For a module load, verify
 the `use` path resolves relative to the importing file. For an object write,
 the compiler creates missing parent directories automatically; verify that no
@@ -798,10 +1366,34 @@ and writing the object, and that the filesystem is writable and has free
 space. Re-running the same build after fixing the filesystem succeeds;
 changing the source will not help.
 
+For a module-load failure, the path must resolve to `util/math.vow` (or `util/math.vow.d`) next to the importing file:
+
+**Right:**
+
+```vow
+module Main
+
+use util.math
+```
+
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) A call to a user function that passes a `Vec`, `String`, map or `Option` argument is also not modelable (`Call target with a collection argument`): the model has no representation for a collection crossing a user-function boundary. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — for example `RegionAlloc` and `FieldSet` from a struct construction the model does not cover (a struct of scalar fields is modelled), also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) A call to a user function that passes a `Vec`, `String`, map or `Option` argument is also not modelable (`Call target with a collection argument`): the model has no representation for a collection crossing a user-function boundary. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+
+**Wrong:**
+
+```vow
+fn len_of(v: Vec<i64>) -> u64 {
+    v.len()
+}
+
+fn count(v: Vec<i64>) -> u64 vow {
+    ensures: result == v.len()
+} {
+    len_of(v)
+}
+```
 
 ```json
 {
@@ -817,6 +1409,16 @@ changing the source will not help.
 **Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the function is skipped with a structured warning instead of tripping the defense-in-depth `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` that historically broke the bootstrap on every vowed struct-builder. But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke ESBMC at all (`Unverified`, exit 0).
 
 **Fix:** Refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.
+
+**Right:**
+
+```vow
+fn count(v: Vec<i64>) -> u64 vow {
+    ensures: result == v.len()
+} {
+    v.len()
+}
+```
 
 **Note form (uncontracted caller).** The same code also appears with `severity: "note"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed. The message ends with the reason, and the reasons need different fixes: `` `f` cannot be modelled `` (restructure `f`, or accept that it stays unverified), or `the verifier timed out for `f`` / `the verifier could not decide them for `f`` (the proof was attempted but not finished — constrain or simplify `f`, or raise the timeout):
 
@@ -836,6 +1438,16 @@ changing the source will not help.
 **Phase:** Verification (Warning; the build status stays `Verified`)
 **Meaning:** The verifier proved that a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) can reach its `ArithmeticOverflow` abort for some input the function's `requires` admits. The operand span in `primary` points at the operator itself.
 
+**Wrong:**
+
+```vow
+fn twice(x: i64) -> i64 vow {
+    ensures: result == x + x
+} {
+    x +! x
+}
+```
+
 ```json
 {
   "error_code": "ArithOverflowReachable",
@@ -854,12 +1466,33 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 
 **Fix:** If the abort is unreachable in practice, say so in the contract — a `requires` that bounds the operands removes the warning, and the bound is then a genuine semantic constraint rather than a verifier appeasement. If wrapping is the intended behaviour, use the wrapping operator (`+`, `-`, `*`, `/`, `%`) and state the wrapped result in the contract. If the abort is a real possibility the caller must handle, the warning is informational.
 
+**Right:**
+
+```vow
+fn twice(x: i64) -> i64 vow {
+    requires: x >= -4611686018427387904 && x <= 4611686018427387903
+    ensures: result == x + x
+} {
+    x +! x
+}
+```
+
 **Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made — the counterexample is the actionable finding.
 
 ### VerifierAssertionUnattributed
 
 **Phase:** Verification
 **Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero, a dynamic shift count that exceeds the operand's bit width, and (native backend only) `unwrap()` called on `None` or `Err`.
+
+**Wrong:**
+
+```vow
+fn remainder(n: u64, d: u64) -> u64 vow {
+    ensures: result <= n
+} {
+    n % d
+}
+```
 
 ```json
 {
@@ -873,6 +1506,17 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
 
 **Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For `unwrap() called on None`, match on the value or require its discriminant instead of unwrapping. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
+
+**Right:**
+
+```vow
+fn remainder(n: u64, d: u64) -> u64 vow {
+    requires: d != 0
+    ensures: result <= n
+} {
+    n % d
+}
+```
 
 ### VerifierBug
 
@@ -892,10 +1536,27 @@ The structured counterexample's `violation` field carries the stable property de
 
 **Fix:** Report the function, its counterexample `values` and `replay_reason` as a verifier bug. Do not weaken the contract to avoid the counterexample on the strength of this diagnostic alone.
 
+**Right:** No source rewrite applies; the program and its contract are not at fault. Keep both unchanged and report the bug.
+
 ### ModelCapacityAssumed
 
 **Phase:** Verification (Note; the build status stays `Verified`)
 **Meaning:** The function's contracts were proved, but the proof's model restricts at least one capacity to the verifier's model capacity (defaults: `Vec<T>` 128, `String` 256, `HashMap<K, V>` and `BTreeMap<K, V>` 64, user-struct `Heap` 1024 slots; the `String` capacity is raised to the longest string literal in the module, and the note's message reports the capacity actually applied; see [`contracts.md`](contracts.md#collection-models-for-verification)). A parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled as nondeterministic *within* its capacity, and struct allocations stop at the heap capacity, so executions with longer collections or more struct allocations were pruned, not checked: `Verified` means "verified for executions up to the capacities".
+
+**Wrong:**
+
+```vow
+fn first_or_zero(v: Vec<i64>) -> i64 vow {
+    requires: v.len() <= 128
+    ensures: v.len() > 0 || result == 0
+} {
+    if v.len() > 0 {
+        v[0]
+    } else {
+        0
+    }
+}
+```
 
 ```json
 {
@@ -914,6 +1575,20 @@ The `message` lists every bounded kind as `Kind: capacity`, in the fixed order `
 **Why this is a Note and not a failure.** The verdict is genuine for every execution inside the bound and the verifier never changes a verdict because of the note. It is informational so that an agent or CEGIS loop can tell a bounded proof from an unbounded one — for example, to treat a `Verified` function that handles untrusted-length collections with extra scrutiny, or to test it with the runtime checks of `--mode debug`.
 
 **Fix:** None is required. Do **not** add `requires: v.len() <= 128` (or any other capacity) to silence it: that distorts a true contract to fit a prover limitation, and an unbounded backend removes the note without any source change.
+
+**Right:** Remove the length bound and keep the note; the source needs no other change.
+
+```vow
+fn first_or_zero(v: Vec<i64>) -> i64 vow {
+    ensures: v.len() > 0 || result == 0
+} {
+    if v.len() > 0 {
+        v[0]
+    } else {
+        0
+    }
+}
+```
 
 **Ordering and presence.** Notes describe a *completed* proof run, so they are emitted only when the overall `status` is `Verified`, one per proved function, after every other diagnostic and in function declaration order. A run that ends in a counterexample, `unknown`, `timeout`, `error`, or a fail-closed skip carries no note: a halt cuts the set of verified functions short in a scheduling-dependent way, and a note about one of them would be noise next to the real failure.
 
@@ -949,7 +1624,31 @@ magnitude, which can exceed the range an IEEE-754 double represents exactly —
 that acts on the exact value must read it with an arbitrary-precision JSON
 number parser; a default `double` parser silently rounds it.
 
+**Wrong:**
+
+```vow
+fn divide(a: i64, b: i64) -> i64 vow {
+    requires: b != 0
+} {
+    a / b
+}
+
+fn main() -> i32 {
+    let q: i64 = divide(10, 0);
+    0
+}
+```
+
 **Fix:** See the `description` and `values` fields to understand which predicate failed and with what runtime values.
+
+**Right:** (`divide` unchanged)
+
+```vow
+fn main() -> i32 {
+    let q: i64 = divide(10, 2);
+    0
+}
+```
 
 ### ArithmeticOverflow
 
@@ -968,6 +1667,28 @@ if overflow is acceptable, or add bounds contracts to prevent overflow. For
 division and remainder, rule out a zero divisor and, for signed division, the
 `MIN / -1` case.
 
+**Wrong:**
+
+```vow
+fn main() -> i32 {
+    let a: i64 = 9223372036854775807;
+    let b: i64 = a +! 1;
+    0
+}
+```
+
+**Right:**
+
+```vow
+fn main() -> i32 {
+    let a: i64 = 9223372036854775807;
+    if a < 9223372036854775807 {
+        let b: i64 = a +! 1;
+    }
+    0
+}
+```
+
 The abort is emitted in every build mode, release included, so this cannot be
 deferred to a debug run. A checked operator's abort is part of the operator's
 meaning, not a debug-mode check. Division and remainder also abort when no
@@ -982,8 +1703,31 @@ used.
 {"error":"UnwrapOnNone"}
 ```
 
+**Wrong:**
+
+```vow
+fn main() -> i32 [panic] {
+    let o: Option<i64> = Option::None;
+    let x: i64 = o.unwrap();
+    0
+}
+```
+
 **Fix:** Use `match` to handle the empty variant — `None` for `Option`, `Err` for
 `Result` — or add contracts that guarantee the value is `Some`/`Ok`.
+
+**Right:**
+
+```vow
+fn main() -> i32 {
+    let o: Option<i64> = Option::None;
+    match o {
+        Option::Some(x) => x,
+        Option::None => 0,
+    };
+    0
+}
+```
 
 The abort is emitted in every build mode, release included, so this cannot be
 deferred to a debug run.
@@ -998,7 +1742,29 @@ Not gated by `[panic]`: the abort is a verification obligation of the (pure) ind
 {"error":"IndexOutOfBounds"}
 ```
 
+**Wrong:**
+
+```vow
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    let x: i64 = v[0];
+    0
+}
+```
+
 **Fix:** Add a bounds check before indexing, or add a contract: `requires: i < v.len()`. Do not pair it with `requires: i >= 0` — on an unsigned index that clause is always true and is rejected as [TautologicalComparison](#tautologicalcomparison).
+
+**Right:**
+
+```vow
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    if v.len() > 0 {
+        let x: i64 = v[0];
+    }
+    0
+}
+```
 
 ### RegionLiteralMutation
 
@@ -1018,7 +1784,27 @@ hint: construct a mutable HashMap and copy entries before mutating  # for HashMa
 
 The `operation` field identifies the source-level method that trapped (e.g., `Vec::push`, `Vec::pop`, `HashMap::insert`, `String::clear`). The `origin` field identifies the storage class of the immutable backing; today only `rodata` is emitted.
 
+**Wrong:**
+
+```vow
+fn main() -> i32 {
+    let s: String = "abc";
+    s.push_str("d");
+    0
+}
+```
+
 **Fix:** Obtain an explicit mutable copy before mutation: `String::from(value)`, or construct a fresh mutable container and copy the entries you need before mutating.
+
+**Right:**
+
+```vow
+fn main() -> i32 {
+    let s: String = String::from("abc");
+    s.push_str("d");
+    0
+}
+```
 
 ### StackOverflow
 
@@ -1036,7 +1822,36 @@ In debug or sanitize mode, the diagnostic includes call depth and the function t
 
 The signal handler is installed in **all** build modes. The `depth` and `function` fields are only available in debug/sanitize mode where call-depth instrumentation is emitted.
 
+**Wrong:**
+
+```vow
+fn count_down(n: u64) -> u64 {
+    count_down(n + 1)
+}
+
+fn main() -> i32 {
+    let r: u64 = count_down(1);
+    0
+}
+```
+
 **Fix:** Add a base case to recursive functions, or restructure the algorithm to use iteration instead of recursion.
+
+**Right:**
+
+```vow
+fn count_down(n: u64) -> u64 {
+    if n == 0 {
+        return 0;
+    }
+    count_down(n - 1)
+}
+
+fn main() -> i32 {
+    let r: u64 = count_down(1);
+    0
+}
+```
 
 ### OutOfMemory
 
@@ -1052,6 +1867,8 @@ Like every runtime abort, an OOM exits with the reserved status **`134`** (see *
 
 **Fix:** Reduce working-set size, raise the process memory limit, or run on a machine with more memory. This is not a Vow program error.
 
+**Right:** No source rewrite applies; the program is not at fault.
+
 ## Warnings
 
 ### LoweringWarning
@@ -1060,3 +1877,14 @@ Like every runtime abort, an OOM exits with the reserved status **`134`** (see *
 **Meaning:** The IR lowerer could not resolve a struct type tag or field name, defaulting to index 0. This usually indicates a missing type annotation on a `let` binding, causing the compiler to lose track of which struct type a pointer refers to.
 
 **Fix:** Add an explicit type annotation: `let x: MyStruct = ...;` so the compiler can track struct type tags through the IR.
+
+**Right:**
+
+```vow
+struct MyStruct { a: i64 }
+
+fn f() -> i64 {
+    let x: MyStruct = MyStruct { a: 1 };
+    x.a
+}
+```
