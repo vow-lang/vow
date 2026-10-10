@@ -853,6 +853,15 @@ else
     fail "verifier/esbmc-path-cache" "$(tail -10 "$TMPDIR/esbmc-path-cache.log")"
 fi
 
+for stage_compiler in rust self; do
+    if [ "$stage_compiler" = rust ]; then stage_bin="$RUST"; else stage_bin="$SELF"; fi
+    if VOWC_BIN="$stage_bin" bash tests/build-staging/tests.sh >"$TMPDIR/build-staging-$stage_compiler.log" 2>&1; then
+        pass "build-staging/$stage_compiler"
+    else
+        fail "build-staging/$stage_compiler" "$(tail -10 "$TMPDIR/build-staging-$stage_compiler.log")"
+    fi
+done
+
 if command -v esbmc >/dev/null 2>&1; then
     if VOWC_BIN="$RUST" bash tests/verify-cache-stale-pass/tests.sh >"$TMPDIR/verify-cache-stale-pass.log" 2>&1; then
         pass "verifier/verify-cache-stale-pass"

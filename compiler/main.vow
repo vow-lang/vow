@@ -1983,14 +1983,15 @@ fn verify_finish(argv: Vec<String>, fns: Vec<IrFunction>, path: String, dctx: Di
 }
 
 // Spawn-with-FIFO-drain phase of `run_build`. Mirrors `run_verify_loop` but
-// leaves the final drain to `build_drain_verify_phase` so the orchestrator can
-// run codegen in parallel with in-flight ESBMC processes.
+// leaves the final drain to `build_drain_verify_phase`. It runs only after
+// codegen and linking have finished (#179), so the Cranelift working set is
+// released before the first ESBMC process starts.
 //
 // State threading (Vow Vecs share heap backing across by-value copies, so
 // pushes/removes visible to the caller — see compiler/frontend.vow:202-204):
 //   - `in_flight_h`, `in_flight_fi`, `in_flight_tmp`: caller-allocated FIFO
 //     queues. This phase pushes new handles and pre-drains when the pool is
-//     full. Remaining entries are drained by `build_drain_verify_phase` after codegen.
+//     full. Remaining entries are drained by `build_drain_verify_phase`.
 //   - `ces`, `soft_meta`: counterexample + soft-fail accumulators threaded
 //     through to `verify_collect_and_report`.
 //   - `model_bounds`: per-function model-bound text, filled at launch and read
@@ -2046,9 +2047,9 @@ fn build_verify_phase(
     result
 }
 
-// Post-codegen FIFO drain phase of `run_build`. Collects results from
-// every ESBMC process still in flight after `build_verify_phase` returned
-// and codegen completed. Mutates `ces` / `soft_meta` via shared Vec backings.
+// FIFO drain phase of `run_build`. Collects results from every ESBMC process
+// still in flight after `build_verify_phase` returned. Mutates `ces` /
+// `soft_meta` via shared Vec backings.
 // Returns the post-drain `all_proven` flag (0 if any in-flight job failed,
 // otherwise the input value).
 //
@@ -2217,13 +2218,7 @@ fn run_build_cmd(argv: Vec<String>, sub: bool) -> i32 [io, read, write] {
     let in_flight_fi: Vec<i64> = Vec::new();
     let in_flight_tmp: Vec<String> = Vec::new();
     let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
-    let verify_origin: i64 = trace_now(tctx);
     let model_bounds: Vec<String> = model_bounds_table(fns.len() as i64);
-    if do_verify {
-        let phase_result: Vec<i64> = build_verify_phase(esbmc_bin, fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, in_flight_h, in_flight_fi, in_flight_tmp, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, verify_origin, tctx, model_bounds);
-        if phase_result[0] == 0 { all_proven = 0; }
-        if phase_result[1] == 1 { any_skipped = 1; }
-    }
     let t_codegen: i64 = trace_now(tctx);
     let codegen_status: i64 = build_codegen_phase(ir_mod, out, mode, trace, path, dctx);
     trace_span(tctx, String::from("codegen"), PID_COMPILER(), TID_MAIN(), t_codegen, trace_now(tctx) - t_codegen, String::from(""));
@@ -2234,6 +2229,12 @@ fn run_build_cmd(argv: Vec<String>, sub: bool) -> i32 [io, read, write] {
         diag_emit_build_verify_json(String::from("Unverified"), out, dctx, Vec::new());
         return 0;
     }
+    // Verification starts only after codegen and linking so ESBMC children
+    // never overlap the Cranelift working set; the pool bounds what remains (#179).
+    let verify_origin: i64 = trace_now(tctx);
+    let phase_result: Vec<i64> = build_verify_phase(esbmc_bin, fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, in_flight_h, in_flight_fi, in_flight_tmp, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, verify_origin, tctx, model_bounds);
+    if phase_result[0] == 0 { all_proven = 0; }
+    if phase_result[1] == 1 { any_skipped = 1; }
     all_proven = build_drain_verify_phase(esbmc_bin, in_flight_h, in_flight_fi, in_flight_tmp, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven, verify_origin, tctx, model_bounds, dctx);
     trace_span(tctx, String::from("verification"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, trace_now(tctx) - verify_origin, String::from(""));
     if all_proven == 1 && any_skipped == 0 {
@@ -6236,12 +6237,13 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Verification Pipeline\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Codegen (Cranelift) and verification run in parallel:\n"));
+    r.push_str(String::from("Codegen (Cranelift) and linking finish before verification starts, so peak memory is the larger of the two phases rather than their sum:\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```\n"));
-    r.push_str(String::from("Vow Source → Parse → Type Check → IR Lower ─┬─→ Cranelift → executable\n"));
-    r.push_str(String::from("                                              └─→ C Emit → ESBMC → proof / counterexample\n"));
+    r.push_str(String::from("Vow Source → Parse → Type Check → IR Lower → Cranelift → executable → C Emit → ESBMC → proof / counterexample\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A codegen or link failure ends the build before any ESBMC process is started. Verification itself runs up to `--verify-jobs` ESBMC processes at a time.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Contract clauses become IR opcodes. The C emitter translates `requires` to `__ESBMC_assume()` (the verifier assumes preconditions hold) and `ensures`/`invariant` to `__ESBMC_assert()` (the verifier checks postconditions).\n"));
     r.push_str(String::from("\n"));
@@ -12304,12 +12306,13 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Verification Pipeline\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Codegen (Cranelift) and verification run in parallel:\n"));
+    r.push_str(String::from("Codegen (Cranelift) and linking finish before verification starts, so peak memory is the larger of the two phases rather than their sum:\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```\n"));
-    r.push_str(String::from("Vow Source → Parse → Type Check → IR Lower ─┬─→ Cranelift → executable\n"));
-    r.push_str(String::from("                                              └─→ C Emit → ESBMC → proof / counterexample\n"));
+    r.push_str(String::from("Vow Source → Parse → Type Check → IR Lower → Cranelift → executable → C Emit → ESBMC → proof / counterexample\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A codegen or link failure ends the build before any ESBMC process is started. Verification itself runs up to `--verify-jobs` ESBMC processes at a time.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Contract clauses become IR opcodes. The C emitter translates `requires` to `__ESBMC_assume()` (the verifier assumes preconditions hold) and `ensures`/`invariant` to `__ESBMC_assert()` (the verifier checks postconditions).\n"));
     r.push_str(String::from("\n"));
