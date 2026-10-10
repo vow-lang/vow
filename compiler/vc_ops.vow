@@ -53,7 +53,8 @@ fn vc_op_modeled_int(op: i64) -> bool {
 }
 
 fn vc_op_modeled_core(op: i64) -> bool {
-    op == IOP_CONST_I64() || op == IOP_CONST_BOOL() || op == IOP_GET_ARG()
+    op == IOP_FIELD_GET() || op == IOP_FIELD_SET()
+        || op == IOP_CONST_I64() || op == IOP_CONST_BOOL() || op == IOP_GET_ARG()
         || op == IOP_WADD() || op == IOP_WSUB() || op == IOP_WMUL() || op == IOP_WDIV() || op == IOP_WREM()
         || op == IOP_BITAND() || op == IOP_BITOR() || op == IOP_BITXOR()
         || op == IOP_EQ() || op == IOP_NE() || op == IOP_LT() || op == IOP_LE() || op == IOP_GT() || op == IOP_GE()
@@ -62,7 +63,6 @@ fn vc_op_modeled_core(op: i64) -> bool {
         || op == IOP_CONST_UNIT() || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_UNREACHABLE()
         || op == IOP_PHI() || op == IOP_UPSILON()
         || op == IOP_REGION_ALLOC() || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
-        || op == IOP_FIELD_GET() || op == IOP_FIELD_SET()
 }
 
 fn vc_op_unsupported(op: i64) -> bool {

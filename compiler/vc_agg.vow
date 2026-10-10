@@ -119,16 +119,14 @@ fn vc_agg_slot_width(sort: i64) -> i64 {
     1
 }
 
-// Writes `term` into slot `idx` at `sort`; every other view of a slot the write
-// covers is overwritten too, so it reads as unconstrained again.
+// Writes `term` into slot `idx` at `sort`; every view of a slot the write covers
+// reads as unconstrained, then the exact view takes `term`.
 fn vc_agg_set(ag: VcAgg, obj: i64, idx: i64, sort: i64, term: i64) {
     let end: i64 = idx + vc_agg_slot_width(sort);
     let mut s: i64 = ag.heads[obj as u64];
     while s >= 0 {
         let si: i64 = ag.sl_idx[s as u64];
-        let ss: i64 = ag.sl_sort[s as u64];
-        let overlaps: bool = si < end && idx < si + vc_agg_slot_width(ss);
-        if overlaps && !(si == idx && ss == sort) {
+        if si < end && idx < si + vc_agg_slot_width(ag.sl_sort[s as u64]) {
             ag.sl_term[s as u64] = -1;
         }
         s = ag.sl_next[s as u64];

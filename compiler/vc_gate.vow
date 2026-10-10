@@ -135,7 +135,7 @@ fn vc_field_access_ok(dk: i64, ty: i64) -> bool {
     if dk == IDATA_FIELD() {
         return ty == ITY_BOOL() || (vc_ty_is_int(ty) && vc_ty_bits(ty) <= 64);
     }
-    dk == IDATA_WIDE_SLOT() && (ty == ITY_I128() || ty == ITY_U128())
+    dk == IDATA_WIDE_SLOT() && vc_ty_bits(ty) == 128
 }
 
 // The function's only effect may be `panic`: `.unwrap()` needs it, and the
