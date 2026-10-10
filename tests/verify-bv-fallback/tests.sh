@@ -88,7 +88,7 @@ run_case() {
     fi
     if [ -n "$want_status" ]; then
         local got
-        got=$(python3 -c '
+        got=$(python3 -I -c '
 import json, sys
 d = json.load(open(sys.argv[1]))
 print(d.get("verify_status", ""), "|", d.get("verify_message", ""), "|", d.get("function", ""))
