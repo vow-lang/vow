@@ -6,13 +6,16 @@ use ir_dominance
 use vc_ops
 use vc_int
 use vc_cfg
+use vc_agg
+use ast
 
 // Fail-closed subset gate for the native verifier. `vc_skip_reason` returns ""
-// only for a pure, loop-free function built from the integer (8 to 128 bits) and
-// Bool operations the symbolic executor models, with the control-flow shape
-// `vc_cfg_detail` accepts; every other function is `Skipped` with
-// "<code>: <detail>" using the closed codes of ADR-1430 (listed in `vc_ops`).
-// An unknown opcode is never accepted.
+// only for a loop-free function whose only effect is `panic` (the effect of
+// `.unwrap()`), built from the integer (8 to 128 bits) and Bool operations the
+// symbolic executor models and the struct, enum and `Option` values it
+// scalarises (`vc_agg`), with the control-flow shape `vc_cfg_detail` accepts;
+// every other function is `Skipped` with "<code>: <detail>" using the closed
+// codes of ADR-1430 (listed in `vc_ops`). An unknown opcode is never accepted.
 
 fn vc_reason(code: String, detail: String) -> String {
     let out: String = String::from(code);
@@ -118,9 +121,22 @@ fn vc_operand_ok(inst: IrInst, tys: Vec<i64>, lits: Vec<i64>, k: u64, want: i64)
 }
 
 // Types a Phi may carry. Unit is accepted for the statement-position `if`,
-// whose arms each feed a Unit Phi; the executor models no value for it.
+// whose arms each feed a Unit Phi; the executor models no value for it. A
+// pointer is an aggregate object.
 fn vc_is_merge_ty(ty: i64) -> bool {
-    vc_ty_is_int(ty) || ty == ITY_BOOL() || ty == ITY_UNIT()
+    vc_ty_is_int(ty) || ty == ITY_BOOL() || ty == ITY_UNIT() || ty == ITY_PTR()
+}
+
+// Types a struct field or enum payload slot may hold: Bool and the integers
+// that fit the 64-bit slot. A 128-bit value takes two slots (`wide-aggregate-field`).
+fn vc_is_field_ty(ty: i64) -> bool {
+    ty == ITY_BOOL() || (vc_ty_is_int(ty) && vc_ty_bits(ty) <= 64)
+}
+
+// The function's only effect may be `panic`: `.unwrap()` needs it, and the
+// abort is the claim the executor makes of it.
+fn vc_effects_modeled(effects: i64) -> bool {
+    effects == 0 || effects == EFF_PANIC()
 }
 
 fn vc_arg_ty(tys: Vec<i64>, inst: IrInst, k: u64) -> i64 {
@@ -161,7 +177,7 @@ fn vc_is_const_int_op(op: i64) -> bool {
 // types of the values it reads.
 fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>) -> bool {
     let op: i64 = inst.op;
-    if !vc_op_modeled(op) { return false; }
+    if !vc_op_gate_candidate(op) { return false; }
     let n: u64 = inst.args.len();
     let t0: i64 = vc_arg_ty(tys, inst, 0);
     let t1: i64 = vc_arg_ty(tys, inst, 1);
@@ -174,9 +190,21 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>)
     if op == IOP_PHI() { return n == 0 && vc_is_merge_ty(inst.ty); }
     if op == IOP_UPSILON() { return n == 1 && inst.dk == IDATA_PHI_TARGET() && vc_is_merge_ty(t0); }
     if op == IOP_GET_ARG() {
-        return vc_ty_is_int(inst.ty) && n == 0 && inst.dv >= 0 && inst.dv < f.params.len() as i64
-            && f.params[inst.dv as u64] == inst.ty;
+        return (vc_ty_is_int(inst.ty) || inst.ty == ITY_PTR()) && n == 0 && inst.dv >= 0
+            && inst.dv < f.params.len() as i64 && f.params[inst.dv as u64] == inst.ty;
     }
+    if op == IOP_REGION_ALLOC() {
+        return inst.ty == ITY_PTR() && n == 0 && inst.dk == IDATA_ALLOC_SIZE() && inst.dv >= 8;
+    }
+    if op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE() { return n == 0; }
+    if op == IOP_FIELD_GET() {
+        return n == 1 && t0 == ITY_PTR() && inst.dk == IDATA_FIELD() && inst.dv >= 0 && vc_is_field_ty(inst.ty);
+    }
+    if op == IOP_FIELD_SET() {
+        return n == 2 && t0 == ITY_PTR() && inst.dk == IDATA_FIELD() && inst.dv >= 0
+            && inst.ty == ITY_UNIT() && vc_is_field_ty(t1);
+    }
+    if op == IOP_CALL() { return n == 0 && inst.ty == ITY_UNIT() && vc_is_unwrap_abort(inst); }
     if vc_is_arith_op(op) {
         return vc_ty_is_int(inst.ty) && n == 2 && vc_operand_ok(inst, tys, lits, 0, inst.ty)
             && vc_operand_ok(inst, tys, lits, 1, inst.ty);
@@ -204,7 +232,8 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>)
     }
     if op == IOP_RETURN() {
         if f.return_ty == ITY_UNIT() { return n == 0; }
-        return n == 1 && t0 == f.return_ty && (vc_ty_is_int(f.return_ty) || f.return_ty == ITY_BOOL());
+        return n == 1 && t0 == f.return_ty
+            && (vc_ty_is_int(f.return_ty) || f.return_ty == ITY_BOOL() || f.return_ty == ITY_PTR());
     }
     false
 }
@@ -223,7 +252,7 @@ fn vc_inst_specific_reason(inst: IrInst, tys: Vec<i64>) -> String {
     let model: i64 = vc_op_model(inst.op);
     if model == VC_OPM_FLOAT_REM() { return vc_reason(VC_SKIP_FLOAT_REM(), opcode_name(inst.op)); }
     if model == VC_OPM_CALL() {
-        if inst.dk == IDATA_CALL_EXTERN() && !catalogue_verifier_known(inst.ds) {
+        if inst.dk == IDATA_CALL_EXTERN() && !vc_is_unwrap_abort(inst) && !catalogue_verifier_known(inst.ds) {
             return vc_reason(VC_SKIP_UNMODELED_BUILTIN(), inst.ds);
         }
         return String::from("");
@@ -256,7 +285,7 @@ fn vc_unsupported_detail(inst: IrInst, tys: Vec<i64>) -> String {
 
 // "" when `f` is inside the native subset, else "<code>: <detail>".
 fn vc_skip_reason(f: IrFunction) -> String {
-    if f.effects != 0 {
+    if !vc_effects_modeled(f.effects) {
         return vc_reason(VC_SKIP_FUNCTION_HAS_EFFECTS(), effects_str(f.effects));
     }
     let dom: String = ir_non_dominating_read(f);
@@ -293,6 +322,10 @@ fn vc_skip_reason(f: IrFunction) -> String {
         bi = bi + 1;
     }
     if have_generic { return generic; }
+    let shape: String = vc_agg_shape_detail(f, tys.len());
+    if shape.len() > 0 {
+        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), shape);
+    }
     let cfg: String = vc_cfg_detail(f, tys);
     if cfg.len() > 0 {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), cfg);

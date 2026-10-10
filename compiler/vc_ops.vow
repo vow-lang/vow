@@ -65,6 +65,7 @@ fn vc_op_modeled_core(op: i64) -> bool {
         || op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_RETURN()
         || op == IOP_CONST_UNIT() || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_UNREACHABLE()
         || op == IOP_PHI() || op == IOP_UPSILON()
+        || op == IOP_REGION_ALLOC() || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
 }
 
 fn vc_op_unsupported(op: i64) -> bool {
@@ -78,7 +79,6 @@ fn vc_op_unsupported(op: i64) -> bool {
         || op == IOP_LOAD() || op == IOP_STORE()
         || op == IOP_VOW_INV()
         || op == IOP_DEBUG_CALL()
-        || op == IOP_REGION_ALLOC() || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
         || op == IOP_COMPLEXITY_DESCRIPTOR()
         || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW()
 }
@@ -94,6 +94,21 @@ fn vc_op_model(op: i64) -> i64 {
     if vc_op_modeled(op) { return VC_OPM_MODELED(); }
     if vc_op_unsupported(op) { return VC_OPM_UNSUPPORTED(); }
     VC_OPM_UNCLASSIFIED()
+}
+
+// The lowerer's own call to the unwrap abort: reaching it is the unwrap-on-None
+// failure. It is not a catalogue builtin, so the table lists it here; the
+// executor turns it into a claim that its path is infeasible.
+fn VC_INTERNAL_UNWRAP_PANIC() -> String { String::from("__vow_unwrap_panic") }
+
+fn vc_is_unwrap_abort(inst: IrInst) -> bool {
+    inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_UNWRAP_PANIC()
+}
+
+// Opcodes the gate looks at: modelled outright, or decided per instruction.
+fn vc_op_gate_candidate(op: i64) -> bool {
+    let model: i64 = vc_op_model(op);
+    model == VC_OPM_MODELED() || model == VC_OPM_CALL() || model == VC_OPM_FIELD()
 }
 
 // Builtins are modelled only when `catalogue_verifier_known` lists their runtime

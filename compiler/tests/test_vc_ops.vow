@@ -44,6 +44,9 @@ fn check_known_classes() -> i64 {
     if vc_op_model(IOP_REM_F32()) != VC_OPM_FLOAT_REM() { return 604; }
     if vc_op_model(IOP_REM_F64()) != VC_OPM_FLOAT_REM() { return 605; }
     if vc_op_model(9999) != VC_OPM_UNCLASSIFIED() { return 606; }
+    if vc_op_model(IOP_REGION_ALLOC()) != VC_OPM_MODELED() { return 607; }
+    if vc_op_model(IOP_REGION_OPEN()) != VC_OPM_MODELED() { return 608; }
+    if vc_op_model(IOP_REGION_CLOSE()) != VC_OPM_MODELED() { return 609; }
     0
 }
 

@@ -1,0 +1,43 @@
+// Thirty nested merges of two structs. Each merge reads the previous ones, so a
+// merged field that is printed instead of named makes the query exponential.
+module StructSwapChain
+
+struct P { a: i64, b: i64 }
+
+fn f(c: i64) -> i64 vow {
+  ensures: result == result
+} {
+  let mut x: P = P { a: 1, b: 2 };
+  let mut y: P = P { a: 3, b: 4 };
+  if c > 0 { let t: P = x; x = y; y = t; }
+  if c > 1 { let t: P = x; x = y; y = t; }
+  if c > 2 { let t: P = x; x = y; y = t; }
+  if c > 3 { let t: P = x; x = y; y = t; }
+  if c > 4 { let t: P = x; x = y; y = t; }
+  if c > 5 { let t: P = x; x = y; y = t; }
+  if c > 6 { let t: P = x; x = y; y = t; }
+  if c > 7 { let t: P = x; x = y; y = t; }
+  if c > 8 { let t: P = x; x = y; y = t; }
+  if c > 9 { let t: P = x; x = y; y = t; }
+  if c > 10 { let t: P = x; x = y; y = t; }
+  if c > 11 { let t: P = x; x = y; y = t; }
+  if c > 12 { let t: P = x; x = y; y = t; }
+  if c > 13 { let t: P = x; x = y; y = t; }
+  if c > 14 { let t: P = x; x = y; y = t; }
+  if c > 15 { let t: P = x; x = y; y = t; }
+  if c > 16 { let t: P = x; x = y; y = t; }
+  if c > 17 { let t: P = x; x = y; y = t; }
+  if c > 18 { let t: P = x; x = y; y = t; }
+  if c > 19 { let t: P = x; x = y; y = t; }
+  if c > 20 { let t: P = x; x = y; y = t; }
+  if c > 21 { let t: P = x; x = y; y = t; }
+  if c > 22 { let t: P = x; x = y; y = t; }
+  if c > 23 { let t: P = x; x = y; y = t; }
+  if c > 24 { let t: P = x; x = y; y = t; }
+  if c > 25 { let t: P = x; x = y; y = t; }
+  if c > 26 { let t: P = x; x = y; y = t; }
+  if c > 27 { let t: P = x; x = y; y = t; }
+  if c > 28 { let t: P = x; x = y; y = t; }
+  if c > 29 { let t: P = x; x = y; y = t; }
+  x.a + y.b
+}

@@ -1,0 +1,19 @@
+module StructRebuiltField
+
+struct Cell { value: i64, live: bool }
+
+fn bump(x: i64) -> Cell vow {
+  requires: x < 1000,
+  ensures: result.value == x + 1,
+  ensures: result.live
+} {
+  let c: Cell = Cell { value: x, live: false };
+  c.value = x + 1;
+  c.live = true;
+  c
+}
+
+fn main() -> i32 [io] {
+  print_i64(bump(1).value);
+  0
+}

@@ -1,0 +1,324 @@
+module TestVcAgg
+
+use ir
+use vc_term
+use vc_smt
+use vc_gate
+use vc_ops
+use vc_agg
+use vc_flow
+use vc_exec
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn mk_vow(id: i64, op: i64, pred: i64, vow_id: i64) -> IrInst {
+    ir_inst_new(id, op, ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+fn ptr_param() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p
+}
+
+fn count_of(hay: String, needle: String) -> i64 {
+    let mut n: i64 = 0;
+    let mut i: u64 = 0;
+    while i + needle.len() <= hay.len() {
+        if hay.substring(i, i + needle.len()) == needle {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+fn query(cs: VcClaims, k: u64) -> String {
+    vc_smt_render(cs.arena, vc_claim_script(cs, k))
+}
+
+fn one_block(name: String, params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, name, params, ret, blocks)
+}
+
+// build(x) = P { a: x, b: 7 }, ensures result.b == 7
+fn build_insts(read_idx: i64) -> Vec<IrInst> {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_alloc(1, 24));
+    i.push(mk_inst_field_set(2, 1, 0, 0));
+    i.push(mk_inst_const_i64(3, 7));
+    i.push(mk_inst_field_set(4, 1, 1, 3));
+    i.push(mk_inst_field_get(5, ITY_I64(), 1, read_idx));
+    i.push(mk_inst(6, IOP_EQ(), ITY_BOOL(), args2(5, 3)));
+    i.push(mk_vow(7, IOP_VOW_ENS(), 6, 0));
+    i.push(mk_inst_return(8, 1));
+    i
+}
+
+fn check_struct_gate_accepts() -> i64 {
+    let f: IrFunction = one_block(String::from("build"), mk_params1(), ITY_PTR(), build_insts(1));
+    if vc_skip_reason(f).len() != 0 { return 1; }
+    0
+}
+
+fn check_param_read_accepted() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    i.push(mk_inst_return(2, 1));
+    if vc_skip_reason(one_block(String::from("g"), ptr_param(), ITY_I64(), i)).len() != 0 { return 10; }
+    0
+}
+
+fn check_field_set_needs_own_block_alloc() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_const_i64(1, 3));
+    i.push(mk_inst_field_set(2, 0, 0, 1));
+    i.push(mk_inst_return(3, 0));
+    let r: String = vc_skip_reason(one_block(String::from("s"), ptr_param(), ITY_PTR(), i));
+    if r != String::from("unsupported-opcode: FieldSet outside the block that allocates its target") { return 20; }
+
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_alloc(0, 16));
+    a.push(mk_inst_const_i64(1, 3));
+    a.push(mk_inst_jump(2, 1));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(mk_inst_field_set(3, 0, 0, 1));
+    b.push(mk_inst_return(4, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, a));
+    blocks.push(mk_block(1, b));
+    let g: IrFunction = mk_function(1, String::from("t"), Vec::new(), ITY_PTR(), blocks);
+    if vc_skip_reason(g) != r { return 21; }
+    0
+}
+
+fn check_unsupported_aggregate_shapes() -> i64 {
+    let n: Vec<IrInst> = Vec::new();
+    n.push(mk_inst_arg(0, ITY_PTR(), 0));
+    n.push(mk_inst_field_get(1, ITY_PTR(), 0, 0));
+    n.push(mk_inst_return(2, 1));
+    if vc_skip_reason(one_block(String::from("nested"), ptr_param(), ITY_PTR(), n)) != String::from("unsupported-opcode: FieldGet[ptr]") { return 30; }
+
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_arg(0, ITY_PTR(), 0));
+    w.push(mk_inst_field_get(1, ITY_I128(), 0, 0));
+    w.push(mk_inst_return(2, 0));
+    let r: String = vc_skip_reason(one_block(String::from("wide"), ptr_param(), ITY_PTR(), w));
+    if !r.contains(String::from("wide-aggregate-field")) { return 31; }
+
+    let l: Vec<IrInst> = Vec::new();
+    l.push(mk_inst_arg(0, ITY_LPTR(), 0));
+    l.push(mk_inst_return(1, 0));
+    let lp: Vec<i64> = Vec::new();
+    lp.push(ITY_LPTR());
+    if vc_skip_reason(one_block(String::from("lin"), lp, ITY_LPTR(), l)).len() == 0 { return 32; }
+
+    let q: Vec<IrInst> = Vec::new();
+    q.push(mk_inst_arg(0, ITY_PTR(), 0));
+    q.push(mk_inst_arg(1, ITY_PTR(), 1));
+    q.push(mk_inst(2, IOP_EQ(), ITY_BOOL(), args2(0, 1)));
+    q.push(mk_inst_return(3, 2));
+    let pp: Vec<i64> = Vec::new();
+    pp.push(ITY_PTR());
+    pp.push(ITY_PTR());
+    if vc_skip_reason(one_block(String::from("peq"), pp, ITY_BOOL(), q)).len() == 0 { return 33; }
+    0
+}
+
+// unwrap(o): tag == 0 ? abort : payload
+fn unwrap_fn(close_region: bool, with_abort: bool, empty_tag: i64) -> IrFunction {
+    let a: Vec<IrInst> = Vec::new();
+    a.push(mk_inst_arg(0, ITY_PTR(), 0));
+    a.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
+    a.push(mk_inst_const_i64(2, empty_tag));
+    a.push(mk_inst(3, IOP_EQ(), ITY_BOOL(), args2(1, 2)));
+    a.push(mk_inst_branch(4, 3, 1, 2));
+    let p: Vec<IrInst> = Vec::new();
+    if with_abort {
+        p.push(mk_inst_call_extern(5, ITY_UNIT(), Vec::new(), VC_INTERNAL_UNWRAP_PANIC()));
+    }
+    if close_region {
+        p.push(mk_inst(6, IOP_REGION_CLOSE(), ITY_UNIT(), Vec::new()));
+    }
+    p.push(mk_inst_unreachable(7));
+    let ok: Vec<IrInst> = Vec::new();
+    ok.push(mk_inst_field_get(8, ITY_I64(), 0, 1));
+    ok.push(mk_inst_return(9, 8));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, a));
+    blocks.push(mk_block(1, p));
+    blocks.push(mk_block(2, ok));
+    let f: IrFunction = mk_function(1, String::from("unwrap"), ptr_param(), ITY_I64(), blocks);
+    f.effects = 2;
+    f
+}
+
+fn check_effects_and_unwrap_shape() -> i64 {
+    if vc_skip_reason(unwrap_fn(false, true, 0)).len() != 0 { return 40; }
+    if vc_skip_reason(unwrap_fn(true, true, 0)).len() != 0 { return 41; }
+    if vc_skip_reason(unwrap_fn(false, false, 0)) != String::from("unsupported-opcode: Unreachable") { return 42; }
+    let with_io: IrFunction = unwrap_fn(false, true, 0);
+    with_io.effects = 3;
+    if !vc_skip_reason(with_io).contains(String::from("function-has-effects")) { return 43; }
+    let noisy: IrFunction = unwrap_fn(false, true, 0);
+    noisy.effects = 1;
+    if !vc_skip_reason(noisy).contains(String::from("function-has-effects")) { return 44; }
+    0
+}
+
+fn check_unwrap_claim() -> i64 {
+    let cs: VcClaims = vc_claims(unwrap_fn(true, true, 0));
+    if cs.kinds.len() != 1 { return 50; }
+    if cs.kinds[0] != VC_CLAIM_UNWRAP_NONE() { return 51; }
+    if cs.vow_ids[0] != -1 { return 52; }
+    if cs.labels[0] != String::from("unwrap-none") { return 53; }
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(declare-const p0f0s64 (_ BitVec 64))")) { return 54; }
+    if !q.contains(String::from("(define-fun v1 () (_ BitVec 64) p0f0s64)")) { return 55; }
+    if !q.contains(String::from("(assert (and v3 (not false)))")) { return 56; }
+    // `Result::unwrap` aborts on `Err`, whose tag is 1: the claim follows the tag it compares.
+    let err: String = query(vc_claims(unwrap_fn(true, true, 1)), 0);
+    if !err.contains(String::from("(define-fun v2 () (_ BitVec 64) #x0000000000000001)")) { return 57; }
+    if !err.contains(String::from("(assert (and v3 (not false)))")) { return 58; }
+    0
+}
+
+fn check_build_read_is_stored_term() -> i64 {
+    let cs: VcClaims = vc_claims(one_block(String::from("build"), mk_params1(), ITY_PTR(), build_insts(1)));
+    if cs.kinds.len() != 1 { return 60; }
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(define-fun v5 () (_ BitVec 64) v3)")) { return 61; }
+    if q.contains(String::from("declare-const j")) { return 62; }
+    0
+}
+
+fn check_unwritten_field_is_unconstrained() -> i64 {
+    let cs: VcClaims = vc_claims(one_block(String::from("build"), mk_params1(), ITY_PTR(), build_insts(2)));
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(declare-const j0 (_ BitVec 64))")) { return 70; }
+    if !q.contains(String::from("(define-fun v5 () (_ BitVec 64) j0)")) { return 71; }
+    0
+}
+
+fn check_param_symbols_declared_once() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_field_get(1, ITY_I64(), 0, 1));
+    i.push(mk_inst_field_get(2, ITY_I64(), 0, 1));
+    i.push(mk_inst(3, IOP_EQ(), ITY_BOOL(), args2(1, 2)));
+    i.push(mk_vow(4, IOP_VOW_ENS(), 3, 0));
+    i.push(mk_inst_return(5, 1));
+    let cs: VcClaims = vc_claims(one_block(String::from("g"), ptr_param(), ITY_I64(), i));
+    let q: String = query(cs, 0);
+    if count_of(q, String::from("(declare-const p0f1s64 ")) != 1 { return 80; }
+    0
+}
+
+// pick(c): P { a: 1 } if c > 0 else P { a: 2 }; ensures result.a == 1 || 2
+fn merged_fn(read_idx: i64) -> IrFunction {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_arg(0, ITY_I64(), 0));
+    e.push(mk_inst_const_i64(1, 0));
+    e.push(mk_inst(2, IOP_GT(), ITY_BOOL(), args2(0, 1)));
+    e.push(mk_inst_branch(3, 2, 1, 2));
+    let t: Vec<IrInst> = Vec::new();
+    t.push(mk_inst_alloc(4, 24));
+    t.push(mk_inst_const_i64(5, 1));
+    t.push(mk_inst_field_set(6, 4, 0, 5));
+    t.push(mk_inst_field_set(7, 4, 1, 5));
+    t.push(mk_inst_upsilon(8, 4, 20));
+    t.push(mk_inst_jump(9, 3));
+    let f: Vec<IrInst> = Vec::new();
+    f.push(mk_inst_alloc(10, 16));
+    f.push(mk_inst_const_i64(11, 2));
+    f.push(mk_inst_field_set(12, 10, 0, 11));
+    f.push(mk_inst_upsilon(13, 10, 20));
+    f.push(mk_inst_jump(14, 3));
+    let m: Vec<IrInst> = Vec::new();
+    m.push(mk_inst_phi(20, ITY_PTR()));
+    m.push(mk_inst_field_get(21, ITY_I64(), 20, read_idx));
+    m.push(mk_inst_return(22, 20));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, t));
+    blocks.push(mk_block(2, f));
+    blocks.push(mk_block(3, m));
+    mk_function(1, String::from("pick"), mk_params1(), ITY_PTR(), blocks)
+}
+
+fn check_phi_of_objects() -> i64 {
+    if vc_skip_reason(merged_fn(0)).len() != 0 { return 90; }
+    0
+}
+
+fn check_merged_read_is_ite_and_none_payload_is_junk() -> i64 {
+    // Both arms set field 0: the merged read is an `ite` of the two stored terms.
+    let cs: VcClaims = vc_claims(merged_fn(0));
+    let hdr: SmtScript = cs.header;
+    let all: String = vc_smt_render(cs.arena, hdr);
+    if !all.contains(String::from("() (_ BitVec 64) (ite ")) { return 100; }
+    if all.contains(String::from("declare-const j")) { return 101; }
+    // Only the then-arm set field 1: the else-arm's slot is an unconstrained constant.
+    let cs1: VcClaims = vc_claims(merged_fn(1));
+    let all1: String = vc_smt_render(cs1.arena, cs1.header);
+    if !all1.contains(String::from("(declare-const j0 (_ BitVec 64))")) { return 102; }
+    if !all1.contains(String::from("() (_ BitVec 64) (ite ")) { return 103; }
+    0
+}
+
+fn check_slot_overwrite_and_sorts() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let hdr: SmtScript = vc_script_new();
+    let ag: VcAgg = vc_agg_new(vc_flow_new(1, 1));
+    let o: i64 = vc_agg_alloc(ag);
+    let a: i64 = vc_tm_bv(ar, 64, 1, 0);
+    let b: i64 = vc_tm_bv(ar, 64, 2, 0);
+    vc_agg_set(ag, o, 3, 64, a);
+    if vc_agg_get(ag, ar, hdr, o, 3, 64) != a { return 110; }
+    vc_agg_set(ag, o, 3, 64, b);
+    if vc_agg_get(ag, ar, hdr, o, 3, 64) != b { return 111; }
+    // Writing the Bool view of a slot invalidates its i64 view.
+    let t: i64 = vc_tm_bool_const(ar, true);
+    vc_agg_set(ag, o, 3, VC_SORT_BOOL(), t);
+    if vc_agg_get(ag, ar, hdr, o, 3, VC_SORT_BOOL()) != t { return 112; }
+    let reread: i64 = vc_agg_get(ag, ar, hdr, o, 3, 64);
+    if reread == a || reread == b { return 113; }
+    // A second parameter object per index is never created.
+    let p0: i64 = vc_agg_param(ag, 0);
+    if vc_agg_param(ag, 0) != p0 { return 114; }
+    if vc_agg_param(ag, 1) == p0 { return 115; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_struct_gate_accepts();
+    if r == 0 { r = check_param_read_accepted(); }
+    if r == 0 { r = check_field_set_needs_own_block_alloc(); }
+    if r == 0 { r = check_unsupported_aggregate_shapes(); }
+    if r == 0 { r = check_effects_and_unwrap_shape(); }
+    if r == 0 { r = check_unwrap_claim(); }
+    if r == 0 { r = check_build_read_is_stored_term(); }
+    if r == 0 { r = check_unwritten_field_is_unconstrained(); }
+    if r == 0 { r = check_param_symbols_declared_once(); }
+    if r == 0 { r = check_phi_of_objects(); }
+    if r == 0 { r = check_merged_read_is_ite_and_none_payload_is_junk(); }
+    if r == 0 { r = check_slot_overwrite_and_sorts(); }
+    i64_to_i32_wrap(r)
+}

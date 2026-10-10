@@ -1,0 +1,13 @@
+// Native-only: ESBMC skips `[panic]` functions (see tests/verify-skip/unwrap_panic_effect.vow).
+// TEST: counterexample-fn "lookup"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// TEST: counterexample-violation "unwrap() called on None"
+module UnwrapNone
+
+fn lookup(x: i64) -> i64 [panic] vow {
+  ensures: result == result
+} {
+  let o: Option<i64> = if x > 0 { Option::Some(x) } else { Option::None };
+  o.unwrap()
+}

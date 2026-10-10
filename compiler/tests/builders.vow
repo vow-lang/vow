@@ -112,3 +112,20 @@ fn mk_params1() -> Vec<i64> {
     p.push(ITY_I64());
     p
 }
+
+fn mk_inst_alloc(id: i64, size: i64) -> IrInst {
+    ir_inst_new(id, IOP_REGION_ALLOC(), ITY_PTR(), Vec::new(), IDATA_ALLOC_SIZE(), size, 8, String::from(""))
+}
+
+fn mk_inst_field_set(id: i64, obj: i64, idx: i64, value_id: i64) -> IrInst {
+    let args: Vec<i64> = Vec::new();
+    args.push(obj);
+    args.push(value_id);
+    ir_inst_new(id, IOP_FIELD_SET(), ITY_UNIT(), args, IDATA_FIELD(), idx, 0, String::from(""))
+}
+
+fn mk_inst_field_get(id: i64, ty: i64, obj: i64, idx: i64) -> IrInst {
+    let args: Vec<i64> = Vec::new();
+    args.push(obj);
+    ir_inst_new(id, IOP_FIELD_GET(), ty, args, IDATA_FIELD(), idx, 0, String::from(""))
+}

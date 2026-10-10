@@ -1,0 +1,19 @@
+module EnumMatchPayload
+
+enum Shape { Circle(i64), Rect(i64), Empty }
+
+fn units(s: Shape) -> i64 vow {
+  requires: match s { Shape::Circle(r) => r >= 0 && r < 1000, Shape::Rect(w) => w >= 0 && w < 1000, Shape::Empty => true },
+  ensures: result >= 0
+} {
+  match s {
+    Shape::Circle(r) => r,
+    Shape::Rect(w) => w + 1,
+    Shape::Empty => 0,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(units(Shape::Rect(2)));
+  0
+}

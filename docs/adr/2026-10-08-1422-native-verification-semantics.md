@@ -191,7 +191,14 @@ known limits.
   exact on the `u64` side only; the `String` side is an uninterpreted relation.
   `format(parse(s)) == s` and decimal-text properties are `unknown`.
 - **Float `%`** is `Skipped` until codegen defines it.
-- **Recursion and effects** are `Skipped`.
+- **Recursion and effects** are `Skipped`, except `panic`: the abort of
+  `.unwrap()` on `None`/`Err` is a verification claim, reported unattributed
+  (vow id `4294967293`, blame `none`) like the division aborts (#1417).
+- **Aggregates** (structs, enums, `Option`, `Result`) are scalarised: one `i64`
+  or `Bool` term per field, merged field by field at joins. Parameter fields and
+  discriminants, and fields no construction wrote, are unconstrained. A field
+  write is modelled only on a value built in the same block; any other write,
+  and any aggregate nested in another, is `Skipped` (#1417).
 - **Callee inlining** (epic D4) makes verification cost grow with the call tree;
   modular assume-guarantee verification is a separate future ADR.
 - **128-bit aggregates** (struct fields) stay gated.
