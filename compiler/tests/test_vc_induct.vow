@@ -7,6 +7,7 @@ use vc_ops
 use vc_gate
 use vc_cfg
 use vc_loops
+use vc_exec
 use vc_induct
 use tests.builders
 
@@ -263,6 +264,18 @@ fn check_and_region() -> i64 {
     0
 }
 
+// The executor reads the cut function as claims only: one per copy of the
+// invariant, no unwinding claim, and the havoc constant is not a model input.
+fn check_claims() -> i64 {
+    let c: VcInduct = vc_induct_cut(count_up());
+    if c.status != VC_INDUCT_OK() { return 1; }
+    let cs: VcClaims = vc_claims(c.f);
+    if cs.kinds.len() != 2 { return 2; }
+    if cs.kinds[0] != VC_CLAIM_ENSURES() || cs.kinds[1] != VC_CLAIM_ENSURES() { return 3; }
+    if cs.model_names.len() != 0 { return 4; }
+    0
+}
+
 fn check_deterministic() -> i64 {
     let a: VcInduct = vc_induct_cut(count_up_and());
     let b: VcInduct = vc_induct_cut(count_up_and());
@@ -310,6 +323,7 @@ fn check_ptr_phi() -> i64 {
 fn main() -> i32 {
     let mut r: i64 = check_structure();
     if r == 0 { r = check_and_region() + 100; if r == 100 { r = 0; } }
+    if r == 0 { r = check_claims() + 150; if r == 150 { r = 0; } }
     if r == 0 { r = check_deterministic() + 200; if r == 200 { r = 0; } }
     if r == 0 { r = check_not_applicable() + 300; if r == 300 { r = 0; } }
     if r == 0 { r = check_ptr_phi() + 400; if r == 400 { r = 0; } }
