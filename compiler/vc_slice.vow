@@ -1,0 +1,249 @@
+module VcSlice
+
+use vc_term
+use vc_smt
+use vc_exec
+use ir_dominance
+
+// Cone of influence of one claim. The query of claim `k` (`vc_claim_script`)
+// asserts every assumption made before it, but the verdict of a claim depends
+// only on the assumptions that can constrain the variables its negated goal
+// reads, directly or through a chain of other assumptions. `vc_slice_claim`
+// computes that cone, and `vc_claim_script_sliced` renders a query holding only
+// it.
+//
+// Variables are the terms of kind `VC_T_VAR`: parameters and aggregate slots
+// (declared) and `define-fun` names (bound, see `vc_tm_bind`). A bound variable
+// stands for its definition term, so reaching one reaches everything its
+// definition mentions. An assumption is in the cone when it mentions a variable
+// that is reached, or that a reached variable is part of: `x = a + b` makes an
+// assumption over `x` constrain `a`. The upward step goes through definitions
+// only; a definition nothing kept refers to is dropped with its command.
+//
+// The result is a relaxation of the full query (a subset of its conjuncts, with
+// only unreferenced definitions removed), so `unsat` on it implies `unsat` on
+// the full query. `sat` implies nothing: the dropped assumptions may be
+// contradictory on their own. Callers therefore re-ask the full query whenever a
+// sliced query is not `unsat`, unless only definitions were dropped (those are
+// macros: the sliced query is then equisatisfiable). Declarations, the logic and
+// the model request are always kept, so a model of a sliced query names every
+// parameter.
+
+// Indexes over one finished `VcClaims`, built once: `ah` maps a variable to the
+// assumptions that mention it directly, `uh` to the bound variables whose
+// definition mentions it. Both are linked lists in parallel vectors (`*n` next,
+// `*i` payload) headed per variable id. `tmark`, `upmark`, `amark` are epoch
+// stamps, so a query never clears them.
+struct VcSlicer {
+    ah: Vec<i64>,
+    an: Vec<i64>,
+    ai: Vec<i64>,
+    uh: Vec<i64>,
+    un: Vec<i64>,
+    ud: Vec<i64>,
+    dc: Vec<i64>,
+    ground: Vec<i64>,
+    tmark: Vec<i64>,
+    upmark: Vec<i64>,
+    amark: Vec<i64>,
+    epoch: i64,
+    down: Vec<i64>,
+    ups: Vec<i64>,
+}
+
+// The kept parts of one claim's query: indices into the shared header and the
+// assumption list, ascending. `dropped_asserts` is set when an assumption was
+// left out, `dropped_defs` when a definition was.
+struct VcSlice {
+    cmds: Vec<i64>,
+    assumed: Vec<i64>,
+    dropped_asserts: bool,
+    dropped_defs: bool,
+}
+
+// Links every variable leaf of `root` to `owner` on the list headed in `heads`
+// (`defs` selects the definition list). Returns the number of leaves met.
+fn vc_slicer_link(sx: VcSlicer, ar: VcArena, root: i64, owner: i64, defs: bool) -> i64 {
+    sx.epoch = sx.epoch + 1;
+    let ep: i64 = sx.epoch;
+    let st: Vec<i64> = sx.down;
+    let mut leaves: i64 = 0;
+    st.push(root);
+    while st.len() > 0 {
+        let t: i64 = st[st.len() - 1];
+        st.pop();
+        if sx.tmark[t as u64] != ep {
+            sx.tmark[t as u64] = ep;
+            let kind: i64 = ar.kinds[t as u64];
+            if kind == VC_T_VAR() {
+                leaves = leaves + 1;
+                if defs {
+                    sx.un.push(sx.uh[t as u64]);
+                    sx.ud.push(owner);
+                    sx.uh[t as u64] = sx.un.len() as i64 - 1;
+                } else {
+                    sx.an.push(sx.ah[t as u64]);
+                    sx.ai.push(owner);
+                    sx.ah[t as u64] = sx.an.len() as i64 - 1;
+                }
+            } else if kind == VC_T_APP() {
+                st.push(ar.a[t as u64]);
+                if ar.b[t as u64] >= 0 { st.push(ar.b[t as u64]); }
+                if ar.c[t as u64] >= 0 { st.push(ar.c[t as u64]); }
+            } else if kind == VC_T_EXT() {
+                st.push(ar.a[t as u64]);
+            }
+        }
+    }
+    leaves
+}
+
+fn vc_slicer_new(cs: VcClaims) -> VcSlicer {
+    let ar: VcArena = cs.arena;
+    let n: u64 = ar.kinds.len();
+    let sx: VcSlicer = VcSlicer {
+        ah: dom_fill(n, -1),
+        an: Vec::new(),
+        ai: Vec::new(),
+        uh: dom_fill(n, -1),
+        un: Vec::new(),
+        ud: Vec::new(),
+        dc: dom_fill(n, -1),
+        ground: dom_fill(cs.assumed.len(), 0),
+        tmark: dom_fill(n, 0),
+        upmark: dom_fill(n, 0),
+        amark: dom_fill(cs.assumed.len(), 0),
+        epoch: 0,
+        down: Vec::new(),
+        ups: Vec::new(),
+    };
+    let hdr: SmtScript = cs.header;
+    let mut i: u64 = 0;
+    while i < hdr.kinds.len() {
+        if hdr.kinds[i] == VC_CMD_DEFINE_FUN() {
+            let v: i64 = ar.named[hdr.terms[i] as u64];
+            if v >= 0 {
+                sx.dc[v as u64] = i as i64;
+                vc_slicer_link(sx, ar, hdr.terms[i], v, true);
+            }
+        }
+        i = i + 1;
+    }
+    let mut a: u64 = 0;
+    while a < cs.assumed.len() {
+        if vc_slicer_link(sx, ar, cs.assumed[a], a as i64, false) == 0 {
+            sx.ground[a] = 1;
+        }
+        a = a + 1;
+    }
+    sx
+}
+
+// Visits `start` and everything that depends on it through definitions below
+// `hl`, queueing the assumptions below `al` that mention any of them.
+fn vc_slice_up(sx: VcSlicer, cs: VcClaims, start: i64, ep: i64, hl: i64, al: i64) {
+    if sx.upmark[start as u64] == ep { return; }
+    sx.upmark[start as u64] = ep;
+    let ups: Vec<i64> = sx.ups;
+    ups.push(start);
+    while ups.len() > 0 {
+        let u: i64 = ups[ups.len() - 1];
+        ups.pop();
+        let mut e: i64 = sx.ah[u as u64];
+        while e >= 0 {
+            let a: i64 = sx.ai[e as u64];
+            if a < al && sx.amark[a as u64] != ep {
+                sx.amark[a as u64] = ep;
+                sx.down.push(cs.assumed[a as u64]);
+            }
+            e = sx.an[e as u64];
+        }
+        e = sx.uh[u as u64];
+        while e >= 0 {
+            let d: i64 = sx.ud[e as u64];
+            if sx.dc[d as u64] < hl && sx.upmark[d as u64] != ep {
+                sx.upmark[d as u64] = ep;
+                ups.push(d);
+            }
+            e = sx.un[e as u64];
+        }
+    }
+}
+
+// The cone of claim `k`: header commands and assumptions of its prefix that
+// can influence its negated goal.
+fn vc_slice_claim(sx: VcSlicer, cs: VcClaims, k: u64) -> VcSlice {
+    let ar: VcArena = cs.arena;
+    let hdr: SmtScript = cs.header;
+    let hl: i64 = cs.header_lens[k];
+    let al: i64 = cs.assumed_lens[k];
+    sx.epoch = sx.epoch + 1;
+    let ep: i64 = sx.epoch;
+    let st: Vec<i64> = sx.down;
+    st.push(cs.negated_goals[k]);
+    while st.len() > 0 {
+        let t: i64 = st[st.len() - 1];
+        st.pop();
+        if sx.tmark[t as u64] != ep {
+            sx.tmark[t as u64] = ep;
+            let kind: i64 = ar.kinds[t as u64];
+            if kind == VC_T_VAR() {
+                vc_slice_up(sx, cs, t, ep, hl, al);
+                let def: i64 = ar.named[t as u64];
+                if def >= 0 { st.push(def); }
+            } else if kind == VC_T_APP() {
+                st.push(ar.a[t as u64]);
+                if ar.b[t as u64] >= 0 { st.push(ar.b[t as u64]); }
+                if ar.c[t as u64] >= 0 { st.push(ar.c[t as u64]); }
+            } else if kind == VC_T_EXT() {
+                st.push(ar.a[t as u64]);
+            }
+        }
+    }
+    let sl: VcSlice = VcSlice { cmds: Vec::new(), assumed: Vec::new(), dropped_asserts: false, dropped_defs: false };
+    let mut i: i64 = 0;
+    while i < hl {
+        let mut keep: bool = true;
+        if hdr.kinds[i as u64] == VC_CMD_DEFINE_FUN() {
+            let v: i64 = ar.named[hdr.terms[i as u64] as u64];
+            if v >= 0 && sx.tmark[v as u64] != ep {
+                keep = false;
+                sl.dropped_defs = true;
+            }
+        }
+        if keep { sl.cmds.push(i); }
+        i = i + 1;
+    }
+    let mut a: i64 = 0;
+    while a < al {
+        if sx.amark[a as u64] == ep || sx.ground[a as u64] == 1 {
+            sl.assumed.push(a);
+        } else {
+            sl.dropped_asserts = true;
+        }
+        a = a + 1;
+    }
+    sl
+}
+
+// The query of claim `k` restricted to `sl`: the shape of `vc_claim_script`
+// with the commands and assumptions of the cone only.
+fn vc_claim_script_sliced(cs: VcClaims, k: u64, sl: VcSlice) -> SmtScript {
+    let hdr: SmtScript = cs.header;
+    let s: SmtScript = vc_script_new();
+    let mut i: u64 = 0;
+    while i < sl.cmds.len() {
+        let c: u64 = sl.cmds[i] as u64;
+        vc_script_push(s, hdr.kinds[c], hdr.names[c], hdr.vals[c], hdr.sorts[c], hdr.terms[c]);
+        i = i + 1;
+    }
+    let mut j: u64 = 0;
+    while j < sl.assumed.len() {
+        vc_script_assert(s, cs.assumed[sl.assumed[j] as u64]);
+        j = j + 1;
+    }
+    vc_script_assert(s, cs.negated_goals[k]);
+    vc_script_check_sat(s);
+    vc_script_get_value(s, cs.model_names);
+    s
+}
