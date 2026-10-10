@@ -77,6 +77,8 @@ jobs:
         run: python3 scripts/test_verify_eval.py
       - name: Native-vs-ESBMC differential harness unit tests
         run: python3 scripts/test_verify_diff.py
+      - name: Native-vs-ESBMC performance harness unit tests
+        run: python3 scripts/test_verify_perf.py
       - name: Candidate isolation unit tests
         run: python3 scripts/test_candidate_isolation.py
       - name: Equivalence runner unit tests

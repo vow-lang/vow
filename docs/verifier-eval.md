@@ -190,3 +190,73 @@ python3 scripts/verify_diff.py --filter max   # one fixture family
 It is a developer and acceptance-gate tool (epic #1398, gate item 1), not a
 `full_test.sh` section: the native backend covers a growing subset, so most
 fixtures are `weaker` until it catches up.
+
+## Performance gate: native verifier vs ESBMC
+
+[`scripts/verify_perf.py`](../scripts/verify_perf.py) (epic #1398, issue #1420)
+encodes acceptance gate item 3. It times `vowc verify --backend esbmc` against
+`--backend native` with the cache off (`--no-cache`, fresh `VOW_CACHE_DIR` per
+run), one fixture at a time on one machine, and reports the median of five runs
+per backend.
+
+**Corpus** (read-only, enumerated at start; a benchmark count other than 23 is
+corpus drift and exits `2`):
+
+- the 23 non-stretch `benchmarks/*/reference.vow` files from `benchmarks/manifest.toml`;
+- `tests/verify`, `tests/verify-fail`, `tests/verify-skip` (honouring `// TEST: skip`);
+- `tests/verify-fail-multi/*/main.vow`;
+- `tests/verify-native/{pass,fail,skip,unknown}` (truth from the directory);
+- the float fixtures, which live inside the sets above;
+- `tests/verify-stress` only with `--include-stress` (non-gating, times out by design).
+
+**Metrics.** Wall-clock is the process wall time. Peak RSS is the larger of the
+sampled sum over the whole process tree (driver plus solver children, 20 ms
+interval) and the kernel's `ru_maxrss` for the run; both raw numbers are in the
+report. One discarded warm-up run per backend precedes the timed runs, and the
+timed runs alternate between backends so host drift hits both.
+
+**Gate.** A ratio is `native / esbmc` of the per-backend medians.
+
+| Criterion | Threshold |
+| --- | --- |
+| Geometric mean of the ratios, wall-clock and RSS | `<= 1.0` on both |
+| Worst single fixture, wall-clock and RSS | `<= 1.25` |
+| Timeouts | native times out on no fixture where ESBMC finishes |
+| Comparable rows | at least one |
+
+Only rows classed `match` by `verify_diff.py` (same verdict and counterexamples,
+so the same work) enter the ratios. `more_precise`, `weaker`, `soundness`,
+`harness`, a verdict that changes between runs of one backend (`unstable`) and
+rows where either backend timed out are listed with their reason and left out of
+the ratios. Verdict parity is gate item 1 and stays with `verify_diff.py`. The
+timeout criterion looks at every row, so a native timeout still counts when the
+row is otherwise excluded. A fixture times out on a backend when more than half
+of its runs did (`verify_status` `timeout` or the watchdog fired).
+
+By default neither backend gets `--timeout`, so each runs at its shipped
+budget (an explicit `--timeout` suppresses ESBMC's BV phase and its fallback).
+`--timeout N` passes the same budget to both and is recorded in the report.
+Both backends run with `--verify-jobs 1` unless overridden.
+
+**Report.** One JSON document (`schema_version`, `vowc`, `esbmc_version`,
+`bitwuzla_version`, `host`, `runs`, `budget`, `timeout_s`, `verify_jobs`,
+`corpus`, `rows[]`, `gate`) on stdout or in `--output FILE`, plus a human
+summary on stderr. Each row carries both backends' medians, raw samples,
+verdicts, `timeout_runs`, the `verify_diff` class, the ratios and the reason a
+row was excluded. `gate` carries the criteria, per-metric geometric mean and
+worst fixture, and the timeout lists (`native_only`, `esbmc_only`, `both`). A
+run with `--runs` below 5, or with `--filter`, sets `gate.provisional`.
+
+Exit codes: `0` gate passed, `1` gate failed, `2` the harness could not run
+(missing `vowc`, `esbmc` or `bitwuzla`; ESBMC that is not 8.5; non-Linux host;
+corpus drift; no fixture selected; an I/O error).
+
+```bash
+python3 scripts/verify_perf.py --vowc build/vowc --output /tmp/verify-perf.json
+python3 scripts/verify_perf.py --filter benchmarks/E01 --runs 1   # smoke run
+```
+
+Run it on an idle host with ESBMC 8.5 and the pinned Bitwuzla on `PATH`. The
+full run measures hundreds of fixtures six times per backend and takes hours. It
+is an acceptance-gate tool, not a `full_test.sh` section: it is host-dependent
+and its thresholds only become meaningful once native covers the corpus.
