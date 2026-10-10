@@ -186,17 +186,6 @@ fn check_unwind_schedule() -> i64 {
     0
 }
 
-fn check_round_decision() -> i64 {
-    if vc_round_decision(false, 0, 6) != VC_ROUND_PROVEN() { return 40; }
-    if vc_round_decision(false, 5, 6) != VC_ROUND_PROVEN() { return 41; }
-    if vc_round_decision(true, 0, 6) != VC_ROUND_NEXT() { return 42; }
-    if vc_round_decision(true, 4, 6) != VC_ROUND_NEXT() { return 43; }
-    // an open unwinding claim at the last bound is never proven
-    if vc_round_decision(true, 5, 6) != VC_ROUND_UNKNOWN() { return 44; }
-    if vc_round_decision(true, 0, 1) != VC_ROUND_UNKNOWN() { return 45; }
-    0
-}
-
 fn main() -> i32 {
     let mut r: i64 = check_round_trip();
     if r == 0 { r = check_leading_noise_is_skipped(); }
@@ -208,6 +197,5 @@ fn main() -> i32 {
     if r == 0 { r = check_tail_keeps_whole_characters(); }
     if r == 0 { r = check_unwinding_reason_round_trips(); }
     if r == 0 { r = check_unwind_schedule(); }
-    if r == 0 { r = check_round_decision(); }
     i64_to_i32_wrap(r)
 }

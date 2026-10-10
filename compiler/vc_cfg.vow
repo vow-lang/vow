@@ -198,31 +198,32 @@ fn vc_upsilon_detail(f: IrFunction, tys: Vec<i64>, succ: Vec<i64>, rpo: Vec<i64>
     String::from("")
 }
 
-fn vc_cfg_detail(f: IrFunction, tys: Vec<i64>) -> String {
+// `acyclic` selects the executor's own shape (no back edge at all) over the
+// source shape (reducible loops `vc_unroll` can unroll).
+fn vc_flow_shape_detail(f: IrFunction, tys: Vec<i64>, acyclic: bool) -> String {
     let nb: u64 = f.blocks.len();
     let id_to_idx: Vec<i64> = dom_block_id_table(f);
     let succ: Vec<i64> = dom_successors(f, id_to_idx);
     let t: String = vc_terminator_detail(f, succ);
     if t.len() > 0 { return t; }
     let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
-    let l: String = vc_loop_shape_detail(f, succ, rpo);
+    let mut l: String = vc_loop_shape_detail(f, succ, rpo);
+    if acyclic {
+        l = vc_back_edge_detail(nb, succ, rpo);
+    }
     if l.len() > 0 { return l; }
     vc_cfg_tail_detail(f, tys, succ, rpo)
+}
+
+fn vc_cfg_detail(f: IrFunction, tys: Vec<i64>) -> String {
+    vc_flow_shape_detail(f, tys, false)
 }
 
 // The shape the executor walks: `vc_cfg_detail` plus acyclicity, which the
 // unroller must deliver and the executor relies on (a block entered before one
 // of its predecessors would silently lose its obligations).
 fn vc_unrolled_detail(f: IrFunction, tys: Vec<i64>) -> String {
-    let nb: u64 = f.blocks.len();
-    let id_to_idx: Vec<i64> = dom_block_id_table(f);
-    let succ: Vec<i64> = dom_successors(f, id_to_idx);
-    let t: String = vc_terminator_detail(f, succ);
-    if t.len() > 0 { return t; }
-    let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
-    let b: String = vc_back_edge_detail(nb, succ, rpo);
-    if b.len() > 0 { return b; }
-    vc_cfg_tail_detail(f, tys, succ, rpo)
+    vc_flow_shape_detail(f, tys, true)
 }
 
 fn vc_cfg_tail_detail(f: IrFunction, tys: Vec<i64>, succ: Vec<i64>, rpo: Vec<i64>) -> String {

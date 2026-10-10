@@ -130,7 +130,29 @@ fn vc_empty_loop_info(nb: u64, irreducible: bool, idom: Vec<i64>, nums: Vec<i64>
     }
 }
 
+// True when a reachable edge goes to a block numbered no later than its source.
+fn vc_has_retreating_edge(nb: u64, succ: Vec<i64>, rpo: Vec<i64>) -> bool {
+    let mut b: u64 = 0;
+    while b < nb {
+        if rpo[b] >= 0 {
+            let mut k: u64 = 0;
+            while k < 2 {
+                let s: i64 = succ[b * 2 + k];
+                if s >= 0 && rpo[s as u64] <= rpo[b] {
+                    return true;
+                }
+                k = k + 1;
+            }
+        }
+        b = b + 1;
+    }
+    false
+}
+
 fn vc_loop_analysis(nb: u64, succ: Vec<i64>, rpo: Vec<i64>) -> VcLoopInfo {
+    if !vc_has_retreating_edge(nb, succ, rpo) {
+        return vc_empty_loop_info(nb, false, Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    }
     let order: Vec<i64> = dom_rpo_order(rpo);
     let off: Vec<i64> = dom_pred_offsets(nb, succ, rpo);
     let preds: Vec<i64> = dom_pred_list(nb, succ, rpo, off);
@@ -145,9 +167,6 @@ fn vc_loop_analysis(nb: u64, succ: Vec<i64>, rpo: Vec<i64>) -> VcLoopInfo {
         return vc_empty_loop_info(nb, true, idom, nums, off, preds);
     }
     let n: u64 = headers.len();
-    if n == 0 {
-        return vc_empty_loop_info(nb, false, idom, nums, off, preds);
-    }
 
     let mark: Vec<i64> = dom_fill(nb, -1);
     let mem: Vec<i64> = Vec::new();
@@ -414,20 +433,26 @@ fn vc_clone_inst(orig: IrInst, new_id: i64, args: Vec<i64>, dv: i64, dv2: i64) -
 }
 
 fn vc_replace_arg(inst: IrInst, v: i64, w: i64) -> IrInst {
-    let args: Vec<i64> = Vec::new();
-    let mut changed: bool = false;
+    let mut hit: bool = false;
     let mut ai: u64 = 0;
     while ai < inst.args.len() {
         if inst.args[ai] == v {
+            hit = true;
+        }
+        ai = ai + 1;
+    }
+    if !hit {
+        return inst;
+    }
+    let args: Vec<i64> = Vec::new();
+    ai = 0;
+    while ai < inst.args.len() {
+        if inst.args[ai] == v {
             args.push(w);
-            changed = true;
         } else {
             args.push(inst.args[ai]);
         }
         ai = ai + 1;
-    }
-    if !changed {
-        return inst;
     }
     vc_clone_inst(inst, inst.id, args, inst.dv, inst.dv2)
 }
@@ -435,21 +460,9 @@ fn vc_replace_arg(inst: IrInst, v: i64, w: i64) -> IrInst {
 // `f`'s signature and contracts with no blocks, for a transformed copy.
 fn vc_function_shell(f: IrFunction) -> IrFunction {
     let g: IrFunction = ir_function_new(f.id, f.name, f.return_ty, f.effects, f.source_file);
-    let mut i: u64 = 0;
-    while i < f.params.len() {
-        g.params.push(f.params[i]);
-        i = i + 1;
-    }
-    i = 0;
-    while i < f.param_names.len() {
-        g.param_names.push(f.param_names[i]);
-        i = i + 1;
-    }
-    i = 0;
-    while i < f.vows.len() {
-        g.vows.push(f.vows[i]);
-        i = i + 1;
-    }
+    g.params = f.params;
+    g.param_names = f.param_names;
+    g.vows = f.vows;
     g
 }
 
@@ -550,9 +563,9 @@ fn vc_values_closing_at(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, defs: VcDe
     }
 }
 
-// One closing step: the function after routing the first escaping read through
-// a Phi, or `f` itself (`changed` false) when nothing is left or it cannot be
-// closed.
+// One closing step: the function after routing every value of one loop that
+// lands at the first escaping read's block through Phis (one rebuild), or `f`
+// itself (`changed` false) when nothing is left or it cannot be closed.
 fn vc_close_one(f: IrFunction) -> VcClosed {
     let nb: u64 = f.blocks.len();
     if nb == 0 {

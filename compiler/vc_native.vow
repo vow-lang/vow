@@ -50,22 +50,6 @@ fn vc_unwind_bounds() -> Vec<i64> {
     b
 }
 
-fn VC_ROUND_PROVEN() -> i64 { 0 }
-fn VC_ROUND_NEXT() -> i64 { 1 }
-fn VC_ROUND_UNKNOWN() -> i64 { 2 }
-
-// What a round that decided every claim without a failure leads to: `open` is
-// true when its unwinding claim was `sat`.
-fn vc_round_decision(open: bool, round: u64, rounds: u64) -> i64 {
-    if !open {
-        return VC_ROUND_PROVEN();
-    }
-    if round + 1 < rounds {
-        return VC_ROUND_NEXT();
-    }
-    VC_ROUND_UNKNOWN()
-}
-
 fn vc_bare_outcome(result: VerifyResult) -> VcOutcome {
     VcOutcome { result: result, sites: Vec::new() }
 }
@@ -88,16 +72,16 @@ fn vc_has_site(sites: Vec<ParsedArithSite>, site: ParsedArithSite) -> bool {
     false
 }
 
-// One round: the claims of the unrolled function `g` of `f`. `sites` collects
-// the reachable soft aborts. Returns the verdict that ends the check (any
-// outcome but `unsat`/soft `sat`/open unwinding), or `proven` with `open` set
-// when only the unwinding claim was `sat`.
 struct VcRound {
     result: VerifyResult,
     ended: bool,
     open: bool,
 }
 
+// One round: the claims of the unrolled function `g` of `f`. `sites` collects
+// the reachable soft aborts. Returns the verdict that ends the check (any
+// outcome but `unsat`/soft `sat`/open unwinding), or `proven` with `open` set
+// when only the unwinding claim was `sat`.
 fn vc_run_round(f: IrFunction, g: IrFunction, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String) -> VcRound [io, read, write] {
     let cs: VcClaims = vc_claims(g);
     if cs.kinds.len() == 0 {
@@ -150,14 +134,13 @@ fn vc_verify_function(f: IrFunction, timeout_ms: i64, scratch: String) -> VcOutc
         if r.ended {
             return vc_bare_outcome(r.result);
         }
-        let d: i64 = vc_round_decision(r.open, round, bounds.len());
-        if d == VC_ROUND_PROVEN() {
+        if !r.open {
             return VcOutcome { result: vc_proven_result(), sites: sites };
         }
-        if d == VC_ROUND_UNKNOWN() {
+        if round + 1 == bounds.len() {
             return vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_unwinding_reason(bound)));
         }
         round = round + 1;
     }
-    vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_unwinding_reason(0)))
+    vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_unwinding_reason(bounds[bounds.len() - 1])))
 }
