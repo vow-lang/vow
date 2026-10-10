@@ -1659,7 +1659,10 @@ mod tests {
     fn assert_head_round_trips(body: &str) -> String {
         let first = print_fn_body(body);
         let (module, diagnostics) = crate::parser::parse_module(&first, "t.vow");
-        assert!(diagnostics.is_empty(), "{body:?} reprint:\n{first}\n{diagnostics:?}");
+        assert!(
+            diagnostics.is_empty(),
+            "{body:?} reprint:\n{first}\n{diagnostics:?}"
+        );
         let second = print_module(&module);
         assert_eq!(first, second, "{body:?}: not idempotent");
         first
@@ -1669,7 +1672,10 @@ mod tests {
     fn head_struct_literal_is_parenthesised_so_it_reparses() {
         for (body, expected) in [
             ("if (S { a: 1 }).a == 1 { }", "if (S { a: 1 }.a == 1) {"),
-            ("while (S { a: 1 }).a == 1 { }", "while (S { a: 1 }.a == 1) {"),
+            (
+                "while (S { a: 1 }).a == 1 { }",
+                "while (S { a: 1 }.a == 1) {",
+            ),
             ("for i in (S { a: 1 }).a { }", "for i in (S { a: 1 }.a) {"),
             ("match (S { a: 1 }) { }", "match (S { a: 1 }) {"),
             ("if 1 == (S { a: 1 }).a { }", "if (1 == S { a: 1 }.a) {"),
@@ -1678,7 +1684,10 @@ mod tests {
             ("if (S { a: 1 }).m() { }", "if (S { a: 1 }.m()) {"),
             ("if (S { a: 1 })(x) { }", "if (S { a: 1 }(x)) {"),
             ("if (S { a: 1 }).v[0] { }", "if (S { a: 1 }.v[0]) {"),
-            ("if (S { a: 1 }) as i64 == 1 { }", "if ((S { a: 1 }) as i64 == 1) {"),
+            (
+                "if (S { a: 1 }) as i64 == 1 { }",
+                "if ((S { a: 1 }) as i64 == 1) {",
+            ),
             ("if (x = S { a: 1 }) { }", "if (x = S { a: 1 }) {"),
             ("if { break S { a: 1 } } { }", "if {"),
             ("if (return S { a: 1 }) { }", "if (return S { a: 1 }) {"),

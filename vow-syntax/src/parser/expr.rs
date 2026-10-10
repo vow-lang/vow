@@ -1709,7 +1709,9 @@ mod tests {
     const HEAD_PRELUDE: &str = "module M\nstruct S { a: i64 }\nenum Color { Red, Green }\nenum Shape { Circle { r: i64 } }\nconst DEBUG: bool = false;\n";
 
     fn parse_fn_body(body: &str) -> (crate::ast::Module, Vec<vow_diag::Diagnostic>) {
-        let src = format!("{HEAD_PRELUDE}fn f(c: Color, x: S, v: Vec<i64>) -> i64 {{\n    {body}\n    0\n}}\n");
+        let src = format!(
+            "{HEAD_PRELUDE}fn f(c: Color, x: S, v: Vec<i64>) -> i64 {{\n    {body}\n    0\n}}\n"
+        );
         crate::parser::parse_module(&src, "t.vow")
     }
 
@@ -1757,10 +1759,10 @@ mod tests {
         let expr = parse_no_errors("if c == Color::Red { }");
         match &expr.kind {
             ExprKind::If { condition, .. } => match &condition.kind {
-                ExprKind::BinaryOp { rhs, .. } => assert!(
-                    matches!(&rhs.kind, ExprKind::EnumConstruct { path, fields }
-                        if path == &["Color", "Red"] && fields.is_empty())
-                ),
+                ExprKind::BinaryOp { rhs, .. } => {
+                    assert!(matches!(&rhs.kind, ExprKind::EnumConstruct { path, fields }
+                        if path == &["Color", "Red"] && fields.is_empty()))
+                }
                 other => panic!("expected BinaryOp, got {other:?}"),
             },
             other => panic!("expected If, got {other:?}"),
