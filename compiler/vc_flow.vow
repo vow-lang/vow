@@ -13,7 +13,7 @@ use ir_dominance
 // bound to a `define-fun` name, so a term is printed once and the query grows
 // with the number of edges and Phis, never with the number of paths.
 //
-// A branch whose condition is a constant, or an SSA value whose outcome the path
+// A branch whose condition is a constant, or a term whose outcome the path
 // already fixed, has a single live edge: the other target gets no edge and is
 // never executed. A Phi is the `ite` over its incoming edges of the value each
 // predecessor's Upsilon supplied, and collapses to that value when every
@@ -59,16 +59,18 @@ fn vc_flow_new(n_blocks: u64, n_ids: u64) -> VcFlow {
     }
 }
 
-// `t` bound to a fresh name when it is composite; leaves and names are shared.
+// `t` bound to a name when it is composite; leaves and terms already named
+// share the name they have.
 fn vc_flow_name(fl: VcFlow, ar: VcArena, hdr: SmtScript, sort: i64, t: i64) -> i64 {
-    if ar.kinds[t as u64] != VC_T_APP() {
-        return t;
+    let known: i64 = vc_tm_shared(ar, t);
+    if known >= 0 {
+        return known;
     }
     let name: String = String::from("g");
     name.push_str(i64_to_string(fl.names));
     fl.names = fl.names + 1;
     vc_script_define_fun(hdr, name, sort, t);
-    vc_tm_var(ar, name)
+    vc_tm_bind(ar, t, name)
 }
 
 fn vc_flow_and(fl: VcFlow, ar: VcArena, hdr: SmtScript, a: i64, b: i64) -> i64 {
@@ -91,8 +93,18 @@ fn vc_flow_has_fact(fl: VcFlow, off: i64, len: i64, lit: i64) -> bool {
     false
 }
 
-fn vc_flow_fact_lit(cond_id: i64, outcome: bool) -> i64 {
-    if outcome { cond_id * 2 + 1 } else { cond_id * 2 }
+// The fact "term `t` evaluates to `outcome`", normalised through negations so a
+// condition and its negation share one fact.
+fn vc_flow_fact_lit(ar: VcArena, t: i64, outcome: bool) -> i64 {
+    let mut base: i64 = t;
+    let mut o: bool = outcome;
+    let mut inner: i64 = vc_tm_negated(ar, base);
+    while inner >= 0 {
+        base = inner;
+        o = !o;
+        inner = vc_tm_negated(ar, base);
+    }
+    if o { base * 2 + 1 } else { base * 2 }
 }
 
 // Offset of a copy of the fact set `off`/`len` extended by `lit`; the copy runs

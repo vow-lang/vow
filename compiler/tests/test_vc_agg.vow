@@ -225,21 +225,24 @@ fn check_unwrap_claim() -> i64 {
     if cs.labels[0] != String::from("unwrap-none") { return 53; }
     let q: String = query(cs, 0);
     if !q.contains(String::from("(declare-const p0f0s64 (_ BitVec 64))")) { return 54; }
-    if !q.contains(String::from("(define-fun v1 () (_ BitVec 64) p0f0s64)")) { return 55; }
-    if !q.contains(String::from("(assert (and v3 (not false)))")) { return 56; }
+    if !q.contains(String::from("(define-fun v3 () Bool (= p0f0s64 #x0000000000000000))")) { return 55; }
+    if !q.contains(String::from("(assert v3)\n")) { return 56; }
     // `Result::unwrap` aborts on `Err`, whose tag is 1: the claim follows the tag it compares.
     let err: String = query(vc_claims(unwrap_fn(true, true, 1)), 0);
-    if !err.contains(String::from("(define-fun v2 () (_ BitVec 64) #x0000000000000001)")) { return 57; }
-    if !err.contains(String::from("(assert (and v3 (not false)))")) { return 58; }
+    if !err.contains(String::from("(define-fun v3 () Bool (= p0f0s64 #x0000000000000001))")) { return 57; }
+    if !err.contains(String::from("(assert v3)\n")) { return 58; }
     0
 }
 
+// A read of a stored field is the stored term itself: the constant 7 compared
+// with itself is decided, so no claim and no unconstrained symbol remain.
 fn check_build_read_is_stored_term() -> i64 {
     let cs: VcClaims = vc_claims(one_block(String::from("build"), mk_params1(), ITY_PTR(), build_insts(1)));
-    if cs.kinds.len() != 1 { return 60; }
-    let q: String = query(cs, 0);
-    if !q.contains(String::from("(define-fun v5 () (_ BitVec 64) v3)")) { return 61; }
-    if q.contains(String::from("declare-const j")) { return 62; }
+    if cs.kinds.len() != 0 { return 60; }
+    if vc_smt_render(cs.arena, cs.header).contains(String::from("declare-const j")) { return 62; }
+    let a: VcClaims = vc_claims(one_block(String::from("build"), mk_params1(), ITY_PTR(), build_insts(0)));
+    if a.kinds.len() != 1 { return 63; }
+    if !query(a, 0).contains(String::from("(define-fun v6 () Bool (= p0 #x0000000000000007))")) { return 64; }
     0
 }
 
@@ -247,7 +250,7 @@ fn check_unwritten_field_is_unconstrained() -> i64 {
     let cs: VcClaims = vc_claims(one_block(String::from("build"), mk_params1(), ITY_PTR(), build_insts(2)));
     let q: String = query(cs, 0);
     if !q.contains(String::from("(declare-const j0 (_ BitVec 64))")) { return 70; }
-    if !q.contains(String::from("(define-fun v5 () (_ BitVec 64) j0)")) { return 71; }
+    if !q.contains(String::from("(= j0 #x0000000000000007))")) { return 71; }
     0
 }
 
@@ -260,8 +263,8 @@ fn check_param_symbols_declared_once() -> i64 {
     i.push(mk_vow(4, IOP_VOW_ENS(), 3, 0));
     i.push(mk_inst_return(5, 1));
     let cs: VcClaims = vc_claims(one_block(String::from("g"), ptr_param(), ITY_I64(), i));
-    let q: String = query(cs, 0);
-    if count_of(q, String::from("(declare-const p0f1s64 ")) != 1 { return 80; }
+    let all: String = vc_smt_render(cs.arena, cs.header);
+    if count_of(all, String::from("(declare-const p0f1s64 ")) != 1 { return 80; }
     0
 }
 
@@ -345,7 +348,7 @@ fn mk_const128(id: i64, lo: i64, hi: i64) -> IrInst {
     ir_inst_new(id, IOP_CONST_U128(), ITY_U128(), Vec::new(), IDATA_CONST_I64(), lo, hi, String::from(""))
 }
 
-// build(): W { v: 5 + 7 << 64 } at wide slot 1, ensures result.v == itself
+// build(): W { v: 5 + 7 << 64 } at wide slot 1, ensures the read-back equals it
 fn check_wide_slot_roundtrip_is_stored_term() -> i64 {
     let i: Vec<IrInst> = Vec::new();
     i.push(mk_inst_alloc(0, 32));
@@ -358,10 +361,8 @@ fn check_wide_slot_roundtrip_is_stored_term() -> i64 {
     let f: IrFunction = one_block(String::from("w"), Vec::new(), ITY_PTR(), i);
     if vc_skip_reason(f).len() != 0 { return 130; }
     let cs: VcClaims = vc_claims(f);
-    if cs.kinds.len() != 1 { return 131; }
-    let q: String = query(cs, 0);
-    if !q.contains(String::from("(define-fun v3 () (_ BitVec 128) v1)")) { return 132; }
-    if q.contains(String::from("declare-const j")) { return 133; }
+    if cs.kinds.len() != 0 { return 131; }
+    if vc_smt_render(cs.arena, cs.header).contains(String::from("declare-const j")) { return 133; }
     0
 }
 

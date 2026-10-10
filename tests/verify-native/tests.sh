@@ -79,7 +79,7 @@ cat > "$ONE_CLAIM" <<'SRC'
 module One
 
 fn keep(x: i64) -> i64 vow {
-  ensures: result == x
+  ensures: result - x == 0
 } {
   x
 }
@@ -95,7 +95,7 @@ cat > "$WIDE_CLAIM" <<'SRC'
 module Wide
 
 fn keep(x: u128, y: i8) -> u128 vow {
-  ensures: result == x
+  ensures: result - x == 0
 } {
   x
 }
@@ -110,7 +110,7 @@ cat > "$THREE_CLAIMS" <<'SRC'
 module Three
 
 fn quot(a: i64, b: i64) -> i64 vow {
-  ensures: result == result
+  ensures: result - a / b == 0
 } {
   a / b
 }
@@ -162,14 +162,14 @@ cat > "$CALL_CLAIMS" <<'SRC'
 module Calls
 
 fn caller(y: i64) -> i64 vow {
-  ensures: result == y
+  ensures: result - y <= 0
 } {
   keep(y)
 }
 
 fn keep(x: i64) -> i64 vow {
   requires: x > 0
-  ensures: result == x
+  ensures: result - x == 0
 } {
   x
 }
@@ -372,7 +372,7 @@ python3 - "$MANY" <<'PY'
 import sys
 out = ["module Many", ""]
 for i in range(6):
-    out += [f"fn keep{i}(x: i64) -> i64 vow {{", "  ensures: result == x", "} {", f"  x + {i} - {i}", "}", ""]
+    out += [f"fn keep{i}(x: i64) -> i64 vow {{", "  ensures: result - x == 0", "} {", f"  x + {i} - {i}", "}", ""]
 out += ["fn main() -> i32 [io] {", "  print_i64(keep0(1));", "  0", "}", ""]
 open(sys.argv[1], "w").write("\n".join(out))
 PY
@@ -511,6 +511,58 @@ expect "loop sat status" "$(field "$RUN_OUT" status)" "VerifyFailed"
 expect "loop sat vow id" "$(field "$RUN_OUT" counterexamples.0.vow_id)" "1"
 no_leftovers "loop sat"
 
+# a loop with a literal bound folds to constants: every claim, the unwinding
+# claim of the rounds that stop short and the invariants of the covering round
+# included, is decided by the simplifier, so not one query reaches the solver.
+LITERAL_LOOP="$TMP_ROOT/literal_loop.vow"
+cat > "$LITERAL_LOOP" <<'SRC'
+module LiteralLoop
+
+fn tally() -> u64 vow {
+  ensures: result == 36
+} {
+  let mut sum: u64 = 0;
+  let mut i: u64 = 0;
+  while i < 8 vow {
+    invariant: i <= 8
+  } {
+    i = i + 1;
+    sum = sum + i;
+  }
+  sum
+}
+
+fn main() -> i32 [io] {
+  print_u64(tally());
+  0
+}
+SRC
+run_native unsat "$LITERAL_LOOP"
+expect "literal loop status" "$(field "$RUN_OUT" status)" "Verified"
+expect "literal loop spawns nothing" "$(queries)" "0"
+no_leftovers "literal loop"
+
+# the same loop with a `requires` keeps its unwinding claim for the solver: a
+# contradictory assumption would make it `unsat`, which only the solver can tell.
+GUARDED_LOOP="$TMP_ROOT/guarded_loop.vow"
+sed -e 's/fn tally() -> u64 vow {/fn tally(n: u64) -> u64 vow {/' \
+    -e 's/  ensures: result == 36/  requires: n > 0,\n  ensures: result == 36/' \
+    -e 's/tally());/tally(1));/' \
+    -e 's/module LiteralLoop/module GuardedLoop/' "$LITERAL_LOOP" > "$GUARDED_LOOP"
+run_native unsat "$GUARDED_LOOP"
+expect "guarded loop status" "$(field "$RUN_OUT" status)" "Verified"
+if [ "$(queries)" -lt 1 ]; then fail "guarded loop: the unwinding claim never reached the solver"; fi
+no_leftovers "guarded loop"
+
+# a decided-false claim is not dropped: the counterexample needs the solver.
+WRONG_LOOP="$TMP_ROOT/wrong_loop.vow"
+sed -e 's/result == 36/result == 35/' -e 's/module LiteralLoop/module WrongLoop/' "$LITERAL_LOOP" > "$WRONG_LOOP"
+run_native sat "$WRONG_LOOP"
+expect "wrong literal loop status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "wrong literal loop function" "$(field "$RUN_OUT" counterexamples.0.function)" "tally"
+if [ "$(queries)" -lt 1 ]; then fail "wrong literal loop: no query reached the solver"; fi
+no_leftovers "wrong literal loop"
+
 # branches: the query grows with the number of changed names, not with the
 # number of paths. N sequential (2^N paths) and N nested (N+1 paths) `if`s each
 # update one name; the single ensures claim's query must have one `ite` per
@@ -520,7 +572,7 @@ stress_source() {
     echo "module Stress"
     echo
     echo "fn bump(x: i64) -> i64 vow {"
-    echo "  ensures: result == result"
+    echo "  ensures: result - x + x == result"
     echo "} {"
     echo "  let mut acc: i64 = x;"
     if [ "$shape" = sequential ]; then
@@ -571,7 +623,7 @@ cat > "$REPLAY_SRC" <<'SRC'
 module Replay
 
 fn quot(a: i64, b: i64) -> i64 vow {
-  ensures: result == result
+  ensures: result - a / b == 0
 } {
   a / b
 }
@@ -603,7 +655,7 @@ cat > "$REPLAY_SKIP_SRC" <<'SRC'
 module ReplaySkip
 
 fn quot(a: i32, b: i32) -> i32 vow {
-  ensures: result == result
+  ensures: result - a / b == 0
 } {
   a / b
 }

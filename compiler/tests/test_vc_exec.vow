@@ -7,6 +7,7 @@ use vc_gate
 use vc_exec
 use vc_ops
 use vc_unroll
+use vc_native
 use tests.builders
 
 fn args1(a: i64) -> Vec<i64> {
@@ -79,9 +80,9 @@ fn check_divide_with_requires() -> i64 {
     if cs.labels[0] != String::from("division by zero") { return 6; }
     if cs.labels[1] != String::from("division overflow") { return 7; }
     let q0: String = query(cs, 0);
-    if !q0.contains(String::from("(assert v3)\n(assert (not (distinct v1 #x0000000000000000)))\n(check-sat)")) { return 8; }
+    if !q0.contains(String::from("(assert v3)\n(assert (not (distinct p1 #x0000000000000000)))\n(check-sat)")) { return 8; }
     let q1: String = query(cs, 1);
-    if !q1.contains(String::from("(assert v3)\n(assert (distinct v1 #x0000000000000000))\n(assert (not (not (and (= v0 #x8000000000000000) (= v1 #xffffffffffffffff)))))\n")) { return 9; }
+    if !q1.contains(String::from("(assert v3)\n(assert (distinct p1 #x0000000000000000))\n(assert (and (= p0 #x8000000000000000) (= p1 #xffffffffffffffff)))\n")) { return 9; }
     0
 }
 
@@ -113,11 +114,9 @@ fn check_ensures_claim_golden() -> i64 {
     let want: String = String::from("(set-logic QF_BV)\n");
     want.push_str(String::from("(set-option :produce-models true)\n"));
     want.push_str(String::from("(declare-const p0 (_ BitVec 64))\n"));
-    want.push_str(String::from("(define-fun v0 () (_ BitVec 64) p0)\n"));
-    want.push_str(String::from("(define-fun v1 () (_ BitVec 64) #x0000000000000000)\n"));
-    want.push_str(String::from("(define-fun v2 () Bool (bvsgt v0 v1))\n"));
-    want.push_str(String::from("(define-fun v4 () (_ BitVec 64) (bvadd v0 v0))\n"));
-    want.push_str(String::from("(define-fun v5 () Bool (bvsgt v4 v0))\n"));
+    want.push_str(String::from("(define-fun v2 () Bool (bvsgt p0 #x0000000000000000))\n"));
+    want.push_str(String::from("(define-fun v4 () (_ BitVec 64) (bvadd p0 p0))\n"));
+    want.push_str(String::from("(define-fun v5 () Bool (bvsgt v4 p0))\n"));
     want.push_str(String::from("(assert v2)\n"));
     want.push_str(String::from("(assert (not v5))\n"));
     want.push_str(String::from("(check-sat)\n"));
@@ -145,18 +144,32 @@ fn check_second_division_assumes_first() -> i64 {
     i.push(mk_inst_arg(0, ITY_I64(), 0));
     i.push(mk_inst_arg(1, ITY_I64(), 1));
     i.push(mk_inst(2, IOP_WDIV(), ITY_I64(), args2(0, 1)));
+    i.push(mk_inst(3, IOP_WDIV(), ITY_I64(), args2(0, 2)));
+    i.push(mk_inst_return(4, 3));
+    let cs: VcClaims = vc_claims(one_block(String::from("dd"), params2(), ITY_I64(), i));
+    if cs.kinds.len() != 4 { return 40; }
+    if cs.kinds[2] != VC_CLAIM_DIV_ZERO() { return 41; }
+    let q: String = query(cs, 2);
+    if count_of(q, String::from("(assert (distinct p1 #x0000000000000000))")) != 1 { return 42; }
+    if !q.contains(String::from("(assert (not (and (= p0 ")) { return 43; }
+    let first: String = query(cs, 0);
+    if first.contains(String::from("(assert (distinct p1")) { return 44; }
+    if first.contains(String::from("(define-fun v2 ")) { return 45; }
+    if !query(cs, 2).contains(String::from("(define-fun v2 ")) { return 46; }
+    0
+}
+
+// A guard already assumed on the path is not asked again.
+fn check_duplicate_guard_claim_elided() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_arg(1, ITY_I64(), 1));
+    i.push(mk_inst(2, IOP_WDIV(), ITY_I64(), args2(0, 1)));
     i.push(mk_inst(3, IOP_WREM(), ITY_I64(), args2(2, 1)));
     i.push(mk_inst_return(4, 3));
     let cs: VcClaims = vc_claims(one_block(String::from("dd"), params2(), ITY_I64(), i));
-    if cs.kinds.len() != 3 { return 40; }
-    if cs.kinds[2] != VC_CLAIM_DIV_ZERO() { return 41; }
-    let q: String = query(cs, 2);
-    if count_of(q, String::from("(assert (distinct v1 #x0000000000000000))")) != 1 { return 42; }
-    if !q.contains(String::from("(assert (not (and (= v0 ")) { return 43; }
-    let first: String = query(cs, 0);
-    if first.contains(String::from("(assert (distinct v1")) { return 44; }
-    if first.contains(String::from("(define-fun v2 ")) { return 45; }
-    if !query(cs, 2).contains(String::from("(define-fun v2 ")) { return 46; }
+    if cs.kinds.len() != 2 { return 47; }
+    if cs.kinds[0] != VC_CLAIM_DIV_ZERO() || cs.kinds[1] != VC_CLAIM_DIV_OVERFLOW() { return 48; }
     0
 }
 
@@ -179,9 +192,10 @@ fn check_division_in_requires_is_positional() -> i64 {
 fn check_names_are_internal() -> i64 {
     let i: Vec<IrInst> = Vec::new();
     i.push(mk_inst_arg(0, ITY_I64(), 0));
-    i.push(mk_inst(1, IOP_EQ(), ITY_BOOL(), args2(0, 0)));
-    i.push(mk_vow(2, IOP_VOW_ENS(), 1, 0));
-    i.push(mk_inst_return(3, 0));
+    i.push(mk_inst_const_i64(1, 5));
+    i.push(mk_inst(2, IOP_LT(), ITY_BOOL(), args2(0, 1)));
+    i.push(mk_vow(3, IOP_VOW_ENS(), 2, 0));
+    i.push(mk_inst_return(4, 0));
     let p: Vec<i64> = Vec::new();
     p.push(ITY_I64());
     let f: IrFunction = one_block(String::from("evil"), p, ITY_I64(), i);
@@ -197,6 +211,29 @@ fn check_names_are_internal() -> i64 {
 
 fn check_bool_operators() -> i64 {
     let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_const_i64(1, 0));
+    i.push(mk_inst(2, IOP_EQ(), ITY_BOOL(), args2(0, 1)));
+    i.push(mk_inst(3, IOP_NOT(), ITY_BOOL(), args1(2)));
+    i.push(mk_inst(4, IOP_LT(), ITY_BOOL(), args2(0, 1)));
+    i.push(mk_inst(5, IOP_OR(), ITY_BOOL(), args2(3, 4)));
+    i.push(mk_inst(6, IOP_AND(), ITY_BOOL(), args2(5, 2)));
+    i.push(mk_vow(7, IOP_VOW_ENS(), 6, 0));
+    i.push(mk_inst_return(8, 0));
+    let f: IrFunction = one_block(String::from("b"), mk_params1(), ITY_I64(), i);
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 69; }
+    let q: String = query(cs, 0);
+    if !q.contains(String::from("(define-fun v2 () Bool (= p0 #x0000000000000000))\n")) { return 70; }
+    if !q.contains(String::from("(define-fun v3 () Bool (not v2))\n")) { return 71; }
+    if !q.contains(String::from("(define-fun v5 () Bool (or v3 v4))\n")) { return 72; }
+    if !q.contains(String::from("(define-fun v6 () Bool (and v5 v2))\n")) { return 73; }
+    0
+}
+
+// Constants and Bool laws fold: no definition and no claim is left.
+fn check_constant_bool_logic_folds_away() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
     i.push(mk_inst_const_i64(0, 1));
     i.push(mk_inst(1, IOP_EQ(), ITY_BOOL(), args2(0, 0)));
     i.push(mk_inst(2, IOP_NOT(), ITY_BOOL(), args1(1)));
@@ -206,11 +243,8 @@ fn check_bool_operators() -> i64 {
     i.push(mk_inst_return(6, 0));
     let f: IrFunction = one_block(String::from("b"), Vec::new(), ITY_I64(), i);
     let cs: VcClaims = vc_claims(f);
-    let q: String = query(cs, 0);
-    if !q.contains(String::from("(define-fun v2 () Bool (not v1))\n")) { return 70; }
-    if !q.contains(String::from("(define-fun v3 () Bool (or v1 v2))\n")) { return 71; }
-    if !q.contains(String::from("(define-fun v4 () Bool (and v3 v1))\n")) { return 72; }
-    if q.contains(String::from("get-value")) { return 73; }
+    if cs.kinds.len() != 0 { return 74; }
+    if cs.header.kinds.len() != 2 { return 75; }
     0
 }
 
@@ -249,9 +283,9 @@ fn check_diamond_phi_is_ite() -> i64 {
     if cs.kinds.len() != 1 { return 81; }
     let q: String = query(cs, 0);
     if !q.contains(String::from("(define-fun g0 () Bool (not v2))\n")) { return 82; }
-    if !q.contains(String::from("(define-fun g1 () Bool (or v2 g0))\n")) { return 83; }
-    if !q.contains(String::from("(define-fun v9 () (_ BitVec 64) (ite g0 v6 v0))\n")) { return 84; }
-    if !q.contains(String::from("(assert (and g1 (not v11)))\n")) { return 85; }
+    if q.contains(String::from("(or v2 g0)")) { return 83; }
+    if !q.contains(String::from("(define-fun v9 () (_ BitVec 64) (ite g0 #x0000000000000000 p0))\n")) { return 84; }
+    if !q.contains(String::from("(assert (not v11))\n")) { return 85; }
     0
 }
 
@@ -283,7 +317,7 @@ fn check_early_return_claims_carry_path_condition() -> i64 {
     if cs.vow_ids[1] == 0 { neg_k = 1; }
     let pos_k: u64 = 1 - neg_k;
     if cs.vow_ids[neg_k] != 0 || cs.vow_ids[pos_k] != 1 { return 92; }
-    if !query(cs, neg_k).contains(String::from("(assert (and v2 (not v4)))\n")) { return 93; }
+    if !query(cs, neg_k).contains(String::from("(assert (and v2 (not v7)))\n")) { return 93; }
     if !query(cs, pos_k).contains(String::from("(assert (and g0 (not v7)))\n")) { return 94; }
     0
 }
@@ -295,13 +329,15 @@ fn check_constant_guard_prunes_dead_arm() -> i64 {
     a.push(mk_inst_const_bool(1, 1));
     a.push(mk_inst_branch(2, 1, 1, 2));
     let t: Vec<IrInst> = Vec::new();
-    t.push(mk_inst_const_bool(3, 1));
-    t.push(mk_vow(4, IOP_VOW_ENS(), 3, 0));
-    t.push(mk_inst_return(5, 0));
+    t.push(mk_inst_const_i64(3, 0));
+    t.push(mk_inst(4, IOP_GT(), ITY_BOOL(), args2(0, 3)));
+    t.push(mk_vow(5, IOP_VOW_ENS(), 4, 0));
+    t.push(mk_inst_return(6, 0));
     let e: Vec<IrInst> = Vec::new();
-    e.push(mk_inst_const_bool(6, 0));
-    e.push(mk_vow(7, IOP_VOW_ENS(), 6, 1));
-    e.push(mk_inst_return(8, 0));
+    e.push(mk_inst_const_i64(7, 0));
+    e.push(mk_inst(8, IOP_LT(), ITY_BOOL(), args2(0, 7)));
+    e.push(mk_vow(9, IOP_VOW_ENS(), 8, 1));
+    e.push(mk_inst_return(10, 0));
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, a));
     blocks.push(mk_block(1, t));
@@ -323,7 +359,8 @@ fn check_repeated_guard_prunes_inner_else() -> i64 {
     let outer_else: Vec<IrInst> = Vec::new();
     outer_else.push(mk_inst_return(5, 0));
     let inner_then: Vec<IrInst> = Vec::new();
-    inner_then.push(mk_vow(6, IOP_VOW_ENS(), 2, 0));
+    inner_then.push(mk_inst(11, IOP_GE(), ITY_BOOL(), args2(0, 1)));
+    inner_then.push(mk_vow(6, IOP_VOW_ENS(), 11, 0));
     inner_then.push(mk_inst_return(7, 0));
     let inner_else: Vec<IrInst> = Vec::new();
     inner_else.push(mk_inst_const_bool(8, 0));
@@ -367,8 +404,8 @@ fn check_arm_division_assumption_is_guarded() -> i64 {
     blocks.push(mk_block(3, m));
     let cs: VcClaims = vc_claims(mk_function(1, String::from("armdiv"), params2(), ITY_I64(), blocks));
     if cs.kinds.len() != 2 { return 120; }
-    if !query(cs, 0).contains(String::from("(assert (and v3 (not (distinct v1 #x0000000000000000))))\n")) { return 121; }
-    if !query(cs, 1).contains(String::from("(assert (or (not v3) (distinct v1 #x0000000000000000)))\n")) { return 122; }
+    if !query(cs, 0).contains(String::from("(assert (and v3 (not (distinct p1 #x0000000000000000))))\n")) { return 121; }
+    if !query(cs, 1).contains(String::from("(assert (or (not v3) (distinct p1 #x0000000000000000)))\n")) { return 122; }
     0
 }
 
@@ -410,7 +447,7 @@ fn stress_function(n: i64) -> IrFunction {
         acc = phi;
         i = i + 1;
     }
-    cur.push(mk_inst(id, IOP_EQ(), ITY_BOOL(), args2(acc, acc)));
+    cur.push(mk_inst(id, IOP_GE(), ITY_BOOL(), args2(acc, 1)));
     cur.push(mk_vow(id + 1, IOP_VOW_ENS(), id, 0));
     cur.push(mk_inst_return(id + 2, acc));
     blocks.push(mk_block(3 * n, cur));
@@ -449,7 +486,7 @@ fn check_nested_else_edge_is_one_name() -> i64 {
     let inner_then: Vec<IrInst> = Vec::new();
     inner_then.push(mk_inst_return(7, 0));
     let inner_else: Vec<IrInst> = Vec::new();
-    inner_else.push(mk_inst(8, IOP_EQ(), ITY_BOOL(), args2(0, 0)));
+    inner_else.push(mk_inst(8, IOP_GE(), ITY_BOOL(), args2(0, 1)));
     inner_else.push(mk_vow(9, IOP_VOW_ENS(), 8, 0));
     inner_else.push(mk_inst_return(10, 0));
     let blocks: Vec<IrBlock> = Vec::new();
@@ -488,20 +525,20 @@ fn check_unsigned_division() -> i64 {
     if cs.kinds[0] != VC_CLAIM_DIV_ZERO() { return 101; }
     let q: String = query(cs, 0);
     if !q.contains(String::from("(declare-const p0 (_ BitVec 32))")) { return 102; }
-    if !vc_smt_render(cs.arena, cs.header).contains(String::from("(define-fun v2 () (_ BitVec 32) (bvudiv v0 v1))")) { return 103; }
-    if !q.contains(String::from("(assert (not (distinct v1 #x00000000)))")) { return 104; }
+    if !vc_smt_render(cs.arena, cs.header).contains(String::from("(define-fun v2 () (_ BitVec 32) (bvudiv p0 p1))")) { return 103; }
+    if !q.contains(String::from("(assert (not (distinct p1 #x00000000)))")) { return 104; }
     if cs.model_tys[0] != ITY_U32() { return 105; }
     let cs2: VcClaims = vc_claims(binop_fn(IOP_WREM(), ITY_U8()));
-    if !vc_smt_render(cs2.arena, cs2.header).contains(String::from("(bvurem v0 v1)")) { return 106; }
+    if !vc_smt_render(cs2.arena, cs2.header).contains(String::from("(bvurem p0 p1)")) { return 106; }
     0
 }
 
 fn check_signed_division_widths() -> i64 {
     let cs: VcClaims = vc_claims(binop_fn(IOP_WDIV(), ITY_I8()));
     if cs.kinds.len() != 2 { return 110; }
-    if !query(cs, 1).contains(String::from("(= v0 #x80) (= v1 #xff)")) { return 111; }
+    if !query(cs, 1).contains(String::from("(= p0 #x80) (= p1 #xff)")) { return 111; }
     let w: VcClaims = vc_claims(binop_fn(IOP_WDIV(), ITY_I128()));
-    if !query(w, 1).contains(String::from("(= v0 #x80000000000000000000000000000000) (= v1 #xffffffffffffffffffffffffffffffff)")) { return 112; }
+    if !query(w, 1).contains(String::from("(= p0 #x80000000000000000000000000000000) (= p1 #xffffffffffffffffffffffffffffffff)")) { return 112; }
     if !query(w, 1).contains(String::from("(declare-const p1 (_ BitVec 128))")) { return 113; }
     0
 }
@@ -511,12 +548,12 @@ fn check_checked_arith_is_a_soft_claim() -> i64 {
     if cs.kinds.len() != 1 { return 120; }
     if cs.kinds[0] != VC_CLAIM_ARITH() { return 121; }
     if cs.labels[0] != String::from("add") { return 122; }
-    if !query(cs, 0).contains(String::from("(assert (not (not (bvuaddo v0 v1))))\n(check-sat)")) { return 123; }
+    if !query(cs, 0).contains(String::from("(assert (bvuaddo p0 p1))\n(check-sat)")) { return 123; }
     let s: VcClaims = vc_claims(binop_fn(IOP_CMUL(), ITY_I16()));
-    if !query(s, 0).contains(String::from("(not (bvsmulo v0 v1))")) { return 124; }
+    if !query(s, 0).contains(String::from("(assert (bvsmulo p0 p1))")) { return 124; }
     if s.labels[0] != String::from("mul") { return 125; }
     let sub: VcClaims = vc_claims(binop_fn(IOP_CSUB(), ITY_U64()));
-    if !query(sub, 0).contains(String::from("(bvusubo v0 v1)")) { return 126; }
+    if !query(sub, 0).contains(String::from("(bvusubo p0 p1)")) { return 126; }
     0
 }
 
@@ -545,7 +582,7 @@ fn check_checked_guard_is_assumed_later() -> i64 {
     let cs: VcClaims = vc_claims(two_param_fn(ITY_I64(), i, ITY_I64()));
     if cs.kinds.len() != 2 { return 140; }
     if cs.kinds[1] != VC_CLAIM_ENSURES() { return 141; }
-    if !query(cs, 1).contains(String::from("(assert (not (bvsaddo v0 v1)))\n")) { return 142; }
+    if !query(cs, 1).contains(String::from("(assert (not (bvsaddo p0 p1)))\n")) { return 142; }
     if query(cs, 0).contains(String::from("(assert (not (bvsaddo")) { return 143; }
     0
 }
@@ -570,18 +607,18 @@ fn check_shift_claims() -> i64 {
     if a.vow_ids[0] != -1 { return 153; }
     let qa: String = query(a, 0);
     if !qa.contains(String::from("(declare-const p1 (_ BitVec 32))")) { return 154; }
-    if !vc_smt_render(a.arena, a.header).contains(String::from("(define-fun v2 () (_ BitVec 64) (bvshl v0 ((_ zero_extend 32) v1)))")) { return 155; }
-    if !qa.contains(String::from("(assert (not (bvult v1 #x00000040)))")) { return 156; }
+    if !vc_smt_render(a.arena, a.header).contains(String::from("(define-fun v2 () (_ BitVec 64) (bvshl p0 ((_ zero_extend 32) p1)))")) { return 155; }
+    if !qa.contains(String::from("(assert (not (bvult p1 #x00000040)))")) { return 156; }
     let b: VcClaims = shift_claims(IOP_SHR(), ITY_I64(), ITY_I64());
     let qb: String = query(b, 0);
-    if !vc_smt_render(b.arena, b.header).contains(String::from("(bvashr v0 v1)")) { return 157; }
-    if !qb.contains(String::from("(assert (not (and (bvsge v1 #x0000000000000000) (bvslt v1 #x0000000000000040))))")) { return 158; }
+    if !vc_smt_render(b.arena, b.header).contains(String::from("(bvashr p0 p1)")) { return 157; }
+    if !qb.contains(String::from("(assert (not (and (bvsge p1 #x0000000000000000) (bvslt p1 #x0000000000000040))))")) { return 158; }
     let c: VcClaims = shift_claims(IOP_SHR(), ITY_U8(), ITY_U32());
     let qc: String = query(c, 0);
-    if !vc_smt_render(c.arena, c.header).contains(String::from("(bvlshr v0 ((_ extract 7 0) v1))")) { return 159; }
-    if !qc.contains(String::from("(bvult v1 #x00000008)")) { return 160; }
+    if !vc_smt_render(c.arena, c.header).contains(String::from("(bvlshr p0 ((_ extract 7 0) p1))")) { return 159; }
+    if !qc.contains(String::from("(bvult p1 #x00000008)")) { return 160; }
     let d: VcClaims = shift_claims(IOP_SHL(), ITY_U128(), ITY_U128());
-    if !query(d, 0).contains(String::from("(bvult v1 #x00000000000000000000000000000080)")) { return 161; }
+    if !query(d, 0).contains(String::from("(bvult p1 #x00000000000000000000000000000080)")) { return 161; }
     0
 }
 
@@ -594,34 +631,38 @@ fn cast_query(src: i64, dst: i64) -> String {
     i.push(mk_inst_return(4, 1));
     let p: Vec<i64> = Vec::new();
     p.push(src);
-    query(vc_claims(one_block(String::from("c"), p, dst, i)), 0)
+    let cs: VcClaims = vc_claims(one_block(String::from("c"), p, dst, i));
+    vc_smt_render(cs.arena, cs.header)
 }
 
 fn check_casts() -> i64 {
-    if !cast_query(ITY_I32(), ITY_I64()).contains(String::from("((_ sign_extend 32) v0)")) { return 170; }
-    if !cast_query(ITY_U8(), ITY_U64()).contains(String::from("((_ zero_extend 56) v0)")) { return 171; }
-    if !cast_query(ITY_U32(), ITY_I128()).contains(String::from("((_ zero_extend 96) v0)")) { return 172; }
-    if !cast_query(ITY_I64(), ITY_U128()).contains(String::from("((_ sign_extend 64) v0)")) { return 173; }
-    if !cast_query(ITY_I64(), ITY_U64()).contains(String::from("(define-fun v1 () (_ BitVec 64) v0)")) { return 174; }
-    if !cast_query(ITY_I128(), ITY_U8()).contains(String::from("((_ extract 7 0) v0)")) { return 175; }
+    if !cast_query(ITY_I32(), ITY_I64()).contains(String::from("((_ sign_extend 32) p0)")) { return 170; }
+    if !cast_query(ITY_U8(), ITY_U64()).contains(String::from("((_ zero_extend 56) p0)")) { return 171; }
+    if !cast_query(ITY_U32(), ITY_I128()).contains(String::from("((_ zero_extend 96) p0)")) { return 172; }
+    if !cast_query(ITY_I64(), ITY_U128()).contains(String::from("((_ sign_extend 64) p0)")) { return 173; }
+    if cast_query(ITY_I64(), ITY_U64()).contains(String::from("(define-fun v1 ")) { return 174; }
+    if !cast_query(ITY_I128(), ITY_U8()).contains(String::from("((_ extract 7 0) p0)")) { return 175; }
     0
 }
 
 fn const_query(op: i64, ty: i64, lo: i64, hi: i64) -> String {
     let i: Vec<IrInst> = Vec::new();
-    i.push(ir_inst_new(0, op, ty, Vec::new(), IDATA_CONST_I64(), lo, hi, String::from("")));
-    i.push(mk_inst(1, IOP_EQ(), ITY_BOOL(), args2(0, 0)));
-    i.push(mk_vow(2, IOP_VOW_ENS(), 1, 0));
-    i.push(mk_inst_return(3, 0));
-    query(vc_claims(one_block(String::from("k"), Vec::new(), ty, i)), 0)
+    i.push(mk_inst_arg(0, ty, 0));
+    i.push(ir_inst_new(1, op, ty, Vec::new(), IDATA_CONST_I64(), lo, hi, String::from("")));
+    i.push(mk_inst(2, IOP_EQ(), ITY_BOOL(), args2(0, 1)));
+    i.push(mk_vow(3, IOP_VOW_ENS(), 2, 0));
+    i.push(mk_inst_return(4, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ty);
+    query(vc_claims(one_block(String::from("k"), p, ty, i)), 0)
 }
 
 fn check_constants_are_masked_to_their_width() -> i64 {
-    if !const_query(IOP_CONST_I32(), ITY_U32(), -1, 0).contains(String::from("(_ BitVec 32) #xffffffff)")) { return 180; }
-    if !const_query(IOP_CONST_I32(), ITY_I16(), -32768, 0).contains(String::from("(_ BitVec 16) #x8000)")) { return 181; }
-    if !const_query(IOP_CONST_U8(), ITY_I8(), 255, 0).contains(String::from("(_ BitVec 8) #xff)")) { return 182; }
-    if !const_query(IOP_CONST_U128(), ITY_U128(), 1, -1).contains(String::from("(_ BitVec 128) #xffffffffffffffff0000000000000001)")) { return 183; }
-    if !const_query(IOP_CONST_I128(), ITY_I128(), -1, -1).contains(String::from("#xffffffffffffffffffffffffffffffff")) { return 184; }
+    if !const_query(IOP_CONST_I32(), ITY_U32(), -1, 0).contains(String::from("(= p0 #xffffffff)")) { return 180; }
+    if !const_query(IOP_CONST_I32(), ITY_I16(), -32768, 0).contains(String::from("(= p0 #x8000)")) { return 181; }
+    if !const_query(IOP_CONST_U8(), ITY_I8(), 255, 0).contains(String::from("(= p0 #xff)")) { return 182; }
+    if !const_query(IOP_CONST_U128(), ITY_U128(), 1, -1).contains(String::from("(= p0 #xffffffffffffffff0000000000000001)")) { return 183; }
+    if !const_query(IOP_CONST_I128(), ITY_I128(), -1, -1).contains(String::from("(= p0 #xffffffffffffffffffffffffffffffff)")) { return 184; }
     0
 }
 
@@ -646,23 +687,38 @@ fn check_literal_operands() -> i64 {
     let min: i64 = -9223372036854775807 - 1;
     if !literal_cmp_query(ITY_U128(), min).contains(String::from("#x00000000000000008000000000000000")) { return 190; }
     if !literal_cmp_query(ITY_I128(), min).contains(String::from("#xffffffffffffffff8000000000000000")) { return 191; }
-    if !literal_cmp_query(ITY_U64(), min).contains(String::from("(bvule v0 #x8000000000000000)")) { return 192; }
-    if !literal_cmp_query(ITY_I8(), -5).contains(String::from("(bvsle v0 #xfb)")) { return 193; }
-    if !literal_cmp_query(ITY_U8(), 200).contains(String::from("(bvule v0 #xc8)")) { return 194; }
+    if !literal_cmp_query(ITY_U64(), min).contains(String::from("(bvule p0 #x8000000000000000)")) { return 192; }
+    if !literal_cmp_query(ITY_I8(), -5).contains(String::from("(bvsle p0 #xfb)")) { return 193; }
+    if !literal_cmp_query(ITY_U8(), 200).contains(String::from("(bvule p0 #xc8)")) { return 194; }
     0
 }
 
-// while i < 8 { i = i + 1 } with `invariant: i < 8`, as the lowerer shapes it.
-fn count_up_with_invariant() -> IrFunction {
+// while i < bound { i = i + 1 } with an invariant, as the lowerer shapes it.
+// The bound is the literal 8 (invariant `i <= 8`) or, when `symbolic`, the
+// parameter `n` (invariant `i <= n`). `with_req` adds a parameter `n` and
+// `requires n > 0`.
+fn counted_loop(symbolic: bool, with_req: bool) -> IrFunction {
+    let has_param: bool = symbolic || with_req;
     let e: Vec<IrInst> = Vec::new();
     e.push(mk_inst_const_i64(0, 0));
+    if has_param { e.push(mk_inst_arg(13, ITY_I64(), 0)); }
+    if with_req {
+        e.push(mk_inst(14, IOP_GT(), ITY_BOOL(), args2(13, 0)));
+        e.push(mk_vow(15, IOP_VOW_REQ(), 14, 3));
+    }
     e.push(mk_inst_upsilon(1, 0, 3));
     e.push(mk_inst_jump(2, 1));
     let h: Vec<IrInst> = Vec::new();
     h.push(mk_inst_phi(3, ITY_I64()));
-    h.push(mk_inst_const_i64(4, 8));
-    h.push(mk_inst(5, IOP_LT(), ITY_BOOL(), args2(3, 4)));
-    h.push(mk_vow(6, IOP_VOW_INV(), 5, 7));
+    if symbolic {
+        h.push(mk_inst(5, IOP_LT(), ITY_BOOL(), args2(3, 13)));
+        h.push(mk_inst(16, IOP_LE(), ITY_BOOL(), args2(3, 13)));
+    } else {
+        h.push(mk_inst_const_i64(4, 8));
+        h.push(mk_inst(5, IOP_LT(), ITY_BOOL(), args2(3, 4)));
+        h.push(mk_inst(16, IOP_LE(), ITY_BOOL(), args2(3, 4)));
+    }
+    h.push(mk_vow(6, IOP_VOW_INV(), 16, 7));
     h.push(mk_inst_upsilon(7, 3, 20));
     h.push(mk_inst_branch(8, 5, 2, 3));
     let b: Vec<IrInst> = Vec::new();
@@ -678,7 +734,9 @@ fn count_up_with_invariant() -> IrFunction {
     blocks.push(mk_block(1, h));
     blocks.push(mk_block(2, b));
     blocks.push(mk_block(3, x));
-    mk_function(1, String::from("count_up"), Vec::new(), ITY_I64(), blocks)
+    let p: Vec<i64> = Vec::new();
+    if has_param { p.push(ITY_I64()); }
+    mk_function(1, String::from("count_up"), p, ITY_I64(), blocks)
 }
 
 fn kind_count(cs: VcClaims, kind: i64) -> i64 {
@@ -691,10 +749,18 @@ fn kind_count(cs: VcClaims, kind: i64) -> i64 {
     n
 }
 
+fn unwind_claim(cs: VcClaims) -> u64 {
+    let mut u: u64 = 0;
+    while u < cs.kinds.len() && cs.kinds[u] != VC_CLAIM_UNWIND() { u = u + 1; }
+    u
+}
+
+fn define_count(cs: VcClaims) -> i64 {
+    count_of(vc_smt_render(cs.arena, cs.header), String::from("(define-fun "))
+}
+
 fn check_unrolled_loop_claims() -> i64 {
-    let f: IrFunction = count_up_with_invariant();
-    let g: IrFunction = vc_unroll(f, 2).f;
-    let cs: VcClaims = vc_claims(g);
+    let cs: VcClaims = vc_claims(vc_unroll(counted_loop(true, false), 2).f);
     // one invariant claim per header copy, each with the original vow id
     if kind_count(cs, VC_CLAIM_ENSURES()) != 3 { return 800; }
     let mut k: u64 = 0;
@@ -705,12 +771,57 @@ fn check_unrolled_loop_claims() -> i64 {
     // exactly one unwinding claim, and nothing is assumed after it
     if kind_count(cs, VC_CLAIM_UNWIND()) != 1 { return 802; }
     if cs.assumed.len() != 0 { return 803; }
-    let mut u: u64 = 0;
-    while cs.kinds[u] != VC_CLAIM_UNWIND() { u = u + 1; }
+    let u: u64 = unwind_claim(cs);
     if cs.vow_ids[u] != -1 || cs.labels[u] != VC_LABEL_UNWIND() { return 804; }
     // a loop-free function has no unwinding claim
     let plain: VcClaims = vc_claims(vc_unroll(one_block(String::from("k"), Vec::new(), ITY_I64(), divide_free()), 4).f);
     if kind_count(plain, VC_CLAIM_UNWIND()) != 0 { return 805; }
+    0
+}
+
+// With a literal bound every copy of the invariant and of the loop test is a
+// constant: the invariants are decided, and only the unwinding claim is left,
+// its negated query the constant `true` under no assumptions.
+fn check_literal_loop_decides_its_invariants() -> i64 {
+    let cs: VcClaims = vc_claims(vc_unroll(counted_loop(false, false), 2).f);
+    if cs.kinds.len() != 1 { return 806; }
+    let u: u64 = unwind_claim(cs);
+    if u != 0 { return 807; }
+    if !vc_tm_is_true(cs.arena, cs.negated_goals[0]) { return 808; }
+    if cs.assumed_lens[0] != 0 { return 809; }
+    if define_count(cs) != 0 { return 810; }
+    0
+}
+
+// At a bound that covers the loop nothing is left to ask.
+fn check_covered_literal_loop_has_no_claims() -> i64 {
+    let cs: VcClaims = vc_claims(vc_unroll(counted_loop(false, false), 8).f);
+    if cs.kinds.len() != 0 { return 811; }
+    if define_count(cs) != 0 { return 812; }
+    0
+}
+
+// 16 iterations of a loop against a symbolic bound: every header copy keeps its
+// test and its invariant, but the counter and its sum fold to constants. The
+// unfolded executor needed 122 definitions and 18 claims for this function.
+fn check_symbolic_loop_names_only_composites() -> i64 {
+    let cs: VcClaims = vc_claims(vc_unroll(counted_loop(true, false), 16).f);
+    if cs.kinds.len() > 18 { return 813; }
+    if define_count(cs) * 10 > 122 * 7 { return 814; }
+    0
+}
+
+// Static satisfiability needs an empty assumption prefix: behind a `requires`
+// the claim keeps its place for the solver, which may find the assumptions
+// contradictory.
+fn check_static_sat_needs_no_assumptions() -> i64 {
+    let free: VcClaims = vc_claims(vc_unroll(counted_loop(false, false), 2).f);
+    if !vc_claim_is_static_sat(free, 0) { return 815; }
+    let guarded: VcClaims = vc_claims(vc_unroll(counted_loop(false, true), 2).f);
+    if guarded.kinds.len() != 1 { return 816; }
+    if !vc_tm_is_true(guarded.arena, guarded.negated_goals[0]) { return 817; }
+    if guarded.assumed_lens[0] != 1 { return 818; }
+    if vc_claim_is_static_sat(guarded, 0) { return 819; }
     0
 }
 
@@ -724,7 +835,7 @@ fn divide_free() -> Vec<IrInst> {
 // A bound too small for the loop leaves the unwinding claim satisfiable; at a
 // bound that covers it the claim is the constant-false path.
 fn check_unwinding_claim_query() -> i64 {
-    let g: IrFunction = vc_unroll(count_up_with_invariant(), 1).f;
+    let g: IrFunction = vc_unroll(counted_loop(false, false), 1).f;
     let cs: VcClaims = vc_claims(g);
     let mut u: u64 = 0;
     while cs.kinds[u] != VC_CLAIM_UNWIND() { u = u + 1; }
@@ -736,7 +847,8 @@ fn check_unwinding_claim_query() -> i64 {
 
 // Inlined callee clauses: a `requires` in a frame is a claim blamed on the
 // caller and an `ensures` in a frame one blamed on the callee, both assumed
-// once asked; the target's own `ensures` stays a claim.
+// once asked; the target's own `ensures` stays a claim. Its predicate differs
+// from the callee's, since a claim equal to an earlier assumption is elided.
 fn framed(i: IrInst, frame: i64) -> IrInst {
     i.ds = vc_frame_mark(frame);
     i
@@ -752,8 +864,9 @@ fn callee_clause_function() -> IrFunction {
     i.push(mk_inst(5, IOP_WDIV(), ITY_I64(), args2(0, 1)));
     i.push(mk_inst(6, IOP_GE(), ITY_BOOL(), args2(5, 2)));
     i.push(framed(mk_vow(7, IOP_VOW_ENS(), 6, 5), 0));
-    i.push(mk_vow(8, IOP_VOW_ENS(), 6, 2));
-    i.push(mk_inst_return(9, 5));
+    i.push(mk_inst(8, IOP_GT(), ITY_BOOL(), args2(5, 2)));
+    i.push(mk_vow(9, IOP_VOW_ENS(), 8, 2));
+    i.push(mk_inst_return(10, 5));
     one_block(String::from("flat"), params2(), ITY_I64(), i)
 }
 
@@ -811,9 +924,11 @@ fn main() -> i32 {
     if r == 0 { r = check_ensures_claim_golden(); }
     if r == 0 { r = check_requires_only_has_no_claims(); }
     if r == 0 { r = check_second_division_assumes_first(); }
+    if r == 0 { r = check_duplicate_guard_claim_elided(); }
     if r == 0 { r = check_division_in_requires_is_positional(); }
     if r == 0 { r = check_names_are_internal(); }
     if r == 0 { r = check_bool_operators(); }
+    if r == 0 { r = check_constant_bool_logic_folds_away(); }
     if r == 0 { r = check_diamond_phi_is_ite(); }
     if r == 0 { r = check_early_return_claims_carry_path_condition(); }
     if r == 0 { r = check_constant_guard_prunes_dead_arm(); }
@@ -832,6 +947,10 @@ fn main() -> i32 {
     if r == 0 { r = check_constants_are_masked_to_their_width(); }
     if r == 0 { r = check_literal_operands(); }
     if r == 0 { r = check_unrolled_loop_claims(); }
+    if r == 0 { r = check_literal_loop_decides_its_invariants(); }
+    if r == 0 { r = check_covered_literal_loop_has_no_claims(); }
+    if r == 0 { r = check_symbolic_loop_names_only_composites(); }
+    if r == 0 { r = check_static_sat_needs_no_assumptions(); }
     if r == 0 { r = check_unwinding_claim_query(); }
     if r == 0 { r = check_callee_clauses_are_claims(); }
     if r == 0 { r = check_frame_free_clauses_are_unchanged(); }

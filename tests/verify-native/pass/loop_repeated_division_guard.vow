@@ -1,0 +1,23 @@
+// TEST: category invariant
+// A loop-invariant divisor is guarded once, not once per iteration copy.
+module LoopRepeatedDivisionGuard
+
+fn share(total: u32, parts: u32) -> u32 vow {
+  requires: parts > 0,
+  ensures: result <= total
+} {
+  let mut q: u32 = 0;
+  let mut i: u32 = 0;
+  while i < 4 vow {
+    invariant: i <= 4
+  } {
+    q = total / parts;
+    i = i + 1;
+  }
+  q
+}
+
+fn main() -> i32 [io] {
+  print_u64(share(10, 3) as u64);
+  0
+}
