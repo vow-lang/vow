@@ -220,6 +220,27 @@ fn check_closing() -> i64 {
     0
 }
 
+// Two header values read in the exit block close in one step: one Phi and one
+// header Upsilon each.
+fn check_batched_closing() -> i64 {
+    let f: IrFunction = count_up();
+    let x: IrBlock = f.blocks[3];
+    x.insts.pop();
+    x.insts.push(mk_inst_add(22, 3, 4));
+    x.insts.push(mk_inst_return(23, 22));
+    if shape(f) != String::from("loop value used outside its loop") { return 90; }
+    let closed: IrFunction = vc_close_loops(f);
+    if shape(closed).len() != 0 { return 91; }
+    let cx: IrBlock = closed.blocks[3];
+    let ch: IrBlock = closed.blocks[1];
+    let ox: IrBlock = f.blocks[3];
+    let oh: IrBlock = f.blocks[1];
+    if cx.insts.len() != ox.insts.len() + 2 { return 92; }
+    if ch.insts.len() != oh.insts.len() + 2 { return 93; }
+    if print_function(vc_close_loops(closed)) != print_function(closed) { return 94; }
+    0
+}
+
 // The exit block is also entered from outside the loop: it cannot be closed.
 fn check_unclosable() -> i64 {
     let f: IrFunction = escaping_exit();
@@ -239,6 +260,7 @@ fn main() -> i32 {
     if r == 0 { r = check_escaping_read(); }
     if r == 0 { r = check_acyclic_has_no_loops(); }
     if r == 0 { r = check_closing(); }
+    if r == 0 { r = check_batched_closing(); }
     if r == 0 { r = check_unclosable(); }
     i64_to_i32_wrap(r)
 }

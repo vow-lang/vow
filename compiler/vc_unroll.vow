@@ -259,26 +259,6 @@ fn vc_clone_at(st: VcUnrollState, defs: VcDefs, f: IrFunction, n: u64, p: u64, s
     vc_clone_inst(orig, new_id, args, dv, dv2)
 }
 
-fn vc_unrolled_shell(f: IrFunction) -> IrFunction {
-    let g: IrFunction = ir_function_new(f.id, f.name, f.return_ty, f.effects, f.source_file);
-    let mut i: u64 = 0;
-    while i < f.params.len() {
-        g.params.push(f.params[i]);
-        i = i + 1;
-    }
-    i = 0;
-    while i < f.param_names.len() {
-        g.param_names.push(f.param_names[i]);
-        i = i + 1;
-    }
-    i = 0;
-    while i < f.vows.len() {
-        g.vows.push(f.vows[i]);
-        i = i + 1;
-    }
-    g
-}
-
 fn vc_unroll_status(f: IrFunction, status: i64, looped: bool) -> VcUnrolled {
     VcUnrolled { f: f, status: status, looped: looped }
 }
@@ -339,7 +319,7 @@ fn vc_unroll_capped(f: IrFunction, bound: i64, cap: i64) -> VcUnrolled {
         n = n + 1;
     }
     let defs: VcDefs = vc_def_table(f, rpo, (dom_max_inst_id(f) + 1) as u64);
-    let g: IrFunction = vc_unrolled_shell(f);
+    let g: IrFunction = vc_function_shell(f);
     let sink_id: i64 = n_inst as i64;
     n = 0;
     while n < n_inst {

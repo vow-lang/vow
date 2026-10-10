@@ -255,25 +255,29 @@ fn vc_def_table(f: IrFunction, rpo: Vec<i64>, n_ids: u64) -> VcDefs {
     VcDefs { blk: blk, pos: pos }
 }
 
-// The first value block `bi` reads that is defined in a loop the block is not
-// inside, or -1. The unroller keeps one copy of a loop value per iteration, so
-// after the loop only the exit Phis (which belong to the block outside it) may
-// carry a value out; `vc_close_loops` makes every other read go through one.
+// True when value `d`, read in block `bi`, is defined in a loop the block is not
+// inside. The unroller keeps one copy of a loop value per iteration, so after the
+// loop only the exit Phis (which belong to the block outside it) may carry a
+// value out; `vc_close_loops` makes every other read go through one.
+fn vc_read_escapes(li: VcLoopInfo, def_blk: Vec<i64>, d: i64, bi: u64) -> bool {
+    if d < 0 || (d as u64) >= def_blk.len() || def_blk[d as u64] < 0 {
+        return false;
+    }
+    let db: u64 = def_blk[d as u64] as u64;
+    let dl: i64 = vc_chain_len(li, db);
+    dl > vc_chain_len(li, bi) || vc_chain_common(li, db, bi) < dl
+}
+
+// The first value block `bi` reads that escapes its loop, or -1.
 fn vc_escaping_value(f: IrFunction, li: VcLoopInfo, def_blk: Vec<i64>, bi: u64) -> i64 {
     let blk: IrBlock = f.blocks[bi];
-    let here: i64 = vc_chain_len(li, bi);
     let mut ii: u64 = 0;
     while ii < blk.insts.len() {
         let inst: IrInst = blk.insts[ii];
         let mut ai: u64 = 0;
         while ai < inst.args.len() {
-            let d: i64 = inst.args[ai];
-            if d >= 0 && (d as u64) < def_blk.len() && def_blk[d as u64] >= 0 {
-                let db: u64 = def_blk[d as u64] as u64;
-                let dl: i64 = vc_chain_len(li, db);
-                if dl > here || vc_chain_common(li, db, bi) < dl {
-                    return d;
-                }
+            if vc_read_escapes(li, def_blk, inst.args[ai], bi) {
+                return inst.args[ai];
             }
             ai = ai + 1;
         }
@@ -423,13 +427,8 @@ fn vc_replace_arg(inst: IrInst, v: i64, w: i64) -> IrInst {
     }
 }
 
-// `f` with a Phi for `v` (of type `ty`) at the head of block `e`, fed by an
-// Upsilon in each predecessor, and every read of `v` that `e` dominates
-// redirected to it.
-fn vc_close_value(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, e: u64, v: i64, ty: i64) -> IrFunction {
-    let nb: u64 = f.blocks.len();
-    let phi_id: i64 = dom_max_inst_id(f) + 1;
-    let mut next_id: i64 = phi_id + 1;
+// `f`'s signature and contracts with no blocks, for a transformed copy.
+fn vc_function_shell(f: IrFunction) -> IrFunction {
     let g: IrFunction = ir_function_new(f.id, f.name, f.return_ty, f.effects, f.source_file);
     let mut i: u64 = 0;
     while i < f.params.len() {
@@ -446,6 +445,18 @@ fn vc_close_value(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, e: u64, v: i64, 
         g.vows.push(f.vows[i]);
         i = i + 1;
     }
+    g
+}
+
+// `f` with a Phi for each value `vs[k]` (of type `tys[k]`) at the head of block
+// `e`, fed by an Upsilon in each predecessor, and every read of `vs[k]` that `e`
+// dominates redirected to it.
+fn vc_close_values(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, e: u64, vs: Vec<i64>, tys: Vec<i64>) -> IrFunction {
+    let nb: u64 = f.blocks.len();
+    let first_phi: i64 = dom_max_inst_id(f) + 1;
+    let nv: i64 = vs.len() as i64;
+    let mut next_id: i64 = first_phi + nv;
+    let g: IrFunction = vc_function_shell(f);
     let is_pred: Vec<i64> = dom_fill(nb, 0);
     let mut pi: i64 = li.pred_off[e];
     while pi < li.pred_off[e + 1] {
@@ -459,32 +470,79 @@ fn vc_close_value(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, e: u64, v: i64, 
         let redirect: bool = rpo[bi] >= 0 && dom_dominates(li.nums, nb, e as i64, bi as i64);
         let term: i64 = vc_last_terminal(src);
         if bi == e {
-            out.insts.push(ir_inst_new(phi_id, IOP_PHI(), ty, Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+            let mut k: u64 = 0;
+            while k < vs.len() {
+                out.insts.push(ir_inst_new(first_phi + k as i64, IOP_PHI(), tys[k], Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+                k = k + 1;
+            }
         }
         let mut ii: u64 = 0;
         while ii < src.insts.len() {
             if is_pred[bi] == 1 && ii as i64 == term {
-                let feed: Vec<i64> = Vec::new();
-                feed.push(v);
-                let ups: IrInst = ir_inst_new(next_id, IOP_UPSILON(), ITY_UNIT(), feed, IDATA_PHI_TARGET(), phi_id, 0, String::from(""));
                 let t: IrInst = src.insts[ii];
-                ups.ostart = t.ostart;
-                ups.olen = t.olen;
-                out.insts.push(ups);
-                next_id = next_id + 1;
+                let mut k: u64 = 0;
+                while k < vs.len() {
+                    let feed: Vec<i64> = Vec::new();
+                    feed.push(vs[k]);
+                    let ups: IrInst = ir_inst_new(next_id, IOP_UPSILON(), ITY_UNIT(), feed, IDATA_PHI_TARGET(), first_phi + k as i64, 0, String::from(""));
+                    ups.ostart = t.ostart;
+                    ups.olen = t.olen;
+                    out.insts.push(ups);
+                    next_id = next_id + 1;
+                    k = k + 1;
+                }
             }
-            let inst: IrInst = src.insts[ii];
+            let mut inst: IrInst = src.insts[ii];
             if redirect {
-                out.insts.push(vc_replace_arg(inst, v, phi_id));
-            } else {
-                out.insts.push(inst);
+                let mut k: u64 = 0;
+                while k < vs.len() {
+                    inst = vc_replace_arg(inst, vs[k], first_phi + k as i64);
+                    k = k + 1;
+                }
             }
+            out.insts.push(inst);
             ii = ii + 1;
         }
         g.blocks.push(out);
         bi = bi + 1;
     }
     g
+}
+
+// Every value of loop `lp` read, in a block `e` dominates, outside `lp`: they all
+// close at `e`, so one rebuild serves them instead of one per value.
+fn vc_values_closing_at(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, defs: VcDefs, e: u64, lp: i64, vs: Vec<i64>, tys: Vec<i64>) {
+    let nb: u64 = f.blocks.len();
+    let def_blk: Vec<i64> = defs.blk;
+    let def_pos: Vec<i64> = defs.pos;
+    let picked: Vec<i64> = dom_fill(def_blk.len(), 0);
+    let mut bi: u64 = 0;
+    while bi < nb {
+        if rpo[bi] >= 0 && dom_dominates(li.nums, nb, e as i64, bi as i64) {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                let mut ai: u64 = 0;
+                while ai < inst.args.len() {
+                    let d: i64 = inst.args[ai];
+                    if vc_read_escapes(li, def_blk, d, bi) && picked[d as u64] == 0 {
+                        let db: u64 = def_blk[d as u64] as u64;
+                        if vc_chain_at(li, db, vc_chain_len(li, db) - 1) == lp {
+                            picked[d as u64] = 1;
+                            let dblk: IrBlock = f.blocks[db];
+                            let dinst: IrInst = dblk.insts[def_pos[d as u64] as u64];
+                            vs.push(d);
+                            tys.push(dinst.ty);
+                        }
+                    }
+                    ai = ai + 1;
+                }
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
 }
 
 // One closing step: the function after routing the first escaping read through
@@ -503,7 +561,6 @@ fn vc_close_one(f: IrFunction) -> VcClosed {
     }
     let defs: VcDefs = vc_def_table(f, rpo, (dom_max_inst_id(f) + 1) as u64);
     let def_blk: Vec<i64> = defs.blk;
-    let def_pos: Vec<i64> = defs.pos;
     let mut bi: u64 = 0;
     while bi < nb {
         if rpo[bi] >= 0 {
@@ -515,9 +572,10 @@ fn vc_close_one(f: IrFunction) -> VcClosed {
                 if e < 0 {
                     return VcClosed { f: f, changed: false };
                 }
-                let dblk: IrBlock = f.blocks[db];
-                let dinst: IrInst = dblk.insts[def_pos[v as u64] as u64];
-                return VcClosed { f: vc_close_value(f, li, rpo, e as u64, v, dinst.ty), changed: true };
+                let vs: Vec<i64> = Vec::new();
+                let tys: Vec<i64> = Vec::new();
+                vc_values_closing_at(f, li, rpo, defs, e as u64, lp, vs, tys);
+                return VcClosed { f: vc_close_values(f, li, rpo, e as u64, vs, tys), changed: true };
             }
         }
         bi = bi + 1;
