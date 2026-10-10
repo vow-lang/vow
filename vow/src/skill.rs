@@ -37,33 +37,138 @@ pub(crate) fn bundle_markdown() -> String {
 
 // --- install mechanics -------------------------------------------------------
 
-fn install_skill_tree_to(root: &Path) -> std::io::Result<PathBuf> {
-    let dir = root.join(".claude/skills/vow");
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        std::io::Error::new(e.kind(), format!("cannot create {}: {}", dir.display(), e))
-    })?;
-    let path = dir.join("SKILL.md");
-    std::fs::write(&path, skill_entrypoint_markdown()).map_err(|e| {
-        std::io::Error::new(e.kind(), format!("cannot write {}: {}", path.display(), e))
-    })?;
-    for (relative_path, contents) in skill_support_files() {
-        let support_path = dir.join(relative_path);
-        if let Some(parent) = support_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                std::io::Error::new(
-                    e.kind(),
-                    format!("cannot create {}: {}", parent.display(), e),
-                )
-            })?;
+const RESERVE_ATTEMPTS: u32 = 8;
+
+type RenameFn<'a> = &'a dyn Fn(&Path, &Path) -> std::io::Result<()>;
+
+fn io_ctx(op: &str, path: &Path, e: std::io::Error) -> std::io::Error {
+    std::io::Error::new(e.kind(), format!("cannot {op} {}: {e}", path.display()))
+}
+
+fn unique_token(attempt: u32) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!("{}-{nanos}-{attempt}", std::process::id())
+}
+
+/// Exclusively create `<parent>/.<stem>-<token>`: `create_dir` fails when the
+/// name is taken, so two concurrent installers never share a directory.
+fn reserve_unique_dir(
+    parent: &Path,
+    stem: &str,
+    token: &dyn Fn(u32) -> String,
+) -> std::io::Result<PathBuf> {
+    for attempt in 0..RESERVE_ATTEMPTS {
+        let candidate = parent.join(format!(".{stem}-{}", token(attempt)));
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(io_ctx("create", &candidate, e)),
         }
-        std::fs::write(&support_path, contents).map_err(|e| {
-            std::io::Error::new(
-                e.kind(),
-                format!("cannot write {}: {}", support_path.display(), e),
-            )
-        })?;
     }
-    Ok(path)
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!(
+            "cannot create {}: no unused name after {RESERVE_ATTEMPTS} attempts",
+            parent.join(stem).display()
+        ),
+    ))
+}
+
+/// Writes every support file, then the entrypoint, so a directory that holds
+/// `SKILL.md` always holds the files it links to.
+fn write_skill_files(dir: &Path, entrypoint: &str, files: &[(&str, &str)]) -> std::io::Result<()> {
+    for (relative_path, contents) in files {
+        let path = dir.join(relative_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io_ctx("create", parent, e))?;
+        }
+        std::fs::write(&path, contents).map_err(|e| io_ctx("write", &path, e))?;
+    }
+    let path = dir.join("SKILL.md");
+    std::fs::write(&path, entrypoint).map_err(|e| io_ctx("write", &path, e))
+}
+
+/// Moves a fully written `stage` to `target`. An existing `target` is swapped
+/// out through a backup, since a directory cannot be renamed over a non-empty
+/// one, and put back when the final rename fails.
+fn commit_stage(
+    parent: &Path,
+    stage: &Path,
+    target: &Path,
+    token: &dyn Fn(u32) -> String,
+    rename: RenameFn,
+) -> std::io::Result<()> {
+    if target.symlink_metadata().is_err() {
+        return rename(stage, target).map_err(|e| io_ctx("install", target, e));
+    }
+    let backup = reserve_unique_dir(parent, "vow-backup", token)?;
+    if let Err(e) = rename(target, &backup) {
+        let _ = std::fs::remove_dir(&backup);
+        return Err(io_ctx("install", target, e));
+    }
+    if let Err(e) = rename(stage, target) {
+        return Err(match rename(&backup, target) {
+            Ok(()) => io_ctx("install", target, e),
+            Err(_) => std::io::Error::new(
+                e.kind(),
+                format!(
+                    "cannot install {}: {e}; previous tree kept at {}",
+                    target.display(),
+                    backup.display()
+                ),
+            ),
+        });
+    }
+    let _ = std::fs::remove_dir_all(&backup);
+    Ok(())
+}
+
+fn install_tree_with(
+    root: &Path,
+    entrypoint: &str,
+    files: &[(&str, &str)],
+    token: &dyn Fn(u32) -> String,
+    rename: RenameFn,
+) -> std::io::Result<PathBuf> {
+    let parent = root.join(".claude/skills");
+    let target = parent.join("vow");
+    std::fs::create_dir_all(&parent).map_err(|e| io_ctx("create", &parent, e))?;
+
+    let is_link = target
+        .symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_symlink());
+    if is_link {
+        write_skill_files(&target, entrypoint, files)?;
+        return Ok(target.join("SKILL.md"));
+    }
+
+    let stage = reserve_unique_dir(&parent, "vow-install", token)?;
+    let committed = write_skill_files(&stage, entrypoint, files)
+        .and_then(|()| commit_stage(&parent, &stage, &target, token, rename));
+    if let Err(e) = committed {
+        let _ = std::fs::remove_dir_all(&stage);
+        return Err(e);
+    }
+    Ok(target.join("SKILL.md"))
+}
+
+/// Builds the skill tree in a sibling staging directory and renames it into
+/// `<root>/.claude/skills/vow`, so a failure never leaves a `SKILL.md` that
+/// links to missing files. A symlinked `vow` directory is written in place.
+fn install_tree_atomic(
+    root: &Path,
+    entrypoint: &str,
+    files: &[(&str, &str)],
+) -> std::io::Result<PathBuf> {
+    install_tree_with(root, entrypoint, files, &unique_token, &|from, to| {
+        std::fs::rename(from, to)
+    })
+}
+
+fn install_skill_tree_to(root: &Path) -> std::io::Result<PathBuf> {
+    install_tree_atomic(root, &skill_entrypoint_markdown(), skill_support_files())
 }
 
 fn run_skill_install_scoped<R: std::io::BufRead, W: std::io::Write>(
@@ -13656,6 +13761,256 @@ mod tests {
             !source.contains("fn skill_support_contents() -> Vec<String>"),
             "generated Vow should stream support contents by index during install"
         );
+    }
+
+    fn skills_entries(root: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(root.join(".claude/skills"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn seed_old_tree(root: &Path) -> PathBuf {
+        let target = root.join(".claude/skills/vow");
+        std::fs::create_dir_all(target.join("reference")).unwrap();
+        std::fs::write(target.join("SKILL.md"), "old").unwrap();
+        std::fs::write(target.join("reference/stale.md"), "stale").unwrap();
+        target
+    }
+
+    fn assert_old_tree_intact(target: &Path) {
+        assert_eq!(
+            std::fs::read_to_string(target.join("SKILL.md")).unwrap(),
+            "old"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("reference/stale.md")).unwrap(),
+            "stale"
+        );
+    }
+
+    const GOOD_FILES: &[(&str, &str)] = &[("reference/a.md", "a"), ("schemas/b.json", "{}")];
+    const BAD_FILES: &[(&str, &str)] = &[("a", "x"), ("a/b.md", "y")];
+
+    #[test]
+    fn atomic_install_failure_leaves_no_partial_tree() {
+        let dir = TempDir::new().unwrap();
+        let err = install_tree_atomic(dir.path(), "entry", BAD_FILES).unwrap_err();
+        assert!(err.to_string().contains("cannot create"), "{err}");
+        assert!(!dir.path().join(".claude/skills/vow").exists());
+        assert!(skills_entries(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn atomic_install_success_leaves_only_the_skill_directory() {
+        let dir = TempDir::new().unwrap();
+        install_skill_tree_to(dir.path()).unwrap();
+        assert_eq!(skills_entries(dir.path()), vec!["vow".to_string()]);
+        let skill_dir = dir.path().join(".claude/skills/vow");
+        for (rel, expected) in skill_support_files() {
+            assert_eq!(
+                &std::fs::read_to_string(skill_dir.join(rel)).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn write_skill_files_writes_entrypoint_last() {
+        let dir = TempDir::new().unwrap();
+        let err = write_skill_files(dir.path(), "entry", BAD_FILES).unwrap_err();
+        assert!(err.to_string().contains("cannot create"), "{err}");
+        assert!(!dir.path().join("SKILL.md").exists());
+    }
+
+    #[test]
+    fn atomic_install_replaces_existing_tree() {
+        let dir = TempDir::new().unwrap();
+        let target = seed_old_tree(dir.path());
+        let installed = install_tree_atomic(dir.path(), "new", GOOD_FILES).unwrap();
+        assert_eq!(installed, target.join("SKILL.md"));
+        assert_eq!(std::fs::read_to_string(&installed).unwrap(), "new");
+        assert!(target.join("reference/a.md").exists());
+        assert!(!target.join("reference/stale.md").exists());
+        assert_eq!(skills_entries(dir.path()), vec!["vow".to_string()]);
+    }
+
+    #[test]
+    fn atomic_install_failure_keeps_existing_tree() {
+        let dir = TempDir::new().unwrap();
+        let target = seed_old_tree(dir.path());
+        install_tree_atomic(dir.path(), "new", BAD_FILES).unwrap_err();
+        assert_old_tree_intact(&target);
+        assert_eq!(skills_entries(dir.path()), vec!["vow".to_string()]);
+    }
+
+    #[test]
+    fn atomic_install_repairs_orphan_entrypoint_blocked_by_a_file() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join(".claude/skills/vow");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("reference"), "not a directory").unwrap();
+        install_tree_atomic(dir.path(), "new", GOOD_FILES).unwrap();
+        assert!(target.join("reference/a.md").is_file());
+        assert_eq!(
+            std::fs::read_to_string(target.join("SKILL.md")).unwrap(),
+            "new"
+        );
+    }
+
+    /// Fails the renames whose 1-based call number is in `failing`.
+    fn install_with_failing_renames(
+        root: &Path,
+        failing: &'static [u32],
+    ) -> std::io::Result<PathBuf> {
+        let calls = std::cell::Cell::new(0u32);
+        install_tree_with(root, "new", GOOD_FILES, &unique_token, &|from, to| {
+            calls.set(calls.get() + 1);
+            if failing.contains(&calls.get()) {
+                Err(std::io::Error::other("injected rename failure"))
+            } else {
+                std::fs::rename(from, to)
+            }
+        })
+    }
+
+    #[test]
+    fn commit_failure_on_fresh_install_cleans_the_stage() {
+        let dir = TempDir::new().unwrap();
+        let err = install_with_failing_renames(dir.path(), &[1]).unwrap_err();
+        assert!(err.to_string().contains("cannot install"), "{err}");
+        assert!(!dir.path().join(".claude/skills/vow").exists());
+        assert!(skills_entries(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn commit_failure_restores_the_previous_tree() {
+        let dir = TempDir::new().unwrap();
+        let target = seed_old_tree(dir.path());
+        let err = install_with_failing_renames(dir.path(), &[2]).unwrap_err();
+        assert!(err.to_string().contains("cannot install"), "{err}");
+        assert_old_tree_intact(&target);
+        assert_eq!(skills_entries(dir.path()), vec!["vow".to_string()]);
+    }
+
+    #[test]
+    fn failed_backup_rename_leaves_the_previous_tree_and_no_backup() {
+        let dir = TempDir::new().unwrap();
+        let target = seed_old_tree(dir.path());
+        install_with_failing_renames(dir.path(), &[1]).unwrap_err();
+        assert_old_tree_intact(&target);
+        assert_eq!(skills_entries(dir.path()), vec!["vow".to_string()]);
+    }
+
+    #[test]
+    fn failed_restore_reports_where_the_previous_tree_is_kept() {
+        let dir = TempDir::new().unwrap();
+        seed_old_tree(dir.path());
+        let err = install_with_failing_renames(dir.path(), &[2, 3]).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("previous tree kept at"), "{message}");
+        let backup = message.rsplit("kept at ").next().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(Path::new(backup).join("SKILL.md")).unwrap(),
+            "old"
+        );
+    }
+
+    #[test]
+    fn reserve_unique_dir_retries_taken_names() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join(".s-a")).unwrap();
+        let token = |attempt: u32| if attempt == 0 { "a" } else { "b" }.to_string();
+        let reserved = reserve_unique_dir(dir.path(), "s", &token).unwrap();
+        assert_eq!(reserved, dir.path().join(".s-b"));
+    }
+
+    #[test]
+    fn reserve_unique_dir_gives_up_when_every_name_is_taken() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join(".s-a")).unwrap();
+        let err = reserve_unique_dir(dir.path(), "s", &|_| "a".to_string()).unwrap_err();
+        assert!(err.to_string().contains("no unused name"), "{err}");
+    }
+
+    #[test]
+    fn reserve_unique_dir_reports_other_failures() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("missing");
+        let err = reserve_unique_dir(&missing, "s", &|_| "a".to_string()).unwrap_err();
+        assert!(err.to_string().contains("cannot create"), "{err}");
+    }
+
+    #[test]
+    fn install_fails_cleanly_when_skills_path_is_a_file() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        std::fs::write(dir.path().join(".claude/skills"), "file").unwrap();
+        let err = install_skill_tree_to(dir.path()).unwrap_err();
+        assert!(err.to_string().contains("cannot create"), "{err}");
+        maybe_auto_install(dir.path());
+        assert!(dir.path().join(".claude/skills").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_install_writes_through_a_symlinked_skill_directory() {
+        let dir = TempDir::new().unwrap();
+        let real = dir.path().join("dotfiles/vow");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude/skills")).unwrap();
+        let link = dir.path().join(".claude/skills/vow");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        install_tree_atomic(dir.path(), "new", GOOD_FILES).unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(real.join("SKILL.md")).unwrap(),
+            "new"
+        );
+        assert!(real.join("schemas/b.json").is_file());
+        assert_eq!(skills_entries(dir.path()), vec!["vow".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_install_failure_leaves_no_entrypoint() {
+        let dir = TempDir::new().unwrap();
+        let real = dir.path().join("dotfiles/vow");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude/skills")).unwrap();
+        std::os::unix::fs::symlink(&real, dir.path().join(".claude/skills/vow")).unwrap();
+
+        install_tree_atomic(dir.path(), "new", BAD_FILES).unwrap_err();
+        assert!(!real.join("SKILL.md").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unwritable_skills_directory_keeps_the_previous_tree() {
+        use std::os::unix::fs::PermissionsExt;
+
+        struct RestoreMode(PathBuf);
+        impl Drop for RestoreMode {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        let target = seed_old_tree(dir.path());
+        let skills = dir.path().join(".claude/skills");
+        let _restore = RestoreMode(skills.clone());
+        std::fs::set_permissions(&skills, std::fs::Permissions::from_mode(0o555)).unwrap();
+        if std::fs::File::create(skills.join("probe")).is_ok() {
+            return;
+        }
+
+        let err = install_tree_atomic(dir.path(), "new", GOOD_FILES).unwrap_err();
+        assert!(err.to_string().contains("cannot create"), "{err}");
+        assert_old_tree_intact(&target);
     }
 
     #[test]
