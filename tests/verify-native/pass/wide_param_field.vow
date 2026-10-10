@@ -1,0 +1,15 @@
+module WideParamField
+
+struct Held { lo: i64, v: u128 }
+
+fn positive(p: Held) -> u128 vow {
+  requires: p.v > 0,
+  ensures: result > 0
+} {
+  p.v
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

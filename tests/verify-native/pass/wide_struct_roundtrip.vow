@@ -1,13 +1,19 @@
-// TEST: category unverifiable
-// TEST: skip-reason wide-aggregate-field
-module WideFieldSkipped
+module WideStructRoundtrip
 
 struct Wide { value: i128 }
+struct UWide { value: u128 }
 
 fn roundtrip(x: i128) -> i128 vow {
   ensures: result == x
 } {
   let w: Wide = Wide { value: x };
+  w.value
+}
+
+fn uroundtrip(x: u128) -> u128 vow {
+  ensures: result == x
+} {
+  let w: UWide = UWide { value: x };
   w.value
 }
 

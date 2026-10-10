@@ -1,0 +1,23 @@
+module WideStructMixedSlots
+
+// A 128-bit field takes two slots, so `c` sits one slot later than its index.
+struct Mix { a: i64, b: i128, c: u64 }
+
+fn build(a: i64, y: i128, c: u64) -> Mix vow {
+  ensures: result.a == a,
+  ensures: result.b == y,
+  ensures: result.c == c
+} {
+  Mix { a: a, b: y, c: c }
+}
+
+fn narrow_after_wide(m: Mix) -> u64 vow {
+  ensures: result == m.c
+} {
+  m.c
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

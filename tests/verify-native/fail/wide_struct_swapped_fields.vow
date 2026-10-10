@@ -1,0 +1,13 @@
+// TEST: replay-skipped 128-bit parameter
+// TEST: counterexample-fn "swapped"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module WideStructSwappedFields
+
+struct Two { a: i128, b: i128 }
+
+fn swapped(x: i128, y: i128) -> Two vow {
+  ensures: result.a == x
+} {
+  Two { a: y, b: x }
+}

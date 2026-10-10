@@ -1,0 +1,15 @@
+// TEST: replay-skipped 128-bit parameter
+// TEST: counterexample-fn "build"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result.value > x"
+// TEST: counterexample-value x 170141183460469231731687303715884105727
+module WideStructFieldOverflow
+
+struct Wide { value: i128 }
+
+fn build(x: i128) -> Wide vow {
+  ensures: result.value > x
+} {
+  Wide { value: x + 1 }
+}
