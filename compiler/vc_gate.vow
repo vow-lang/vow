@@ -177,8 +177,7 @@ fn vc_is_const_int_op(op: i64) -> bool {
 // types of the values it reads.
 fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>) -> bool {
     let op: i64 = inst.op;
-    let model: i64 = vc_op_model(op);
-    if model != VC_OPM_MODELED() && model != VC_OPM_CALL() && model != VC_OPM_FIELD() { return false; }
+    if !vc_op_gate_candidate(op) { return false; }
     let n: u64 = inst.args.len();
     let t0: i64 = vc_arg_ty(tys, inst, 0);
     let t1: i64 = vc_arg_ty(tys, inst, 1);
@@ -205,10 +204,7 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>)
         return n == 2 && t0 == ITY_PTR() && inst.dk == IDATA_FIELD() && inst.dv >= 0
             && inst.ty == ITY_UNIT() && vc_is_field_ty(t1);
     }
-    if op == IOP_CALL() {
-        return n == 0 && inst.ty == ITY_UNIT() && inst.dk == IDATA_CALL_EXTERN()
-            && inst.ds == VC_INTERNAL_UNWRAP_PANIC();
-    }
+    if op == IOP_CALL() { return n == 0 && inst.ty == ITY_UNIT() && vc_is_unwrap_abort(inst); }
     if vc_is_arith_op(op) {
         return vc_ty_is_int(inst.ty) && n == 2 && vc_operand_ok(inst, tys, lits, 0, inst.ty)
             && vc_operand_ok(inst, tys, lits, 1, inst.ty);
@@ -256,7 +252,7 @@ fn vc_inst_specific_reason(inst: IrInst, tys: Vec<i64>) -> String {
     let model: i64 = vc_op_model(inst.op);
     if model == VC_OPM_FLOAT_REM() { return vc_reason(VC_SKIP_FLOAT_REM(), opcode_name(inst.op)); }
     if model == VC_OPM_CALL() {
-        if inst.dk == IDATA_CALL_EXTERN() && inst.ds != VC_INTERNAL_UNWRAP_PANIC() && !catalogue_verifier_known(inst.ds) {
+        if inst.dk == IDATA_CALL_EXTERN() && !vc_is_unwrap_abort(inst) && !catalogue_verifier_known(inst.ds) {
             return vc_reason(VC_SKIP_UNMODELED_BUILTIN(), inst.ds);
         }
         return String::from("");

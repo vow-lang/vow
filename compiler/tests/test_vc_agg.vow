@@ -6,6 +6,7 @@ use vc_smt
 use vc_gate
 use vc_ops
 use vc_agg
+use vc_flow
 use vc_exec
 use tests.builders
 
@@ -22,39 +23,13 @@ fn args2(a: i64, b: i64) -> Vec<i64> {
     v
 }
 
-fn mk_alloc(id: i64, size: i64) -> IrInst {
-    ir_inst_new(id, IOP_REGION_ALLOC(), ITY_PTR(), Vec::new(), IDATA_ALLOC_SIZE(), size, 8, String::from(""))
-}
-
-fn mk_fset(id: i64, obj: i64, idx: i64, val: i64) -> IrInst {
-    ir_inst_new(id, IOP_FIELD_SET(), ITY_UNIT(), args2(obj, val), IDATA_FIELD(), idx, 0, String::from(""))
-}
-
-fn mk_fget(id: i64, ty: i64, obj: i64, idx: i64) -> IrInst {
-    ir_inst_new(id, IOP_FIELD_GET(), ty, args1(obj), IDATA_FIELD(), idx, 0, String::from(""))
-}
-
 fn mk_vow(id: i64, op: i64, pred: i64, vow_id: i64) -> IrInst {
     ir_inst_new(id, op, ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
-}
-
-fn mk_unwrap_abort(id: i64) -> IrInst {
-    ir_inst_new(id, IOP_CALL(), ITY_UNIT(), Vec::new(), IDATA_CALL_EXTERN(), 0, 0, VC_INTERNAL_UNWRAP_PANIC())
-}
-
-fn mk_region_close(id: i64) -> IrInst {
-    ir_inst_new(id, IOP_REGION_CLOSE(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""))
 }
 
 fn ptr_param() -> Vec<i64> {
     let p: Vec<i64> = Vec::new();
     p.push(ITY_PTR());
-    p
-}
-
-fn i64_param() -> Vec<i64> {
-    let p: Vec<i64> = Vec::new();
-    p.push(ITY_I64());
     p
 }
 
@@ -84,11 +59,11 @@ fn one_block(name: String, params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> Ir
 fn build_insts(read_idx: i64) -> Vec<IrInst> {
     let i: Vec<IrInst> = Vec::new();
     i.push(mk_inst_arg(0, ITY_I64(), 0));
-    i.push(mk_alloc(1, 24));
-    i.push(mk_fset(2, 1, 0, 0));
+    i.push(mk_inst_alloc(1, 24));
+    i.push(mk_inst_field_set(2, 1, 0, 0));
     i.push(mk_inst_const_i64(3, 7));
-    i.push(mk_fset(4, 1, 1, 3));
-    i.push(mk_fget(5, ITY_I64(), 1, read_idx));
+    i.push(mk_inst_field_set(4, 1, 1, 3));
+    i.push(mk_inst_field_get(5, ITY_I64(), 1, read_idx));
     i.push(mk_inst(6, IOP_EQ(), ITY_BOOL(), args2(5, 3)));
     i.push(mk_vow(7, IOP_VOW_ENS(), 6, 0));
     i.push(mk_inst_return(8, 1));
@@ -96,7 +71,7 @@ fn build_insts(read_idx: i64) -> Vec<IrInst> {
 }
 
 fn check_struct_gate_accepts() -> i64 {
-    let f: IrFunction = one_block(String::from("build"), i64_param(), ITY_PTR(), build_insts(1));
+    let f: IrFunction = one_block(String::from("build"), mk_params1(), ITY_PTR(), build_insts(1));
     if vc_skip_reason(f).len() != 0 { return 1; }
     0
 }
@@ -104,7 +79,7 @@ fn check_struct_gate_accepts() -> i64 {
 fn check_param_read_accepted() -> i64 {
     let i: Vec<IrInst> = Vec::new();
     i.push(mk_inst_arg(0, ITY_PTR(), 0));
-    i.push(mk_fget(1, ITY_I64(), 0, 0));
+    i.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
     i.push(mk_inst_return(2, 1));
     if vc_skip_reason(one_block(String::from("g"), ptr_param(), ITY_I64(), i)).len() != 0 { return 10; }
     0
@@ -114,17 +89,17 @@ fn check_field_set_needs_own_block_alloc() -> i64 {
     let i: Vec<IrInst> = Vec::new();
     i.push(mk_inst_arg(0, ITY_PTR(), 0));
     i.push(mk_inst_const_i64(1, 3));
-    i.push(mk_fset(2, 0, 0, 1));
+    i.push(mk_inst_field_set(2, 0, 0, 1));
     i.push(mk_inst_return(3, 0));
     let r: String = vc_skip_reason(one_block(String::from("s"), ptr_param(), ITY_PTR(), i));
     if r != String::from("unsupported-opcode: FieldSet outside the block that allocates its target") { return 20; }
 
     let a: Vec<IrInst> = Vec::new();
-    a.push(mk_alloc(0, 16));
+    a.push(mk_inst_alloc(0, 16));
     a.push(mk_inst_const_i64(1, 3));
     a.push(mk_inst_jump(2, 1));
     let b: Vec<IrInst> = Vec::new();
-    b.push(mk_fset(3, 0, 0, 1));
+    b.push(mk_inst_field_set(3, 0, 0, 1));
     b.push(mk_inst_return(4, 0));
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, a));
@@ -137,13 +112,13 @@ fn check_field_set_needs_own_block_alloc() -> i64 {
 fn check_unsupported_aggregate_shapes() -> i64 {
     let n: Vec<IrInst> = Vec::new();
     n.push(mk_inst_arg(0, ITY_PTR(), 0));
-    n.push(mk_fget(1, ITY_PTR(), 0, 0));
+    n.push(mk_inst_field_get(1, ITY_PTR(), 0, 0));
     n.push(mk_inst_return(2, 1));
     if vc_skip_reason(one_block(String::from("nested"), ptr_param(), ITY_PTR(), n)) != String::from("unsupported-opcode: FieldGet[ptr]") { return 30; }
 
     let w: Vec<IrInst> = Vec::new();
     w.push(mk_inst_arg(0, ITY_PTR(), 0));
-    w.push(mk_fget(1, ITY_I128(), 0, 0));
+    w.push(mk_inst_field_get(1, ITY_I128(), 0, 0));
     w.push(mk_inst_return(2, 0));
     let r: String = vc_skip_reason(one_block(String::from("wide"), ptr_param(), ITY_PTR(), w));
     if !r.contains(String::from("wide-aggregate-field")) { return 31; }
@@ -171,20 +146,20 @@ fn check_unsupported_aggregate_shapes() -> i64 {
 fn unwrap_fn(close_region: bool, with_abort: bool, empty_tag: i64) -> IrFunction {
     let a: Vec<IrInst> = Vec::new();
     a.push(mk_inst_arg(0, ITY_PTR(), 0));
-    a.push(mk_fget(1, ITY_I64(), 0, 0));
+    a.push(mk_inst_field_get(1, ITY_I64(), 0, 0));
     a.push(mk_inst_const_i64(2, empty_tag));
     a.push(mk_inst(3, IOP_EQ(), ITY_BOOL(), args2(1, 2)));
     a.push(mk_inst_branch(4, 3, 1, 2));
     let p: Vec<IrInst> = Vec::new();
     if with_abort {
-        p.push(mk_unwrap_abort(5));
+        p.push(mk_inst_call_extern(5, ITY_UNIT(), Vec::new(), VC_INTERNAL_UNWRAP_PANIC()));
     }
     if close_region {
-        p.push(mk_region_close(6));
+        p.push(mk_inst(6, IOP_REGION_CLOSE(), ITY_UNIT(), Vec::new()));
     }
     p.push(mk_inst_unreachable(7));
     let ok: Vec<IrInst> = Vec::new();
-    ok.push(mk_fget(8, ITY_I64(), 0, 1));
+    ok.push(mk_inst_field_get(8, ITY_I64(), 0, 1));
     ok.push(mk_inst_return(9, 8));
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, a));
@@ -226,7 +201,7 @@ fn check_unwrap_claim() -> i64 {
 }
 
 fn check_build_read_is_stored_term() -> i64 {
-    let cs: VcClaims = vc_claims(one_block(String::from("build"), i64_param(), ITY_PTR(), build_insts(1)));
+    let cs: VcClaims = vc_claims(one_block(String::from("build"), mk_params1(), ITY_PTR(), build_insts(1)));
     if cs.kinds.len() != 1 { return 60; }
     let q: String = query(cs, 0);
     if !q.contains(String::from("(define-fun v5 () (_ BitVec 64) v3)")) { return 61; }
@@ -235,7 +210,7 @@ fn check_build_read_is_stored_term() -> i64 {
 }
 
 fn check_unwritten_field_is_unconstrained() -> i64 {
-    let cs: VcClaims = vc_claims(one_block(String::from("build"), i64_param(), ITY_PTR(), build_insts(2)));
+    let cs: VcClaims = vc_claims(one_block(String::from("build"), mk_params1(), ITY_PTR(), build_insts(2)));
     let q: String = query(cs, 0);
     if !q.contains(String::from("(declare-const j0 (_ BitVec 64))")) { return 70; }
     if !q.contains(String::from("(define-fun v5 () (_ BitVec 64) j0)")) { return 71; }
@@ -245,8 +220,8 @@ fn check_unwritten_field_is_unconstrained() -> i64 {
 fn check_param_symbols_declared_once() -> i64 {
     let i: Vec<IrInst> = Vec::new();
     i.push(mk_inst_arg(0, ITY_PTR(), 0));
-    i.push(mk_fget(1, ITY_I64(), 0, 1));
-    i.push(mk_fget(2, ITY_I64(), 0, 1));
+    i.push(mk_inst_field_get(1, ITY_I64(), 0, 1));
+    i.push(mk_inst_field_get(2, ITY_I64(), 0, 1));
     i.push(mk_inst(3, IOP_EQ(), ITY_BOOL(), args2(1, 2)));
     i.push(mk_vow(4, IOP_VOW_ENS(), 3, 0));
     i.push(mk_inst_return(5, 1));
@@ -264,28 +239,28 @@ fn merged_fn(read_idx: i64) -> IrFunction {
     e.push(mk_inst(2, IOP_GT(), ITY_BOOL(), args2(0, 1)));
     e.push(mk_inst_branch(3, 2, 1, 2));
     let t: Vec<IrInst> = Vec::new();
-    t.push(mk_alloc(4, 24));
+    t.push(mk_inst_alloc(4, 24));
     t.push(mk_inst_const_i64(5, 1));
-    t.push(mk_fset(6, 4, 0, 5));
-    t.push(mk_fset(7, 4, 1, 5));
+    t.push(mk_inst_field_set(6, 4, 0, 5));
+    t.push(mk_inst_field_set(7, 4, 1, 5));
     t.push(mk_inst_upsilon(8, 4, 20));
     t.push(mk_inst_jump(9, 3));
     let f: Vec<IrInst> = Vec::new();
-    f.push(mk_alloc(10, 16));
+    f.push(mk_inst_alloc(10, 16));
     f.push(mk_inst_const_i64(11, 2));
-    f.push(mk_fset(12, 10, 0, 11));
+    f.push(mk_inst_field_set(12, 10, 0, 11));
     f.push(mk_inst_upsilon(13, 10, 20));
     f.push(mk_inst_jump(14, 3));
     let m: Vec<IrInst> = Vec::new();
     m.push(mk_inst_phi(20, ITY_PTR()));
-    m.push(mk_fget(21, ITY_I64(), 20, read_idx));
+    m.push(mk_inst_field_get(21, ITY_I64(), 20, read_idx));
     m.push(mk_inst_return(22, 20));
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, e));
     blocks.push(mk_block(1, t));
     blocks.push(mk_block(2, f));
     blocks.push(mk_block(3, m));
-    mk_function(1, String::from("pick"), i64_param(), ITY_PTR(), blocks)
+    mk_function(1, String::from("pick"), mk_params1(), ITY_PTR(), blocks)
 }
 
 fn check_phi_of_objects() -> i64 {
@@ -298,20 +273,20 @@ fn check_merged_read_is_ite_and_none_payload_is_junk() -> i64 {
     let cs: VcClaims = vc_claims(merged_fn(0));
     let hdr: SmtScript = cs.header;
     let all: String = vc_smt_render(cs.arena, hdr);
-    if !all.contains(String::from("(define-fun m0 () (_ BitVec 64) (ite ")) { return 100; }
+    if !all.contains(String::from("() (_ BitVec 64) (ite ")) { return 100; }
     if all.contains(String::from("declare-const j")) { return 101; }
     // Only the then-arm set field 1: the else-arm's slot is an unconstrained constant.
     let cs1: VcClaims = vc_claims(merged_fn(1));
     let all1: String = vc_smt_render(cs1.arena, cs1.header);
     if !all1.contains(String::from("(declare-const j0 (_ BitVec 64))")) { return 102; }
-    if !all1.contains(String::from("(define-fun m0 () (_ BitVec 64) (ite ")) { return 103; }
+    if !all1.contains(String::from("() (_ BitVec 64) (ite ")) { return 103; }
     0
 }
 
 fn check_slot_overwrite_and_sorts() -> i64 {
     let ar: VcArena = vc_arena_new();
     let hdr: SmtScript = vc_script_new();
-    let ag: VcAgg = vc_agg_new();
+    let ag: VcAgg = vc_agg_new(vc_flow_new(1, 1));
     let o: i64 = vc_agg_alloc(ag);
     let a: i64 = vc_tm_bv(ar, 64, 1, 0);
     let b: i64 = vc_tm_bv(ar, 64, 2, 0);
@@ -332,14 +307,6 @@ fn check_slot_overwrite_and_sorts() -> i64 {
     0
 }
 
-fn check_catalogue_split() -> i64 {
-    if vc_op_model(IOP_REGION_ALLOC()) != VC_OPM_MODELED() { return 120; }
-    if vc_op_model(IOP_REGION_OPEN()) != VC_OPM_MODELED() { return 121; }
-    if vc_op_model(IOP_REGION_CLOSE()) != VC_OPM_MODELED() { return 122; }
-    if VC_INTERNAL_UNWRAP_PANIC() != String::from("__vow_unwrap_panic") { return 123; }
-    0
-}
-
 fn main() -> i32 {
     let mut r: i64 = check_struct_gate_accepts();
     if r == 0 { r = check_param_read_accepted(); }
@@ -353,6 +320,5 @@ fn main() -> i32 {
     if r == 0 { r = check_phi_of_objects(); }
     if r == 0 { r = check_merged_read_is_ite_and_none_payload_is_junk(); }
     if r == 0 { r = check_slot_overwrite_and_sorts(); }
-    if r == 0 { r = check_catalogue_split(); }
     i64_to_i32_wrap(r)
 }

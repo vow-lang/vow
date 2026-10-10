@@ -873,9 +873,6 @@ fn parse_vow_label(output: String) -> ParsedVowLabel {
     parsed_vow_label_none()
 }
 
-// Description of the `unwrap-none` assertion; replay keys its predicted abort off it.
-fn unwrap_none_description() -> String { String::from("unwrap() called on None") }
-
 fn describe_assert_label(label: String) -> String {
     if label == String::from("vec bounds") || label == String::from("string bounds") {
         return String::from("index out of bounds");
@@ -896,7 +893,7 @@ fn describe_assert_label(label: String) -> String {
         return String::from("shift amount exceeds the operand's bit width");
     }
     if label == String::from("unwrap-none") {
-        return unwrap_none_description();
+        return String::from("unwrap() called on None");
     }
     if label == String::from("division by zero") {
         return String::from("division or remainder by zero");

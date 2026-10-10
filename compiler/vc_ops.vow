@@ -101,6 +101,16 @@ fn vc_op_model(op: i64) -> i64 {
 // executor turns it into a claim that its path is infeasible.
 fn VC_INTERNAL_UNWRAP_PANIC() -> String { String::from("__vow_unwrap_panic") }
 
+fn vc_is_unwrap_abort(inst: IrInst) -> bool {
+    inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_UNWRAP_PANIC()
+}
+
+// Opcodes the gate looks at: modelled outright, or decided per instruction.
+fn vc_op_gate_candidate(op: i64) -> bool {
+    let model: i64 = vc_op_model(op);
+    model == VC_OPM_MODELED() || model == VC_OPM_CALL() || model == VC_OPM_FIELD()
+}
+
 // Builtins are modelled only when `catalogue_verifier_known` lists their runtime
 // symbol; an `unmodeled` entry and a symbol the catalogue lacks are skipped alike.
 

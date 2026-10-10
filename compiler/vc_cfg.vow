@@ -22,7 +22,7 @@ fn vc_unwrap_abort_precedes(blk: IrBlock) -> bool {
         k = k - 1;
         let prev: IrInst = blk.insts[k];
         if prev.op == IOP_CALL() {
-            return prev.dk == IDATA_CALL_EXTERN() && prev.ds == VC_INTERNAL_UNWRAP_PANIC();
+            return vc_is_unwrap_abort(prev);
         }
         // The region analysis closes the block's region before the abort ends it.
         if prev.op != IOP_REGION_CLOSE() { return false; }

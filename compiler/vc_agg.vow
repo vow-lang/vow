@@ -31,51 +31,48 @@ fn VC_OBJ_PARAM() -> i64 { 1 }
 fn VC_OBJ_PHI() -> i64 { 2 }
 
 struct VcAgg {
+    fl: VcFlow,
     kinds: Vec<i64>,
     owners: Vec<i64>,
+    phis: Vec<i64>,
     heads: Vec<i64>,
-    pe_first: Vec<i64>,
-    pe_count: Vec<i64>,
-    pe_cond: Vec<i64>,
-    pe_obj: Vec<i64>,
     sl_next: Vec<i64>,
     sl_idx: Vec<i64>,
     sl_sort: Vec<i64>,
     sl_term: Vec<i64>,
     junk: i64,
-    names: i64,
 }
 
-fn vc_agg_new() -> VcAgg {
+// `fl` is the control-flow state of the walk: a Phi object reads its incoming
+// objects from the edges and Upsilons recorded there.
+fn vc_agg_new(fl: VcFlow) -> VcAgg {
     VcAgg {
+        fl: fl,
         kinds: Vec::new(),
         owners: Vec::new(),
+        phis: Vec::new(),
         heads: Vec::new(),
-        pe_first: Vec::new(),
-        pe_count: Vec::new(),
-        pe_cond: Vec::new(),
-        pe_obj: Vec::new(),
         sl_next: Vec::new(),
         sl_idx: Vec::new(),
         sl_sort: Vec::new(),
         sl_term: Vec::new(),
         junk: 0,
-        names: 0,
     }
 }
 
-fn vc_agg_push_obj(ag: VcAgg, kind: i64, owner: i64) -> i64 {
+// `owner` is the parameter index of a parameter object and the block of a Phi
+// object (whose Phi is `phi`); -1 otherwise.
+fn vc_agg_push_obj(ag: VcAgg, kind: i64, owner: i64, phi: i64) -> i64 {
     let id: i64 = ag.kinds.len() as i64;
     ag.kinds.push(kind);
     ag.owners.push(owner);
+    ag.phis.push(phi);
     ag.heads.push(-1);
-    ag.pe_first.push(-1);
-    ag.pe_count.push(0);
     id
 }
 
 fn vc_agg_alloc(ag: VcAgg) -> i64 {
-    vc_agg_push_obj(ag, VC_OBJ_ALLOC(), -1)
+    vc_agg_push_obj(ag, VC_OBJ_ALLOC(), -1, -1)
 }
 
 // One object per parameter index, so a parameter's field symbols are declared once.
@@ -87,7 +84,7 @@ fn vc_agg_param(ag: VcAgg, k: i64) -> i64 {
         }
         o = o + 1;
     }
-    vc_agg_push_obj(ag, VC_OBJ_PARAM(), k)
+    vc_agg_push_obj(ag, VC_OBJ_PARAM(), k, -1)
 }
 
 fn vc_agg_find(ag: VcAgg, obj: i64, idx: i64, sort: i64) -> i64 {
@@ -158,80 +155,57 @@ fn vc_agg_get(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: 
         return ag.sl_term[s as u64];
     }
     let kind: i64 = ag.kinds[obj as u64];
-    let mut t: i64 = -1;
-    if kind == VC_OBJ_PARAM() {
-        t = vc_agg_param_symbol(ar, hdr, ag.owners[obj as u64], idx, sort);
-    } else if kind == VC_OBJ_PHI() {
-        t = vc_agg_name(ag, ar, hdr, sort, vc_agg_phi_read(ag, ar, hdr, obj, idx, sort));
-    } else {
-        t = vc_agg_junk(ag, ar, hdr, sort);
-    }
+    let t: i64 = {
+        if kind == VC_OBJ_PARAM() {
+            vc_agg_param_symbol(ar, hdr, ag.owners[obj as u64], idx, sort)
+        } else if kind == VC_OBJ_PHI() {
+            // Named like a scalar Phi: merges of merges would otherwise print
+            // every shared subterm once per use and grow exponentially.
+            vc_flow_name(ag.fl, ar, hdr, sort, vc_agg_phi_read(ag, ar, hdr, obj, idx, sort))
+        } else {
+            vc_agg_junk(ag, ar, hdr, sort)
+        }
+    };
     vc_agg_store(ag, obj, idx, sort, t);
     t
 }
 
-// A composite term bound to a `define-fun`, as `vc_define` does for a scalar
-// Phi: merges of merges would otherwise print every shared subterm once per use
-// and the query would grow exponentially with the nesting.
-fn vc_agg_name(ag: VcAgg, ar: VcArena, hdr: SmtScript, sort: i64, t: i64) -> i64 {
-    if ar.kinds[t as u64] != VC_T_APP() {
-        return t;
-    }
-    let name: String = String::from("m");
-    name.push_str(i64_to_string(ag.names));
-    ag.names = ag.names + 1;
-    vc_script_define_fun(hdr, name, sort, t);
-    vc_tm_var(ar, name)
-}
-
-// The `ite` chain `vc_flow_phi_value` builds, over the slot of each incoming object.
+// The `ite` chain `vc_flow_phi_value` builds, over the slot of each incoming
+// object: the first edge is the base, each later one wraps it. A block's edges
+// are final once the block is entered, so this may run at any later read.
 fn vc_agg_phi_read(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: i64) -> i64 {
-    let first: i64 = ag.pe_first[obj as u64];
-    let n: i64 = ag.pe_count[obj as u64];
-    let mut acc: i64 = vc_agg_get(ag, ar, hdr, ag.pe_obj[first as u64], idx, sort);
-    let mut k: i64 = 1;
-    while k < n {
-        let e: u64 = (first + k) as u64;
-        let v: i64 = vc_agg_get(ag, ar, hdr, ag.pe_obj[e], idx, sort);
+    let fl: VcFlow = ag.fl;
+    let phi: i64 = ag.phis[obj as u64];
+    let first: i64 = fl.in_head[ag.owners[obj as u64] as u64];
+    let base: i64 = vc_flow_upsilon_from(fl, phi, fl.e_src[first as u64]);
+    let mut acc: i64 = vc_agg_get(ag, ar, hdr, base, idx, sort);
+    let mut e: i64 = fl.e_next[first as u64];
+    while e >= 0 {
+        let child: i64 = vc_flow_upsilon_from(fl, phi, fl.e_src[e as u64]);
+        let v: i64 = vc_agg_get(ag, ar, hdr, child, idx, sort);
         if v != acc {
-            acc = vc_tm_app3(ar, VC_OP_ITE(), ag.pe_cond[e], v, acc);
+            acc = vc_tm_app3(ar, VC_OP_ITE(), fl.e_cond[e as u64], v, acc);
         }
-        k = k + 1;
+        e = fl.e_next[e as u64];
     }
     acc
 }
 
 // Object of the Phi `phi_id` at the head of block `bi`: the object itself when
-// every live edge supplies the same one, else an object that merges them. The
+// every live edge supplies the same one, else a Phi object that merges them. The
 // Upsilons recorded the supplied objects in place of terms.
-fn vc_agg_phi(ag: VcAgg, fl: VcFlow, bi: u64, phi_id: i64) -> i64 {
+fn vc_agg_phi(ag: VcAgg, bi: u64, phi_id: i64) -> i64 {
+    let fl: VcFlow = ag.fl;
     let first: i64 = fl.in_head[bi];
     let base: i64 = vc_flow_upsilon_from(fl, phi_id, fl.e_src[first as u64]);
-    let mut same: bool = true;
     let mut e: i64 = fl.e_next[first as u64];
     while e >= 0 {
         if vc_flow_upsilon_from(fl, phi_id, fl.e_src[e as u64]) != base {
-            same = false;
+            return vc_agg_push_obj(ag, VC_OBJ_PHI(), bi as i64, phi_id);
         }
         e = fl.e_next[e as u64];
     }
-    if same {
-        return base;
-    }
-    let obj: i64 = vc_agg_push_obj(ag, VC_OBJ_PHI(), -1);
-    ag.pe_first[obj as u64] = ag.pe_obj.len() as i64;
-    ag.pe_cond.push(fl.e_cond[first as u64]);
-    ag.pe_obj.push(base);
-    let mut n: i64 = 1;
-    e = fl.e_next[first as u64];
-    while e >= 0 {
-        ag.pe_cond.push(fl.e_cond[e as u64]);
-        ag.pe_obj.push(vc_flow_upsilon_from(fl, phi_id, fl.e_src[e as u64]));
-        n = n + 1;
-        e = fl.e_next[e as u64];
-    }
-    ag.pe_count[obj as u64] = n;
-    obj
+    base
 }
 
 // Gate rule for writes: a `FieldSet` must target a `RegionAlloc` of its own
@@ -245,12 +219,12 @@ fn vc_agg_shape_detail(f: IrFunction, n_ids: u64) -> String {
         let mut ii: u64 = 0;
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
-            if inst.op == IOP_REGION_ALLOC() && inst.id >= 0 && (inst.id as u64) < n_ids {
+            if inst.op == IOP_REGION_ALLOC() && inst.id >= 0 {
                 alloc_blk[inst.id as u64] = bi as i64;
             }
             if inst.op == IOP_FIELD_SET() {
                 let target: i64 = inst.args[0];
-                if target < 0 || target >= n_ids as i64 || alloc_blk[target as u64] != bi as i64 {
+                if alloc_blk[target as u64] != bi as i64 {
                     return String::from("FieldSet outside the block that allocates its target");
                 }
             }

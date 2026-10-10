@@ -803,6 +803,9 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     if abort_claim && ce.violation == describe_assert_label(String::from("integer shift count")) {
         return replay_skip(String::from("replay: a shift-count counterexample is a verifier obligation; the runtime masks the count (8-bit shifts excepted)"));
     }
+    if abort_claim && replay_predicted_abort(ce.violation).len() == 0 {
+        return replay_skip(String::from("replay: no runtime abort is predicted for this obligation"));
+    }
     if !abort_claim && (ce.vow_id == caller_precondition_vow_id() || ce.vow_id == unsupported_op_vow_id() || ce.vow_id == verifier_unattributed_vow_id()) {
         return replay_skip(String::from("replay: synthetic counterexample id (caller-precondition / unsupported-op / unattributed-property sentinel)"));
     }
@@ -990,12 +993,17 @@ fn report_verifier_bug_ces(dctx: DiagCtx, ces: Vec<VerifyCE>) [io] {
 }
 
 // The abort a native abort-claim counterexample predicts: `UnwrapOnNone` for the
-// unwrap claim, `ArithmeticOverflow` for the division and remainder claims.
+// unwrap claim, `ArithmeticOverflow` for the division and remainder claims, and
+// "" for any other obligation, which has no runtime abort to confirm.
 fn replay_predicted_abort(violation: String) -> String {
-    if violation == unwrap_none_description() {
+    if violation == describe_assert_label(String::from("unwrap-none")) {
         return String::from("UnwrapOnNone");
     }
-    String::from("ArithmeticOverflow")
+    if violation == describe_assert_label(String::from("division by zero"))
+        || violation == describe_assert_label(String::from("division overflow")) {
+        return String::from("ArithmeticOverflow");
+    }
+    String::from("")
 }
 
 // Verdict for a native abort-claim counterexample: the predicted outcome is the
