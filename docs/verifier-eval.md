@@ -213,10 +213,11 @@ corpus drift and exits `2`):
 
 **Metrics.** Wall-clock is the process wall time. Peak RSS is the larger of the
 sampled sum over the whole process tree (driver plus solver children, 20 ms
-interval) and the kernel's `ru_maxrss` for the run; both raw numbers are in the
-report. Linux seeds a child's `ru_maxrss` with the parent's high-water mark, so
-a kernel value at or below the harness's own peak is ignored. One discarded warm-up run per backend precedes the timed runs, and the
-timed runs alternate between backends so host drift hits both.
+interval) and the kernel's `ru_maxrss` for the run. Linux seeds a child's
+`ru_maxrss` with the parent's high-water mark, so a kernel value at or below the
+harness's own peak is ignored. One discarded warm-up run per backend precedes
+the timed runs, and the timed runs alternate between backends so host drift hits
+both.
 
 **Gate.** A ratio is `native / esbmc` of the per-backend medians.
 

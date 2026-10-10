@@ -36,10 +36,6 @@ def row(
 
 
 class StatisticsTest(unittest.TestCase):
-    def test_median_of_odd_and_even_samples(self):
-        self.assertEqual(3, vp.median([5, 1, 3, 2, 4]))
-        self.assertEqual(2.5, vp.median([4, 1, 3, 2]))
-
     def test_geomean_of_reciprocal_ratios_is_one(self):
         self.assertAlmostEqual(1.0, vp.geomean([2.0, 0.5]))
         self.assertAlmostEqual(2.0, vp.geomean([1.0, 4.0]))
@@ -272,7 +268,6 @@ class RunOnceTest(unittest.TestCase):
         )
         self.assertTrue(got["result"]["cache_empty"])
         self.assertFalse(got["timed_out"])
-        self.assertEqual(0, got["exit_code"])
         self.assertGreater(got["wall_s"], 0)
 
     def test_timeout_flag_only_when_explicit(self):
@@ -291,7 +286,6 @@ class RunOnceTest(unittest.TestCase):
             "print(json.dumps({'status': 'Verified'}))\n"
         )
         self.assertGreaterEqual(got["peak_rss_kb"], 50 * 1024)
-        self.assertGreaterEqual(got["peak_rss_kb"], got["rss_tree_kb"])
 
     def test_maxrss_at_or_below_the_harness_peak_is_not_trusted(self):
         with mock.patch.object(
@@ -345,7 +339,6 @@ def sample(
         "peak_rss_kb": rss,
         "timed_out": timed_out,
         "result": result,
-        "exit_code": 0,
     }
 
 

@@ -26,7 +26,8 @@ could not run (missing tool, wrong ESBMC version, corpus drift, no fixture).
 
 Usage:
     scripts/verify_perf.py [--vowc build/vowc] [--filter NAME] [--runs N]
-                           [--timeout S] [--verify-jobs N] [--output FILE]
+                           [--timeout S] [--verify-jobs N] [--include-stress]
+                           [--output FILE]
 """
 
 import argparse
@@ -86,10 +87,6 @@ NATIVE_DIR_TRUTH = {
 VERSION_RE = re.compile(r"\d+\.\d+(?:\.\d+)?")
 
 
-def median(values):
-    return statistics.median(values)
-
-
 def geomean(values):
     if not values:
         raise ValueError("geometric mean of no values")
@@ -127,8 +124,7 @@ def metric_summary(comparable, key):
     }
 
 
-def evaluate_gate(rows, runs=RUNS, filtered=False):
-    all_rows = rows
+def evaluate_gate(all_rows, runs=RUNS, filtered=False):
     rows = [r for r in all_rows if r["gating"]]
     comparable = [r for r in rows if r["comparable"]]
     metrics = {
@@ -262,9 +258,8 @@ def fixture_function_count(fx):
 
 def sample_tree_rss(pid, stop, peaks):
     while not stop.is_set():
-        tree, own = measure_build_tree_rss.snapshot(pid)
+        tree, _ = measure_build_tree_rss.snapshot(pid)
         peaks["tree"] = max(peaks["tree"], tree)
-        peaks["self"] = max(peaks["self"], own)
         stop.wait(SAMPLE_INTERVAL_S)
 
 
@@ -310,17 +305,18 @@ def run_once(vowc, backend, path, jobs, timeout, watchdog_s):
                 start_new_session=True,
             )
             measured = wait_measured(proc.pid, watchdog_s, start)
+        # wait4 reaped the child behind Popen's back; mark it finished
         proc.returncode = os.waitstatus_to_exitcode(measured["status"])
         with open(out_path, "r", encoding="utf-8", errors="replace") as fh:
             stdout = fh.read()
-        with open(err_path, "r", encoding="utf-8", errors="replace") as fh:
-            stderr = fh.read()
-    result = parse_result(stdout, measured["killed"], measured["status"])
-    if result is None:
-        print(
-            f"verify_perf: {backend} printed no JSON for {path}: {stderr.rstrip()}",
-            file=sys.stderr,
-        )
+        result = parse_result(stdout, measured["killed"], measured["status"])
+        if result is None:
+            with open(err_path, "r", encoding="utf-8", errors="replace") as fh:
+                stderr = fh.read()
+            print(
+                f"verify_perf: {backend} printed no JSON for {path}: {stderr.rstrip()}",
+                file=sys.stderr,
+            )
     timed_out = measured["killed"] or (
         result is not None and result.get("verify_status") == "timeout"
     )
@@ -328,12 +324,8 @@ def run_once(vowc, backend, path, jobs, timeout, watchdog_s):
     return {
         "wall_s": measured["wall_s"],
         "peak_rss_kb": max(measured["tree"], trusted_maxrss(maxrss)),
-        "rss_self_kb": measured["self"],
-        "rss_tree_kb": measured["tree"],
-        "rss_maxrss_kb": maxrss,
         "result": result,
         "timed_out": timed_out,
-        "exit_code": proc.returncode,
     }
 
 
@@ -348,7 +340,7 @@ def trusted_maxrss(maxrss_kb):
 
 
 def wait_measured(pid, watchdog_s, start):
-    peaks = {"tree": 0, "self": 0}
+    peaks = {"tree": 0}
     stop = threading.Event()
     killed = threading.Event()
 
@@ -384,7 +376,6 @@ def wait_measured(pid, watchdog_s, start):
         "rusage": rusage,
         "killed": killed.is_set(),
         "tree": peaks["tree"],
-        "self": peaks["self"],
     }
 
 
@@ -398,8 +389,8 @@ def summarise_backend(samples):
         "verify_status": result.get("verify_status"),
         "status": result.get("status"),
         "counterexamples": verify_eval.actual_cex(result),
-        "wall_s": median([s["wall_s"] for s in samples]),
-        "peak_rss_kb": median([s["peak_rss_kb"] for s in samples]),
+        "wall_s": statistics.median([s["wall_s"] for s in samples]),
+        "peak_rss_kb": statistics.median([s["peak_rss_kb"] for s in samples]),
         "wall_samples": [s["wall_s"] for s in samples],
         "rss_samples": [s["peak_rss_kb"] for s in samples],
         "timeout_runs": timeout_runs,
@@ -485,12 +476,7 @@ def probe_version(tool):
 
 
 def preflight(vowc):
-    problems = []
-    if not os.path.isfile(vowc) or not os.access(vowc, os.X_OK):
-        problems.append(f"vowc not found or not executable: {vowc}")
-    for tool in ("esbmc", "bitwuzla"):
-        if shutil.which(tool) is None:
-            problems.append(f"`{tool}` is not on PATH")
+    problems = verify_diff.preflight(vowc)
     if shutil.which("esbmc") is not None:
         version = probe_version("esbmc")
         if version is None or ".".join(version.split(".")[:2]) != ESBMC_PIN:
@@ -550,7 +536,7 @@ def print_summary(report, stream):
     gate = report["gate"]
     verdict = "PASS" if gate["passed"] else "FAIL"
     if gate["provisional"]:
-        verdict += " (provisional: fewer runs than the gate requires)"
+        verdict += " (provisional: reduced runs or --filter)"
     print(f"verify_perf: gate {verdict}", file=stream)
     print(
         f"  {gate['comparable']} comparable, {gate['excluded']} excluded "
