@@ -1,5 +1,5 @@
 // TEST: replay-skipped the abort is a bounds check, which the replay harness does not reproduce
-// TEST: counterexample-fn "head"
+// TEST: counterexample-fn "caller"
 module InlineCalleeLocalVecOob
 
 fn head(n: u64) -> i64 {
