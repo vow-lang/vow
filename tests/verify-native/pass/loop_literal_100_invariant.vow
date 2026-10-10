@@ -1,0 +1,21 @@
+// TEST: category invariant
+// A loop that really runs 100 times is deeper than the largest unrolling bound,
+// so unwinding alone is `unknown`. Its invariant is inductive and gives the
+// postcondition on exit, so it is proven.
+module LoopLiteral100Invariant
+
+fn hundred() -> u64 vow {
+  ensures: result == 100
+} {
+  let mut i: u64 = 0;
+  while i < 100 vow {
+    invariant: i <= 100
+  } {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  0
+}

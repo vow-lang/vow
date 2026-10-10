@@ -108,6 +108,22 @@ fn vc_is_unwind_sink(inst: IrInst) -> bool {
     inst.op == IOP_UNREACHABLE() && inst.ds == VC_INTERNAL_UNWIND_SINK()
 }
 
+// The two markers of the inductive loop cut (`vc_induct`). A havoc call defines
+// a header Phi's value as an unconstrained constant of its type; the `Unreachable`
+// ends the preservation copy of a loop header, where control returns to the
+// header and no claim is left to make.
+fn VC_INTERNAL_HAVOC() -> String { String::from("__vc_havoc") }
+
+fn vc_is_havoc(inst: IrInst) -> bool {
+    inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_HAVOC()
+}
+
+fn VC_INTERNAL_CUT_END() -> String { String::from("__vc_cut_end") }
+
+fn vc_is_cut_end(inst: IrInst) -> bool {
+    inst.op == IOP_UNREACHABLE() && inst.ds == VC_INTERNAL_CUT_END()
+}
+
 // Inlined callee bodies. The splicer (`vc_inline`) copies a callee into its
 // caller; every clause and abort-bearing instruction of the copy carries the
 // frame it came from in `ds`, which no such opcode uses otherwise and which

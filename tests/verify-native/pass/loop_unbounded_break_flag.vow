@@ -1,0 +1,31 @@
+// TEST: category invariant
+// An unbounded loop with `continue`, `break` and a Bool carried across
+// iterations: two back edges, an early exit and a Bool Phi at the header.
+module LoopUnboundedBreakFlag
+
+fn scan(n: u64) -> u64 vow {
+  ensures: result <= n
+} {
+  let mut i: u64 = 0;
+  let mut found: bool = false;
+  while i < n vow {
+    invariant: i <= n,
+    invariant: !found
+  } {
+    if i == 7 {
+      found = true;
+      break;
+    }
+    if i == 3 {
+      i = i + 1;
+      continue;
+    }
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_u64(scan(10));
+  0
+}

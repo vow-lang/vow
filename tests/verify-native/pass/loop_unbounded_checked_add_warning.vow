@@ -1,0 +1,27 @@
+// TEST: category invariant
+// TEST: warning ArithOverflowReachable
+// The checked add aborts for a large `x`; the contract is judged on returning
+// runs only. The inductive proof keeps the abort site found by unwinding.
+module LoopUnboundedCheckedAddWarning
+
+fn scaled(n: i64, x: i64) -> i64 vow {
+  requires: n >= 0
+  requires: x >= 0
+  ensures: result >= 0
+} {
+  let mut acc: i64 = 0;
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i >= 0,
+    invariant: acc >= 0
+  } {
+    acc = acc +! x;
+    i = i + 1;
+  }
+  acc
+}
+
+fn main() -> i32 [io] {
+  print_i64(scaled(4, 2));
+  0
+}

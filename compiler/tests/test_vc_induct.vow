@@ -1,0 +1,317 @@
+module TestVcInduct
+
+use ir
+use ir_printer
+use ir_dominance
+use vc_ops
+use vc_gate
+use vc_cfg
+use vc_loops
+use vc_induct
+use tests.builders
+
+fn pair(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn mk_inv(id: i64, cond: i64, vow_id: i64) -> IrInst {
+    let one: Vec<i64> = Vec::new();
+    one.push(cond);
+    ir_inst_new(id, IOP_VOW_INV(), ITY_UNIT(), one, IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+// while i < 8 { i = i + 1 } with an invariant in the header block, as the
+// lowerer shapes it (same IR as test_vc_unroll.vow).
+fn count_up() -> IrFunction {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_const_i64(0, 0));
+    e.push(mk_inst_upsilon(1, 0, 3));
+    e.push(mk_inst_jump(2, 1));
+    let h: Vec<IrInst> = Vec::new();
+    h.push(mk_inst_phi(3, ITY_I64()));
+    h.push(mk_inst_const_i64(4, 8));
+    h.push(mk_inst(5, IOP_LT(), ITY_BOOL(), pair(3, 4)));
+    h.push(mk_inv(6, 5, 7));
+    h.push(mk_inst_upsilon(7, 3, 20));
+    h.push(mk_inst_branch(8, 5, 2, 3));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(mk_inst_const_i64(9, 1));
+    b.push(mk_inst_add(10, 3, 9));
+    b.push(mk_inst_upsilon(11, 10, 3));
+    b.push(mk_inst_jump(12, 1));
+    let x: Vec<IrInst> = Vec::new();
+    x.push(mk_inst_phi(20, ITY_I64()));
+    x.push(mk_inst_return(21, 20));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, h));
+    blocks.push(mk_block(2, b));
+    blocks.push(mk_block(3, x));
+    mk_function(1, String::from("count_up"), Vec::new(), ITY_I64(), blocks)
+}
+
+// The same loop with `invariant: i <= 8 && i >= 0`: the clause lowers to a
+// header, a right-hand block, a short-circuit block and a merge block holding
+// the `VowInv`, followed by the loop condition.
+fn count_up_and() -> IrFunction {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_const_i64(0, 0));
+    e.push(mk_inst_upsilon(1, 0, 3));
+    e.push(mk_inst_jump(2, 1));
+    let h: Vec<IrInst> = Vec::new();
+    h.push(mk_inst_phi(3, ITY_I64()));
+    h.push(mk_inst_const_i64(4, 8));
+    h.push(mk_inst(5, IOP_LE(), ITY_BOOL(), pair(3, 4)));
+    h.push(mk_inst_branch(6, 5, 4, 5));
+    let rhs: Vec<IrInst> = Vec::new();
+    rhs.push(mk_inst_const_i64(7, 0));
+    rhs.push(mk_inst(8, IOP_GE(), ITY_BOOL(), pair(3, 7)));
+    rhs.push(mk_inst_upsilon(9, 8, 11));
+    rhs.push(mk_inst_jump(10, 6));
+    let short: Vec<IrInst> = Vec::new();
+    short.push(mk_inst_const_bool(30, 0));
+    short.push(mk_inst_upsilon(31, 30, 11));
+    short.push(mk_inst_jump(32, 6));
+    let m: Vec<IrInst> = Vec::new();
+    m.push(mk_inst_phi(11, ITY_BOOL()));
+    m.push(mk_inv(12, 11, 9));
+    m.push(mk_inst(13, IOP_LT(), ITY_BOOL(), pair(3, 4)));
+    m.push(mk_inst_upsilon(14, 3, 20));
+    m.push(mk_inst_branch(15, 13, 2, 3));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(mk_inst_const_i64(16, 1));
+    b.push(mk_inst_add(17, 3, 16));
+    b.push(mk_inst_upsilon(18, 17, 3));
+    b.push(mk_inst_jump(19, 1));
+    let x: Vec<IrInst> = Vec::new();
+    x.push(mk_inst_phi(20, ITY_I64()));
+    x.push(mk_inst_return(21, 20));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, h));
+    blocks.push(mk_block(2, b));
+    blocks.push(mk_block(3, x));
+    blocks.push(mk_block(4, rhs));
+    blocks.push(mk_block(5, short));
+    blocks.push(mk_block(6, m));
+    mk_function(1, String::from("count_up_and"), Vec::new(), ITY_I64(), blocks)
+}
+
+// `count_up` with the header invariant deleted.
+fn count_up_no_invariant() -> IrFunction {
+    let f: IrFunction = count_up();
+    let h: IrBlock = f.blocks[1];
+    let kept: Vec<IrInst> = Vec::new();
+    let mut i: u64 = 0;
+    while i < h.insts.len() {
+        let inst: IrInst = h.insts[i];
+        if inst.op != IOP_VOW_INV() {
+            kept.push(inst);
+        }
+        i = i + 1;
+    }
+    f.blocks[1] = mk_block(1, kept);
+    f
+}
+
+fn count_op(f: IrFunction, op: i64) -> i64 {
+    let mut n: i64 = 0;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            let inst: IrInst = blk.insts[i];
+            if inst.op == op {
+                n = n + 1;
+            }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    n
+}
+
+fn count_marker(f: IrFunction, marker: String) -> i64 {
+    let mut n: i64 = 0;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            let inst: IrInst = blk.insts[i];
+            if inst.ds == marker {
+                n = n + 1;
+            }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    n
+}
+
+fn count_upsilons_to(f: IrFunction, phi: i64) -> i64 {
+    let mut n: i64 = 0;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            let inst: IrInst = blk.insts[i];
+            if inst.op == IOP_UPSILON() && inst.dv == phi {
+                n = n + 1;
+            }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    n
+}
+
+fn block_by_id(f: IrFunction, id: i64) -> IrBlock {
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        if blk.id == id {
+            return blk;
+        }
+        b = b + 1;
+    }
+    ir_block_new(-1)
+}
+
+fn terminator(blk: IrBlock) -> IrInst {
+    blk.insts[blk.insts.len() - 1]
+}
+
+// The acyclic function is well formed: the executor's shape, and no read that
+// the definition does not dominate.
+fn well_formed(g: IrFunction) -> bool {
+    vc_unrolled_detail(g, vc_ty_table(g)).len() == 0 && ir_non_dominating_read(g).len() == 0
+}
+
+fn check_structure() -> i64 {
+    let f: IrFunction = count_up();
+    let c: VcInduct = vc_induct_cut(f);
+    if c.status != VC_INDUCT_OK() { return 1; }
+    let g: IrFunction = c.f;
+    // 4 original blocks, one entry copy and one back copy of the header
+    if g.blocks.len() != 6 { return 2; }
+    if !well_formed(g) { return 3; }
+    if vc_unrolled_detail(f, vc_ty_table(f)).len() == 0 { return 4; }
+    // the header proper: the Phi is a havoc constant of its id and type, the
+    // invariant an assumption without a frame marker
+    let h: IrBlock = block_by_id(g, 1);
+    let phi: IrInst = h.insts[0];
+    if !vc_is_havoc(phi) || phi.id != 3 || phi.ty != ITY_I64() { return 5; }
+    let inv: IrInst = h.insts[3];
+    if inv.op != IOP_VOW_REQ() || inv.dv != 7 || inv.ds.len() != 0 || inv.args[0] != 5 { return 6; }
+    // two claims (entry and preservation), one assumption
+    if count_op(g, IOP_VOW_INV()) != 2 || count_op(g, IOP_VOW_REQ()) != 1 { return 7; }
+    if count_marker(g, VC_INTERNAL_CUT_END()) != 1 || count_marker(g, VC_INTERNAL_HAVOC()) != 1 { return 8; }
+    // the preheader enters through the entry copy, the latch returns to the back
+    // copy; neither feeds the havoc constant any more
+    let pre: IrBlock = block_by_id(g, 0);
+    let pre_up: IrInst = pre.insts[1];
+    let pre_jump: IrInst = terminator(pre);
+    let latch: IrBlock = block_by_id(g, 2);
+    let latch_up: IrInst = latch.insts[2];
+    let latch_jump: IrInst = terminator(latch);
+    if pre_jump.dv == 1 || latch_jump.dv == 1 || pre_jump.dv == latch_jump.dv { return 9; }
+    if pre_up.dv == 3 || latch_up.dv == 3 || pre_up.dv == latch_up.dv { return 10; }
+    if count_upsilons_to(g, 3) != 0 { return 11; }
+    // the entry copy claims the invariant on its own Phi and continues into the
+    // header proper
+    let ent: IrBlock = block_by_id(g, pre_jump.dv);
+    let ent_phi: IrInst = ent.insts[0];
+    let ent_inv: IrInst = ent.insts[ent.insts.len() - 2];
+    let ent_end: IrInst = terminator(ent);
+    if ent_phi.op != IOP_PHI() || ent_phi.id != pre_up.dv { return 12; }
+    if ent_inv.op != IOP_VOW_INV() || ent_inv.dv != 7 || ent_inv.args[0] == 5 { return 13; }
+    if ent_end.op != IOP_JUMP() || ent_end.dv != 1 { return 14; }
+    // the back copy ends where control would return to the header
+    let back_copy: IrBlock = block_by_id(g, latch_jump.dv);
+    let back_end: IrInst = terminator(back_copy);
+    if !vc_is_cut_end(back_end) || back_copy.insts[0].id != latch_up.dv { return 15; }
+    0
+}
+
+fn check_and_region() -> i64 {
+    let f: IrFunction = count_up_and();
+    if vc_unrolled_detail(f, vc_ty_table(f)).len() == 0 { return 1; }
+    let c: VcInduct = vc_induct_cut(f);
+    if c.status != VC_INDUCT_OK() { return 2; }
+    let g: IrFunction = c.f;
+    // 7 original blocks, a 4-block region copied twice
+    if g.blocks.len() != 15 { return 3; }
+    if !well_formed(g) { return 4; }
+    if count_op(g, IOP_VOW_INV()) != 2 || count_op(g, IOP_VOW_REQ()) != 1 { return 5; }
+    if count_marker(g, VC_INTERNAL_CUT_END()) != 1 { return 6; }
+    // the loop condition is code of the header proper only
+    if count_op(g, IOP_LT()) != 1 { return 7; }
+    // the copies of the region hold the right-hand side and the merge Phi twice
+    if count_op(g, IOP_GE()) != 3 { return 8; }
+    // the header Phi is a havoc constant; left are the original merge Phi, the
+    // exit Phi and the header and merge Phis of each copy
+    if count_op(g, IOP_PHI()) != 1 + 1 + 2 + 2 { return 9; }
+    // the original merge block is the havoc copy: its `VowInv` is an assumption
+    let m: IrBlock = block_by_id(g, 6);
+    if m.insts[1].op != IOP_VOW_REQ() { return 10; }
+    0
+}
+
+fn check_deterministic() -> i64 {
+    let a: VcInduct = vc_induct_cut(count_up_and());
+    let b: VcInduct = vc_induct_cut(count_up_and());
+    if a.status != VC_INDUCT_OK() || b.status != VC_INDUCT_OK() { return 1; }
+    if print_function(a.f) != print_function(b.f) { return 2; }
+    0
+}
+
+fn check_not_applicable() -> i64 {
+    let none: VcInduct = vc_induct_cut(count_up_no_invariant());
+    if none.status != VC_INDUCT_NA() { return 1; }
+    // a loop-free function has nothing to cut
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_const_i64(0, 1));
+    e.push(mk_inst_return(1, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    let flat: IrFunction = mk_function(1, String::from("flat"), Vec::new(), ITY_I64(), blocks);
+    if vc_induct_cut(flat).status != VC_INDUCT_NA() { return 2; }
+    // an invariant that is not in the loop's region is not seen by the cut
+    let f: IrFunction = count_up();
+    let body: IrBlock = f.blocks[2];
+    let moved: Vec<IrInst> = Vec::new();
+    moved.push(mk_inv(40, 5, 8));
+    let mut i: u64 = 0;
+    while i < body.insts.len() {
+        moved.push(body.insts[i]);
+        i = i + 1;
+    }
+    f.blocks[2] = mk_block(2, moved);
+    if vc_induct_cut(f).status != VC_INDUCT_NA() { return 3; }
+    0
+}
+
+fn check_ptr_phi() -> i64 {
+    let f: IrFunction = count_up();
+    let e: IrBlock = f.blocks[0];
+    e.insts[0] = mk_inst_alloc(0, 8);
+    let h: IrBlock = f.blocks[1];
+    h.insts[0] = mk_inst_phi(3, ITY_PTR());
+    if vc_induct_cut(f).status != VC_INDUCT_NA() { return 1; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_structure();
+    if r == 0 { r = check_and_region() + 100; if r == 100 { r = 0; } }
+    if r == 0 { r = check_deterministic() + 200; if r == 200 { r = 0; } }
+    if r == 0 { r = check_not_applicable() + 300; if r == 300 { r = 0; } }
+    if r == 0 { r = check_ptr_phi() + 400; if r == 400 { r = 0; } }
+    i64_to_i32_wrap(r)
+}
