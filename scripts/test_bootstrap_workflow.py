@@ -106,13 +106,15 @@ class BootstrapWorkflowTest(unittest.TestCase):
                 self.assertIn("scripts/bootstrap.sh", self.jobs[name])
 
     def test_bootstrap_verifies_with_esbmc(self) -> None:
-        # --stage3-no-verify halves wall time; Stages 1-2 still verify. A bare
-        # --no-verify here would silently drop ESBMC from the whole pipeline.
+        # bootstrap.sh verifies on its own (Stage 1 plus a separate self-hosted
+        # `verify` pass). A bare --no-verify here would silently drop ESBMC
+        # from the whole pipeline; --stage3-no-verify is a retained no-op.
         for name in ("bootstrap", "bootstrap-macos", "bootstrap-linux-arm64"):
             with self.subTest(job=name):
                 job = self.jobs[name]
-                self.assertIn("--stage3-no-verify", job)
+                self.assertNotIn("--stage3-no-verify", job)
                 self.assertNotIn("bootstrap.sh --no-verify", job)
+                self.assertNotIn("--skip-cargo --no-verify", job)
                 self.assertIn("install-esbmc", job)
 
     def compiler_test_step(self) -> str:

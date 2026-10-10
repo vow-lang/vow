@@ -59,10 +59,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     # Runs scripts/bootstrap.sh end-to-end so a bootstrap regression
-    # (failing Stage 1/2 verification, or a broken SHA-256 fixed point)
-    # is caught. Stage 3 skips ESBMC to roughly halve wall time;
-    # verification does not affect codegen, so the fixed-point check
-    # remains meaningful.
+    # (failing Stage 1 or self-hosted verification, or a broken SHA-256
+    # fixed point) is caught. Stages 2-3 skip ESBMC and one separate
+    # self-hosted `verify` pass runs on the fixed-point binary, so ESBMC
+    # never overlaps a self-hosted codegen. Verification does not affect
+    # codegen, so the fixed-point check remains meaningful.
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -75,8 +76,8 @@ jobs:
         uses: ./.github/actions/install-esbmc
       - name: Install Bitwuzla
         uses: ./.github/actions/install-bitwuzla
-      - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
-        run: scripts/bootstrap.sh --stage3-no-verify
+      - name: Bootstrap (Stage 1 and self-hosted verify, fixed-point check)
+        run: scripts/bootstrap.sh
       - name: Compiler test suite, both compilers (equivalence tier 1)
         # This is blocking but nightly rather than per-PR while #1171 keeps the
         # self-hosted suite outside the pull-request latency budget. Running it
@@ -103,10 +104,10 @@ jobs:
   bootstrap-macos:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    # Runs the same verified three-stage bootstrap as Linux: Stages 1-2 verify
-    # with the arm64 macOS ESBMC artifact, while Stage 3 skips ESBMC to roughly
-    # halve wall time. Verification does not affect codegen, so the SHA-256
-    # fixed-point check remains meaningful.
+    # Runs the same verified three-stage bootstrap as Linux: Stage 1 and the
+    # separate self-hosted verify pass use the arm64 macOS ESBMC artifact,
+    # while Stages 2-3 skip ESBMC. Verification does not affect codegen, so
+    # the SHA-256 fixed-point check remains meaningful.
     # Pinned (not macos-latest) to match release.yml's macos/aarch64 leg: both
     # jobs depend on the runner resolving to arm64 for the install-esbmc pin.
     runs-on: macos-15
@@ -121,15 +122,16 @@ jobs:
         uses: ./.github/actions/install-esbmc
       - name: Install Bitwuzla
         uses: ./.github/actions/install-bitwuzla
-      - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
-        run: scripts/bootstrap.sh --stage3-no-verify
+      - name: Bootstrap (Stage 1 and self-hosted verify, fixed-point check)
+        run: scripts/bootstrap.sh
 
   bootstrap-linux-arm64:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    # Runs the same verified three-stage bootstrap as Linux/x86_64 and macOS: Stages 1-2 verify
-    # with the arm64 Linux ESBMC artifact, while Stage 3 skips ESBMC to roughly halve wall time.
-    # Verification does not affect codegen, so the SHA-256 fixed-point check remains meaningful.
+    # Runs the same verified three-stage bootstrap as Linux/x86_64 and macOS: Stage 1 and the
+    # separate self-hosted verify pass use the arm64 Linux ESBMC artifact, while Stages 2-3 skip
+    # ESBMC. Verification does not affect codegen, so the SHA-256 fixed-point check remains
+    # meaningful.
     # Runner label matches release.yml's linux/aarch64 leg (ubuntu-24.04-arm) so both jobs depend
     # on the same GitHub-hosted ARM64 image resolving the install-esbmc pin identically.
     runs-on: ubuntu-24.04-arm
@@ -144,5 +146,5 @@ jobs:
         uses: ./.github/actions/install-esbmc
       - name: Install Bitwuzla
         uses: ./.github/actions/install-bitwuzla
-      - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
-        run: scripts/bootstrap.sh --stage3-no-verify
+      - name: Bootstrap (Stage 1 and self-hosted verify, fixed-point check)
+        run: scripts/bootstrap.sh
