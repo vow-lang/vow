@@ -3159,48 +3159,120 @@ fn skill_parent_dir(path: String) -> String {
     }
 }
 
-fn install_skill_tree(root: String, emit_errors: bool) -> String [io, write] {
-    let dir: String = skill_install_dir(root);
-    let mk: i64 = fs_mkdir(dir);
-    if mk < 0 {
-        if emit_errors {
-            diag_eprintln_best_effort(str2(String::from("vow skill install: cannot create "), dir));
-        }
-        return String::from("");
+fn skill_report(emit_errors: bool, prefix: String, path: String) [io] {
+    if emit_errors {
+        diag_eprintln_best_effort(str2(prefix, path));
     }
+}
 
-    let path: String = str3(dir, String::from("/"), String::from("SKILL.md"));
-    let wr: i64 = fs_write(path, skill_entrypoint());
-    if wr < 0 {
-        if emit_errors {
-            diag_eprintln_best_effort(str2(String::from("vow skill install: cannot write "), path));
+// Exclusive reservation: plain `mkdir` (no -p) fails when the name is taken, so
+// concurrent installers never share a directory. Its output is captured, not printed.
+fn skill_reserve_dir(parent: String, stem: String) -> String [io] {
+    let mut attempt: i64 = 0;
+    while attempt < 8 {
+        let token: String = str3(int_to_string(time_unix_ms()), String::from("-"), int_to_string(attempt));
+        let candidate: String = str4(parent, String::from("/."), stem, str2(String::from("-"), token));
+        let margs: Vec<String> = Vec::new();
+        margs.push(candidate);
+        let rc: i64 = process_run(String::from("mkdir"), margs);
+        if rc == 0 {
+            return candidate;
         }
-        return String::from("");
+        attempt = attempt + 1;
     }
+    String::from("")
+}
 
+// Support files first, SKILL.md last: a directory holding SKILL.md always holds the
+// files it links to.
+fn skill_write_tree(dir: String, emit_errors: bool) -> bool [io, write] {
     let mut i: u64 = 0;
     while i < skill_support_count() {
         let support_path: String = str3(dir, String::from("/"), skill_support_path(i));
         let support_parent: String = skill_parent_dir(support_path);
         if support_parent.len() > 0 {
-            let parent_mk: i64 = fs_mkdir(support_parent);
-            if parent_mk < 0 {
-                if emit_errors {
-                    diag_eprintln_best_effort(str2(String::from("vow skill install: cannot create "), support_parent));
-                }
-                return String::from("");
+            if fs_mkdir(support_parent) != 0 {
+                skill_report(emit_errors, String::from("vow skill install: cannot create "), support_parent);
+                return false;
             }
         }
-        let support_wr: i64 = fs_write(support_path, skill_support_content(i));
-        if support_wr < 0 {
-            if emit_errors {
-                diag_eprintln_best_effort(str2(String::from("vow skill install: cannot write "), support_path));
-            }
-            return String::from("");
+        if fs_write(support_path, skill_support_content(i)) != 0 {
+            skill_report(emit_errors, String::from("vow skill install: cannot write "), support_path);
+            return false;
         }
         i = i + 1;
     }
+    let path: String = str3(dir, String::from("/"), String::from("SKILL.md"));
+    if fs_write(path, skill_entrypoint()) != 0 {
+        skill_report(emit_errors, String::from("vow skill install: cannot write "), path);
+        return false;
+    }
+    true
+}
 
+// A directory cannot be renamed over a non-empty one, so an existing target is swapped
+// out through a backup and put back when the final rename fails.
+fn skill_commit_stage(parent: String, stage: String, target: String, emit_errors: bool) -> bool [io, read, write] {
+    let cannot_install: String = String::from("vow skill install: cannot install ");
+    if fs_exists(target) != 1 {
+        if fs_rename(stage, target) != 0 {
+            skill_report(emit_errors, cannot_install, target);
+            return false;
+        }
+        return true;
+    }
+    let backup: String = skill_reserve_dir(parent, String::from("vow-backup"));
+    if backup.len() == 0 {
+        skill_report(emit_errors, String::from("vow skill install: cannot create "), str2(parent, String::from("/.vow-backup")));
+        return false;
+    }
+    if fs_rename(target, backup) != 0 {
+        fs_remove_dir(backup);
+        skill_report(emit_errors, cannot_install, target);
+        return false;
+    }
+    if fs_rename(stage, target) != 0 {
+        if fs_rename(backup, target) != 0 {
+            skill_report(emit_errors, cannot_install, str3(target, String::from("; previous tree kept at "), backup));
+        } else {
+            skill_report(emit_errors, cannot_install, target);
+        }
+        return false;
+    }
+    fs_remove_dir_all(backup);
+    true
+}
+
+// Builds the tree in a sibling staging directory and renames it into place, so a
+// failure never leaves a SKILL.md that links to missing files. A symlinked target
+// (dotfile managers) is written in place. Returns "" on failure.
+fn install_skill_tree(root: String, emit_errors: bool) -> String [io, read, write] {
+    let dir: String = skill_install_dir(root);
+    let parent: String = skill_parent_dir(dir);
+    let path: String = str3(dir, String::from("/"), String::from("SKILL.md"));
+    if fs_mkdir(parent) != 0 {
+        skill_report(emit_errors, String::from("vow skill install: cannot create "), parent);
+        return String::from("");
+    }
+    if fs_is_symlink(dir) == 1 {
+        if !skill_write_tree(dir, emit_errors) {
+            return String::from("");
+        }
+        return path;
+    }
+    let stage: String = skill_reserve_dir(parent, String::from("vow-install"));
+    if stage.len() == 0 {
+        skill_report(emit_errors, String::from("vow skill install: cannot create "), str2(parent, String::from("/.vow-install")));
+        return String::from("");
+    }
+    let mut committed: bool = skill_write_tree(stage, emit_errors);
+    if committed {
+        committed = skill_commit_stage(parent, stage, dir, emit_errors);
+    }
+    if !committed {
+        fs_remove_dir_all(stage);
+        return String::from("");
+    }
     path
 }
 
