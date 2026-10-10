@@ -357,7 +357,8 @@ acyclic function.
   under the budget can now run out of it.
 - **Warnings.** An inductive proof reports the abort sites of the last
   completed bounded round, which are the ones reachable within the unrolled
-  prefix. A checked-arithmetic claim `sat` in the induction query is ignored: the
+  prefix, plus any the round that ended undecided found before it ended. A
+  checked-arithmetic claim `sat` in the induction query is ignored: the
   havoc state may be unreachable. A function proven only inductively can
   therefore have reachable aborts that no warning names.
 - **Partial correctness.** A proof covers terminating runs: the exit obligation

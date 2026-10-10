@@ -232,6 +232,19 @@ fn vc_proven_with(sites: Vec<ParsedArithSite>) -> VcOutcome {
     proven
 }
 
+// The sites of an incomplete round (it ended undecided part way) plus those the
+// last completed round found: the incomplete round must not lose a warning.
+fn vc_merge_sites(sites: Vec<ParsedArithSite>, earlier: Vec<ParsedArithSite>) -> Vec<ParsedArithSite> {
+    let mut i: u64 = 0;
+    while i < earlier.len() {
+        if !vc_has_site(sites, earlier[i]) {
+            sites.push(earlier[i]);
+        }
+        i = i + 1;
+    }
+    sites
+}
+
 // A bounded round that ends undecided (solver unknown, timeout) cannot overturn
 // an inductive proof; a counterexample or an error does.
 fn vc_undecided(r: VcRound) -> bool {
@@ -272,7 +285,7 @@ fn vc_verify_function(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: Stri
         let r: VcRound = vc_run_round(f, g, inl.frames, sites, started, timeout_ms, scratch);
         if r.ended {
             if ind.proves && vc_undecided(r) {
-                return vc_proven_with(sites);
+                return vc_proven_with(vc_merge_sites(sites, last_sites));
             }
             return vc_chain_outcome(f, inl.frames, r.frame, r.result);
         }
