@@ -23,9 +23,9 @@ native verifier" there is **no Rust twin**, no `c_emitter` change and no C-parit
   "not proved inductively"; the result stays the BMC `unknown`. Matches ADR Rule 1 ("a step-case
   failure is `unknown`, never `failed`"). A *wrong* invariant is `failed` because bounded
   unwinding checks the invariant as a claim on every header visit and finds a real run.
-- **Eligibility:** every loop of the (loop-closed) function has >= 1 `invariant` in its header, no
-  header Phi is `ITY_PTR`, and no `VowInv` lives outside a loop header. Otherwise BMC only, as
-  today. Keeps `unknown/loop_infinite.vow` and `unknown/loop_symbolic_bound.vow` `unknown`
+- **Eligibility:** every loop of the (loop-closed) function has >= 1 `invariant` in its *invariant
+  region* (below), no header Phi is `ITY_PTR`, and no `VowInv` lies outside the invariant region
+  of its innermost loop. Otherwise BMC only, as today. Keeps `unknown/loop_infinite.vow` and `unknown/loop_symbolic_bound.vow` `unknown`
   (invariant-free loops are never cut with an implicit `true`).
 - **Soft (checked-arithmetic) claims: `sat` is ignored in the induction query** (the havoc state may
   be unreachable). The warning sites reported with an inductive proof are the ones collected in the
@@ -35,6 +35,11 @@ native verifier" there is **no Rust twin**, no `c_emitter` change and no C-parit
   non-terminating loop with an invariant (`while true vow { invariant: true }`) is `proven`
   (vacuous exit). ESBMC/BMC give `unknown` there. This is a deliberate verdict change, recorded in
   the ADR and pinned by a fixture; maintainers may veto in review.
+- **`&&`/`||` in an invariant lowers to branches** (checked: `lower_expr`,
+  `compiler/lower.vow:2927-3010`, emits `Branch` + rhs/short/merge blocks + Phi for
+  `BINOP_AND/OR`; `lower_invariant_clauses` (`lower.vow:5792-5818`) calls `lower_expr` for the
+  clause). So `invariant: i >= 0 && i <= n` puts its `VowInv` in a merge block after the header,
+  and the cut must clone an *invariant region* (a small DAG of blocks), not a header-block prefix.
 - Follow-up names: automatic k-induction (base/forward/step) is the next epic child (P3 "automatic
   k-induction"); #1419/#1420/#1423 are perf/harness/Vec issues, not this feature.
 
@@ -69,23 +74,38 @@ Input is the output of `vc_close_loops` (what `vc_verify_function` already holds
 Module header `use ir; use ir_dominance; use vc_ops; use vc_loops`. Steps, per loop `j` with header
 block `h = li.headers[j]` processed in `li.headers` order (determinism: no HashMap, no iteration
 over unordered containers):
+- **Invariant region of loop `j`.** The lowerer emits, in the header: Phis, then per clause the
+  clause expression followed by its `VowInv`, then the loop condition. A clause with `&&`/`||`
+  spreads over several blocks (rhs, short, merge). Let `blk_last` be the block holding the last
+  `VowInv` whose innermost loop is `j` (the blocks holding `j`'s `VowInv`s must form a dominator
+  chain ending in `blk_last`, else NA). The region `R_j` is `h` plus every block found by a
+  backward walk from `blk_last` over predecessors that does not expand `h` and stays inside the
+  loop. `blk_last` is cloned only up to and including that last `VowInv`; every other block of
+  `R_j` is cloned whole. A block of `R_j` other than `blk_last` with a successor outside `R_j`
+  makes the loop NA. For a plain comma-separated invariant `R_j = {h}` and this is a header prefix.
 - **Applicable?** `vc_loop_analysis` not irreducible, `n_loops > 0`, entry not a header; every
-  header has >= 1 `IOP_VOW_INV`; no header Phi of `ITY_PTR`; no `VOW_INV` outside a header; no block
-  with both successors equal to a header. Else `status = VC_INDUCT_NA` and the caller keeps BMC only.
+  loop has an invariant region with >= 1 `IOP_VOW_INV`; the number of `VOW_INV` in all regions
+  equals the number in the whole function (none stray); no header Phi of `ITY_PTR`; no block with
+  both successors equal to a header. Else `status = VC_INDUCT_NA` and the caller keeps BMC only.
   Export `vc_induction_eligible(f)` doing the same checks without building the result.
 - **New ids**: instruction ids from `dom_max_inst_id(f) + 1`, block ids from `max(block.id) + 1`
   (same scheme as `vc_close_values`, `vc_loops.vow:472-528`). New blocks are appended after the
   originals, `h_entry` then `h_back` per loop, so block 0 stays the entry.
-- **`h_entry`**: fresh Phis `p_i` (one per non-Unit header Phi) + a clone of the header's non-Phi
-  prefix up to and including its last `VOW_INV` (fresh ids, header Phis remapped to `p_i`, operands
-  defined outside the header unchanged; `ostart/olen` preserved via `vc_clone_inst` so claims keep
-  source spans) + `Jump h`. Invariants stay `VOW_INV` (claims = entry check).
-- **`h_back`**: same clone with Phis `q_i` and fresh ids, ending in an `Unreachable` with
-  `ds = VC_INTERNAL_CUT_END()` (no claim, no assumption). Invariants stay claims (preservation).
-- **Header `h` (havoc copy, original ids)**: each non-Unit Phi becomes an `IOP_CALL` havoc marker
-  with the Phi's id and type; each Unit Phi becomes `CONST_UNIT` with its id; every header
-  `VOW_INV` becomes `VOW_REQ` (the executor already assumes `VOW_REQ` via `vc_assume`).
-  Condition, branch and body are untouched.
+- **`h_entry`** (entry check): a clone of `R_j` with fresh block ids and fresh instruction ids
+  (including its merge Phis and the Upsilons feeding them, remapped consistently). The cloned
+  header carries fresh Phis `p_i` (one per non-Unit header Phi) fed by the retargeted preheader
+  Upsilons; header Phis are remapped to `p_i`; operands defined outside `R_j` are unchanged;
+  `ostart/olen` preserved via `vc_clone_inst` so claims keep source spans. The cloned `blk_last`
+  ends, right after the last `VowInv`, in `Jump h` (the original header = havoc copy).
+  Invariants stay `VOW_INV` (claims).
+- **`h_back`** (preservation check): the same clone with Phis `q_i` and fresh ids, whose cloned
+  `blk_last` ends in an `Unreachable` with `ds = VC_INTERNAL_CUT_END()` (no claim, no
+  assumption). Invariants stay claims. Cloned blocks are appended in `R_j`'s block-index order for
+  determinism.
+- **Havoc copy = the original `R_j` and the loop (original ids)**: each non-Unit header Phi becomes
+  an `IOP_CALL` havoc marker with the Phi's id and type; each Unit Phi becomes `CONST_UNIT` with
+  its id; every `VOW_INV` of `R_j` becomes `VOW_REQ` (the executor already assumes `VOW_REQ` via
+  `vc_assume`). Condition, branch and body are untouched.
 - **Edges**: any branch/jump target `== h` from a back-edge source (`dom_dominates(li.nums, nb, h,
   src)`) becomes `h_back`; from any other predecessor becomes `h_entry`. Compare block ids as
   `vc_clone_at` does (`vc_unroll.vow:236-242`).
@@ -98,7 +118,9 @@ over unordered containers):
   `vc_clone_inst` (`:419`), `vc_replace_arg` (`:435`), `ir_inst_new` (`ir.vow:322`),
   `ir_block_new` (`ir.vow:356`).
 - Keep functions small (CLAUDE.md "small files, smaller functions"): split into
-  `vc_induct_eligibility`, `vc_induct_clone_prefix`, `vc_induct_rebuild_block`.
+  `vc_induct_region` (compute `R_j`/`blk_last`), `vc_induct_eligibility`,
+  `vc_induct_clone_region`, `vc_induct_rebuild_block`. If the module passes ~400 lines, move the
+  region walk to its own `vc_induct_region.vow` (and register it in `concat_vow.sh`).
 
 ### 3. Executor: define a havoc marker
 - **File**: `compiler/vc_exec.vow:308-347` (`vc_walk_inst`), new arm before the final `vc_define`
@@ -131,15 +153,28 @@ over unordered containers):
 See Testing.
 
 ### 7. Docs
-- ADR addendum "(#1422): invariant-based induction": eligibility; the three obligations (entry =
+- ADR: besides the new addendum, qualify the #1418 addendum bullet "An unwinding claim that is
+  still `sat` at the largest bound is `unknown`, never `proven`" with "unless invariant induction
+  (#1422) closes it", and the bullet on `invariant` "is a claim ... and is not assumed" with a
+  pointer to the new addendum.
+- ADR addendum "(#1422): invariant-based induction": eligibility; an invariant violated only
+  beyond the largest bound stays `unknown`; the three obligations (entry =
   claim on pre-loop state, preservation = claim at back edge from havoc state with invariant and
   loop condition assumed, exit = rest of the function from havoc state with invariant assumed and
   condition negated); never `failed`; true-but-non-inductive invariant stays `unknown`; partial
   correctness (non-terminating loop with invariant is `proven`); soft-claim sites come from the last
   BMC round; ordering after BMC; supersedes the #1418 bullet "`invariant` ... is not assumed";
   the `loop_literal_100` flip (ADR Rule 2 already allows `k > 50` fixtures to newly prove).
-- `docs/spec/cli.md:69` "Loops": replace "(inductive use is future work)" with the induction
-  description and the `unknown`/`failed` rules above; keep the `unwinding assertion:` prefix text.
+- `docs/spec/cli.md:69` "Loops" - rewrite, not just drop the parenthetical. Three statements go
+  false: "A function is `Verified` only when the unwinding assertion holds"; "a loop that can run
+  longer (a bound that is a parameter, `while true`, a literal bound above 64) is
+  `verify_status: "unknown"` ... never `Verified`"; "An `invariant` ... is not assumed to hold
+  (inductive use is future work)". New text: when every loop has an `invariant` and bounded
+  unwinding stays `unknown`, the function is attempted inductively (entry, preservation, exit) and
+  is `Verified` when all hold; otherwise `unknown` with the same `unwinding assertion:` message;
+  induction never yields `VerifyFailed`; an invariant violated only beyond the largest bound is
+  `unknown`; warnings are those reachable within the unrolled prefix; proofs are partial
+  correctness. Keep the `unwinding assertion:` prefix text.
 - Do **not** touch `docs/spec/contracts.md` (ADR defers its rewrite to the P3 docs child) or
   `docs/spec/grammar.md` (no syntax/semantics change of the language).
 - Run `uv run python scripts/generate_help.py`, commit everything it regenerates (the cli.md Loops
@@ -152,21 +187,29 @@ See Testing.
    from `test_vc_unroll.vow:19-48`): status OK; `vc_unrolled_detail` empty; block count = orig + 2;
    header's first inst is a havoc marker with the original Phi id; header `VOW_INV` became
    `VOW_REQ`; `h_entry` holds a `VOW_INV` over a remapped Phi; `h_back` ends in the cut-end marker
-   and its Phi is fed by the latch Upsilon; preheader Upsilon targets `p_i`. More cases: two latches
-   (`continue`), Bool Phi, Unit Phi, nested loops (both cut), loop with no invariant -> `NA`, Ptr
-   Phi -> `NA`, `VOW_INV` outside a header -> `NA`; running the pass twice gives identical
-   `ir_print` output. Production: `vc_induct.vow`.
+   and its Phi is fed by the latch Upsilon; preheader Upsilon targets `p_i`. More cases: a
+   multi-block invariant region (`i >= 0 && i <= n` lowered as in `lower.vow:2927-3010`: header,
+   rhs, short, merge, `VowInv` in the merge block) -> region cloned, jump/cut-end placed right
+   after the `VowInv`, condition code not cloned; two latches (`continue`), Bool Phi, Unit Phi,
+   nested loops (both cut), loop with no invariant -> `NA`, Ptr Phi -> `NA`, stray `VOW_INV`
+   outside any region -> `NA`; running the pass twice gives identical `ir_print` output.
+   Production: `vc_induct.vow`.
 2. **Executor** - `compiler/tests/test_vc_exec.vow`: `vc_claims(cut)` on `count_up` + an `ensures`:
    claim count/kinds as expected (entry, preservation, ensures), no `VC_CLAIM_UNWIND`, header script
    has a `declare-const h<id>`, `cs.model_names` holds only parameters. Production: step 3.
-3. **Driver** - `tests/verify-native/tests.sh` wiring tier: add a loop-with-invariant source and
-   assert the fake-solver behaviours that do not regress (`unsat` -> Verified; `sat` -> failed with
-   the invariant's vow id from BMC). The fake solver cannot reach the induction path (every
-   answer is uniform), so the induction path is covered by the real-solver fixtures; a skipped
-   fixture tier is **not** a pass - run Section 4g with `bitwuzla` on `PATH`.
+3. **Driver regression guard** - `tests/verify-native/tests.sh` wiring tier: add a
+   loop-with-invariant source and assert the fake-solver behaviours that must not regress
+   (`unsat` -> Verified; `sat` -> failed with the invariant's vow id from BMC). This guard does
+   **not** count toward the acceptance criteria: the fake solver answers uniformly and cannot
+   reach the induction path, which only the real-solver fixtures exercise. A skipped fixture tier
+   is not a pass - run Section 4g with `bitwuzla` on `PATH`. Time the new `pass/` fixtures once
+   (each runs rounds 2..64 before induction, ~65 header copies per round, one solver process per
+   claim) and note the numbers in the PR so Section 4g wall-clock does not jump unnoticed.
 4. **Real-solver fixtures** (`tests/verify-native/`, header `// TEST: category invariant`):
    - `pass/loop_unbounded_count.vow`: `count(n)`, `requires n >= 0`, `invariant: i >= 0, i <= n`,
      `ensures result == n` (acceptance 1).
+   - `pass/loop_unbounded_and_invariant.vow`: `invariant: i >= 0 && i <= n` (branch-lowered
+     `&&` region) with `ensures result == n`; guards against silently ineligible `&&` invariants.
    - `pass/loop_unbounded_break_flag.vow`: `while` with `break`/`continue` and a Bool carried flag.
    - `pass/loop_unbounded_nested.vow`: nested loops, each with an invariant.
    - `pass/loop_unbounded_checked_add_warning.vow`: `acc +! x` with unbounded `n`; `// TEST: warning
@@ -207,6 +250,10 @@ See Testing.
   only through exit Phis (loop-closed form, already enforced by the gate); (d) `vc_flow` branch
   facts are keyed by immutable SSA ids so they stay valid across the havoc; (e) ignored soft
   claims never feed the verdict; (f) induction never returns `failed`.
+- **Region cloning bugs**: wrong region membership would drop or duplicate invariant code. Unit
+  tests assert the cloned claim count and arguments and the NA paths; the driver runs
+  `vc_unrolled_detail` on every produced function, so an eligible-but-malformed cut fails closed
+  (non-empty detail -> BMC only).
 - **Partial correctness** (vacuous proof of non-terminating loops) is a user-visible semantics
   change; recorded in the ADR, flagged for maintainer confirmation.
 - **Time budget**: induction runs after up to six BMC rounds; a function that exhausts `--timeout`
