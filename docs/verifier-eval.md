@@ -134,7 +134,7 @@ cargo build --release -p vow
 python3 scripts/verify_eval.py
 
 # Local, against the fixed-point self-hosted compiler:
-scripts/bootstrap.sh --stage3-no-verify
+scripts/bootstrap.sh
 python3 scripts/verify_eval.py --verifier build/vowc --output-dir /tmp/verify-eval-self
 
 # Authoring aid — print actual outcomes for every program:

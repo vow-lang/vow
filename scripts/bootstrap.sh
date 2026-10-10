@@ -27,23 +27,27 @@ usage() {
     echo "Stages:"
     echo "  0: cargo build --all --release      -> ./target/release/vow"
     echo "  1: Rust compiler builds self-hosted  -> build/vowc"
-    echo "  2: Self-hosted rebuilds itself       -> build/vowc2"
-    echo "  3: Second self-hosted rebuild        -> build/vowc3"
-    echo "  Verify: sha256(vowc2) == sha256(vowc3)"
+    echo "  2: Self-hosted rebuilds itself       -> build/vowc2 (--no-verify)"
+    echo "  3: Second self-hosted rebuild        -> build/vowc3 (--no-verify)"
+    echo "  Fixed point: sha256(vowc2) == sha256(vowc3)"
+    echo "  Verify: build/vowc2 verify compiler/main.vow, run on its own after"
+    echo "          Stages 2-3 so ESBMC never overlaps a self-hosted codegen"
+    echo "          (Stage 1 still verifies inside the Rust compiler's build)"
     echo ""
     echo "Options:"
     echo "  --skip-cargo         Skip Stage 0 if Rust binary already built"
-    echo "  --no-verify          Skip ESBMC verification at every stage. Useful on"
-    echo "                       platforms where ESBMC is unavailable."
+    echo "  --no-verify          Skip ESBMC verification at every stage and skip the"
+    echo "                       separate verify pass. Useful on platforms where"
+    echo "                       ESBMC is unavailable."
     echo "                       Verification does not change codegen, so the"
     echo "                       SHA-256 fixed-point check remains meaningful."
-    echo "  --stage3-no-verify   Skip ESBMC verification on Stage 3 only (Stages 1-2"
-    echo "                       still verify). Verification does not change codegen,"
-    echo "                       so the SHA-256 fixed-point check remains meaningful."
-    echo "  --no-cache           Disable the on-disk verify cache. Forwarded to all"
-    echo "                       three stages for CLI symmetry, but only Stage 1"
-    echo "                       (the Rust compiler) has one -- the self-hosted"
-    echo "                       compiler (Stages 2-3) always re-runs ESBMC. The"
+    echo "  --stage3-no-verify   Retained for compatibility: Stage 3 never verifies, so"
+    echo "                       this is a no-op."
+    echo "  --no-cache           Disable the on-disk verify cache. Forwarded to every"
+    echo "                       stage and to the verify pass for CLI symmetry, but"
+    echo "                       only Stage 1 (the Rust compiler) has one -- the"
+    echo "                       self-hosted compiler (Stages 2-3 and the verify"
+    echo "                       pass) always re-runs ESBMC. The"
     echo "                       verify cache's hits/misses never change codegen"
     echo "                       output, so under verification this is cheap"
     echo "                       defense in depth for a 'green locally' claim, not"
@@ -145,22 +149,26 @@ if [ "$NO_VERIFY" = true ] && [ "$STAGE3_NO_VERIFY" = true ]; then
     echo "warning: --no-verify supersedes --stage3-no-verify" >&2
 fi
 
-stage12_build_flags="--verify-jobs 1"
-stage3_build_flags="--verify-jobs 1"
+# Stage 1 verifies inside the Rust build. Stages 2-3 never verify: the
+# self-hosted compiler overlaps codegen with ESBMC, so a verifying rebuild
+# peaks at both together. One explicit `vowc verify` pass runs afterwards
+# instead (#180).
+stage1_build_flags="--verify-jobs 1"
+self_build_flags="--no-verify"
+verify_flags="--verify-jobs 1"
 if [ "$NO_VERIFY" = true ]; then
-    stage12_build_flags="--no-verify"
-    stage3_build_flags="--no-verify"
-elif [ "$STAGE3_NO_VERIFY" = true ]; then
-    stage3_build_flags="--no-verify"
+    stage1_build_flags="--no-verify"
 fi
 
 if [ "$NO_CACHE" = true ]; then
-    stage12_build_flags="$stage12_build_flags --no-cache"
-    stage3_build_flags="$stage3_build_flags --no-cache"
+    stage1_build_flags="$stage1_build_flags --no-cache"
+    self_build_flags="$self_build_flags --no-cache"
+    verify_flags="$verify_flags --no-cache"
 fi
 
 # Stage 1 runs the Rust compiler (well-behaved release binary) — no vmem cap.
-# Stages 2+3 run the self-hosted compiler under VOW_BOOTSTRAP_VMEM_KB if set.
+# Stages 2+3 and the verify pass run the self-hosted compiler under
+# VOW_BOOTSTRAP_VMEM_KB if set.
 # The Stage 1/2/3 call sites always invoke run_rust_stage / run_self_stage;
 # these wrappers do the conditional dispatch (verify-aware vs plain logger),
 # so the stage invocation code itself is identical in both modes — only the
@@ -202,7 +210,7 @@ fi
 # codegen + one ESBMC instead of codegen + N-fold ESBMC fan-out. See #175.
 printf "${BOLD}Stage 1:${RESET} Rust compiler -> build/vowc\n"
 t0=$(date +%s)
-if ! run_rust_stage "./target/release/vow build $stage12_build_flags compiler/main.vow -o build/vowc"; then
+if ! run_rust_stage "./target/release/vow build $stage1_build_flags compiler/main.vow -o build/vowc"; then
     printf "  ${RED}FAILED${RESET}\n"
     exit 1
 fi
@@ -213,7 +221,7 @@ printf "  done in %ds\n" $((t1 - t0))
 
 printf "${BOLD}Stage 2:${RESET} build/vowc -> build/vowc2\n"
 t0=$(date +%s)
-if ! run_self_stage "build/vowc build $stage12_build_flags compiler/main.vow -o build/vowc2"; then
+if ! run_self_stage "build/vowc build $self_build_flags compiler/main.vow -o build/vowc2"; then
     printf "  ${RED}FAILED${RESET}\n"
     if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
         printf "  Hint: rerun with a higher VOW_BOOTSTRAP_VMEM_KB or unset it for no cap.\n"
@@ -227,7 +235,7 @@ printf "  done in %ds\n" $((t1 - t0))
 
 printf "${BOLD}Stage 3:${RESET} build/vowc2 -> build/vowc3\n"
 t0=$(date +%s)
-if ! run_self_stage "build/vowc2 build $stage3_build_flags compiler/main.vow -o build/vowc3"; then
+if ! run_self_stage "build/vowc2 build $self_build_flags compiler/main.vow -o build/vowc3"; then
     printf "  ${RED}FAILED${RESET}\n"
     if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
         printf "  Hint: rerun with a higher VOW_BOOTSTRAP_VMEM_KB or unset it for no cap.\n"
@@ -237,14 +245,34 @@ fi
 t1=$(date +%s)
 printf "  done in %ds\n" $((t1 - t0))
 
-# ─── Verify: SHA-256 fixed point ─────────────────────────────────────
+# ─── Fixed point: SHA-256 ────────────────────────────────────────────
 
-printf "${BOLD}Verify:${RESET}  SHA-256 fixed point (vowc2 == vowc3)\n"
+printf "${BOLD}Fixed point:${RESET} SHA-256 (vowc2 == vowc3)\n"
 sha_vowc2=$(sha256_file build/vowc2)
 sha_vowc3=$(sha256_file build/vowc3)
 
 if [ "$sha_vowc2" = "$sha_vowc3" ]; then
     printf "  ${GREEN}MATCH${RESET}  %s\n" "$sha_vowc2"
+
+    # ─── Verify: self-hosted vowc2 verify compiler/main.vow ──────────
+    # Runs on the exact binary about to be promoted, after codegen has
+    # finished, so a failure leaves the previous build/vowc untouched.
+    if [ "$NO_VERIFY" = true ]; then
+        printf "${BOLD}Verify:${RESET} skipped (--no-verify)\n"
+    else
+        printf "${BOLD}Verify:${RESET} build/vowc2 verify compiler/main.vow\n"
+        t0=$(date +%s)
+        if ! run_self_stage "build/vowc2 verify $verify_flags compiler/main.vow"; then
+            printf "  ${RED}FAILED${RESET}\n"
+            if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
+                printf "  Hint: rerun with a higher VOW_BOOTSTRAP_VMEM_KB or unset it for no cap.\n"
+            fi
+            exit 1
+        fi
+        t1=$(date +%s)
+        printf "  done in %ds\n" $((t1 - t0))
+    fi
+
     mv build/vowc2 build/vowc
     rm -f build/vowc3
     printf "\n${GREEN}${BOLD}Bootstrap successful.${RESET} build/vowc is the self-hosted compiler.\n"
