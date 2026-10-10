@@ -1032,6 +1032,8 @@ def build_skill_entrypoint() -> str:
             "- Worked examples: [examples/examples.md](examples/examples.md)",
             "- JSON schemas: [schemas/](schemas/)",
             "",
+            "Outside Claude Code (raw API or custom agent harness that cannot load these files): run `build/vowc skill print --bundle` for one self-contained document with all of the above inlined.",
+            "",
         ]
     )
 

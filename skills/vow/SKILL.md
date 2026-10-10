@@ -48,3 +48,5 @@ fn main() -> i32 [io] {
 - Standard library (math, heap, stack, geometry, bignum, gc): [reference/stdlib.md](reference/stdlib.md)
 - Worked examples: [examples/examples.md](examples/examples.md)
 - JSON schemas: [schemas/](schemas/)
+
+Outside Claude Code (raw API or custom agent harness that cannot load these files): run `build/vowc skill print --bundle` for one self-contained document with all of the above inlined.

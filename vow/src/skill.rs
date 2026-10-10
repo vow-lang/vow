@@ -1465,6 +1465,8 @@ fn main() -> i32 [io] {
 - Standard library (math, heap, stack, geometry, bignum, gc): [reference/stdlib.md](reference/stdlib.md)
 - Worked examples: [examples/examples.md](examples/examples.md)
 - JSON schemas: [schemas/](schemas/)
+
+Outside Claude Code (raw API or custom agent harness that cannot load these files): run `build/vowc skill print --bundle` for one self-contained document with all of the above inlined.
 "#
     .to_string()
 }
@@ -13663,6 +13665,15 @@ mod tests {
         let schema =
             std::fs::read_to_string(skill_dir.join("schemas/build-result.schema.json")).unwrap();
         assert!(schema.contains("\"title\": \"BuildResult\""));
+    }
+
+    #[test]
+    fn skill_entrypoint_points_raw_harnesses_at_the_bundle() {
+        let entry = skill_entrypoint_markdown();
+        assert!(
+            entry.contains("`build/vowc skill print --bundle`"),
+            "entrypoint must name the self-contained bundle command"
+        );
     }
 
     #[test]

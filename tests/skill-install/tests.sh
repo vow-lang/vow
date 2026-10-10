@@ -220,6 +220,14 @@ expect_file "auto-install creates skills/vow" "$p/.claude/skills/vow/SKILL.md"
 expect_file "auto-install writes cli reference" "$p/.claude/skills/vow/reference/cli.md"
 expect "legacy install entries" "$(ls -A "$p/.claude/skills")" "$(printf 'vow\nvow-toolchain')"
 
+# the entrypoint tells non-Claude-Code harnesses how to get the bundled document
+run_in "$(new_project)" skill print
+expect "skill print exit" "$rc" "0"
+case "$out" in
+    *"skill print --bundle"*) ;;
+    *) fail "skill print entrypoint does not mention skill print --bundle" ;;
+esac
+
 if [ "$failures" -ne 0 ]; then
     echo "$failures skill-install check(s) failed ($VOWC_KIND)" >&2
     exit 1
