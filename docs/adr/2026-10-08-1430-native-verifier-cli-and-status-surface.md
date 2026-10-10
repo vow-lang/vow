@@ -231,12 +231,11 @@ instructions, a specific code (`float-rem-unsupported`, `unmodeled-builtin`) is
 reported in preference to a generic
 `unsupported-opcode` that happens to come earlier. The per-function gate emits
 `function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`,
-`unmodeled-builtin` and `unsupported-opcode`. Three codes
-need information the per-function gate does not have and are defined but not yet
-emitted: `reserved-verifier-symbol` waits for the reserved set to be fixed (no
-native query contains a user function name). `recursion-unsupported` and
-`non-modelable-callee` are emitted by the module-level check that inlines calls
-(#1416), which sees the call graph the per-function gate cannot.
+`unmodeled-builtin` and `unsupported-opcode`. `recursion-unsupported` and
+`non-modelable-callee` need the call graph the per-function gate does not have;
+the module-level check that inlines calls emits them (#1416).
+`reserved-verifier-symbol` is defined but not yet emitted: it waits for the
+reserved set to be fixed (no native query contains a user function name).
 
 **Addendum (issue #1421, 128-bit aggregates).** The transitional
 `wide-aggregate-field` code is removed: the native verifier models a 128-bit
