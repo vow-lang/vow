@@ -14,7 +14,3 @@ fn count_to_eight() -> u64 vow {
   }
   i
 }
-
-fn main() -> i32 [io] {
-  0
-}

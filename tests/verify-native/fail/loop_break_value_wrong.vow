@@ -15,7 +15,3 @@ fn first_above_three() -> u64 vow {
   };
   r
 }
-
-fn main() -> i32 [io] {
-  0
-}

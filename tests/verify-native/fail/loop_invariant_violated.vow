@@ -19,8 +19,3 @@ fn fill_and_sum() -> u64 vow {
   }
   sum
 }
-
-fn main() -> i32 [io] {
-  print_u64(fill_and_sum());
-  0
-}

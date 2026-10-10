@@ -17,7 +17,3 @@ fn trip() -> u64 vow {
   }
   i
 }
-
-fn main() -> i32 [io] {
-  0
-}
