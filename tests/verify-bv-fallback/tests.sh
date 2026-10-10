@@ -65,7 +65,7 @@ VOW
 
 failures=0
 
-# run_case NAME BV IR EXPECTED_STDERR_SUBSTRING EXPECTED_STATUS EXPECTED_MESSAGE
+# run_case NAME BV IR EXPECTED_STDERR_LINE EXPECTED_STATUS EXPECTED_MESSAGE
 #          EXPECTED_INVOCATIONS [extra verify flags...]
 run_case() {
     local name="$1" bv="$2" ir="$3" want_line="$4" want_status="$5" want_msg="$6" want_calls="$7"
@@ -78,7 +78,7 @@ run_case() {
     local calls
     calls=$(wc -l < "$log" | tr -d ' ')
     local ok=1
-    if ! grep -qF -- "$want_line" "$err"; then
+    if ! grep -qxF -- "  $want_line" "$err"; then
         printf '%s: stderr lacks %q\n' "$name" "$want_line" >&2
         ok=0
     fi

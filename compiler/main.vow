@@ -1671,14 +1671,10 @@ fn verify_collect_and_report(
             return 0;
         }
         if st == VERIFY_TIMEOUT() {
-            diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
-            record_soft_fail(soft_meta, String::from("timeout"), String::from(""), f.name);
-            return 0;
+            return report_bv_timeout(f, soft_meta);
         }
         if st == VERIFY_UNKNOWN() {
-            diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": UNKNOWN")));
-            record_soft_fail(soft_meta, String::from("unknown"), parse_unknown_reason(vr.raw_output), f.name);
-            return 0;
+            return report_bv_unknown(f, vr.raw_output, soft_meta);
         }
         if st == VERIFY_NOT_FOUND() {
             diag_eprintln_best_effort(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
