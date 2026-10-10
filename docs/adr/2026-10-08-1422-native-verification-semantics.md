@@ -265,3 +265,47 @@ function into an acyclic one before symbolic execution.
   it as an inductive hypothesis belongs to the k-induction work (#1419, #1420).
 - Soft arithmetic sites are collected per source site from the round that proves
   the function, so a loop body does not repeat its warning once per iteration.
+
+## Addendum (#1416): inlined calls with blame and vow-id mapping
+
+The "callee inlining" decision is implemented in `compiler/vc_inline.vow`. The
+call graph below a verify target is flattened before symbolic execution; the
+executor still sees one acyclic function.
+
+- A call of a user function with integer, `Bool` or `Unit` arguments and result
+  is replaced by a copy of the callee: the call's block ends with a jump into
+  the copy, each `Return` becomes an Upsilon into the call's Phi (a Unit
+  result has a constant instead) and a jump to the continuation block. Every
+  copy gets fresh value and block ids, so a callee spliced twice shares
+  nothing. Aggregates do not cross a call yet; such a call is `Skipped` as
+  `unsupported-opcode`. Callees may build and use aggregates internally.
+- Clauses and abort-bearing instructions of a copy carry the frame they came
+  from in `IrInst.ds`. Inside a frame a `requires` is a claim blamed on the
+  caller, an `ensures` or loop `invariant` a claim blamed on the callee, and
+  both are assumed afterwards. The `vow_id` stays the callee-local id; the
+  result's `callee_precondition_*` / `callee_postcondition_*` carry the callee's
+  function id, which is what `build_ce_from_result` already consumes. A
+  callee's `requires` precedes its body, so a caller's violation is reported
+  before an `ensures` that would only fail because of it.
+- A function without a `vow` block that calls a contracted function is the
+  caller-precondition role: only callee `requires` (and the unwinding claim) are
+  obligations, every other claim is assumed, as `caller_preconditions_only_source`
+  does for ESBMC.
+- Recursion, direct or through other functions, is `Skipped` as
+  `recursion-unsupported` with the cycle as detail (`a -> b -> a`); a target
+  that merely reaches a recursive function gets the same code. A callee outside
+  the subset is `non-modelable-callee: <callee> (<code>)`. The gate vets the
+  flattened function, not the parts: splitting a block at a call can change the
+  aggregate and control-flow shape the gate sees.
+- The inlined instruction count is computed from a memoised call-tree walk
+  before anything is built. A tree above 200000 instructions (the unroller's
+  bound) is `unknown` with a reason that starts `inlining budget:`, never
+  `Skipped` (the code list is closed) and never `proven`.
+- A counterexample for a claim inside a callee carries the chain of calls that
+  leads to it in `call_sites`, outermost first (function the call is made in
+  and the call's source range). Argument values at depth 1 are recovered as
+  before; deeper `violating_args[].value` stay empty. `call_sites` is filled for
+  callee-blame counterexamples too, which the schema description ("caller-blame
+  failures") does not say yet; the wording is the spec rewrite's to widen.
+- The worker's result wire tag is `VOWRES2`: the failing claim's call chain
+  follows the arithmetic sites.

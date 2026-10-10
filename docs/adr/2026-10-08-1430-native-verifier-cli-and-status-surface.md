@@ -151,12 +151,12 @@ opcode or builtin name); `detail` is never part of the enumerated set.
 | Code | When | Lifetime |
 |---|---|---|
 | `function-has-effects` | The function has an effect other than `panic` (D10). `panic`, the effect of `.unwrap()`, is modelled: the abort is a claim (#1417). | Permanent. |
-| `recursion-unsupported` | The function is directly or mutually recursive in the inlined call graph (D10). | Permanent here; modular verification is a separate decision. |
+| `recursion-unsupported` | The function is directly or mutually recursive in the inlined call graph (D10). `detail` is the cycle, `a -> b -> a`; a target that only reaches a recursive function gets the same code (#1416). | Permanent here; modular verification is a separate decision. |
 | `float-rem-unsupported` | The body uses `RemF32` or `RemF64` (D7). | Until codegen defines float `%`. |
 | `ir-non-dominating-read` | The dominance validator rejects the IR (D13). | Kept as a defensive gate after the lowerer fix. |
 | `unmodeled-builtin` | An extern call whose runtime symbol has no entry with `verifier_model: known` in `docs/spec/operations.json`: the entry is absent or says `unmodeled` (D10). `detail` is the builtin. | Shrinks as builtins are modelled. |
 | `unsupported-opcode` | An opcode absent from `compiler/vc_ops.vow`, a module the `vc_ops` child introduces (today `Load`, `Store`, `LinearBorrow`). `detail` is the opcode (D10). | Shrinks. |
-| `non-modelable-callee` | An inlined callee is itself `Skipped`. `detail` carries the callee's code. | Permanent. |
+| `non-modelable-callee` | An inlined callee is itself `Skipped`. `detail` is `<callee> (<code>)`, the callee's own code (#1416). | Permanent. |
 | `reserved-verifier-symbol` | The function name collides with a reserved checker symbol. | Permanent; the reserved set is fixed in P1. |
 
 **Prerequisite for `unmodeled-builtin`.** Absent stays fail-closed, so the gate
@@ -233,9 +233,10 @@ reported in preference to a generic
 `function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`,
 `unmodeled-builtin` and `unsupported-opcode`. Three codes
 need information the per-function gate does not have and are defined but not yet
-emitted: `recursion-unsupported` and `non-modelable-callee` arrive with call
-inlining (P2), where a call graph exists, and `reserved-verifier-symbol` waits for
-the reserved set to be fixed (no native query contains a user function name).
+emitted: `reserved-verifier-symbol` waits for the reserved set to be fixed (no
+native query contains a user function name). `recursion-unsupported` and
+`non-modelable-callee` are emitted by the module-level check that inlines calls
+(#1416), which sees the call graph the per-function gate cannot.
 
 **Addendum (issue #1421, 128-bit aggregates).** The transitional
 `wide-aggregate-field` code is removed: the native verifier models a 128-bit
