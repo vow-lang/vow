@@ -16,6 +16,15 @@ Use this skill when writing, compiling, debugging, or verifying Vow programs.
 Keep the workflow tight: run the compiler, read the structured JSON, fix the
 program or contract, and repeat until the result is `Verified`.
 
+## Do nots
+
+- Do not weaken, cap, or distort a contract to make verification pass; fix the code or report that the proof is out of reach.
+- Do not add verifier-motivated bounds (`n <= 10`, length or capacity caps) to `requires`; keep only real domain constraints and use checked operators (`+!`) for overflow.
+- Do not use `--no-verify` to get past a real verification failure; it only skips the proof (status `Unverified`).
+- Do not report a program as verified unless `status` is `Verified`; `Unverified` means the proof never ran and `Skipped` means a function could not be modelled.
+- Do not invent CLI flags, JSON fields, syntax, or builtins; check `--help` and the reference files first.
+- Do not scrape terminal prose; parse the JSON result that `build` and `verify` print to stdout (`status`, `diagnostics`, `counterexamples`), not the human-readable text on stderr.
+
 ## Installed toolchain (live)
 
 !`(command -v vow >/dev/null 2>&1 && vow --help 2>/dev/null | head -200) || (command -v build/vowc >/dev/null 2>&1 && build/vowc --help 2>/dev/null | head -200) || echo '(vow toolchain not found on PATH; run scripts/bootstrap.sh to build build/vowc)'`

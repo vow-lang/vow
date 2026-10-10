@@ -199,5 +199,36 @@ class VowPayloadEmissionTest(unittest.TestCase):
         self.assertLess(statements, source_lines)
 
 
+class SkillDoNotsTest(unittest.TestCase):
+    def _section(self) -> str:
+        entry = generate_help.build_skill_entrypoint()
+        start = entry.index("## Do nots")
+        end = entry.index("\n## ", start + 1)
+        return entry[start:end]
+
+    def test_section_sits_between_intro_and_live_toolchain(self):
+        entry = generate_help.build_skill_entrypoint()
+        self.assertLess(entry.index("# Vow"), entry.index("## Do nots"))
+        self.assertLess(
+            entry.index("## Do nots"), entry.index("## Installed toolchain (live)")
+        )
+
+    def test_every_rule_is_a_do_not_bullet(self):
+        bullets = [ln for ln in self._section().splitlines() if ln.startswith("- ")]
+        self.assertGreaterEqual(len(bullets), 5)
+        for bullet in bullets:
+            self.assertTrue(bullet.startswith("- Do not "), bullet)
+
+    def test_section_names_only_flags_the_cli_spec_documents(self):
+        cli = (SPEC / "cli.md").read_text()
+        flags = set(re.findall(r"--[a-z][a-z-]*", self._section()))
+        self.assertTrue(flags)
+        for flag in flags:
+            self.assertIn(flag, cli)
+
+    def test_section_cannot_terminate_the_rust_raw_string(self):
+        self.assertNotIn('"##', self._section())
+
+
 if __name__ == "__main__":
     unittest.main()
