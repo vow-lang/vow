@@ -3141,6 +3141,8 @@ When no scope flag is provided, `install` prompts on stderr for local (`./.claud
 
 **Auto-install on build.** The first time `vow build` (or the bare `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
 
+**Migrating an existing install.** Auto-install never rewrites or extends an existing `.claude/skills/vow/SKILL.md`, whatever its content. An older single-file `SKILL.md` therefore keeps working as-is, but it does not gain the `reference/`, `examples/`, and `schemas/` support files, and a skill directory that is missing support files is not repaired by a build. To move to the split layout, refresh after a compiler upgrade, or repair missing support files, run `vow skill install --local` or `vow skill install --global`. Explicit install always rewrites `SKILL.md` and every support file it owns, overwriting local edits to them, and leaves other files in the directory alone; project installs are usually committed, so review the diff afterwards. Installs made before the skill directory was renamed to `vow` (`.claude/skills/vow-toolchain/`) are neither detected nor modified: after installing, delete that directory by hand so only one Vow skill remains.
+
 ### `vow test`
 
 Discover, compile, run, and report on Vow test files. Tests are normal `.vow` programs with `main() -> i32` — no test-specific syntax.
@@ -9185,6 +9187,8 @@ When no scope flag is provided, `install` prompts on stderr for local (`./.claud
 
 **Auto-install on build.** The first time `vow build` (or the bare `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
 
+**Migrating an existing install.** Auto-install never rewrites or extends an existing `.claude/skills/vow/SKILL.md`, whatever its content. An older single-file `SKILL.md` therefore keeps working as-is, but it does not gain the `reference/`, `examples/`, and `schemas/` support files, and a skill directory that is missing support files is not repaired by a build. To move to the split layout, refresh after a compiler upgrade, or repair missing support files, run `vow skill install --local` or `vow skill install --global`. Explicit install always rewrites `SKILL.md` and every support file it owns, overwriting local edits to them, and leaves other files in the directory alone; project installs are usually committed, so review the diff afterwards. Installs made before the skill directory was renamed to `vow` (`.claude/skills/vow-toolchain/`) are neither detected nor modified: after installing, delete that directory by hand so only one Vow skill remains.
+
 ### `vow test`
 
 Discover, compile, run, and report on Vow test files. Tests are normal `.vow` programs with `main() -> i32` — no test-specific syntax.
@@ -13693,6 +13697,75 @@ mod tests {
         maybe_auto_install(dir.path());
         let contents = std::fs::read_to_string(&target).unwrap();
         assert_eq!(contents, "user-managed content");
+    }
+
+    fn local_project_with_monolithic_skill() -> (TempDir, PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let skill_dir = dir.path().join(".claude/skills/vow");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(dir.path().join(".git"), "gitdir: ../real-git-dir\n").unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "user-managed content").unwrap();
+        (dir, skill_dir)
+    }
+
+    fn install_local(cwd: &Path) -> PathBuf {
+        let mut stdin = std::io::Cursor::new(Vec::<u8>::new());
+        let mut stderr = Vec::new();
+        run_skill_install_scoped(cwd, None, true, false, &mut stdin, &mut stderr).unwrap()
+    }
+
+    #[test]
+    fn auto_install_skill_does_not_add_support_files_to_monolithic_install() {
+        let (dir, skill_dir) = local_project_with_monolithic_skill();
+
+        maybe_auto_install(dir.path());
+
+        assert_eq!(
+            std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap(),
+            "user-managed content"
+        );
+        for support_dir in ["reference", "examples", "schemas"] {
+            assert!(
+                !skill_dir.join(support_dir).exists(),
+                "auto-install must not add {support_dir}/ next to an existing SKILL.md"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_install_migrates_monolithic_skill_to_split_layout() {
+        let (dir, skill_dir) = local_project_with_monolithic_skill();
+
+        let installed = install_local(dir.path());
+
+        assert_eq!(installed, skill_dir.join("SKILL.md"));
+        assert_eq!(
+            std::fs::read_to_string(&installed).unwrap(),
+            entrypoint_markdown()
+        );
+        for (relative_path, contents) in skill_support_files() {
+            assert_eq!(
+                std::fs::read_to_string(skill_dir.join(relative_path)).unwrap(),
+                *contents,
+                "explicit install must write {relative_path}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_install_repairs_missing_support_files_and_keeps_foreign_files() {
+        let (dir, skill_dir) = local_project_with_monolithic_skill();
+        install_local(dir.path());
+        std::fs::remove_dir_all(skill_dir.join("reference")).unwrap();
+        std::fs::write(skill_dir.join("notes.md"), "mine").unwrap();
+
+        install_local(dir.path());
+
+        assert!(skill_dir.join("reference/cli.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(skill_dir.join("notes.md")).unwrap(),
+            "mine"
+        );
     }
 
     #[test]
