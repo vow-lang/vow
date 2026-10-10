@@ -45,11 +45,11 @@ fn vc_worker_mem_kb() -> i64 [read] {
 }
 
 // ---------------------------------------------------------------------------
-// Wire format: `VOWRES1\n`, then integers one per line and strings as
+// Wire format: `VOWRES2\n`, then integers one per line and strings as
 // `<byte length>\n<bytes>\n`. Pure, so it is unit-tested directly.
 // ---------------------------------------------------------------------------
 
-fn vc_wire_tag() -> String { String::from("VOWRES1\n") }
+fn vc_wire_tag() -> String { String::from("VOWRES2\n") }
 
 fn vc_wire_int(out: String, v: i64) {
     out.push_str(i64_to_string(v));
@@ -94,6 +94,14 @@ fn vc_wire_encode(oc: VcOutcome) -> String {
         vc_wire_int(out, site.ostart);
         vc_wire_int(out, site.olen);
         k = k + 1;
+    }
+    vc_wire_int(out, oc.chain_funcs.len() as i64);
+    let mut c: u64 = 0;
+    while c < oc.chain_funcs.len() {
+        vc_wire_int(out, oc.chain_funcs[c]);
+        vc_wire_int(out, oc.chain_starts[c]);
+        vc_wire_int(out, oc.chain_lens[c]);
+        c = c + 1;
     }
     out
 }
@@ -173,6 +181,17 @@ fn vc_wire_decode(text: String) -> Option<VcOutcome> {
         sites.push(ParsedArithSite { cause: cause, owner: owner, ostart: ostart, olen: olen });
         s = s + 1;
     }
+    let n_chain: i64 = vc_wire_read_int(text, cur);
+    let chain_funcs: Vec<i64> = Vec::new();
+    let chain_starts: Vec<i64> = Vec::new();
+    let chain_lens: Vec<i64> = Vec::new();
+    let mut c: i64 = 0;
+    while c < n_chain && cur[1] == 0 {
+        chain_funcs.push(vc_wire_read_int(text, cur));
+        chain_starts.push(vc_wire_read_int(text, cur));
+        chain_lens.push(vc_wire_read_int(text, cur));
+        c = c + 1;
+    }
     if cur[1] != 0 || status < 0 || status > VERIFY_PANICKED() { return Option::None; }
     let result: VerifyResult = VerifyResult {
         status: status,
@@ -186,7 +205,7 @@ fn vc_wire_decode(text: String) -> Option<VcOutcome> {
         block_visits: visits,
         raw_output: raw,
     };
-    Option::Some(VcOutcome { result: result, sites: sites })
+    Option::Some(VcOutcome { result: result, sites: sites, chain_funcs: chain_funcs, chain_starts: chain_starts, chain_lens: chain_lens })
 }
 
 // ---------------------------------------------------------------------------

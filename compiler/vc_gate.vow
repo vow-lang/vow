@@ -180,9 +180,25 @@ fn vc_is_const_int_op(op: i64) -> bool {
         || op == IOP_CONST_I128() || op == IOP_CONST_U128()
 }
 
+// A call of a user function the splicer can inline: every argument and the
+// result are integer or Bool (or the result is Unit). Aggregates do not cross a
+// call yet.
+fn vc_call_scalar(inst: IrInst, tys: Vec<i64>) -> bool {
+    if inst.dk != IDATA_CALL_TARGET() { return false; }
+    if inst.ty != ITY_UNIT() && inst.ty != ITY_BOOL() && !vc_ty_is_int(inst.ty) { return false; }
+    let mut k: u64 = 0;
+    while k < inst.args.len() {
+        let t: i64 = vc_arg_ty(tys, inst, k);
+        if t != ITY_BOOL() && !vc_ty_is_int(t) { return false; }
+        k = k + 1;
+    }
+    true
+}
+
 // True when the instruction is one the symbolic executor models, given the
-// types of the values it reads.
-fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>) -> bool {
+// types of the values it reads. `calls` admits a scalar call of a user function
+// (inlined before execution); without it only the unwrap abort is a call.
+fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>, calls: bool) -> bool {
     let op: i64 = inst.op;
     if !vc_op_gate_candidate(op) { return false; }
     let n: u64 = inst.args.len();
@@ -211,7 +227,10 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>)
         return n == 2 && t0 == ITY_PTR() && inst.dv >= 0 && inst.ty == ITY_UNIT()
             && vc_field_access_ok(inst.dk, t1);
     }
-    if op == IOP_CALL() { return n == 0 && inst.ty == ITY_UNIT() && vc_is_unwrap_abort(inst); }
+    if op == IOP_CALL() {
+        if vc_is_unwrap_abort(inst) { return n == 0 && inst.ty == ITY_UNIT(); }
+        return calls && vc_call_scalar(inst, tys);
+    }
     if vc_is_arith_op(op) {
         return vc_ty_is_int(inst.ty) && n == 2 && vc_operand_ok(inst, tys, lits, 0, inst.ty)
             && vc_operand_ok(inst, tys, lits, 1, inst.ty);
@@ -280,6 +299,16 @@ fn vc_unsupported_detail(inst: IrInst, tys: Vec<i64>) -> String {
 
 // "" when `f` is inside the native subset, else "<code>: <detail>".
 fn vc_skip_reason(src: IrFunction) -> String {
+    vc_skip_reason_with(src, false)
+}
+
+// The same with scalar calls of user functions allowed: the check of one
+// function of a call tree before `vc_inline` flattens it.
+fn vc_skip_reason_calls(src: IrFunction) -> String {
+    vc_skip_reason_with(src, true)
+}
+
+fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
     if !vc_effects_modeled(src.effects) {
         return vc_reason(VC_SKIP_FUNCTION_HAS_EFFECTS(), effects_str(src.effects));
     }
@@ -310,7 +339,7 @@ fn vc_skip_reason(src: IrFunction) -> String {
         let mut ii: u64 = 0;
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
-            if !vc_inst_supported(f, inst, tys, lits) {
+            if !vc_inst_supported(f, inst, tys, lits, calls) {
                 let specific: String = vc_inst_specific_reason(inst);
                 if specific.len() > 0 { return specific; }
                 if !have_generic {

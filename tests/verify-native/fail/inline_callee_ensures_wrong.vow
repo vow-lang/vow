@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "bump"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module InlineCalleeEnsures
+
+fn bump(x: i64) -> i64 vow {
+  requires: x > 0 && x < 1000
+  ensures: result == x + 2
+} {
+  x + 1
+}
+
+fn caller(y: i64) -> i64 vow {
+  requires: y > 0 && y < 1000
+  ensures: result > y
+} {
+  bump(y)
+}
+
+fn main() -> i32 [io] {
+  print_i64(caller(4));
+  0
+}

@@ -1,0 +1,18 @@
+// TEST: category unverifiable
+// TEST: skip-reason recursion-unsupported
+module RecursionSelf
+
+fn count_down(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == 0
+} {
+  if n == 0 {
+    return 0;
+  }
+  count_down(n - 1)
+}
+
+fn main() -> i32 [io] {
+  print_i64(count_down(3));
+  0
+}

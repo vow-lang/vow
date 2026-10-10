@@ -1,6 +1,7 @@
 module VcCex
 
 use ir
+use vc_ops
 use verifier
 use vc_solver
 use vc_exec
@@ -60,11 +61,21 @@ fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> 
             values.push(vc_format_int(cs.model_tys[j], ans.values[j], ans.highs[j]));
             j = j + 1;
         }
+        let kind: i64 = cs.kinds[k];
         let mut raw: String = String::from("");
-        if cs.kinds[k] != VC_CLAIM_ENSURES() {
+        if kind != VC_CLAIM_ENSURES() && kind != VC_CLAIM_CALLER_PRE() && kind != VC_CLAIM_CALLEE_POST() {
             raw = vc_violated_property_text(cs.labels[k]);
         }
-        return vc_verify_result(VERIFY_FAILED(), cs.vow_ids[k], names, values, raw);
+        let vr: VerifyResult = vc_verify_result(VERIFY_FAILED(), cs.vow_ids[k], names, values, raw);
+        let owner: i64 = vc_frame_func(cs.fr, cs.frames[k], f.id);
+        if kind == VC_CLAIM_CALLER_PRE() {
+            vr.callee_precondition_func_id = owner;
+            vr.callee_precondition_vow_id = cs.vow_ids[k];
+        } else if kind == VC_CLAIM_CALLEE_POST() {
+            vr.callee_postcondition_func_id = owner;
+            vr.callee_postcondition_vow_id = cs.vow_ids[k];
+        }
+        return vr;
     }
     if ans.verdict == VC_ANS_UNKNOWN() {
         return vc_verify_result(VERIFY_UNKNOWN(), -1, Vec::new(), Vec::new(), ans.raw);
@@ -100,8 +111,24 @@ fn vc_unwinding_budget_reason(bound: i64) -> String {
     out
 }
 
+// The call tree of a function is too large to inline within the budget: nothing
+// was proven, and nothing is claimed either.
+fn vc_inline_budget_label() -> String { String::from("inlining budget") }
+
+fn vc_inline_budget_reason(cap: i64) -> String {
+    let out: String = vc_inline_budget_label();
+    out.push_str(String::from(": inlining the calls exceeds the verifier's size budget of "));
+    out.push_str(i64_to_string(cap));
+    out.push_str(String::from(" instructions"));
+    out
+}
+
 fn vc_output_has_unwinding(raw: String) -> bool {
     str_find_str(raw, VC_LABEL_UNWIND()) >= 0
+}
+
+fn vc_output_has_inline_budget(raw: String) -> bool {
+    str_find_str(raw, vc_inline_budget_label()) >= 0
 }
 
 fn vc_plain_result(status: i64, raw: String) -> VerifyResult {

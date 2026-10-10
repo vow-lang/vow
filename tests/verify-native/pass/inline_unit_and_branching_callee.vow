@@ -1,0 +1,25 @@
+module InlineBranchingCallee
+
+fn clamp(x: i64, lo: i64, hi: i64) -> i64 vow {
+  requires: lo <= hi
+  ensures: result >= lo && result <= hi
+} {
+  if x < lo {
+    return lo;
+  }
+  if x > hi {
+    return hi;
+  }
+  x
+}
+
+fn percent(x: i64) -> i64 vow {
+  ensures: result >= 0 && result <= 100
+} {
+  clamp(x, 0, 100)
+}
+
+fn main() -> i32 [io] {
+  print_i64(percent(500));
+  0
+}

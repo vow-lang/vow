@@ -9,6 +9,7 @@ use c_emitter
 use verifier
 use verify_report
 use vc_gate
+use vc_inline
 use vc_native
 use vc_cex
 use vc_worker
@@ -1721,6 +1722,48 @@ fn verify_collect_and_report(
     0
 }
 
+// `ce` with its call sites replaced by the exact chain of inlined calls the
+// native verifier followed to the failing clause, outermost first: the function
+// each call is made in and the range of the call. The argument values the
+// direct-call scan found stay.
+fn native_with_call_chain(ce: VerifyCE, ir_mod: IrModule, oc: VcOutcome, path: String) -> VerifyCE {
+    if oc.chain_funcs.len() == 0 {
+        return ce;
+    }
+    let fns: Vec<String> = Vec::new();
+    let files: Vec<String> = Vec::new();
+    let mut i: u64 = 0;
+    while i < oc.chain_funcs.len() {
+        let fi: i64 = find_ir_function_index_by_id(ir_mod.functions, oc.chain_funcs[i]);
+        let caller: IrFunction = ir_mod.functions[fi as u64];
+        fns.push(caller.name);
+        files.push(path);
+        i = i + 1;
+    }
+    VerifyCE {
+        function: ce.function,
+        target_function: ce.target_function,
+        var_names: ce.var_names,
+        var_values: ce.var_values,
+        violation: ce.violation,
+        vow_id: ce.vow_id,
+        source: ce.source,
+        source_start: ce.source_start,
+        source_len: ce.source_len,
+        blame: ce.blame,
+        call_site_functions: fns,
+        call_site_files: files,
+        call_site_offsets: oc.chain_starts,
+        call_site_lengths: oc.chain_lens,
+        violating_arg_params: ce.violating_arg_params,
+        violating_arg_values: ce.violating_arg_values,
+        violating_arg_offsets: ce.violating_arg_offsets,
+        violating_arg_lengths: ce.violating_arg_lengths,
+        replay: ce.replay,
+        replay_reason: ce.replay_reason,
+    }
+}
+
 // Report one native-backend result for `f`. Returns 1 when proven, else 0
 // after recording the counterexample or the soft failure. A proof carries one
 // `ArithOverflowReachable` warning per checked operator whose abort the solver
@@ -1743,7 +1786,7 @@ fn native_report_result(f: IrFunction, ir_mod: IrModule, path: String, oc: VcOut
         diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": FAILED")));
         emit_ce_vars(vr);
         if ces.len() == 0 {
-            ces.push(build_ce_from_result(f, ir_mod, vr, path));
+            ces.push(native_with_call_chain(build_ce_from_result(f, ir_mod, vr, path), ir_mod, oc, path));
         }
         return 0;
     }
@@ -1756,7 +1799,7 @@ fn native_report_result(f: IrFunction, ir_mod: IrModule, path: String, oc: VcOut
         diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": UNKNOWN")));
         let why: String = {
             if output_has_memory_limit(vr.raw_output) { memory_limit_reason() }
-            else if vc_output_has_unwinding(vr.raw_output) { vr.raw_output }
+            else if vc_output_has_unwinding(vr.raw_output) || vc_output_has_inline_budget(vr.raw_output) { vr.raw_output }
             else { String::from("the solver answered unknown") }
         };
         record_soft_fail(soft_meta, String::from("unknown"), why, f.name);
@@ -1807,7 +1850,7 @@ fn native_plan(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
         if is_verify_target(f, ir_mod, const_fn_indices) {
-            let reason: String = vc_skip_reason(f);
+            let reason: String = vc_module_skip_reason(f, ir_mod);
             if reason.len() > 0 {
                 entries.push(NativeEntry { fn_index: fi as i64, reason: reason, task: -1 });
             } else {
@@ -1894,7 +1937,7 @@ fn run_verify_worker(argv: Vec<String>) -> i32 [io, read, write] {
         diag_eprintln_best_effort(String::from("verify-worker: function name does not match the planned index"));
         return 3;
     }
-    print_str(vc_wire_encode(vc_verify_function(f, budget_ms, get_flag_arg(argv, "--worker-scratch"))));
+    print_str(vc_wire_encode(vc_verify_function(f, fr.ir_mod, budget_ms, get_flag_arg(argv, "--worker-scratch"))));
     0
 }
 

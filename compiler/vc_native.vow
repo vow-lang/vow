@@ -4,7 +4,9 @@ use ir
 use verifier
 use vc_smt
 use vc_solver
+use vc_ops
 use vc_gate
+use vc_inline
 use vc_cfg
 use vc_loops
 use vc_exec
@@ -29,10 +31,15 @@ use vc_cex
 // without obligations is proven without one.
 
 // A verdict plus the reachable checked-arithmetic aborts found on the way. The
-// sites are meaningful only when the result is `proven`.
+// sites are meaningful only when the result is `proven`. A failure inside an
+// inlined callee also carries the call chain that leads to it, outermost first:
+// per call the function it is made in and the source range of the call.
 struct VcOutcome {
     result: VerifyResult,
     sites: Vec<ParsedArithSite>,
+    chain_funcs: Vec<i64>,
+    chain_starts: Vec<i64>,
+    chain_lens: Vec<i64>,
 }
 
 // Number of back edges a loop may take before the unwinding claim fails, per
@@ -51,7 +58,27 @@ fn vc_unwind_bounds() -> Vec<i64> {
 }
 
 fn vc_bare_outcome(result: VerifyResult) -> VcOutcome {
-    VcOutcome { result: result, sites: Vec::new() }
+    VcOutcome { result: result, sites: Vec::new(), chain_funcs: Vec::new(), chain_starts: Vec::new(), chain_lens: Vec::new() }
+}
+
+// `result` for a claim of frame `frame`: the calls from the target down to it.
+fn vc_chain_outcome(f: IrFunction, fr: VcFrames, frame: i64, result: VerifyResult) -> VcOutcome {
+    let oc: VcOutcome = vc_bare_outcome(result);
+    let up: Vec<i64> = Vec::new();
+    let mut k: i64 = frame;
+    while k >= 0 && k < fr.func_ids.len() as i64 {
+        up.push(k);
+        k = fr.parents[k as u64];
+    }
+    let mut i: i64 = up.len() as i64;
+    while i > 0 {
+        i = i - 1;
+        let j: i64 = up[i as u64];
+        oc.chain_funcs.push(vc_frame_func(fr, fr.parents[j as u64], f.id));
+        oc.chain_starts.push(fr.call_starts[j as u64]);
+        oc.chain_lens.push(fr.call_lens[j as u64]);
+    }
+    oc
 }
 
 fn vc_check_claim(bin: String, cs: VcClaims, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
@@ -76,21 +103,22 @@ struct VcRound {
     result: VerifyResult,
     ended: bool,
     open: bool,
+    frame: i64,
 }
 
 // One round: the claims of the unrolled function `g` of `f`. `sites` collects
 // the reachable soft aborts. Returns the verdict that ends the check (any
 // outcome but `unsat`/soft `sat`/open unwinding), or `proven` with `open` set
 // when only the unwinding claim was `sat`.
-fn vc_run_round(f: IrFunction, g: IrFunction, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String) -> VcRound [io, read, write] {
-    let cs: VcClaims = vc_claims(g);
+fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String) -> VcRound [io, read, write] {
+    let cs: VcClaims = vc_claims_mode(g, fr, f.vows.len() == 0);
     if cs.kinds.len() == 0 {
-        return VcRound { result: vc_proven_result(), ended: false, open: false };
+        return VcRound { result: vc_proven_result(), ended: false, open: false, frame: -1 };
     }
     let bin: String = vc_solver_locate();
     if bin.len() == 0 {
         let nf: VerifyResult = vc_claim_result(f, cs, 0, vc_answer_plain(VC_ANS_NOT_FOUND(), String::from("Bitwuzla not found")));
-        return VcRound { result: nf, ended: true, open: false };
+        return VcRound { result: nf, ended: true, open: false, frame: -1 };
     }
     let mut open: bool = false;
     let mut k: u64 = 0;
@@ -99,24 +127,31 @@ fn vc_run_round(f: IrFunction, g: IrFunction, sites: Vec<ParsedArithSite>, start
         let ans: VcSolverAnswer = vc_check_claim(bin, cs, k, timeout_ms - spent_ms, scratch);
         if ans.verdict != VC_ANS_UNSAT() {
             if cs.kinds[k] == VC_CLAIM_ARITH() && ans.verdict == VC_ANS_SAT() {
-                let site: ParsedArithSite = ParsedArithSite { cause: cs.labels[k], owner: f.id, ostart: cs.ostarts[k], olen: cs.olens[k] };
+                let site: ParsedArithSite = ParsedArithSite { cause: cs.labels[k], owner: vc_frame_func(fr, cs.frames[k], f.id), ostart: cs.ostarts[k], olen: cs.olens[k] };
                 if !vc_has_site(sites, site) {
                     sites.push(site);
                 }
             } else if cs.kinds[k] == VC_CLAIM_UNWIND() && ans.verdict == VC_ANS_SAT() {
                 open = true;
             } else {
-                return VcRound { result: vc_claim_result(f, cs, k, ans), ended: true, open: false };
+                return VcRound { result: vc_claim_result(f, cs, k, ans), ended: true, open: false, frame: cs.frames[k] };
             }
         }
         k = k + 1;
     }
-    VcRound { result: vc_proven_result(), ended: false, open: open }
+    VcRound { result: vc_proven_result(), ended: false, open: open, frame: -1 }
 }
 
-fn vc_verify_function(f: IrFunction, timeout_ms: i64, scratch: String) -> VcOutcome [io, read, write] {
+fn vc_verify_function(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: String) -> VcOutcome [io, read, write] {
     let bounds: Vec<i64> = vc_unwind_bounds();
-    let closed: IrFunction = vc_close_loops(f);
+    let inl: VcInlined = vc_inline(f, m, VC_INLINE_INST_CAP());
+    if inl.status == VC_INLINE_TOO_LARGE() {
+        return vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_inline_budget_reason(VC_INLINE_INST_CAP())));
+    }
+    if inl.status != VC_INLINE_OK() {
+        return vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("internal error: call inlining failed")));
+    }
+    let closed: IrFunction = vc_close_loops(inl.f);
     let started: i64 = time_micros();
     let mut round: u64 = 0;
     while round < bounds.len() {
@@ -130,12 +165,14 @@ fn vc_verify_function(f: IrFunction, timeout_ms: i64, scratch: String) -> VcOutc
             return vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("internal error: loop unrolling produced an unsupported control-flow graph")));
         }
         let sites: Vec<ParsedArithSite> = Vec::new();
-        let r: VcRound = vc_run_round(f, g, sites, started, timeout_ms, scratch);
+        let r: VcRound = vc_run_round(f, g, inl.frames, sites, started, timeout_ms, scratch);
         if r.ended {
-            return vc_bare_outcome(r.result);
+            return vc_chain_outcome(f, inl.frames, r.frame, r.result);
         }
         if !r.open {
-            return VcOutcome { result: vc_proven_result(), sites: sites };
+            let proven: VcOutcome = vc_bare_outcome(vc_proven_result());
+            proven.sites = sites;
+            return proven;
         }
         if round + 1 == bounds.len() {
             return vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_unwinding_reason(bound)));

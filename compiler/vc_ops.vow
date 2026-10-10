@@ -108,6 +108,57 @@ fn vc_is_unwind_sink(inst: IrInst) -> bool {
     inst.op == IOP_UNREACHABLE() && inst.ds == VC_INTERNAL_UNWIND_SINK()
 }
 
+// Inlined callee bodies. The splicer (`vc_inline`) copies a callee into its
+// caller; every clause and abort-bearing instruction of the copy carries the
+// frame it came from in `ds`, which no such opcode uses otherwise and which
+// `vc_clone_inst` preserves, so the marker survives loop closing and unrolling.
+// Frame k of `VcFrames` is the k-th spliced call, in depth-first order: the
+// function it enters, the source range of the call and the frame of the call's
+// own caller (-1 for the verify target).
+struct VcFrames {
+    func_ids: Vec<i64>,
+    call_starts: Vec<i64>,
+    call_lens: Vec<i64>,
+    parents: Vec<i64>,
+}
+
+fn vc_frames_new() -> VcFrames {
+    VcFrames { func_ids: Vec::new(), call_starts: Vec::new(), call_lens: Vec::new(), parents: Vec::new() }
+}
+
+fn VC_FRAME_PREFIX() -> String { String::from("__vc_frame:") }
+
+fn vc_frame_mark(k: i64) -> String {
+    let out: String = VC_FRAME_PREFIX();
+    out.push_str(i64_to_string(k));
+    out
+}
+
+// The frame an instruction was spliced from; -1 for the target's own.
+fn vc_frame_of(inst: IrInst) -> i64 {
+    let pre: String = VC_FRAME_PREFIX();
+    if inst.ds.len() <= pre.len() || inst.ds.substring(0 as u64, pre.len()) != pre {
+        return -1;
+    }
+    match parse_i64(inst.ds.substring(pre.len(), inst.ds.len())) {
+        Option::Some(k) => { k },
+        Option::None => { -1 },
+    }
+}
+
+// The function that owns frame `k` (`root` for the target).
+fn vc_frame_func(fr: VcFrames, k: i64, root: i64) -> i64 {
+    if k < 0 || k >= fr.func_ids.len() as i64 { return root; }
+    fr.func_ids[k as u64]
+}
+
+// Opcodes whose instances carry a frame marker when spliced.
+fn vc_op_frame_marked(op: i64) -> bool {
+    op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_VOW_INV()
+        || op == IOP_CADD() || op == IOP_CSUB() || op == IOP_CMUL() || op == IOP_CDIV() || op == IOP_CREM()
+        || op == IOP_WDIV() || op == IOP_WREM() || op == IOP_SHL() || op == IOP_SHR()
+}
+
 // Opcodes the gate looks at: modelled outright, or decided per instruction.
 fn vc_op_gate_candidate(op: i64) -> bool {
     let model: i64 = vc_op_model(op);

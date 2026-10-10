@@ -1,0 +1,524 @@
+module VcInline
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_gate
+use vc_loops
+
+// Callee inlining for the native verifier. A call of a user function is spliced
+// into its caller before symbolic execution, so the executor only ever sees one
+// acyclic function: the callee's `requires` become claims blamed on the caller,
+// its `ensures` and loop invariants claims blamed on the callee, and its result
+// is the Phi of its returns. `vc_module_skip_reason` is the single decision the
+// driver makes before a function goes to a worker: recursion is skipped (the
+// splice would not terminate), a callee outside the subset names itself, and the
+// flattened function must pass the ordinary gate (splitting a block at a call
+// can change the aggregate and control-flow shape the gate sees).
+//
+// The splice keeps every instruction of the target as is and gives each callee
+// copy fresh value and block ids (a copy's ids are the callee's own plus an
+// offset), so the same callee spliced twice never shares a value. A call at
+// position p of block B ends B with a jump into the copy and continues in a new
+// block that starts with a Phi (or a Unit constant) under the call's own id, fed
+// by an Upsilon before each return of the copy. Reads of the call's result stay
+// valid without rewriting.
+
+fn VC_INLINE_OK() -> i64 { 0 }
+fn VC_INLINE_TOO_LARGE() -> i64 { 1 }
+fn VC_INLINE_MALFORMED() -> i64 { 2 }
+
+// Instructions in the flattened function, same bound as the unroller's.
+fn VC_INLINE_INST_CAP() -> i64 { 200000 }
+
+struct VcInlined {
+    f: IrFunction,
+    frames: VcFrames,
+    status: i64,
+}
+
+fn vc_is_user_call(inst: IrInst) -> bool {
+    inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET()
+}
+
+fn vc_has_user_call(g: IrFunction) -> bool {
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() {
+        let blk: IrBlock = g.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            if vc_is_user_call(blk.insts[ii]) { return true; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}
+
+// Index of each function in the module, by function id; -1 when absent.
+fn vc_fn_index_table(fns: Vec<IrFunction>) -> Vec<i64> {
+    let mut max_id: i64 = 0;
+    let mut i: u64 = 0;
+    while i < fns.len() {
+        let g: IrFunction = fns[i];
+        if g.id > max_id { max_id = g.id; }
+        i = i + 1;
+    }
+    let table: Vec<i64> = dom_fill((max_id + 1) as u64, -1);
+    i = 0;
+    while i < fns.len() {
+        let g: IrFunction = fns[i];
+        if g.id >= 0 && table[g.id as u64] < 0 {
+            table[g.id as u64] = i as i64;
+        }
+        i = i + 1;
+    }
+    table
+}
+
+fn vc_callee_index(idx_of: Vec<i64>, id: i64) -> i64 {
+    if id < 0 || id >= idx_of.len() as i64 { return -1; }
+    idx_of[id as u64]
+}
+
+// "a -> b -> a" for the cycle that closes at path position `at`.
+fn vc_cycle_text(fns: Vec<IrFunction>, path: Vec<i64>, at: u64) -> String {
+    let out: String = String::from("");
+    let mut i: u64 = at;
+    while i < path.len() {
+        let g: IrFunction = fns[path[i] as u64];
+        out.push_str(g.name);
+        out.push_str(String::from(" -> "));
+        i = i + 1;
+    }
+    let first: IrFunction = fns[path[at] as u64];
+    out.push_str(first.name);
+    out
+}
+
+// Depth-first search from function `u` over user calls. `colour`: 0 unvisited,
+// 1 on the current path, 2 finished. Returns the first cycle found as text, or "".
+fn vc_cycle_from(fns: Vec<IrFunction>, idx_of: Vec<i64>, colour: Vec<i64>, path: Vec<i64>, u: i64) -> String {
+    colour[u as u64] = 1;
+    path.push(u);
+    let g: IrFunction = fns[u as u64];
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() {
+        let blk: IrBlock = g.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if vc_is_user_call(inst) {
+                let t: i64 = vc_callee_index(idx_of, inst.dv);
+                if t >= 0 {
+                    if colour[t as u64] == 1 {
+                        let mut at: u64 = 0;
+                        while path[at] != t {
+                            at = at + 1;
+                        }
+                        return vc_cycle_text(fns, path, at);
+                    }
+                    if colour[t as u64] == 0 {
+                        let r: String = vc_cycle_from(fns, idx_of, colour, path, t);
+                        if r.len() > 0 { return r; }
+                    }
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    colour[u as u64] = 2;
+    path.pop();
+    String::from("")
+}
+
+// The first call cycle reachable from function index `root`, as "a -> b -> a";
+// "" when the call graph below it is acyclic.
+fn vc_call_cycle(fns: Vec<IrFunction>, idx_of: Vec<i64>, root: i64) -> String {
+    let colour: Vec<i64> = dom_fill(fns.len(), 0);
+    let path: Vec<i64> = Vec::new();
+    vc_cycle_from(fns, idx_of, colour, path, root)
+}
+
+// Reachable callees of `u` in post-order (callees before their callers), each
+// once; the root itself is not listed.
+fn vc_reachable_callees(fns: Vec<IrFunction>, idx_of: Vec<i64>, seen: Vec<i64>, order: Vec<i64>, u: i64) {
+    seen[u as u64] = 1;
+    let g: IrFunction = fns[u as u64];
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() {
+        let blk: IrBlock = g.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if vc_is_user_call(inst) {
+                let t: i64 = vc_callee_index(idx_of, inst.dv);
+                if t >= 0 && seen[t as u64] == 0 {
+                    vc_reachable_callees(fns, idx_of, seen, order, t);
+                    order.push(t);
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+}
+
+fn vc_inst_count(g: IrFunction) -> i64 {
+    let mut n: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() {
+        let blk: IrBlock = g.blocks[bi];
+        n = n + blk.insts.len() as i64;
+        bi = bi + 1;
+    }
+    n
+}
+
+// Instructions of `u` with every call replaced by its callee's tree, saturating
+// one past `cap`. Computed before anything is materialised, so a call tree that
+// grows exponentially costs a table walk, not memory. `memo`: -1 not computed.
+fn vc_tree_size(fns: Vec<IrFunction>, idx_of: Vec<i64>, memo: Vec<i64>, u: i64, cap: i64) -> i64 {
+    if memo[u as u64] >= 0 { return memo[u as u64]; }
+    // On the current path: a cycle, never expanded.
+    memo[u as u64] = cap + 1;
+    let g: IrFunction = fns[u as u64];
+    let mut total: i64 = vc_inst_count(g);
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() && total <= cap {
+        let blk: IrBlock = g.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() && total <= cap {
+            let inst: IrInst = blk.insts[ii];
+            if vc_is_user_call(inst) {
+                let t: i64 = vc_callee_index(idx_of, inst.dv);
+                if t >= 0 {
+                    total = total + vc_tree_size(fns, idx_of, memo, t, cap);
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    if total > cap { total = cap + 1; }
+    memo[u as u64] = total;
+    total
+}
+
+fn vc_max_block_id(g: IrFunction) -> i64 {
+    let mut max_id: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() {
+        let blk: IrBlock = g.blocks[bi];
+        if blk.id > max_id { max_id = blk.id; }
+        bi = bi + 1;
+    }
+    max_id
+}
+
+// Splice state: the output blocks and the counters for fresh value and block ids.
+struct VcSplice {
+    fns: Vec<IrFunction>,
+    idx_of: Vec<i64>,
+    blocks: Vec<IrBlock>,
+    frames: VcFrames,
+    next_val: i64,
+    next_blk: i64,
+    bad: bool,
+}
+
+fn vc_fresh_val(sp: VcSplice) -> i64 {
+    let id: i64 = sp.next_val;
+    sp.next_val = id + 1;
+    id
+}
+
+// The value that stands for `id` in a copy: a parameter read becomes the call's
+// argument, every other value moves by the copy's offset.
+fn vc_map_val(sub: Vec<i64>, vbase: i64, id: i64) -> i64 {
+    if id < 0 { return id; }
+    if id < sub.len() as i64 && sub[id as u64] >= 0 { return sub[id as u64]; }
+    vbase + id
+}
+
+fn vc_map_args(inst: IrInst, sub: Vec<i64>, vbase: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut k: u64 = 0;
+    while k < inst.args.len() {
+        out.push(vc_map_val(sub, vbase, inst.args[k]));
+        k = k + 1;
+    }
+    out
+}
+
+// A copy of `inst` for frame `frame` (a callee), ids moved by the offsets.
+fn vc_map_inst(inst: IrInst, frame: i64, sub: Vec<i64>, vbase: i64, bbase: i64) -> IrInst {
+    let mut dv: i64 = inst.dv;
+    let mut dv2: i64 = inst.dv2;
+    if inst.op == IOP_JUMP() {
+        dv = bbase + inst.dv;
+    } else if inst.op == IOP_BRANCH() {
+        dv = bbase + inst.dv;
+        dv2 = bbase + inst.dv2;
+    } else if inst.op == IOP_UPSILON() {
+        dv = vbase + inst.dv;
+    }
+    let mut id: i64 = inst.id;
+    if id >= 0 { id = vbase + id; }
+    let out: IrInst = vc_clone_inst(inst, id, vc_map_args(inst, sub, vbase), dv, dv2);
+    if vc_op_frame_marked(inst.op) {
+        out.ds = vc_frame_mark(frame);
+    }
+    out
+}
+
+fn vc_inst_jump(sp: VcSplice, target: i64) -> IrInst {
+    ir_inst_new(vc_fresh_val(sp), IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), target, 0, String::from(""))
+}
+
+// The continuation block of a call: a Unit constant or the result Phi under the
+// call's own id.
+fn vc_new_continuation(sp: VcSplice, blk_id: i64, ret_id: i64, ty: i64) -> IrBlock {
+    let cont: IrBlock = ir_block_new(blk_id);
+    if ty == ITY_UNIT() {
+        cont.insts.push(ir_inst_new(ret_id, IOP_CONST_UNIT(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+    } else {
+        cont.insts.push(ir_inst_new(ret_id, IOP_PHI(), ty, Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+    }
+    sp.blocks.push(cont);
+    cont
+}
+
+// Values of the callee's parameter reads, mapped to the call's arguments.
+fn vc_param_subst(callee: IrFunction, call: IrInst, sub: Vec<i64>, vbase: i64) -> Vec<i64> {
+    let out: Vec<i64> = dom_fill((dom_max_inst_id(callee) + 1) as u64, -1);
+    let mut bi: u64 = 0;
+    while bi < callee.blocks.len() {
+        let blk: IrBlock = callee.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_GET_ARG() && inst.id >= 0 {
+                if inst.dv >= 0 && inst.dv < call.args.len() as i64 {
+                    out[inst.id as u64] = vc_map_val(sub, vbase, call.args[inst.dv as u64]);
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    out
+}
+
+// Splices the call `call` made from frame `frame`; `cur` is the block it sits
+// in. Returns the continuation block the caller goes on appending to.
+fn vc_splice_call(sp: VcSplice, frame: i64, sub: Vec<i64>, vbase: i64, cur: IrBlock, call: IrInst) -> IrBlock {
+    let ci: i64 = vc_callee_index(sp.idx_of, call.dv);
+    if ci < 0 || sp.fns[ci as u64].blocks.len() == 0 {
+        sp.bad = true;
+        return cur;
+    }
+    let callee: IrFunction = sp.fns[ci as u64];
+    let fr: VcFrames = sp.frames;
+    let k: i64 = fr.func_ids.len() as i64;
+    fr.func_ids.push(callee.id);
+    fr.call_starts.push(call.ostart);
+    fr.call_lens.push(call.olen);
+    fr.parents.push(frame);
+    let csub: Vec<i64> = vc_param_subst(callee, call, sub, vbase);
+    let cvbase: i64 = sp.next_val;
+    sp.next_val = cvbase + csub.len() as i64;
+    let cbbase: i64 = sp.next_blk;
+    sp.next_blk = cbbase + vc_max_block_id(callee) + 1;
+    let cont_id: i64 = sp.next_blk;
+    sp.next_blk = cont_id + 1;
+    let ret_id: i64 = vc_map_val(sub, vbase, call.id);
+    let entry: IrBlock = callee.blocks[0];
+    cur.insts.push(vc_inst_jump(sp, cbbase + entry.id));
+    vc_splice_fn(sp, callee, k, csub, cvbase, cbbase, cont_id, ret_id, call.ty == ITY_UNIT());
+    vc_new_continuation(sp, cont_id, ret_id, call.ty)
+}
+
+// A `Return` of a callee copy: feed the call's Phi, then continue after the call.
+// A Unit result has a constant, not a Phi: nothing to feed.
+fn vc_splice_return(sp: VcSplice, cur: IrBlock, inst: IrInst, sub: Vec<i64>, vbase: i64, ret_blk: i64, ret_id: i64, ret_unit: bool) {
+    if inst.args.len() > 0 && !ret_unit {
+        let feed: Vec<i64> = Vec::new();
+        feed.push(vc_map_val(sub, vbase, inst.args[0]));
+        let ups: IrInst = ir_inst_new(vc_fresh_val(sp), IOP_UPSILON(), ITY_UNIT(), feed, IDATA_PHI_TARGET(), ret_id, 0, String::from(""));
+        ups.ostart = inst.ostart;
+        ups.olen = inst.olen;
+        cur.insts.push(ups);
+    }
+    cur.insts.push(vc_inst_jump(sp, ret_blk));
+}
+
+// Appends the blocks of `g`, entered as frame `frame` (-1: the target itself,
+// copied as is), to the splice. `ret_blk`/`ret_id` are where a callee copy's
+// returns go.
+fn vc_splice_fn(sp: VcSplice, g: IrFunction, frame: i64, sub: Vec<i64>, vbase: i64, bbase: i64, ret_blk: i64, ret_id: i64, ret_unit: bool) {
+    let root: bool = frame < 0;
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() {
+        let src: IrBlock = g.blocks[bi];
+        let mut cur: IrBlock = ir_block_new(bbase + src.id);
+        sp.blocks.push(cur);
+        let mut ii: u64 = 0;
+        while ii < src.insts.len() {
+            let inst: IrInst = src.insts[ii];
+            if vc_is_user_call(inst) {
+                cur = vc_splice_call(sp, frame, sub, vbase, cur, inst);
+            } else if root {
+                cur.insts.push(inst);
+            } else if inst.op == IOP_RETURN() {
+                vc_splice_return(sp, cur, inst, sub, vbase, ret_blk, ret_id, ret_unit);
+            } else if inst.op != IOP_GET_ARG() {
+                // A parameter read is replaced by the call's argument (`sub`).
+                cur.insts.push(vc_map_inst(inst, frame, sub, vbase, bbase));
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+}
+
+// `f` with every call of a user function in `m` replaced by the callee's body,
+// recursively. `cap` bounds the instructions of the result; a call tree above it
+// is `VC_INLINE_TOO_LARGE` and nothing is built. `f` must not be on a call cycle.
+fn vc_inline(f: IrFunction, m: IrModule, cap: i64) -> VcInlined {
+    let fns: Vec<IrFunction> = m.functions;
+    let frames: VcFrames = vc_frames_new();
+    if !vc_has_user_call(f) {
+        return VcInlined { f: f, frames: frames, status: VC_INLINE_OK() };
+    }
+    let idx_of: Vec<i64> = vc_fn_index_table(fns);
+    let sizes: Vec<i64> = dom_fill(fns.len(), -1);
+    let root_size: i64 = vc_inst_count(f);
+    let mut total: i64 = root_size;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() && total <= cap {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() && total <= cap {
+            let inst: IrInst = blk.insts[ii];
+            if vc_is_user_call(inst) {
+                let t: i64 = vc_callee_index(idx_of, inst.dv);
+                if t >= 0 {
+                    total = total + vc_tree_size(fns, idx_of, sizes, t, cap);
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    if total > cap {
+        return VcInlined { f: f, frames: frames, status: VC_INLINE_TOO_LARGE() };
+    }
+    let sp: VcSplice = VcSplice {
+        fns: fns,
+        idx_of: idx_of,
+        blocks: Vec::new(),
+        frames: frames,
+        next_val: dom_max_inst_id(f) + 1,
+        next_blk: vc_max_block_id(f) + 1,
+        bad: false,
+    };
+    let none: Vec<i64> = Vec::new();
+    vc_splice_fn(sp, f, -1, none, 0, 0, -1, -1, false);
+    let g: IrFunction = vc_function_shell(f);
+    g.blocks = sp.blocks;
+    let mut status: i64 = VC_INLINE_OK();
+    if sp.bad { status = VC_INLINE_MALFORMED(); }
+    VcInlined { f: g, frames: frames, status: status }
+}
+
+// "" when every call of `g` agrees with its callee's signature: arity, argument
+// types and result type. The lowerer never emits a mismatch; a call that would
+// make the splice read the wrong type is rejected rather than guessed at.
+fn vc_call_signature_detail(g: IrFunction, fns: Vec<IrFunction>, idx_of: Vec<i64>) -> String {
+    let tys: Vec<i64> = vc_ty_table(g);
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() {
+        let blk: IrBlock = g.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if vc_is_user_call(inst) {
+                let t: i64 = vc_callee_index(idx_of, inst.dv);
+                if t < 0 {
+                    return vc_reason(VC_SKIP_NON_MODELABLE_CALLEE(), String::from("<unresolved> (unsupported-opcode)"));
+                }
+                let callee: IrFunction = fns[t as u64];
+                let mut ok: bool = inst.args.len() == callee.params.len() && inst.ty == callee.return_ty;
+                let mut k: u64 = 0;
+                while ok && k < inst.args.len() {
+                    if vc_arg_ty(tys, inst, k) != callee.params[k] { ok = false; }
+                    k = k + 1;
+                }
+                if !ok {
+                    return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), vc_unsupported_detail(inst, tys));
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}
+
+fn vc_non_modelable_callee(g: IrFunction, why: String) -> String {
+    let detail: String = String::from(g.name);
+    detail.push_str(String::from(" ("));
+    detail.push_str(vc_reason_code(why));
+    detail.push_str(String::from(")"));
+    vc_reason(VC_SKIP_NON_MODELABLE_CALLEE(), detail)
+}
+
+// "" when the target `f` is inside the native subset once its calls are
+// inlined, else "<code>: <detail>": the one decision the driver takes before a
+// function goes to a worker. A function without calls is decided by
+// `vc_skip_reason` alone. A call tree above the size budget is not skipped: the
+// worker answers `unknown` for it.
+fn vc_module_skip_reason(f: IrFunction, m: IrModule) -> String {
+    if !vc_has_user_call(f) {
+        return vc_skip_reason(f);
+    }
+    let fns: Vec<IrFunction> = m.functions;
+    let idx_of: Vec<i64> = vc_fn_index_table(fns);
+    let root: i64 = vc_callee_index(idx_of, f.id);
+    if root < 0 {
+        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("function is not in the module"));
+    }
+    let cycle: String = vc_call_cycle(fns, idx_of, root);
+    if cycle.len() > 0 {
+        return vc_reason(VC_SKIP_RECURSION(), cycle);
+    }
+    let own: String = vc_skip_reason_calls(f);
+    if own.len() > 0 { return own; }
+    let seen: Vec<i64> = dom_fill(fns.len(), 0);
+    let order: Vec<i64> = Vec::new();
+    vc_reachable_callees(fns, idx_of, seen, order, root);
+    let mut oi: u64 = 0;
+    while oi < order.len() {
+        let g: IrFunction = fns[order[oi] as u64];
+        let why: String = vc_skip_reason_calls(g);
+        if why.len() > 0 { return vc_non_modelable_callee(g, why); }
+        oi = oi + 1;
+    }
+    let sig: String = vc_call_signature_detail(f, fns, idx_of);
+    if sig.len() > 0 { return sig; }
+    oi = 0;
+    while oi < order.len() {
+        let g: IrFunction = fns[order[oi] as u64];
+        let gsig: String = vc_call_signature_detail(g, fns, idx_of);
+        if gsig.len() > 0 { return vc_non_modelable_callee(g, gsig); }
+        oi = oi + 1;
+    }
+    let inl: VcInlined = vc_inline(f, m, VC_INLINE_INST_CAP());
+    if inl.status == VC_INLINE_TOO_LARGE() { return String::from(""); }
+    if inl.status != VC_INLINE_OK() {
+        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("call target is not in the module"));
+    }
+    vc_skip_reason(inl.f)
+}
