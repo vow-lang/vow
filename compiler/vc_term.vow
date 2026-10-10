@@ -1,7 +1,9 @@
 module VcTerm
 
+use vc_bvfold
+
 // Term arena for the native verifier. Terms live in parallel vectors and are
-// referred to by index; there is no hash-consing or simplification. All SMT
+// referred to by index, and equal terms are one index. All SMT
 // text is produced by `vc_smt`, which maps the operator codes below to
 // symbols.
 //
@@ -55,6 +57,11 @@ fn VC_OP_BVUSUBO() -> i64 { 30 }
 fn VC_OP_BVSMULO() -> i64 { 31 }
 fn VC_OP_BVUMULO() -> i64 { 32 }
 
+// `hashes` caches each term's node hash; `slots` is an open-addressing table
+// (power-of-two length, linear probing, -1 empty) over the interned term ids, so
+// building a node that already exists returns its id. `named` maps a composite
+// term to the variable the executor bound to it, `assumed` flags the terms that
+// are already an assumption; both are -1/0 until set.
 struct VcArena {
     kinds: Vec<i64>,
     a: Vec<i64>,
@@ -62,6 +69,23 @@ struct VcArena {
     c: Vec<i64>,
     aux: Vec<i64>,
     strs: Vec<String>,
+    hashes: Vec<i64>,
+    named: Vec<i64>,
+    assumed: Vec<i64>,
+    slots: Vec<i64>,
+    used: i64,
+}
+
+fn VC_ARENA_SLOTS() -> i64 { 64 }
+
+fn vc_slots_new(n: i64) -> Vec<i64> {
+    let s: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n {
+        s.push(-1);
+        i = i + 1;
+    }
+    s
 }
 
 fn vc_arena_new() -> VcArena {
@@ -72,45 +96,134 @@ fn vc_arena_new() -> VcArena {
         c: Vec::new(),
         aux: Vec::new(),
         strs: Vec::new(),
+        hashes: Vec::new(),
+        named: Vec::new(),
+        assumed: Vec::new(),
+        slots: vc_slots_new(VC_ARENA_SLOTS()),
+        used: 0,
     }
 }
 
-fn vc_arena_push(ar: VcArena, kind: i64, a: i64, b: i64, c: i64, aux: i64) -> i64 {
+// A wrapping mix of a node's five fields; children are canonical ids, so the
+// hash of a node never walks its subterms.
+fn vc_term_hash(kind: i64, a: i64, b: i64, c: i64, aux: i64) -> i64 {
+    let k: i64 = 2685821657736338717;
+    let mut h: i64 = (kind + 1) * k;
+    h = (h ^ a) * k;
+    h = h ^ (h >> 29);
+    h = (h ^ b) * k;
+    h = h ^ (h >> 29);
+    h = (h ^ c) * k;
+    h = h ^ (h >> 29);
+    h = (h ^ aux) * k;
+    h ^ (h >> 32)
+}
+
+// Appends a node without looking it up: the only constructor of fresh ids.
+fn vc_arena_push_hashed(ar: VcArena, h: i64, kind: i64, a: i64, b: i64, c: i64, aux: i64) -> i64 {
     let id: i64 = ar.kinds.len() as i64;
     ar.kinds.push(kind);
     ar.a.push(a);
     ar.b.push(b);
     ar.c.push(c);
     ar.aux.push(aux);
+    ar.hashes.push(h);
+    ar.named.push(-1);
+    ar.assumed.push(0);
     id
 }
 
+fn vc_arena_push(ar: VcArena, kind: i64, a: i64, b: i64, c: i64, aux: i64) -> i64 {
+    vc_arena_push_hashed(ar, vc_term_hash(kind, a, b, c, aux), kind, a, b, c, aux)
+}
+
+fn vc_arena_same_node(ar: VcArena, t: i64, kind: i64, a: i64, b: i64, c: i64, aux: i64) -> bool {
+    let i: u64 = t as u64;
+    ar.kinds[i] == kind && ar.aux[i] == aux && ar.a[i] == a && ar.b[i] == b && ar.c[i] == c
+}
+
+fn vc_arena_slot_of(h: i64, n: i64) -> i64 {
+    h & (n - 1)
+}
+
+// Doubles the table and reinserts every interned id by its cached hash.
+fn vc_arena_grow(ar: VcArena) {
+    let old: Vec<i64> = ar.slots;
+    let n: i64 = old.len() as i64 * 2;
+    let fresh: Vec<i64> = vc_slots_new(n);
+    let mut i: u64 = 0;
+    while i < old.len() {
+        let t: i64 = old[i];
+        if t >= 0 {
+            let mut s: i64 = vc_arena_slot_of(ar.hashes[t as u64], n);
+            while fresh[s as u64] >= 0 {
+                s = vc_arena_slot_of(s + 1, n);
+            }
+            fresh[s as u64] = t;
+        }
+        i = i + 1;
+    }
+    ar.slots = fresh;
+}
+
+// The id of the node `(kind, a, b, c, aux)`, created on first use. `h` is its
+// hash; it is a parameter only so tests can force collisions.
+fn vc_arena_intern_hashed(ar: VcArena, h: i64, kind: i64, a: i64, b: i64, c: i64, aux: i64) -> i64 {
+    let n: i64 = ar.slots.len() as i64;
+    let mut s: i64 = vc_arena_slot_of(h, n);
+    while ar.slots[s as u64] >= 0 {
+        let t: i64 = ar.slots[s as u64];
+        if ar.hashes[t as u64] == h && vc_arena_same_node(ar, t, kind, a, b, c, aux) {
+            return t;
+        }
+        s = vc_arena_slot_of(s + 1, n);
+    }
+    let id: i64 = vc_arena_push_hashed(ar, h, kind, a, b, c, aux);
+    ar.slots[s as u64] = id;
+    ar.used = ar.used + 1;
+    if ar.used * 2 > n {
+        vc_arena_grow(ar);
+    }
+    id
+}
+
+fn vc_arena_intern(ar: VcArena, kind: i64, a: i64, b: i64, c: i64, aux: i64) -> i64 {
+    vc_arena_intern_hashed(ar, vc_term_hash(kind, a, b, c, aux), kind, a, b, c, aux)
+}
+
+// Variables are never interned: each call is a fresh leaf, and the caller
+// holds its id.
 fn vc_tm_var(ar: VcArena, name: String) -> i64 {
     let si: i64 = ar.strs.len() as i64;
     ar.strs.push(name);
     vc_arena_push(ar, VC_T_VAR(), -1, -1, -1, si)
 }
 
-// A bit-vector constant of `width` bits from its two 64-bit limbs.
+// A bit-vector constant of `width` bits from its two 64-bit limbs. Up to 64
+// bits the value is canonical (masked, high limb 0), so equal constants are
+// one id.
 fn vc_tm_bv(ar: VcArena, width: i64, lo: i64, hi: i64) -> i64 {
-    vc_arena_push(ar, VC_T_BV(), width, hi, -1, lo)
+    if width <= 64 {
+        return vc_arena_intern(ar, VC_T_BV(), width, 0, -1, vc_bvfold_mask(width, lo));
+    }
+    vc_arena_intern(ar, VC_T_BV(), width, hi, -1, lo)
 }
 
 fn vc_tm_bool_const(ar: VcArena, value: bool) -> i64 {
     let flag: i64 = { if value { 1 } else { 0 } };
-    vc_arena_push(ar, VC_T_BOOL(), -1, -1, -1, flag)
+    vc_arena_intern(ar, VC_T_BOOL(), -1, -1, -1, flag)
 }
 
 fn vc_tm_app1(ar: VcArena, op: i64, x: i64) -> i64 {
-    vc_arena_push(ar, VC_T_APP(), x, -1, -1, op)
+    vc_arena_intern(ar, VC_T_APP(), x, -1, -1, op)
 }
 
 fn vc_tm_app2(ar: VcArena, op: i64, x: i64, y: i64) -> i64 {
-    vc_arena_push(ar, VC_T_APP(), x, y, -1, op)
+    vc_arena_intern(ar, VC_T_APP(), x, y, -1, op)
 }
 
 fn vc_tm_app3(ar: VcArena, op: i64, x: i64, y: i64, z: i64) -> i64 {
-    vc_arena_push(ar, VC_T_APP(), x, y, z, op)
+    vc_arena_intern(ar, VC_T_APP(), x, y, z, op)
 }
 
 fn vc_tm_is_true(ar: VcArena, t: i64) -> bool {
@@ -142,5 +255,5 @@ fn vc_tm_implies(ar: VcArena, premise: i64, t: i64) -> i64 {
 // `zero_extend`/`sign_extend` by `amount` bits, or (`VC_EXT_LOW`) the low
 // `amount` bits of `x`.
 fn vc_tm_ext(ar: VcArena, kind: i64, amount: i64, x: i64) -> i64 {
-    vc_arena_push(ar, VC_T_EXT(), x, amount, -1, kind)
+    vc_arena_intern(ar, VC_T_EXT(), x, amount, -1, kind)
 }
