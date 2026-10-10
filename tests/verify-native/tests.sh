@@ -721,6 +721,40 @@ run_native sat "$REPLAY_SRC"
 expect "no replay without the flag" "$(field "$RUN_OUT" counterexamples.0.replay)" ""
 expect "no bug report without the flag" "$(field "$RUN_OUT" diagnostics.0.error_code)" "VerifierAssertionUnattributed"
 
+# a Vec function is decided in the array logic: every query of it declares an
+# array sort and uses select/store, and none carries a bound on a length (the
+# model has no capacity), while a function without a Vec stays in QF_BV.
+VEC_CLAIMS="$TMP_ROOT/vec.vow"
+cat > "$VEC_CLAIMS" <<'SRC'
+module Vec
+
+fn grow(v: Vec<i64>, i: u64) -> i64 vow {
+  requires: i < v.len()
+  ensures: result == result
+} {
+  v.push(1);
+  v[i]
+}
+
+fn main() -> i32 [io] {
+  0
+}
+SRC
+run_native unsat "$VEC_CLAIMS"
+expect "vec status" "$(field "$RUN_OUT" status)" "Verified"
+if [ "$(queries)" -lt 1 ]; then fail "vec: no query reached the solver"; fi
+for q in "$BW_DIR"/q.*.smt2; do
+    grep -q '^(set-logic QF_ABV)$' "$q" || fail "vec query $q is not QF_ABV"
+    grep -q '(Array (_ BitVec 64) (_ BitVec 64))' "$q" || fail "vec query $q declares no array"
+    grep -q '(store ' "$q" || fail "vec query $q has no store"
+    if grep -Eq '#x0*(80|7f|ff|100|10000)\)' "$q"; then fail "vec query $q carries a capacity-like constant"; fi
+done
+no_leftovers "vec"
+run_native unsat "$ONE_CLAIM"
+for q in "$BW_DIR"/q.*.smt2; do
+    grep -q '^(set-logic QF_BV)$' "$q" || fail "scalar query $q left QF_BV"
+done
+
 # flag handling.
 usage_error() {
     local want="$1"; shift
