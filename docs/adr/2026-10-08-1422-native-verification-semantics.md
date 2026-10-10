@@ -304,7 +304,8 @@ executor still sees one acyclic function.
 - A counterexample for a claim inside a callee carries the chain of calls that
   leads to it in `call_sites`, outermost first (function the call is made in
   and the call's source range). Argument values at depth 1 are recovered as
-  before; deeper `violating_args[].value` stay empty. `call_sites` is filled for
+  before; deeper `violating_args[].value` stay empty. Each call site's `file` is
+  the source file of the function the call is made in. `call_sites` is filled for
   callee-blame counterexamples too, which the schema description ("caller-blame
   failures") does not say yet; the wording is the spec rewrite's to widen.
 - The worker's result wire tag is `VOWRES2`: the failing claim's call chain

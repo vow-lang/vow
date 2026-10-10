@@ -1722,6 +1722,13 @@ fn verify_collect_and_report(
     0
 }
 
+// The file a call made in `caller` is in: the function's own source file (a
+// callee may live in another module), else the root file.
+fn native_call_site_file(caller: IrFunction, path: String) -> String {
+    if caller.source_file.len() > 0 { return caller.source_file; }
+    path
+}
+
 // `ce` with its call sites replaced by the exact chain of inlined calls the
 // native verifier followed to the failing clause, outermost first: the function
 // each call is made in and the range of the call. The argument values the
@@ -1737,7 +1744,7 @@ fn native_with_call_chain(ce: VerifyCE, ir_mod: IrModule, oc: VcOutcome, path: S
         let fi: i64 = find_ir_function_index_by_id(ir_mod.functions, oc.chain_funcs[i]);
         let caller: IrFunction = ir_mod.functions[fi as u64];
         fns.push(caller.name);
-        files.push(path);
+        files.push(native_call_site_file(caller, path));
         i = i + 1;
     }
     VerifyCE {

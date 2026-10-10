@@ -4,6 +4,7 @@ use verifier
 use vc_native
 use vc_cex
 use vc_worker
+use tests.builders
 
 fn sample_result() -> VerifyResult {
     let names: Vec<String> = Vec::new();
@@ -196,6 +197,50 @@ fn check_unwind_schedule() -> i64 {
     0
 }
 
+// The call chain of a failing claim runs from the target's own call down to the
+// claim's frame, outermost first, each call made in the function it sits in.
+fn check_chain_outcome() -> i64 {
+    let fr: VcFrames = vc_frames_new();
+    fr.func_ids.push(21);
+    fr.call_starts.push(100);
+    fr.call_lens.push(7);
+    fr.parents.push(-1);
+    fr.func_ids.push(22);
+    fr.call_starts.push(300);
+    fr.call_lens.push(5);
+    fr.parents.push(0);
+    let f: IrFunction = mk_function(20, String::from("t"), Vec::new(), ITY_I64(), Vec::new());
+    let deep: VcOutcome = vc_chain_outcome(f, fr, 1, sample_result());
+    if deep.chain_funcs.len() != 2 { return 1; }
+    if deep.chain_funcs[0] != 20 || deep.chain_starts[0] != 100 || deep.chain_lens[0] != 7 { return 2; }
+    if deep.chain_funcs[1] != 21 || deep.chain_starts[1] != 300 || deep.chain_lens[1] != 5 { return 3; }
+    let shallow: VcOutcome = vc_chain_outcome(f, fr, 0, sample_result());
+    if shallow.chain_funcs.len() != 1 || shallow.chain_funcs[0] != 20 { return 4; }
+    let own: VcOutcome = vc_chain_outcome(f, fr, -1, sample_result());
+    if own.chain_funcs.len() != 0 { return 5; }
+    // The chain survives the wire.
+    let back: VcOutcome = match vc_wire_decode(vc_wire_encode(deep)) {
+        Option::Some(v) => { v },
+        Option::None => { return 6; },
+    };
+    if back.chain_funcs.len() != 2 || back.chain_funcs[1] != 21 { return 7; }
+    0
+}
+
+fn check_inline_budget_reason_round_trips() -> i64 {
+    let reason: String = vc_inline_budget_reason(200000);
+    if !vc_output_has_inline_budget(reason) { return 1; }
+    if vc_output_has_unwinding(reason) { return 2; }
+    let oc: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), reason));
+    let back: VcOutcome = match vc_wire_decode(vc_wire_encode(oc)) {
+        Option::Some(v) => { v },
+        Option::None => { return 3; },
+    };
+    if back.result.status != VERIFY_UNKNOWN() { return 4; }
+    if !vc_output_has_inline_budget(back.result.raw_output) { return 5; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_round_trip();
     if r == 0 { r = check_leading_noise_is_skipped(); }
@@ -207,5 +252,7 @@ fn main() -> i32 {
     if r == 0 { r = check_tail_keeps_whole_characters(); }
     if r == 0 { r = check_unwinding_reason_round_trips(); }
     if r == 0 { r = check_unwind_schedule(); }
+    if r == 0 { r = check_chain_outcome(); }
+    if r == 0 { r = check_inline_budget_reason_round_trips(); }
     i64_to_i32_wrap(r)
 }
