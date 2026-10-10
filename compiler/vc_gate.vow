@@ -127,10 +127,15 @@ fn vc_is_merge_ty(ty: i64) -> bool {
     vc_ty_is_int(ty) || ty == ITY_BOOL() || ty == ITY_UNIT() || ty == ITY_PTR()
 }
 
-// Types a struct field or enum payload slot may hold: Bool and the integers
-// that fit the 64-bit slot. A 128-bit value takes two slots (`wide-aggregate-field`).
-fn vc_is_field_ty(ty: i64) -> bool {
-    ty == ITY_BOOL() || (vc_ty_is_int(ty) && vc_ty_bits(ty) <= 64)
+// A struct field or enum payload slot holds Bool or an integer up to 64 bits
+// in one slot (`IDATA_FIELD`), and a 128-bit integer in two (`IDATA_WIDE_SLOT`).
+// The slot kind and the value's width must agree: the lowerer never pairs them
+// otherwise, so a mismatch is IR the executor does not guess at.
+fn vc_field_access_ok(dk: i64, ty: i64) -> bool {
+    if dk == IDATA_FIELD() {
+        return ty == ITY_BOOL() || (vc_ty_is_int(ty) && vc_ty_bits(ty) <= 64);
+    }
+    dk == IDATA_WIDE_SLOT() && vc_ty_bits(ty) == 128
 }
 
 // The function's only effect may be `panic`: `.unwrap()` needs it, and the
@@ -198,11 +203,11 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>)
     }
     if op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE() { return n == 0; }
     if op == IOP_FIELD_GET() {
-        return n == 1 && t0 == ITY_PTR() && inst.dk == IDATA_FIELD() && inst.dv >= 0 && vc_is_field_ty(inst.ty);
+        return n == 1 && t0 == ITY_PTR() && inst.dv >= 0 && vc_field_access_ok(inst.dk, inst.ty);
     }
     if op == IOP_FIELD_SET() {
-        return n == 2 && t0 == ITY_PTR() && inst.dk == IDATA_FIELD() && inst.dv >= 0
-            && inst.ty == ITY_UNIT() && vc_is_field_ty(t1);
+        return n == 2 && t0 == ITY_PTR() && inst.dv >= 0 && inst.ty == ITY_UNIT()
+            && vc_field_access_ok(inst.dk, t1);
     }
     if op == IOP_CALL() { return n == 0 && inst.ty == ITY_UNIT() && vc_is_unwrap_abort(inst); }
     if vc_is_arith_op(op) {
@@ -238,17 +243,11 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>)
     false
 }
 
-// Width of the value a FieldGet reads or a FieldSet writes.
-fn vc_field_ty(inst: IrInst, tys: Vec<i64>) -> i64 {
-    if inst.op == IOP_FIELD_SET() { return vc_arg_ty(tys, inst, 1); }
-    inst.ty
-}
-
-// The specific reason (float remainder, unmodelled builtin, wide field) for an
-// instruction `vc_inst_supported` rejected, or "" when it is only generically
-// unsupported. Only the three per-instruction classes of the op-model table can
-// have one, so every other opcode costs a single table lookup.
-fn vc_inst_specific_reason(inst: IrInst, tys: Vec<i64>) -> String {
+// The specific reason (float remainder, unmodelled builtin) for an instruction
+// `vc_inst_supported` rejected, or "" when it is only generically unsupported.
+// Only the two per-instruction classes of the op-model table can have one, so
+// every other opcode costs a single table lookup.
+fn vc_inst_specific_reason(inst: IrInst) -> String {
     let model: i64 = vc_op_model(inst.op);
     if model == VC_OPM_FLOAT_REM() { return vc_reason(VC_SKIP_FLOAT_REM(), opcode_name(inst.op)); }
     if model == VC_OPM_CALL() {
@@ -256,12 +255,6 @@ fn vc_inst_specific_reason(inst: IrInst, tys: Vec<i64>) -> String {
             return vc_reason(VC_SKIP_UNMODELED_BUILTIN(), inst.ds);
         }
         return String::from("");
-    }
-    if model == VC_OPM_FIELD() {
-        let width_ty: i64 = vc_field_ty(inst, tys);
-        if width_ty == ITY_I128() || width_ty == ITY_U128() {
-            return vc_reason(VC_SKIP_WIDE_AGGREGATE_FIELD(), vc_name_with_ty(inst.op, width_ty));
-        }
     }
     String::from("")
 }
@@ -297,7 +290,7 @@ fn vc_skip_reason(f: IrFunction) -> String {
     }
     let tys: Vec<i64> = vc_ty_table(f);
     let lits: Vec<i64> = vc_literal_table(f, tys);
-    // A specific reason (float remainder, unmodelled builtin, wide field) beats
+    // A specific reason (float remainder, unmodelled builtin) beats
     // the generic `unsupported-opcode` of an earlier instruction: it names what
     // has to be modelled, and the generic one would hide it behind a parameter
     // or constant that precedes it.
@@ -310,7 +303,7 @@ fn vc_skip_reason(f: IrFunction) -> String {
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
             if !vc_inst_supported(f, inst, tys, lits) {
-                let specific: String = vc_inst_specific_reason(inst, tys);
+                let specific: String = vc_inst_specific_reason(inst);
                 if specific.len() > 0 { return specific; }
                 if !have_generic {
                     have_generic = true;

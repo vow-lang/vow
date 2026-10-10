@@ -158,7 +158,6 @@ opcode or builtin name); `detail` is never part of the enumerated set.
 | `unsupported-opcode` | An opcode absent from `compiler/vc_ops.vow`, a module the `vc_ops` child introduces (today `Load`, `Store`, `LinearBorrow`). `detail` is the opcode (D10). | Shrinks. |
 | `non-modelable-callee` | An inlined callee is itself `Skipped`. `detail` carries the callee's code. | Permanent. |
 | `reserved-verifier-symbol` | The function name collides with a reserved checker symbol. | Permanent; the reserved set is fixed in P1. |
-| `wide-aggregate-field` | `FieldGet`/`FieldSet` at 128-bit width. | Transitional: removed when the 128-bit aggregate work (D12) lands. |
 
 **Prerequisite for `unmodeled-builtin`.** Absent stays fail-closed, so the gate
 can only be enabled once the catalogue says which builtins are modelled. Today
@@ -228,15 +227,25 @@ builtins are `unmodeled` for now: the symbolic executor encodes no call, so a
 `known` entry alone would still be skipped as `unsupported-opcode`. The
 collection runtime symbols are not catalogued, so they are absent, which is
 `unmodeled-builtin` as well. When a function has several unsupported
-instructions, a specific code (`float-rem-unsupported`, `unmodeled-builtin`,
-`wide-aggregate-field`) is reported in preference to a generic
+instructions, a specific code (`float-rem-unsupported`, `unmodeled-builtin`) is
+reported in preference to a generic
 `unsupported-opcode` that happens to come earlier. The per-function gate emits
 `function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`,
-`unmodeled-builtin`, `wide-aggregate-field` and `unsupported-opcode`. Three codes
+`unmodeled-builtin` and `unsupported-opcode`. Three codes
 need information the per-function gate does not have and are defined but not yet
 emitted: `recursion-unsupported` and `non-modelable-callee` arrive with call
 inlining (P2), where a call graph exists, and `reserved-verifier-symbol` waits for
 the reserved set to be fixed (no native query contains a user function name).
+
+**Addendum (issue #1421, 128-bit aggregates).** The transitional
+`wide-aggregate-field` code is removed: the native verifier models a 128-bit
+struct field or enum payload as one 128-bit term over two slots, so `FieldGet`
+and `FieldSet` of a 128-bit value are modelled like any other field access. The
+gate accepts a `FieldGet`/`FieldSet` only when the slot kind and the value width
+agree (a 128-bit value in a `WideSlot`, anything narrower in a plain field slot);
+a mismatch is a generic `unsupported-opcode`. The reason table and the two lists
+above no longer mention the code. A `Vec<i128>` element is still `Skipped`, as
+`unmodeled-builtin`, until the collection model (#1423).
 
 ### 5. Timeline
 

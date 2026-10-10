@@ -1,0 +1,52 @@
+// Native-only: ESBMC reports 128-bit enum payloads as Skipped, and the `[panic]`
+// effect on `unwrap_u128` has no ESBMC counterpart.
+module WideEnumPayload
+
+enum Wide {
+    Value(i128),
+    Empty,
+}
+
+enum Pair {
+    Both(i64, i128),
+    Empty,
+}
+
+fn low_limb(w: Wide) -> i64 vow {
+  ensures: result >= 0
+} {
+    match w {
+        Wide::Value(v) => { if v == 0 { 0 } else { 1 } },
+        Wide::Empty => { 0 },
+    }
+}
+
+fn second_limb(p: Pair) -> i64 vow {
+  ensures: result >= 0
+} {
+    match p {
+        Pair::Both(a, b) => { if b == 0 { 0 } else { 1 } },
+        Pair::Empty => { 0 },
+    }
+}
+
+fn ok_limb(r: Result<i128, i64>) -> i64 vow {
+  ensures: result >= 0
+} {
+    match r {
+        Result::Ok(v) => { if v == 0 { 0 } else { 1 } },
+        Result::Err(e) => { 0 },
+    }
+}
+
+fn unwrap_u128(x: u128) -> u128 [panic] vow {
+  ensures: result == x
+} {
+  let o: Option<u128> = Option::Some(x);
+  o.unwrap()
+}
+
+fn main() -> i32 [io, panic] {
+  print_i64(low_limb(Wide::Empty));
+  0
+}

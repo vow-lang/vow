@@ -399,16 +399,18 @@ Verification is a separate matter. 128-bit literals (in a body or in
 `requires`/`ensures`/`invariant`) are verifiable, and are modelled exactly under
 the bit-vector encoding, `i128::MIN`, `i128::MAX` and `u128::MAX` included; a
 proof obtained by the `--encoding ir` timeout fallback is reported as `ProvenIr`
-and is weaker. Every 128-bit aggregate access is `Skipped` rather than modelled:
-a contracted function that reads or writes a 128-bit aggregate field or enum
-payload is reported `Skipped`, with `FieldGet at 128-bit width` or `FieldSet at
-128-bit width`, rather than being modelled through the verifier's 8-byte heap
-slot; a function that reads, writes, or pushes a `Vec<i128>` or `Vec<u128>`
-element is `Skipped` with an unsupported `Call extern` opcode; so is a call to
-`parse_i128` or `parse_u128`, whose `Option` result the verifier's 64-bit
-`Option` model cannot represent. A narrow field declared after a 128-bit one
-still verifies: it lives in the shifted slot, which the heap model addresses
-like any other. Contracts over 128-bit parameters alone do verify.
+and is weaker. Under the default ESBMC backend every 128-bit aggregate access
+is `Skipped` rather than modelled: a contracted function that reads or writes a
+128-bit aggregate field or enum payload is reported `Skipped`, with `FieldGet at
+128-bit width` or `FieldSet at 128-bit width`, rather than being modelled through
+the verifier's 8-byte heap slot. `--backend native` models a 128-bit struct
+field or enum payload exactly, as one 128-bit term (it occupies two slots, and a
+narrow field declared after it lives in the shifted slot). A function that
+reads, writes, or pushes a `Vec<i128>` or `Vec<u128>` element is `Skipped`
+under both backends (an unsupported `Call extern` opcode under ESBMC,
+`unmodeled-builtin` under native); so is a call to `parse_i128` or
+`parse_u128`, whose `Option` result the verifier's 64-bit `Option` model cannot
+represent. Contracts over 128-bit parameters alone do verify.
 
 Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
 binding captured by a `vow` block reports its full value in the runtime

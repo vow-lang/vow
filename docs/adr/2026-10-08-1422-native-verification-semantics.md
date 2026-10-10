@@ -145,7 +145,8 @@ Properties that need `len <= CAP` to hold were never proven for the runtime.
 `/!`, `%!`) assert the absence of overflow and model the abort, as the
 runtime does. Shift counts follow the language's rules in `grammar.md` (count
 type `u32`, compile-time and dynamic range checks). Aggregates with 128-bit
-fields stay gated (`Skipped`) as they are today.
+fields stay gated (`Skipped`) as they are today. *Addendum (#1421):* a 128-bit
+struct field or enum payload is one `BitVec 128` term; the gate is lifted.
 
 The unbounded-integer fallback is dropped: there is no `proven-ir` result.
 A function ESBMC only proved under integer arithmetic after the bitvector run
@@ -201,7 +202,9 @@ known limits.
   and any aggregate nested in another, is `Skipped` (#1417).
 - **Callee inlining** (epic D4) makes verification cost grow with the call tree;
   modular assume-guarantee verification is a separate future ADR.
-- **128-bit aggregates** (struct fields) stay gated.
+- **128-bit aggregates** (struct fields) stay gated. *Addendum (#1421):* struct
+  fields and enum payloads of 128 bits are modelled, one 128-bit term each;
+  `Vec<i128>` elements stay `Skipped` until the collection model (#1423).
 - **Solver limits.** Timeout or memory exhaustion yields `unknown` with a
   structured reason, never `proven`.
 - **Floating-point cost.** FP queries bit-blast and can be slow; they time out
