@@ -38,7 +38,14 @@ fn sample() -> VcOutcome {
     let sites: Vec<ParsedArithSite> = Vec::new();
     sites.push(ParsedArithSite { cause: String::from("overflow in +!"), owner: 3, ostart: 17, olen: 6 });
     sites.push(ParsedArithSite { cause: String::from("a\nb"), owner: -1, ostart: 0, olen: 0 });
-    VcOutcome { result: sample_result(), sites: sites }
+    let oc: VcOutcome = VcOutcome { result: sample_result(), sites: sites, chain_funcs: Vec::new(), chain_starts: Vec::new(), chain_lens: Vec::new() };
+    oc.chain_funcs.push(4);
+    oc.chain_starts.push(120);
+    oc.chain_lens.push(9);
+    oc.chain_funcs.push(7);
+    oc.chain_starts.push(-1);
+    oc.chain_lens.push(0);
+    oc
 }
 
 fn check_round_trip() -> i64 {
@@ -62,6 +69,9 @@ fn check_round_trip() -> i64 {
     if back.var_values[0] != String::from("-9223372036854775808") { return 8; }
     if back.block_visits.len() != 2 || back.block_visits[1] != -1 { return 9; }
     if back.raw_output != vr.raw_output { return 10; }
+    if back_oc.chain_funcs.len() != 2 || back_oc.chain_starts.len() != 2 || back_oc.chain_lens.len() != 2 { return 16; }
+    if back_oc.chain_funcs[0] != 4 || back_oc.chain_starts[0] != 120 || back_oc.chain_lens[0] != 9 { return 17; }
+    if back_oc.chain_funcs[1] != 7 || back_oc.chain_starts[1] != -1 || back_oc.chain_lens[1] != 0 { return 18; }
     0
 }
 
@@ -91,8 +101,8 @@ fn check_truncation_never_decodes() -> i64 {
     }
     if is_none(full) { return 2; }
     if !is_none(String::from("")) { return 3; }
-    if !is_none(String::from("VOWRES1\n99\n")) { return 4; }
-    if !is_none(String::from("VOWRES1\n99\n0\n0\n0\n0\n0\n0\n0\n0\n")) { return 5; }
+    if !is_none(String::from("VOWRES2\n99\n")) { return 4; }
+    if !is_none(String::from("VOWRES2\n99\n0\n0\n0\n0\n0\n0\n0\n0\n")) { return 5; }
     0
 }
 

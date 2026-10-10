@@ -1,5 +1,5 @@
 // TEST: counterexample-fn "bump"
-// TEST: counterexample-vow-id 0
+// TEST: counterexample-vow-id 1
 // TEST: counterexample-blame Callee
 module InlineCalleeEnsures
 
