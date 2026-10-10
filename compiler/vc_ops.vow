@@ -59,7 +59,7 @@ fn vc_op_modeled_core(op: i64) -> bool {
         || op == IOP_BITAND() || op == IOP_BITOR() || op == IOP_BITXOR()
         || op == IOP_EQ() || op == IOP_NE() || op == IOP_LT() || op == IOP_LE() || op == IOP_GT() || op == IOP_GE()
         || op == IOP_NOT() || op == IOP_AND() || op == IOP_OR()
-        || op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_RETURN()
+        || op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_VOW_INV() || op == IOP_RETURN()
         || op == IOP_CONST_UNIT() || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_UNREACHABLE()
         || op == IOP_PHI() || op == IOP_UPSILON()
         || op == IOP_REGION_ALLOC() || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
@@ -74,7 +74,6 @@ fn vc_op_unsupported(op: i64) -> bool {
         || op == IOP_EQ_F64() || op == IOP_NE_F64() || op == IOP_LT_F64() || op == IOP_LE_F64()
         || op == IOP_GT_F64() || op == IOP_GE_F64()
         || op == IOP_LOAD() || op == IOP_STORE()
-        || op == IOP_VOW_INV()
         || op == IOP_DEBUG_CALL()
         || op == IOP_COMPLEXITY_DESCRIPTOR()
         || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW()
@@ -99,6 +98,14 @@ fn VC_INTERNAL_UNWRAP_PANIC() -> String { String::from("__vow_unwrap_panic") }
 
 fn vc_is_unwrap_abort(inst: IrInst) -> bool {
     inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_UNWRAP_PANIC()
+}
+
+// The `Unreachable` the loop unroller puts where a back edge goes past the
+// bound. Reaching it means some run needs more iterations than the bound.
+fn VC_INTERNAL_UNWIND_SINK() -> String { String::from("__vc_unwind_sink") }
+
+fn vc_is_unwind_sink(inst: IrInst) -> bool {
+    inst.op == IOP_UNREACHABLE() && inst.ds == VC_INTERNAL_UNWIND_SINK()
 }
 
 // Opcodes the gate looks at: modelled outright, or decided per instruction.

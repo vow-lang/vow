@@ -4,24 +4,65 @@ use ir
 use verifier
 use vc_smt
 use vc_solver
+use vc_gate
+use vc_cfg
 use vc_exec
+use vc_unroll
 use vc_cex
 
 // Native verification of one function inside the subset accepted by
-// `vc_skip_reason`: every claim is decided by its own solver run, in IR order.
-// A hard claim that is not `unsat` decides the result; `unsat` is the only
-// outcome that counts as proof. A soft claim (a checked operator's abort) never
-// fails the function: `sat` records that the abort is reachable, `unsat` that it
-// is not, and only an undecided run (unknown, timeout, error) stops the check.
-// `timeout_ms` is the budget for the whole function; each claim gets what is
-// left of it. `scratch`, when not empty, is the directory for the query files. The solver is looked up only when there
-// is a claim to decide: a function without obligations is proven without one.
+// `vc_skip_reason`. A function with loops is unrolled to a bound taken from
+// `vc_unwind_bounds`, smallest first; each round decides every claim of the
+// unrolled function by its own solver run, in IR order. A hard claim that is not
+// `unsat` decides the result: a counterexample inside the unrolled prefix is a
+// real run, so it fails the function at once. `unsat` is the only outcome that
+// counts as proof, and only when the round's unwinding claim is `unsat` too. A
+// `sat` unwinding claim means some run needs more iterations than the bound: the
+// next round unrolls further, and after the last the result is `unknown`, never
+// `proven`. A soft claim (a checked operator's abort) never fails the function:
+// `sat` records that the abort is reachable, `unsat` that it is not, and only an
+// undecided run (unknown, timeout, error) stops the check. `timeout_ms` is the
+// budget for the whole function, shared by all rounds; each claim gets what is
+// left of it. `scratch`, when not empty, is the directory for the query files.
+// The solver is looked up only when there is a claim to decide: a function
+// without obligations is proven without one.
 
 // A verdict plus the reachable checked-arithmetic aborts found on the way. The
 // sites are meaningful only when the result is `proven`.
 struct VcOutcome {
     result: VerifyResult,
     sites: Vec<ParsedArithSite>,
+}
+
+// Number of back edges a loop may take before the unwinding claim fails, per
+// round. The last bound is at least ESBMC's default `--max-k-step`, so every
+// loop ESBMC proves by unwinding is still proven. Internal: `--timeout` is the
+// only user knob.
+fn vc_unwind_bounds() -> Vec<i64> {
+    let b: Vec<i64> = Vec::new();
+    b.push(2);
+    b.push(4);
+    b.push(8);
+    b.push(16);
+    b.push(32);
+    b.push(64);
+    b
+}
+
+fn VC_ROUND_PROVEN() -> i64 { 0 }
+fn VC_ROUND_NEXT() -> i64 { 1 }
+fn VC_ROUND_UNKNOWN() -> i64 { 2 }
+
+// What a round that decided every claim without a failure leads to: `open` is
+// true when its unwinding claim was `sat`.
+fn vc_round_decision(open: bool, round: u64, rounds: u64) -> i64 {
+    if !open {
+        return VC_ROUND_PROVEN();
+    }
+    if round + 1 < rounds {
+        return VC_ROUND_NEXT();
+    }
+    VC_ROUND_UNKNOWN()
 }
 
 fn vc_bare_outcome(result: VerifyResult) -> VcOutcome {
@@ -33,27 +74,88 @@ fn vc_check_claim(bin: String, cs: VcClaims, k: u64, budget_ms: i64, scratch: St
     vc_solver_check(bin, query, cs.model_names, cs.model_widths, budget_ms, scratch)
 }
 
-fn vc_verify_function(f: IrFunction, timeout_ms: i64, scratch: String) -> VcOutcome [io, read, write] {
-    let cs: VcClaims = vc_claims(f);
+// Every unrolled copy of a checked operator repeats one source site.
+fn vc_has_site(sites: Vec<ParsedArithSite>, site: ParsedArithSite) -> bool {
+    let mut i: u64 = 0;
+    while i < sites.len() {
+        let s: ParsedArithSite = sites[i];
+        if s.ostart == site.ostart && s.olen == site.olen && s.owner == site.owner && s.cause == site.cause {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// One round: the claims of the unrolled function `g` of `f`. `sites` collects
+// the reachable soft aborts. Returns the verdict that ends the check (any
+// outcome but `unsat`/soft `sat`/open unwinding), or `proven` with `open` set
+// when only the unwinding claim was `sat`.
+struct VcRound {
+    result: VerifyResult,
+    ended: bool,
+    open: bool,
+}
+
+fn vc_run_round(f: IrFunction, g: IrFunction, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String) -> VcRound [io, read, write] {
+    let cs: VcClaims = vc_claims(g);
     if cs.kinds.len() == 0 {
-        return vc_bare_outcome(vc_proven_result());
+        return VcRound { result: vc_proven_result(), ended: false, open: false };
     }
     let bin: String = vc_solver_locate();
     if bin.len() == 0 {
-        return vc_bare_outcome(vc_claim_result(f, cs, 0, vc_answer_plain(VC_ANS_NOT_FOUND(), String::from("Bitwuzla not found"))));
+        let nf: VerifyResult = vc_claim_result(f, cs, 0, vc_answer_plain(VC_ANS_NOT_FOUND(), String::from("Bitwuzla not found")));
+        return VcRound { result: nf, ended: true, open: false };
     }
-    let sites: Vec<ParsedArithSite> = Vec::new();
-    let started: i64 = time_micros();
+    let mut open: bool = false;
     let mut k: u64 = 0;
     while k < cs.kinds.len() {
         let spent_ms: i64 = (time_micros() - started) / 1000;
         let ans: VcSolverAnswer = vc_check_claim(bin, cs, k, timeout_ms - spent_ms, scratch);
-        if cs.kinds[k] == VC_CLAIM_ARITH() && ans.verdict == VC_ANS_SAT() {
-            sites.push(ParsedArithSite { cause: cs.labels[k], owner: f.id, ostart: cs.ostarts[k], olen: cs.olens[k] });
-        } else if ans.verdict != VC_ANS_UNSAT() {
-            return vc_bare_outcome(vc_claim_result(f, cs, k, ans));
+        if ans.verdict != VC_ANS_UNSAT() {
+            if cs.kinds[k] == VC_CLAIM_ARITH() && ans.verdict == VC_ANS_SAT() {
+                let site: ParsedArithSite = ParsedArithSite { cause: cs.labels[k], owner: f.id, ostart: cs.ostarts[k], olen: cs.olens[k] };
+                if !vc_has_site(sites, site) {
+                    sites.push(site);
+                }
+            } else if cs.kinds[k] == VC_CLAIM_UNWIND() && ans.verdict == VC_ANS_SAT() {
+                open = true;
+            } else {
+                return VcRound { result: vc_claim_result(f, cs, k, ans), ended: true, open: false };
+            }
         }
         k = k + 1;
     }
-    VcOutcome { result: vc_proven_result(), sites: sites }
+    VcRound { result: vc_proven_result(), ended: false, open: open }
+}
+
+fn vc_verify_function(f: IrFunction, timeout_ms: i64, scratch: String) -> VcOutcome [io, read, write] {
+    let bounds: Vec<i64> = vc_unwind_bounds();
+    let started: i64 = time_micros();
+    let mut round: u64 = 0;
+    while round < bounds.len() {
+        let bound: i64 = bounds[round];
+        let u: VcUnrolled = vc_unroll(f, bound);
+        if u.status == VC_UNROLL_TOO_LARGE() {
+            return vc_bare_outcome(vc_unknown_result(vc_unwinding_budget_reason(bound)));
+        }
+        let g: IrFunction = u.f;
+        if u.status != VC_UNROLL_OK() || (u.looped && vc_unrolled_detail(g, vc_ty_table(g)).len() > 0) {
+            return vc_bare_outcome(vc_error_result(String::from("internal error: loop unrolling produced an unsupported control-flow graph")));
+        }
+        let sites: Vec<ParsedArithSite> = Vec::new();
+        let r: VcRound = vc_run_round(f, g, sites, started, timeout_ms, scratch);
+        if r.ended {
+            return vc_bare_outcome(r.result);
+        }
+        let d: i64 = vc_round_decision(r.open, round, bounds.len());
+        if d == VC_ROUND_PROVEN() {
+            return VcOutcome { result: vc_proven_result(), sites: sites };
+        }
+        if d == VC_ROUND_UNKNOWN() {
+            return vc_bare_outcome(vc_unknown_result(vc_unwinding_reason(bound)));
+        }
+        round = round + 1;
+    }
+    vc_bare_outcome(vc_unknown_result(vc_unwinding_reason(0)))
 }

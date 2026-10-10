@@ -80,3 +80,32 @@ fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> 
     }
     vc_verify_result(VERIFY_ERROR(), -1, Vec::new(), Vec::new(), ans.raw)
 }
+
+// The unwinding assertion could not be discharged at the largest bound: some
+// run may need more iterations than the verifier unrolls, so nothing is proven.
+// The text travels in `raw_output` through the worker wire format.
+fn vc_unwinding_reason(bound: i64) -> String {
+    let out: String = String::from("unwinding assertion: a loop may run more than ");
+    out.push_str(i64_to_string(bound));
+    out.push_str(String::from(" iterations (internal unrolling bound reached)"));
+    out
+}
+
+fn vc_unwinding_budget_reason(bound: i64) -> String {
+    let out: String = String::from("unwinding assertion: unrolling the loops to ");
+    out.push_str(i64_to_string(bound));
+    out.push_str(String::from(" iterations exceeds the verifier's size budget"));
+    out
+}
+
+fn vc_output_has_unwinding(raw: String) -> bool {
+    str_find_str(raw, String::from("unwinding assertion")) >= 0
+}
+
+fn vc_unknown_result(raw: String) -> VerifyResult {
+    vc_verify_result(VERIFY_UNKNOWN(), -1, Vec::new(), Vec::new(), raw)
+}
+
+fn vc_error_result(raw: String) -> VerifyResult {
+    vc_verify_result(VERIFY_ERROR(), -1, Vec::new(), Vec::new(), raw)
+}

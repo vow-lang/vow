@@ -10,6 +10,7 @@ use verifier
 use verify_report
 use vc_gate
 use vc_native
+use vc_cex
 use vc_worker
 use vc_solver
 use diag
@@ -1737,6 +1738,7 @@ fn native_report_result(f: IrFunction, ir_mod: IrModule, path: String, oc: VcOut
         diag_eprintln_best_effort(str3(String::from("  "), f.name, String::from(": UNKNOWN")));
         let why: String = {
             if output_has_memory_limit(vr.raw_output) { memory_limit_reason() }
+            else if vc_output_has_unwinding(vr.raw_output) { vr.raw_output }
             else { String::from("the solver answered unknown") }
         };
         record_soft_fail(soft_meta, String::from("unknown"), why, f.name);

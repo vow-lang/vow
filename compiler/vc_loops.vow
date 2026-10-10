@@ -1,0 +1,300 @@
+module VcLoops
+
+use ir
+use ir_dominance
+
+// Natural-loop analysis for the native verifier's loop unwinding. A retreating
+// edge of the reverse-postorder numbering is a back edge when its target
+// dominates its source; one that is not makes the CFG irreducible, and such a
+// function is not unrolled. The back edges sharing a header form one loop (the
+// header plus every block that reaches a back-edge source without passing the
+// header). In a reducible CFG two loops are nested or disjoint, so the loops
+// containing a block form a chain, stored outer to inner, which is the order of
+// strictly decreasing member count.
+
+fn VC_MAX_LOOP_DEPTH() -> i64 { 8 }
+
+struct VcLoopInfo {
+    irreducible: bool,
+    n_loops: i64,
+    headers: Vec<i64>,
+    loop_of_header: Vec<i64>,
+    chain_off: Vec<i64>,
+    chain: Vec<i64>,
+    max_depth: i64,
+}
+
+// Back edges as parallel (source, loop) lists; false when a retreating edge is
+// not a back edge. `headers`/`loop_of_header` are filled in discovery order.
+fn vc_find_back_edges(nb: u64, succ: Vec<i64>, rpo: Vec<i64>, nums: Vec<i64>, headers: Vec<i64>, loop_of_header: Vec<i64>, be_src: Vec<i64>, be_loop: Vec<i64>) -> bool {
+    let mut b: u64 = 0;
+    while b < nb {
+        if rpo[b] >= 0 {
+            let mut k: u64 = 0;
+            while k < 2 {
+                let s: i64 = succ[b * 2 + k];
+                if s >= 0 && rpo[s as u64] <= rpo[b] {
+                    if !dom_dominates(nums, nb, s, b as i64) {
+                        return false;
+                    }
+                    if loop_of_header[s as u64] < 0 {
+                        loop_of_header[s as u64] = headers.len() as i64;
+                        headers.push(s);
+                    }
+                    be_src.push(b as i64);
+                    be_loop.push(loop_of_header[s as u64]);
+                }
+                k = k + 1;
+            }
+        }
+        b = b + 1;
+    }
+    true
+}
+
+// Appends the members of loop `j` to `mem`, using `mark[b] == j` as the visited
+// stamp (loops are processed in increasing `j`, so no reset is needed).
+fn vc_collect_loop(j: i64, header: i64, be_src: Vec<i64>, be_loop: Vec<i64>, off: Vec<i64>, preds: Vec<i64>, mark: Vec<i64>, mem: Vec<i64>) {
+    let stack: Vec<i64> = Vec::new();
+    mark[header as u64] = j;
+    mem.push(header);
+    let mut e: u64 = 0;
+    while e < be_src.len() {
+        let src: i64 = be_src[e];
+        if be_loop[e] == j && mark[src as u64] != j {
+            mark[src as u64] = j;
+            mem.push(src);
+            stack.push(src);
+        }
+        e = e + 1;
+    }
+    while stack.len() > 0 {
+        let b: i64 = stack[stack.len() - 1];
+        stack.pop();
+        let mut pi: i64 = off[b as u64];
+        while pi < off[(b + 1) as u64] {
+            let p: i64 = preds[pi as u64];
+            if mark[p as u64] != j {
+                mark[p as u64] = j;
+                mem.push(p);
+                stack.push(p);
+            }
+            pi = pi + 1;
+        }
+    }
+}
+
+// Loop indices ordered by decreasing member count (insertion sort; loop counts
+// are small and the order must be deterministic).
+fn vc_loops_by_size_desc(n: u64, mem_off: Vec<i64>) -> Vec<i64> {
+    let order: Vec<i64> = Vec::new();
+    let mut j: u64 = 0;
+    while j < n {
+        let size: i64 = mem_off[j + 1] - mem_off[j];
+        order.push(j as i64);
+        let mut p: u64 = order.len() - 1;
+        let mut sifting: bool = true;
+        while sifting && p > 0 {
+            let prev: i64 = order[p - 1];
+            let prev_size: i64 = mem_off[(prev + 1) as u64] - mem_off[prev as u64];
+            if prev_size >= size {
+                sifting = false;
+            } else {
+                order[p] = prev;
+                order[p - 1] = j as i64;
+                p = p - 1;
+            }
+        }
+        j = j + 1;
+    }
+    order
+}
+
+fn vc_empty_loop_info(nb: u64, irreducible: bool) -> VcLoopInfo {
+    VcLoopInfo {
+        irreducible: irreducible,
+        n_loops: 0,
+        headers: Vec::new(),
+        loop_of_header: dom_fill(nb, -1),
+        chain_off: dom_fill(nb + 1, 0),
+        chain: Vec::new(),
+        max_depth: 0,
+    }
+}
+
+fn vc_loop_analysis(nb: u64, succ: Vec<i64>, rpo: Vec<i64>) -> VcLoopInfo {
+    let order: Vec<i64> = dom_rpo_order(rpo);
+    let off: Vec<i64> = dom_pred_offsets(nb, succ, rpo);
+    let preds: Vec<i64> = dom_pred_list(nb, succ, rpo, off);
+    let idom: Vec<i64> = dom_idoms(nb, rpo, order, off, preds);
+    let nums: Vec<i64> = dom_tree_numbers(nb, idom, order);
+
+    let headers: Vec<i64> = Vec::new();
+    let loop_of_header: Vec<i64> = dom_fill(nb, -1);
+    let be_src: Vec<i64> = Vec::new();
+    let be_loop: Vec<i64> = Vec::new();
+    if !vc_find_back_edges(nb, succ, rpo, nums, headers, loop_of_header, be_src, be_loop) {
+        return vc_empty_loop_info(nb, true);
+    }
+    let n: u64 = headers.len();
+    if n == 0 {
+        return vc_empty_loop_info(nb, false);
+    }
+
+    let mark: Vec<i64> = dom_fill(nb, -1);
+    let mem: Vec<i64> = Vec::new();
+    let mem_off: Vec<i64> = Vec::new();
+    let mut j: u64 = 0;
+    while j < n {
+        mem_off.push(mem.len() as i64);
+        vc_collect_loop(j as i64, headers[j], be_src, be_loop, off, preds, mark, mem);
+        j = j + 1;
+    }
+    mem_off.push(mem.len() as i64);
+
+    let cnt: Vec<i64> = dom_fill(nb, 0);
+    let mut m: u64 = 0;
+    while m < mem.len() {
+        cnt[mem[m] as u64] = cnt[mem[m] as u64] + 1;
+        m = m + 1;
+    }
+    let chain_off: Vec<i64> = dom_fill(nb + 1, 0);
+    let mut max_depth: i64 = 0;
+    let mut b: u64 = 0;
+    while b < nb {
+        chain_off[b + 1] = chain_off[b] + cnt[b];
+        if cnt[b] > max_depth {
+            max_depth = cnt[b];
+        }
+        b = b + 1;
+    }
+    let chain: Vec<i64> = dom_fill(mem.len() as u64, -1);
+    let fill: Vec<i64> = dom_fill(nb, 0);
+    let by_size: Vec<i64> = vc_loops_by_size_desc(n, mem_off);
+    let mut oi: u64 = 0;
+    while oi < by_size.len() {
+        let lp: i64 = by_size[oi];
+        let mut mi: i64 = mem_off[lp as u64];
+        while mi < mem_off[(lp + 1) as u64] {
+            let blk: u64 = mem[mi as u64] as u64;
+            chain[(chain_off[blk] + fill[blk]) as u64] = lp;
+            fill[blk] = fill[blk] + 1;
+            mi = mi + 1;
+        }
+        oi = oi + 1;
+    }
+    VcLoopInfo {
+        irreducible: false,
+        n_loops: n as i64,
+        headers: headers,
+        loop_of_header: loop_of_header,
+        chain_off: chain_off,
+        chain: chain,
+        max_depth: max_depth,
+    }
+}
+
+fn vc_chain_len(li: VcLoopInfo, b: u64) -> i64 {
+    li.chain_off[b + 1] - li.chain_off[b]
+}
+
+// Loop at depth `i` (0 is the outermost) of block `b`'s chain.
+fn vc_chain_at(li: VcLoopInfo, b: u64, i: i64) -> i64 {
+    li.chain[(li.chain_off[b] + i) as u64]
+}
+
+// Number of leading loops two blocks have in common.
+fn vc_chain_common(li: VcLoopInfo, a: u64, b: u64) -> i64 {
+    let la: i64 = vc_chain_len(li, a);
+    let lb: i64 = vc_chain_len(li, b);
+    let mut n: i64 = 0;
+    while n < la && n < lb && vc_chain_at(li, a, n) == vc_chain_at(li, b, n) {
+        n = n + 1;
+    }
+    n
+}
+
+struct VcDefs {
+    blk: Vec<i64>,
+    pos: Vec<i64>,
+}
+
+// Block index and position of the instruction defining each value id (-1 when
+// undefined), over the reachable blocks.
+fn vc_def_table(f: IrFunction, rpo: Vec<i64>, n_ids: u64) -> VcDefs {
+    let blk: Vec<i64> = dom_fill(n_ids, -1);
+    let pos: Vec<i64> = dom_fill(n_ids, -1);
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        if rpo[bi] >= 0 {
+            let b: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < b.insts.len() {
+                let inst: IrInst = b.insts[ii];
+                if inst.id >= 0 && (inst.id as u64) < n_ids && blk[inst.id as u64] < 0 {
+                    blk[inst.id as u64] = bi as i64;
+                    pos[inst.id as u64] = ii as i64;
+                }
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+    VcDefs { blk: blk, pos: pos }
+}
+
+// True when block `bi` reads a value defined in a loop the block is not inside.
+// The unroller keeps one copy of a loop value per iteration, so after the loop
+// only the exit Phis (which belong to the block outside it) may carry a value
+// out.
+fn vc_escaping_read(f: IrFunction, li: VcLoopInfo, def_blk: Vec<i64>, bi: u64) -> bool {
+    let blk: IrBlock = f.blocks[bi];
+    let here: i64 = vc_chain_len(li, bi);
+    let mut ii: u64 = 0;
+    while ii < blk.insts.len() {
+        let inst: IrInst = blk.insts[ii];
+        let mut ai: u64 = 0;
+        while ai < inst.args.len() {
+            let d: i64 = inst.args[ai];
+            if d >= 0 && (d as u64) < def_blk.len() && def_blk[d as u64] >= 0 {
+                let db: u64 = def_blk[d as u64] as u64;
+                let dl: i64 = vc_chain_len(li, db);
+                if dl > here || vc_chain_common(li, db, bi) < dl {
+                    return true;
+                }
+            }
+            ai = ai + 1;
+        }
+        ii = ii + 1;
+    }
+    false
+}
+
+// "" when every loop of the reachable CFG can be unrolled, else the detail of an
+// `unsupported-opcode` skip. A function without a loop is always accepted.
+fn vc_loop_shape_detail(f: IrFunction, succ: Vec<i64>, rpo: Vec<i64>) -> String {
+    let nb: u64 = f.blocks.len();
+    let li: VcLoopInfo = vc_loop_analysis(nb, succ, rpo);
+    if li.irreducible {
+        return String::from("irreducible loop (back edge to a block that does not dominate its source)");
+    }
+    if li.n_loops == 0 {
+        return String::from("");
+    }
+    if li.loop_of_header[0] >= 0 {
+        return String::from("entry block is a loop header");
+    }
+    if li.max_depth > VC_MAX_LOOP_DEPTH() {
+        return String::from("loop nest deeper than 8");
+    }
+    let defs: VcDefs = vc_def_table(f, rpo, (dom_max_inst_id(f) + 1) as u64);
+    let def_blk: Vec<i64> = defs.blk;
+    let mut bi: u64 = 0;
+    while bi < nb {
+        if rpo[bi] >= 0 && vc_escaping_read(f, li, def_blk, bi) {
+            return String::from("loop value used outside its loop");
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}

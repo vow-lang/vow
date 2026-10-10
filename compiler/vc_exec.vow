@@ -10,8 +10,8 @@ use vc_agg
 use ir_dominance
 
 // Symbolic execution of an acyclic integer/Bool function (one that
-// `vc_skip_reason` accepts), with its aggregates scalarised by `vc_agg`, into
-// proof obligations. Blocks are walked in
+// `vc_skip_reason` accepts, after `vc_unroll` removed its loops), with its
+// aggregates scalarised by `vc_agg`, into proof obligations. Blocks are walked in
 // reverse postorder (`vc_flow` holds the path conditions and merges). Each IR
 // value becomes a `define-fun`; each `requires` is an assumption for the claims
 // that follow it. A claim is only asked on the paths that reach it: its query
@@ -30,6 +30,13 @@ use ir_dominance
 //         contract is judged on returning runs only. A counterexample to a soft
 //         claim is not a failure; it means the abort is reachable and the
 //         driver reports it as an `ArithOverflowReachable` warning.
+//
+// A loop reaches the executor already unrolled (`vc_unroll`): a back edge past
+// the bound ends in a sink block, and a path that reaches it is the unwinding
+// claim "no run needs more iterations than the bound". It is a claim only and
+// assumes nothing afterwards: a counterexample means the bound was too small,
+// not that the function is wrong. A loop `invariant` is checked like an
+// `ensures` at every iteration copy of its header, and assumed nowhere.
 
 fn VC_CLAIM_ENSURES() -> i64 { 0 }
 fn VC_CLAIM_DIV_ZERO() -> i64 { 1 }
@@ -37,11 +44,13 @@ fn VC_CLAIM_DIV_OVERFLOW() -> i64 { 2 }
 fn VC_CLAIM_SHIFT_COUNT() -> i64 { 3 }
 fn VC_CLAIM_ARITH() -> i64 { 4 }
 fn VC_CLAIM_UNWRAP_NONE() -> i64 { 5 }
+fn VC_CLAIM_UNWIND() -> i64 { 6 }
 
 fn VC_LABEL_DIV_ZERO() -> String { String::from("division by zero") }
 fn VC_LABEL_DIV_OVERFLOW() -> String { String::from("division overflow") }
 fn VC_LABEL_SHIFT_COUNT() -> String { String::from("integer shift count") }
 fn VC_LABEL_UNWRAP_NONE() -> String { String::from("unwrap-none") }
+fn VC_LABEL_UNWIND() -> String { String::from("unwinding assertion") }
 
 // One shared command list (`header`) and one append-only assumption list serve
 // every claim: claim `k` is the first `header_lens[k]` header commands, the
@@ -322,7 +331,7 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
         vc_flow_add_upsilon(fl, inst.dv, bi as i64, w.var_of[inst.args[0] as u64]);
     } else if op == IOP_VOW_REQ() {
         vc_assume(cs, pc, w.var_of[inst.args[0] as u64]);
-    } else if op == IOP_VOW_ENS() {
+    } else if op == IOP_VOW_ENS() || op == IOP_VOW_INV() {
         vc_add_claim(cs, VC_CLAIM_ENSURES(), inst.dv, String::from(""), pc, w.var_of[inst.args[0] as u64], inst.ostart, inst.olen);
     } else if op == IOP_JUMP() {
         vc_flow_add_edge(fl, succ[bi * 2] as u64, bi as i64, pc, fl.block_foff[bi], fl.block_flen[bi]);
@@ -330,6 +339,8 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
         vc_walk_branch(w, inst, bi, succ[bi * 2], succ[bi * 2 + 1]);
     } else if vc_is_unwrap_abort(inst) {
         vc_guard(cs, VC_CLAIM_UNWRAP_NONE(), VC_LABEL_UNWRAP_NONE(), pc, vc_tm_bool_const(cs.arena, false), inst);
+    } else if vc_is_unwind_sink(inst) {
+        vc_add_claim(cs, VC_CLAIM_UNWIND(), -1, VC_LABEL_UNWIND(), pc, vc_tm_bool_const(cs.arena, false), inst.ostart, inst.olen);
     } else if op != IOP_RETURN() && op != IOP_UNREACHABLE() {
         vc_define(w, inst, vc_exec_value(w, inst, pc));
     }

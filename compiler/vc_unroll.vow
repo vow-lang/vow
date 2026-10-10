@@ -1,0 +1,375 @@
+module VcUnroll
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_loops
+
+// Bounded unrolling of the natural loops of a function `vc_loop_shape_detail`
+// accepts, into an acyclic function the symbolic executor already walks.
+//
+// An instance is a block together with one iteration counter per loop that
+// contains it, packed outermost first in radix `bound + 1`. A back edge
+// increments its loop's counter; an edge leaving a loop drops it and an edge
+// entering one starts it at 0. A back edge that would pass `bound` goes to one
+// sink block holding an `Unreachable` marked `VC_INTERNAL_UNWIND_SINK`: the
+// executor turns a reachable sink into the unwinding assertion. Every
+// instruction is cloned with a fresh id (`base[instance] + position`) and a use
+// reads the instance of its definition with the counters of the loops they
+// share, which `vc_loop_shape_detail` guarantees to be all of the definition's.
+// Instances are numbered in a fixed depth-first order and the entry is
+// instance 0, so the result is deterministic and its first block is the entry.
+
+fn VC_UNWIND_INST_CAP() -> i64 { 200000 }
+fn VC_UNROLL_OK() -> i64 { 0 }
+fn VC_UNROLL_TOO_LARGE() -> i64 { 1 }
+fn VC_UNROLL_MALFORMED() -> i64 { 2 }
+
+struct VcUnrolled {
+    f: IrFunction,
+    status: i64,
+    looped: bool,
+}
+
+struct VcUnrollState {
+    li: VcLoopInfo,
+    r: i64,
+    succ: Vec<i64>,
+    slot_off: Vec<i64>,
+    slots: Vec<i64>,
+    iblk: Vec<i64>,
+    ikey: Vec<i64>,
+    isucc: Vec<i64>,
+    base: Vec<i64>,
+    bad: i64,
+    sink_used: bool,
+    sink_start: i64,
+    sink_len: i64,
+}
+
+// `r` to the power `d`, stopping once the value exceeds `limit`.
+fn vc_sat_pow(r: i64, d: i64, limit: i64) -> i64 {
+    let mut out: i64 = 1;
+    let mut i: i64 = 0;
+    while i < d && out <= limit {
+        out = out * r;
+        i = i + 1;
+    }
+    out
+}
+
+// Number of instructions of the unrolled function; above `limit` once it
+// passes it.
+fn vc_unrolled_cost(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, r: i64, limit: i64) -> i64 {
+    let mut total: i64 = 0;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        if rpo[b] >= 0 {
+            let blk: IrBlock = f.blocks[b];
+            total = total + (blk.insts.len() as i64) * vc_sat_pow(r, vc_chain_len(li, b), limit);
+            if total > limit {
+                return total;
+            }
+        }
+        b = b + 1;
+    }
+    total
+}
+
+fn vc_new_instance(st: VcUnrollState, b: i64, key: i64) -> i64 {
+    let n: i64 = st.iblk.len() as i64;
+    st.iblk.push(b);
+    st.ikey.push(key);
+    st.isucc.push(-1);
+    st.isucc.push(-1);
+    n
+}
+
+// Key of the instance of block `s` entered from instance (`b`, `key`) along one
+// edge; -1 when the edge is a back edge that would pass `bound`.
+fn vc_edge_key(st: VcUnrollState, b: u64, key: i64, s: u64, bound: i64) -> i64 {
+    let li: VcLoopInfo = st.li;
+    let db: i64 = vc_chain_len(li, b);
+    let ds: i64 = vc_chain_len(li, s);
+    let cp: i64 = vc_chain_common(li, b, s);
+    let lim: i64 = 1000000000;
+    let mut p: i64 = key / vc_sat_pow(st.r, db - cp, lim);
+    if li.loop_of_header[s] >= 0 && cp == ds {
+        if p % st.r >= bound {
+            return -1;
+        }
+        p = p + 1;
+    }
+    p * vc_sat_pow(st.r, ds - cp, lim)
+}
+
+// Assigns instance numbers and resolves each instance's two successors:
+// an instance number, -1 for none and -2 for an edge cut at the bound.
+fn vc_discover(st: VcUnrollState, bound: i64) {
+    let stack: Vec<i64> = Vec::new();
+    st.slots[0] = vc_new_instance(st, 0, 0);
+    stack.push(0);
+    while stack.len() > 0 {
+        let n: i64 = stack[stack.len() - 1];
+        stack.pop();
+        let b: u64 = st.iblk[n as u64] as u64;
+        let key: i64 = st.ikey[n as u64];
+        let mut k: u64 = 0;
+        while k < 2 {
+            let s: i64 = st.succ[b * 2 + k];
+            if s >= 0 {
+                let nk: i64 = vc_edge_key(st, b, key, s as u64, bound);
+                if nk < 0 {
+                    st.isucc[(n * 2) as u64 + k] = -2;
+                } else {
+                    let slot: u64 = (st.slot_off[s as u64] + nk) as u64;
+                    if st.slots[slot] < 0 {
+                        st.slots[slot] = vc_new_instance(st, s, nk);
+                        stack.push(st.slots[slot]);
+                    }
+                    st.isucc[(n * 2) as u64 + k] = st.slots[slot];
+                }
+            }
+            k = k + 1;
+        }
+    }
+}
+
+// New id of original value `v` as read by instance (`b`, `key`): the copy made
+// by the instance of its defining block with the counters shared with `b`.
+fn vc_resolve(st: VcUnrollState, defs: VcDefs, b: u64, key: i64, v: i64) -> i64 {
+    let def_blk: Vec<i64> = defs.blk;
+    let def_pos: Vec<i64> = defs.pos;
+    if v < 0 || v >= def_blk.len() as i64 || def_blk[v as u64] < 0 {
+        st.bad = 1;
+        return -1;
+    }
+    let db: u64 = def_blk[v as u64] as u64;
+    let li: VcLoopInfo = st.li;
+    let dl: i64 = vc_chain_len(li, db);
+    let here: i64 = vc_chain_len(li, b);
+    if dl > here || vc_chain_common(li, db, b) < dl {
+        st.bad = 1;
+        return -1;
+    }
+    let p: i64 = key / vc_sat_pow(st.r, here - dl, 1000000000);
+    let inst_no: i64 = st.slots[(st.slot_off[db] + p) as u64];
+    if inst_no < 0 {
+        st.bad = 1;
+        return -1;
+    }
+    st.base[inst_no as u64] + def_pos[v as u64]
+}
+
+// New block id for the successor `k` of instance `n`: the sink for a cut edge.
+fn vc_target_block(st: VcUnrollState, n: u64, k: u64, term: IrInst, sink_id: i64) -> i64 {
+    let t: i64 = st.isucc[n * 2 + k];
+    if t == -2 {
+        if !st.sink_used {
+            st.sink_used = true;
+            st.sink_start = term.ostart;
+            st.sink_len = term.olen;
+        }
+        return sink_id;
+    }
+    if t < 0 {
+        st.bad = 1;
+    }
+    t
+}
+
+// New id of the Phi an Upsilon of instance `n` feeds: the Phi's copy in the
+// successor instance holding the Phi's block; -2 when that edge was cut (the
+// Upsilon is dropped).
+fn vc_upsilon_phi(st: VcUnrollState, defs: VcDefs, n: u64, orig: IrInst) -> i64 {
+    let def_blk: Vec<i64> = defs.blk;
+    let def_pos: Vec<i64> = defs.pos;
+    let p: i64 = orig.dv;
+    if p < 0 || p >= def_blk.len() as i64 || def_blk[p as u64] < 0 {
+        st.bad = 1;
+        return -1;
+    }
+    let b: u64 = st.iblk[n] as u64;
+    let m: i64 = def_blk[p as u64];
+    let mut k: u64 = 0;
+    while k < 2 {
+        if st.succ[b * 2 + k] == m {
+            let t: i64 = st.isucc[n * 2 + k];
+            if t == -2 {
+                return -2;
+            }
+            if t < 0 {
+                st.bad = 1;
+                return -1;
+            }
+            return st.base[t as u64] + def_pos[p as u64];
+        }
+        k = k + 1;
+    }
+    st.bad = 1;
+    -1
+}
+
+fn vc_clone_inst(orig: IrInst, new_id: i64, args: Vec<i64>, dv: i64, dv2: i64) -> IrInst {
+    IrInst {
+        id: new_id,
+        op: orig.op,
+        ty: orig.ty,
+        args: args,
+        dk: orig.dk,
+        dv: dv,
+        dv2: dv2,
+        ds: orig.ds,
+        ostart: orig.ostart,
+        olen: orig.olen,
+        rgn: orig.rgn,
+    }
+}
+
+// The clone of instruction `p` of instance `n`, or a template with id -2 when
+// the instruction is dropped (an Upsilon along a cut edge).
+fn vc_clone_at(st: VcUnrollState, defs: VcDefs, f: IrFunction, n: u64, p: u64, sink_id: i64) -> IrInst {
+    let b: u64 = st.iblk[n] as u64;
+    let key: i64 = st.ikey[n];
+    let blk: IrBlock = f.blocks[b];
+    let orig: IrInst = blk.insts[p];
+    let mut new_id: i64 = -1;
+    if orig.id >= 0 {
+        new_id = st.base[n] + p as i64;
+    }
+    let args: Vec<i64> = Vec::new();
+    let mut ai: u64 = 0;
+    while ai < orig.args.len() {
+        args.push(vc_resolve(st, defs, b, key, orig.args[ai]));
+        ai = ai + 1;
+    }
+    let mut dv: i64 = orig.dv;
+    let mut dv2: i64 = orig.dv2;
+    if orig.op == IOP_UPSILON() {
+        dv = vc_upsilon_phi(st, defs, n, orig);
+        if dv == -2 {
+            new_id = -2;
+        }
+    } else if orig.op == IOP_BRANCH() && orig.dk == IDATA_BRANCH_TARGETS() {
+        dv = vc_target_block(st, n, 0, orig, sink_id);
+        dv2 = vc_target_block(st, n, 1, orig, sink_id);
+    } else if orig.op == IOP_JUMP() && orig.dk == IDATA_JUMP_TARGET() {
+        dv = vc_target_block(st, n, 0, orig, sink_id);
+    }
+    vc_clone_inst(orig, new_id, args, dv, dv2)
+}
+
+fn vc_unrolled_shell(f: IrFunction) -> IrFunction {
+    let g: IrFunction = ir_function_new(f.id, f.name, f.return_ty, f.effects, f.source_file);
+    let mut i: u64 = 0;
+    while i < f.params.len() {
+        g.params.push(f.params[i]);
+        i = i + 1;
+    }
+    i = 0;
+    while i < f.param_names.len() {
+        g.param_names.push(f.param_names[i]);
+        i = i + 1;
+    }
+    i = 0;
+    while i < f.vows.len() {
+        g.vows.push(f.vows[i]);
+        i = i + 1;
+    }
+    g
+}
+
+fn vc_unroll_status(f: IrFunction, status: i64, looped: bool) -> VcUnrolled {
+    VcUnrolled { f: f, status: status, looped: looped }
+}
+
+// Unrolls every loop of `f` (already accepted by `vc_loop_shape_detail`) to
+// `bound` back edges; more than `cap` unrolled instructions is `TOO_LARGE`. A
+// function without a loop is returned as is.
+fn vc_unroll_capped(f: IrFunction, bound: i64, cap: i64) -> VcUnrolled {
+    let nb: u64 = f.blocks.len();
+    let id_to_idx: Vec<i64> = dom_block_id_table(f);
+    let succ: Vec<i64> = dom_successors(f, id_to_idx);
+    let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
+    let li: VcLoopInfo = vc_loop_analysis(nb, succ, rpo);
+    if li.irreducible || nb == 0 || bound < 0 || li.loop_of_header[0] >= 0 {
+        return vc_unroll_status(f, VC_UNROLL_MALFORMED(), true);
+    }
+    if li.n_loops == 0 {
+        return vc_unroll_status(f, VC_UNROLL_OK(), false);
+    }
+    let r: i64 = bound + 1;
+    if vc_unrolled_cost(f, li, rpo, r, cap) > cap {
+        return vc_unroll_status(f, VC_UNROLL_TOO_LARGE(), true);
+    }
+    let slot_off: Vec<i64> = Vec::new();
+    let mut total: i64 = 0;
+    let mut b: u64 = 0;
+    while b < nb {
+        slot_off.push(total);
+        if rpo[b] >= 0 {
+            total = total + vc_sat_pow(r, vc_chain_len(li, b), cap);
+        }
+        b = b + 1;
+    }
+    let st: VcUnrollState = VcUnrollState {
+        li: li,
+        r: r,
+        succ: succ,
+        slot_off: slot_off,
+        slots: dom_fill(total as u64, -1),
+        iblk: Vec::new(),
+        ikey: Vec::new(),
+        isucc: Vec::new(),
+        base: Vec::new(),
+        bad: 0,
+        sink_used: false,
+        sink_start: 0,
+        sink_len: 0,
+    };
+    vc_discover(st, bound);
+
+    let n_inst: u64 = st.iblk.len();
+    let mut n_ids: i64 = 0;
+    let mut n: u64 = 0;
+    while n < n_inst {
+        st.base.push(n_ids);
+        let src: IrBlock = f.blocks[st.iblk[n] as u64];
+        n_ids = n_ids + src.insts.len() as i64;
+        n = n + 1;
+    }
+    let defs: VcDefs = vc_def_table(f, rpo, (dom_max_inst_id(f) + 1) as u64);
+    let g: IrFunction = vc_unrolled_shell(f);
+    let sink_id: i64 = n_inst as i64;
+    n = 0;
+    while n < n_inst {
+        let src: IrBlock = f.blocks[st.iblk[n] as u64];
+        let out: IrBlock = ir_block_new(n as i64);
+        let mut p: u64 = 0;
+        while p < src.insts.len() {
+            let c: IrInst = vc_clone_at(st, defs, f, n, p, sink_id);
+            if c.id != -2 {
+                out.insts.push(c);
+            }
+            p = p + 1;
+        }
+        g.blocks.push(out);
+        n = n + 1;
+    }
+    if st.sink_used {
+        let sink: IrBlock = ir_block_new(sink_id);
+        let marker: IrInst = ir_inst_new(n_ids, IOP_UNREACHABLE(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, VC_INTERNAL_UNWIND_SINK());
+        marker.ostart = st.sink_start;
+        marker.olen = st.sink_len;
+        sink.insts.push(marker);
+        g.blocks.push(sink);
+    }
+    if st.bad != 0 {
+        return vc_unroll_status(f, VC_UNROLL_MALFORMED(), true);
+    }
+    vc_unroll_status(g, VC_UNROLL_OK(), true)
+}
+
+fn vc_unroll(f: IrFunction, bound: i64) -> VcUnrolled {
+    vc_unroll_capped(f, bound, VC_UNWIND_INST_CAP())
+}
