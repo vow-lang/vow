@@ -1,0 +1,25 @@
+// TEST: category invariant
+// A literal-bound loop with checked arithmetic and no `requires`: every
+// iteration copy folds to constants, so every claim is decided without the
+// solver and the unwinding assertion holds at bound 32.
+module LoopLiteralBound32
+
+fn tally() -> u64 vow {
+  ensures: result == 528
+} {
+  let mut sum: u64 = 0;
+  let mut i: u64 = 0;
+  while i < 32 vow {
+    invariant: i <= 32,
+    invariant: sum <= 528
+  } {
+    i = i + 1;
+    sum = sum +! i;
+  }
+  sum
+}
+
+fn main() -> i32 [io] {
+  print_u64(tally());
+  0
+}

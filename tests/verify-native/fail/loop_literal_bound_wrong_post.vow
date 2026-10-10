@@ -1,0 +1,26 @@
+// TEST: category invariant
+// TEST: counterexample-fn tally
+// TEST: counterexample-blame Callee
+// The loop folds to the constant 528, which the postcondition contradicts: the
+// claim is decided false and must still reach the solver as a counterexample,
+// never be dropped as decided.
+module LoopLiteralBoundWrongPost
+
+fn tally() -> u64 vow {
+  ensures: result == 527
+} {
+  let mut sum: u64 = 0;
+  let mut i: u64 = 0;
+  while i < 32 vow {
+    invariant: i <= 32
+  } {
+    i = i + 1;
+    sum = sum + i;
+  }
+  sum
+}
+
+fn main() -> i32 [io] {
+  print_u64(tally());
+  0
+}
