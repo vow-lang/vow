@@ -408,8 +408,7 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     } else if vc_is_havoc(inst) {
         let name: String = String::from("h");
         name.push_str(i64_to_string(inst.id));
-        vc_script_declare_const(cs.header, name, vc_ty_sort(inst.ty));
-        vc_define(w, inst, vc_tm_var(cs.arena, name));
+        vc_define(w, inst, vc_agg_declare(cs.arena, cs.header, name, vc_ty_sort(inst.ty)));
     } else if vc_is_unwrap_abort(inst) {
         vc_guard(cs, VC_CLAIM_UNWRAP_NONE(), VC_LABEL_UNWRAP_NONE(), pc, vc_tm_bool_const(cs.arena, false), inst);
     } else if vc_is_unwind_sink(inst) {

@@ -7,7 +7,6 @@ use vc_solver
 use vc_ops
 use vc_gate
 use vc_inline
-use ir_dominance
 use vc_cfg
 use vc_loops
 use vc_exec
@@ -112,17 +111,6 @@ fn vc_has_site(sites: Vec<ParsedArithSite>, site: ParsedArithSite) -> bool {
     false
 }
 
-fn vc_has_kind(kinds: Vec<i64>, kind: i64) -> bool {
-    let mut i: u64 = 0;
-    while i < kinds.len() {
-        if kinds[i] == kind {
-            return true;
-        }
-        i = i + 1;
-    }
-    false
-}
-
 struct VcRound {
     result: VerifyResult,
     ended: bool,
@@ -162,8 +150,8 @@ fn vc_note_soft_sat(f: IrFunction, fr: VcFrames, cs: VcClaims, k: u64, sites: Ve
 // the reachable soft aborts. Returns the verdict that ends the check (any
 // outcome but `unsat`/soft `sat`/open unwinding), or `proven` with `open` set
 // when only the unwinding claim was `sat`. The solver is located when the first
-// claim that needs it comes up. `soft` tells whether `g` has a soft claim at
-// all.
+// claim that needs it comes up. `soft` tells whether `g` has a soft claim, and
+// is meaningful only for a round that ran every claim.
 fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String) -> VcRound [io, read, write] {
     let cs: VcClaims = vc_claims_mode(g, fr, f.vows.len() == 0);
     if cs.kinds.len() == 0 {
@@ -172,9 +160,12 @@ fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, sites: Vec<ParsedAri
     let mut bin: String = String::from("");
     let mut located: bool = false;
     let mut open: bool = false;
-    let soft: bool = vc_has_kind(cs.kinds, VC_CLAIM_ARITH());
+    let mut soft: bool = false;
     let mut k: u64 = 0;
     while k < cs.kinds.len() {
+        if cs.kinds[k] == VC_CLAIM_ARITH() {
+            soft = true;
+        }
         if vc_claim_is_static_sat(cs, k) {
             if vc_note_soft_sat(f, fr, cs, k, sites) { open = true; }
         } else {
@@ -218,9 +209,6 @@ fn vc_induction_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, started
         return none;
     }
     let g: IrFunction = c.f;
-    if vc_unrolled_detail(g, vc_ty_table(g)).len() > 0 || ir_non_dominating_read(g).len() > 0 {
-        return none;
-    }
     let sites: Vec<ParsedArithSite> = Vec::new();
     let r: VcRound = vc_run_round(f, g, fr, sites, started, timeout_ms, scratch);
     VcInduction { proves: !r.ended && !r.open, soft: r.soft }
@@ -230,6 +218,15 @@ fn vc_proven_with(sites: Vec<ParsedArithSite>) -> VcOutcome {
     let proven: VcOutcome = vc_bare_outcome(vc_proven_result());
     proven.sites = sites;
     proven
+}
+
+// The end of the bounded schedule with the last round open: the inductive proof
+// stands when there is one, else the answer is `unknown` for `reason`.
+fn vc_open_outcome(ind: VcInduction, sites: Vec<ParsedArithSite>, reason: String) -> VcOutcome {
+    if ind.proves {
+        return vc_proven_with(sites);
+    }
+    vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), reason))
 }
 
 // The sites of an incomplete round (it ended undecided part way) plus those the
@@ -272,10 +269,7 @@ fn vc_verify_function(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: Stri
         let bound: i64 = bounds[round];
         let u: VcUnrolled = vc_unroll(closed, bound);
         if u.status == VC_UNROLL_TOO_LARGE() {
-            if ind.proves {
-                return vc_proven_with(last_sites);
-            }
-            return vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_unwinding_budget_reason(bound)));
+            return vc_open_outcome(ind, last_sites, vc_unwinding_budget_reason(bound));
         }
         let g: IrFunction = u.f;
         if u.status != VC_UNROLL_OK() || (u.looped && vc_unrolled_detail(g, vc_ty_table(g)).len() > 0) {
@@ -294,10 +288,7 @@ fn vc_verify_function(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: Stri
         }
         last_sites = sites;
         if round + 1 == bounds.len() {
-            if ind.proves {
-                return vc_proven_with(last_sites);
-            }
-            return vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_unwinding_reason(bound)));
+            return vc_open_outcome(ind, last_sites, vc_unwinding_reason(bound));
         }
         round = round + 1;
     }

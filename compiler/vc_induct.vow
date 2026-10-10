@@ -3,7 +3,10 @@ module VcInduct
 use ir
 use ir_dominance
 use vc_ops
+use vc_gate
+use vc_cfg
 use vc_loops
+use vc_inline
 
 // Loop cut for inductive verification from user `invariant` clauses. Every loop
 // of a loop-closed function is replaced by three pieces, giving an acyclic
@@ -27,8 +30,9 @@ use vc_loops
 //
 // A loop the cut cannot treat exactly (a loop without an invariant, a pointer
 // carried by a header Phi, an irregular header) makes the whole function `NA`:
-// the caller keeps the bounded verdict. An accepted cut is only a transformation:
-// it never produces a verdict itself.
+// the caller keeps the bounded verdict, as it does for a cut the executor cannot
+// walk. An accepted cut is only a transformation: it never produces a verdict
+// itself.
 
 fn VC_INDUCT_OK() -> i64 { 0 }
 fn VC_INDUCT_NA() -> i64 { 1 }
@@ -68,7 +72,6 @@ fn vc_induct_innermost(li: VcLoopInfo, b: u64) -> i64 {
 // form a dominator chain or there is none.
 fn vc_induct_last_block(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, j: i64) -> i64 {
     let nb: u64 = f.blocks.len();
-    let mut found: i64 = -1;
     let mut b: u64 = 0;
     while b < nb {
         let blk: IrBlock = f.blocks[b];
@@ -85,15 +88,12 @@ fn vc_induct_last_block(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, j: i64) ->
                 c = c + 1;
             }
             if all {
-                if found >= 0 {
-                    return -1;
-                }
-                found = b as i64;
+                return b as i64;
             }
         }
         b = b + 1;
     }
-    found
+    -1
 }
 
 // Marks in `owner` every block that reaches `last` without passing the header
@@ -171,14 +171,13 @@ struct VcRegions {
     ok: bool,
     owner: Vec<i64>,
     last: Vec<i64>,
-    cut: Vec<i64>,
 }
 
 // Invariant region of every loop. Not `ok` unless every loop has one, regions
 // are disjoint, and no `VowInv` of the function lies outside them.
 fn vc_induct_regions(f: IrFunction, li: VcLoopInfo, succ: Vec<i64>, rpo: Vec<i64>) -> VcRegions {
     let nb: u64 = f.blocks.len();
-    let rg: VcRegions = VcRegions { ok: false, owner: dom_fill(nb, -1), last: Vec::new(), cut: Vec::new() };
+    let rg: VcRegions = VcRegions { ok: false, owner: dom_fill(nb, -1), last: Vec::new() };
     let mut j: i64 = 0;
     while j < li.n_loops {
         let h: i64 = li.headers[j as u64];
@@ -189,9 +188,7 @@ fn vc_induct_regions(f: IrFunction, li: VcLoopInfo, succ: Vec<i64>, rpo: Vec<i64
         if !vc_induct_region_closed(li, succ, rg.owner, j, h, last) {
             return rg;
         }
-        let blk: IrBlock = f.blocks[last as u64];
         rg.last.push(last);
-        rg.cut.push(vc_induct_last_inv(blk));
         j = j + 1;
     }
     let mut total: i64 = 0;
@@ -234,10 +231,8 @@ struct VcCut {
     f: IrFunction,
     li: VcLoopInfo,
     id_to_idx: Vec<i64>,
-    rpo: Vec<i64>,
     owner: Vec<i64>,
     last: Vec<i64>,
-    cut: Vec<i64>,
     remap: Vec<i64>,
     blk_new: Vec<i64>,
     phi_loop: Vec<i64>,
@@ -255,7 +250,7 @@ struct VcCut {
 fn vc_induct_keep(st: VcCut, j: i64, b: u64) -> u64 {
     let blk: IrBlock = st.f.blocks[b];
     if st.last[j as u64] == b as i64 {
-        return (st.cut[j as u64] + 1) as u64;
+        return (vc_induct_last_inv(blk) + 1) as u64;
     }
     blk.insts.len()
 }
@@ -275,17 +270,7 @@ fn vc_induct_copy_inst(st: VcCut, inst: IrInst) -> IrInst {
     if inst.id >= 0 {
         new_id = st.remap[inst.id as u64];
     }
-    let args: Vec<i64> = Vec::new();
-    let mut ai: u64 = 0;
-    while ai < inst.args.len() {
-        let a: i64 = inst.args[ai];
-        if a >= 0 && (a as u64) < st.remap.len() && st.remap[a as u64] >= 0 {
-            args.push(st.remap[a as u64]);
-        } else {
-            args.push(a);
-        }
-        ai = ai + 1;
-    }
+    let args: Vec<i64> = vc_map_args(inst, st.remap, 0);
     let mut dv: i64 = inst.dv;
     let mut dv2: i64 = inst.dv2;
     if inst.op == IOP_UPSILON() {
@@ -405,19 +390,11 @@ fn vc_induct_copy(st: VcCut, j: i64, back: bool) {
 
 // `inst` with another opcode, no operands and no frame marker.
 fn vc_induct_retag(inst: IrInst, op: i64, dk: i64, ds: String) -> IrInst {
-    IrInst {
-        id: inst.id,
-        op: op,
-        ty: inst.ty,
-        args: Vec::new(),
-        dk: dk,
-        dv: 0,
-        dv2: 0,
-        ds: ds,
-        ostart: inst.ostart,
-        olen: inst.olen,
-        rgn: inst.rgn,
-    }
+    let out: IrInst = vc_clone_inst(inst, inst.id, Vec::new(), 0, 0);
+    out.op = op;
+    out.dk = dk;
+    out.ds = ds;
+    out
 }
 
 // The unconstrained stand-in for a header Phi.
@@ -432,25 +409,10 @@ fn vc_induct_havoc(phi: IrInst) -> IrInst {
 // frame marker is cleared: an invariant of a spliced callee is a claim in the
 // copies and a plain assumption here.
 fn vc_induct_assume(inv: IrInst) -> IrInst {
-    IrInst {
-        id: inv.id,
-        op: IOP_VOW_REQ(),
-        ty: inv.ty,
-        args: inv.args,
-        dk: inv.dk,
-        dv: inv.dv,
-        dv2: inv.dv2,
-        ds: String::from(""),
-        ostart: inv.ostart,
-        olen: inv.olen,
-        rgn: inv.rgn,
-    }
-}
-
-// Whether `src` lies in the loop `t`: a back edge source or an edge inside it.
-fn vc_induct_in_loop(st: VcCut, t: i64, src: u64) -> bool {
-    let nb: u64 = st.f.blocks.len();
-    st.rpo[src] >= 0 && dom_dominates(st.li.nums, nb, st.li.headers[t as u64], src as i64)
+    let out: IrInst = vc_clone_inst(inv, inv.id, inv.args, inv.dv, inv.dv2);
+    out.op = IOP_VOW_REQ();
+    out.ds = String::from("");
+    out
 }
 
 // A branch or jump target that is a loop header, retargeted to that loop's entry
@@ -464,7 +426,7 @@ fn vc_induct_edge_target(st: VcCut, src: u64, id: i64) -> i64 {
     if t < 0 {
         return id;
     }
-    if vc_induct_in_loop(st, t, src) {
+    if vc_in_loop(st.li, src, t) {
         return st.back_head[t as u64];
     }
     st.ent_head[t as u64]
@@ -479,7 +441,7 @@ fn vc_induct_upsilon(st: VcCut, src: u64, inst: IrInst) -> IrInst {
     }
     let t: i64 = st.phi_loop[p as u64];
     let mut np: i64 = st.ent_phi[p as u64];
-    if vc_induct_in_loop(st, t, src) {
+    if vc_in_loop(st.li, src, t) {
         np = st.back_phi[p as u64];
     }
     if np < 0 {
@@ -550,10 +512,7 @@ fn vc_induct_cut(f: IrFunction) -> VcInduct {
     let succ: Vec<i64> = dom_successors(f, id_to_idx);
     let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
     let li: VcLoopInfo = vc_loop_analysis(nb, succ, rpo);
-    if li.irreducible || li.n_loops == 0 || li.loop_of_header[0] >= 0 || li.max_depth > VC_MAX_LOOP_DEPTH() {
-        return vc_induct_status(f, VC_INDUCT_NA());
-    }
-    if vc_loop_shape_detail(f, succ, rpo).len() > 0 || vc_induct_ptr_phi(f, li) {
+    if li.n_loops == 0 || vc_loop_shape_detail(f, succ, rpo).len() > 0 || vc_induct_ptr_phi(f, li) {
         return vc_induct_status(f, VC_INDUCT_NA());
     }
     let rg: VcRegions = vc_induct_regions(f, li, succ, rpo);
@@ -566,10 +525,8 @@ fn vc_induct_cut(f: IrFunction) -> VcInduct {
         f: f,
         li: li,
         id_to_idx: id_to_idx,
-        rpo: rpo,
         owner: rg.owner,
         last: rg.last,
-        cut: rg.cut,
         remap: dom_fill(n_ids, -1),
         blk_new: dom_fill(nb, -1),
         phi_loop: vc_induct_phi_loops(f, li, n_ids),
@@ -599,7 +556,7 @@ fn vc_induct_cut(f: IrFunction) -> VcInduct {
         g.blocks.push(st.clones[c]);
         c = c + 1;
     }
-    if st.bad {
+    if st.bad || vc_unrolled_detail(g, vc_ty_table(g)).len() > 0 || ir_non_dominating_read(g).len() > 0 {
         return vc_induct_status(f, VC_INDUCT_NA());
     }
     vc_induct_status(g, VC_INDUCT_OK())
