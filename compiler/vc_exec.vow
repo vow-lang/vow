@@ -39,10 +39,10 @@ use ir_dominance
 // claim "no run needs more iterations than the bound". It is a claim only and
 // assumes nothing afterwards: a counterexample means the bound was too small,
 // not that the function is wrong. A loop `invariant` is checked like an
-// `ensures` at every iteration copy of its header, and assumed nowhere. In the
-// inductive attempt (`vc_induct`) the loop is cut instead: a header Phi is a
-// havoc marker, a fresh unconstrained constant, and the invariant of the havoc
-// copy is a plain `requires`, an assumption.
+// `ensures` at every iteration copy of its header, and assumed nowhere in an
+// unrolled function. In the inductive attempt (`vc_induct`) the loop is cut
+// instead: a header Phi is a havoc marker, a fresh unconstrained constant, and
+// the invariant of the havoc copy is a plain `requires`, an assumption.
 //
 // A call has been spliced into its caller before this point (`vc_inline`), and
 // the clauses of the copy carry the frame they came from (`vc_frame_of`). In a

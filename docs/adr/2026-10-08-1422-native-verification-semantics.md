@@ -342,15 +342,19 @@ acyclic function.
   header visit and finds a real run. An invariant that is true but not
   inductive (too weak to give the postcondition, not preserved from an
   unreachable state), or violated only past the largest bound, is `unknown`.
-- **Order.** The inductive attempt runs before the bounded rounds and costs one
-  query set. When it proves a function that has no checked-arithmetic claim, the
-  function is `proven` without bounded unwinding, so an unbounded or nested loop
-  is cheap. When the function has such a claim, bounded unwinding still runs
-  first to find the abort sites, so every existing proof, counterexample and
-  `ArithOverflowReachable` set is unchanged; the induction proof is used where
-  the rounds end `unknown`: open at the largest bound, over the size budget, or
-  undecided (solver unknown, timeout). A bounded counterexample or a solver
-  error is never overturned.
+- **Order.** The inductive attempt always runs first and costs one query set.
+  When it proves a function that has no checked-arithmetic claim, the function is
+  `proven` without bounded unwinding, so an unbounded or nested loop is cheap.
+  When the function has such a claim, the bounded rounds also run, both to find
+  the abort sites and to supply the verdict: every proof, counterexample and
+  `ArithOverflowReachable` set they produce is unchanged, and the induction
+  proof is used only where they end `unknown`: open at the largest bound, over
+  the size budget, or undecided (solver unknown, timeout). A bounded
+  counterexample or a solver error is never overturned. This ordering cannot
+  change a verdict a bounded round reaches: an inductive proof holds for every
+  finite prefix, so it cannot coexist with a real counterexample. The attempt
+  shares `--timeout` with the rounds, so a bounded proof that finished just
+  under the budget can now run out of it.
 - **Warnings.** An inductive proof reports the abort sites of the last
   completed bounded round, which are the ones reachable within the unrolled
   prefix. A checked-arithmetic claim `sat` in the induction query is ignored: the
