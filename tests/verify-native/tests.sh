@@ -157,6 +157,29 @@ fn main() -> i32 [io] {
 }
 SRC
 
+LOOP_INV_CLAIMS="$TMP_ROOT/loop_inv.vow"
+cat > "$LOOP_INV_CLAIMS" <<'SRC'
+module LoopInv
+
+fn count(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == n
+} {
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_i64(count(1));
+  0
+}
+SRC
+
 CALL_CLAIMS="$TMP_ROOT/calls.vow"
 cat > "$CALL_CLAIMS" <<'SRC'
 module Calls
@@ -562,6 +585,31 @@ expect "wrong literal loop status" "$(field "$RUN_OUT" status)" "VerifyFailed"
 expect "wrong literal loop function" "$(field "$RUN_OUT" counterexamples.0.function)" "tally"
 if [ "$(queries)" -lt 1 ]; then fail "wrong literal loop: no query reached the solver"; fi
 no_leftovers "wrong literal loop"
+
+# a loop whose every loop carries an invariant is tried inductively before any
+# unrolling: with every query `unsat` the three claims of the cut function (the
+# invariant on entry, the invariant at the back edge and the ensures) are the
+# only queries, and the function is proven without a bounded round.
+run_native unsat "$LOOP_INV_CLAIMS"
+expect "invariant loop unsat status" "$(field "$RUN_OUT" status)" "Verified"
+expect "invariant loop unsat queries" "$(queries)" "3"
+no_leftovers "invariant loop unsat"
+
+# an undecided inductive query proves nothing: bounded unwinding runs and ends
+# on its own first undecided query.
+run_native unknown "$LOOP_INV_CLAIMS"
+expect "invariant loop unknown status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "invariant loop unknown verify_status" "$(field "$RUN_OUT" verify_status)" "unknown"
+expect "invariant loop unknown has no counterexample" "$(field "$RUN_OUT" counterexamples.0.function)" ""
+no_leftovers "invariant loop unknown"
+
+# a `sat` inductive query is never a counterexample (the havoc state may be
+# unreachable): the verdict comes from bounded unwinding, which names the
+# invariant's own vow id.
+run_native sat "$LOOP_INV_CLAIMS"
+expect "invariant loop sat status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "invariant loop sat violation" "$(field "$RUN_OUT" counterexamples.0.violation)" "invariant i <= n"
+no_leftovers "invariant loop sat"
 
 # branches: the query grows with the number of changed names, not with the
 # number of paths. N sequential (2^N paths) and N nested (N+1 paths) `if`s each

@@ -260,9 +260,11 @@ function into an acyclic one before symbolic execution.
   `--timeout`.
 - A failed hard claim inside the unrolled prefix is a real run and is `failed`
   at once, whatever the unwinding claim says. An unwinding claim that is still
-  `sat` at the largest bound is `unknown`, never `proven`.
-- `invariant` is a claim checked on every header visit and is not assumed. Using
-  it as an inductive hypothesis belongs to the k-induction work (#1419, #1420).
+  `sat` at the largest bound is `unknown`, never `proven`, unless invariant
+  induction closes the loops (addendum #1422).
+- `invariant` is a claim checked on every header visit and is not assumed by
+  bounded unwinding. Its inductive use is the addendum (#1422) below; automatic
+  k-induction for invariant-free loops is still open.
 - Soft arithmetic sites are collected per source site from the round that proves
   the function, so a loop body does not repeat its warning once per iteration.
 
@@ -310,3 +312,62 @@ executor still sees one acyclic function.
   failures") does not say yet; the wording is the spec rewrite's to widen.
 - The worker's result wire tag is `VOWRES2`: the failing claim's call chain
   follows the arithmetic sites.
+
+## Addendum (#1422): invariant-based induction
+
+The first strategy of Rule 1 is implemented in `compiler/vc_induct.vow`. The
+implementation is an IR-to-IR cut, so the symbolic executor still walks one
+acyclic function.
+
+- **Obligations.** For every loop the cut yields three pieces. The *entry copy*
+  is the loop's invariant region (the header's Phis, the clause code and the
+  last `VowInv`) on the state the loop is entered with: the invariants are
+  claims there. The *header proper* is the original loop with each header Phi
+  replaced by an unconstrained constant of its type and each invariant of the
+  region by an assumption; its condition, body and exit are untouched, so the
+  claims of the body and of everything after the loop (including `ensures`) are
+  decided from an arbitrary state that satisfies the invariant. The *back copy*
+  is the region again, fed by the back edges: the invariants are claims there
+  (preservation), and it ends in a marker that carries no claim. A `&&`/`||` in
+  a clause lowers to branches, so the region may span several blocks; the cut
+  copies the blocks that lead to the last `VowInv` and stops right after it.
+- **Eligibility.** Every loop of the function must have an `invariant`, no
+  header Phi may be a pointer, and every `invariant` must lie in its loop's
+  region. Otherwise the cut does not apply and bounded unwinding decides alone,
+  as before. A loop without an invariant is never cut with an implicit `true`.
+- **Verdicts.** Induction only ever adds `proven`. A query that is not `unsat`
+  is "not proved inductively", never `failed` (Rule 1: a step-case failure is
+  `unknown`), because its counterexample may be a state no run reaches. A wrong
+  invariant is still `failed`: bounded unwinding checks the invariant on every
+  header visit and finds a real run. An invariant that is true but not
+  inductive (too weak to give the postcondition, not preserved from an
+  unreachable state), or violated only past the largest bound, is `unknown`.
+- **Order.** The inductive attempt runs before the bounded rounds and costs one
+  query set. When it proves a function that has no checked-arithmetic claim, the
+  function is `proven` without bounded unwinding, so an unbounded or nested loop
+  is cheap. When the function has such a claim, bounded unwinding still runs
+  first to find the abort sites, so every existing proof, counterexample and
+  `ArithOverflowReachable` set is unchanged; the induction proof is used where
+  the rounds end `unknown`: open at the largest bound, over the size budget, or
+  undecided (solver unknown, timeout). A bounded counterexample or a solver
+  error is never overturned.
+- **Warnings.** An inductive proof reports the abort sites of the last
+  completed bounded round, which are the ones reachable within the unrolled
+  prefix. A checked-arithmetic claim `sat` in the induction query is ignored: the
+  havoc state may be unreachable. A function proven only inductively can
+  therefore have reachable aborts that no warning names.
+- **Partial correctness.** A proof covers terminating runs: the exit obligation
+  is "from the invariant and the negated condition", so a loop that never exits
+  satisfies any `ensures` vacuously (`while true vow { invariant: true }` is
+  `proven`; bounded unwinding alone says `unknown` for it, and so does ESBMC).
+  This is a deliberate verdict change, pinned by
+  `tests/verify-native/pass/loop_nonterminating_partial_correctness.vow`.
+- **Inlined callees.** A callee's loop is cut like the target's. Its invariants
+  are claims blamed on the callee in the entry and back copies and a plain
+  assumption in the havoc copy (the frame marker is cleared there).
+- **Verdict impact.** Stronger, as Rule 1 and Rule 2 allow: a loop that bounded
+  unwinding leaves `unknown` (a parameter bound, a literal bound above 64) is
+  `proven` given an inductive invariant. `tests/verify-native/unknown/loop_literal_100.vow`
+  carried an invariant and was `unknown`; it is `pass/loop_literal_100_invariant.vow`
+  now, and the `unknown/` fixture keeps the invariant-free loop. No ESBMC
+  `proven` becomes weaker.

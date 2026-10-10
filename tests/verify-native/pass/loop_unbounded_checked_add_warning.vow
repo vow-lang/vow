@@ -15,7 +15,7 @@ fn scaled(n: i64, x: i64) -> i64 vow {
     invariant: i >= 0,
     invariant: acc >= 0
   } {
-    acc = acc +! x;
+    acc = i +! x;
     i = i + 1;
   }
   acc

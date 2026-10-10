@@ -32,6 +32,16 @@ use vc_term
 // left of it. `scratch`, when not empty, is the directory for the query files.
 // The solver is looked up only when there is a claim to decide: a function
 // without obligations is proven without one.
+//
+// A function whose loops all carry an `invariant` is first tried inductively
+// (`vc_induct`): each loop is cut at its header, its variables are havoc'd and
+// the invariant is assumed there, so one query set covers every trip count.
+// All claims `unsat` is a proof; anything else says nothing, because a
+// counterexample may be a state no run reaches, so the bounded schedule above
+// decides. A proof with no checked-arithmetic claim ends the check. With one,
+// the bounded rounds still run, so the warnings are the aborts they find, and
+// the proof is used where they end `unknown` (open at the largest bound, over
+// the size budget, or undecided). It never changes a counterexample.
 
 // A verdict plus the reachable checked-arithmetic aborts found on the way. The
 // sites are meaningful only when the result is `proven`. A failure inside an
