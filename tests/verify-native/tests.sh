@@ -536,7 +536,10 @@ no_leftovers "loop sat"
 
 # a loop with a literal bound folds to constants: every claim, the unwinding
 # claim of the rounds that stop short and the invariants of the covering round
-# included, is decided by the simplifier, so not one query reaches the solver.
+# included, is decided by the simplifier, so no bounded round spawns a query. The
+# solver answers `unknown` so the inductive attempt (the loop has an invariant)
+# cannot prove the function itself and leave the bounded rounds unexercised: its
+# first claim is the one query.
 LITERAL_LOOP="$TMP_ROOT/literal_loop.vow"
 cat > "$LITERAL_LOOP" <<'SRC'
 module LiteralLoop
@@ -560,21 +563,23 @@ fn main() -> i32 [io] {
   0
 }
 SRC
-run_native unsat "$LITERAL_LOOP"
+run_native unknown "$LITERAL_LOOP"
 expect "literal loop status" "$(field "$RUN_OUT" status)" "Verified"
-expect "literal loop spawns nothing" "$(queries)" "0"
+expect "literal loop bounded rounds spawn nothing" "$(queries)" "1"
 no_leftovers "literal loop"
 
 # the same loop with a `requires` keeps its unwinding claim for the solver: a
 # contradictory assumption would make it `unsat`, which only the solver can tell.
+# With `unknown` the inductive attempt and the unwinding claim are one query each.
 GUARDED_LOOP="$TMP_ROOT/guarded_loop.vow"
 sed -e 's/fn tally() -> u64 vow {/fn tally(n: u64) -> u64 vow {/' \
     -e 's/  ensures: result == 36/  requires: n > 0,\n  ensures: result == 36/' \
     -e 's/tally());/tally(1));/' \
     -e 's/module LiteralLoop/module GuardedLoop/' "$LITERAL_LOOP" > "$GUARDED_LOOP"
-run_native unsat "$GUARDED_LOOP"
-expect "guarded loop status" "$(field "$RUN_OUT" status)" "Verified"
-if [ "$(queries)" -lt 1 ]; then fail "guarded loop: the unwinding claim never reached the solver"; fi
+run_native unknown "$GUARDED_LOOP"
+expect "guarded loop status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "guarded loop verify_status" "$(field "$RUN_OUT" verify_status)" "unknown"
+expect "guarded loop unwinding claim reaches the solver" "$(queries)" "2"
 no_leftovers "guarded loop"
 
 # a decided-false claim is not dropped: the counterexample needs the solver.

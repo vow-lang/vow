@@ -264,14 +264,15 @@ fn check_and_region() -> i64 {
     0
 }
 
-// The executor reads the cut function as claims only: one per copy of the
-// invariant, no unwinding claim, and the havoc constant is not a model input.
+// The executor reads the cut function as claims only: no unwinding claim, and
+// the havoc constant is not a model input. The invariant's entry copy folds to
+// `0 < 8`, which the simplifier decides, so only the back-edge copy is left.
 fn check_claims() -> i64 {
     let c: VcInduct = vc_induct_cut(count_up());
     if c.status != VC_INDUCT_OK() { return 1; }
     let cs: VcClaims = vc_claims(c.f);
-    if cs.kinds.len() != 2 { return 2; }
-    if cs.kinds[0] != VC_CLAIM_ENSURES() || cs.kinds[1] != VC_CLAIM_ENSURES() { return 3; }
+    if cs.kinds.len() != 1 { return 2; }
+    if cs.kinds[0] != VC_CLAIM_ENSURES() { return 3; }
     if cs.model_names.len() != 0 { return 4; }
     0
 }
