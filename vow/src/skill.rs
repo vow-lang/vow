@@ -1433,6 +1433,15 @@ Use this skill when writing, compiling, debugging, or verifying Vow programs.
 Keep the workflow tight: run the compiler, read the structured JSON, fix the
 program or contract, and repeat until the result is `Verified`.
 
+## Do nots
+
+- Do not weaken, cap, or distort a contract to make verification pass; fix the code or report that the proof is out of reach.
+- Do not add verifier-motivated bounds (`n <= 10`, length or capacity caps) to `requires`; keep only real domain constraints and use checked operators (`+!`) for overflow.
+- Do not use `--no-verify` to get past a real verification failure; it only skips the proof (status `Unverified`).
+- Do not report a program as verified unless `status` is `Verified`; `Unverified` and `Skipped` are not success.
+- Do not invent CLI flags, JSON fields, syntax, or builtins; check `--help` and the reference files first.
+- Do not scrape terminal prose; parse the JSON object on stdout (`status`, `diagnostics`, `counterexamples`) and use `--human` only for people.
+
 ## Installed toolchain (live)
 
 !`(command -v vow >/dev/null 2>&1 && vow --help 2>/dev/null | head -200) || (command -v build/vowc >/dev/null 2>&1 && build/vowc --help 2>/dev/null | head -200) || echo '(vow toolchain not found on PATH; run scripts/bootstrap.sh to build build/vowc)'`
@@ -15323,6 +15332,9 @@ mod tests {
             !contents.contains("```json"),
             "SKILL.md entrypoint should link to schemas, not inline them"
         );
+        let do_nots = contents.find("## Do nots").expect("Do nots section");
+        let toolchain = contents.find("## Installed toolchain").unwrap();
+        assert!(do_nots < toolchain);
 
         let grammar = std::fs::read_to_string(skill_dir.join("reference/grammar.md")).unwrap();
         assert!(grammar.contains("# Vow Grammar Reference"));

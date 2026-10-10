@@ -199,5 +199,55 @@ class VowPayloadEmissionTest(unittest.TestCase):
         self.assertLess(statements, source_lines)
 
 
+class SkillDoNotsTest(unittest.TestCase):
+    def _section(self) -> str:
+        entry = generate_help.build_skill_entrypoint()
+        start = entry.index("## Do nots")
+        end = entry.index("\n## ", start + 1)
+        return entry[start:end]
+
+    def test_section_sits_between_intro_and_live_toolchain(self):
+        entry = generate_help.build_skill_entrypoint()
+        self.assertIn("## Do nots", entry)
+        self.assertLess(entry.index("# Vow"), entry.index("## Do nots"))
+        self.assertLess(
+            entry.index("## Do nots"), entry.index("## Installed toolchain (live)")
+        )
+
+    def test_section_covers_each_agent_bug_class(self):
+        section = self._section()
+        for needle in (
+            "contract",
+            "requires",
+            "--no-verify",
+            "Verified",
+            "Unverified",
+            "--help",
+            "stdout",
+            "--human",
+        ):
+            self.assertIn(needle, section)
+
+    def test_every_rule_is_a_do_not_bullet(self):
+        bullets = [ln for ln in self._section().splitlines() if ln.startswith("- ")]
+        self.assertGreaterEqual(len(bullets), 5)
+        for bullet in bullets:
+            self.assertTrue(bullet.startswith("- Do not "), bullet)
+
+    def test_section_names_only_flags_the_cli_spec_documents(self):
+        cli = (SPEC / "cli.md").read_text()
+        flags = set(re.findall(r"--[a-z][a-z-]*", self._section()))
+        self.assertTrue(flags)
+        for flag in flags:
+            self.assertIn(flag, cli)
+
+    def test_section_is_safe_for_generated_payloads(self):
+        section = self._section()
+        self.assertTrue(section.isascii())
+        for forbidden in ('"', "\\", '"##'):
+            self.assertNotIn(forbidden, section)
+        self.assertEqual("".join(_literals(_emit(section))), _expected(section))
+
+
 if __name__ == "__main__":
     unittest.main()
