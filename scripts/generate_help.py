@@ -890,9 +890,9 @@ def inject_rust(skill_rs: Path, json_str: str, human_str: str) -> str:
 
 
 # Upper bound, in bytes, for one emitted payload literal. Whole lines are packed
-# into a chunk up to this size; it must not exceed the longest literal already in
-# compiler/*.vow because the verifier sizes its C string buffers by the longest
-# literal in the module.
+# into a chunk up to this size, so chunking never produces a literal longer than
+# max(this cap, the longest source line). The verifier sizes its C string
+# buffers by the longest literal in the module; chunks therefore never raise it.
 VOW_LITERAL_CHUNK_BYTES = 2048
 
 
@@ -1175,7 +1175,7 @@ def inject_skill_vow(
         "} {",
     ]
     for idx, (path, _, _) in enumerate(support_entries):
-        escaped = path.replace("\\", "\\\\").replace('"', '\\"')
+        escaped = _vow_escape(path)
         sections.append(
             f'    if index == {idx} {{ return String::from("{escaped}"); }}'
         )

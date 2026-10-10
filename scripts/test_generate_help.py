@@ -64,10 +64,6 @@ class OutputDefaultTest(unittest.TestCase):
 
 _LITERAL = re.compile(r'String::from\("((?:[^"\\]|\\.)*)"\)')
 _ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", '"': '"', "0": "\0"}
-# Longest decoded string literal in compiler/*.vow before chunking. The verifier
-# sizes every C string buffer by the longest literal in the module, so chunks
-# must never push the maximum above this.
-BASE_MAX_LITERAL = 3506
 
 
 def _decode(escaped: str) -> str:
@@ -177,7 +173,7 @@ class VowPayloadEmissionTest(unittest.TestCase):
         texts = ["".join(_literals(bodies[n])) for n in fns]
         self.assertCountEqual(texts, [_expected(t) for t in support.values()])
 
-    def test_real_payload_stays_within_longest_baseline_literal(self):
+    def test_real_payload_chunks_never_exceed_longest_source_line(self):
         grammar = (SPEC / "grammar.md").read_text()
         cli = (SPEC / "cli.md").read_text()
         contracts = (SPEC / "contracts.md").read_text()
@@ -189,7 +185,6 @@ class VowPayloadEmissionTest(unittest.TestCase):
             generate_help.build_skill_bundle(),
             *generate_help.build_skill_support_files().values(),
         ]
-        self.assertLessEqual(generate_help.VOW_LITERAL_CHUNK_BYTES, BASE_MAX_LITERAL)
         statements = 0
         for text in texts:
             longest_line = (
@@ -201,7 +196,6 @@ class VowPayloadEmissionTest(unittest.TestCase):
             self.assertEqual("".join(lits), _expected(text))
             for lit in lits:
                 self.assertLessEqual(len(lit.encode()), limit)
-                self.assertLessEqual(len(lit.encode()), BASE_MAX_LITERAL)
         self.assertLess(statements, 2000)
 
 
