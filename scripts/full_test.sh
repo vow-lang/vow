@@ -1005,7 +1005,6 @@ print(cx[0].get('violation', '') if cx else '')
     if [ -n "$expected_replay" ]; then
         replay_errors=()
         for replay_side in rust self; do
-            replay_json=""
             if [ "$replay_side" = "rust" ]; then
                 replay_json=$($RUST verify --replay-cex --no-cache "$vow_file" 2>/dev/null) || true
             else

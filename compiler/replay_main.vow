@@ -3,6 +3,7 @@ module ReplayMain
 use lexer
 use ast
 use diag
+use mutants_patch
 
 // Entry-`main` handling for `--replay-cex` (#1550). A replay harness is the
 // entry file's own text plus a synthesized `fn main`, so a file that already
@@ -53,18 +54,11 @@ fn replay_rename_main(src: String, start: i64) -> String {
     let name: String = String::from("main");
     let nl: i64 = name.len() as i64;
     if p + nl > n { return String::from(""); }
-    let mut k: i64 = 0;
-    while k < nl {
-        if src.byte_at((p + k) as u64) != name.byte_at(k as u64) { return String::from(""); }
-        k = k + 1;
-    }
+    if src.substring(p as u64, (p + nl) as u64) != name { return String::from(""); }
     let end: i64 = p + nl;
     if end < n {
         let after: i64 = src.byte_at(end as u64);
         if after >= 0 && after <= 255 && is_ident_cont(after) { return String::from(""); }
     }
-    let out: String = src.substring(0, p as u64);
-    out.push_str(String::from("__replay_orig_main"));
-    out.push_str(src.substring(end as u64, src.len()));
-    out
+    splice(src, p as u64, nl as u64, String::from("__replay_orig_main"))
 }
