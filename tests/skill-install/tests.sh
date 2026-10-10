@@ -228,6 +228,14 @@ case "$out" in
     *) fail "skill print entrypoint does not mention skill print --bundle" ;;
 esac
 
+# the command the entrypoint advertises really prints the self-contained document
+run_in "$(new_project)" skill print --bundle
+expect "skill print --bundle exit" "$rc" "0"
+case "$out" in
+    *"# Vow Language Reference"*) ;;
+    *) fail "skill print --bundle does not print the self-contained document" ;;
+esac
+
 if [ "$failures" -ne 0 ]; then
     echo "$failures skill-install check(s) failed ($VOWC_KIND)" >&2
     exit 1
