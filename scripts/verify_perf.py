@@ -6,7 +6,7 @@ corpus (the non-stretch benchmark references, tests/verify*, and the float
 fixtures inside them): median of five runs per backend, cache off, same
 machine. Wall-clock is the process wall time; peak RSS is the larger of the
 sampled sum over the whole process tree (driver plus solver children) and the
-kernel's `ru_maxrss` for the run.
+kernel's `ru_maxrss` for the run when that is above the harness's own peak.
 
 The replacement gate (acceptance gate item 3) passes when, over the rows both
 backends handle identically (class `match` in scripts/verify_diff.py terms):
@@ -35,6 +35,7 @@ import math
 import os
 import platform
 import re
+import resource
 import shutil
 import signal
 import statistics
@@ -61,6 +62,8 @@ GEOMEAN_MAX = 1.0
 WORST_MAX = 1.25
 MIN_COMPARABLE = 1
 GATE_BENCHMARKS = 23
+
+NON_GATING_GROUPS = ("verify-stress",)
 
 ESBMC_PIN = "8.5"
 BACKENDS = verify_diff.BACKENDS
@@ -124,7 +127,9 @@ def metric_summary(comparable, key):
     }
 
 
-def evaluate_gate(rows, runs=RUNS):
+def evaluate_gate(rows, runs=RUNS, filtered=False):
+    all_rows = rows
+    rows = [r for r in all_rows if r["gating"]]
     comparable = [r for r in rows if r["comparable"]]
     metrics = {
         "wall": metric_summary(comparable, "ratio_wall"),
@@ -150,7 +155,7 @@ def evaluate_gate(rows, runs=RUNS):
     }
     return {
         "passed": all(criteria.values()),
-        "provisional": runs < RUNS,
+        "provisional": runs < RUNS or filtered,
         "criteria": criteria,
         "thresholds": {
             "geomean_max": GEOMEAN_MAX,
@@ -160,6 +165,7 @@ def evaluate_gate(rows, runs=RUNS):
         },
         "comparable": len(comparable),
         "excluded": len(rows) - len(comparable),
+        "non_gating": len(all_rows) - len(rows),
         "metrics": metrics,
         "timeouts": timeouts,
     }
@@ -321,7 +327,7 @@ def run_once(vowc, backend, path, jobs, timeout, watchdog_s):
     maxrss = measured["rusage"].ru_maxrss
     return {
         "wall_s": measured["wall_s"],
-        "peak_rss_kb": max(measured["tree"], maxrss),
+        "peak_rss_kb": max(measured["tree"], trusted_maxrss(maxrss)),
         "rss_self_kb": measured["self"],
         "rss_tree_kb": measured["tree"],
         "rss_maxrss_kb": maxrss,
@@ -329,6 +335,16 @@ def run_once(vowc, backend, path, jobs, timeout, watchdog_s):
         "timed_out": timed_out,
         "exit_code": proc.returncode,
     }
+
+
+def trusted_maxrss(maxrss_kb):
+    """`ru_maxrss` of a reaped child, or 0 when it cannot be told from the floor.
+
+    Linux seeds a child's high-water mark with its parent's at exec time, so a
+    value at or below the harness's own peak says nothing about the child.
+    """
+    floor = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return maxrss_kb if maxrss_kb > floor else 0
 
 
 def wait_measured(pid, watchdog_s, start):
@@ -350,6 +366,13 @@ def wait_measured(pid, watchdog_s, start):
     try:
         os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
         wall_s = time.monotonic() - start
+    except BaseException:
+        kill_group()
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
+        raise
     finally:
         watchdog.cancel()
         stop.set()
@@ -385,7 +408,9 @@ def summarise_backend(samples):
     }
 
 
-def excluded_reason(cls, esbmc, native):
+def excluded_reason(gating, cls, esbmc, native):
+    if not gating:
+        return "non-gating"
     if esbmc["unstable"] or native["unstable"]:
         return "unstable"
     if esbmc["timed_out"] or native["timed_out"]:
@@ -406,13 +431,15 @@ def build_row(fx, samples):
         verify_diff.cex_keys(native["counterexamples"]),
         native["verify_status"],
     )
-    excluded = excluded_reason(cls, esbmc, native)
+    gating = fx.group not in NON_GATING_GROUPS
+    excluded = excluded_reason(gating, cls, esbmc, native)
     row = {
         "fixture": f"{fx.group}/{fx.name}",
         "group": fx.group,
         "truth": fx.truth,
         "class": cls,
         "detail": detail,
+        "gating": gating,
         "comparable": excluded is None,
         "excluded": excluded,
         "ratio_wall": None,
@@ -501,7 +528,7 @@ def build_report(args, rows, corpus):
             "filter": args.filter,
         },
         "rows": rows,
-        "gate": {**evaluate_gate(rows, args.runs)},
+        "gate": evaluate_gate(rows, args.runs, args.filter is not None),
     }
 
 
@@ -589,6 +616,7 @@ def parse_args(argv):
         "--output", default=None, help="write the JSON report here instead of stdout"
     )
     args = ap.parse_args(argv)
+    args.vowc = os.path.abspath(args.vowc)
     if args.runs < 1:
         ap.error("--runs must be >= 1")
     if args.verify_jobs < 1:
@@ -629,8 +657,6 @@ def main(argv=None):
         return 2
 
     report = build_report(args, rows, corpus)
-    if args.filter is not None:
-        report["gate"]["provisional"] = True
     text = json.dumps(report, indent=2) + "\n"
     if args.output:
         with open(args.output, "w", encoding="utf-8") as fh:

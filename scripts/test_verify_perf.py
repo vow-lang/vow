@@ -17,6 +17,7 @@ def row(
     fixture="g/f",
     cls="match",
     comparable=True,
+    gating=True,
     wall=1.0,
     rss=1.0,
     native_timeout=False,
@@ -26,6 +27,7 @@ def row(
         "fixture": fixture,
         "class": cls,
         "comparable": comparable,
+        "gating": gating,
         "ratio_wall": wall,
         "ratio_rss": rss,
         "esbmc": {"timed_out": esbmc_timeout},
@@ -142,6 +144,27 @@ class GateTest(unittest.TestCase):
     def test_fewer_runs_than_the_gate_requires_is_provisional(self):
         self.assertFalse(self.gate([row()])["provisional"])
         self.assertTrue(self.gate([row()], runs=1)["provisional"])
+        self.assertTrue(vp.evaluate_gate([row()], filtered=True)["provisional"])
+
+    def test_non_gating_rows_never_enter_ratios_or_timeouts(self):
+        gate = self.gate(
+            [
+                row(),
+                row("verify-stress/s", gating=False, wall=9.0, rss=9.0),
+                row(
+                    "verify-stress/t",
+                    gating=False,
+                    comparable=False,
+                    wall=None,
+                    rss=None,
+                    native_timeout=True,
+                ),
+            ]
+        )
+        self.assertTrue(gate["passed"])
+        self.assertEqual(1, gate["comparable"])
+        self.assertEqual(2, gate["non_gating"])
+        self.assertEqual([], gate["timeouts"]["native_only"])
 
 
 class CorpusTest(unittest.TestCase):
@@ -268,9 +291,17 @@ class RunOnceTest(unittest.TestCase):
             "print(json.dumps({'status': 'Verified'}))\n"
         )
         self.assertGreaterEqual(got["peak_rss_kb"], 50 * 1024)
-        self.assertGreaterEqual(
-            got["peak_rss_kb"], max(got["rss_tree_kb"], got["rss_maxrss_kb"])
-        )
+        self.assertGreaterEqual(got["peak_rss_kb"], got["rss_tree_kb"])
+
+    def test_maxrss_at_or_below_the_harness_peak_is_not_trusted(self):
+        with mock.patch.object(
+            vp.resource,
+            "getrusage",
+            return_value=mock.Mock(ru_maxrss=40_000),
+        ):
+            self.assertEqual(0, vp.trusted_maxrss(40_000))
+            self.assertEqual(0, vp.trusted_maxrss(1_000))
+            self.assertEqual(40_001, vp.trusted_maxrss(40_001))
 
     def test_watchdog_kills_a_hung_run(self):
         got = self.run_stub("import time\ntime.sleep(60)\n", watchdog_s=0.5)
@@ -321,7 +352,7 @@ def sample(
 class FixtureTest(unittest.TestCase):
     FX = vp.Fixture("verify", "x", "tests/verify/x.vow", "Verified")
 
-    def measure(self, per_backend, runs=5):
+    def measure(self, per_backend, runs=5, fx=None):
         calls = []
 
         def fake(vowc, backend, path, jobs, timeout, watchdog_s):
@@ -332,7 +363,7 @@ class FixtureTest(unittest.TestCase):
             mock.patch.object(vp, "run_once", side_effect=fake),
             mock.patch.object(vp.verify_diff, "function_count", return_value=2),
         ):
-            result = vp.measure_fixture("vowc", self.FX, runs, 1, None)
+            result = vp.measure_fixture("vowc", fx or self.FX, runs, 1, None)
         return result, calls
 
     @staticmethod
@@ -360,6 +391,19 @@ class FixtureTest(unittest.TestCase):
         self.assertEqual(
             vp.DEFAULT_BUDGET_S * 2 + vp.verify_diff.WATCHDOG_SLACK, calls[0][1]
         )
+
+    def test_stress_rows_are_reported_but_non_gating(self):
+        stress = vp.Fixture("verify-stress", "s", "tests/verify-stress/s.vow", None)
+        got, _ = self.measure(
+            {
+                "esbmc": self.feed(*[sample()] * 6),
+                "native": self.feed(*[sample()] * 6),
+            },
+            fx=stress,
+        )
+        self.assertFalse(got["gating"])
+        self.assertFalse(got["comparable"])
+        self.assertEqual("non-gating", got["excluded"])
 
     def test_verdict_that_changes_between_runs_is_unstable(self):
         flaky = [sample()] * 3 + [sample("Skipped")] * 3

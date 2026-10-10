@@ -207,12 +207,15 @@ corpus drift and exits `2`):
 - `tests/verify-fail-multi/*/main.vow`;
 - `tests/verify-native/{pass,fail,skip,unknown}` (truth from the directory);
 - the float fixtures, which live inside the sets above;
-- `tests/verify-stress` only with `--include-stress` (non-gating, times out by design).
+- `tests/verify-stress` only with `--include-stress`. Its rows are reported with
+  `gating: false` and never enter the ratios or the timeout criterion (times out
+  by design).
 
 **Metrics.** Wall-clock is the process wall time. Peak RSS is the larger of the
 sampled sum over the whole process tree (driver plus solver children, 20 ms
 interval) and the kernel's `ru_maxrss` for the run; both raw numbers are in the
-report. One discarded warm-up run per backend precedes the timed runs, and the
+report. Linux seeds a child's `ru_maxrss` with the parent's high-water mark, so
+a kernel value at or below the harness's own peak is ignored. One discarded warm-up run per backend precedes the timed runs, and the
 timed runs alternate between backends so host drift hits both.
 
 **Gate.** A ratio is `native / esbmc` of the per-backend medians.
@@ -245,7 +248,9 @@ summary on stderr. Each row carries both backends' medians, raw samples,
 verdicts, `timeout_runs`, the `verify_diff` class, the ratios and the reason a
 row was excluded. `gate` carries the criteria, per-metric geometric mean and
 worst fixture, and the timeout lists (`native_only`, `esbmc_only`, `both`). A
-run with `--runs` below 5, or with `--filter`, sets `gate.provisional`.
+run with `--runs` below 5, or with `--filter`, sets `gate.provisional`; the exit
+code does not distinguish a provisional pass, so read `gate.provisional` before
+treating `0` as the gate.
 
 Exit codes: `0` gate passed, `1` gate failed, `2` the harness could not run
 (missing `vowc`, `esbmc` or `bitwuzla`; ESBMC that is not 8.5; non-Linux host;
