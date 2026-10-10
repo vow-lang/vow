@@ -1,4 +1,5 @@
-// Native-only: the `[panic]` effect on `unwrap_u128` has no ESBMC counterpart.
+// Native-only: ESBMC reports 128-bit enum payloads as Skipped, and the `[panic]`
+// effect on `unwrap_u128` has no ESBMC counterpart.
 module WideEnumPayload
 
 enum Wide {
