@@ -60,6 +60,9 @@ struct Parser {
     source: String,
     file: String,
     diagnostics: Vec<Diagnostic>,
+    // Set while parsing the head of `if` / `while` / `for … in` / `match`,
+    // where `Name {` opens the body rather than a struct literal.
+    no_struct: bool,
 }
 
 impl Parser {
@@ -70,7 +73,15 @@ impl Parser {
             source,
             file,
             diagnostics: Vec::new(),
+            no_struct: false,
         }
+    }
+
+    fn with_no_struct<T>(&mut self, value: bool, f: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = std::mem::replace(&mut self.no_struct, value);
+        let result = f(self);
+        self.no_struct = saved;
+        result
     }
 
     fn peek(&self) -> &Token {
@@ -451,6 +462,13 @@ impl Parser {
     }
 
     fn parse_vow_block(&mut self) -> Option<VowBlock> {
+        let saved = std::mem::replace(&mut self.no_struct, false);
+        let result = self.parse_vow_block_body();
+        self.no_struct = saved;
+        result
+    }
+
+    fn parse_vow_block_body(&mut self) -> Option<VowBlock> {
         let start = self.current_span();
         self.expect(TokenKind::KwVow)?;
         self.expect(TokenKind::LBrace)?;
@@ -519,6 +537,13 @@ impl Parser {
     }
 
     fn parse_block(&mut self) -> Option<Block> {
+        let saved = std::mem::replace(&mut self.no_struct, false);
+        let result = self.parse_block_body();
+        self.no_struct = saved;
+        result
+    }
+
+    fn parse_block_body(&mut self) -> Option<Block> {
         let start = self.current_span();
         self.expect(TokenKind::LBrace)?;
 
