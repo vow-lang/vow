@@ -75,13 +75,8 @@ printf 'mine' > "$proj/.claude/skills/vow/notes.md"
 expect_file "install restores reference/" "$proj/.claude/skills/vow/reference/cli.md"
 expect "install keeps foreign file" "$(cat "$proj/.claude/skills/vow/notes.md")" "mine"
 
-# 4. A fresh .claude/ gets the full split tree from auto-install.
-proj=$(new_project fresh)
-build_in "$proj"
-expect_file "auto-install writes SKILL.md" "$proj/.claude/skills/vow/SKILL.md"
-expect_file "auto-install writes cli reference" "$proj/.claude/skills/vow/reference/cli.md"
-
-# 5. A pre-rename vow-toolchain directory is neither detected nor modified.
+# 4. A pre-rename vow-toolchain directory is neither detected nor modified,
+#    and a fresh auto-install writes the full split tree next to it.
 proj=$(new_project legacy-dir)
 mkdir -p "$proj/.claude/skills/vow-toolchain"
 printf '%s' "$MONOLITHIC" > "$proj/.claude/skills/vow-toolchain/SKILL.md"
@@ -89,6 +84,7 @@ build_in "$proj"
 expect "legacy dir untouched" \
     "$(cat "$proj/.claude/skills/vow-toolchain/SKILL.md")" "$MONOLITHIC"
 expect_file "auto-install creates skills/vow" "$proj/.claude/skills/vow/SKILL.md"
+expect_file "auto-install writes cli reference" "$proj/.claude/skills/vow/reference/cli.md"
 
 if [ "$failures" -ne 0 ]; then
     echo "$failures check(s) failed" >&2
