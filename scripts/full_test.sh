@@ -1001,15 +1001,15 @@ print(cx[0].get('violation', '') if cx else '')
     # `// TEST: replay <status>` pins the `replay` status of every counterexample
     # under `verify --replay-cex` on both compilers. Only the status is compared:
     # `replay_reason` wording differs between the compilers by design.
-    expected_replay=$(sed -n 's|^// TEST: replay \([a-z]*\)$|\1|p' "$vow_file" | head -1)
+    expected_replay=$(sed -n 's|^// TEST: replay \([a-z,]*\)$|\1|p' "$vow_file" | head -1)
     if [ -n "$expected_replay" ]; then
         replay_errors=()
         for replay_side in rust self; do
-            replay_json="" replay_exit=0
+            replay_json=""
             if [ "$replay_side" = "rust" ]; then
-                replay_json=$($RUST verify --replay-cex --no-cache "$vow_file" 2>/dev/null) || replay_exit=$?
+                replay_json=$($RUST verify --replay-cex --no-cache "$vow_file" 2>/dev/null) || true
             else
-                replay_json=$(run_self verify --replay-cex --no-cache "$vow_file" 2>/dev/null) || replay_exit=$?
+                replay_json=$(run_self verify --replay-cex --no-cache "$vow_file" 2>/dev/null) || true
             fi
             actual_replays=$(python3 -c "
 import json, sys
