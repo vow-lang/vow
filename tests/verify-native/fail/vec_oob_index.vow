@@ -1,0 +1,19 @@
+// TEST: replay-skipped the abort is a bounds check, which the replay harness does not reproduce
+// TEST: counterexample-fn "at"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// TEST: counterexample-violation "index out of bounds"
+module VecOobIndex
+
+fn at(v: Vec<i64>, i: u64) -> i64 vow {
+  ensures: result == result
+} {
+  v[i]
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  print_i64(at(v, 0));
+  0
+}

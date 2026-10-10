@@ -1,0 +1,20 @@
+// TEST: replay-skipped the abort is a bounds check, which the replay harness does not reproduce
+// TEST: counterexample-fn "head"
+module InlineCalleeLocalVecOob
+
+fn head(n: u64) -> i64 {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v[n]
+}
+
+fn caller(n: u64) -> i64 vow {
+  ensures: result == result
+} {
+  head(n)
+}
+
+fn main() -> i32 [io] {
+  print_i64(caller(0));
+  0
+}
