@@ -1,0 +1,342 @@
+module VcVec
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_term
+use vc_smt
+use vc_int
+use vc_flow
+use vc_agg
+
+// Model of `Vec<T>` (T = Bool or an integer of at most 64 bits) for the native
+// verifier: an SMT array from 64-bit indices to 64-bit elements plus a 64-bit
+// symbolic length. There is no capacity anywhere: a parameter's length is an
+// unconstrained constant, and `push` only assumes that the length does not wrap,
+// which is the path on which the runtime itself traps (`checked_add` in
+// `Vec::reserve`). An element is stored as the 8-byte slot the runtime keeps:
+// sign-extended for a signed type, zero-extended for an unsigned one or Bool.
+//
+// A Vec value is a `vc_agg` object, so pointers stay out of the term language;
+// this module keeps the `(array, length)` pair of every such object per block.
+// Unlike a struct, a Vec is mutated in many blocks, so the state is
+// flow-sensitive: entering a block merges the exit states of its live in-edges
+// with the same `ite` chain a Phi uses (`vc_flow`), and every write replaces
+// the state of the block being walked. The state is never inherited from the
+// block walked before, only from edges. A block that is not reached is never
+// entered, so it contributes nothing.
+
+struct VcVec {
+    fl: VcFlow,
+    n_blocks: u64,
+    slot_of: Vec<i64>,
+    kinds: Vec<i64>,
+    owners: Vec<i64>,
+    base_arr: Vec<i64>,
+    base_len: Vec<i64>,
+    arr: Vec<i64>,
+    len: Vec<i64>,
+    names: i64,
+}
+
+fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
+    VcVec {
+        fl: fl,
+        n_blocks: n_blocks,
+        slot_of: Vec::new(),
+        kinds: Vec::new(),
+        owners: Vec::new(),
+        base_arr: Vec::new(),
+        base_len: Vec::new(),
+        arr: Vec::new(),
+        len: Vec::new(),
+        names: 0,
+    }
+}
+
+// Number of Vec objects the function created or read; 0 keeps the query in the
+// plain bit-vector logic.
+fn vc_vec_count(vv: VcVec) -> u64 {
+    vv.kinds.len()
+}
+
+fn vc_vec_declare(ar: VcArena, hdr: SmtScript, name: String, sort: i64) -> i64 {
+    vc_script_declare_const(hdr, name, sort);
+    vc_tm_var(ar, name)
+}
+
+fn vc_vec_fresh_name(vv: VcVec, prefix: String) -> String {
+    let name: String = String::from(prefix);
+    name.push_str(i64_to_string(vv.names));
+    vv.names = vv.names + 1;
+    name
+}
+
+// A new slot for object `obj`; its states are absent in every block.
+fn vc_vec_push_slot(vv: VcVec, obj: i64, kind: i64, owner: i64) -> i64 {
+    while vv.slot_of.len() as i64 <= obj {
+        vv.slot_of.push(-1);
+    }
+    let s: i64 = vv.kinds.len() as i64;
+    vv.slot_of[obj as u64] = s;
+    vv.kinds.push(kind);
+    vv.owners.push(owner);
+    vv.base_arr.push(-1);
+    vv.base_len.push(-1);
+    let mut k: u64 = 0;
+    while k < vv.n_blocks {
+        vv.arr.push(-1);
+        vv.len.push(-1);
+        k = k + 1;
+    }
+    s
+}
+
+fn vc_vec_pos(vv: VcVec, s: i64, bi: i64) -> u64 {
+    s as u64 * vv.n_blocks + bi as u64
+}
+
+// The slot of `obj`, created on first use. A parameter starts as an
+// unconstrained array and length, valid in every block; an object nothing
+// created (the gate does not let one through) is treated the same way, which
+// only loses precision.
+fn vc_vec_slot(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64) -> i64 {
+    if (obj as u64) < vv.slot_of.len() && vv.slot_of[obj as u64] >= 0 {
+        return vv.slot_of[obj as u64];
+    }
+    let kind: i64 = ag.kinds[obj as u64];
+    let mut owner: i64 = -1;
+    if kind == VC_OBJ_PARAM() { owner = ag.owners[obj as u64]; }
+    let s: i64 = vc_vec_push_slot(vv, obj, kind, owner);
+    let mut prefix: String = String::from("p");
+    prefix.push_str(i64_to_string(owner));
+    if kind != VC_OBJ_PARAM() {
+        prefix = vc_vec_fresh_name(vv, String::from("vo"));
+    }
+    let a_name: String = String::from(prefix);
+    a_name.push_str(String::from("_varr"));
+    let l_name: String = String::from(prefix);
+    l_name.push_str(String::from("_vlen"));
+    vv.base_arr[s as u64] = vc_vec_declare(ar, hdr, a_name, VC_SORT_ARRAY64());
+    vv.base_len[s as u64] = vc_vec_declare(ar, hdr, l_name, 64);
+    s
+}
+
+// A `Vec::new()` result: length 0, contents unconstrained (readable only behind
+// the bounds claim, which fails for any index at length 0).
+fn vc_vec_create(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, bi: i64) {
+    let s: i64 = vc_vec_push_slot(vv, obj, VC_OBJ_ALLOC(), -1);
+    let name: String = vc_vec_fresh_name(vv, String::from("vc"));
+    name.push_str(String::from("_varr"));
+    let p: u64 = vc_vec_pos(vv, s, bi);
+    vv.arr[p] = vc_vec_declare(ar, hdr, name, VC_SORT_ARRAY64());
+    vv.len[p] = vc_tm_bv(ar, 64, 0, 0);
+}
+
+// Current array and length of slot `s` in block `bi`. A parameter that no
+// block of the path wrote is its initial state; an allocation absent here was
+// never created on this path, which dominance rules out (the gate validates
+// it), so its unconstrained base is a safe answer.
+fn vc_vec_cur_arr(vv: VcVec, s: i64, bi: i64) -> i64 {
+    let a: i64 = vv.arr[vc_vec_pos(vv, s, bi)];
+    if a >= 0 { return a; }
+    vv.base_arr[s as u64]
+}
+
+fn vc_vec_cur_len(vv: VcVec, s: i64, bi: i64) -> i64 {
+    let l: i64 = vv.len[vc_vec_pos(vv, s, bi)];
+    if l >= 0 { return l; }
+    vv.base_len[s as u64]
+}
+
+fn vc_vec_write(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64, arr: i64, len: i64) {
+    let p: u64 = vc_vec_pos(vv, s, bi);
+    vv.arr[p] = vc_flow_name(vv.fl, ar, hdr, VC_SORT_ARRAY64(), arr);
+    vv.len[p] = vc_flow_name(vv.fl, ar, hdr, 64, len);
+}
+
+// Entry state of every slot in block `bi`, from its live in-edges: the same
+// `ite` chain as `vc_flow_phi_value` (first edge is the base, later edges wrap
+// it). An edge that carries no state for a parameter slot carries its initial
+// state; for an allocation it carries nothing and is skipped.
+fn vc_vec_enter(vv: VcVec, ar: VcArena, hdr: SmtScript, bi: u64) {
+    let fl: VcFlow = vv.fl;
+    let n: u64 = vv.kinds.len();
+    let mut s: u64 = 0;
+    while s < n {
+        let mut acc_a: i64 = -1;
+        let mut acc_l: i64 = -1;
+        let mut e: i64 = fl.in_head[bi];
+        while e >= 0 {
+            let src: i64 = fl.e_src[e as u64];
+            let p: u64 = vc_vec_pos(vv, s as i64, src);
+            let mut a: i64 = vv.arr[p];
+            let mut l: i64 = vv.len[p];
+            if a < 0 && vv.kinds[s] == VC_OBJ_PARAM() {
+                a = vv.base_arr[s];
+                l = vv.base_len[s];
+            }
+            if a >= 0 {
+                if acc_a < 0 {
+                    acc_a = a;
+                    acc_l = l;
+                } else {
+                    let c: i64 = fl.e_cond[e as u64];
+                    if a != acc_a { acc_a = vc_tm_app3(ar, VC_OP_ITE(), c, a, acc_a); }
+                    if l != acc_l { acc_l = vc_tm_app3(ar, VC_OP_ITE(), c, l, acc_l); }
+                }
+            }
+            e = fl.e_next[e as u64];
+        }
+        if acc_a >= 0 {
+            vc_vec_write(vv, ar, hdr, s as i64, bi as i64, acc_a, acc_l);
+        }
+        s = s + 1;
+    }
+}
+
+// A pushed or stored value as the 64-bit slot the runtime keeps.
+fn vc_vec_elem64(ar: VcArena, ty: i64, t: i64) -> i64 {
+    if ty == ITY_BOOL() {
+        return vc_tm_app3(ar, VC_OP_ITE(), t, vc_tm_bv(ar, 64, 1, 0), vc_tm_bv(ar, 64, 0, 0));
+    }
+    let bits: i64 = vc_ty_bits(ty);
+    if bits >= 64 { return t; }
+    if vc_ty_signed(ty) { return vc_tm_ext(ar, VC_EXT_SIGN(), 64 - bits, t); }
+    vc_tm_ext(ar, VC_EXT_ZERO(), 64 - bits, t)
+}
+
+// `idx < len` as unsigned 64-bit values: a negative `i64` index is a huge
+// unsigned one, so one comparison covers both.
+fn vc_vec_in_bounds(ar: VcArena, idx: i64, len: i64) -> i64 {
+    vc_tm_app2(ar, VC_OP_BVULT(), idx, len)
+}
+
+// The length does not wrap: `push` at `u64::MAX` is the runtime's own
+// `checked_add` overflow trap, which never returns.
+fn vc_vec_push_guard(ar: VcArena, len: i64) -> i64 {
+    vc_tm_app2(ar, VC_OP_DISTINCT(), len, vc_tm_bv(ar, 64, -1, 0))
+}
+
+fn vc_vec_push(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64, elem: i64) {
+    let arr: i64 = vc_vec_cur_arr(vv, s, bi);
+    let len: i64 = vc_vec_cur_len(vv, s, bi);
+    let stored: i64 = vc_tm_app3(ar, VC_OP_STORE(), arr, len, elem);
+    let next: i64 = vc_tm_app2(ar, VC_OP_BVADD(), len, vc_tm_bv(ar, 64, 1, 0));
+    vc_vec_write(vv, ar, hdr, s, bi, stored, next);
+}
+
+fn vc_vec_set(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64, idx: i64, elem: i64) {
+    let arr: i64 = vc_vec_cur_arr(vv, s, bi);
+    let len: i64 = vc_vec_cur_len(vv, s, bi);
+    vc_vec_write(vv, ar, hdr, s, bi, vc_tm_app3(ar, VC_OP_STORE(), arr, idx, elem), len);
+}
+
+// `pop` drops the last element when there is one, like the runtime.
+fn vc_vec_pop(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64) {
+    let arr: i64 = vc_vec_cur_arr(vv, s, bi);
+    let len: i64 = vc_vec_cur_len(vv, s, bi);
+    let zero: i64 = vc_tm_bv(ar, 64, 0, 0);
+    let dec: i64 = vc_tm_app2(ar, VC_OP_BVSUB(), len, vc_tm_bv(ar, 64, 1, 0));
+    let next: i64 = vc_tm_app3(ar, VC_OP_ITE(), vc_tm_app2(ar, VC_OP_EQ(), len, zero), zero, dec);
+    vc_vec_write(vv, ar, hdr, s, bi, arr, next);
+}
+
+// Gate rule: a Vec lives only in its own function, as an object no other
+// instruction can alias. A pointer used by a Vec operation must not also be a
+// struct (`FieldGet`/`FieldSet`) or be passed to a user call, and a Phi may
+// merge Vec pointers only when every `Upsilon` feeding it supplies the same
+// value; a differing merge would be two model objects for one runtime Vec. ""
+// when the shape is fine, else the detail of an `unsupported-opcode` skip.
+fn vc_vec_shape_detail(f: IrFunction, n_ids: u64) -> String {
+    let is_vec: Vec<i64> = dom_fill(n_ids, 0);
+    let mut any: bool = false;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            let k: i64 = vc_inst_vec_kind(inst);
+            if k != VC_VEC_NONE() {
+                any = true;
+                if k == VC_VEC_NEW() {
+                    if inst.id >= 0 { is_vec[inst.id as u64] = 1; }
+                } else if inst.args.len() > 0 {
+                    is_vec[inst.args[0] as u64] = 1;
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    if !any { return String::from(""); }
+    // A Phi that a Vec pointer feeds or that a Vec operation reads supplies
+    // one value only; `sup` is that value (-2 once two differ). Iterated, since
+    // a Phi can feed another Phi.
+    let sup: Vec<i64> = dom_fill(n_ids, -1);
+    let mut changed: bool = true;
+    while changed {
+        changed = false;
+        bi = 0;
+        while bi < f.blocks.len() {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: u64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_UPSILON() && inst.args.len() == 1 {
+                    let phi: u64 = inst.dv as u64;
+                    let val: u64 = inst.args[0] as u64;
+                    if is_vec[phi] == 1 || is_vec[val] == 1 {
+                        if sup[phi] == -1 {
+                            sup[phi] = inst.args[0];
+                        } else if sup[phi] != inst.args[0] {
+                            return String::from("Vec merged by a Phi");
+                        }
+                        if is_vec[phi] != 1 || is_vec[val] != 1 {
+                            is_vec[phi] = 1;
+                            is_vec[val] = 1;
+                            changed = true;
+                        }
+                    }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+    }
+    bi = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_FIELD_GET() || inst.op == IOP_FIELD_SET() {
+                if is_vec[inst.args[0] as u64] == 1 {
+                    return String::from("Vec used as a struct");
+                }
+            }
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+                let mut k: u64 = 0;
+                while k < inst.args.len() {
+                    if is_vec[inst.args[k] as u64] == 1 {
+                        return String::from("Vec passed to a call");
+                    }
+                    k = k + 1;
+                }
+            }
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && vc_inst_vec_kind(inst) == VC_VEC_NONE() {
+                let mut k: u64 = 0;
+                while k < inst.args.len() {
+                    if is_vec[inst.args[k] as u64] == 1 {
+                        return String::from("Vec passed to an unmodelled builtin");
+                    }
+                    k = k + 1;
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}

@@ -8,6 +8,7 @@ use vc_int
 use vc_cfg
 use vc_loops
 use vc_agg
+use vc_vec
 use ast
 
 // Fail-closed subset gate for the native verifier. `vc_skip_reason` returns ""
@@ -15,7 +16,8 @@ use ast
 // and whose loops are reducible and unrollable (`vc_loops`), built from the
 // integer (8 to 128 bits) and Bool operations the
 // symbolic executor models and the struct, enum and `Option` values it
-// scalarises (`vc_agg`), with the control-flow shape `vc_cfg_detail` accepts;
+// scalarises (`vc_agg`) and the `Vec`s of Bool and integers up to 64 bits it
+// models as an array plus a length (`vc_vec`), with the control-flow shape `vc_cfg_detail` accepts;
 // every other function is `Skipped` with "<code>: <detail>" using the closed
 // codes of ADR-1430 (listed in `vc_ops`). An unknown opcode is never accepted.
 
@@ -389,6 +391,10 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
     let shape: String = vc_agg_shape_detail(f, tys.len());
     if shape.len() > 0 {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), shape);
+    }
+    let vec_shape: String = vc_vec_shape_detail(f, tys.len());
+    if vec_shape.len() > 0 {
+        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), vec_shape);
     }
     let cfg: String = vc_cfg_detail(f, tys);
     if cfg.len() > 0 {

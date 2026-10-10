@@ -8,6 +8,7 @@ use vc_int
 use vc_gate
 use vc_flow
 use vc_agg
+use vc_vec
 use ir_dominance
 
 // Symbolic execution of an acyclic integer/Bool function (one that
@@ -29,6 +30,7 @@ use ir_dominance
 //   hard  the abort of `.unwrap()` on `None`/`Err`: the lowerer branches on the
 //         discriminant and calls the abort on the empty variant, so that call is
 //         a claim that its path is infeasible.
+//   hard  a `Vec` index at or past the length (`vc_vec`), on `get` and `set`.
 //   soft  checked `+! -! *! /! %!`: the language aborts on overflow, so the
 //         contract is judged on returning runs only. A counterexample to a soft
 //         claim is not a failure; it means the abort is reachable and the
@@ -61,12 +63,14 @@ fn VC_CLAIM_UNWRAP_NONE() -> i64 { 5 }
 fn VC_CLAIM_UNWIND() -> i64 { 6 }
 fn VC_CLAIM_CALLER_PRE() -> i64 { 7 }
 fn VC_CLAIM_CALLEE_POST() -> i64 { 8 }
+fn VC_CLAIM_VEC_BOUNDS() -> i64 { 9 }
 
 fn VC_LABEL_DIV_ZERO() -> String { String::from("division by zero") }
 fn VC_LABEL_DIV_OVERFLOW() -> String { String::from("division overflow") }
 fn VC_LABEL_SHIFT_COUNT() -> String { String::from("integer shift count") }
 fn VC_LABEL_UNWRAP_NONE() -> String { String::from("unwrap-none") }
 fn VC_LABEL_UNWIND() -> String { String::from("unwinding assertion") }
+fn VC_LABEL_VEC_BOUNDS() -> String { String::from("vec bounds") }
 
 // One shared command list (`header`) and one append-only assumption list serve
 // every claim: claim `k` is the first `header_lens[k]` header commands, the
@@ -174,6 +178,7 @@ struct VcWalk {
     cs: VcClaims,
     fl: VcFlow,
     ag: VcAgg,
+    vv: VcVec,
     var_of: Vec<i64>,
     obj_of: Vec<i64>,
     tys: Vec<i64>,
@@ -354,6 +359,45 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
     false
 }
 
+// A `Vec` call (`vc_vec`). `get` and `len` define a value, the rest change the
+// object's state in this block; an index out of bounds is a hard claim, assumed
+// afterwards like the other aborts.
+fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
+    let kind: i64 = vc_inst_vec_kind(inst);
+    if kind == VC_VEC_NONE() { return false; }
+    let cs: VcClaims = w.cs;
+    let ar: VcArena = cs.arena;
+    let hdr: SmtScript = cs.header;
+    let vv: VcVec = w.vv;
+    let b: i64 = bi as i64;
+    if kind == VC_VEC_NEW() {
+        let obj: i64 = vc_agg_alloc(w.ag);
+        w.obj_of[inst.id as u64] = obj;
+        vc_vec_create(vv, w.ag, ar, hdr, obj, b);
+        return true;
+    }
+    let s: i64 = vc_vec_slot(vv, w.ag, ar, hdr, w.obj_of[inst.args[0] as u64]);
+    if kind == VC_VEC_LEN() {
+        vc_define(w, inst, vc_vec_cur_len(vv, s, b));
+    } else if kind == VC_VEC_POP() {
+        vc_vec_pop(vv, ar, hdr, s, b);
+    } else if kind == VC_VEC_PUSH() {
+        let elem: i64 = vc_vec_elem64(ar, w.tys[inst.args[1] as u64], w.var_of[inst.args[1] as u64]);
+        vc_assume(cs, pc, vc_vec_push_guard(ar, vc_vec_cur_len(vv, s, b)));
+        vc_vec_push(vv, ar, hdr, s, b, elem);
+    } else {
+        let idx: i64 = w.var_of[inst.args[1] as u64];
+        vc_guard(cs, VC_CLAIM_VEC_BOUNDS(), VC_LABEL_VEC_BOUNDS(), pc, vc_vec_in_bounds(ar, idx, vc_vec_cur_len(vv, s, b)), inst);
+        if kind == VC_VEC_GET() {
+            vc_define(w, inst, vc_tm_app2(ar, VC_OP_SELECT(), vc_vec_cur_arr(vv, s, b), idx));
+        } else {
+            let elem: i64 = vc_vec_elem64(ar, w.tys[inst.args[2] as u64], w.var_of[inst.args[2] as u64]);
+            vc_vec_set(vv, ar, hdr, s, b, idx, elem);
+        }
+    }
+    true
+}
+
 // A contract clause. The target's own `requires` is an assumption and its
 // `ensures`/`invariant` a claim; a spliced callee's clauses are claims blamed on
 // the caller and the callee, assumed once asked.
@@ -409,6 +453,8 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
         let name: String = String::from("h");
         name.push_str(i64_to_string(inst.id));
         vc_define(w, inst, vc_agg_declare(cs.arena, cs.header, name, vc_ty_sort(inst.ty)));
+    } else if vc_walk_vec(w, bi, inst, pc) {
+        return;
     } else if vc_is_unwrap_abort(inst) {
         vc_guard(cs, VC_CLAIM_UNWRAP_NONE(), VC_LABEL_UNWRAP_NONE(), pc, vc_tm_bool_const(cs.arena, false), inst);
     } else if vc_is_unwind_sink(inst) {
@@ -471,6 +517,7 @@ fn vc_claims_mode(f: IrFunction, fr: VcFrames, pre_only: bool) -> VcClaims {
         cs: cs,
         fl: fl,
         ag: vc_agg_new(fl),
+        vv: vc_vec_new_state(fl, nb),
         var_of: dom_fill(tys.len(), -1),
         obj_of: dom_fill(tys.len(), -1),
         tys: tys,
@@ -489,6 +536,7 @@ fn vc_claims_mode(f: IrFunction, fr: VcFrames, pre_only: bool) -> VcClaims {
             fl.block_pc[0] = vc_tm_bool_const(ar, true);
         } else {
             live = vc_flow_enter(fl, ar, hdr, bi);
+            if live { vc_vec_enter(w.vv, ar, hdr, bi); }
         }
         if live {
             let blk: IrBlock = f.blocks[bi];
@@ -500,6 +548,9 @@ fn vc_claims_mode(f: IrFunction, fr: VcFrames, pre_only: bool) -> VcClaims {
             }
         }
         oi = oi + 1;
+    }
+    if vc_vec_count(w.vv) > 0 {
+        hdr.names[0] = String::from("QF_ABV");
     }
     cs
 }

@@ -180,11 +180,19 @@ fn vc_frame_mark(k: i64) -> String {
     out
 }
 
-// The frame an instruction was spliced from; -1 for the target's own. The
-// unwrap abort keeps its extern name in `ds`, so its frame travels in `dv2`
-// (`frame + 1`; 0 for the target's own, which the lowerer emits with `dv2` 0).
+// An extern call that can fail keeps its symbol in `ds`, so the frame it was
+// spliced from travels in `dv2` (`frame + 1`; 0 for the target's own, which the
+// lowerer emits with `dv2` 0): the unwrap abort and a `Vec` `get`/`set`, whose
+// bounds check is a claim.
+fn vc_frame_in_dv2(inst: IrInst) -> bool {
+    if vc_is_unwrap_abort(inst) { return true; }
+    let k: i64 = vc_inst_vec_kind(inst);
+    k == VC_VEC_GET() || k == VC_VEC_SET()
+}
+
+// The frame an instruction was spliced from; -1 for the target's own.
 fn vc_frame_of(inst: IrInst) -> i64 {
-    if vc_is_unwrap_abort(inst) { return inst.dv2 - 1; }
+    if vc_frame_in_dv2(inst) { return inst.dv2 - 1; }
     let pre: String = VC_FRAME_PREFIX();
     if inst.ds.len() <= pre.len() || string_starts_with(inst.ds, pre) != 1 {
         return -1;
