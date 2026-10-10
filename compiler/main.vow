@@ -3169,7 +3169,9 @@ fn skill_report(emit_errors: bool, prefix: String, path: String) [io] {
 
 // Exclusive reservation: plain `mkdir` (no -p) fails when the name is taken, so
 // concurrent installers never share a directory. Its output is captured, not printed.
-fn skill_reserve_dir(parent: String, stem: String) -> String [io] {
+// Only an existing candidate is a name collision worth retrying; any other failure
+// (unwritable parent, no `mkdir`) is final.
+fn skill_reserve_dir(parent: String, stem: String, emit_errors: bool) -> String [io, read] {
     let mut attempt: i64 = 0;
     while attempt < 8 {
         let token: String = str3(int_to_string(time_unix_ms()), String::from("-"), int_to_string(attempt));
@@ -3180,8 +3182,13 @@ fn skill_reserve_dir(parent: String, stem: String) -> String [io] {
         if rc == 0 {
             return candidate;
         }
+        if fs_exists(candidate) != 1 {
+            skill_report(emit_errors, String::from("vow skill install: cannot create "), candidate);
+            return String::from("");
+        }
         attempt = attempt + 1;
     }
+    skill_report(emit_errors, String::from("vow skill install: cannot create "), str3(parent, String::from("/."), stem));
     String::from("")
 }
 
@@ -3223,9 +3230,8 @@ fn skill_commit_stage(parent: String, stage: String, target: String, emit_errors
         }
         return true;
     }
-    let backup: String = skill_reserve_dir(parent, String::from("vow-backup"));
+    let backup: String = skill_reserve_dir(parent, String::from("vow-backup"), emit_errors);
     if backup.len() == 0 {
-        skill_report(emit_errors, String::from("vow skill install: cannot create "), str2(parent, String::from("/.vow-backup")));
         return false;
     }
     if fs_rename(target, backup) != 0 {
@@ -3262,16 +3268,11 @@ fn install_skill_tree(root: String, emit_errors: bool) -> String [io, read, writ
         }
         return path;
     }
-    let stage: String = skill_reserve_dir(parent, String::from("vow-install"));
+    let stage: String = skill_reserve_dir(parent, String::from("vow-install"), emit_errors);
     if stage.len() == 0 {
-        skill_report(emit_errors, String::from("vow skill install: cannot create "), str2(parent, String::from("/.vow-install")));
         return String::from("");
     }
-    let mut committed: bool = skill_write_tree(stage, emit_errors);
-    if committed {
-        committed = skill_commit_stage(parent, stage, dir, emit_errors);
-    }
-    if !committed {
+    if !(skill_write_tree(stage, emit_errors) && skill_commit_stage(parent, stage, dir, emit_errors)) {
         fs_remove_dir_all(stage);
         return String::from("");
     }
