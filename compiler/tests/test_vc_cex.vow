@@ -15,6 +15,9 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
         header: vc_script_new(),
         assumed: Vec::new(),
         kinds: Vec::new(),
+        frames: Vec::new(),
+        fr: vc_frames_new(),
+        pre_only: false,
         vow_ids: Vec::new(),
         labels: Vec::new(),
         ostarts: Vec::new(),
@@ -28,6 +31,7 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
         model_widths: Vec::new(),
     };
     cs.kinds.push(kind);
+    cs.frames.push(-1);
     cs.vow_ids.push(vow_id);
     cs.labels.push(label);
     cs.model_names.push(String::from("p0"));
@@ -149,11 +153,47 @@ fn check_shift_and_arith_labels() -> i64 {
     0
 }
 
+// A claim of an inlined callee reports the callee's own vow id and names the
+// callee's function; neither carries an assertion label (the callee clause
+// text is resolved from the function's vows).
+fn check_callee_clauses() -> i64 {
+    let f: IrFunction = fn_xy();
+    let pre: VcClaims = claims_with(VC_CLAIM_CALLER_PRE(), 4, String::from(""));
+    pre.frames[0] = 1;
+    pre.fr.func_ids.push(30);
+    pre.fr.func_ids.push(31);
+    pre.fr.call_starts.push(0);
+    pre.fr.call_starts.push(0);
+    pre.fr.call_lens.push(0);
+    pre.fr.call_lens.push(0);
+    pre.fr.parents.push(-1);
+    pre.fr.parents.push(0);
+    let r: VerifyResult = vc_claim_result(f, pre, 0, answer(VC_ANS_SAT(), 1, 2));
+    if r.status != VERIFY_FAILED() { return 50; }
+    if r.vow_id != 4 { return 51; }
+    if r.callee_precondition_func_id != 31 || r.callee_precondition_vow_id != 4 { return 52; }
+    if r.callee_postcondition_func_id != -1 || r.callee_postcondition_vow_id != -1 { return 53; }
+    if r.raw_output.len() != 0 { return 54; }
+    let post: VcClaims = claims_with(VC_CLAIM_CALLEE_POST(), 6, String::from(""));
+    post.frames[0] = 0;
+    post.fr.func_ids.push(30);
+    post.fr.call_starts.push(0);
+    post.fr.call_lens.push(0);
+    post.fr.parents.push(-1);
+    let q: VerifyResult = vc_claim_result(f, post, 0, answer(VC_ANS_SAT(), 1, 2));
+    if q.vow_id != 6 { return 55; }
+    if q.callee_postcondition_func_id != 30 || q.callee_postcondition_vow_id != 6 { return 56; }
+    if q.callee_precondition_func_id != -1 { return 57; }
+    if q.raw_output.len() != 0 { return 58; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_sat_ensures();
     if r == 0 { r = check_sat_abort_claims(); }
     if r == 0 { r = check_non_sat_verdicts(); }
     if r == 0 { r = check_values_follow_declared_types(); }
     if r == 0 { r = check_shift_and_arith_labels(); }
+    if r == 0 { r = check_callee_clauses(); }
     i64_to_i32_wrap(r)
 }

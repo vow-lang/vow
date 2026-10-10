@@ -1,6 +1,7 @@
 module VcExec
 
 use ir
+use vc_ops
 use vc_term
 use vc_smt
 use vc_int
@@ -37,6 +38,14 @@ use ir_dominance
 // assumes nothing afterwards: a counterexample means the bound was too small,
 // not that the function is wrong. A loop `invariant` is checked like an
 // `ensures` at every iteration copy of its header, and assumed nowhere.
+//
+// A call has been spliced into its caller before this point (`vc_inline`), and
+// the clauses of the copy carry the frame they came from (`vc_frame_of`). In a
+// frame a `requires` is a claim blamed on the caller and an `ensures` or loop
+// `invariant` one blamed on the callee, and both are assumed afterwards: the
+// first failing claim on a path is the one reported. A function without a `vow`
+// block is verified only for its callees' preconditions (`pre_only`): every
+// other claim is assumed instead, as the ESBMC pipeline demotes it.
 
 fn VC_CLAIM_ENSURES() -> i64 { 0 }
 fn VC_CLAIM_DIV_ZERO() -> i64 { 1 }
@@ -45,6 +54,8 @@ fn VC_CLAIM_SHIFT_COUNT() -> i64 { 3 }
 fn VC_CLAIM_ARITH() -> i64 { 4 }
 fn VC_CLAIM_UNWRAP_NONE() -> i64 { 5 }
 fn VC_CLAIM_UNWIND() -> i64 { 6 }
+fn VC_CLAIM_CALLER_PRE() -> i64 { 7 }
+fn VC_CLAIM_CALLEE_POST() -> i64 { 8 }
 
 fn VC_LABEL_DIV_ZERO() -> String { String::from("division by zero") }
 fn VC_LABEL_DIV_OVERFLOW() -> String { String::from("division overflow") }
@@ -61,6 +72,9 @@ struct VcClaims {
     header: SmtScript,
     assumed: Vec<i64>,
     kinds: Vec<i64>,
+    frames: Vec<i64>,
+    fr: VcFrames,
+    pre_only: bool,
     vow_ids: Vec<i64>,
     labels: Vec<String>,
     ostarts: Vec<i64>,
@@ -86,9 +100,13 @@ fn vc_param_name(k: i64) -> String {
     out
 }
 
-fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, pc: i64, goal: i64, ostart: i64, olen: i64) {
+fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, pc: i64, goal: i64, ostart: i64, olen: i64, frame: i64) {
+    if cs.pre_only && kind != VC_CLAIM_CALLER_PRE() && kind != VC_CLAIM_UNWIND() {
+        return;
+    }
     let hdr: SmtScript = cs.header;
     cs.kinds.push(kind);
+    cs.frames.push(frame);
     cs.vow_ids.push(vow_id);
     cs.labels.push(label);
     cs.ostarts.push(ostart);
@@ -107,7 +125,7 @@ fn vc_assume(cs: VcClaims, pc: i64, t: i64) {
 // A claim that `goal` holds on the paths reaching `inst`, then the assumption
 // that it does.
 fn vc_guard(cs: VcClaims, kind: i64, label: String, pc: i64, goal: i64, inst: IrInst) {
-    vc_add_claim(cs, kind, -1, label, pc, goal, inst.ostart, inst.olen);
+    vc_add_claim(cs, kind, -1, label, pc, goal, inst.ostart, inst.olen, vc_frame_of(inst));
     vc_assume(cs, pc, goal);
 }
 
@@ -305,6 +323,27 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
     false
 }
 
+// A contract clause. The target's own `requires` is an assumption and its
+// `ensures`/`invariant` a claim; a spliced callee's clauses are claims blamed on
+// the caller and the callee, assumed once asked.
+fn vc_walk_clause(w: VcWalk, inst: IrInst, pc: i64) {
+    let cs: VcClaims = w.cs;
+    let goal: i64 = w.var_of[inst.args[0] as u64];
+    let frame: i64 = vc_frame_of(inst);
+    if frame < 0 {
+        if inst.op == IOP_VOW_REQ() {
+            vc_assume(cs, pc, goal);
+        } else {
+            vc_add_claim(cs, VC_CLAIM_ENSURES(), inst.dv, String::from(""), pc, goal, inst.ostart, inst.olen, -1);
+        }
+        return;
+    }
+    let mut kind: i64 = VC_CLAIM_CALLEE_POST();
+    if inst.op == IOP_VOW_REQ() { kind = VC_CLAIM_CALLER_PRE(); }
+    vc_add_claim(cs, kind, inst.dv, String::from(""), pc, goal, inst.ostart, inst.olen, frame);
+    vc_assume(cs, pc, goal);
+}
+
 fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     let cs: VcClaims = w.cs;
     let fl: VcFlow = w.fl;
@@ -329,10 +368,8 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
         vc_define(w, inst, vc_flow_phi_value(fl, cs.arena, bi, inst.id));
     } else if op == IOP_UPSILON() {
         vc_flow_add_upsilon(fl, inst.dv, bi as i64, w.var_of[inst.args[0] as u64]);
-    } else if op == IOP_VOW_REQ() {
-        vc_assume(cs, pc, w.var_of[inst.args[0] as u64]);
-    } else if op == IOP_VOW_ENS() || op == IOP_VOW_INV() {
-        vc_add_claim(cs, VC_CLAIM_ENSURES(), inst.dv, String::from(""), pc, w.var_of[inst.args[0] as u64], inst.ostart, inst.olen);
+    } else if op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_VOW_INV() {
+        vc_walk_clause(w, inst, pc);
     } else if op == IOP_JUMP() {
         vc_flow_add_edge(fl, succ[bi * 2] as u64, bi as i64, pc, fl.block_foff[bi], fl.block_flen[bi]);
     } else if op == IOP_BRANCH() {
@@ -340,7 +377,7 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     } else if vc_is_unwrap_abort(inst) {
         vc_guard(cs, VC_CLAIM_UNWRAP_NONE(), VC_LABEL_UNWRAP_NONE(), pc, vc_tm_bool_const(cs.arena, false), inst);
     } else if vc_is_unwind_sink(inst) {
-        vc_add_claim(cs, VC_CLAIM_UNWIND(), -1, VC_LABEL_UNWIND(), pc, vc_tm_bool_const(cs.arena, false), inst.ostart, inst.olen);
+        vc_add_claim(cs, VC_CLAIM_UNWIND(), -1, VC_LABEL_UNWIND(), pc, vc_tm_bool_const(cs.arena, false), inst.ostart, inst.olen, -1);
     } else if op != IOP_RETURN() && op != IOP_UNREACHABLE() {
         vc_define(w, inst, vc_exec_value(w, inst, pc));
     }
@@ -348,6 +385,13 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
 
 // Obligations for a function inside the native subset, in walk order.
 fn vc_claims(f: IrFunction) -> VcClaims {
+    vc_claims_mode(f, vc_frames_new(), false)
+}
+
+// The same for the flattened function of a call tree: `fr` names the frames its
+// markers refer to, `pre_only` demotes every claim but the callees'
+// preconditions and the unwinding claim.
+fn vc_claims_mode(f: IrFunction, fr: VcFrames, pre_only: bool) -> VcClaims {
     let ar: VcArena = vc_arena_new();
     let hdr: SmtScript = vc_script_new();
     let assumed: Vec<i64> = Vec::new();
@@ -356,6 +400,9 @@ fn vc_claims(f: IrFunction) -> VcClaims {
         header: hdr,
         assumed: assumed,
         kinds: Vec::new(),
+        frames: Vec::new(),
+        fr: fr,
+        pre_only: pre_only,
         vow_ids: Vec::new(),
         labels: Vec::new(),
         ostarts: Vec::new(),

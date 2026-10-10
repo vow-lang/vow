@@ -4,6 +4,7 @@ use verifier
 use vc_native
 use vc_cex
 use vc_worker
+use tests.builders
 
 fn sample_result() -> VerifyResult {
     let names: Vec<String> = Vec::new();
@@ -38,7 +39,14 @@ fn sample() -> VcOutcome {
     let sites: Vec<ParsedArithSite> = Vec::new();
     sites.push(ParsedArithSite { cause: String::from("overflow in +!"), owner: 3, ostart: 17, olen: 6 });
     sites.push(ParsedArithSite { cause: String::from("a\nb"), owner: -1, ostart: 0, olen: 0 });
-    VcOutcome { result: sample_result(), sites: sites }
+    let oc: VcOutcome = VcOutcome { result: sample_result(), sites: sites, chain_funcs: Vec::new(), chain_starts: Vec::new(), chain_lens: Vec::new() };
+    oc.chain_funcs.push(4);
+    oc.chain_starts.push(120);
+    oc.chain_lens.push(9);
+    oc.chain_funcs.push(7);
+    oc.chain_starts.push(-1);
+    oc.chain_lens.push(0);
+    oc
 }
 
 fn check_round_trip() -> i64 {
@@ -62,6 +70,9 @@ fn check_round_trip() -> i64 {
     if back.var_values[0] != String::from("-9223372036854775808") { return 8; }
     if back.block_visits.len() != 2 || back.block_visits[1] != -1 { return 9; }
     if back.raw_output != vr.raw_output { return 10; }
+    if back_oc.chain_funcs.len() != 2 || back_oc.chain_starts.len() != 2 || back_oc.chain_lens.len() != 2 { return 16; }
+    if back_oc.chain_funcs[0] != 4 || back_oc.chain_starts[0] != 120 || back_oc.chain_lens[0] != 9 { return 17; }
+    if back_oc.chain_funcs[1] != 7 || back_oc.chain_starts[1] != -1 || back_oc.chain_lens[1] != 0 { return 18; }
     0
 }
 
@@ -91,8 +102,8 @@ fn check_truncation_never_decodes() -> i64 {
     }
     if is_none(full) { return 2; }
     if !is_none(String::from("")) { return 3; }
-    if !is_none(String::from("VOWRES1\n99\n")) { return 4; }
-    if !is_none(String::from("VOWRES1\n99\n0\n0\n0\n0\n0\n0\n0\n0\n")) { return 5; }
+    if !is_none(String::from("VOWRES2\n99\n")) { return 4; }
+    if !is_none(String::from("VOWRES2\n99\n0\n0\n0\n0\n0\n0\n0\n0\n")) { return 5; }
     0
 }
 
@@ -186,6 +197,50 @@ fn check_unwind_schedule() -> i64 {
     0
 }
 
+// The call chain of a failing claim runs from the target's own call down to the
+// claim's frame, outermost first, each call made in the function it sits in.
+fn check_chain_outcome() -> i64 {
+    let fr: VcFrames = vc_frames_new();
+    fr.func_ids.push(21);
+    fr.call_starts.push(100);
+    fr.call_lens.push(7);
+    fr.parents.push(-1);
+    fr.func_ids.push(22);
+    fr.call_starts.push(300);
+    fr.call_lens.push(5);
+    fr.parents.push(0);
+    let f: IrFunction = mk_function(20, String::from("t"), Vec::new(), ITY_I64(), Vec::new());
+    let deep: VcOutcome = vc_chain_outcome(f, fr, 1, sample_result());
+    if deep.chain_funcs.len() != 2 { return 1; }
+    if deep.chain_funcs[0] != 20 || deep.chain_starts[0] != 100 || deep.chain_lens[0] != 7 { return 2; }
+    if deep.chain_funcs[1] != 21 || deep.chain_starts[1] != 300 || deep.chain_lens[1] != 5 { return 3; }
+    let shallow: VcOutcome = vc_chain_outcome(f, fr, 0, sample_result());
+    if shallow.chain_funcs.len() != 1 || shallow.chain_funcs[0] != 20 { return 4; }
+    let own: VcOutcome = vc_chain_outcome(f, fr, -1, sample_result());
+    if own.chain_funcs.len() != 0 { return 5; }
+    // The chain survives the wire.
+    let back: VcOutcome = match vc_wire_decode(vc_wire_encode(deep)) {
+        Option::Some(v) => { v },
+        Option::None => { return 6; },
+    };
+    if back.chain_funcs.len() != 2 || back.chain_funcs[1] != 21 { return 7; }
+    0
+}
+
+fn check_inline_budget_reason_round_trips() -> i64 {
+    let reason: String = vc_inline_budget_reason(200000);
+    if !vc_output_has_inline_budget(reason) { return 1; }
+    if vc_output_has_unwinding(reason) { return 2; }
+    let oc: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), reason));
+    let back: VcOutcome = match vc_wire_decode(vc_wire_encode(oc)) {
+        Option::Some(v) => { v },
+        Option::None => { return 3; },
+    };
+    if back.result.status != VERIFY_UNKNOWN() { return 4; }
+    if !vc_output_has_inline_budget(back.result.raw_output) { return 5; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_round_trip();
     if r == 0 { r = check_leading_noise_is_skipped(); }
@@ -197,5 +252,7 @@ fn main() -> i32 {
     if r == 0 { r = check_tail_keeps_whole_characters(); }
     if r == 0 { r = check_unwinding_reason_round_trips(); }
     if r == 0 { r = check_unwind_schedule(); }
+    if r == 0 { r = check_chain_outcome(); }
+    if r == 0 { r = check_inline_budget_reason_round_trips(); }
     i64_to_i32_wrap(r)
 }

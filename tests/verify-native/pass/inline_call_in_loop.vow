@@ -1,0 +1,26 @@
+module InlineCallInLoop
+
+fn count_to(n: i64) -> i64 vow {
+  requires: n >= 0 && n <= 10
+  ensures: result == n
+} {
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i >= 0 && i <= n
+  } {
+    i = step(i);
+  }
+  i
+}
+
+fn step(x: i64) -> i64 vow {
+  requires: x >= 0 && x < 1000
+  ensures: result == x + 1
+} {
+  x + 1
+}
+
+fn main() -> i32 [io] {
+  print_i64(count_to(3));
+  0
+}

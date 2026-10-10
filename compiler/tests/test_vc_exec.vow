@@ -5,6 +5,7 @@ use vc_term
 use vc_smt
 use vc_gate
 use vc_exec
+use vc_ops
 use vc_unroll
 use tests.builders
 
@@ -733,6 +734,77 @@ fn check_unwinding_claim_query() -> i64 {
     0
 }
 
+// Inlined callee clauses: a `requires` in a frame is a claim blamed on the
+// caller and an `ensures` in a frame one blamed on the callee, both assumed
+// once asked; the target's own `ensures` stays a claim.
+fn framed(i: IrInst, frame: i64) -> IrInst {
+    i.ds = vc_frame_mark(frame);
+    i
+}
+
+fn callee_clause_function() -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_arg(1, ITY_I64(), 1));
+    i.push(mk_inst_const_i64(2, 0));
+    i.push(mk_inst(3, IOP_GT(), ITY_BOOL(), args2(1, 2)));
+    i.push(framed(mk_vow(4, IOP_VOW_REQ(), 3, 4), 0));
+    i.push(mk_inst(5, IOP_WDIV(), ITY_I64(), args2(0, 1)));
+    i.push(mk_inst(6, IOP_GE(), ITY_BOOL(), args2(5, 2)));
+    i.push(framed(mk_vow(7, IOP_VOW_ENS(), 6, 5), 0));
+    i.push(mk_vow(8, IOP_VOW_ENS(), 6, 2));
+    i.push(mk_inst_return(9, 5));
+    one_block(String::from("flat"), params2(), ITY_I64(), i)
+}
+
+fn one_frame() -> VcFrames {
+    let fr: VcFrames = vc_frames_new();
+    fr.func_ids.push(9);
+    fr.call_starts.push(10);
+    fr.call_lens.push(3);
+    fr.parents.push(-1);
+    fr
+}
+
+fn check_callee_clauses_are_claims() -> i64 {
+    let f: IrFunction = callee_clause_function();
+    if vc_skip_reason(f).len() != 0 { return 1; }
+    let cs: VcClaims = vc_claims_mode(f, one_frame(), false);
+    if cs.kinds.len() != 5 { return 2; }
+    if cs.kinds[0] != VC_CLAIM_CALLER_PRE() || cs.vow_ids[0] != 4 || cs.frames[0] != 0 { return 3; }
+    if cs.kinds[1] != VC_CLAIM_DIV_ZERO() || cs.kinds[2] != VC_CLAIM_DIV_OVERFLOW() { return 4; }
+    if cs.kinds[3] != VC_CLAIM_CALLEE_POST() || cs.vow_ids[3] != 5 || cs.frames[3] != 0 { return 5; }
+    if cs.kinds[4] != VC_CLAIM_ENSURES() || cs.vow_ids[4] != 2 || cs.frames[4] != -1 { return 6; }
+    // The callee's `requires` is claimed first and assumed for everything after it.
+    if cs.assumed_lens[0] != 0 || cs.assumed_lens[1] != 1 { return 7; }
+    // The callee's `ensures` is assumed once claimed; the target's own is not.
+    if cs.assumed_lens[3] != 3 || cs.assumed_lens[4] != 4 { return 8; }
+    if cs.assumed.len() != 4 { return 9; }
+    0
+}
+
+fn check_frame_free_clauses_are_unchanged() -> i64 {
+    let f: IrFunction = divide_with_requires(IOP_WDIV());
+    let a: VcClaims = vc_claims(f);
+    let b: VcClaims = vc_claims_mode(f, vc_frames_new(), false);
+    if a.kinds.len() != b.kinds.len() || a.kinds.len() != 2 { return 1; }
+    if a.frames[0] != -1 || a.frames[1] != -1 { return 2; }
+    0
+}
+
+// A function without a `vow` block is held only to its callees' preconditions:
+// every other claim is assumed instead, so a later claim still sees its guard.
+fn check_caller_precondition_role() -> i64 {
+    let f: IrFunction = callee_clause_function();
+    let cs: VcClaims = vc_claims_mode(f, one_frame(), true);
+    if cs.kinds.len() != 1 { return 1; }
+    if cs.kinds[0] != VC_CLAIM_CALLER_PRE() || cs.vow_ids[0] != 4 { return 2; }
+    // `requires` and the two division guards are assumed, plus the callee's
+    // and the target's `ensures`.
+    if cs.assumed.len() != 4 { return 3; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_divide_with_requires();
     if r == 0 { r = check_rem_has_only_zero_claim(); }
@@ -761,5 +833,8 @@ fn main() -> i32 {
     if r == 0 { r = check_literal_operands(); }
     if r == 0 { r = check_unrolled_loop_claims(); }
     if r == 0 { r = check_unwinding_claim_query(); }
+    if r == 0 { r = check_callee_clauses_are_claims(); }
+    if r == 0 { r = check_frame_free_clauses_are_unchanged(); }
+    if r == 0 { r = check_caller_precondition_role(); }
     i64_to_i32_wrap(r)
 }

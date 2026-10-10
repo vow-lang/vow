@@ -1,0 +1,20 @@
+module InlineCalleeEnsuresUsed
+
+fn double(x: i64) -> i64 vow {
+  requires: x >= 0 && x <= 1000000
+  ensures: result == x * 2
+} {
+  x + x
+}
+
+fn caller(y: i64) -> i64 vow {
+  requires: y >= 0 && y <= 1000
+  ensures: result == y * 2 + 2
+} {
+  double(y) + 2
+}
+
+fn main() -> i32 [io] {
+  print_i64(caller(4));
+  0
+}

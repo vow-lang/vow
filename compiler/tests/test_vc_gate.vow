@@ -503,8 +503,48 @@ fn check_reason_codes() -> i64 {
     0
 }
 
+// A call of a user function is accepted only when its arguments and result are
+// scalar, and only by the check that inlines it afterwards.
+fn check_scalar_calls() -> i64 {
+    let ok: Vec<IrInst> = Vec::new();
+    ok.push(mk_inst_arg(0, ITY_I64(), 0));
+    ok.push(mk_inst_call_target(1, ITY_I64(), args1(0), 7));
+    ok.push(mk_inst_return(2, 1));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    let f: IrFunction = one_block(String::from("c"), p, ITY_I64(), ok);
+    if vc_skip_reason(f) != String::from("unsupported-opcode: Call[i64]") { return 1; }
+    if vc_skip_reason_calls(f).len() != 0 { return 2; }
+
+    let unit: Vec<IrInst> = Vec::new();
+    unit.push(mk_inst_arg(0, ITY_I64(), 0));
+    unit.push(mk_inst_call_target(1, ITY_UNIT(), args1(0), 7));
+    unit.push(mk_inst_return(2, 0));
+    if vc_skip_reason_calls(one_block(String::from("u"), p, ITY_I64(), unit)).len() != 0 { return 3; }
+
+    let agg: Vec<IrInst> = Vec::new();
+    agg.push(mk_inst_alloc(0, 16));
+    agg.push(mk_inst_call_target(1, ITY_I64(), args1(0), 7));
+    agg.push(mk_inst_return(2, 1));
+    if vc_skip_reason_calls(one_block(String::from("a"), Vec::new(), ITY_I64(), agg)).len() == 0 { return 4; }
+
+    let ptr_result: Vec<IrInst> = Vec::new();
+    ptr_result.push(mk_inst_arg(0, ITY_I64(), 0));
+    ptr_result.push(mk_inst_call_target(1, ITY_PTR(), args1(0), 7));
+    ptr_result.push(mk_inst_return(2, 0));
+    if vc_skip_reason_calls(one_block(String::from("r"), p, ITY_I64(), ptr_result)).len() == 0 { return 5; }
+
+    let ext: Vec<IrInst> = Vec::new();
+    ext.push(mk_inst_arg(0, ITY_I64(), 0));
+    ext.push(mk_inst_call_extern(1, ITY_I64(), args1(0), String::from("__vow_abs_i64")));
+    ext.push(mk_inst_return(2, 1));
+    if vc_skip_reason_calls(one_block(String::from("e"), p, ITY_I64(), ext)).len() == 0 { return 6; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_accepted();
+    if r == 0 { r = check_scalar_calls(); }
     if r == 0 { r = check_effects(); }
     if r == 0 { r = check_branches_accepted(); }
     if r == 0 { r = check_phi_input_missing(); }

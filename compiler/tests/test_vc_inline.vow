@@ -1,0 +1,381 @@
+module TestVcInline
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_gate
+use vc_cfg
+use vc_loops
+use vc_inline
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn mk_vow(id: i64, op: i64, pred: i64, vow_id: i64) -> IrInst {
+    ir_inst_new(id, op, ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+fn fn_of(id: i64, name: String, ret: i64, blocks: Vec<IrBlock>) -> IrFunction {
+    mk_function(id, name, mk_params1(), ret, blocks)
+}
+
+fn one(b: IrBlock) -> Vec<IrBlock> {
+    let v: Vec<IrBlock> = Vec::new();
+    v.push(b);
+    v
+}
+
+// name(x) = other(x)
+fn forwarder(id: i64, name: String, other: i64) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_call_target(1, ITY_I64(), args1(0), other));
+    i.push(mk_inst_return(2, 1));
+    fn_of(id, name, ITY_I64(), one(mk_block(0, i)))
+}
+
+fn leaf(id: i64, name: String) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_return(1, 0));
+    fn_of(id, name, ITY_I64(), one(mk_block(0, i)))
+}
+
+// name(x) = if x > 0 { x } else { 0 } with a requires and an ensures.
+fn contracted_branchy(id: i64, name: String) -> IrFunction {
+    let b0: Vec<IrInst> = Vec::new();
+    b0.push(mk_inst_arg(0, ITY_I64(), 0));
+    b0.push(mk_inst_const_i64(1, 0));
+    let c: Vec<i64> = Vec::new();
+    c.push(0);
+    c.push(1);
+    b0.push(mk_inst(2, IOP_GE(), ITY_BOOL(), c));
+    b0.push(mk_vow(3, IOP_VOW_REQ(), 2, 0));
+    b0.push(mk_inst_branch(4, 2, 1, 2));
+    let b1: Vec<IrInst> = Vec::new();
+    b1.push(mk_inst_return(5, 0));
+    let b2: Vec<IrInst> = Vec::new();
+    b2.push(mk_inst_const_i64(6, 0));
+    b2.push(mk_vow(7, IOP_VOW_ENS(), 2, 1));
+    b2.push(mk_inst_return(8, 6));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, b0));
+    blocks.push(mk_block(1, b1));
+    blocks.push(mk_block(2, b2));
+    fn_of(id, name, ITY_I64(), blocks)
+}
+
+fn module3(a: IrFunction, b: IrFunction, c: IrFunction) -> IrModule {
+    let fs: Vec<IrFunction> = Vec::new();
+    fs.push(a);
+    fs.push(b);
+    fs.push(c);
+    mk_module(fs)
+}
+
+fn check_cycles() -> i64 {
+    let self_rec: IrModule = module3(forwarder(0, String::from("a"), 0), leaf(1, String::from("l")), leaf(2, String::from("m")));
+    let idx: Vec<i64> = vc_fn_index_table(self_rec.functions);
+    if vc_call_cycle(self_rec.functions, idx, 0) != String::from("a -> a") { return 1; }
+
+    let mutual: IrModule = module3(forwarder(0, String::from("a"), 1), forwarder(1, String::from("b"), 0), leaf(2, String::from("m")));
+    let midx: Vec<i64> = vc_fn_index_table(mutual.functions);
+    if vc_call_cycle(mutual.functions, midx, 0) != String::from("a -> b -> a") { return 2; }
+    if vc_call_cycle(mutual.functions, midx, 1) != String::from("b -> a -> b") { return 3; }
+
+    let indirect: IrModule = module3(forwarder(0, String::from("a"), 1), forwarder(1, String::from("b"), 2), forwarder(2, String::from("c"), 1));
+    let iidx: Vec<i64> = vc_fn_index_table(indirect.functions);
+    if vc_call_cycle(indirect.functions, iidx, 0) != String::from("b -> c -> b") { return 4; }
+
+    let chain: IrModule = module3(forwarder(0, String::from("a"), 1), forwarder(1, String::from("b"), 2), leaf(2, String::from("c")));
+    let cidx: Vec<i64> = vc_fn_index_table(chain.functions);
+    if vc_call_cycle(chain.functions, cidx, 0).len() != 0 { return 5; }
+
+    // A cycle that the root does not reach is not the root's problem.
+    let aside: IrModule = module3(forwarder(0, String::from("a"), 1), leaf(1, String::from("b")), forwarder(2, String::from("c"), 2));
+    let aidx: Vec<i64> = vc_fn_index_table(aside.functions);
+    if vc_call_cycle(aside.functions, aidx, 0).len() != 0 { return 6; }
+    0
+}
+
+// a calls b twice, b calls c: a diamond without a cycle.
+fn check_diamond_is_acyclic() -> i64 {
+    let top_i: Vec<IrInst> = Vec::new();
+    top_i.push(mk_inst_arg(0, ITY_I64(), 0));
+    top_i.push(mk_inst_call_target(1, ITY_I64(), args1(0), 1));
+    top_i.push(mk_inst_call_target(2, ITY_I64(), args1(1), 2));
+    top_i.push(mk_inst_return(3, 2));
+    let top: IrFunction = fn_of(0, String::from("top"), ITY_I64(), one(mk_block(0, top_i)));
+    let m: IrModule = module3(top, forwarder(1, String::from("left"), 2), leaf(2, String::from("base")));
+    let idx: Vec<i64> = vc_fn_index_table(m.functions);
+    if vc_call_cycle(m.functions, idx, 0).len() != 0 { return 1; }
+    let seen: Vec<i64> = dom_fill(3, 0);
+    let order: Vec<i64> = Vec::new();
+    vc_reachable_callees(m.functions, idx, seen, order, 0);
+    if order.len() != 2 || order[0] != 2 || order[1] != 1 { return 2; }
+    0
+}
+
+fn check_splice_single_call() -> i64 {
+    let callee: IrFunction = contracted_branchy(1, String::from("g"));
+    let top_i: Vec<IrInst> = Vec::new();
+    top_i.push(mk_inst_arg(0, ITY_I64(), 0));
+    top_i.push(mk_inst_call_target(1, ITY_I64(), args1(0), 1));
+    top_i.push(mk_inst_return(2, 1));
+    let top: IrFunction = fn_of(0, String::from("top"), ITY_I64(), one(mk_block(0, top_i)));
+    let m: IrModule = module3(top, callee, leaf(2, String::from("unused")));
+    let r: VcInlined = vc_inline(top, m, VC_INLINE_INST_CAP());
+    if r.status != VC_INLINE_OK() { return 1; }
+    if r.frames.func_ids.len() != 1 || r.frames.func_ids[0] != 1 || r.frames.parents[0] != -1 { return 2; }
+    let g: IrFunction = r.f;
+    if vc_has_user_call(g) { return 3; }
+    if ir_non_dominating_read(g).len() != 0 { return 4; }
+    let tys: Vec<i64> = vc_ty_table(g);
+    if vc_cfg_detail(g, tys).len() != 0 { return 5; }
+    if vc_skip_reason(g).len() != 0 { return 6; }
+    // entry (kept) + the callee's three blocks + the continuation
+    if g.blocks.len() != 5 { return 7; }
+    // The continuation starts with a Phi under the call's own id.
+    let mut phis: i64 = 0;
+    let mut ups: i64 = 0;
+    let mut marked_req: i64 = 0;
+    let mut marked_ens: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() {
+        let blk: IrBlock = g.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_PHI() {
+                phis = phis + 1;
+                if inst.id != 1 || ii != 0 || inst.ty != ITY_I64() { return 8; }
+            }
+            if inst.op == IOP_UPSILON() { ups = ups + 1; }
+            if inst.op == IOP_VOW_REQ() && vc_frame_of(inst) == 0 { marked_req = marked_req + 1; }
+            if inst.op == IOP_VOW_ENS() && vc_frame_of(inst) == 0 { marked_ens = marked_ens + 1; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    if phis != 1 { return 9; }
+    if ups != 2 { return 10; }
+    if marked_req != 1 || marked_ens != 1 { return 11; }
+    // The target's own return still returns the call's value.
+    let last: IrBlock = g.blocks[g.blocks.len() - 1];
+    let ret: IrInst = last.insts[last.insts.len() - 1];
+    if ret.op != IOP_RETURN() || ret.args[0] != 1 { return 12; }
+    // The loop passes accept the flattened function.
+    if vc_close_loops(g).blocks.len() != g.blocks.len() { return 13; }
+    0
+}
+
+fn check_splice_unit_callee() -> i64 {
+    let ci: Vec<IrInst> = Vec::new();
+    ci.push(mk_inst_arg(0, ITY_I64(), 0));
+    ci.push(mk_inst_const_i64(1, 0));
+    let c: Vec<i64> = Vec::new();
+    c.push(0);
+    c.push(1);
+    ci.push(mk_inst(2, IOP_GE(), ITY_BOOL(), c));
+    ci.push(mk_vow(3, IOP_VOW_REQ(), 2, 0));
+    ci.push(ir_inst_new(4, IOP_CONST_UNIT(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+    ci.push(mk_inst_return(5, 4));
+    let callee: IrFunction = fn_of(1, String::from("check"), ITY_UNIT(), one(mk_block(0, ci)));
+    let ti: Vec<IrInst> = Vec::new();
+    ti.push(mk_inst_arg(0, ITY_I64(), 0));
+    ti.push(mk_inst_call_target(1, ITY_UNIT(), args1(0), 1));
+    ti.push(mk_inst_return(2, 0));
+    let top: IrFunction = fn_of(0, String::from("top"), ITY_I64(), one(mk_block(0, ti)));
+    let m: IrModule = module3(top, callee, leaf(2, String::from("unused")));
+    let r: VcInlined = vc_inline(top, m, VC_INLINE_INST_CAP());
+    if r.status != VC_INLINE_OK() { return 1; }
+    let g: IrFunction = r.f;
+    let mut phis: i64 = 0;
+    let mut ups: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() {
+        let blk: IrBlock = g.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            if blk.insts[ii].op == IOP_PHI() { phis = phis + 1; }
+            if blk.insts[ii].op == IOP_UPSILON() { ups = ups + 1; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    if phis != 0 || ups != 0 { return 2; }
+    if vc_skip_reason(g).len() != 0 { return 3; }
+    0
+}
+
+// Two calls of one callee share nothing: every value of the second copy is new.
+fn check_copies_do_not_share_values() -> i64 {
+    let top_i: Vec<IrInst> = Vec::new();
+    top_i.push(mk_inst_arg(0, ITY_I64(), 0));
+    top_i.push(mk_inst_call_target(1, ITY_I64(), args1(0), 1));
+    top_i.push(mk_inst_call_target(2, ITY_I64(), args1(1), 1));
+    top_i.push(mk_inst_return(3, 2));
+    let top: IrFunction = fn_of(0, String::from("top"), ITY_I64(), one(mk_block(0, top_i)));
+    let m: IrModule = module3(top, contracted_branchy(1, String::from("g")), leaf(2, String::from("unused")));
+    let r: VcInlined = vc_inline(top, m, VC_INLINE_INST_CAP());
+    if r.status != VC_INLINE_OK() || r.frames.func_ids.len() != 2 { return 1; }
+    let g: IrFunction = r.f;
+    let seen: Vec<i64> = dom_fill((dom_max_inst_id(g) + 1) as u64, 0);
+    let mut bi: u64 = 0;
+    while bi < g.blocks.len() {
+        let blk: IrBlock = g.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let id: i64 = blk.insts[ii].id;
+            if id >= 0 {
+                if seen[id as u64] != 0 { return 2; }
+                seen[id as u64] = 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    if ir_non_dominating_read(g).len() != 0 { return 3; }
+    if vc_skip_reason(g).len() != 0 { return 4; }
+    0
+}
+
+fn check_nested_frames() -> i64 {
+    let m: IrModule = module3(forwarder(0, String::from("a"), 1), forwarder(1, String::from("b"), 2), contracted_branchy(2, String::from("c")));
+    let r: VcInlined = vc_inline(m.functions[0], m, VC_INLINE_INST_CAP());
+    if r.status != VC_INLINE_OK() || r.frames.func_ids.len() != 2 { return 1; }
+    if r.frames.func_ids[0] != 1 || r.frames.parents[0] != -1 { return 2; }
+    if r.frames.func_ids[1] != 2 || r.frames.parents[1] != 0 { return 3; }
+    if vc_frame_func(r.frames, 1, 0) != 2 || vc_frame_func(r.frames, -1, 0) != 0 { return 4; }
+    if vc_skip_reason(r.f).len() != 0 { return 5; }
+    0
+}
+
+fn check_module_reasons() -> i64 {
+    let rec: IrModule = module3(forwarder(0, String::from("a"), 1), forwarder(1, String::from("b"), 0), leaf(2, String::from("m")));
+    if vc_module_skip_reason(rec.functions[0], rec) != String::from("recursion-unsupported: a -> b -> a") { return 1; }
+
+    // A callee outside the subset names itself and its own code.
+    let bad_i: Vec<IrInst> = Vec::new();
+    bad_i.push(mk_inst_arg(0, ITY_I64(), 0));
+    bad_i.push(mk_inst(1, IOP_LOAD(), ITY_I64(), args1(0)));
+    bad_i.push(mk_inst_return(2, 1));
+    let bad: IrFunction = fn_of(1, String::from("g"), ITY_I64(), one(mk_block(0, bad_i)));
+    let m: IrModule = module3(forwarder(0, String::from("a"), 1), bad, leaf(2, String::from("m")));
+    if vc_module_skip_reason(m.functions[0], m) != String::from("non-modelable-callee: g (unsupported-opcode)") { return 2; }
+
+    // A function without calls is decided as before.
+    if vc_module_skip_reason(m.functions[2], m).len() != 0 { return 3; }
+
+    // The ordinary case is accepted.
+    let ok: IrModule = module3(forwarder(0, String::from("a"), 1), contracted_branchy(1, String::from("g")), leaf(2, String::from("m")));
+    if vc_module_skip_reason(ok.functions[0], ok).len() != 0 { return 4; }
+
+    // A call whose argument count disagrees with the callee is not guessed at.
+    let wrong_i: Vec<IrInst> = Vec::new();
+    wrong_i.push(mk_inst_arg(0, ITY_I64(), 0));
+    let two: Vec<i64> = Vec::new();
+    two.push(0);
+    two.push(0);
+    wrong_i.push(mk_inst_call_target(1, ITY_I64(), two, 1));
+    wrong_i.push(mk_inst_return(2, 1));
+    let wrong: IrFunction = fn_of(0, String::from("a"), ITY_I64(), one(mk_block(0, wrong_i)));
+    let wm: IrModule = module3(wrong, leaf(1, String::from("g")), leaf(2, String::from("m")));
+    if vc_module_skip_reason(wm.functions[0], wm).len() == 0 { return 5; }
+    0
+}
+
+// A call tree is counted before it is built; a function calling the next one
+// twice has 2^n instructions in its tree and must not be materialised.
+fn check_budget() -> i64 {
+    let fs: Vec<IrFunction> = Vec::new();
+    let n: i64 = 40;
+    let mut k: i64 = 0;
+    while k < n {
+        let i: Vec<IrInst> = Vec::new();
+        i.push(mk_inst_arg(0, ITY_I64(), 0));
+        i.push(mk_inst_call_target(1, ITY_I64(), args1(0), k + 1));
+        i.push(mk_inst_call_target(2, ITY_I64(), args1(1), k + 1));
+        i.push(mk_inst_return(3, 2));
+        let name: String = String::from("f");
+        name.push_str(i64_to_string(k));
+        fs.push(fn_of(k, name, ITY_I64(), one(mk_block(0, i))));
+        k = k + 1;
+    }
+    fs.push(leaf(n, String::from("last")));
+    let m: IrModule = mk_module(fs);
+    let r: VcInlined = vc_inline(m.functions[0], m, VC_INLINE_INST_CAP());
+    if r.status != VC_INLINE_TOO_LARGE() { return 1; }
+    if r.f.blocks.len() != m.functions[0].blocks.len() { return 2; }
+    // The module gate lets it through: the worker answers `unknown`.
+    if vc_module_skip_reason(m.functions[0], m).len() != 0 { return 3; }
+
+    let small: IrModule = module3(forwarder(0, String::from("a"), 1), leaf(1, String::from("b")), leaf(2, String::from("m")));
+    if vc_inline(small.functions[0], small, 3).status != VC_INLINE_TOO_LARGE() { return 4; }
+    if vc_inline(small.functions[0], small, 100).status != VC_INLINE_OK() { return 5; }
+    0
+}
+
+fn check_frame_marks() -> i64 {
+    let mark: String = vc_frame_mark(12);
+    let i: IrInst = ir_inst_new(0, IOP_CADD(), ITY_I64(), Vec::new(), IDATA_NONE(), 0, 0, mark);
+    if vc_frame_of(i) != 12 { return 1; }
+    let plain: IrInst = ir_inst_new(0, IOP_CADD(), ITY_I64(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""));
+    if vc_frame_of(plain) != -1 { return 2; }
+    let other: IrInst = ir_inst_new(0, IOP_CALL(), ITY_I64(), Vec::new(), IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_unwrap_panic"));
+    if vc_frame_of(other) != -1 { return 3; }
+    let torn: IrInst = ir_inst_new(0, IOP_CADD(), ITY_I64(), Vec::new(), IDATA_NONE(), 0, 0, VC_FRAME_PREFIX());
+    if vc_frame_of(torn) != -1 { return 4; }
+    0
+}
+
+// The unwrap abort keeps its extern name, so its frame travels in `dv2`: a
+// callee's abort is attributed to the callee's frame, the target's own is not.
+fn check_unwrap_abort_frame() -> i64 {
+    let ci: Vec<IrInst> = Vec::new();
+    ci.push(mk_inst_arg(0, ITY_I64(), 0));
+    ci.push(ir_inst_new(1, IOP_CALL(), ITY_UNIT(), Vec::new(), IDATA_CALL_EXTERN(), 0, 0, VC_INTERNAL_UNWRAP_PANIC()));
+    ci.push(mk_inst_return(2, 0));
+    let callee: IrFunction = fn_of(1, String::from("g"), ITY_I64(), one(mk_block(0, ci)));
+    let top: IrFunction = forwarder(0, String::from("top"), 1);
+    let m: IrModule = module3(top, callee, leaf(2, String::from("unused")));
+    let r: VcInlined = vc_inline(top, m, VC_INLINE_INST_CAP());
+    if r.status != VC_INLINE_OK() { return 1; }
+    let mut seen: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < r.f.blocks.len() {
+        let blk: IrBlock = r.f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if vc_is_unwrap_abort(inst) {
+                seen = seen + 1;
+                if vc_frame_of(inst) != 0 { return 2; }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    if seen != 1 { return 3; }
+    // The callee itself is untouched: the splice copies, it does not mark in place.
+    if vc_frame_of(callee.blocks[0].insts[1]) != -1 { return 4; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_cycles();
+    if r == 0 { let d: i64 = check_diamond_is_acyclic(); if d != 0 { r = 100 + d; } }
+    if r == 0 { let d: i64 = check_splice_single_call(); if d != 0 { r = 200 + d; } }
+    if r == 0 { let d: i64 = check_splice_unit_callee(); if d != 0 { r = 300 + d; } }
+    if r == 0 { let d: i64 = check_copies_do_not_share_values(); if d != 0 { r = 400 + d; } }
+    if r == 0 { let d: i64 = check_nested_frames(); if d != 0 { r = 500 + d; } }
+    if r == 0 { let d: i64 = check_module_reasons(); if d != 0 { r = 600 + d; } }
+    if r == 0 { let d: i64 = check_budget(); if d != 0 { r = 700 + d; } }
+    if r == 0 { let d: i64 = check_frame_marks(); if d != 0 { r = 800 + d; } }
+    if r == 0 { let d: i64 = check_unwrap_abort_frame(); if d != 0 { r = 900 + d; } }
+    i64_to_i32_wrap(r)
+}
