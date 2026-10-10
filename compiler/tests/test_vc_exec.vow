@@ -847,7 +847,8 @@ fn check_unwinding_claim_query() -> i64 {
 
 // Inlined callee clauses: a `requires` in a frame is a claim blamed on the
 // caller and an `ensures` in a frame one blamed on the callee, both assumed
-// once asked; the target's own `ensures` stays a claim.
+// once asked; the target's own `ensures` stays a claim. Its predicate differs
+// from the callee's, since a claim equal to an earlier assumption is elided.
 fn framed(i: IrInst, frame: i64) -> IrInst {
     i.ds = vc_frame_mark(frame);
     i
@@ -863,8 +864,9 @@ fn callee_clause_function() -> IrFunction {
     i.push(mk_inst(5, IOP_WDIV(), ITY_I64(), args2(0, 1)));
     i.push(mk_inst(6, IOP_GE(), ITY_BOOL(), args2(5, 2)));
     i.push(framed(mk_vow(7, IOP_VOW_ENS(), 6, 5), 0));
-    i.push(mk_vow(8, IOP_VOW_ENS(), 6, 2));
-    i.push(mk_inst_return(9, 5));
+    i.push(mk_inst(8, IOP_GT(), ITY_BOOL(), args2(5, 2)));
+    i.push(mk_vow(9, IOP_VOW_ENS(), 8, 2));
+    i.push(mk_inst_return(10, 5));
     one_block(String::from("flat"), params2(), ITY_I64(), i)
 }
 
