@@ -4,7 +4,7 @@
 Reads docs/spec/grammar.md and docs/spec/cli.md (the canonical specs),
 builds the help JSON structure, and writes it into:
   - vow/src/skill.rs (skill_json raw string literal, skill_human string literal)
-  - compiler/main.vow (skill_json push_str calls, skill_human push_str calls)
+  - compiler/main.vow (skill_json and skill_human as chunked string literals)
 
 Usage:
     python3 scripts/generate_help.py          # from repo root
@@ -889,24 +889,48 @@ def inject_rust(skill_rs: Path, json_str: str, human_str: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _vow_pushstr_body(text: str) -> tuple[str, str]:
-    """Convert a multiline string into Vow String::from first line + push_str rest.
-    Returns (first_line_escaped, rest_pushstr_lines)."""
-    vow_text = text.replace("\u2014", "--")
-    lines = vow_text.split("\n")
-    first_escaped = lines[0].replace("\\", "\\\\").replace('"', '\\"')
-    rest = []
-    for line in lines[1:]:
-        escaped = line.replace("\\", "\\\\").replace('"', '\\"')
-        rest.append(f'    r.push_str(String::from("{escaped}\\n"));')
-    return first_escaped, "\n".join(rest)
+# Upper bound, in bytes, for one emitted payload literal. Whole lines are packed
+# into a chunk up to this size, so chunking never produces a literal longer than
+# max(this cap, the longest source line). The verifier sizes its C string
+# buffers by the longest literal in the module; chunks therefore never raise it.
+VOW_LITERAL_CHUNK_BYTES = 2048
+
+
+def _vow_escape(chunk: str) -> str:
+    return chunk.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def _vow_payload_fn(name: str, text: str) -> str:
+    """Emit `fn name() -> String` building `text` from chunked string literals.
+
+    The payload is `text` (em dashes become `--`) plus a trailing newline, packed
+    into whole-line chunks of at most VOW_LITERAL_CHUNK_BYTES (a longer line is a
+    chunk of its own).
+    """
+    chunks: list[str] = []
+    current = ""
+    for line in text.replace("\u2014", "--").split("\n"):
+        line += "\n"
+        if current and len((current + line).encode()) > VOW_LITERAL_CHUNK_BYTES:
+            chunks.append(current)
+            current = ""
+        current += line
+    chunks.append(current)
+    body = [f'    let r: String = String::from("{_vow_escape(chunks[0])}");']
+    body += [
+        f'    r.push_str(String::from("{_vow_escape(chunk)}"));' for chunk in chunks[1:]
+    ]
+    return "\n".join([f"fn {name}() -> String {{", *body, "    r", "}"])
 
 
 def inject_vow(main_vow: Path, json_str: str, human_str: str) -> str:
     content = main_vow.read_text()
 
-    first_json, rest_json = _vow_pushstr_body(json_str)
-    json_fn = f'// GENERATE:SKILL_JSON:START\nfn skill_json() -> String {{\n    let r: String = String::from("{first_json}\\n");\n{rest_json}\n    r\n}}\n// GENERATE:SKILL_JSON:END'
+    json_fn = (
+        "// GENERATE:SKILL_JSON:START\n"
+        + _vow_payload_fn("skill_json", json_str)
+        + "\n// GENERATE:SKILL_JSON:END"
+    )
     content = _replace_between_markers(
         content,
         "// GENERATE:SKILL_JSON:START",
@@ -914,8 +938,11 @@ def inject_vow(main_vow: Path, json_str: str, human_str: str) -> str:
         json_fn,
     )
 
-    first_human, rest_human = _vow_pushstr_body(human_str)
-    human_fn = f'// GENERATE:SKILL_HUMAN:START\nfn skill_human() -> String {{\n    let r: String = String::from("{first_human}\\n");\n{rest_human}\n    r\n}}\n// GENERATE:SKILL_HUMAN:END'
+    human_fn = (
+        "// GENERATE:SKILL_HUMAN:START\n"
+        + _vow_payload_fn("skill_human", human_str)
+        + "\n// GENERATE:SKILL_HUMAN:END"
+    )
     content = _replace_between_markers(
         content,
         "// GENERATE:SKILL_HUMAN:START",
@@ -1121,8 +1148,6 @@ def inject_skill_vow(
     content: str, entrypoint_md: str, bundle_md: str, support_files: dict[str, str]
 ) -> str:
     """Inject generated skill helpers into self-hosted main.vow."""
-    first_entrypoint, rest_entrypoint = _vow_pushstr_body(entrypoint_md)
-    first_bundle, rest_bundle = _vow_pushstr_body(bundle_md)
     support_entries = [
         (path, body, _vow_skill_support_content_fn_name(path))
         for path, body in support_files.items()
@@ -1130,17 +1155,9 @@ def inject_skill_vow(
 
     sections = [
         "// GENERATE:SKILL_FULL:START",
-        "fn skill_entrypoint() -> String {",
-        f'    let r: String = String::from("{first_entrypoint}\\n");',
-        rest_entrypoint,
-        "    r",
-        "}",
+        _vow_payload_fn("skill_entrypoint", entrypoint_md),
         "",
-        "fn skill_bundle() -> String {",
-        f'    let r: String = String::from("{first_bundle}\\n");',
-        rest_bundle,
-        "    r",
-        "}",
+        _vow_payload_fn("skill_bundle", bundle_md),
         "",
         "fn skill_support_count() -> u64 {",
         f"    {len(support_entries)}",
@@ -1151,24 +1168,14 @@ def inject_skill_vow(
         "} {",
     ]
     for idx, (path, _, _) in enumerate(support_entries):
-        escaped = path.replace("\\", "\\\\").replace('"', '\\"')
+        escaped = _vow_escape(path)
         sections.append(
             f'    if index == {idx} {{ return String::from("{escaped}"); }}'
         )
     sections.extend(['    String::from("")', "}", ""])
 
     for _, body, fn_name in support_entries:
-        first, rest = _vow_pushstr_body(body)
-        sections.extend(
-            [
-                f"fn {fn_name}() -> String {{",
-                f'    let r: String = String::from("{first}\\n");',
-                rest,
-                "    r",
-                "}",
-                "",
-            ]
-        )
+        sections.extend([_vow_payload_fn(fn_name, body), ""])
 
     sections.extend(
         [
