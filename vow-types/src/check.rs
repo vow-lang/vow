@@ -2694,8 +2694,7 @@ impl<'e> Checker<'e> {
                 // `method_result_type` / `builtin_method_names` seams; the arm
                 // keeps only the diagnostics and side effects those cannot own.
                 let result_ty = method_result_type(&recv_ty, method);
-                if is_vec
-                    && method == "push"
+                if method == "push"
                     && let Some(args) = recv_ty.applied_args(NominalKind::Struct, "Vec")
                     && let Some(elem_ty) = args.first()
                 {

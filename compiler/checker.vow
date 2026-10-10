@@ -2604,14 +2604,14 @@ fn pattern_vec_variant_payload_ty_path(ts: TyStore, tid: i64) -> Vec<Vec<i64>> {
 // 8-byte, so lowering needs the width from the checker rather than from
 // whatever metadata the receiver happens to carry.
 fn record_wide_vec_site(e: CheckEnv, eid: i64, elem_tid: i64) {
-    let scalar: i64 = pattern_scalar_ir_ty(e.ts, elem_tid);
-    if scalar != ITY_I128() && scalar != ITY_U128() {
+    let elem_tag: i64 = ty_tag(e.ts, elem_tid);
+    if elem_tag != CTY_I128() && elem_tag != CTY_U128() {
         return;
     }
     while e.question_scalar_tys.len() as i64 <= eid {
         e.question_scalar_tys.push(-1);
     }
-    e.question_scalar_tys[eid as u64] = scalar;
+    e.question_scalar_tys[eid as u64] = pattern_scalar_ir_ty(e.ts, elem_tid);
 }
 
 // Records payload scalar or aggregate metadata for an expression that extracts an
@@ -3328,8 +3328,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if vec_args >= 0 {
             let hargs_lid: i64 = vec_args;
             if mname == String::from("push") {
-                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
-                record_wide_vec_site(e, eid, ts_arg_or_unknown(e.ts, hargs_lid, 0));
+                let push_elem_tid: i64 = ts_arg_or_unknown(e.ts, hargs_lid, 0);
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, push_elem_tid, mname);
+                record_wide_vec_site(e, eid, push_elem_tid);
             }
             if mname == String::from("truncate") {
                 check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_U64(), mname);

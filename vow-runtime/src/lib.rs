@@ -1796,8 +1796,9 @@ pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
     v.len = new_len;
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i64) {
+/// Address of element `index` for a write: the sanitizer, rodata and bounds
+/// checks every `Vec` element store shares, parameterised by element stride.
+unsafe fn vec_set_slot_ptr(vec: *mut u8, index: usize, elem_size: usize) -> *mut u8 {
     sanitize_check_live(vec as usize, "set");
     let v = unsafe { &*(vec as *const VowVec) };
     if v.cap == VOW_CAP_RODATA {
@@ -1809,7 +1810,12 @@ pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i6
         let _ = writeln!(std::io::stderr(), "index out of bounds");
         std::process::exit(VOW_RUNTIME_ABORT_EXIT);
     }
-    let elem_ptr = unsafe { v.ptr.add(index * 8) as *mut i64 };
+    unsafe { v.ptr.add(index * elem_size) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i64) {
+    let elem_ptr = unsafe { vec_set_slot_ptr(vec, index, 8) as *mut i64 };
     unsafe { *elem_ptr = value };
 }
 
@@ -1824,7 +1830,7 @@ const VEC_WIDE_ELEM_SIZE: usize = 16;
 pub unsafe extern "C" fn __vow_vec_push_wide_ptr(vec: *mut u8) -> *mut u8 {
     unsafe {
         with_growth_arena(vec, |arena| {
-            sanitize_on_push(vec as usize);
+            sanitize_check_live(vec as usize, "push");
             vec_push_slot_no_sanitize_in_arena(arena, vec, VEC_WIDE_ELEM_SIZE, 8, "Vec::push")
         })
     }
@@ -1839,18 +1845,7 @@ pub unsafe extern "C" fn __vow_vec_get_wide_ptr(vec: *const u8, index: usize) ->
 /// Bounds-checked address of a 128-bit element, for a `WideSlot` write.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_set_wide_ptr(vec: *mut u8, index: usize) -> *mut u8 {
-    sanitize_on_set(vec as usize, index);
-    let v = unsafe { &*(vec as *const VowVec) };
-    if v.cap == VOW_CAP_RODATA {
-        region_literal_mutation_trap("Vec::set");
-    }
-    if index >= v.len {
-        let json = r#"{"error":"IndexOutOfBounds"}"#;
-        let _ = writeln!(std::io::stderr(), "{json}");
-        let _ = writeln!(std::io::stderr(), "index out of bounds");
-        std::process::exit(VOW_RUNTIME_ABORT_EXIT);
-    }
-    unsafe { v.ptr.add(index * VEC_WIDE_ELEM_SIZE) }
+    unsafe { vec_set_slot_ptr(vec, index, VEC_WIDE_ELEM_SIZE) }
 }
 
 #[unsafe(no_mangle)]

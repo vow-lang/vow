@@ -474,9 +474,44 @@ fn checked_wide_vec_elem(ctx: &LowerCtx, expr: &Expr) -> Option<Ty> {
         .filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
 }
 
-/// Address of a `Vec` element through a bounds-checked helper, so the 128-bit
-/// value can be read or written with the two-slot `WideSlot` access.
-fn emit_wide_vec_elem_ptr(
+/// Reads a 128-bit `Vec` element: a bounds-checked element address, then the
+/// two-slot `WideSlot` load. Twin of `lctx_emit_wide_vec_elem_get`.
+fn emit_wide_vec_elem_get(
+    ctx: &mut LowerCtx,
+    vec: InstId,
+    index: InstId,
+    wide_ty: Ty,
+    span: Span,
+) -> InstId {
+    let slot = ctx.emit(
+        Opcode::Call,
+        Ty::Ptr,
+        vec![vec, index],
+        InstData::CallExtern("__vow_vec_get_wide_ptr".to_string()),
+        span,
+    );
+    ctx.emit(
+        Opcode::FieldGet,
+        wide_ty,
+        vec![slot],
+        InstData::WideSlot(0),
+        span,
+    )
+}
+
+/// Stores into a 128-bit `Vec` element address with the two-slot `WideSlot`
+/// store. Twin of `lctx_emit_wide_slot_store`.
+fn emit_wide_slot_store(ctx: &mut LowerCtx, slot: InstId, value: InstId, span: Span) -> InstId {
+    ctx.emit(
+        Opcode::FieldSet,
+        Ty::Unit,
+        vec![slot, value],
+        InstData::WideSlot(0),
+        span,
+    )
+}
+
+fn emit_wide_vec_elem_call(
     ctx: &mut LowerCtx,
     helper: &str,
     args: Vec<InstId>,
@@ -919,15 +954,12 @@ fn payload_slot(payload_tys: &[Ty], index: usize) -> u32 {
 }
 
 fn field_type_slot_width(type_name: &str) -> u32 {
-    if matches!(type_name, "i128" | "u128") {
-        2
-    } else {
-        1
-    }
+    payload_slot_width(scalar_ty_for_field_type_name(type_name))
 }
 
-/// First 8-byte slot of struct field `index`. Structs have no tag, so slots
-/// start at 0 and every field after a 128-bit one moves up by one.
+/// First 8-byte slot of struct field `index` (or, with `index` equal to the
+/// field count, the slot count). Structs have no tag, so slots start at 0 and
+/// every field after a 128-bit one moves up by one.
 fn struct_field_slot(ctx: &LowerCtx, struct_name: &str, index: usize) -> u32 {
     let Some(type_names) = ctx.struct_field_type_names.get(struct_name) else {
         return index as u32;
@@ -937,23 +969,13 @@ fn struct_field_slot(ctx: &LowerCtx, struct_name: &str, index: usize) -> u32 {
         .sum()
 }
 
-/// Number of 8-byte slots the fields of `struct_name` occupy.
-fn struct_slot_count(ctx: &LowerCtx, struct_name: &str, n_fields: usize) -> u32 {
-    struct_field_slot(ctx, struct_name, n_fields)
-}
-
 fn struct_field_data(ctx: &LowerCtx, struct_name: &str, index: usize) -> InstData {
-    let slot = struct_field_slot(ctx, struct_name, index);
-    let wide = ctx
+    let field_ty = ctx
         .struct_field_type_names
         .get(struct_name)
         .and_then(|names| names.get(index))
-        .is_some_and(|name| field_type_slot_width(name) == 2);
-    if wide {
-        InstData::WideSlot(slot)
-    } else {
-        InstData::FieldIndex(slot)
-    }
+        .map_or(Ty::I64, |name| scalar_ty_for_field_type_name(name));
+    payload_field_data(field_ty, struct_field_slot(ctx, struct_name, index))
 }
 
 /// Declared 128-bit width of an enum variant's payload slot, by enum name.
@@ -2442,19 +2464,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 // Index store transfers a linear RHS into the heap container.
                 ctx.emit_linear_consume_if_needed(new_val, span);
                 if checked_wide_vec_elem(ctx, lhs).is_some() {
-                    let slot = emit_wide_vec_elem_ptr(
+                    let slot = emit_wide_vec_elem_call(
                         ctx,
                         "__vow_vec_set_wide_ptr",
                         vec![vec_ptr, idx_id],
                         span,
                     );
-                    ctx.emit(
-                        Opcode::FieldSet,
-                        Ty::Unit,
-                        vec![slot, new_val],
-                        InstData::WideSlot(0),
-                        span,
-                    );
+                    emit_wide_slot_store(ctx, slot, new_val, span);
                     return new_val;
                 }
                 ctx.emit(
@@ -2834,19 +2850,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // Body: get element and bind to loop variable
             ctx.switch_to_block(body_block);
             let elem_id = if let Some(wide_ty) = checked_wide_vec_elem(ctx, expr) {
-                let slot = emit_wide_vec_elem_ptr(
-                    ctx,
-                    "__vow_vec_get_wide_ptr",
-                    vec![iter_id, idx_phi],
-                    span,
-                );
-                ctx.emit(
-                    Opcode::FieldGet,
-                    wide_ty,
-                    vec![slot],
-                    InstData::WideSlot(0),
-                    span,
-                )
+                emit_wide_vec_elem_get(ctx, iter_id, idx_phi, wide_ty, span)
             } else {
                 ctx.emit(
                     Opcode::Call,
@@ -3278,7 +3282,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 vec![]
             };
             let n_fields = field_names.len().max(fields.len());
-            let n_slots = (struct_slot_count(ctx, name, field_names.len()) as usize).max(n_fields);
+            let n_slots = (struct_field_slot(ctx, name, field_names.len()) as usize).max(n_fields);
             let result_ty = if ctx.linear_owner_names.contains(name) {
                 Ty::LinearPtr
             } else {
@@ -4129,19 +4133,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                         });
                     if elem_ty.is_some() {
-                        let slot = emit_wide_vec_elem_ptr(
+                        let slot = emit_wide_vec_elem_call(
                             ctx,
                             "__vow_vec_push_wide_ptr",
                             vec![recv_id],
                             span,
                         );
-                        return ctx.emit(
-                            Opcode::FieldSet,
-                            Ty::Unit,
-                            vec![slot, elem_id],
-                            InstData::WideSlot(0),
-                            span,
-                        );
+                        return emit_wide_slot_store(ctx, slot, elem_id, span);
                     }
                     ctx.emit(
                         Opcode::Call,
@@ -4178,19 +4176,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let vec_ptr = lower_expr(ctx, base);
             let idx_id = lower_expr(ctx, index);
             if let Some(wide_ty) = checked_wide_vec_elem(ctx, expr) {
-                let slot = emit_wide_vec_elem_ptr(
-                    ctx,
-                    "__vow_vec_get_wide_ptr",
-                    vec![vec_ptr, idx_id],
-                    span,
-                );
-                let result = ctx.emit(
-                    Opcode::FieldGet,
-                    wide_ty,
-                    vec![slot],
-                    InstData::WideSlot(0),
-                    span,
-                );
+                let result = emit_wide_vec_elem_get(ctx, vec_ptr, idx_id, wide_ty, span);
                 if let Some(ast_type) = elem_ast_type {
                     ctx.inst_declared_ast_types.insert(result, ast_type);
                 }

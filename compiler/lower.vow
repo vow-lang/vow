@@ -1161,8 +1161,7 @@ fn lctx_struct_field_slot(ctx: LowerCtx, struct_name: String, ordinal: i64) -> i
     slot
 }
 
-fn lctx_struct_field_dk(ctx: LowerCtx, struct_name: String, ordinal: i64) -> i64 {
-    let type_name: String = lctx_struct_field_type(ctx, struct_name, ordinal);
+fn lower_field_dk(type_name: String) -> i64 {
     if lower_field_type_slot_width(type_name) == 2 { IDATA_WIDE_SLOT() } else { IDATA_FIELD() }
 }
 
@@ -4097,7 +4096,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                 let fs_args: Vec<i64> = Vec::new();
                 fs_args.push(recv_id);
                 fs_args.push(val_id);
-                return lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, lctx_struct_field_dk(ctx, recv_tag_str, fidx), lctx_struct_field_slot(ctx, recv_tag_str, fidx), 0, String::from(""), origin);
+                return lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, lower_field_dk(field_type_name), lctx_struct_field_slot(ctx, recv_tag_str, fidx), 0, String::from(""), origin);
             }
             return lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from(""), origin);
         }
@@ -4190,7 +4189,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
         fg_args.push(recv_id);
         let field_type: String = lctx_struct_field_type(ctx, recv_tag_str, fidx);
         let field_ity: i64 = ity_for_scalar_type_name(field_type);
-        let result: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ity, fg_args, lctx_struct_field_dk(ctx, recv_tag_str, fidx), lctx_struct_field_slot(ctx, recv_tag_str, fidx), 0, String::from(""), origin);
+        let result: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ity, fg_args, lower_field_dk(field_type), lctx_struct_field_slot(ctx, recv_tag_str, fidx), 0, String::from(""), origin);
         lctx_tag_declared_ast_tid(
             ctx, result, lctx_struct_field_ast_tid(ctx, recv_tag_str, fidx)
         );
@@ -4265,7 +4264,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
                 let fs_args: Vec<i64> = Vec::new();
                 fs_args.push(ptr_id);
                 fs_args.push(val_id);
-                lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, lctx_struct_field_dk(ctx, struct_name, fidx), lctx_struct_field_slot(ctx, struct_name, fidx), 0, String::from(""), origin);
+                lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, lower_field_dk(field_name), lctx_struct_field_slot(ctx, struct_name, fidx), 0, String::from(""), origin);
             }
             fi = fi + 1;
         }

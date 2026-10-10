@@ -171,9 +171,9 @@ fn ity_bits(ty: i64) -> i64 {
 /// Returns `None` when the coercion would silently drop a 128-bit value's high
 /// limb. The builtins that legitimately narrow (`i128_to_u8_*` and friends)
 /// declare an I128 parameter, so they never hit that branch — a 128-bit value
-/// arriving at a narrower slot means the callee has no 128-bit-aware ABI yet
-/// (e.g. the i64-only `Vec` element helpers). Callers must fail closed rather
-/// than pass a truncated value.
+/// arriving at a narrower slot means the callee has no 128-bit-aware ABI.
+/// (`Vec<i128>` elements never reach here: they use the element-address
+/// helpers.) Callers must fail closed rather than pass a truncated value.
 fn coerce_call_argument(
     builder: &mut FunctionBuilder<'_>,
     value: Value,
