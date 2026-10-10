@@ -70,8 +70,9 @@ fn param_push_get() -> IrFunction {
     one_block(ptr_u64_params(), ITY_I64(), insts)
 }
 
-// A parameter's length has no capacity: reading an element adds no assumption,
-// and the bounds claim compares the index against the length symbol itself.
+// A parameter's length has no capacity: its one assumption is the runtime's
+// representation invariant (below `VOW_CAP_VALUE_MASK`), and the bounds claim
+// compares the index against the length symbol itself.
 fn check_param_length_is_unconstrained() -> i64 {
     let f: IrFunction = param_get();
     if vc_skip_reason(f).len() != 0 { return 1; }
@@ -79,7 +80,8 @@ fn check_param_length_is_unconstrained() -> i64 {
     if cs.kinds.len() != 1 { return 2; }
     if cs.kinds[0] != VC_CLAIM_VEC_BOUNDS() { return 3; }
     if cs.labels[0] != VC_LABEL_VEC_BOUNDS() { return 4; }
-    if cs.assumed_lens[0] != 0 { return 5; }
+    if cs.assumed_lens[0] != 1 { return 5; }
+    if vc_term_text(cs.arena, cs.assumed[0]) != String::from("(bvult p0_vlen #x7fffffffffffffff)") { return 11; }
     let hdr: SmtScript = cs.header;
     if hdr.names[0] != String::from("QF_ABV") { return 6; }
     let q: String = render(cs, 0);
@@ -90,16 +92,17 @@ fn check_param_length_is_unconstrained() -> i64 {
     0
 }
 
-// A push assumes only that the length does not wrap, and that is the one
-// assumption: no bound on the length is ever introduced.
-fn check_push_assumes_only_no_wrap() -> i64 {
+// A push assumes only that the new length stays within the representation
+// invariant: besides the invariant of the parameter itself, no bound on the
+// length is introduced.
+fn check_push_assumes_only_the_invariant() -> i64 {
     let f: IrFunction = param_push_get();
     if vc_skip_reason(f).len() != 0 { return 20; }
     let cs: VcClaims = vc_claims(f);
     if cs.kinds.len() != 1 { return 21; }
-    if cs.assumed_lens[0] != 1 { return 22; }
-    let got: String = vc_term_text(cs.arena, cs.assumed[0]);
-    if got != String::from("(distinct p0_vlen #xffffffffffffffff)") { return 23; }
+    if cs.assumed_lens[0] != 2 { return 22; }
+    let got: String = vc_term_text(cs.arena, cs.assumed[1]);
+    if got != String::from("(bvult p0_vlen #x7ffffffffffffffe)") { return 23; }
     let q: String = render(cs, 0);
     if !contains(q, String::from("(store p0_varr p0_vlen")) { return 24; }
     if !contains(q, String::from("(bvadd p0_vlen #x0000000000000001)")) { return 25; }
@@ -121,7 +124,7 @@ fn local_two_pushes() -> IrFunction {
 }
 
 // A new Vec starts empty and only the pushes change its length; no claim and
-// no assumption besides the two no-wrap guards.
+// no assumption besides the two push guards.
 fn check_local_vec_length() -> i64 {
     let f: IrFunction = local_two_pushes();
     if vc_skip_reason(f).len() != 0 { return 30; }
@@ -161,7 +164,7 @@ fn check_frame_travels_in_dv2() -> i64 {
 
 fn main() -> i32 {
     let mut r: i64 = check_param_length_is_unconstrained();
-    if r == 0 { r = check_push_assumes_only_no_wrap(); }
+    if r == 0 { r = check_push_assumes_only_the_invariant(); }
     if r == 0 { r = check_local_vec_length(); }
     if r == 0 { r = check_no_vec_stays_bit_vector(); }
     if r == 0 { r = check_frame_travels_in_dv2(); }

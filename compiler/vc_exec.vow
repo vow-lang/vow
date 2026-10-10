@@ -377,6 +377,12 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
         return true;
     }
     let s: i64 = vc_vec_slot(vv, w.ag, ar, hdr, w.obj_of[inst.args[0] as u64]);
+    let facts: Vec<i64> = vc_vec_take_facts(vv);
+    let mut fi: u64 = 0;
+    while fi < facts.len() {
+        cs.assumed.push(facts[fi]);
+        fi = fi + 1;
+    }
     if kind == VC_VEC_LEN() {
         vc_define(w, inst, vc_vec_cur_len(vv, s, b));
     } else if kind == VC_VEC_POP() {
