@@ -2401,6 +2401,39 @@ if ! check_empty_output "test/subcommand" "$rust_test_json" "$self_test_json" "$
         fail "test/single-file-module-root" "rust=$rust_single_status self=$self_single_status"
     fi
 
+    # A nonexistent path and a hung test must both fail closed in both
+    # compilers: TestsFailed, exit 1, exactly one failed/timeout entry (#415).
+    hang_dir="$TMPDIR/test_hang"
+    mkdir -p "$hang_dir"
+    printf 'module M\nfn main() -> i32 [io] {\n    while true {\n    }\n    0\n}\n' >"$hang_dir/test_hang.vow"
+    for who in rust self; do
+        for case in missing-path timeout; do
+            if [ "$case" = "missing-path" ]; then
+                case_args=("$hang_dir/does_not_exist.vow"); want_status="failed"
+            else
+                case_args=("$hang_dir/test_hang.vow" --timeout 1000); want_status="timeout"
+            fi
+            case_exit=0
+            if [ "$who" = "rust" ]; then
+                case_json=$($RUST test "${case_args[@]}" 2>/dev/null) || case_exit=$?
+            else
+                case_json=$(run_self test "${case_args[@]}" 2>/dev/null) || case_exit=$?
+            fi
+            case_ok=$(printf '%s' "$case_json" | uv run python -c "
+import json,sys
+d=json.load(sys.stdin)
+t=d['tests']
+ok=(d['status']=='TestsFailed' and d['total']==1 and d['passed']==0 and d['failed']==1
+    and len(t)==1 and t[0]['status']==sys.argv[1])
+print('ok' if ok else 'bad')" "$want_status" 2>/dev/null) || case_ok=""
+            if [ "$case_ok" = "ok" ] && [ "$case_exit" = "1" ]; then
+                pass "test/$case-$who"
+            else
+                fail "test/$case-$who" "exit=$case_exit result=$case_ok json=$case_json"
+            fi
+        done
+    done
+
     # --jobs 1 (strictly sequential) must report the same suite as the
     # concurrent default: same per-file statuses in the same order.
     rust_seq=$($RUST test compiler/ --filter test_lexer --jobs 1 2>/dev/null) || true
