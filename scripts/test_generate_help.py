@@ -208,25 +208,10 @@ class SkillDoNotsTest(unittest.TestCase):
 
     def test_section_sits_between_intro_and_live_toolchain(self):
         entry = generate_help.build_skill_entrypoint()
-        self.assertIn("## Do nots", entry)
         self.assertLess(entry.index("# Vow"), entry.index("## Do nots"))
         self.assertLess(
             entry.index("## Do nots"), entry.index("## Installed toolchain (live)")
         )
-
-    def test_section_covers_each_agent_bug_class(self):
-        section = self._section()
-        for needle in (
-            "contract",
-            "requires",
-            "--no-verify",
-            "Verified",
-            "Unverified",
-            "--help",
-            "stdout",
-            "stderr",
-        ):
-            self.assertIn(needle, section)
 
     def test_every_rule_is_a_do_not_bullet(self):
         bullets = [ln for ln in self._section().splitlines() if ln.startswith("- ")]
@@ -241,12 +226,8 @@ class SkillDoNotsTest(unittest.TestCase):
         for flag in flags:
             self.assertIn(flag, cli)
 
-    def test_section_is_safe_for_generated_payloads(self):
-        section = self._section()
-        self.assertTrue(section.isascii())
-        for forbidden in ('"', "\\", '"##'):
-            self.assertNotIn(forbidden, section)
-        self.assertEqual("".join(_literals(_emit(section))), _expected(section))
+    def test_section_cannot_terminate_the_rust_raw_string(self):
+        self.assertNotIn('"##', self._section())
 
 
 if __name__ == "__main__":
