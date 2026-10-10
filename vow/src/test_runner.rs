@@ -179,16 +179,17 @@ fn missing_path_result(path: &Path) -> TestResult {
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| file.clone());
-    let mut entry = unexecuted_entry(
+    let entry = TestEntry {
         file,
         name,
-        "failed",
-        std::time::Instant::now(),
-        vec![],
-        vec![],
-    );
-    entry.stderr = format!("test path '{}' does not exist", path.display());
-    entry.duration_ms = 0;
+        status: "failed".to_string(),
+        exit_code: None,
+        stdout: String::new(),
+        stderr: format!("test path '{}' does not exist", path.display()),
+        duration_ms: 0,
+        diagnostics: vec![],
+        counterexamples: vec![],
+    };
     build_test_result(
         vec![entry],
         ContractDensity {
