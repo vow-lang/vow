@@ -174,21 +174,20 @@ index expression has exactly the type `u64` (see [Indexing](#indexing)), so
 **128-bit implementation status:** `i128`/`u128` are executable end to end:
 full-range literals, arithmetic, casts, narrowing, and `parse_i128`/`parse_u128`
 compile natively. A 128-bit value may be an `Option`, `Result`, or `enum`
-payload; it may not yet be a struct field or a `Vec` element (see the layout
-below). ESBMC modelling of 128-bit aggregates and constants is not available, so
+payload, a struct field, or a `Vec` element (see the layout below). ESBMC modelling of 128-bit aggregates and constants is not available, so
 verification reports `Skipped` rather than an unsound result. Never weaken
 contracts to fit the verifier.
 
 **Aggregate layout:** every struct field and enum payload occupies one 8-byte
 slot regardless of declared type (narrow ints are padded). An `i128`/`u128`
-**enum payload** occupies two consecutive 8-byte slots, low limb first
-([ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) decision 9), so every
-payload after it moves up by one slot. The two-slot layout is not implemented
-for struct fields or `Vec` elements: the compiler refuses reads and writes of
-128-bit struct fields and `Vec<i128>`/`Vec<u128>` elements instead of storing
-them in an undersized slot. There is no packing or natural-alignment layout
-today; FFI structs that need a specific C layout must shim through `Vec<u8>` or
-extern wrappers.
+struct field or enum payload occupies two consecutive 8-byte slots, low limb
+first ([ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) decision 9), so
+every field or payload after it moves up by one slot and the allocation grows
+with it. A struct has no tag, so its first field is slot 0; an enum's tag takes
+slot 0 and payloads start at slot 1. A `Vec<i128>`/`Vec<u128>` element is 16
+bytes (two slots, low limb first); `len` and `cap` still count elements. There
+is no packing or natural-alignment layout today; FFI structs that need a
+specific C layout must shim through `Vec<u8>` or extern wrappers.
 
 ### Built-in Parameterized Types
 
@@ -386,31 +385,30 @@ remainder by zero aborts at every width, as does signed `/` and `/!` on
 not abort.
 
 128-bit values carry both limbs through locals, parameters, returns,
-temporaries, and the payloads of `enum`, `Option`, and `Result` values (stored
-in two consecutive slots, see the aggregate layout above). The payload width
-comes from the checker, so it holds wherever the value came from: built in the
-same function, received as a parameter, handed back by a call, or read out of a
-`Vec` element or a struct field holding the enum; through a `match` arm, `?`, or
-`.unwrap()`; and at every payload position.
+temporaries, struct fields, `Vec` elements, and the payloads of `enum`,
+`Option`, and `Result` values (stored in two consecutive slots, see the
+aggregate layout above). The width comes from the checker, so it holds wherever
+the value came from: built in the same function, received as a parameter,
+handed back by a call, or read out of a `Vec` element or a struct field; through
+a `match` arm, `?`, or `.unwrap()`; at every payload position; and at every
+`Vec` index read or write, `push`, and `for` loop. `pin_to_root` and
+`Vec::from_raw_parts_copy` copy one 8-byte slot per element, so they reject
+`Vec<i128>`/`Vec<u128>` with a `TypeMismatch`; build such a `Vec` with `push`.
 
-Two aggregate positions are not supported yet: `Vec<i128>`/`Vec<u128>`
-elements (the element helpers are i64-only) and `i128`/`u128` struct fields.
-Reading or writing either fails codegen with `CodegenUnsupported` and a named
-limitation rather than a raw backend verifier dump, before an 8-byte slot can
-truncate the value or a 16-byte store can overwrite its neighbour. The refusal
-is at the access, not the declaration: a struct may declare a 128-bit member
-and still compile as long as nothing touches it. These are backend gaps, not
-language rules; the type checker accepts both at 128-bit width. Verification
-is a separate matter: 128-bit literals (in a body or in
+Verification is a separate matter. 128-bit literals (in a body or in
 `requires`/`ensures`/`invariant`) are verifiable, and are modelled exactly under
 the bit-vector encoding, `i128::MIN`, `i128::MAX` and `u128::MAX` included; a
 proof obtained by the `--encoding ir` timeout fallback is reported as `ProvenIr`
-and is weaker. A contracted function that reads or writes a 128-bit aggregate field or enum payload is
-likewise reported `Skipped`, with `FieldGet at 128-bit width` or `FieldSet at
+and is weaker. Every 128-bit aggregate access is `Skipped` rather than modelled:
+a contracted function that reads or writes a 128-bit aggregate field or enum
+payload is reported `Skipped`, with `FieldGet at 128-bit width` or `FieldSet at
 128-bit width`, rather than being modelled through the verifier's 8-byte heap
-slot; so is a call to `parse_i128` or `parse_u128`, whose `Option` result the
-verifier's 64-bit `Option` model cannot represent. Contracts over 128-bit
-parameters alone do verify.
+slot; a function that reads, writes, or pushes a `Vec<i128>` or `Vec<u128>`
+element is `Skipped` with an unsupported `Call extern` opcode; so is a call to
+`parse_i128` or `parse_u128`, whose `Option` result the verifier's 64-bit
+`Option` model cannot represent. A narrow field declared after a 128-bit one
+still verifies: it lives in the shifted slot, which the heap model addresses
+like any other. Contracts over 128-bit parameters alone do verify.
 
 Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
 binding captured by a `vow` block reports its full value in the runtime
@@ -1078,7 +1076,7 @@ m.contains_key(k)
 | Method         | Signature                        |
 |----------------|----------------------------------|
 | `Vec::new()`   | `() -> Vec<T>`                   |
-| `Vec::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> Vec<T>` for flat scalar `T` |
+| `Vec::from_raw_parts_copy(ptr, len)` | `(i64, u64) -> Vec<T>` for one-slot scalar `T` (not `i128`/`u128`) |
 | `.push(val)`   | `(T) -> ()`                      |
 | `.pop()`       | `() -> ()`                       |
 | `.len()`       | `() -> u64`                      |
@@ -1124,7 +1122,7 @@ m.contains_key(k)
 | `.remove(k)`        | `(K) -> ()`                 |
 | `.len()`            | `() -> u64`                 |
 
-**Key and value types.** The runtime stores each key and each value in one 64-bit slot and compares keys by value. A `HashMap` key must therefore be `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, or `bool`; every other key type is an `UnsupportedFeature` error in both compilers. `String`, `Vec`, struct, enum, `Option`, and tuple keys are heap-backed handles that would compare by pointer, so a lookup with an equal-but-distinct `String` would silently miss (and a mutable `String` mutated after insertion would corrupt the map). `i128`/`u128` keys would be truncated, and `f32`/`f64` have no total equality. Hash or intern such keys to a `u64` at the call site (`hash_str` / `hash_u64`, see [Hashing](#hashing)) and keep a side table for the originals. A `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64` is likewise an `UnsupportedFeature` error: map values occupy a single 64-bit integer slot, so a 128-bit value would lose its high word and a float has no slot encoding. A `HashMap` value that is or transitively contains a `linear struct` is an `UnsupportedFeature` error for the same reason `BTreeMap` rejects it (`BTreeMapValueMustBeNonLinear`): the map copies values bitwise and `get` would hand out a second copy of the linear obligation. Narrow integer values (`i8` … `u32`) are stored widened and read back at their declared width. The check applies wherever the map type is written (annotations, parameters, returns, fields, aliases, constants), including nested inside `Vec`, `Option`, tuples, and other maps. A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: no aggregate can hold a 128-bit field yet (epic #526), so codegen rejects it with `CodegenUnsupported` wherever it appears.
+**Key and value types.** The runtime stores each key and each value in one 64-bit slot and compares keys by value. A `HashMap` key must therefore be `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, or `bool`; every other key type is an `UnsupportedFeature` error in both compilers. `String`, `Vec`, struct, enum, `Option`, and tuple keys are heap-backed handles that would compare by pointer, so a lookup with an equal-but-distinct `String` would silently miss (and a mutable `String` mutated after insertion would corrupt the map). `i128`/`u128` keys would be truncated, and `f32`/`f64` have no total equality. Hash or intern such keys to a `u64` at the call site (`hash_str` / `hash_u64`, see [Hashing](#hashing)) and keep a side table for the originals. A `HashMap` or `BTreeMap` value of type `i128`, `u128`, `f32`, or `f64` is likewise an `UnsupportedFeature` error: map values occupy a single 64-bit integer slot, so a 128-bit value would lose its high word and a float has no slot encoding. A `HashMap` value that is or transitively contains a `linear struct` is an `UnsupportedFeature` error for the same reason `BTreeMap` rejects it (`BTreeMapValueMustBeNonLinear`): the map copies values bitwise and `get` would hand out a second copy of the linear obligation. Narrow integer values (`i8` … `u32`) are stored widened and read back at their declared width. The check applies wherever the map type is written (annotations, parameters, returns, fields, aliases, constants), including nested inside `Vec`, `Option`, tuples, and other maps. A 128-bit integer nested inside an aggregate value (`Option<u128>`, a struct field) is not a map restriction: aggregates hold 128-bit fields in two slots, so only a bare 128-bit map value is rejected.
 
 **Set idiom.** The unit type `()` is a valid map value, so `HashMap<K, ()>` and `BTreeMap<K, ()>` are sets: `s.insert(k, ());` adds a member, `s.contains_key(k)` (`s.contains(k)` for `BTreeMap`) tests membership, `s.remove(k)` deletes it, and `s.get(k)` returns `Option<()>`. The value `()` has type `()` (it checks against a `()` annotation or return type), and the runtime stores it in the usual 64-bit slot as `0`. A function cannot take a `()` parameter (`UnsupportedFeature`: the argument carries no information and has no ABI slot), so pass the set itself or a key instead.
 
@@ -1316,9 +1314,9 @@ vow {
 
 | Function         | Signature                                  | Effects    |
 |------------------|--------------------------------------------|------------|
-| `pin_to_root`    | `fn(value: String) -> String` and `fn<T>(value: Vec<T>) -> Vec<T>` for flat scalar `T` | `[]` |
+| `pin_to_root`    | `fn(value: String) -> String` and `fn<T>(value: Vec<T>) -> Vec<T>` for one-slot scalar `T` | `[]` |
 
-`pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a flat scalar slot type (`i*`, `u*`, `f32`, `f64`, `bool`). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.
+`pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a one-slot scalar type (`i8`..`i64`, `u8`..`u64`, `f32`, `f64`, `bool`; not `i128`/`u128`, whose elements take two slots). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.
 
 #### Linear Intrinsics
 
@@ -1328,7 +1326,7 @@ vow {
 
 `drop` is a compiler intrinsic, not a user-defined generic. `L` must be a linear owner: a `linear struct`, or an owned enum wrapper (`Option`, `Result`, or a user enum) that contains one. Any other argument type, or an argument count other than one, is a `TypeMismatch`. `drop` consumes the value exactly once (a second use is `LinearTypeViolation`) and discharges its obligation. It has no runtime effect beyond that: it runs no destructor, frees nothing, and lowers to no instruction other than the consume marker the type and region passes already track. It is verifier-neutral: the consume marker is a no-op in the C model, so a function that drops a linear value is verified exactly as if the call were absent. A user-defined function named `drop` takes precedence over the intrinsic.
 
-`String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.
+`String::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: u64)` copies `len` one-slot scalars into a fresh `Vec<T>` (`T` is not `i128`/`u128`). The pointer is `i64` and the length is `u64`, so a signed length must be converted explicitly (`n as u64`); the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.
 
 For pointer-containing C payloads, a wrapper must be written per type: call the extern, recursively copy every Vow-owned heap subobject into the target region, free every C-owned pointer according to the extern's ownership contract, then return the Vow-placed value. A bytewise copy of a pointer-containing payload is unsound because it preserves stale pointers into C-owned storage.
 

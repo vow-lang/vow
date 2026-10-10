@@ -171,9 +171,9 @@ fn ity_bits(ty: i64) -> i64 {
 /// Returns `None` when the coercion would silently drop a 128-bit value's high
 /// limb. The builtins that legitimately narrow (`i128_to_u8_*` and friends)
 /// declare an I128 parameter, so they never hit that branch — a 128-bit value
-/// arriving at a narrower slot means the callee has no 128-bit-aware ABI yet
-/// (e.g. the i64-only `Vec` element helpers). Callers must fail closed rather
-/// than pass a truncated value.
+/// arriving at a narrower slot means the callee has no 128-bit-aware ABI.
+/// (`Vec<i128>` elements never reach here: they use the element-address
+/// helpers.) Callers must fail closed rather than pass a truncated value.
 fn coerce_call_argument(
     builder: &mut FunctionBuilder<'_>,
     value: Value,
@@ -202,15 +202,16 @@ fn coerce_call_argument(
 
 fn report_narrowed_wide_argument() {
     eprintln!(
-        "clif_shim: 128-bit values are not supported in aggregates or by this builtin yet \
+        "clif_shim: 128-bit values are not supported by this builtin yet \
          (epic #526); narrowing here would silently drop the high 64 bits"
     );
 }
 
-const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields are not supported yet (epic #526): an aggregate \
-     field slot is 8 bytes, so a 128-bit field would truncate or overwrite its neighbour";
+const WIDE_AGGREGATE_FIELD_MSG: &str = "internal error: a 128-bit value reached a single-slot aggregate access \
+     (epic #526); lowering must emit the two-slot form, because an 8-byte slot would truncate it \
+     or overwrite its neighbour";
 
-const WIDE_SLOT_TYPE_MSG: &str = "internal error: a two-slot enum payload access must carry a 128-bit value, but lowering produced a narrower type";
+const WIDE_SLOT_TYPE_MSG: &str = "internal error: a two-slot aggregate access must carry a 128-bit value, but lowering produced a narrower type";
 
 fn reject_wide_aggregate_field() -> i64 {
     eprintln!("clif_shim: {WIDE_AGGREGATE_FIELD_MSG}");
@@ -3813,6 +3814,15 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_push_wide_ptr" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_get_wide_ptr" | "__vow_vec_set_wide_ptr" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_vec_pop" => {
             sig.params.push(AbiParam::new(types::I64));

@@ -27,8 +27,11 @@ const VERIFY_CACHE_FAILURE_HEADER: &str = "FAILED v3";
 // locally-constructed annotated Option/Result locals now tagging their
 // element type for post-extraction reads, all make pre-cutover objects
 // unsafe to reuse. So does the two-slot layout for 128-bit enum payloads
-// (#1543), which changes enum allocation sizes and later payload slot indices.
-const COMPILE_CACHE_ABI_VERSION: &str = "static-string-arena-slot-utf8-lexer-narrow-unary-match-aggregate-wide-guard-index-u64-literal-narrow-context-wide-slot-v10";
+// (#1543), which changes enum allocation sizes and later payload slot
+// indices, and the same layout for 128-bit struct fields (#1569), which
+// changes struct allocation sizes and later field slot indices, and the
+// 16-byte `Vec<i128>`/`Vec<u128>` element reached through new runtime helpers.
+const COMPILE_CACHE_ABI_VERSION: &str = "static-string-arena-slot-utf8-lexer-narrow-unary-match-aggregate-wide-guard-index-u64-literal-narrow-context-wide-slot-struct-field-vec-element-v11";
 
 pub struct CompileCache {
     dir: PathBuf,

@@ -524,7 +524,7 @@ fn CLIF_ERR_WIDE_AGGREGATE_FIELD() -> i64 { -5 }
 fn CLIF_ERR_IO_MKDIR() -> i64 { -6 }
 
 fn CLIF_WIDE_AGGREGATE_FIELD_MSG() -> String {
-    String::from("128-bit struct fields are not supported yet (epic #526): an aggregate field slot is 8 bytes, so a 128-bit field would truncate or overwrite its neighbour")
+    String::from("internal error: a 128-bit value reached a single-slot aggregate access (epic #526); lowering must emit the two-slot form, because an 8-byte slot would truncate it or overwrite its neighbour")
 }
 
 fn clif_emit_module(m: IrModule, output_path: String, mode: i64, trace: i64) -> i64 [io] {

@@ -169,3 +169,18 @@ BigInt subprojects.
   runtime's 128-bit `Option` cell is `[tag, lo, hi]`. Decision 8's
   `parse_i128`/`parse_u128` ship with it and remain unknown to the verifier's
   64-bit `Option` model, so functions using them are `Skipped`. See #1543.
+- **2026-10-09 — Decision 9, struct fields and `Vec` elements.** The two-slot
+  layout now covers `i128`/`u128` **struct fields** and `Vec<i128>`/`Vec<u128>`
+  **elements** (#1569), so no aggregate position is refused at codegen any
+  more. A struct has no tag, so its slots start at 0 and a wide field shifts
+  every later field up by one slot; the allocation is `(slots + 1) * 8`, the
+  extra slot being the guard. A `Vec` element is 16 bytes, low limb first,
+  with `len` and `cap` still counting elements and the descriptor unchanged.
+  Lowering reads and writes both through the `WideSlot` marker: struct accesses
+  directly, `Vec` accesses through bounds-checked element-address helpers
+  (`__vow_vec_push_wide_ptr`, `__vow_vec_get_wide_ptr`,
+  `__vow_vec_set_wide_ptr`), so no 128-bit value crosses the extern ABI beside
+  another argument. The element width comes from the checker, per `Vec` access.
+  `pin_to_root` and `Vec::from_raw_parts_copy` copy one 8-byte slot per
+  element and therefore reject 128-bit element types. The verifier still skips
+  these accesses until #1421 models them.

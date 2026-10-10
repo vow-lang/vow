@@ -588,13 +588,18 @@ fn is_flat_slot_tid(ts: TyStore, tid: i64) -> bool {
     (tag >= CTY_I8() && tag <= CTY_U128()) || tag == CTY_F32() || tag == CTY_F64() || tag == CTY_BOOL()
 }
 
+// A Vec whose elements are one 8-byte slot each. `Vec<i128>`/`Vec<u128>`
+// elements take two, so the slot-copying `pin_to_root` and
+// `Vec::from_raw_parts_copy` would halve them.
 fn is_flat_vec_tid(ts: TyStore, tid: i64) -> bool {
     let args_lid: i64 = ty_applied_args(ts, tid, -1, String::from("Vec"));
     if args_lid < 0 { return false; }
     if ts_arg_len(ts, args_lid) == 0 {
         return false;
     }
-    is_flat_slot_tid(ts, ts_arg_get(ts, args_lid, 0))
+    let elem: i64 = ts_arg_get(ts, args_lid, 0);
+    let elem_tag: i64 = ty_tag(ts, elem);
+    is_flat_slot_tid(ts, elem) && elem_tag != CTY_I128() && elem_tag != CTY_U128()
 }
 
 fn is_supported_pin_tid(ts: TyStore, tid: i64) -> bool {
@@ -2594,6 +2599,21 @@ fn pattern_vec_variant_payload_ty_path(ts: TyStore, tid: i64) -> Vec<Vec<i64>> {
     result
 }
 
+// Records a Vec access whose element is 128 bits wide (an index read or write,
+// a `push`, or a `for` loop), keyed by expression id. The element helpers are
+// 8-byte, so lowering needs the width from the checker rather than from
+// whatever metadata the receiver happens to carry.
+fn record_wide_vec_site(e: CheckEnv, eid: i64, elem_tid: i64) {
+    let elem_tag: i64 = ty_tag(e.ts, elem_tid);
+    if elem_tag != CTY_I128() && elem_tag != CTY_U128() {
+        return;
+    }
+    while e.question_scalar_tys.len() as i64 <= eid {
+        e.question_scalar_tys.push(-1);
+    }
+    e.question_scalar_tys[eid as u64] = pattern_scalar_ir_ty(e.ts, elem_tid);
+}
+
 // Records payload scalar or aggregate metadata for an expression that extracts an
 // Option/Result payload via FieldGet. Both `?` and `.unwrap()` register here;
 // the arrays are keyed by expression id, so the two never collide.
@@ -3308,7 +3328,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if vec_args >= 0 {
             let hargs_lid: i64 = vec_args;
             if mname == String::from("push") {
-                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0), mname);
+                let push_elem_tid: i64 = ts_arg_or_unknown(e.ts, hargs_lid, 0);
+                check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, push_elem_tid, mname);
+                record_wide_vec_site(e, eid, push_elem_tid);
             }
             if mname == String::from("truncate") {
                 check_method_argument_exact(e, m, a, args_lid, arg_tids, 0, CTY_U64(), mname);
@@ -3481,7 +3503,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let index_args: i64 = ty_applied_args(e.ts, recv_tid, -1, String::from("Vec"));
         if index_args >= 0 {
             if ts_arg_len(e.ts, index_args) > 0 {
-                return ts_arg_get(e.ts, index_args, 0);
+                let index_elem_tid: i64 = ts_arg_get(e.ts, index_args, 0);
+                record_wide_vec_site(e, eid, index_elem_tid);
+                return index_elem_tid;
             }
             return CTY_UNIT();
         }
@@ -3636,6 +3660,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 env_emit_error_code(e, EC_TYPE_MISMATCH(), ferr3_msg, expr_span(a, eid));
             }
         }
+        record_wide_vec_site(e, eid, elem_tid);
         env_push_scope(e);
         env_define_var(e, binding_name, elem_tid);
         let fvow_lid: i64 = list_get(a, info_lid, 1);

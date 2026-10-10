@@ -1,0 +1,12 @@
+// TEST: exit 134
+// TEST: stderr "IndexOutOfBounds"
+module WideVecElementWriteOutOfBounds
+
+// Writing past the end of a `Vec<u128>` traps instead of scribbling beyond
+// the buffer.
+fn main() -> i32 [io] {
+    let v: Vec<u128> = Vec::new();
+    v.push(1);
+    v[1] = 3154393236604333326336;
+    0
+}

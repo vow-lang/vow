@@ -1682,6 +1682,24 @@ pub unsafe extern "C" fn __vow_vec_push(
     }
 }
 
+unsafe fn vec_push_slot_no_sanitize_in_arena(
+    arena: *mut VowArena,
+    vec: *mut u8,
+    elem_size: usize,
+    elem_align: usize,
+    op: &'static str,
+) -> *mut u8 {
+    let v = unsafe { &*(vec as *const VowVec) };
+    if v.cap == VOW_CAP_RODATA {
+        region_literal_mutation_trap(op);
+    }
+    unsafe { vec_reserve_in_arena_no_null_check(arena, vec, 1, elem_size, elem_align) };
+    let v = unsafe { &mut *(vec as *mut VowVec) };
+    let dest = unsafe { v.ptr.add(v.len * elem_size) };
+    v.len += 1;
+    dest
+}
+
 unsafe fn vec_push_no_sanitize_in_arena(
     arena: *mut VowArena,
     vec: *mut u8,
@@ -1690,15 +1708,8 @@ unsafe fn vec_push_no_sanitize_in_arena(
     elem_align: usize,
     op: &'static str,
 ) {
-    let v = unsafe { &*(vec as *const VowVec) };
-    if v.cap == VOW_CAP_RODATA {
-        region_literal_mutation_trap(op);
-    }
-    unsafe { vec_reserve_in_arena_no_null_check(arena, vec, 1, elem_size, elem_align) };
-    let v = unsafe { &mut *(vec as *mut VowVec) };
-    let dest = unsafe { v.ptr.add(v.len * elem_size) };
+    let dest = unsafe { vec_push_slot_no_sanitize_in_arena(arena, vec, elem_size, elem_align, op) };
     unsafe { std::ptr::copy_nonoverlapping(elem, dest, elem_size) };
-    v.len += 1;
 }
 
 #[unsafe(no_mangle)]
@@ -1785,8 +1796,9 @@ pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
     v.len = new_len;
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i64) {
+/// Address of element `index` for a write: the sanitizer, rodata and bounds
+/// checks every `Vec` element store shares, parameterised by element stride.
+unsafe fn vec_set_slot_ptr(vec: *mut u8, index: usize, elem_size: usize) -> *mut u8 {
     sanitize_check_live(vec as usize, "set");
     let v = unsafe { &*(vec as *const VowVec) };
     if v.cap == VOW_CAP_RODATA {
@@ -1798,8 +1810,42 @@ pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i6
         let _ = writeln!(std::io::stderr(), "index out of bounds");
         std::process::exit(VOW_RUNTIME_ABORT_EXIT);
     }
-    let elem_ptr = unsafe { v.ptr.add(index * 8) as *mut i64 };
+    unsafe { v.ptr.add(index * elem_size) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i64) {
+    let elem_ptr = unsafe { vec_set_slot_ptr(vec, index, 8) as *mut i64 };
     unsafe { *elem_ptr = value };
+}
+
+/// Byte stride of a `Vec<i128>` / `Vec<u128>` element: two 8-byte slots, low
+/// limb first (ADR 0001 decision 9). `len` and `cap` still count elements.
+const VEC_WIDE_ELEM_SIZE: usize = 16;
+
+/// Appends one 128-bit element and returns the address of its two slots, which
+/// the caller fills with a `WideSlot` store. The slots are uninitialised until
+/// that store, which the lowering emits immediately after the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_push_wide_ptr(vec: *mut u8) -> *mut u8 {
+    unsafe {
+        with_growth_arena(vec, |arena| {
+            sanitize_check_live(vec as usize, "push");
+            vec_push_slot_no_sanitize_in_arena(arena, vec, VEC_WIDE_ELEM_SIZE, 8, "Vec::push")
+        })
+    }
+}
+
+/// Bounds-checked address of a 128-bit element, for a `WideSlot` read.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_get_wide_ptr(vec: *const u8, index: usize) -> *const u8 {
+    unsafe { __vow_vec_get_ptr(vec, index, VEC_WIDE_ELEM_SIZE) }
+}
+
+/// Bounds-checked address of a 128-bit element, for a `WideSlot` write.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_set_wide_ptr(vec: *mut u8, index: usize) -> *mut u8 {
+    unsafe { vec_set_slot_ptr(vec, index, VEC_WIDE_ELEM_SIZE) }
 }
 
 #[unsafe(no_mangle)]
@@ -6411,6 +6457,69 @@ mod tests {
         unsafe { __vow_vec_push_val(v, 42) };
         unsafe { __vow_vec_pop(v) };
         assert_eq!(unsafe { &*(v as *const VowVec) }.len, 0);
+    }
+
+    /// Writes a 128-bit value through the two-slot address a wide helper
+    /// returns, low limb first. Unaligned writes keep the test independent of
+    /// the buffer's 8-byte alignment.
+    unsafe fn write_wide(slot: *mut u8, value: u128) {
+        unsafe { std::ptr::write_unaligned(slot as *mut u128, value) };
+    }
+
+    unsafe fn read_wide(slot: *const u8) -> u128 {
+        unsafe { std::ptr::read_unaligned(slot as *const u128) }
+    }
+
+    #[test]
+    fn wide_vec_elements_are_sixteen_bytes_and_survive_regrowth() {
+        let v = __vow_vec_new_val();
+        let values: Vec<u128> = (0..100u128)
+            .map(|i| (i << 64) | (0xDEAD_BEEF_0000_0000 + i))
+            .collect();
+        for value in &values {
+            let slot = unsafe { __vow_vec_push_wide_ptr(v) };
+            unsafe { write_wide(slot, *value) };
+        }
+        let desc = unsafe { &*(v as *const VowVec) };
+        assert_eq!(desc.len, values.len());
+        for (i, value) in values.iter().enumerate() {
+            let slot = unsafe { __vow_vec_get_wide_ptr(v, i) };
+            assert_eq!(unsafe { read_wide(slot) }, *value, "element {i}");
+        }
+    }
+
+    #[test]
+    fn wide_vec_set_overwrites_only_its_own_element() {
+        let v = __vow_vec_new_val();
+        for value in [1u128 << 100, 2u128 << 100, 3u128 << 100] {
+            unsafe { write_wide(__vow_vec_push_wide_ptr(v), value) };
+        }
+        unsafe { write_wide(__vow_vec_set_wide_ptr(v, 1), u128::MAX) };
+        let read = |i| unsafe { read_wide(__vow_vec_get_wide_ptr(v, i)) };
+        assert_eq!(read(0), 1u128 << 100);
+        assert_eq!(read(1), u128::MAX);
+        assert_eq!(read(2), 3u128 << 100);
+    }
+
+    #[test]
+    fn wide_vec_pop_truncate_and_push_reuse_the_element_stride() {
+        let v = __vow_vec_new_val();
+        for i in 0..4u128 {
+            unsafe { write_wide(__vow_vec_push_wide_ptr(v), (i + 1) << 70) };
+        }
+        unsafe { __vow_vec_truncate(v, 2) };
+        unsafe { __vow_vec_pop(v) };
+        unsafe { write_wide(__vow_vec_push_wide_ptr(v), 9u128 << 90) };
+        let desc = unsafe { &*(v as *const VowVec) };
+        assert_eq!(desc.len, 2);
+        assert_eq!(
+            unsafe { read_wide(__vow_vec_get_wide_ptr(v, 0)) },
+            1u128 << 70
+        );
+        assert_eq!(
+            unsafe { read_wide(__vow_vec_get_wide_ptr(v, 1)) },
+            9u128 << 90
+        );
     }
 
     #[test]
