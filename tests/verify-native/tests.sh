@@ -157,6 +157,49 @@ fn main() -> i32 [io] {
 }
 SRC
 
+CALL_CLAIMS="$TMP_ROOT/calls.vow"
+cat > "$CALL_CLAIMS" <<'SRC'
+module Calls
+
+fn caller(y: i64) -> i64 vow {
+  ensures: result == y
+} {
+  keep(y)
+}
+
+fn keep(x: i64) -> i64 vow {
+  requires: x > 0
+  ensures: result == x
+} {
+  x
+}
+
+fn main() -> i32 [io] {
+  print_i64(caller(1));
+  0
+}
+SRC
+
+RECURSIVE="$TMP_ROOT/recursive.vow"
+cat > "$RECURSIVE" <<'SRC'
+module Recursive
+
+fn spin(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == 0
+} {
+  if n == 0 {
+    return 0;
+  }
+  spin(n - 1)
+}
+
+fn main() -> i32 [io] {
+  print_i64(spin(1));
+  0
+}
+SRC
+
 failures=0
 fail() {
     echo "FAIL: $1" >&2
@@ -257,6 +300,30 @@ for mode in garbage exit1 sat_empty; do
     expect "$mode exit" "$RUN_RC" "1"
     no_leftovers "$mode"
 done
+
+# an inlined call adds the callee's clauses to the caller's claims: the callee's
+# `requires` and `ensures` and the caller's `ensures`, then the callee on its own.
+run_native unsat "$CALL_CLAIMS"
+expect "call status" "$(field "$RUN_OUT" status)" "Verified"
+expect "call queries" "$(queries)" "4"
+no_leftovers "calls"
+
+# the caller's precondition claim comes first and blames the caller; the
+# counterexample names the callee's clause and the call site.
+run_native sat "$CALL_CLAIMS" --verify-jobs 1
+expect "call sat status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "call sat function" "$(field "$RUN_OUT" counterexamples.0.function)" "caller"
+expect "call sat blame" "$(field "$RUN_OUT" counterexamples.0.blame)" "Caller"
+expect "call sat vow id" "$(field "$RUN_OUT" counterexamples.0.vow_id)" "0"
+expect "call site function" "$(field "$RUN_OUT" counterexamples.0.call_sites.0.caller_function)" "caller"
+expect "call stops at first claim" "$(queries)" "1"
+no_leftovers "calls sat"
+
+# recursion is skipped, never sent to the solver.
+run_native unsat "$RECURSIVE"
+expect "recursion status" "$(field "$RUN_OUT" status)" "Skipped"
+expect "recursion queries" "$(queries)" "0"
+no_leftovers "recursion"
 
 # a hung solver is killed at the budget and reaped.
 start=$(date +%s)
