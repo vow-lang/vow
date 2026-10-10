@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "outer"
+// TEST: counterexample-blame Callee
+module InlineOwnEnsuresThroughCall
+
+fn outer(x: i64) -> i64 vow {
+  requires: x >= 0 && x < 1000
+  ensures: result == x + 10
+} {
+  inner(x) + 1
+}
+
+fn inner(x: i64) -> i64 vow {
+  requires: x >= 0 && x < 1000
+  ensures: result >= x
+} {
+  x + 1
+}
+
+fn main() -> i32 [io] {
+  print_i64(outer(3));
+  0
+}

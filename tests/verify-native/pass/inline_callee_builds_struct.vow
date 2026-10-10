@@ -1,0 +1,23 @@
+module InlineCalleeBuildsStruct
+
+struct Range { lo: i64, hi: i64 }
+
+fn span(a: i64, b: i64) -> i64 vow {
+  requires: a <= b
+  ensures: result == b - a
+} {
+  let r: Range = Range { lo: a, hi: b };
+  r.hi - r.lo
+}
+
+fn width(x: i64) -> i64 vow {
+  requires: x >= 0 && x < 1000
+  ensures: result == 5
+} {
+  span(x, x + 5)
+}
+
+fn main() -> i32 [io] {
+  print_i64(width(3));
+  0
+}
