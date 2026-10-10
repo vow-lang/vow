@@ -5,6 +5,10 @@ set -euo pipefail
 # staged in a sibling directory and renamed into place, so a failure never
 # leaves a SKILL.md that links to missing reference/, examples/ or schemas/
 # files, and auto-install on `build` stays silent and never fails the build.
+# Existing installs keep working (issue #358): auto-install leaves an existing
+# SKILL.md (including the old monolithic layout) untouched, and an explicit
+# `skill install --local` migrates it to the split layout and keeps files it
+# does not own.
 #
 #   VOWC_BIN=build/vowc            bash tests/skill-install/tests.sh
 #   VOWC_BIN=target/release/vow VOWC_KIND=rust bash tests/skill-install/tests.sh
@@ -29,6 +33,12 @@ failures=0
 fail() { echo "FAIL: $*" >&2; failures=$((failures + 1)); }
 expect() {
     if [ "$2" != "$3" ]; then fail "$1: expected '$3', got '$2'"; fi
+}
+expect_file() {
+    if [ ! -f "$2" ]; then fail "$1: missing $2"; fi
+}
+expect_absent() {
+    if [ -e "$2" ]; then fail "$1: unexpected $2"; fi
 }
 
 new_project() {
@@ -85,11 +95,24 @@ expect "re-install exit" "$rc" "0"
 assert_complete_tree "re-install" "$p"
 assert_no_leftovers "re-install" "$p"
 
-# stale and user-added files are replaced with the whole tree
-mkdir -p "$p/.claude/skills/vow/reference"
+# owned files are rewritten; files the install does not own are carried over
+mkdir -p "$p/.claude/skills/vow/reference" "$p/.claude/skills/vow/mine/deep"
 echo stale >"$p/.claude/skills/vow/reference/stale.md"
+echo notes >"$p/.claude/skills/vow/notes.md"
+echo deep >"$p/.claude/skills/vow/mine/deep/x.txt"
+echo edited >"$p/.claude/skills/vow/reference/cli.md"
 run_in "$p" skill install --local
 expect "replace exit" "$rc" "0"
+expect "carry-over keeps top-level file" "$(cat "$p/.claude/skills/vow/notes.md")" "notes"
+expect "carry-over keeps nested foreign file" \
+    "$(cat "$p/.claude/skills/vow/mine/deep/x.txt")" "deep"
+expect "carry-over keeps foreign file in owned dir" \
+    "$(cat "$p/.claude/skills/vow/reference/stale.md")" "stale"
+case "$(cat "$p/.claude/skills/vow/reference/cli.md")" in
+    edited) fail "replace: owned reference/cli.md kept its local edit" ;;
+esac
+rm -rf "$p/.claude/skills/vow/mine" "$p/.claude/skills/vow/notes.md" \
+    "$p/.claude/skills/vow/reference/stale.md"
 assert_complete_tree "replace" "$p"
 assert_no_leftovers "replace" "$p"
 
@@ -162,6 +185,40 @@ expect "symlink exit" "$rc" "0"
 if [ ! -L "$p/.claude/skills/vow" ]; then fail "symlinked skill directory was replaced"; fi
 assert_tree_at "symlink target" "$p/dotfiles/vow"
 assert_no_leftovers "symlink" "$p"
+
+# an existing monolithic SKILL.md survives a build and gains no support files
+MONOLITHIC="monolithic skill content"
+p=$(new_project)
+mkdir -p "$p/.claude/skills/vow"
+printf '%s' "$MONOLITHIC" >"$p/.claude/skills/vow/SKILL.md"
+run_in "$p" build --no-verify "$FIXTURE" -o "$TMP_ROOT/hello"
+expect "monolithic build exit" "$rc" "0"
+expect "auto-install keeps monolithic SKILL.md" \
+    "$(cat "$p/.claude/skills/vow/SKILL.md")" "$MONOLITHIC"
+for sub in reference examples schemas; do
+    expect_absent "auto-install adds no $sub/" "$p/.claude/skills/vow/$sub"
+done
+
+# an explicit install migrates it to the split layout
+run_in "$p" skill install --local
+expect "migrate exit" "$rc" "0"
+case "$(head -2 "$p/.claude/skills/vow/SKILL.md")" in
+    *"name: vow"*) ;;
+    *) fail "SKILL.md was not rewritten with the split-layout entrypoint" ;;
+esac
+assert_complete_tree "migrate" "$p"
+
+# a pre-rename vow-toolchain directory is neither detected nor modified, and a
+# fresh auto-install writes the full split tree next to it
+p=$(new_project)
+mkdir -p "$p/.claude/skills/vow-toolchain"
+printf '%s' "$MONOLITHIC" >"$p/.claude/skills/vow-toolchain/SKILL.md"
+run_in "$p" build --no-verify "$FIXTURE" -o "$TMP_ROOT/hello"
+expect "legacy dir untouched" \
+    "$(cat "$p/.claude/skills/vow-toolchain/SKILL.md")" "$MONOLITHIC"
+expect_file "auto-install creates skills/vow" "$p/.claude/skills/vow/SKILL.md"
+expect_file "auto-install writes cli reference" "$p/.claude/skills/vow/reference/cli.md"
+expect "legacy install entries" "$(ls -A "$p/.claude/skills")" "$(printf 'vow\nvow-toolchain')"
 
 if [ "$failures" -ne 0 ]; then
     echo "$failures skill-install check(s) failed ($VOWC_KIND)" >&2

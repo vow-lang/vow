@@ -121,6 +121,17 @@ without its support files. Commit the resulting `.claude/skills/vow/`
 tree to your repository so collaborators (human and agent) get the same skill
 version on checkout.
 
+**Upgrading an existing install.** Auto-install never touches an existing
+`.claude/skills/vow/SKILL.md`, so an older single-file skill keeps working but
+does not gain the split-layout support files. Re-run
+`build/vowc skill install --local` (project install) or `--global` (machine-wide
+install), matching the install you are replacing, to migrate or refresh it; this
+overwrites `SKILL.md` and the support files, so review the diff before
+committing. In a project without `.git`, delete `.claude/skills/vow/SKILL.md` and
+run a build instead. A leftover `.claude/skills/vow-toolchain/` directory from
+before the rename is not touched and will sit next to the new `vow` skill —
+delete it by hand.
+
 ### Outside Claude Code (raw API harnesses)
 
 For any other harness — a custom agent loop, the bench runner, a one-off API call

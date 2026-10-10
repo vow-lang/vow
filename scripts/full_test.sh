@@ -997,6 +997,34 @@ print(cx[0].get('violation', '') if cx else '')
             fail "${name}/verify-fail-violation" "expected '$expected_violation'; $(IFS='; '; echo "${violation_errors[*]}")"
         fi
     fi
+
+    # `// TEST: replay <status>` pins the `replay` status of every counterexample
+    # under `verify --replay-cex` on both compilers. Only the status is compared:
+    # `replay_reason` wording differs between the compilers by design.
+    expected_replay=$(sed -n 's|^// TEST: replay \([a-z,]*\)$|\1|p' "$vow_file" | head -1)
+    if [ -n "$expected_replay" ]; then
+        replay_errors=()
+        for replay_side in rust self; do
+            if [ "$replay_side" = "rust" ]; then
+                replay_json=$($RUST verify --replay-cex --no-cache "$vow_file" 2>/dev/null) || true
+            else
+                replay_json=$(run_self verify --replay-cex --no-cache "$vow_file" 2>/dev/null) || true
+            fi
+            actual_replays=$(python3 -c "
+import json, sys
+cx = json.loads(sys.stdin.read()).get('counterexamples') or []
+print(','.join(sorted(set(c.get('replay', '') for c in cx))) if cx else '<none>')
+" <<< "$replay_json" 2>/dev/null) || actual_replays="<unparseable>"
+            if [ "$actual_replays" != "$expected_replay" ]; then
+                replay_errors+=("$replay_side replay='$actual_replays'")
+            fi
+        done
+        if [ ${#replay_errors[@]} -eq 0 ]; then
+            pass "${name}/verify-fail-replay"
+        else
+            fail "${name}/verify-fail-replay" "expected '$expected_replay'; $(IFS='; '; echo "${replay_errors[*]}")"
+        fi
+    fi
 done
 echo ""
 
@@ -1594,13 +1622,16 @@ else
 fi
 echo ""
 
-# ─── Section 4k: Atomic skill installs (tests/skill-install/, #361) ──
+# ─── Section 4k: Skill installs (tests/skill-install/, #358 and #361) ─
 #
-# Both compilers stage the skill tree next to its target and rename it into
-# place, so a failed install never leaves a SKILL.md without its support files
-# and auto-install stays silent.
+# Auto-install must leave an existing SKILL.md (including the old monolithic
+# layout) untouched; an explicit `skill install --local` migrates it to the
+# split layout. Both compilers stage the skill tree next to its target and
+# rename it into place, so a failed install never leaves a SKILL.md without its
+# support files and auto-install stays silent. Both compilers implement this
+# independently.
 
-section_begin "Section 4k: Atomic skill installs"
+section_begin "Section 4k: Skill installs"
 skill_install_rust_log="$TMPDIR/skill-install-rust.log"
 if VOWC_BIN="$RUST" VOWC_KIND=rust bash tests/skill-install/tests.sh >"$skill_install_rust_log" 2>&1; then
     pass "skill-install/rust"

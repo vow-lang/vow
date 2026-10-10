@@ -90,6 +90,34 @@ fn write_skill_files(dir: &Path, entrypoint: &str, files: &[(&str, &str)]) -> st
     std::fs::write(&path, entrypoint).map_err(|e| io_ctx("write", &path, e))
 }
 
+/// Copies every entry of `from` that `into` does not already hold, so files the
+/// installer does not own (local notes, stale files in owned directories) survive
+/// the swap while owned files always come from the freshly written stage.
+fn carry_over_foreign(from: &Path, into: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(from).map_err(|e| io_ctx("read", from, e))? {
+        let entry = entry.map_err(|e| io_ctx("read", from, e))?;
+        let (src, dst) = (entry.path(), into.join(entry.file_name()));
+        let kind = entry.file_type().map_err(|e| io_ctx("read", &src, e))?;
+        if dst.symlink_metadata().is_ok() {
+            if kind.is_dir() && dst.is_dir() {
+                carry_over_foreign(&src, &dst)?;
+            }
+        } else if kind.is_dir() {
+            std::fs::create_dir(&dst).map_err(|e| io_ctx("create", &dst, e))?;
+            carry_over_foreign(&src, &dst)?;
+        } else if kind.is_symlink() {
+            let link = std::fs::read_link(&src).map_err(|e| io_ctx("read", &src, e))?;
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&link, &dst).map_err(|e| io_ctx("write", &dst, e))?;
+            #[cfg(not(unix))]
+            let _ = link;
+        } else {
+            std::fs::copy(&src, &dst).map_err(|e| io_ctx("write", &dst, e))?;
+        }
+    }
+    Ok(())
+}
+
 /// Moves a fully written `stage` to `target`. An existing `target` is swapped
 /// out through a backup, since a directory cannot be renamed over a non-empty
 /// one, and put back when the final rename fails.
@@ -146,6 +174,13 @@ fn install_tree_with(
 
     let stage = reserve_unique_dir(&parent, "vow-install", token)?;
     let committed = write_skill_files(&stage, entrypoint, files)
+        .and_then(|()| {
+            if target.is_dir() {
+                carry_over_foreign(&target, &stage)
+            } else {
+                Ok(())
+            }
+        })
         .and_then(|()| commit_stage(&parent, &stage, &target, token, rename));
     if let Err(e) = committed {
         let _ = std::fs::remove_dir_all(&stage);
@@ -3242,11 +3277,13 @@ vow skill install --global  # install to $HOME/.claude/skills/vow/ on Linux
 
 `install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code discovers the skill from the `.claude/skills/` directory and uses the frontmatter description/`when_to_use` metadata to load it for `.vow` file work as well as creation and verification-debugging prompts before a `.vow` file exists.
 
-**Atomic install.** `install` builds the whole tree in a staging directory next to the target (`.claude/skills/.vow-install-*`) and renames it into place, writing `SKILL.md` last, so a failed or interrupted install never leaves a `SKILL.md` that links to missing `reference/`, `examples/`, or `schemas/` files. When `skills/vow/` already exists, the old tree is renamed aside, the new one renamed in, and the old one restored if that rename fails; the directory is briefly absent between the two renames, never half-written. A re-install therefore replaces the whole directory: stale files from an older toolchain and files added by hand under `skills/vow/` are removed, and the install needs write access to `.claude/skills/` itself. A `skills/vow` symlink (dotfile managers) is kept and written through in place, support files first and `SKILL.md` last. A pre-existing partial tree is repaired by the next explicit `install`; auto-install never touches a tree that already holds `SKILL.md`.
+**Atomic install.** `install` builds the whole tree in a staging directory next to the target (`.claude/skills/.vow-install-*`) and renames it into place, writing `SKILL.md` last, so a failed or interrupted install never leaves a `SKILL.md` that links to missing `reference/`, `examples/`, or `schemas/` files. When `skills/vow/` already exists, the old tree is renamed aside, the new one renamed in, and the old one restored if that rename fails; the directory is briefly absent between the two renames, never half-written. Files the install does not own (hand-added notes, stale files an older toolchain left in `reference/`) are copied from the old tree into the staged one before the swap, so a re-install rewrites owned files and leaves everything else alone; the install needs write access to `.claude/skills/` itself. A `skills/vow` symlink (dotfile managers) is kept and written through in place, support files first and `SKILL.md` last. A pre-existing partial tree is repaired by the next explicit `install`; auto-install never touches a tree that already holds `SKILL.md`.
 
 When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow/` and fails if `$HOME` is unset or empty.
 
 **Auto-install on build.** The first time `vow build` (or the bare `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build and stays silent on failure; a failed auto-install leaves no `SKILL.md`, so the next build retries it.
+
+**Migrating an existing install.** An existing `.claude/skills/vow/SKILL.md` is never rewritten, and while it is present a build does not add or repair support files, so an older single-file skill keeps working but lacks `reference/`, `examples/`, and `schemas/`. To migrate, refresh after a compiler upgrade, or repair, run `vow skill install` with the scope being replaced: `--local` for `./.claude/skills/vow/` or `--global` for `$HOME/.claude/skills/vow/` (a global install does not refresh a project-local one). Without `.git`, `--local` is unavailable: delete `.claude/skills/vow/SKILL.md` and run a build instead. Explicit install rewrites `SKILL.md` and every support file it owns, overwriting local edits, and leaves other files alone; review the diff of a committed project install. A pre-rename `.claude/skills/vow-toolchain/` install is neither detected nor modified, so a build installs `.claude/skills/vow/` beside it: delete the old directory by hand.
 
 ### `vow test`
 
@@ -3613,7 +3650,7 @@ program failed while keeping `"diverged"` for runs where the verifier and runtim
 whether the predicted failure is reachable. Runtime aborts use the reserved exit status `134` and
 the structured diagnostics documented under [Runtime Errors](errors.md#runtime-errors).
 
-**v1 input scope.** Reconstruction supports scalar parameters (`i64`, `u64`, `bool`) and bounded `Vec` of those scalars. `String`, `HashMap`, `BTreeMap`, struct, reference, and nested-aggregate parameters are reported as `"skipped"` with a reason. The self-hosted compiler's v1 reconstructs scalars only and reports `Vec` parameters as `"skipped"` (the Rust compiler additionally reconstructs bounded `Vec`s); both report identical outcomes for scalar and aggregate-skip cases. Replaying a counterexample for a function whose entry file already defines `main` is `"skipped"` by the self-hosted compiler.
+**v1 input scope.** Reconstruction supports scalar parameters (`i64`, `u64`, `bool`) and bounded `Vec` of those scalars. `String`, `HashMap`, `BTreeMap`, struct, reference, and nested-aggregate parameters are reported as `"skipped"` with a reason. The self-hosted compiler's v1 reconstructs scalars only and reports `Vec` parameters as `"skipped"` (the Rust compiler additionally reconstructs bounded `Vec`s); both report identical outcomes for scalar and aggregate-skip cases. An entry file that already defines `main` replays like any other: both compilers set that `main` aside in the harness and call the failing function from a synthesized `main`. A counterexample for `main` itself is `"skipped"` (the harness cannot call the entry function).
 
 `replay`/`replay_reason` are present on a counterexample only when `--replay-cex` was passed.
 
@@ -9288,11 +9325,13 @@ vow skill install --global  # install to $HOME/.claude/skills/vow/ on Linux
 
 `install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code discovers the skill from the `.claude/skills/` directory and uses the frontmatter description/`when_to_use` metadata to load it for `.vow` file work as well as creation and verification-debugging prompts before a `.vow` file exists.
 
-**Atomic install.** `install` builds the whole tree in a staging directory next to the target (`.claude/skills/.vow-install-*`) and renames it into place, writing `SKILL.md` last, so a failed or interrupted install never leaves a `SKILL.md` that links to missing `reference/`, `examples/`, or `schemas/` files. When `skills/vow/` already exists, the old tree is renamed aside, the new one renamed in, and the old one restored if that rename fails; the directory is briefly absent between the two renames, never half-written. A re-install therefore replaces the whole directory: stale files from an older toolchain and files added by hand under `skills/vow/` are removed, and the install needs write access to `.claude/skills/` itself. A `skills/vow` symlink (dotfile managers) is kept and written through in place, support files first and `SKILL.md` last. A pre-existing partial tree is repaired by the next explicit `install`; auto-install never touches a tree that already holds `SKILL.md`.
+**Atomic install.** `install` builds the whole tree in a staging directory next to the target (`.claude/skills/.vow-install-*`) and renames it into place, writing `SKILL.md` last, so a failed or interrupted install never leaves a `SKILL.md` that links to missing `reference/`, `examples/`, or `schemas/` files. When `skills/vow/` already exists, the old tree is renamed aside, the new one renamed in, and the old one restored if that rename fails; the directory is briefly absent between the two renames, never half-written. Files the install does not own (hand-added notes, stale files an older toolchain left in `reference/`) are copied from the old tree into the staged one before the swap, so a re-install rewrites owned files and leaves everything else alone; the install needs write access to `.claude/skills/` itself. A `skills/vow` symlink (dotfile managers) is kept and written through in place, support files first and `SKILL.md` last. A pre-existing partial tree is repaired by the next explicit `install`; auto-install never touches a tree that already holds `SKILL.md`.
 
 When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow/` and fails if `$HOME` is unset or empty.
 
 **Auto-install on build.** The first time `vow build` (or the bare `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build and stays silent on failure; a failed auto-install leaves no `SKILL.md`, so the next build retries it.
+
+**Migrating an existing install.** An existing `.claude/skills/vow/SKILL.md` is never rewritten, and while it is present a build does not add or repair support files, so an older single-file skill keeps working but lacks `reference/`, `examples/`, and `schemas/`. To migrate, refresh after a compiler upgrade, or repair, run `vow skill install` with the scope being replaced: `--local` for `./.claude/skills/vow/` or `--global` for `$HOME/.claude/skills/vow/` (a global install does not refresh a project-local one). Without `.git`, `--local` is unavailable: delete `.claude/skills/vow/SKILL.md` and run a build instead. Explicit install rewrites `SKILL.md` and every support file it owns, overwriting local edits, and leaves other files alone; review the diff of a committed project install. A pre-rename `.claude/skills/vow-toolchain/` install is neither detected nor modified, so a build installs `.claude/skills/vow/` beside it: delete the old directory by hand.
 
 ### `vow test`
 
@@ -9659,7 +9698,7 @@ program failed while keeping `"diverged"` for runs where the verifier and runtim
 whether the predicted failure is reachable. Runtime aborts use the reserved exit status `134` and
 the structured diagnostics documented under [Runtime Errors](errors.md#runtime-errors).
 
-**v1 input scope.** Reconstruction supports scalar parameters (`i64`, `u64`, `bool`) and bounded `Vec` of those scalars. `String`, `HashMap`, `BTreeMap`, struct, reference, and nested-aggregate parameters are reported as `"skipped"` with a reason. The self-hosted compiler's v1 reconstructs scalars only and reports `Vec` parameters as `"skipped"` (the Rust compiler additionally reconstructs bounded `Vec`s); both report identical outcomes for scalar and aggregate-skip cases. Replaying a counterexample for a function whose entry file already defines `main` is `"skipped"` by the self-hosted compiler.
+**v1 input scope.** Reconstruction supports scalar parameters (`i64`, `u64`, `bool`) and bounded `Vec` of those scalars. `String`, `HashMap`, `BTreeMap`, struct, reference, and nested-aggregate parameters are reported as `"skipped"` with a reason. The self-hosted compiler's v1 reconstructs scalars only and reports `Vec` parameters as `"skipped"` (the Rust compiler additionally reconstructs bounded `Vec`s); both report identical outcomes for scalar and aggregate-skip cases. An entry file that already defines `main` replays like any other: both compilers set that `main` aside in the harness and call the failing function from a synthesized `main`. A counterexample for `main` itself is `"skipped"` (the harness cannot call the entry function).
 
 `replay`/`replay_reason` are present on a counterexample only when `--replay-cex` was passed.
 
@@ -13830,15 +13869,35 @@ mod tests {
     }
 
     #[test]
-    fn atomic_install_replaces_existing_tree() {
+    fn atomic_install_rewrites_owned_files_and_carries_over_foreign_ones() {
         let dir = TempDir::new().unwrap();
         let target = seed_old_tree(dir.path());
+        std::fs::write(target.join("reference/a.md"), "edited").unwrap();
+        std::fs::create_dir_all(target.join("mine/deep")).unwrap();
+        std::fs::write(target.join("mine/deep/x.txt"), "deep").unwrap();
+        std::fs::write(target.join("notes.md"), "notes").unwrap();
         let installed = install_tree_atomic(dir.path(), "new", GOOD_FILES).unwrap();
         assert_eq!(installed, target.join("SKILL.md"));
         assert_eq!(std::fs::read_to_string(&installed).unwrap(), "new");
-        assert!(target.join("reference/a.md").exists());
-        assert!(!target.join("reference/stale.md").exists());
+        let read = |rel: &str| std::fs::read_to_string(target.join(rel)).unwrap();
+        assert_eq!(read("reference/a.md"), "a");
+        assert_eq!(read("reference/stale.md"), "stale");
+        assert_eq!(read("mine/deep/x.txt"), "deep");
+        assert_eq!(read("notes.md"), "notes");
         assert_eq!(skills_entries(dir.path()), vec!["vow".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_install_carries_over_symlinks_as_links() {
+        let dir = TempDir::new().unwrap();
+        let target = seed_old_tree(dir.path());
+        std::os::unix::fs::symlink("missing-target", target.join("link")).unwrap();
+        install_tree_atomic(dir.path(), "new", GOOD_FILES).unwrap();
+        assert_eq!(
+            std::fs::read_link(target.join("link")).unwrap(),
+            PathBuf::from("missing-target")
+        );
     }
 
     #[test]
@@ -14052,6 +14111,63 @@ mod tests {
         maybe_auto_install(dir.path());
         let contents = std::fs::read_to_string(&target).unwrap();
         assert_eq!(contents, "user-managed content");
+        for support_dir in ["reference", "examples", "schemas"] {
+            assert!(
+                !target_dir.join(support_dir).exists(),
+                "auto-install must not add {support_dir}/ next to an existing SKILL.md"
+            );
+        }
+    }
+
+    fn local_project_with_monolithic_skill() -> (TempDir, PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let skill_dir = dir.path().join(".claude/skills/vow");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(dir.path().join(".git"), "gitdir: ../real-git-dir\n").unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "user-managed content").unwrap();
+        (dir, skill_dir)
+    }
+
+    fn install_local(cwd: &Path) -> PathBuf {
+        let mut stdin = std::io::Cursor::new(Vec::<u8>::new());
+        let mut stderr = Vec::new();
+        run_skill_install_scoped(cwd, None, true, false, &mut stdin, &mut stderr).unwrap()
+    }
+
+    #[test]
+    fn explicit_install_migrates_monolithic_skill_to_split_layout() {
+        let (dir, skill_dir) = local_project_with_monolithic_skill();
+
+        let installed = install_local(dir.path());
+
+        assert_eq!(installed, skill_dir.join("SKILL.md"));
+        assert_eq!(
+            std::fs::read_to_string(&installed).unwrap(),
+            entrypoint_markdown()
+        );
+        for (relative_path, contents) in skill_support_files() {
+            assert_eq!(
+                std::fs::read_to_string(skill_dir.join(relative_path)).unwrap(),
+                *contents,
+                "explicit install must write {relative_path}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_install_repairs_missing_support_files_and_keeps_foreign_files() {
+        let (dir, skill_dir) = local_project_with_monolithic_skill();
+        install_local(dir.path());
+        std::fs::remove_dir_all(skill_dir.join("reference")).unwrap();
+        std::fs::write(skill_dir.join("notes.md"), "mine").unwrap();
+
+        install_local(dir.path());
+
+        assert!(skill_dir.join("reference/cli.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(skill_dir.join("notes.md")).unwrap(),
+            "mine"
+        );
     }
 
     #[test]
@@ -14059,12 +14175,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
         std::fs::write(dir.path().join(".git"), "gitdir: ../real-git-dir\n").unwrap();
-        let mut stdin = std::io::Cursor::new(Vec::<u8>::new());
-        let mut stderr = Vec::new();
 
-        let installed =
-            run_skill_install_scoped(dir.path(), None, true, false, &mut stdin, &mut stderr)
-                .unwrap();
+        let installed = install_local(dir.path());
 
         assert_eq!(installed, dir.path().join(".claude/skills/vow/SKILL.md"));
         assert!(installed.exists());

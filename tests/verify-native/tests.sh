@@ -498,8 +498,7 @@ no_leftovers "stress"
 
 # --replay-cex: a counterexample the runtime reproduces is `confirmed`; one it
 # does not is a verifier bug. The fake solver answers b = 0 (a real divide-by-zero)
-# or b = 7 (a model the runtime disagrees with). The source defines no `main`:
-# the self-hosted replay harness cannot splice one in.
+# or b = 7 (a model the runtime disagrees with).
 REPLAY_SRC="$TMP_ROOT/replay.vow"
 cat > "$REPLAY_SRC" <<'SRC'
 module Replay
@@ -525,8 +524,24 @@ expect "replay diverged keeps the violation diagnostic first" "$(field "$RUN_OUT
 expect "replay diverged bug code" "$(field "$RUN_OUT" diagnostics.1.error_code)" "VerifierBug"
 no_leftovers "replay diverged"
 
-# a skipped replay never ran, so it is not a verifier bug (THREE_CLAIMS defines main).
+# an entry file that defines `main` replays like any other (THREE_CLAIMS defines it).
 run_native sat_zero "$THREE_CLAIMS" --replay-cex
+expect "replay with main confirmed" "$(field "$RUN_OUT" counterexamples.0.replay)" "confirmed"
+expect "replay with main has no bug report" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
+no_leftovers "replay with main"
+
+# a skipped replay never ran, so it is not a verifier bug (an i32 parameter is not replayable).
+REPLAY_SKIP_SRC="$TMP_ROOT/replay_skip.vow"
+cat > "$REPLAY_SKIP_SRC" <<'SRC'
+module ReplaySkip
+
+fn quot(a: i32, b: i32) -> i32 vow {
+  ensures: result == result
+} {
+  a / b
+}
+SRC
+run_native sat_zero "$REPLAY_SKIP_SRC" --replay-cex
 expect "replay skipped" "$(field "$RUN_OUT" counterexamples.0.replay)" "skipped"
 expect "skipped replay is not a verifier bug" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
 
