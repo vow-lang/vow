@@ -1,0 +1,26 @@
+// TEST: category callee-blame
+// TEST: counterexample-fn "pinned"
+// TEST: counterexample-blame Callee
+// TEST: counterexample-vow-id 1
+// TEST: replay confirmed
+//
+// Counterexample-replay fixture for an entry file that defines `main` (#1550).
+// `pinned`'s `requires: x == 3` forces the counterexample x=3, and the body
+// returns x=3, violating `ensures: result == 0` (vow_id 1, Callee blame).
+//
+// The replay harness is this file plus a synthesized `fn main`, so both
+// compilers must set this file's own `main` aside first. `main` never calls
+// `pinned`, so it contributes no counterexample of its own.
+module ReplayConfirmWithMain
+
+fn pinned(x: i64) -> i64 vow {
+  requires: x == 3,
+  ensures: result == 0
+} {
+  x
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

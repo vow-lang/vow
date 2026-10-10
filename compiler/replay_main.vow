@@ -1,0 +1,64 @@
+module ReplayMain
+
+use lexer
+use ast
+use diag
+use mutants_patch
+
+// Entry-`main` handling for `--replay-cex` (#1550). A replay harness is the
+// entry file's own text plus a synthesized `fn main`, so a file that already
+// defines `main` must have that definition renamed out of the way first. The
+// definition is located in the merged AST, never by text search, so `fn main(`
+// inside a comment or string literal is not mistaken for it. Only the span
+// start is used: packed spans clamp their length to 65535 bytes, so removing
+// the definition by span would truncate a long `main`.
+
+// Byte offset of the `fn` keyword of the `main` defined in `path` itself, or
+// -1 when the entry file defines none. A `main` from a `use`d dependency is not
+// the entry file's `main`, so only items whose originating file is `path` count.
+fn replay_entry_main_start(m: Module, item_files: Vec<String>, path: String) -> i64 {
+    let a: AstArena = m.arena;
+    let n: u64 = m.items.len();
+    let mut i: u64 = 0u64;
+    while i < n {
+        let it: i64 = m.items[i];
+        if i < item_files.len() && item_files[i] == path && it >= 0 && item_kind(it) == ITEM_FN() {
+            let fid: i64 = item_id(it);
+            if !fn_is_declaration(a, fid) && arena_str(a, fn_name_sid(a, fid)) == String::from("main") {
+                return span_unpack_start(fn_span(a, fid));
+            }
+        }
+        i = i + 1u64;
+    }
+    -1
+}
+
+fn replay_is_space(b: i64) -> bool {
+    b == 32 || b == 9 || b == 10 || b == 13
+}
+
+// `src` with the `main` whose `fn` keyword sits at byte `start` renamed to
+// `__replay_orig_main`. Returns "" when `src` does not hold `fn`, whitespace and
+// exactly the identifier `main` at that offset, so a stale offset can never
+// corrupt a harness silently.
+fn replay_rename_main(src: String, start: i64) -> String {
+    let n: i64 = src.len() as i64;
+    if start < 0 || start + 2 > n { return String::from(""); }
+    if src.byte_at(start as u64) != 102 || src.byte_at((start + 1) as u64) != 110 {
+        return String::from("");
+    }
+    let mut p: i64 = start + 2;
+    while p < n && replay_is_space(src.byte_at(p as u64)) {
+        p = p + 1;
+    }
+    let name: String = String::from("main");
+    let nl: i64 = name.len() as i64;
+    if p + nl > n { return String::from(""); }
+    if src.substring(p as u64, (p + nl) as u64) != name { return String::from(""); }
+    let end: i64 = p + nl;
+    if end < n {
+        let after: i64 = src.byte_at(end as u64);
+        if after >= 0 && after <= 255 && is_ident_cont(after) { return String::from(""); }
+    }
+    splice(src, p as u64, nl as u64, String::from("__replay_orig_main"))
+}

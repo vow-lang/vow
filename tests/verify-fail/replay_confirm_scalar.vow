@@ -11,8 +11,8 @@
 //
 // With `--replay-cex`, both compilers build a `--mode debug` harness that calls
 // `pinned(3)` and observe the runtime VowViolation fire with the same vow_id 1
-// and Callee blame -> replay "confirmed". No `fn main` here, so the self-hosted
-// compiler (which skips replay when the entry file defines main) also confirms.
+// and Callee blame -> replay "confirmed". No `fn main` here; replay of a file
+// that defines `main` is covered by replay_confirm_with_main.vow.
 module ReplayConfirmScalar
 
 fn pinned(x: i64) -> i64 vow {

@@ -997,6 +997,34 @@ print(cx[0].get('violation', '') if cx else '')
             fail "${name}/verify-fail-violation" "expected '$expected_violation'; $(IFS='; '; echo "${violation_errors[*]}")"
         fi
     fi
+
+    # `// TEST: replay <status>` pins the `replay` status of every counterexample
+    # under `verify --replay-cex` on both compilers. Only the status is compared:
+    # `replay_reason` wording differs between the compilers by design.
+    expected_replay=$(sed -n 's|^// TEST: replay \([a-z,]*\)$|\1|p' "$vow_file" | head -1)
+    if [ -n "$expected_replay" ]; then
+        replay_errors=()
+        for replay_side in rust self; do
+            if [ "$replay_side" = "rust" ]; then
+                replay_json=$($RUST verify --replay-cex --no-cache "$vow_file" 2>/dev/null) || true
+            else
+                replay_json=$(run_self verify --replay-cex --no-cache "$vow_file" 2>/dev/null) || true
+            fi
+            actual_replays=$(python3 -c "
+import json, sys
+cx = json.loads(sys.stdin.read()).get('counterexamples') or []
+print(','.join(sorted(set(c.get('replay', '') for c in cx))) if cx else '<none>')
+" <<< "$replay_json" 2>/dev/null) || actual_replays="<unparseable>"
+            if [ "$actual_replays" != "$expected_replay" ]; then
+                replay_errors+=("$replay_side replay='$actual_replays'")
+            fi
+        done
+        if [ ${#replay_errors[@]} -eq 0 ]; then
+            pass "${name}/verify-fail-replay"
+        else
+            fail "${name}/verify-fail-replay" "expected '$expected_replay'; $(IFS='; '; echo "${replay_errors[*]}")"
+        fi
+    fi
 done
 echo ""
 
