@@ -1622,6 +1622,27 @@ else
 fi
 echo ""
 
+# ─── Section 4k: Skill install migration (tests/skill-install/, #358) ─
+#
+# Auto-install must leave an existing SKILL.md (including the old monolithic
+# layout) untouched; an explicit `skill install --local` migrates it to the
+# split layout. Both compilers implement this independently.
+
+section_begin "Section 4k: Skill install migration"
+skill_install_rust_log="$TMPDIR/skill-install-rust.log"
+if VOWC_BIN="$RUST" bash tests/skill-install/tests.sh >"$skill_install_rust_log" 2>&1; then
+    pass "skill-install/rust"
+else
+    fail "skill-install/rust" "$(tail -20 "$skill_install_rust_log")"
+fi
+skill_install_self_log="$TMPDIR/skill-install-self.log"
+if VOWC_BIN="$SELF" bash tests/skill-install/tests.sh >"$skill_install_self_log" 2>&1; then
+    pass "skill-install/self-hosted"
+else
+    fail "skill-install/self-hosted" "$(tail -20 "$skill_install_self_log")"
+fi
+echo ""
+
 # ─── Section 5: Debug Mode ─────────────────────────────────────────
 
 section_begin "Section 5: Debug Mode"
