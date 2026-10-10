@@ -13,6 +13,7 @@ struct Parser {
     file: String,
     aborted: i64,
     recovered: i64,
+    no_struct: i64,
 }
 
 fn parser_new(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx, file: String) -> Parser {
@@ -25,6 +26,7 @@ fn parser_new(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx, file: String) 
         file: file,
         aborted: 0,
         recovered: 0,
+        no_struct: 0,
     }
 }
 
@@ -597,6 +599,8 @@ fn parse_vow_block(p: Parser) -> i64 {
     }
     let _kw: Token = advance(p);
     let _lb: bool = expect(p, tok_lbrace());
+    let saved_no_struct: i64 = p.no_struct;
+    p.no_struct = 0;
     let clause_ids: Vec<i64> = Vec::new();
     while !at(p, tok_rbrace()) && !at_end(p) {
         let ct: Token = peek(p);
@@ -629,6 +633,7 @@ fn parse_vow_block(p: Parser) -> i64 {
             let _cm: Token = advance(p);
         }
     }
+    p.no_struct = saved_no_struct;
     let _rb: bool = expect(p, tok_rbrace());
     arena_add_list(p.arena, clause_ids)
 }
@@ -696,6 +701,8 @@ fn parse_block(p: Parser) -> i64 {
         t.span_start
     };
     let _lb: bool = expect(p, tok_lbrace());
+    let saved_no_struct: i64 = p.no_struct;
+    p.no_struct = 0;
     let stmt_items: Vec<i64> = Vec::new();
     let mut open: bool = false;
     while !open && !at(p, tok_rbrace()) && !at_end(p) {
@@ -728,6 +735,7 @@ fn parse_block(p: Parser) -> i64 {
             }
         }
     }
+    p.no_struct = saved_no_struct;
     let _rb: bool = if open { false } else { expect(p, tok_rbrace()) };
     let stmts_lid: i64 = arena_add_list(p.arena, stmt_items);
     let span: i64 = span_pack_to_here(p, span_start);
@@ -961,7 +969,10 @@ fn parse_postfix_chain(p: Parser, start_e: i64, span_start: i64, allow_cast: boo
             }
         } else if at(p, tok_lbracket()) {
             let _lb: Token = advance(p);
+            let saved_no_struct: i64 = p.no_struct;
+            p.no_struct = 0;
             let idx: i64 = parse_expr(p);
+            p.no_struct = saved_no_struct;
             let _rb: bool = expect(p, tok_rbracket());
             e = arena_add_expr(p.arena, EXPR_INDEX(), e, idx, 0, span_pack_to_here(p, span_start));
         } else if at(p, tok_lparen()) {
@@ -1008,6 +1019,8 @@ fn parse_cast_target(p: Parser) -> i64 {
 
 fn parse_call_args(p: Parser) -> i64 {
     let _lp: bool = expect(p, tok_lparen());
+    let saved_no_struct: i64 = p.no_struct;
+    p.no_struct = 0;
     let arg_items: Vec<i64> = Vec::new();
     while !at(p, tok_rparen()) && !at_end(p) {
         arg_items.push(parse_expr(p));
@@ -1015,6 +1028,7 @@ fn parse_call_args(p: Parser) -> i64 {
             let _c: Token = advance(p);
         }
     }
+    p.no_struct = saved_no_struct;
     let _rp: bool = expect(p, tok_rparen());
     arena_add_list(p.arena, arg_items)
 }
@@ -1077,7 +1091,7 @@ fn parse_primary(p: Parser) -> i64 {
         let sid: i64 = arena_intern_str(p.arena, name_str);
         if at(p, tok_colon_colon()) {
             parse_path_expr(p, sid, span_start)
-        } else if at(p, tok_lbrace()) && first_byte >= 65 && first_byte <= 90 && looks_like_struct_literal(p) {
+        } else if at(p, tok_lbrace()) && p.no_struct == 0 && first_byte >= 65 && first_byte <= 90 && looks_like_struct_literal(p) {
             let path_items: Vec<i64> = Vec::new();
             path_items.push(sid);
             let path_lid: i64 = arena_add_list(p.arena, path_items);
@@ -1136,6 +1150,8 @@ fn parse_primary(p: Parser) -> i64 {
             let _rp: Token = advance(p);
             arena_add_expr(p.arena, EXPR_TUPLE(), arena_add_list(p.arena, Vec::new()), 0, 0, span_pack_to_here(p, span_start))
         } else {
+            let saved_no_struct: i64 = p.no_struct;
+            p.no_struct = 0;
             let e: i64 = parse_expr(p);
             if at(p, tok_comma()) {
                 let tup_items: Vec<i64> = Vec::new();
@@ -1144,10 +1160,12 @@ fn parse_primary(p: Parser) -> i64 {
                     let _c: Token = advance(p);
                     tup_items.push(parse_expr(p));
                 }
+                p.no_struct = saved_no_struct;
                 let _rp: bool = expect(p, tok_rparen());
                 let elems_lid: i64 = arena_add_list(p.arena, tup_items);
                 arena_add_expr(p.arena, EXPR_TUPLE(), elems_lid, 0, 0, span_pack_to_here(p, span_start))
             } else {
+                p.no_struct = saved_no_struct;
                 let _rp: bool = expect(p, tok_rparen());
                 e
             }
@@ -1171,7 +1189,7 @@ fn parse_path_expr(p: Parser, first_sid: i64, span_start: i64) -> i64 {
         path_items.push(sid);
     }
     let path_lid: i64 = arena_add_list(p.arena, path_items);
-    if at(p, tok_lbrace()) {
+    if at(p, tok_lbrace()) && p.no_struct == 0 {
         let n_segs: u64 = path_items.len();
         if n_segs > 1 && looks_like_struct_literal(p) {
             let _lb: Token = advance(p);
@@ -1215,10 +1233,21 @@ fn parse_path_expr(p: Parser, first_sid: i64, span_start: i64) -> i64 {
     }
 }
 
+// The head of `if` / `while` / `for … in` / `match`: `Name {` there opens the
+// body, so struct literals and brace-form enum constructors are not parsed
+// until a delimiter re-enables them.
+fn parse_head_expr(p: Parser) -> i64 {
+    let saved_no_struct: i64 = p.no_struct;
+    p.no_struct = 1;
+    let e: i64 = parse_expr(p);
+    p.no_struct = saved_no_struct;
+    e
+}
+
 fn parse_if_expr(p: Parser) -> i64 {
     let span_start: i64 = peek(p).span_start;
     let _kw: bool = expect(p, tok_kw_if());
-    let cond: i64 = parse_expr(p);
+    let cond: i64 = parse_head_expr(p);
     let then_bid: i64 = parse_block(p);
     let else_eid: i64 = if at(p, tok_kw_else()) {
         let _ekw: Token = advance(p);
@@ -1236,7 +1265,7 @@ fn parse_if_expr(p: Parser) -> i64 {
 fn parse_while_expr(p: Parser) -> i64 {
     let span_start: i64 = peek(p).span_start;
     let _kw: bool = expect(p, tok_kw_while());
-    let cond: i64 = parse_expr(p);
+    let cond: i64 = parse_head_expr(p);
     let vow_lid: i64 = parse_vow_block(p);
     let body_bid: i64 = parse_block(p);
     arena_add_expr(p.arena, EXPR_WHILE(), cond, body_bid, vow_lid, span_pack_to_here(p, span_start))
@@ -1256,7 +1285,7 @@ fn parse_for_expr(p: Parser) -> i64 {
     let name_tok: Token = advance(p);
     let name_sid: i64 = arena_intern_str(p.arena, name_tok.str_val);
     let _in: bool = expect(p, tok_kw_in());
-    let iterable: i64 = parse_expr(p);
+    let iterable: i64 = parse_head_expr(p);
     let vow_lid: i64 = parse_vow_block(p);
     let body_bid: i64 = parse_block(p);
     let info_items: Vec<i64> = Vec::new();
@@ -1269,8 +1298,10 @@ fn parse_for_expr(p: Parser) -> i64 {
 fn parse_match_expr(p: Parser) -> i64 {
     let span_start: i64 = peek(p).span_start;
     let _kw: bool = expect(p, tok_kw_match());
-    let scrutinee: i64 = parse_expr(p);
+    let scrutinee: i64 = parse_head_expr(p);
     let _lb: bool = expect(p, tok_lbrace());
+    let saved_no_struct: i64 = p.no_struct;
+    p.no_struct = 0;
     let arm_items: Vec<i64> = Vec::new();
     while !at(p, tok_rbrace()) && !at_end(p) {
         let pat: i64 = parse_pattern(p);
@@ -1288,6 +1319,7 @@ fn parse_match_expr(p: Parser) -> i64 {
             break;
         }
     }
+    p.no_struct = saved_no_struct;
     let _rb: bool = expect(p, tok_rbrace());
     let arms_lid: i64 = arena_add_list(p.arena, arm_items);
     arena_add_expr(p.arena, EXPR_MATCH(), scrutinee, arms_lid, 0, span_pack_to_here(p, span_start))

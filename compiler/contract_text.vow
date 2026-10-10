@@ -364,11 +364,46 @@ fn print_expr_text_at(a: AstArena, eid: i64, level: i64) -> String {
     print_control_expr_text(a, eid, tag, level)
 }
 
+// Mirrors `head_exposes_struct_literal` in vow-syntax/src/printer.rs: true when
+// printing `eid` leaves a struct literal outside every delimiter, where an
+// `if` / `while` / `for` / `match` head would read `Name {` as the body. An
+// over-approximation by design; both printers must keep the same arm list.
+fn head_exposes_struct_literal_text(a: AstArena, eid: i64) -> bool {
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_SLIT() { return true; }
+    if tag == EXPR_BINOP() {
+        return head_exposes_struct_literal_text(a, expr_b(a, eid))
+            || head_exposes_struct_literal_text(a, expr_c(a, eid));
+    }
+    if tag == EXPR_ASSIGN() {
+        return head_exposes_struct_literal_text(a, expr_a(a, eid))
+            || head_exposes_struct_literal_text(a, expr_b(a, eid));
+    }
+    if tag == EXPR_UNOP() {
+        return head_exposes_struct_literal_text(a, expr_b(a, eid));
+    }
+    if tag == EXPR_CAST() || tag == EXPR_QUESTION() || tag == EXPR_FIELD()
+        || tag == EXPR_INDEX() || tag == EXPR_METHOD() || tag == EXPR_CALL() {
+        return head_exposes_struct_literal_text(a, expr_a(a, eid));
+    }
+    if tag == EXPR_BREAK() || tag == EXPR_RETURN() {
+        let value_eid: i64 = expr_a(a, eid);
+        return value_eid != -1 && head_exposes_struct_literal_text(a, value_eid);
+    }
+    false
+}
+
+fn print_head_text(a: AstArena, eid: i64, level: i64) -> String {
+    let text: String = print_expr_text_at(a, eid, level);
+    if head_exposes_struct_literal_text(a, eid) { return parenthesize_text(text); }
+    text
+}
+
 // The compound forms: `if`, blocks, `match` and the loop / jump expressions.
 fn print_control_expr_text(a: AstArena, eid: i64, tag: i64, level: i64) -> String {
     if tag == EXPR_IF() {
         let result: String = String::from("if ");
-        result.push_str(print_expr_text_at(a, expr_a(a, eid), level));
+        result.push_str(print_head_text(a, expr_a(a, eid), level));
         result.push_str(String::from(" "));
         result.push_str(print_block_text(a, expr_b(a, eid), level));
         let else_eid: i64 = expr_c(a, eid);
@@ -383,7 +418,7 @@ fn print_control_expr_text(a: AstArena, eid: i64, tag: i64, level: i64) -> Strin
     }
     if tag == EXPR_MATCH() {
         let result: String = String::from("match ");
-        result.push_str(print_expr_text_at(a, expr_a(a, eid), level));
+        result.push_str(print_head_text(a, expr_a(a, eid), level));
         result.push_str(String::from(" {\n"));
         let arms_lid: i64 = expr_b(a, eid);
         let narms: i64 = list_len(a, arms_lid) / 2;
@@ -402,7 +437,7 @@ fn print_control_expr_text(a: AstArena, eid: i64, tag: i64, level: i64) -> Strin
     }
     if tag == EXPR_WHILE() {
         let result: String = String::from("while ");
-        result.push_str(print_expr_text_at(a, expr_a(a, eid), level));
+        result.push_str(print_head_text(a, expr_a(a, eid), level));
         result.push_str(print_loop_vow_text(a, expr_c(a, eid), level));
         result.push_str(print_block_text(a, expr_b(a, eid), level));
         return result;
@@ -418,7 +453,7 @@ fn print_control_expr_text(a: AstArena, eid: i64, tag: i64, level: i64) -> Strin
         let result: String = String::from("for ");
         result.push_str(arena_str(a, list_get(a, info_lid, 0)));
         result.push_str(String::from(" in "));
-        result.push_str(print_expr_text_at(a, expr_a(a, eid), level));
+        result.push_str(print_head_text(a, expr_a(a, eid), level));
         result.push_str(print_loop_vow_text(a, list_get(a, info_lid, 1), level));
         result.push_str(print_block_text(a, expr_b(a, eid), level));
         return result;
