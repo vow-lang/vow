@@ -1689,7 +1689,7 @@ mod tests {
                 "if ((S { a: 1 }) as i64 == 1) {",
             ),
             ("if (x = S { a: 1 }) { }", "if (x = S { a: 1 }) {"),
-            ("if { break S { a: 1 } } { }", "if {"),
+            ("if { break S { a: 1 } } { }", "break S { a: 1 }"),
             ("if (return S { a: 1 }) { }", "if (return S { a: 1 }) {"),
         ] {
             let out = assert_head_round_trips(body);
@@ -1703,7 +1703,7 @@ mod tests {
             ("if f(S { a: 1 }) { }", "if f(S { a: 1 }) {"),
             ("if v[S { a: 1 }.a] == 1 { }", "if v[S { a: 1 }.a] == 1 {"),
             ("if (S { a: 1 }, 2) == t { }", "if (S { a: 1 }, 2) == t {"),
-            ("if { S { a: 1 }.a == 1 } { }", "if {"),
+            ("if { S { a: 1 }.a == 1 } { }", "S { a: 1 }.a == 1"),
             ("if h.m(S { a: 1 }) { }", "if h.m(S { a: 1 }) {"),
             ("let s = S { a: 1 };", "let s = S { a: 1 };"),
             ("if c { S { a: 1 } } else { S { a: 2 } }", "if c {"),

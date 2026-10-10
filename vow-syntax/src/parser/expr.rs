@@ -363,7 +363,7 @@ impl Parser {
             };
         }
 
-        let first = self.with_no_struct(false, |p| p.parse_expr_inner(0));
+        let first = self.parse_delimited_expr();
 
         if self.at(&TokenKind::RParen) {
             self.advance();
@@ -377,7 +377,7 @@ impl Parser {
                 if self.at(&TokenKind::RParen) {
                     break;
                 }
-                elems.push(self.with_no_struct(false, |p| p.parse_expr_inner(0)));
+                elems.push(self.parse_delimited_expr());
             }
             let end = self.current_span();
             self.expect(TokenKind::RParen);
@@ -442,7 +442,7 @@ impl Parser {
             }
             TokenKind::LBracket => {
                 self.advance();
-                let index = self.with_no_struct(false, |p| p.parse_expr_inner(0));
+                let index = self.parse_delimited_expr();
                 let end = self.current_span();
                 self.expect(TokenKind::RBracket);
                 Expr {
@@ -489,7 +489,7 @@ impl Parser {
     fn parse_call_args(&mut self) -> (Vec<Expr>, Span) {
         let mut args = Vec::new();
         while !self.at(&TokenKind::RParen) && !self.at_end() {
-            args.push(self.with_no_struct(false, |p| p.parse_expr_inner(0)));
+            args.push(self.parse_delimited_expr());
             if self.at(&TokenKind::Comma) {
                 self.advance();
             } else {
@@ -500,10 +500,20 @@ impl Parser {
         (args, end)
     }
 
+    // The head of `if` / `while` / `for … in` / `match`: `Name {` there opens
+    // the body, so struct literals are not parsed until a delimiter re-enables them.
+    fn parse_head_expr(&mut self) -> Expr {
+        self.with_no_struct(true, |p| p.parse_expr_inner(0))
+    }
+
+    fn parse_delimited_expr(&mut self) -> Expr {
+        self.with_no_struct(false, |p| p.parse_expr_inner(0))
+    }
+
     fn parse_if_expr(&mut self) -> Expr {
         let start = self.current_span();
         self.expect(TokenKind::KwIf);
-        let condition = self.with_no_struct(true, |p| p.parse_expr_inner(0));
+        let condition = self.parse_head_expr();
         let then_branch = self.parse_block_required();
         let else_branch = if self.at(&TokenKind::KwElse) {
             self.advance();
@@ -537,7 +547,7 @@ impl Parser {
     fn parse_while_expr(&mut self) -> Expr {
         let start = self.current_span();
         self.expect(TokenKind::KwWhile);
-        let condition = self.with_no_struct(true, |p| p.parse_expr_inner(0));
+        let condition = self.parse_head_expr();
         let vow = if self.at(&TokenKind::KwVow) {
             self.parse_vow_block()
         } else {
@@ -562,7 +572,7 @@ impl Parser {
             .expect_ident()
             .unwrap_or(("<error>".to_string(), self.current_span()));
         self.expect(TokenKind::KwIn);
-        let iterable = self.with_no_struct(true, |p| p.parse_expr_inner(0));
+        let iterable = self.parse_head_expr();
         let vow = if self.at(&TokenKind::KwVow) {
             self.parse_vow_block()
         } else {
@@ -603,28 +613,29 @@ impl Parser {
     fn parse_match_expr(&mut self) -> Expr {
         let start = self.current_span();
         self.expect(TokenKind::KwMatch);
-        let scrutinee = self.with_no_struct(true, |p| p.parse_expr_inner(0));
+        let scrutinee = self.parse_head_expr();
         self.expect(TokenKind::LBrace);
-        let saved_no_struct = std::mem::replace(&mut self.no_struct, false);
-        let mut arms = Vec::new();
-        while !self.at(&TokenKind::RBrace) && !self.at_end() {
-            let arm_start = self.current_span();
-            let pattern = self.parse_pat_inner();
-            self.expect(TokenKind::FatArrow);
-            let body = self.parse_expr_inner(0);
-            let arm_end = body.span;
-            arms.push(MatchArm {
-                pattern,
-                body,
-                span: arm_start.merge(arm_end),
-            });
-            if self.at(&TokenKind::Comma) {
-                self.advance();
-            } else {
-                break;
+        let arms = self.with_no_struct(false, |p| {
+            let mut arms = Vec::new();
+            while !p.at(&TokenKind::RBrace) && !p.at_end() {
+                let arm_start = p.current_span();
+                let pattern = p.parse_pat_inner();
+                p.expect(TokenKind::FatArrow);
+                let body = p.parse_expr_inner(0);
+                let arm_end = body.span;
+                arms.push(MatchArm {
+                    pattern,
+                    body,
+                    span: arm_start.merge(arm_end),
+                });
+                if p.at(&TokenKind::Comma) {
+                    p.advance();
+                } else {
+                    break;
+                }
             }
-        }
-        self.no_struct = saved_no_struct;
+            arms
+        });
         let end = self.current_span();
         self.expect(TokenKind::RBrace);
         Expr {
@@ -1715,6 +1726,16 @@ mod tests {
         crate::parser::parse_module(&src, "t.vow")
     }
 
+    fn assert_parses_with_literal(body: &str) {
+        let (module, diagnostics) = parse_fn_body(body);
+        assert!(diagnostics.is_empty(), "{body:?}: {diagnostics:?}");
+        let dump = format!("{module:?}");
+        assert!(
+            dump.contains("StructLiteral") || dump.contains("EnumConstruct { path: [\"Shape\""),
+            "{body:?}: no literal node"
+        );
+    }
+
     #[test]
     fn upper_case_and_enum_path_heads_before_an_empty_block_parse_in_every_form() {
         for body in [
@@ -1735,12 +1756,7 @@ mod tests {
 
     #[test]
     fn upper_case_head_is_an_identifier_and_the_brace_is_the_body() {
-        let tokens = crate::lexer::Lexer::new("if DEBUG { }")
-            .tokenize()
-            .expect("lex error");
-        let mut parser = Parser::new(tokens, String::new(), "<test>".to_string());
-        let expr = parser.parse_expr_inner(0);
-        assert!(parser.diagnostics.is_empty(), "{:?}", parser.diagnostics);
+        let expr = parse_no_errors("if DEBUG { }");
         match &expr.kind {
             ExprKind::If {
                 condition,
@@ -1785,13 +1801,7 @@ mod tests {
             "for i in (S { a: 1 }).a { }",
             "match (S { a: 1 }) { }",
         ] {
-            let (module, diagnostics) = parse_fn_body(body);
-            assert!(diagnostics.is_empty(), "{body:?}: {diagnostics:?}");
-            let dump = format!("{module:?}");
-            assert!(
-                dump.contains("StructLiteral") || dump.contains("EnumConstruct { path: [\"Shape\""),
-                "{body:?}: no literal node"
-            );
+            assert_parses_with_literal(body);
         }
     }
 
@@ -1805,13 +1815,7 @@ mod tests {
             "let s = Shape::Circle { r: 1 };",
             "while DEBUG { let s = S { a: 1 }; }",
         ] {
-            let (module, diagnostics) = parse_fn_body(body);
-            assert!(diagnostics.is_empty(), "{body:?}: {diagnostics:?}");
-            let dump = format!("{module:?}");
-            assert!(
-                dump.contains("StructLiteral") || dump.contains("EnumConstruct { path: [\"Shape\""),
-                "{body:?}: no literal node"
-            );
+            assert_parses_with_literal(body);
         }
     }
 
