@@ -1,4 +1,3 @@
-// TEST: category callee-blame
 // TEST: counterexample-fn "caller"
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-blame Caller
