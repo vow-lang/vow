@@ -1,19 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Migration contract for existing Vow skill installs (issue #358). Both
-# compilers must leave an existing .claude/skills/vow/SKILL.md untouched on
-# build (auto-install), and rewrite it plus the split-layout support files on
-# an explicit `skill install --local`.
+# Skill installs are all-or-nothing in both compilers (issue #361): the tree is
+# staged in a sibling directory and renamed into place, so a failure never
+# leaves a SKILL.md that links to missing reference/, examples/ or schemas/
+# files, and auto-install on `build` stays silent and never fails the build.
+# Existing installs keep working (issue #358): auto-install leaves an existing
+# SKILL.md (including the old monolithic layout) untouched, and an explicit
+# `skill install --local` migrates it to the split layout and keeps files it
+# does not own.
 #
 #   VOWC_BIN=build/vowc            bash tests/skill-install/tests.sh
-#   VOWC_BIN=target/release/vow bash tests/skill-install/tests.sh
+#   VOWC_BIN=target/release/vow VOWC_KIND=rust bash tests/skill-install/tests.sh
 
 VOWC_BIN="${VOWC_BIN:-build/vowc}"
 VOWC_BIN=$(cd "$(dirname "$VOWC_BIN")" && pwd)/$(basename "$VOWC_BIN")
-FIXTURE=$(cd "$(dirname "$0")/../.." && pwd)/examples/hello.vow
+VOWC_KIND="${VOWC_KIND:-self}"
+REPO_ROOT=$(pwd)
+FIXTURE="$REPO_ROOT/examples/hello.vow"
+MIRROR="$REPO_ROOT/skills/vow"
 TMP_ROOT=$(mktemp -d)
-trap 'rm -rf "$TMP_ROOT"' EXIT
+cleanup() {
+    chmod -R u+rwX "$TMP_ROOT" 2>/dev/null || true
+    rm -rf "$TMP_ROOT"
+}
+trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
@@ -30,64 +41,187 @@ expect_absent() {
     if [ -e "$2" ]; then fail "$1: unexpected $2"; fi
 }
 
-# Auto-install runs before the frontend and linker in both drivers, so only
-# file state is asserted, never the build's exit code.
-build_in() {
-    (cd "$1" && "$VOWC_BIN" build --no-verify -o out "$FIXTURE" >/dev/null 2>&1) || true
-}
-
 new_project() {
-    local dir="$TMP_ROOT/$1"
-    mkdir -p "$dir/.claude" "$dir/.git"
+    local dir
+    dir=$(mktemp -d "$TMP_ROOT/proj.XXXXXX")
+    mkdir -p "$dir/.git" "$dir/.claude"
     echo "$dir"
 }
 
-MONOLITHIC="monolithic skill content"
+# Runs the compiler inside $1; sets rc, out and err for the caller.
+run_in() {
+    local dir="$1"; shift
+    rc=0
+    (cd "$dir" && "$VOWC_BIN" "$@") >"$TMP_ROOT/out" 2>"$TMP_ROOT/err" || rc=$?
+    out=$(cat "$TMP_ROOT/out")
+    err=$(cat "$TMP_ROOT/err")
+}
 
-# 1. A monolithic SKILL.md survives a build and gains no support files.
-proj=$(new_project monolithic)
-mkdir -p "$proj/.claude/skills/vow"
-printf '%s' "$MONOLITHIC" > "$proj/.claude/skills/vow/SKILL.md"
-build_in "$proj"
+# Byte equality is not asserted: the self-hosted driver embeds ASCII-only copies
+# of some documents, so the tree is compared by file list and non-empty content.
+tree_listing() { (cd "$1" && find . -type f | LC_ALL=C sort); }
+
+assert_tree_at() {
+    local label="$1" tree="$2" f
+    expect "$label: file list" "$(tree_listing "$tree")" "$(tree_listing "$MIRROR")"
+    while IFS= read -r f; do
+        if [ ! -s "$tree/$f" ]; then fail "$label: $f is missing or empty"; fi
+    done < <(tree_listing "$MIRROR")
+}
+
+assert_complete_tree() {
+    assert_tree_at "$1" "$2/.claude/skills/vow"
+}
+
+assert_no_leftovers() {
+    local label="$1" dir="$2" entries
+    entries=$(ls -A "$dir/.claude/skills")
+    expect "$label: .claude/skills entries" "$entries" "vow"
+}
+
+# fresh explicit install
+p=$(new_project)
+run_in "$p" skill install --local
+expect "fresh install exit" "$rc" "0"
+case "$err" in *"installed skill to"*".claude/skills/vow/SKILL.md"*) ;;
+    *) fail "fresh install stderr lacks success line: $err" ;;
+esac
+assert_complete_tree "fresh install" "$p"
+assert_no_leftovers "fresh install" "$p"
+
+# re-install is idempotent
+run_in "$p" skill install --local
+expect "re-install exit" "$rc" "0"
+assert_complete_tree "re-install" "$p"
+assert_no_leftovers "re-install" "$p"
+
+# owned files are rewritten; files the install does not own are carried over
+mkdir -p "$p/.claude/skills/vow/reference" "$p/.claude/skills/vow/mine/deep"
+echo stale >"$p/.claude/skills/vow/reference/stale.md"
+echo notes >"$p/.claude/skills/vow/notes.md"
+echo deep >"$p/.claude/skills/vow/mine/deep/x.txt"
+echo edited >"$p/.claude/skills/vow/reference/cli.md"
+run_in "$p" skill install --local
+expect "replace exit" "$rc" "0"
+expect "carry-over keeps top-level file" "$(cat "$p/.claude/skills/vow/notes.md")" "notes"
+expect "carry-over keeps nested foreign file" \
+    "$(cat "$p/.claude/skills/vow/mine/deep/x.txt")" "deep"
+expect "carry-over keeps foreign file in owned dir" \
+    "$(cat "$p/.claude/skills/vow/reference/stale.md")" "stale"
+case "$(cat "$p/.claude/skills/vow/reference/cli.md")" in
+    edited) fail "replace: owned reference/cli.md kept its local edit" ;;
+esac
+rm -rf "$p/.claude/skills/vow/mine" "$p/.claude/skills/vow/notes.md" \
+    "$p/.claude/skills/vow/reference/stale.md"
+assert_complete_tree "replace" "$p"
+assert_no_leftovers "replace" "$p"
+
+# #361 regression: a regular file named `reference` blocks the support tree.
+# The old installer wrote SKILL.md first, failed on reference/, and left an
+# orphan entrypoint that auto-install then never repaired.
+p=$(new_project)
+mkdir -p "$p/.claude/skills/vow"
+echo blocker >"$p/.claude/skills/vow/reference"
+run_in "$p" skill install --local
+expect "blocked explicit exit" "$rc" "0"
+assert_complete_tree "blocked explicit" "$p"
+assert_no_leftovers "blocked explicit" "$p"
+
+p=$(new_project)
+mkdir -p "$p/.claude/skills/vow"
+echo blocker >"$p/.claude/skills/vow/reference"
+run_in "$p" build --no-verify "$FIXTURE" -o "$TMP_ROOT/hello"
+expect "blocked auto-install build exit" "$rc" "0"
+assert_complete_tree "blocked auto-install" "$p"
+
+# a partial tree (entrypoint only) is repaired by an explicit install
+p=$(new_project)
+mkdir -p "$p/.claude/skills/vow"
+echo old >"$p/.claude/skills/vow/SKILL.md"
+run_in "$p" skill install --local
+expect "partial repair exit" "$rc" "0"
+assert_complete_tree "partial repair" "$p"
+
+# unwritable .claude/skills: explicit install fails and keeps the old tree
+if [ "$(id -u)" != "0" ]; then
+    p=$(new_project)
+    mkdir -p "$p/.claude/skills/vow/reference"
+    echo old >"$p/.claude/skills/vow/SKILL.md"
+    echo stale >"$p/.claude/skills/vow/reference/stale.md"
+    chmod 555 "$p/.claude/skills"
+    run_in "$p" skill install --local
+    expect "unwritable exit" "$rc" "1"
+    case "$err" in *"vow skill install: cannot"*) ;;
+        *) fail "unwritable stderr lacks an install error: $err" ;;
+    esac
+    expect "unwritable keeps SKILL.md" "$(cat "$p/.claude/skills/vow/SKILL.md")" "old"
+    expect "unwritable keeps stale.md" "$(cat "$p/.claude/skills/vow/reference/stale.md")" "stale"
+    expect "unwritable entries" "$(ls -A "$p/.claude/skills")" "vow"
+    chmod 755 "$p/.claude/skills"
+fi
+
+# auto-install on build: complete tree, no skill chatter, build succeeds
+p=$(new_project)
+run_in "$p" build --no-verify "$FIXTURE" -o "$TMP_ROOT/hello"
+expect "auto-install build exit" "$rc" "0"
+assert_complete_tree "auto-install" "$p"
+assert_no_leftovers "auto-install" "$p"
+case "$err" in *skill*) fail "auto-install is not silent: $err" ;; esac
+
+# auto-install failure is silent and never fails the build
+p=$(new_project)
+echo "not a directory" >"$p/.claude/skills"
+run_in "$p" build --no-verify "$FIXTURE" -o "$TMP_ROOT/hello"
+expect "failed auto-install build exit" "$rc" "0"
+case "$err" in *skill*) fail "failed auto-install is not silent: $err" ;; esac
+expect "failed auto-install leaves skills file" "$(cat "$p/.claude/skills")" "not a directory"
+
+# a symlinked skill directory is written in place and the link is kept
+p=$(new_project)
+mkdir -p "$p/dotfiles/vow" "$p/.claude/skills"
+ln -s ../../dotfiles/vow "$p/.claude/skills/vow"
+run_in "$p" skill install --local
+expect "symlink exit" "$rc" "0"
+if [ ! -L "$p/.claude/skills/vow" ]; then fail "symlinked skill directory was replaced"; fi
+assert_tree_at "symlink target" "$p/dotfiles/vow"
+assert_no_leftovers "symlink" "$p"
+
+# an existing monolithic SKILL.md survives a build and gains no support files
+MONOLITHIC="monolithic skill content"
+p=$(new_project)
+mkdir -p "$p/.claude/skills/vow"
+printf '%s' "$MONOLITHIC" >"$p/.claude/skills/vow/SKILL.md"
+run_in "$p" build --no-verify "$FIXTURE" -o "$TMP_ROOT/hello"
+expect "monolithic build exit" "$rc" "0"
 expect "auto-install keeps monolithic SKILL.md" \
-    "$(cat "$proj/.claude/skills/vow/SKILL.md")" "$MONOLITHIC"
+    "$(cat "$p/.claude/skills/vow/SKILL.md")" "$MONOLITHIC"
 for sub in reference examples schemas; do
-    expect_absent "auto-install adds no $sub/" "$proj/.claude/skills/vow/$sub"
+    expect_absent "auto-install adds no $sub/" "$p/.claude/skills/vow/$sub"
 done
 
-# 2. Explicit install migrates it to the split layout.
-(cd "$proj" && "$VOWC_BIN" skill install --local >/dev/null 2>&1) \
-    || fail "skill install --local exited non-zero"
-case "$(head -2 "$proj/.claude/skills/vow/SKILL.md")" in
+# an explicit install migrates it to the split layout
+run_in "$p" skill install --local
+expect "migrate exit" "$rc" "0"
+case "$(head -2 "$p/.claude/skills/vow/SKILL.md")" in
     *"name: vow"*) ;;
     *) fail "SKILL.md was not rewritten with the split-layout entrypoint" ;;
 esac
-expect_file "install writes cli reference" "$proj/.claude/skills/vow/reference/cli.md"
-expect_file "install writes examples" "$proj/.claude/skills/vow/examples/examples.md"
-expect_file "install writes schemas" \
-    "$proj/.claude/skills/vow/schemas/build-result.schema.json"
+assert_complete_tree "migrate" "$p"
 
-# 3. Explicit install repairs missing support files and keeps foreign files.
-rm -rf "$proj/.claude/skills/vow/reference"
-printf 'mine' > "$proj/.claude/skills/vow/notes.md"
-(cd "$proj" && "$VOWC_BIN" skill install --local >/dev/null 2>&1) \
-    || fail "repair install exited non-zero"
-expect_file "install restores reference/" "$proj/.claude/skills/vow/reference/cli.md"
-expect "install keeps foreign file" "$(cat "$proj/.claude/skills/vow/notes.md")" "mine"
-
-# 4. A pre-rename vow-toolchain directory is neither detected nor modified,
-#    and a fresh auto-install writes the full split tree next to it.
-proj=$(new_project legacy-dir)
-mkdir -p "$proj/.claude/skills/vow-toolchain"
-printf '%s' "$MONOLITHIC" > "$proj/.claude/skills/vow-toolchain/SKILL.md"
-build_in "$proj"
+# a pre-rename vow-toolchain directory is neither detected nor modified, and a
+# fresh auto-install writes the full split tree next to it
+p=$(new_project)
+mkdir -p "$p/.claude/skills/vow-toolchain"
+printf '%s' "$MONOLITHIC" >"$p/.claude/skills/vow-toolchain/SKILL.md"
+run_in "$p" build --no-verify "$FIXTURE" -o "$TMP_ROOT/hello"
 expect "legacy dir untouched" \
-    "$(cat "$proj/.claude/skills/vow-toolchain/SKILL.md")" "$MONOLITHIC"
-expect_file "auto-install creates skills/vow" "$proj/.claude/skills/vow/SKILL.md"
-expect_file "auto-install writes cli reference" "$proj/.claude/skills/vow/reference/cli.md"
+    "$(cat "$p/.claude/skills/vow-toolchain/SKILL.md")" "$MONOLITHIC"
+expect_file "auto-install creates skills/vow" "$p/.claude/skills/vow/SKILL.md"
+expect_file "auto-install writes cli reference" "$p/.claude/skills/vow/reference/cli.md"
+expect "legacy install entries" "$(ls -A "$p/.claude/skills")" "$(printf 'vow\nvow-toolchain')"
 
 if [ "$failures" -ne 0 ]; then
-    echo "$failures check(s) failed" >&2
+    echo "$failures skill-install check(s) failed ($VOWC_KIND)" >&2
     exit 1
 fi
-echo "skill-install: all checks passed"
+echo "skill-install: all checks passed ($VOWC_KIND)"

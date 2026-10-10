@@ -1622,21 +1622,24 @@ else
 fi
 echo ""
 
-# ─── Section 4k: Skill install migration (tests/skill-install/, #358) ─
+# ─── Section 4k: Skill installs (tests/skill-install/, #358 and #361) ─
 #
 # Auto-install must leave an existing SKILL.md (including the old monolithic
 # layout) untouched; an explicit `skill install --local` migrates it to the
-# split layout. Both compilers implement this independently.
+# split layout. Both compilers stage the skill tree next to its target and
+# rename it into place, so a failed install never leaves a SKILL.md without its
+# support files and auto-install stays silent. Both compilers implement this
+# independently.
 
-section_begin "Section 4k: Skill install migration"
+section_begin "Section 4k: Skill installs"
 skill_install_rust_log="$TMPDIR/skill-install-rust.log"
-if VOWC_BIN="$RUST" bash tests/skill-install/tests.sh >"$skill_install_rust_log" 2>&1; then
+if VOWC_BIN="$RUST" VOWC_KIND=rust bash tests/skill-install/tests.sh >"$skill_install_rust_log" 2>&1; then
     pass "skill-install/rust"
 else
     fail "skill-install/rust" "$(tail -20 "$skill_install_rust_log")"
 fi
 skill_install_self_log="$TMPDIR/skill-install-self.log"
-if VOWC_BIN="$SELF" bash tests/skill-install/tests.sh >"$skill_install_self_log" 2>&1; then
+if VOWC_BIN="$SELF" VOWC_KIND=self bash tests/skill-install/tests.sh >"$skill_install_self_log" 2>&1; then
     pass "skill-install/self-hosted"
 else
     fail "skill-install/self-hosted" "$(tail -20 "$skill_install_self_log")"

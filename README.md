@@ -115,7 +115,9 @@ build/vowc skill install --global
 ```
 
 The installed skill is split into `SKILL.md` plus `reference/`, `examples/`, and
-`schemas/` support files. Commit the resulting `.claude/skills/vow/`
+`schemas/` support files. The tree is staged next to its target
+and renamed into place, so an install that fails never leaves a `SKILL.md`
+without its support files. Commit the resulting `.claude/skills/vow/`
 tree to your repository so collaborators (human and agent) get the same skill
 version on checkout.
 
