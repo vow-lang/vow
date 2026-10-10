@@ -3,14 +3,17 @@ module VcCfg
 use ir
 use ir_dominance
 use vc_ops
+use vc_loops
 
-// Control-flow shape the native symbolic executor can walk: every reachable
-// block ends in exactly one Branch/Jump/Return, the reachable graph is acyclic,
-// and each Phi is fed by exactly one Upsilon in every reachable predecessor.
-// That last rule is what lets the executor read a Phi as "the value the edge
-// we arrived by supplied" without simulating Upsilon ordering. The result is
-// the detail of an `unsupported-opcode` skip, or "" when the shape is
-// accepted. `tys` is the table from `vc_ty_table`, indexed by instruction id.
+// Control-flow shape the native verifier accepts: every reachable block ends in
+// exactly one Branch/Jump/Return, the reachable graph is reducible with loops
+// `vc_unroll` can unroll, and each Phi is fed by exactly one Upsilon in every
+// reachable predecessor. That last rule is what lets the executor read a Phi as
+// "the value the edge we arrived by supplied" without simulating Upsilon
+// ordering. The executor itself only walks the acyclic function `vc_unroll`
+// builds, which `vc_unrolled_detail` vets. The result is the detail of an
+// `unsupported-opcode` skip, or "" when the shape is accepted. `tys` is the
+// table from `vc_ty_table`, indexed by instruction id.
 
 // `Unreachable` ends the dead merge block of an `if` whose arms both return.
 // It is fine there, because the executor never walks a block the entry cannot
@@ -35,7 +38,7 @@ fn vc_reachable_unreachable_detail(f: IrFunction, rpo: Vec<i64>) -> String {
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
         let last: IrInst = blk.insts[blk.insts.len() - 1];
-        if rpo[bi] >= 0 && last.op == IOP_UNREACHABLE() && !vc_unwrap_abort_precedes(blk) {
+        if rpo[bi] >= 0 && last.op == IOP_UNREACHABLE() && !vc_unwrap_abort_precedes(blk) && !vc_is_unwind_sink(last) {
             return opcode_name(last.op);
         }
         bi = bi + 1;
@@ -195,15 +198,35 @@ fn vc_upsilon_detail(f: IrFunction, tys: Vec<i64>, succ: Vec<i64>, rpo: Vec<i64>
     String::from("")
 }
 
-fn vc_cfg_detail(f: IrFunction, tys: Vec<i64>) -> String {
+// `acyclic` selects the executor's own shape (no back edge at all) over the
+// source shape (reducible loops `vc_unroll` can unroll).
+fn vc_flow_shape_detail(f: IrFunction, tys: Vec<i64>, acyclic: bool) -> String {
     let nb: u64 = f.blocks.len();
     let id_to_idx: Vec<i64> = dom_block_id_table(f);
     let succ: Vec<i64> = dom_successors(f, id_to_idx);
     let t: String = vc_terminator_detail(f, succ);
     if t.len() > 0 { return t; }
     let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
-    let b: String = vc_back_edge_detail(nb, succ, rpo);
-    if b.len() > 0 { return b; }
+    let mut l: String = vc_loop_shape_detail(f, succ, rpo);
+    if acyclic {
+        l = vc_back_edge_detail(nb, succ, rpo);
+    }
+    if l.len() > 0 { return l; }
+    vc_cfg_tail_detail(f, tys, succ, rpo)
+}
+
+fn vc_cfg_detail(f: IrFunction, tys: Vec<i64>) -> String {
+    vc_flow_shape_detail(f, tys, false)
+}
+
+// The shape the executor walks: `vc_cfg_detail` plus acyclicity, which the
+// unroller must deliver and the executor relies on (a block entered before one
+// of its predecessors would silently lose its obligations).
+fn vc_unrolled_detail(f: IrFunction, tys: Vec<i64>) -> String {
+    vc_flow_shape_detail(f, tys, true)
+}
+
+fn vc_cfg_tail_detail(f: IrFunction, tys: Vec<i64>, succ: Vec<i64>, rpo: Vec<i64>) -> String {
     let u: String = vc_reachable_unreachable_detail(f, rpo);
     if u.len() > 0 { return u; }
     let h: String = vc_phi_head_detail(f, rpo);

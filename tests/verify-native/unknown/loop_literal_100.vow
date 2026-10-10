@@ -1,0 +1,21 @@
+// TEST: category invariant
+// A loop that really runs 100 times is deeper than the verifier's largest
+// unrolling bound, so the unwinding assertion fails and the result is unknown,
+// never Verified.
+module LoopLiteral100
+
+fn hundred() -> u64 vow {
+  ensures: result == 100
+} {
+  let mut i: u64 = 0;
+  while i < 100 vow {
+    invariant: i <= 100
+  } {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  0
+}

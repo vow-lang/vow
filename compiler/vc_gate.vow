@@ -6,12 +6,14 @@ use ir_dominance
 use vc_ops
 use vc_int
 use vc_cfg
+use vc_loops
 use vc_agg
 use ast
 
 // Fail-closed subset gate for the native verifier. `vc_skip_reason` returns ""
-// only for a loop-free function whose only effect is `panic` (the effect of
-// `.unwrap()`), built from the integer (8 to 128 bits) and Bool operations the
+// only for a function whose only effect is `panic` (the effect of `.unwrap()`)
+// and whose loops are reducible and unrollable (`vc_loops`), built from the
+// integer (8 to 128 bits) and Bool operations the
 // symbolic executor models and the struct, enum and `Option` values it
 // scalarises (`vc_agg`), with the control-flow shape `vc_cfg_detail` accepts;
 // every other function is `Skipped` with "<code>: <detail>" using the closed
@@ -232,11 +234,11 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>)
     if op == IOP_AND() || op == IOP_OR() {
         return inst.ty == ITY_BOOL() && n == 2 && t0 == ITY_BOOL() && t1 == ITY_BOOL();
     }
-    if op == IOP_VOW_REQ() || op == IOP_VOW_ENS() {
+    if op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_VOW_INV() {
         return n == 1 && t0 == ITY_BOOL() && inst.dk == IDATA_VOW_ID();
     }
     if op == IOP_RETURN() {
-        if f.return_ty == ITY_UNIT() { return n == 0; }
+        if f.return_ty == ITY_UNIT() { return n == 0 || (n == 1 && t0 == ITY_UNIT()); }
         return n == 1 && t0 == f.return_ty
             && (vc_ty_is_int(f.return_ty) || f.return_ty == ITY_BOOL() || f.return_ty == ITY_PTR());
     }
@@ -277,16 +279,22 @@ fn vc_unsupported_detail(inst: IrInst, tys: Vec<i64>) -> String {
 }
 
 // "" when `f` is inside the native subset, else "<code>: <detail>".
-fn vc_skip_reason(f: IrFunction) -> String {
-    if !vc_effects_modeled(f.effects) {
-        return vc_reason(VC_SKIP_FUNCTION_HAS_EFFECTS(), effects_str(f.effects));
+fn vc_skip_reason(src: IrFunction) -> String {
+    if !vc_effects_modeled(src.effects) {
+        return vc_reason(VC_SKIP_FUNCTION_HAS_EFFECTS(), effects_str(src.effects));
     }
-    let dom: String = ir_non_dominating_read(f);
+    let dom: String = ir_non_dominating_read(src);
     if dom.len() > 0 {
         return dom;
     }
-    if f.blocks.len() == 0 {
+    if src.blocks.len() == 0 {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("empty function body"));
+    }
+    // The verifier unrolls the loop-closed form, so that is what is vetted.
+    let f: IrFunction = vc_close_loops(src);
+    let closed_dom: String = ir_non_dominating_read(f);
+    if closed_dom.len() > 0 {
+        return closed_dom;
     }
     let tys: Vec<i64> = vc_ty_table(f);
     let lits: Vec<i64> = vc_literal_table(f, tys);

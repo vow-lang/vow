@@ -1,0 +1,27 @@
+// TEST: category invariant
+module LoopNestedLiteral
+
+fn grid() -> u64 vow {
+  ensures: result == 12
+} {
+  let mut total: u64 = 0;
+  let mut i: u64 = 0;
+  while i < 3 vow {
+    invariant: i <= 3,
+    invariant: total == i * 4
+  } {
+    let mut j: u64 = 0;
+    while j < 4 vow {
+      invariant: j <= 4
+    } {
+      total = total + 1;
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  total
+}
+
+fn main() -> i32 [io] {
+  0
+}

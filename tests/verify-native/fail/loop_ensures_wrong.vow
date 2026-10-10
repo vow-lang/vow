@@ -1,0 +1,16 @@
+// TEST: category invariant
+// TEST: counterexample-fn count_to_eight
+// TEST: counterexample-blame Callee
+module LoopEnsuresWrong
+
+fn count_to_eight() -> u64 vow {
+  ensures: result == 7
+} {
+  let mut i: u64 = 0;
+  while i < 8 vow {
+    invariant: i <= 8
+  } {
+    i = i + 1;
+  }
+  i
+}

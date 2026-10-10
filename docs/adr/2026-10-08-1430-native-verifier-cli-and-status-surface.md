@@ -306,3 +306,16 @@ terminal Ctrl-C no longer reaches them; they stop at their own budget.
 - **Encode the code in the message prefix.** Rejected: see section 4.
 - **A separate verification timeout for `test --verify`.** Out of scope; file a
   follow-up if wanted.
+
+## Addendum (#1418): loops leave the `Skipped` set
+
+- Reducible loops, `break`, `continue` and loop `invariant` clauses are modelled
+  and no longer `Skipped`. The code list of section 4 is unchanged: a loop the
+  verifier cannot unroll stays `unsupported-opcode`, with the details
+  `irreducible loop (...)`, `loop value used outside its loop`,
+  `entry block is a loop header` and `loop nest deeper than 8`.
+- A function whose unwinding assertion cannot be discharged is not skipped. It is
+  `verify_status: "unknown"` and its `verify_message` starts `unwinding
+  assertion:` (the largest bound was reached, or the unrolled program exceeded
+  the size budget).
+- Provenance (`proven-ir`) and `ModelCapacityAssumed` are untouched.
