@@ -572,7 +572,7 @@ stress_source() {
     echo "module Stress"
     echo
     echo "fn bump(x: i64) -> i64 vow {"
-    echo "  ensures: result >= x"
+    echo "  ensures: result - x + x == result"
     echo "} {"
     echo "  let mut acc: i64 = x;"
     if [ "$shape" = sequential ]; then

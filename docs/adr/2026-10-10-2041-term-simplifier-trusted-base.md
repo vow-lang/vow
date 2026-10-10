@@ -55,7 +55,7 @@ division by a divisor above 2^63 when the dividend is not a constant.
 
 ## Cost
 
-Per term the arena now holds seven parallel words (`kinds a b c aux hashes
-named assumed`, nine with the table slot) instead of five. Terms are bounded by
+Per term the arena now holds eight parallel words (`kinds a b c aux hashes
+named assumed`, plus two to four table slots) instead of five. Terms are bounded by
 the unrolled instruction cap, so the worst case stays far below the verify
 worker's address-space cap, and deduplication lowers the count.

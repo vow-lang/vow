@@ -9,7 +9,10 @@ use vc_bvfold
 //
 // A sort code is the bit-vector width (8, 16, 32, 64, 128), or 0 for Bool.
 // A bit-vector constant holds its width in `a` and its low and high 64-bit
-// limbs in `aux` and `b`; bits above the width are ignored.
+// limbs in `aux` and `b`. Up to 64 bits the constant is canonical: `aux` is
+// masked to the width and `b` is 0, so equal constants are one id. At 128 bits
+// both limbs are significant; widths strictly between 64 and 128 are not
+// canonicalised and must not be compared by id.
 
 fn VC_SORT_BOOL() -> i64 { 0 }
 
@@ -301,8 +304,7 @@ fn vc_tm_app1(ar: VcArena, op: i64, x: i64) -> i64 {
 
 // The value of `op` on two constants of one width up to 64 bits, or -1.
 fn vc_fold_value(ar: VcArena, op: i64, w: i64, a: i64, b: i64) -> i64 {
-    let mut v: i64 = -1;
-    let mut known: bool = true;
+    let mut v: i64 = 0;
     if op == VC_OP_BVADD() { v = vc_bvfold_add(w, a, b); }
     else if op == VC_OP_BVSUB() { v = vc_bvfold_sub(w, a, b); }
     else if op == VC_OP_BVMUL() { v = vc_bvfold_mul(w, a, b); }
@@ -316,8 +318,7 @@ fn vc_fold_value(ar: VcArena, op: i64, w: i64, a: i64, b: i64) -> i64 {
     else if op == VC_OP_BVSHL() { v = vc_bvfold_shl(w, a, b); }
     else if op == VC_OP_BVLSHR() { v = vc_bvfold_lshr(w, a, b); }
     else if op == VC_OP_BVASHR() { v = vc_bvfold_ashr(w, a, b); }
-    else { known = false; }
-    if !known { return -1; }
+    else { return -1; }
     vc_tm_bv(ar, w, v, 0)
 }
 
