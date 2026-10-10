@@ -6,14 +6,8 @@ use vc_ops
 use vc_gate
 use vc_cfg
 use vc_loops
-use vc_unroll
 use vc_inline
 use tests.builders
-
-fn args0() -> Vec<i64> {
-    let v: Vec<i64> = Vec::new();
-    v
-}
 
 fn args1(a: i64) -> Vec<i64> {
     let v: Vec<i64> = Vec::new();
@@ -21,18 +15,12 @@ fn args1(a: i64) -> Vec<i64> {
     v
 }
 
-fn params1() -> Vec<i64> {
-    let p: Vec<i64> = Vec::new();
-    p.push(ITY_I64());
-    p
-}
-
 fn mk_vow(id: i64, op: i64, pred: i64, vow_id: i64) -> IrInst {
     ir_inst_new(id, op, ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
 }
 
 fn fn_of(id: i64, name: String, ret: i64, blocks: Vec<IrBlock>) -> IrFunction {
-    mk_function(id, name, params1(), ret, blocks)
+    mk_function(id, name, mk_params1(), ret, blocks)
 }
 
 fn one(b: IrBlock) -> Vec<IrBlock> {

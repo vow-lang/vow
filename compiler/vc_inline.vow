@@ -5,6 +5,7 @@ use ir_dominance
 use vc_ops
 use vc_gate
 use vc_loops
+use vc_unroll
 
 // Callee inlining for the native verifier. A call of a user function is spliced
 // into its caller before symbolic execution, so the executor only ever sees one
@@ -29,7 +30,7 @@ fn VC_INLINE_TOO_LARGE() -> i64 { 1 }
 fn VC_INLINE_MALFORMED() -> i64 { 2 }
 
 // Instructions in the flattened function, same bound as the unroller's.
-fn VC_INLINE_INST_CAP() -> i64 { 200000 }
+fn VC_INLINE_INST_CAP() -> i64 { VC_UNWIND_INST_CAP() }
 
 struct VcInlined {
     f: IrFunction,
@@ -41,18 +42,25 @@ fn vc_is_user_call(inst: IrInst) -> bool {
     inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET()
 }
 
-fn vc_has_user_call(g: IrFunction) -> bool {
+// The calls of user functions in `g`, in block and instruction order.
+fn vc_user_calls(g: IrFunction) -> Vec<IrInst> {
+    let out: Vec<IrInst> = Vec::new();
     let mut bi: u64 = 0;
     while bi < g.blocks.len() {
         let blk: IrBlock = g.blocks[bi];
         let mut ii: u64 = 0;
         while ii < blk.insts.len() {
-            if vc_is_user_call(blk.insts[ii]) { return true; }
+            let inst: IrInst = blk.insts[ii];
+            if vc_is_user_call(inst) { out.push(inst); }
             ii = ii + 1;
         }
         bi = bi + 1;
     }
-    false
+    out
+}
+
+fn vc_has_user_call(g: IrFunction) -> bool {
+    vc_user_calls(g).len() > 0
 }
 
 // Index of each function in the module, by function id; -1 when absent.
@@ -101,32 +109,24 @@ fn vc_cycle_text(fns: Vec<IrFunction>, path: Vec<i64>, at: u64) -> String {
 fn vc_cycle_from(fns: Vec<IrFunction>, idx_of: Vec<i64>, colour: Vec<i64>, path: Vec<i64>, u: i64) -> String {
     colour[u as u64] = 1;
     path.push(u);
-    let g: IrFunction = fns[u as u64];
-    let mut bi: u64 = 0;
-    while bi < g.blocks.len() {
-        let blk: IrBlock = g.blocks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            if vc_is_user_call(inst) {
-                let t: i64 = vc_callee_index(idx_of, inst.dv);
-                if t >= 0 {
-                    if colour[t as u64] == 1 {
-                        let mut at: u64 = 0;
-                        while path[at] != t {
-                            at = at + 1;
-                        }
-                        return vc_cycle_text(fns, path, at);
-                    }
-                    if colour[t as u64] == 0 {
-                        let r: String = vc_cycle_from(fns, idx_of, colour, path, t);
-                        if r.len() > 0 { return r; }
-                    }
+    let calls: Vec<IrInst> = vc_user_calls(fns[u as u64]);
+    let mut ci: u64 = 0;
+    while ci < calls.len() {
+        let t: i64 = vc_callee_index(idx_of, calls[ci].dv);
+        if t >= 0 {
+            if colour[t as u64] == 1 {
+                let mut at: u64 = 0;
+                while path[at] != t {
+                    at = at + 1;
                 }
+                return vc_cycle_text(fns, path, at);
             }
-            ii = ii + 1;
+            if colour[t as u64] == 0 {
+                let r: String = vc_cycle_from(fns, idx_of, colour, path, t);
+                if r.len() > 0 { return r; }
+            }
         }
-        bi = bi + 1;
+        ci = ci + 1;
     }
     colour[u as u64] = 2;
     path.pop();
@@ -145,23 +145,15 @@ fn vc_call_cycle(fns: Vec<IrFunction>, idx_of: Vec<i64>, root: i64) -> String {
 // once; the root itself is not listed.
 fn vc_reachable_callees(fns: Vec<IrFunction>, idx_of: Vec<i64>, seen: Vec<i64>, order: Vec<i64>, u: i64) {
     seen[u as u64] = 1;
-    let g: IrFunction = fns[u as u64];
-    let mut bi: u64 = 0;
-    while bi < g.blocks.len() {
-        let blk: IrBlock = g.blocks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            if vc_is_user_call(inst) {
-                let t: i64 = vc_callee_index(idx_of, inst.dv);
-                if t >= 0 && seen[t as u64] == 0 {
-                    vc_reachable_callees(fns, idx_of, seen, order, t);
-                    order.push(t);
-                }
-            }
-            ii = ii + 1;
+    let calls: Vec<IrInst> = vc_user_calls(fns[u as u64]);
+    let mut ci: u64 = 0;
+    while ci < calls.len() {
+        let t: i64 = vc_callee_index(idx_of, calls[ci].dv);
+        if t >= 0 && seen[t as u64] == 0 {
+            vc_reachable_callees(fns, idx_of, seen, order, t);
+            order.push(t);
         }
-        bi = bi + 1;
+        ci = ci + 1;
     }
 }
 
@@ -176,32 +168,30 @@ fn vc_inst_count(g: IrFunction) -> i64 {
     n
 }
 
-// Instructions of `u` with every call replaced by its callee's tree, saturating
+// Instructions of `g` with every call replaced by its callee's tree, saturating
 // one past `cap`. Computed before anything is materialised, so a call tree that
-// grows exponentially costs a table walk, not memory. `memo`: -1 not computed.
+// grows exponentially costs a table walk, not memory.
+fn vc_body_size(fns: Vec<IrFunction>, idx_of: Vec<i64>, memo: Vec<i64>, g: IrFunction, cap: i64) -> i64 {
+    let calls: Vec<IrInst> = vc_user_calls(g);
+    let mut total: i64 = vc_inst_count(g);
+    let mut ci: u64 = 0;
+    while ci < calls.len() && total <= cap {
+        let t: i64 = vc_callee_index(idx_of, calls[ci].dv);
+        if t >= 0 {
+            total = total + vc_tree_size(fns, idx_of, memo, t, cap);
+        }
+        ci = ci + 1;
+    }
+    if total > cap { total = cap + 1; }
+    total
+}
+
+// `vc_body_size` of function `u`, memoised. `memo`: -1 not computed.
 fn vc_tree_size(fns: Vec<IrFunction>, idx_of: Vec<i64>, memo: Vec<i64>, u: i64, cap: i64) -> i64 {
     if memo[u as u64] >= 0 { return memo[u as u64]; }
     // On the current path: a cycle, never expanded.
     memo[u as u64] = cap + 1;
-    let g: IrFunction = fns[u as u64];
-    let mut total: i64 = vc_inst_count(g);
-    let mut bi: u64 = 0;
-    while bi < g.blocks.len() && total <= cap {
-        let blk: IrBlock = g.blocks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() && total <= cap {
-            let inst: IrInst = blk.insts[ii];
-            if vc_is_user_call(inst) {
-                let t: i64 = vc_callee_index(idx_of, inst.dv);
-                if t >= 0 {
-                    total = total + vc_tree_size(fns, idx_of, memo, t, cap);
-                }
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    if total > cap { total = cap + 1; }
+    let total: i64 = vc_body_size(fns, idx_of, memo, fns[u as u64], cap);
     memo[u as u64] = total;
     total
 }
@@ -396,25 +386,7 @@ fn vc_inline(f: IrFunction, m: IrModule, cap: i64) -> VcInlined {
     }
     let idx_of: Vec<i64> = vc_fn_index_table(fns);
     let sizes: Vec<i64> = dom_fill(fns.len(), -1);
-    let root_size: i64 = vc_inst_count(f);
-    let mut total: i64 = root_size;
-    let mut bi: u64 = 0;
-    while bi < f.blocks.len() && total <= cap {
-        let blk: IrBlock = f.blocks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() && total <= cap {
-            let inst: IrInst = blk.insts[ii];
-            if vc_is_user_call(inst) {
-                let t: i64 = vc_callee_index(idx_of, inst.dv);
-                if t >= 0 {
-                    total = total + vc_tree_size(fns, idx_of, sizes, t, cap);
-                }
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    if total > cap {
+    if vc_body_size(fns, idx_of, sizes, f, cap) > cap {
         return VcInlined { f: f, frames: frames, status: VC_INLINE_TOO_LARGE() };
     }
     let sp: VcSplice = VcSplice {
@@ -440,31 +412,25 @@ fn vc_inline(f: IrFunction, m: IrModule, cap: i64) -> VcInlined {
 // make the splice read the wrong type is rejected rather than guessed at.
 fn vc_call_signature_detail(g: IrFunction, fns: Vec<IrFunction>, idx_of: Vec<i64>) -> String {
     let tys: Vec<i64> = vc_ty_table(g);
-    let mut bi: u64 = 0;
-    while bi < g.blocks.len() {
-        let blk: IrBlock = g.blocks[bi];
-        let mut ii: u64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            if vc_is_user_call(inst) {
-                let t: i64 = vc_callee_index(idx_of, inst.dv);
-                if t < 0 {
-                    return vc_reason(VC_SKIP_NON_MODELABLE_CALLEE(), String::from("<unresolved> (unsupported-opcode)"));
-                }
-                let callee: IrFunction = fns[t as u64];
-                let mut ok: bool = inst.args.len() == callee.params.len() && inst.ty == callee.return_ty;
-                let mut k: u64 = 0;
-                while ok && k < inst.args.len() {
-                    if vc_arg_ty(tys, inst, k) != callee.params[k] { ok = false; }
-                    k = k + 1;
-                }
-                if !ok {
-                    return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), vc_unsupported_detail(inst, tys));
-                }
-            }
-            ii = ii + 1;
+    let calls: Vec<IrInst> = vc_user_calls(g);
+    let mut ci: u64 = 0;
+    while ci < calls.len() {
+        let inst: IrInst = calls[ci];
+        let t: i64 = vc_callee_index(idx_of, inst.dv);
+        if t < 0 {
+            return vc_reason(VC_SKIP_NON_MODELABLE_CALLEE(), String::from("<unresolved> (unsupported-opcode)"));
         }
-        bi = bi + 1;
+        let callee: IrFunction = fns[t as u64];
+        let mut ok: bool = inst.args.len() == callee.params.len() && inst.ty == callee.return_ty;
+        let mut k: u64 = 0;
+        while ok && k < inst.args.len() {
+            if vc_arg_ty(tys, inst, k) != callee.params[k] { ok = false; }
+            k = k + 1;
+        }
+        if !ok {
+            return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), vc_unsupported_detail(inst, tys));
+        }
+        ci = ci + 1;
     }
     String::from("")
 }

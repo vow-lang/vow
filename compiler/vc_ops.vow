@@ -140,7 +140,7 @@ fn vc_frame_mark(k: i64) -> String {
 fn vc_frame_of(inst: IrInst) -> i64 {
     if vc_is_unwrap_abort(inst) { return inst.dv2 - 1; }
     let pre: String = VC_FRAME_PREFIX();
-    if inst.ds.len() <= pre.len() || inst.ds.substring(0 as u64, pre.len()) != pre {
+    if inst.ds.len() <= pre.len() || string_starts_with(inst.ds, pre) != 1 {
         return -1;
     }
     match parse_i64(inst.ds.substring(pre.len(), inst.ds.len())) {

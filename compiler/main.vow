@@ -1750,28 +1750,11 @@ fn native_with_call_chain(ce: VerifyCE, ir_mod: IrModule, oc: VcOutcome, path: S
         files.push(native_call_site_file(caller, path));
         i = i + 1;
     }
-    VerifyCE {
-        function: ce.function,
-        target_function: ce.target_function,
-        var_names: ce.var_names,
-        var_values: ce.var_values,
-        violation: ce.violation,
-        vow_id: ce.vow_id,
-        source: ce.source,
-        source_start: ce.source_start,
-        source_len: ce.source_len,
-        blame: ce.blame,
-        call_site_functions: fns,
-        call_site_files: files,
-        call_site_offsets: oc.chain_starts,
-        call_site_lengths: oc.chain_lens,
-        violating_arg_params: ce.violating_arg_params,
-        violating_arg_values: ce.violating_arg_values,
-        violating_arg_offsets: ce.violating_arg_offsets,
-        violating_arg_lengths: ce.violating_arg_lengths,
-        replay: ce.replay,
-        replay_reason: ce.replay_reason,
-    }
+    ce.call_site_functions = fns;
+    ce.call_site_files = files;
+    ce.call_site_offsets = oc.chain_starts;
+    ce.call_site_lengths = oc.chain_lens;
+    ce
 }
 
 // Report one native-backend result for `f`. Returns 1 when proven, else 0
