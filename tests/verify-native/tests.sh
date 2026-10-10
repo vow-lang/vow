@@ -54,6 +54,20 @@ case "$FAKE_BW_MODE" in
         wait
         ;;
     slow_unsat) echo $$ >> "$FAKE_BW_DIR/pids"; sleep 0.3; echo unsat ;;
+    sat_if_contains|sat_unless_contains)
+        hit=0
+        grep -qF -- "$FAKE_BW_NEEDLE" "$file" && hit=1
+        want=1
+        [ "$FAKE_BW_MODE" = sat_unless_contains ] && want=0
+        if [ "$hit" -ne "$want" ]; then echo unsat; exit 0; fi
+        echo sat
+        echo "("
+        grep -o '^(declare-const p[0-9]* (_ BitVec [0-9]*)' "$file" \
+            | sed -E 's/\(declare-const (p[0-9]+) \(_ BitVec ([0-9]+)\)/\1 \2/' | while read -r name width; do
+            echo "  ($name (_ bv7 $width))"
+        done
+        echo ")"
+        ;;
     sat|sat_zero)
         val=7
         [ "$FAKE_BW_MODE" = sat_zero ] && val=0
@@ -688,6 +702,63 @@ usage_error "only supported by" "$ONE_CLAIM" --backend native
 usage_error "--max-k-step" verify --backend native --max-k-step 5 "$ONE_CLAIM"
 usage_error "--solver" verify --backend native --solver z3 "$ONE_CLAIM"
 usage_error "--encoding" verify --backend native --encoding bv "$ONE_CLAIM"
+
+# Query slicing (#1424). Each claim's query keeps only its cone of influence; a
+# sliced query that is not `unsat` is re-asked in full, which alone decides, so
+# slicing can change query sizes and counts but never a verdict or a model.
+# VOW_VERIFY_NO_SLICE=1 (test-only) restores the unsliced queries.
+SLICE_INDEP="tests/verify-native/pass/slice_independent_clauses.vow"
+SLICE_VACUOUS="tests/verify-native/pass/slice_vacuous_unrelated_requires.vow"
+
+query_bytes() {
+    local total=0 q n
+    for q in "$BW_DIR"/q.*.smt2; do
+        n=$(wc -c < "$q" | tr -d ' ')
+        total=$((total + n))
+    done
+    echo "$total"
+}
+
+run_native unsat "$SLICE_INDEP"
+sliced_bytes=$(query_bytes)
+expect "slice independent status" "$(field "$RUN_OUT" status)" "Verified"
+expect "slice independent queries" "$(queries)" "2"
+export VOW_VERIFY_NO_SLICE=1
+run_native unsat "$SLICE_INDEP"
+unset VOW_VERIFY_NO_SLICE
+full_bytes=$(query_bytes)
+expect "unsliced independent queries" "$(queries)" "2"
+if [ "$sliced_bytes" -ge "$full_bytes" ]; then
+    fail "slicing did not shrink the queries: $sliced_bytes bytes sliced, $full_bytes unsliced"
+fi
+no_leftovers "slice independent"
+
+# A claim whose sliced query is `sat` is re-asked on the full query; the verdict
+# and the counterexample are the unsliced run's. The needle is the negated goal
+# of the second clause, so the fake solver agrees with both query shapes.
+export FAKE_BW_NEEDLE="(assert (not v37))"
+run_native sat_if_contains "$SLICE_INDEP"
+sliced_out="$RUN_OUT"
+expect "confirmed sat status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "confirmed sat queries" "$(queries)" "3"
+export VOW_VERIFY_NO_SLICE=1
+run_native sat_if_contains "$SLICE_INDEP"
+unset VOW_VERIFY_NO_SLICE
+expect "unsliced sat queries" "$(queries)" "2"
+if [ "$sliced_out" != "$RUN_OUT" ]; then
+    fail "slicing changed the counterexample report: '$sliced_out' vs '$RUN_OUT'"
+fi
+no_leftovers "slice confirm sat"
+
+# Dropping a contradictory `requires` on an unrelated parameter must not turn a
+# vacuous proof into a failure: the sliced query is `sat`, the full one `unsat`.
+export FAKE_BW_NEEDLE="#x0000000000000003"
+run_native sat_unless_contains "$SLICE_VACUOUS"
+expect "vacuous status" "$(field "$RUN_OUT" status)" "Verified"
+expect "vacuous exit" "$RUN_RC" "0"
+expect "vacuous queries" "$(queries)" "2"
+unset FAKE_BW_NEEDLE
+no_leftovers "slice vacuous"
 
 if [ "$failures" -ne 0 ]; then
     echo "verify-native: $failures failure(s)" >&2

@@ -10,6 +10,7 @@ use vc_inline
 use vc_cfg
 use vc_loops
 use vc_exec
+use vc_slice
 use vc_unroll
 use vc_cex
 use vc_term
@@ -58,6 +59,13 @@ fn vc_unwind_bounds() -> Vec<i64> {
     b
 }
 
+// Test-only switch, like `VOW_VERIFY_WORKER_MEM_KB`: `VOW_VERIFY_NO_SLICE=1`
+// sends every claim's full query, so the corpus can be run both ways to show
+// that slicing never changes a verdict.
+fn vc_slicing_enabled() -> bool [read] {
+    getenv(String::from("VOW_VERIFY_NO_SLICE")) != String::from("1")
+}
+
 fn vc_bare_outcome(result: VerifyResult) -> VcOutcome {
     VcOutcome { result: result, sites: Vec::new(), chain_funcs: Vec::new(), chain_starts: Vec::new(), chain_lens: Vec::new() }
 }
@@ -82,7 +90,28 @@ fn vc_chain_outcome(f: IrFunction, fr: VcFrames, frame: i64, result: VerifyResul
     oc
 }
 
-fn vc_check_claim(bin: String, cs: VcClaims, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+// Decides claim `k`. With slicing on, the query holds only the claim's cone of
+// influence and an `unsat` answer to it is final: the sliced query is a
+// relaxation of the full one. Any other answer says nothing about the full
+// query (the dropped assumptions may be contradictory on their own, which makes
+// the claim vacuously proven), so the full query is asked in what is left of the
+// budget and alone decides. The one exception is a soft claim from which only
+// definitions were dropped: that query is equisatisfiable with the full one and
+// its answer carries no model, so it stands.
+fn vc_check_claim(bin: String, cs: VcClaims, sx: VcSlicer, slicing: bool, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+    if slicing {
+        let sl: VcSlice = vc_slice_claim(sx, cs, k);
+        if sl.dropped_asserts || sl.dropped_defs {
+            let started: i64 = time_micros();
+            let small: String = vc_smt_render(cs.arena, vc_claim_script_sliced(cs, k, sl));
+            let ans: VcSolverAnswer = vc_solver_check(bin, small, cs.model_names, cs.model_widths, budget_ms, scratch);
+            if ans.verdict == VC_ANS_UNSAT() { return ans; }
+            if !sl.dropped_asserts && vc_claim_is_soft(cs, k) { return ans; }
+            let left_ms: i64 = budget_ms - (time_micros() - started) / 1000;
+            let query: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
+            return vc_solver_check(bin, query, cs.model_names, cs.model_widths, left_ms, scratch);
+        }
+    }
     let query: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
     vc_solver_check(bin, query, cs.model_names, cs.model_widths, budget_ms, scratch)
 }
@@ -139,11 +168,12 @@ fn vc_note_soft_sat(f: IrFunction, fr: VcFrames, cs: VcClaims, k: u64, sites: Ve
 // outcome but `unsat`/soft `sat`/open unwinding), or `proven` with `open` set
 // when only the unwinding claim was `sat`. The solver is located when the first
 // claim that needs it comes up.
-fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String) -> VcRound [io, read, write] {
+fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String, slicing: bool) -> VcRound [io, read, write] {
     let cs: VcClaims = vc_claims_mode(g, fr, f.vows.len() == 0);
     if cs.kinds.len() == 0 {
         return VcRound { result: vc_proven_result(), ended: false, open: false, frame: -1 };
     }
+    let sx: VcSlicer = vc_slicer_new(cs);
     let mut bin: String = String::from("");
     let mut located: bool = false;
     let mut open: bool = false;
@@ -161,7 +191,7 @@ fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, sites: Vec<ParsedAri
                 return VcRound { result: nf, ended: true, open: false, frame: -1 };
             }
             let spent_ms: i64 = (time_micros() - started) / 1000;
-            let ans: VcSolverAnswer = vc_check_claim(bin, cs, k, timeout_ms - spent_ms, scratch);
+            let ans: VcSolverAnswer = vc_check_claim(bin, cs, sx, slicing, k, timeout_ms - spent_ms, scratch);
             if ans.verdict != VC_ANS_UNSAT() {
                 if vc_claim_is_soft(cs, k) && ans.verdict == VC_ANS_SAT() {
                     if vc_note_soft_sat(f, fr, cs, k, sites) { open = true; }
@@ -186,6 +216,7 @@ fn vc_verify_function(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: Stri
     }
     let closed: IrFunction = vc_close_loops(inl.f);
     let started: i64 = time_micros();
+    let slicing: bool = vc_slicing_enabled();
     let mut round: u64 = 0;
     while round < bounds.len() {
         let bound: i64 = bounds[round];
@@ -198,7 +229,7 @@ fn vc_verify_function(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: Stri
             return vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("internal error: loop unrolling produced an unsupported control-flow graph")));
         }
         let sites: Vec<ParsedArithSite> = Vec::new();
-        let r: VcRound = vc_run_round(f, g, inl.frames, sites, started, timeout_ms, scratch);
+        let r: VcRound = vc_run_round(f, g, inl.frames, sites, started, timeout_ms, scratch, slicing);
         if r.ended {
             return vc_chain_outcome(f, inl.frames, r.frame, r.result);
         }
