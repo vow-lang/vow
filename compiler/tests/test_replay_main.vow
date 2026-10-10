@@ -1,0 +1,135 @@
+module TestReplayMain
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use replay_main
+
+fn parse_src(source: String) -> Module [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    parse_module_into(lex(source), arena, dctx, String::from("entry.vow"))
+}
+
+fn files_of(m: Module, file: String) -> Vec<String> {
+    let files: Vec<String> = Vec::new();
+    let mut i: u64 = 0u64;
+    while i < m.items.len() {
+        files.push(file);
+        i = i + 1u64;
+    }
+    files
+}
+
+fn main_start_in(source: String, owner: String) -> i64 [io] {
+    let m: Module = parse_src(source);
+    replay_entry_main_start(m, files_of(m, owner), String::from("entry.vow"))
+}
+
+fn index_of(hay: String, needle: String) -> i64 {
+    let n: i64 = hay.len() as i64;
+    let k: i64 = needle.len() as i64;
+    let mut i: i64 = 0;
+    while i + k <= n {
+        if hay.substring(i as u64, (i + k) as u64) == needle { return i; }
+        i = i + 1;
+    }
+    -1
+}
+
+fn check_locates_main() -> i32 [io] {
+    let src: String = String::from("module T\nfn helper(x: i64) -> i64 { x }\nfn main() -> i32 [io] { 0 }\n");
+    let want: i64 = index_of(src, String::from("fn main"));
+    if want < 0 { return 1; }
+    if main_start_in(src, String::from("entry.vow")) != want { return 2; }
+    let none: String = String::from("module T\nfn helper(x: i64) -> i64 { x }\n");
+    if main_start_in(none, String::from("entry.vow")) != -1 { return 3; }
+    0
+}
+
+fn check_ignores_text_mentions() -> i32 [io] {
+    let src: String = String::from("module T\n// fn main() -> i32 { 0 }\nfn helper() -> i64 { 1 }\n");
+    if main_start_in(src, String::from("entry.vow")) != -1 { return 11; }
+    let lit: String = String::from("module T\nfn helper() -> i64 [io] { print_str(\"fn main(\"); 1 }\n");
+    if main_start_in(lit, String::from("entry.vow")) != -1 { return 12; }
+    0
+}
+
+fn check_ignores_dependency_main() -> i32 [io] {
+    let src: String = String::from("module T\nfn main() -> i32 [io] { 0 }\n");
+    if main_start_in(src, String::from("dep.vow")) != -1 { return 21; }
+    0
+}
+
+fn check_spacing_and_rename() -> i32 [io] {
+    let src: String = String::from("module T\nfn   main () -> i32 [io] { 0 }\nfn tail() -> i64 { 1 }\n");
+    let start: i64 = main_start_in(src, String::from("entry.vow"));
+    if start != index_of(src, String::from("fn   main")) { return 31; }
+    let got: String = replay_rename_main(src, start);
+    let want: String = String::from("module T\nfn   __replay_orig_main () -> i32 [io] { 0 }\nfn tail() -> i64 { 1 }\n");
+    if got != want { return 32; }
+    0
+}
+
+fn check_rejects_stale_offsets() -> i32 {
+    let src: String = String::from("module T\nfn mainly() -> i64 { 1 }\nfn main() -> i32 [io] { 0 }\n");
+    if replay_rename_main(src, index_of(src, String::from("fn mainly"))).len() != 0 { return 41; }
+    if replay_rename_main(src, 0).len() != 0 { return 42; }
+    if replay_rename_main(src, -1).len() != 0 { return 43; }
+    if replay_rename_main(src, src.len() as i64).len() != 0 { return 44; }
+    if replay_rename_main(src, src.len() as i64 + 100).len() != 0 { return 45; }
+    let ok: String = replay_rename_main(src, index_of(src, String::from("fn main()")));
+    if ok.len() == 0 { return 46; }
+    if index_of(ok, String::from("fn mainly")) < 0 { return 47; }
+    if index_of(ok, String::from("fn __replay_orig_main()")) < 0 { return 48; }
+    0
+}
+
+fn check_rename_at_end_of_input() -> i32 {
+    let src: String = String::from("fn main");
+    if replay_rename_main(src, 0) != String::from("fn __replay_orig_main") { return 51; }
+    0
+}
+
+fn long_main_source() -> String {
+    let src: String = String::from("module T\nfn main() -> i32 [io] {\n");
+    let mut i: i64 = 0;
+    while i < 7000 {
+        src.push_str(String::from("    print_i64(0);\n"));
+        i = i + 1;
+    }
+    src.push_str(String::from("    0\n}\nfn tail() -> i64 { 1 }\n"));
+    src
+}
+
+fn check_long_main_keeps_tail() -> i32 [io] {
+    let src: String = long_main_source();
+    if src.len() <= 70000 { return 61; }
+    let want: i64 = index_of(src, String::from("fn main"));
+    let start: i64 = main_start_in(src, String::from("entry.vow"));
+    if start != want { return 62; }
+    let got: String = replay_rename_main(src, start);
+    if got.len() != src.len() + 14 { return 63; }
+    if index_of(got, String::from("}\nfn tail() -> i64 { 1 }\n")) != index_of(src, String::from("}\nfn tail() -> i64 { 1 }\n")) + 14 { return 64; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let r1: i32 = check_locates_main();
+    if r1 != 0 { return r1; }
+    let r2: i32 = check_ignores_text_mentions();
+    if r2 != 0 { return r2; }
+    let r3: i32 = check_ignores_dependency_main();
+    if r3 != 0 { return r3; }
+    let r4: i32 = check_spacing_and_rename();
+    if r4 != 0 { return r4; }
+    let r5: i32 = check_rejects_stale_offsets();
+    if r5 != 0 { return r5; }
+    let r6: i32 = check_rename_at_end_of_input();
+    if r6 != 0 { return r6; }
+    let r7: i32 = check_long_main_keeps_tail();
+    if r7 != 0 { return r7; }
+    0
+}

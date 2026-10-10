@@ -498,8 +498,7 @@ no_leftovers "stress"
 
 # --replay-cex: a counterexample the runtime reproduces is `confirmed`; one it
 # does not is a verifier bug. The fake solver answers b = 0 (a real divide-by-zero)
-# or b = 7 (a model the runtime disagrees with). The source defines no `main`:
-# the self-hosted replay harness cannot splice one in.
+# or b = 7 (a model the runtime disagrees with).
 REPLAY_SRC="$TMP_ROOT/replay.vow"
 cat > "$REPLAY_SRC" <<'SRC'
 module Replay

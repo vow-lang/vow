@@ -22,6 +22,7 @@ use mutants_main
 use complexity
 use complexity_main
 use cli_flags
+use replay_main
 use decl_main
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
@@ -662,10 +663,10 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
 // MIN / -1) replay too and are confirmed by an ArithmeticOverflow abort; a
 // diverged or aborted replay is reported as a VerifierBug diagnostic.
 //
-// Self-hosted v1 scope: scalar params (i64/u64/bool). Aggregate params, a Unit
-// param, or an entry file that already defines `main` are reported as
-// `skipped` with a reason (the Rust compiler additionally reconstructs bounded
-// Vecs).
+// Self-hosted v1 scope: scalar params (i64/u64/bool). Aggregate params or a
+// Unit param are reported as `skipped` with a reason (the Rust compiler
+// additionally reconstructs bounded Vecs). An entry file that already defines
+// `main` replays too: that definition is renamed out of the harness.
 // ---------------------------------------------------------------------------
 
 struct ReplayVerdict {
@@ -792,7 +793,7 @@ fn replay_confirm() -> ReplayVerdict {
     ReplayVerdict { status: String::from("confirmed"), reason: String::from("") }
 }
 
-fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String, abort_claims: bool) -> ReplayVerdict [io, read, write] {
+fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, main_start: i64, argv0: String, abort_claims: bool) -> ReplayVerdict [io, read, write] {
     if ce.function == String::from("main") {
         return replay_skip(String::from("cannot replay the entry function `main`"));
     }
@@ -822,8 +823,12 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     if src.len() == 0 {
         return replay_skip(String::from("replay: could not read source"));
     }
-    if src.contains(String::from("fn main(")) {
-        return replay_skip(String::from("replay: entry file defines main (self-hosted replay limitation)"));
+    let mut base: String = src;
+    if main_start >= 0 {
+        base = replay_rename_main(src, main_start);
+        if base.len() == 0 {
+            return replay_skip(String::from("replay: could not locate the entry file's main"));
+        }
     }
 
     let params: Vec<i64> = f.params;
@@ -867,7 +872,7 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     body.push_str(call_args);
     body.push_str(String::from(");\n"));
 
-    let harness: String = src;
+    let harness: String = base;
     harness.push_str(String::from("\n\nfn main()"));
     harness.push_str(replay_effects_suffix(f.effects));
     harness.push_str(String::from(" {\n"));
@@ -1096,12 +1101,19 @@ fn replay_last_error_kind_in_line(line: String) -> String {
     found
 }
 
-fn replay_all(ces: Vec<VerifyCE>, fns: Vec<IrFunction>, path: String, argv0: String, abort_claims: bool) -> Vec<VerifyCE> [io, read, write] {
+// Offset of the entry file's own `main`, computed once per run and only when
+// replay is requested; -1 when there is none or replay is off.
+fn replay_main_start(argv: Vec<String>, fr: LoweredFrontend, path: String) -> i64 {
+    if !has_flag(argv, "--replay-cex") { return -1; }
+    replay_entry_main_start(fr.merged, fr.item_files, path)
+}
+
+fn replay_all(ces: Vec<VerifyCE>, fns: Vec<IrFunction>, path: String, main_start: i64, argv0: String, abort_claims: bool) -> Vec<VerifyCE> [io, read, write] {
     let out: Vec<VerifyCE> = Vec::new();
     let mut i: u64 = 0;
     while i < ces.len() {
         let ce: VerifyCE = ces[i];
-        let v: ReplayVerdict = replay_one_ce(ce, fns, path, argv0, abort_claims);
+        let v: ReplayVerdict = replay_one_ce(ce, fns, path, main_start, argv0, abort_claims);
         let reason: String = {
             if v.status == String::from("confirmed") { String::from("") }
             else { v.reason }
@@ -1853,7 +1865,7 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
         else if any_skipped { String::from("Skipped") }
         else { String::from("Verified") }
     };
-    verify_finish(argv, fns, path, dctx, tctx, status_str, ces, soft_meta, !all_proven || any_skipped)
+    verify_finish(argv, fns, path, replay_main_start(argv, fr, path), dctx, tctx, status_str, ces, soft_meta, !all_proven || any_skipped)
 }
 
 // `verify-worker <source> --worker-index N --worker-name F --worker-budget-ms MS`:
@@ -1946,12 +1958,12 @@ fn run_verify(argv: Vec<String>) -> i32 [io, read, write] {
         else if outcome == 2 { String::from("Skipped") }
         else { String::from("VerifyFailed") }
     };
-    verify_finish(argv, fns, path, dctx, tctx, status_str, ces, soft_meta, outcome != 0)
+    verify_finish(argv, fns, path, replay_main_start(argv, fr, path), dctx, tctx, status_str, ces, soft_meta, outcome != 0)
 }
 
 // Shared tail of `verify`: counterexample selection, replay, trace output and
 // the JSON result. Returns the process exit code.
-fn verify_finish(argv: Vec<String>, fns: Vec<IrFunction>, path: String, dctx: DiagCtx, tctx: TraceCtx, status_str: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, failed: bool) -> i32 [io, read, write] {
+fn verify_finish(argv: Vec<String>, fns: Vec<IrFunction>, path: String, main_start: i64, dctx: DiagCtx, tctx: TraceCtx, status_str: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, failed: bool) -> i32 [io, read, write] {
     let native: bool = get_flag_arg(argv, "--backend") == "native";
     let mut ces_final: Vec<VerifyCE> = Vec::new();
     let ce_wins: bool = vf_prefers_counterexample(ces, soft_meta, fns);
@@ -1959,7 +1971,7 @@ fn verify_finish(argv: Vec<String>, fns: Vec<IrFunction>, path: String, dctx: Di
         ces_final = ces;
     }
     if has_flag(argv, "--replay-cex") && ces_final.len() > 0 {
-        ces_final = replay_all(ces_final, fns, path, argv[0], native);
+        ces_final = replay_all(ces_final, fns, path, main_start, argv[0], native);
     }
     let vstatus: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
     let vmsg: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
@@ -2252,7 +2264,7 @@ fn run_build_cmd(argv: Vec<String>, sub: bool) -> i32 [io, read, write] {
         ces_final = ces;
     }
     if has_flag(argv, "--replay-cex") && ces_final.len() > 0 {
-        ces_final = replay_all(ces_final, fns, path, argv[0], false);
+        ces_final = replay_all(ces_final, fns, path, replay_main_start(argv, fr, path), argv[0], false);
     }
     let vstatus: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
     let vmsg: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
