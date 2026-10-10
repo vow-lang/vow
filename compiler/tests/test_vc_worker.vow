@@ -39,13 +39,17 @@ fn sample() -> VcOutcome {
     let sites: Vec<ParsedArithSite> = Vec::new();
     sites.push(ParsedArithSite { cause: String::from("overflow in +!"), owner: 3, ostart: 17, olen: 6 });
     sites.push(ParsedArithSite { cause: String::from("a\nb"), owner: -1, ostart: 0, olen: 0 });
-    let oc: VcOutcome = VcOutcome { result: sample_result(), sites: sites, chain_funcs: Vec::new(), chain_starts: Vec::new(), chain_lens: Vec::new() };
+    let oc: VcOutcome = VcOutcome { result: sample_result(), sites: sites, chain_funcs: Vec::new(), chain_starts: Vec::new(), chain_lens: Vec::new(), clause_ids: Vec::new(), clause_proven: Vec::new() };
     oc.chain_funcs.push(4);
     oc.chain_starts.push(120);
     oc.chain_lens.push(9);
     oc.chain_funcs.push(7);
     oc.chain_starts.push(-1);
     oc.chain_lens.push(0);
+    oc.clause_ids.push(5);
+    oc.clause_proven.push(1);
+    oc.clause_ids.push(2);
+    oc.clause_proven.push(0);
     oc
 }
 
@@ -73,6 +77,9 @@ fn check_round_trip() -> i64 {
     if back_oc.chain_funcs.len() != 2 || back_oc.chain_starts.len() != 2 || back_oc.chain_lens.len() != 2 { return 16; }
     if back_oc.chain_funcs[0] != 4 || back_oc.chain_starts[0] != 120 || back_oc.chain_lens[0] != 9 { return 17; }
     if back_oc.chain_funcs[1] != 7 || back_oc.chain_starts[1] != -1 || back_oc.chain_lens[1] != 0 { return 18; }
+    if back_oc.clause_ids.len() != 2 || back_oc.clause_proven.len() != 2 { return 19; }
+    if back_oc.clause_ids[0] != 5 || back_oc.clause_proven[0] != 1 { return 20; }
+    if back_oc.clause_ids[1] != 2 || back_oc.clause_proven[1] != 0 { return 21; }
     0
 }
 
@@ -102,8 +109,8 @@ fn check_truncation_never_decodes() -> i64 {
     }
     if is_none(full) { return 2; }
     if !is_none(String::from("")) { return 3; }
-    if !is_none(String::from("VOWRES2\n99\n")) { return 4; }
-    if !is_none(String::from("VOWRES2\n99\n0\n0\n0\n0\n0\n0\n0\n0\n")) { return 5; }
+    if !is_none(String::from("VOWRES3\n99\n")) { return 4; }
+    if !is_none(String::from("VOWRES3\n99\n0\n0\n0\n0\n0\n0\n0\n0\n")) { return 5; }
     0
 }
 
@@ -241,7 +248,47 @@ fn check_inline_budget_reason_round_trips() -> i64 {
     0
 }
 
-fn main() -> i32 {
+// The previous wire version has no clause section, so a worker of another
+// build can never be read as a result.
+fn check_stale_tag_never_decodes() -> i64 {
+    let full: String = vc_wire_encode(sample());
+    let stale: String = String::from("VOWRES2\n");
+    stale.push_str(full.substring(8, full.len()));
+    if !is_none(stale) { return 1; }
+    0
+}
+
+// A verdict other than 0/1 is corrupt, never read as a proof.
+fn check_clause_flag_is_checked() -> i64 {
+    let oc: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_PROVEN(), String::from("")));
+    oc.clause_ids.push(3);
+    oc.clause_proven.push(2);
+    if !is_none(vc_wire_encode(oc)) { return 1; }
+    oc.clause_proven[0] = 1;
+    if is_none(vc_wire_encode(oc)) { return 2; }
+    0
+}
+
+fn check_clause_mode_flag() -> i64 [read] {
+    let idx: Vec<i64> = Vec::new();
+    idx.push(0);
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("f"));
+    let p: VcPool = vc_pool_new(String::from("vowc"), String::from("a.vow"), idx, names, 1, 1000);
+    let plain: Vec<String> = vc_worker_argv(p, 0);
+    let mut i: u64 = 0;
+    while i < plain.len() {
+        if plain[i] == String::from("--worker-clauses") { return 1; }
+        i = i + 1;
+    }
+    p.clauses = true;
+    let with: Vec<String> = vc_worker_argv(p, 0);
+    if with[with.len() - 1] != String::from("--worker-clauses") { return 2; }
+    if with.len() != plain.len() + 1 { return 3; }
+    0
+}
+
+fn main() -> i32 [read] {
     let mut r: i64 = check_round_trip();
     if r == 0 { r = check_leading_noise_is_skipped(); }
     if r == 0 { r = check_truncation_never_decodes(); }
@@ -254,5 +301,8 @@ fn main() -> i32 {
     if r == 0 { r = check_unwind_schedule(); }
     if r == 0 { r = check_chain_outcome(); }
     if r == 0 { r = check_inline_budget_reason_round_trips(); }
+    if r == 0 { r = check_stale_tag_never_decodes(); }
+    if r == 0 { r = check_clause_flag_is_checked(); }
+    if r == 0 { r = check_clause_mode_flag(); }
     i64_to_i32_wrap(r)
 }

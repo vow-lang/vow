@@ -1910,8 +1910,8 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
     verify_finish(argv, fns, path, replay_main_start(argv, fr, path), dctx, tctx, status_str, ces, soft_meta, !all_proven || any_skipped)
 }
 
-// `verify-worker <source> --worker-index N --worker-name F --worker-budget-ms MS`:
-// internal. Lowers the program again, verifies function N and prints the result
+// `verify-worker <source> --worker-index N --worker-name F --worker-budget-ms MS
+// [--worker-clauses]`: internal. Lowers the program again, verifies function N and prints the result
 // in the `vc_worker` wire format. Exit 3 when the program no longer matches what
 // the parent planned; the parent reports that as a crashed worker.
 fn run_verify_worker(argv: Vec<String>) -> i32 [io, read, write] {
@@ -1930,7 +1930,7 @@ fn run_verify_worker(argv: Vec<String>) -> i32 [io, read, write] {
         diag_eprintln_best_effort(String::from("verify-worker: function name does not match the planned index"));
         return 3;
     }
-    print_str(vc_wire_encode(vc_verify_function(f, fr.ir_mod, budget_ms, get_flag_arg(argv, "--worker-scratch"))));
+    print_str(vc_wire_encode(vc_verify_function_mode(f, fr.ir_mod, budget_ms, get_flag_arg(argv, "--worker-scratch"), has_flag(argv, "--worker-clauses"))));
     0
 }
 

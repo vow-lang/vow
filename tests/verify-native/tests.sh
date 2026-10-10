@@ -760,6 +760,137 @@ expect "vacuous queries" "$(queries)" "2"
 unset FAKE_BW_NEEDLE
 no_leftovers "slice vacuous"
 
+# Per-clause verdicts (#1424). `verify-worker --worker-clauses` decides every
+# claim of its function and reports, per ensures/invariant clause, 1 (proven) or
+# 0 (failed) after the usual result; the overall result is the default mode's.
+# Wire statuses: 0 proven, 1 failed, 2 timeout, 3 error, 6 unknown.
+WIRE_DECODE="$TMP_ROOT/wire_decode.py"
+cat > "$WIRE_DECODE" <<'PY'
+import sys
+t = sys.stdin.read()
+i = t.index("VOWRES3\n") + 8
+def line():
+    global i
+    j = t.index("\n", i)
+    v = int(t[i:j])
+    i = j + 1
+    return v
+def text():
+    global i
+    n = line()
+    v = t[i:i + n]
+    i += n + 1
+    return v
+status = line()
+vow = line()
+for _ in range(4):
+    line()
+for _ in range(line()):
+    text(); text()
+for _ in range(line()):
+    line()
+text()
+for _ in range(line()):
+    text(); line(); line(); line()
+for _ in range(line()):
+    line(); line(); line()
+n = line()
+print(status, vow, ",".join("%d:%d" % (line(), line()) for _ in range(n)))
+PY
+
+CLAUSES_SRC="$TMP_ROOT/clauses.vow"
+cat > "$CLAUSES_SRC" <<'SRC'
+module Clauses
+
+fn two(a: i64, b: i64) -> i64 vow {
+  requires: a > 0 && a < 1000000000
+  requires: b > 0 && b < 1000000000
+  ensures: a * 2 > a
+  ensures: b * 7 > b
+} {
+  a + b
+}
+
+fn main() -> i32 [io] {
+  print_i64(two(1, 1));
+  0
+}
+SRC
+
+# Prints "<status> <vow id> <id:verdict,...>" for the worker of `two`.
+worker_clauses() {
+    local mode="$1"; shift
+    BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
+    PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE="$mode" FAKE_BW_DIR="$BW_DIR" \
+        "$VOWC_BIN" verify-worker "$CLAUSES_SRC" --worker-index 0 --worker-name two \
+        --worker-budget-ms "${WORKER_BUDGET_MS:-60000}" "$@" 2>/dev/null | python3 "$WIRE_DECODE"
+}
+
+export FAKE_BW_NEEDLE="#x0000000000000007"
+expect "clauses all proven" "$(worker_clauses unsat --worker-clauses)" "0 -1 2:1,3:1"
+expect "clauses: only the second sat" "$(worker_clauses sat_if_contains --worker-clauses)" "1 3 2:1,3:0"
+expect "default mode has no clauses" "$(worker_clauses sat_if_contains)" "1 3 "
+expect "clauses: first failure is the overall result" \
+    "$(worker_clauses sat --worker-clauses | cut -d' ' -f1,2)" "1 2"
+unset FAKE_BW_NEEDLE
+no_leftovers "worker clauses"
+
+# A solver answer that no later claim can improve on stops the schedule, and the
+# clauses it left undecided get no verdict (the caller maps them to the overall).
+expect "clauses: unknown does not stop" "$(worker_clauses unknown --worker-clauses)" "6 -1 "
+expect "clauses: error stops with no verdicts" "$(worker_clauses garbage --worker-clauses)" "3 -1 "
+expect "clauses: error stops after the confirming query" "$(queries)" "2"
+no_leftovers "worker clause halt"
+
+# The same decisions against the real solver (skipped without one): a hard abort
+# leaves the ensures verdicts intact, a clause with no claim is proven next to a
+# failing sibling, and a loop's clauses are proven only by its closing round.
+if command -v bitwuzla >/dev/null 2>&1; then
+    CLAUSES_REAL="$TMP_ROOT/clauses_real.vow"
+    cat > "$CLAUSES_REAL" <<'SRC'
+module ClausesReal
+
+fn quo(a: i64, b: i64) -> i64 vow {
+  requires: a > 0 && a < 1000000000
+  ensures: a * 2 > a
+} {
+  a / b
+}
+
+fn scale_wrong(a: i64, b: i64) -> i64 vow {
+  requires: a > 0 && a < 1000000000
+  requires: b > 0 && b < 1000000000
+  ensures: a * 2 > a
+  ensures: b * 3 > b + 2
+  ensures: result == a * 2 + b * 3
+} {
+  a * 2 + b * 3
+}
+SRC
+    real_clauses() {
+        "$VOWC_BIN" verify-worker "$1" --worker-index "$2" --worker-name "$3" \
+            --worker-budget-ms 60000 --worker-clauses 2>/dev/null | python3 "$WIRE_DECODE"
+    }
+    expect "real: abort claim leaves the ensures proven" "$(real_clauses "$CLAUSES_REAL" 0 quo)" "1 -1 1:1"
+    expect "real: wrong clause and a clause without claims" "$(real_clauses "$CLAUSES_REAL" 1 scale_wrong)" "1 3 2:1,3:0,4:1"
+    expect "real: closed loop proves every clause" \
+        "$(real_clauses tests/verify-native/pass/loop_literal_bound.vow 0 fill_and_sum)" "0 -1 0:1,1:1,2:1"
+    expect "real: open loop proves no clause" \
+        "$(real_clauses tests/verify-native/unknown/loop_literal_100.vow 0 hundred)" "6 -1 "
+    expect "real: failure in a late iteration" \
+        "$(real_clauses tests/verify-native/fail/loop_bug_at_iteration_40.vow 0 trip)" "1 1 0:1,1:0,2:1"
+fi
+
+# A clause is only ever given 1/0 here; its status string comes from
+# `resolve_clause_status`, whose vocabulary must stay inside the schema's.
+python3 - <<'PY' || fail "clause statuses are not in contracts-result.schema.json"
+import json
+schema = json.load(open("docs/spec/schemas/contracts-result.schema.json"))
+enum = schema["properties"]["contracts"]["items"]["properties"]["status"]["enum"]
+missing = {"proven", "failed", "unknown", "timeout", "error"} - set(enum)
+assert not missing, missing
+PY
+
 if [ "$failures" -ne 0 ]; then
     echo "verify-native: $failures failure(s)" >&2
     exit 1

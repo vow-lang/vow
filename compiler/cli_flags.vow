@@ -44,7 +44,7 @@ fn cf_is_worker_value(f: String) -> bool {
 }
 
 fn cf_kind_verify_worker(f: String) -> i64 {
-    if cf_is_help(f) { return CF_BOOL(); }
+    if cf_is_help(f) || f == "--worker-clauses" { return CF_BOOL(); }
     if cf_is_worker_value(f) { return CF_VALUE(); }
     CF_UNKNOWN()
 }

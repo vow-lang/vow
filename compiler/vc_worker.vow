@@ -45,11 +45,11 @@ fn vc_worker_mem_kb() -> i64 [read] {
 }
 
 // ---------------------------------------------------------------------------
-// Wire format: `VOWRES2\n`, then integers one per line and strings as
+// Wire format: `VOWRES3\n`, then integers one per line and strings as
 // `<byte length>\n<bytes>\n`. Pure, so it is unit-tested directly.
 // ---------------------------------------------------------------------------
 
-fn vc_wire_tag() -> String { String::from("VOWRES2\n") }
+fn vc_wire_tag() -> String { String::from("VOWRES3\n") }
 
 fn vc_wire_int(out: String, v: i64) {
     out.push_str(i64_to_string(v));
@@ -102,6 +102,13 @@ fn vc_wire_encode(oc: VcOutcome) -> String {
         vc_wire_int(out, oc.chain_starts[c]);
         vc_wire_int(out, oc.chain_lens[c]);
         c = c + 1;
+    }
+    vc_wire_int(out, oc.clause_ids.len() as i64);
+    let mut q: u64 = 0;
+    while q < oc.clause_ids.len() {
+        vc_wire_int(out, oc.clause_ids[q]);
+        vc_wire_int(out, oc.clause_proven[q]);
+        q = q + 1;
     }
     out
 }
@@ -192,6 +199,17 @@ fn vc_wire_decode(text: String) -> Option<VcOutcome> {
         chain_lens.push(vc_wire_read_int(text, cur));
         c = c + 1;
     }
+    let n_clauses: i64 = vc_wire_read_int(text, cur);
+    let clause_ids: Vec<i64> = Vec::new();
+    let clause_proven: Vec<i64> = Vec::new();
+    let mut q: i64 = 0;
+    while q < n_clauses && cur[1] == 0 {
+        clause_ids.push(vc_wire_read_int(text, cur));
+        let flag: i64 = vc_wire_read_int(text, cur);
+        if flag != 0 && flag != 1 { cur[1] = 1; }
+        clause_proven.push(flag);
+        q = q + 1;
+    }
     if cur[1] != 0 || status < 0 || status > VERIFY_PANICKED() { return Option::None; }
     let result: VerifyResult = VerifyResult {
         status: status,
@@ -205,7 +223,7 @@ fn vc_wire_decode(text: String) -> Option<VcOutcome> {
         block_visits: visits,
         raw_output: raw,
     };
-    Option::Some(VcOutcome { result: result, sites: sites, chain_funcs: chain_funcs, chain_starts: chain_starts, chain_lens: chain_lens })
+    Option::Some(VcOutcome { result: result, sites: sites, chain_funcs: chain_funcs, chain_starts: chain_starts, chain_lens: chain_lens, clause_ids: clause_ids, clause_proven: clause_proven })
 }
 
 // ---------------------------------------------------------------------------
@@ -282,7 +300,8 @@ fn vc_worker_result(exit_code: i64, stdout: String, stderr: String) -> VcOutcome
 // Pool: runs the tasks in order, at most `jobs` at a time
 // ---------------------------------------------------------------------------
 
-// `state` holds the counters at the VC_ST_* indices.
+// `state` holds the counters at the VC_ST_* indices. `clauses` makes every
+// worker decide all claims of its function and report per-clause verdicts.
 struct VcPool {
     exe: String,
     path: String,
@@ -297,6 +316,7 @@ struct VcPool {
     scratch: Vec<String>,
     results: Vec<VcOutcome>,
     state: Vec<i64>,
+    clauses: bool,
 }
 
 fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String>, jobs: i64, budget_ms: i64) -> VcPool [read] {
@@ -332,6 +352,7 @@ fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String
         scratch: scratch,
         results: results,
         state: state,
+        clauses: false,
     }
 }
 
@@ -348,6 +369,9 @@ fn vc_worker_argv(p: VcPool, k: u64) -> Vec<String> {
     if p.scratch[k].len() > 0 {
         a.push(String::from("--worker-scratch"));
         a.push(p.scratch[k]);
+    }
+    if p.clauses {
+        a.push(String::from("--worker-clauses"));
     }
     a
 }
