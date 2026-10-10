@@ -1471,6 +1471,30 @@ fn binop_opcode(op: i64, operand_ty: i64) -> i64 vow {
             if operand_ty == ITY_F32() { return IOP_REM_F32(); }
             return IOP_REM_F64();
         }
+        if op == BINOP_EQ() {
+            if operand_ty == ITY_F32() { return IOP_EQ_F32(); }
+            return IOP_EQ_F64();
+        }
+        if op == BINOP_NE() {
+            if operand_ty == ITY_F32() { return IOP_NE_F32(); }
+            return IOP_NE_F64();
+        }
+        if op == BINOP_LT() {
+            if operand_ty == ITY_F32() { return IOP_LT_F32(); }
+            return IOP_LT_F64();
+        }
+        if op == BINOP_LE() {
+            if operand_ty == ITY_F32() { return IOP_LE_F32(); }
+            return IOP_LE_F64();
+        }
+        if op == BINOP_GT() {
+            if operand_ty == ITY_F32() { return IOP_GT_F32(); }
+            return IOP_GT_F64();
+        }
+        if op == BINOP_GE() {
+            if operand_ty == ITY_F32() { return IOP_GE_F32(); }
+            return IOP_GE_F64();
+        }
     }
     if op == BINOP_ADD() { return IOP_WADD(); }
     if op == BINOP_SUB() { return IOP_WSUB(); }

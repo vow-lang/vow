@@ -1840,6 +1840,10 @@ lower to wrapping arithmetic.
 | `>`      | Greater than           |
 | `>=`     | Greater than or equal  |
 
+For `f32` and `f64` operands, the six operators are IEEE-754 comparisons.
+Any comparison with a NaN operand is false, except `!=`, which is true. Both
+operands must have the same type.
+
 ### Bitwise Operators
 
 | Operator | Meaning      |
@@ -7867,6 +7871,10 @@ lower to wrapping arithmetic.
 | `<=`     | Less than or equal     |
 | `>`      | Greater than           |
 | `>=`     | Greater than or equal  |
+
+For `f32` and `f64` operands, the six operators are IEEE-754 comparisons.
+Any comparison with a NaN operand is false, except `!=`, which is true. Both
+operands must have the same type.
 
 ### Bitwise Operators
 

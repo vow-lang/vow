@@ -4307,6 +4307,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `>`      | Greater than           |\n"));
     r.push_str(String::from("| `>=`     | Greater than or equal  |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("For `f32` and `f64` operands, the six operators are IEEE-754 comparisons.\n"));
+    r.push_str(String::from("Any comparison with a NaN operand is false, except `!=`, which is true. Both\n"));
+    r.push_str(String::from("operands must have the same type.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### Bitwise Operators\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Operator | Meaning      |\n"));
@@ -10356,6 +10360,10 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("| `<=`     | Less than or equal     |\n"));
     r.push_str(String::from("| `>`      | Greater than           |\n"));
     r.push_str(String::from("| `>=`     | Greater than or equal  |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("For `f32` and `f64` operands, the six operators are IEEE-754 comparisons.\n"));
+    r.push_str(String::from("Any comparison with a NaN operand is false, except `!=`, which is true. Both\n"));
+    r.push_str(String::from("operands must have the same type.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Bitwise Operators\n"));
     r.push_str(String::from("\n"));
