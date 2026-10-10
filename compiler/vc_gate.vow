@@ -6,6 +6,7 @@ use ir_dominance
 use vc_ops
 use vc_int
 use vc_cfg
+use vc_loops
 use vc_agg
 use ast
 
@@ -278,16 +279,22 @@ fn vc_unsupported_detail(inst: IrInst, tys: Vec<i64>) -> String {
 }
 
 // "" when `f` is inside the native subset, else "<code>: <detail>".
-fn vc_skip_reason(f: IrFunction) -> String {
-    if !vc_effects_modeled(f.effects) {
-        return vc_reason(VC_SKIP_FUNCTION_HAS_EFFECTS(), effects_str(f.effects));
+fn vc_skip_reason(src: IrFunction) -> String {
+    if !vc_effects_modeled(src.effects) {
+        return vc_reason(VC_SKIP_FUNCTION_HAS_EFFECTS(), effects_str(src.effects));
     }
-    let dom: String = ir_non_dominating_read(f);
+    let dom: String = ir_non_dominating_read(src);
     if dom.len() > 0 {
         return dom;
     }
-    if f.blocks.len() == 0 {
+    if src.blocks.len() == 0 {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), String::from("empty function body"));
+    }
+    // The verifier unrolls the loop-closed form, so that is what is vetted.
+    let f: IrFunction = vc_close_loops(src);
+    let closed_dom: String = ir_non_dominating_read(f);
+    if closed_dom.len() > 0 {
+        return closed_dom;
     }
     let tys: Vec<i64> = vc_ty_table(f);
     let lits: Vec<i64> = vc_literal_table(f, tys);

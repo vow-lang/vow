@@ -111,7 +111,7 @@ fn check_phi_input_missing() -> i64 {
     0
 }
 
-fn check_loop_rejected() -> i64 {
+fn check_entry_loop_rejected() -> i64 {
     let a: Vec<IrInst> = Vec::new();
     a.push(mk_inst_arg(0, ITY_I64(), 0));
     a.push(mk_inst(1, IOP_GT(), ITY_BOOL(), args2(0, 0)));
@@ -125,7 +125,61 @@ fn check_loop_rejected() -> i64 {
     blocks.push(mk_block(1, b));
     blocks.push(mk_block(2, c));
     let f: IrFunction = mk_function(1, String::from("lp"), mk_params1(), ITY_I64(), blocks);
-    if vc_skip_reason(f) != String::from("unsupported-opcode: loop (back edge in the control-flow graph)") { return 22; }
+    if vc_skip_reason(f) != String::from("unsupported-opcode: entry block is a loop header") { return 22; }
+    0
+}
+
+// while i < 8 { i = i + 1 }, loop-closed: the exit block reads only its Phi.
+fn counting_loop(read_header_value_after: bool) -> IrFunction {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_const_i64(0, 0));
+    e.push(mk_inst_upsilon(1, 0, 3));
+    e.push(mk_inst_jump(2, 1));
+    let h: Vec<IrInst> = Vec::new();
+    h.push(mk_inst_phi(3, ITY_I64()));
+    h.push(mk_inst_const_i64(4, 8));
+    h.push(mk_inst(5, IOP_LT(), ITY_BOOL(), args2(3, 4)));
+    h.push(mk_vow(6, IOP_VOW_INV(), 5, 0));
+    h.push(mk_inst_upsilon(7, 3, 20));
+    h.push(mk_inst_branch(8, 5, 2, 3));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(mk_inst_const_i64(9, 1));
+    b.push(mk_inst_add(10, 3, 9));
+    b.push(mk_inst_upsilon(11, 10, 3));
+    b.push(mk_inst_jump(12, 1));
+    let x: Vec<IrInst> = Vec::new();
+    x.push(mk_inst_phi(20, ITY_I64()));
+    if read_header_value_after {
+        x.push(mk_inst_return(21, 3));
+    } else {
+        x.push(mk_inst_return(21, 20));
+    }
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, h));
+    blocks.push(mk_block(2, b));
+    blocks.push(mk_block(3, x));
+    mk_function(1, String::from("count_up"), Vec::new(), ITY_I64(), blocks)
+}
+
+fn check_loop_accepted() -> i64 {
+    if vc_skip_reason(counting_loop(false)).len() != 0 { return 26; }
+    0
+}
+
+// The exit block reads the header's value directly; the gate closes the loop
+// by routing it through a Phi, so the function is accepted.
+fn check_loop_value_escape_closed() -> i64 {
+    if vc_skip_reason(counting_loop(true)).len() != 0 { return 27; }
+    0
+}
+
+fn check_void_return_accepted() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(ir_inst_new(0, IOP_CONST_UNIT(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+    i.push(mk_inst_return(1, 0));
+    let r: String = vc_skip_reason(one_block(String::from("v"), Vec::new(), ITY_UNIT(), i));
+    if r.len() != 0 { return 28; }
     0
 }
 
@@ -205,7 +259,7 @@ fn check_op_details() -> i64 {
     v.push(mk_inst(1, IOP_EQ(), ITY_BOOL(), args2(0, 0)));
     v.push(mk_vow(2, IOP_VOW_INV(), 1, 0));
     v.push(mk_inst_return(3, 0));
-    if vc_skip_reason(one_block(String::from("v"), Vec::new(), ITY_I64(), v)) != String::from("unsupported-opcode: VowInvariant") { return 34; }
+    if vc_skip_reason(one_block(String::from("v"), Vec::new(), ITY_I64(), v)).len() != 0 { return 34; }
 
     let unk: Vec<IrInst> = Vec::new();
     unk.push(mk_inst(0, 9999, ITY_I64(), Vec::new()));
@@ -454,7 +508,10 @@ fn main() -> i32 {
     if r == 0 { r = check_effects(); }
     if r == 0 { r = check_branches_accepted(); }
     if r == 0 { r = check_phi_input_missing(); }
-    if r == 0 { r = check_loop_rejected(); }
+    if r == 0 { r = check_entry_loop_rejected(); }
+    if r == 0 { r = check_loop_accepted(); }
+    if r == 0 { r = check_loop_value_escape_closed(); }
+    if r == 0 { r = check_void_return_accepted(); }
     if r == 0 { r = check_branch_to_unknown_block(); }
     if r == 0 { r = check_unreachable_terminator(); }
     if r == 0 { r = check_op_details(); }

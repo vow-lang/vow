@@ -1,0 +1,20 @@
+// TEST: category invariant
+// The bound is a parameter: no finite unrolling covers every `n`, so the
+// unwinding assertion fails and the result is unknown, as it is for ESBMC.
+module LoopSymbolicBound
+
+fn count(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == n
+} {
+  let mut i: i64 = 0;
+  while i < n {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_i64(count(3));
+  0
+}

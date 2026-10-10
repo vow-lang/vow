@@ -125,6 +125,21 @@ SKIPPED_ONLY="$TMP_ROOT/skipped.vow"
 cat > "$SKIPPED_ONLY" <<'SRC'
 module Skipped
 
+fn half(x: f64) -> f64 vow {
+  ensures: result == result
+} {
+  x / 2.0
+}
+
+fn main() -> i32 [io] {
+  0
+}
+SRC
+
+LOOP_CLAIMS="$TMP_ROOT/loop.vow"
+cat > "$LOOP_CLAIMS" <<'SRC'
+module Loop
+
 fn count(n: i64) -> i64 vow {
   requires: n >= 0
   ensures: result == n
@@ -404,6 +419,30 @@ RUN_OUT=$(PATH="$EMPTY_DIR" TMPDIR="$SCRATCH" "$VOWC_BIN" verify --no-cache --ba
 expect "no-claims status" "$(field "$RUN_OUT" status)" "Verified"
 expect "no-claims exit" "$RUN_RC" "0"
 expect "no-claims needs no solver" "$(field "$RUN_OUT" verify_status)" ""
+
+# a loop is unrolled before it is checked: with every query `unsat` the
+# unwinding assertion holds at the first bound, so one query per claim of that
+# single round (the ensures and the unwinding claim) is enough for a proof.
+run_native unsat "$LOOP_CLAIMS"
+expect "loop unsat status" "$(field "$RUN_OUT" status)" "Verified"
+expect "loop unsat queries" "$(queries)" "2"
+no_leftovers "loop unsat"
+
+# an undecided query is inconclusive, never a proof, and stops the schedule.
+run_native unknown "$LOOP_CLAIMS"
+expect "loop unknown status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "loop unknown verify_status" "$(field "$RUN_OUT" verify_status)" "unknown"
+expect "loop unknown has no counterexample" "$(field "$RUN_OUT" counterexamples.0.function)" ""
+no_leftovers "loop unknown"
+
+# a `sat` unwinding assertion alone never fails the function: every round asks
+# its claims again and the last one ends `unknown`. The fake solver answers
+# `sat` to the ensures claim too, so the first hard claim fails the function
+# before any further round, with the clause's own vow id.
+run_native sat "$LOOP_CLAIMS"
+expect "loop sat status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "loop sat vow id" "$(field "$RUN_OUT" counterexamples.0.vow_id)" "1"
+no_leftovers "loop sat"
 
 # branches: the query grows with the number of changed names, not with the
 # number of paths. N sequential (2^N paths) and N nested (N+1 paths) `if`s each

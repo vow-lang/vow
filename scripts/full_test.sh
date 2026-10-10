@@ -1381,7 +1381,8 @@ echo ""
 # #1398, ADR-2026-10-08-1421), so there is no Rust twin and no parity check:
 # each fixture is asserted against its directory (pass/ -> Verified, fail/ ->
 # VerifyFailed with the `counterexample-*` directives, skip/ -> Skipped, never
-# Verified). The wiring tier uses a fake Bitwuzla and always runs; the
+# Verified, unknown/ -> VerifyFailed with `verify_status: "unknown"`, no
+# counterexample and an `unwinding assertion:` message, never Verified). The wiring tier uses a fake Bitwuzla and always runs; the
 # real-solver tier is skipped, not passed, when `bitwuzla` is not on PATH.
 # tests/verify-native/ is deliberately outside Section 2c's explicit globs.
 
@@ -1400,7 +1401,7 @@ if [ "$native_have_solver" -eq 0 ]; then
 fi
 # skip/ fixtures contain only functions outside the subset, so they need no
 # solver and keep guarding "never Verified" even without one.
-for vow_file in tests/verify-native/pass/*.vow tests/verify-native/fail/*.vow tests/verify-native/skip/*.vow; do
+for vow_file in tests/verify-native/pass/*.vow tests/verify-native/fail/*.vow tests/verify-native/unknown/*.vow tests/verify-native/skip/*.vow; do
     [ -f "$vow_file" ] || continue
     name=$(basename "$vow_file" .vow)
     native_dir=$(basename "$(dirname "$vow_file")")
@@ -1409,7 +1410,7 @@ for vow_file in tests/verify-native/pass/*.vow tests/verify-native/fail/*.vow te
     fi
     case "$native_dir" in
         pass) native_want_status="Verified"; native_want_exit=0 ;;
-        fail) native_want_status="VerifyFailed"; native_want_exit=1 ;;
+        fail|unknown) native_want_status="VerifyFailed"; native_want_exit=1 ;;
         *) native_want_status="Skipped"; native_want_exit=1 ;;
     esac
     native_json="" native_exit=0
@@ -1431,6 +1432,20 @@ skipped = [m for m in msgs if m.startswith('skipped verification of')]
 sys.exit(0 if skipped and all(': ' + sys.argv[2] + ': ' in m for m in skipped) else 1)
 " "$native_json" "$native_reason" 2>/dev/null; then
             native_errors+=("skip-reason: not every skipped-verification message carries code '$native_reason'")
+        fi
+    fi
+    if [ "$native_dir" = "unknown" ]; then
+        # An open unwinding assertion is inconclusive: `unknown`, never a proof
+        # and never a counterexample.
+        if ! python3 -c "
+import json, sys
+j = json.loads(sys.argv[1])
+ok = (j.get('verify_status') == 'unknown'
+      and not (j.get('counterexamples') or [])
+      and 'unwinding assertion' in (j.get('verify_message') or ''))
+sys.exit(0 if ok else 1)
+" "$native_json" 2>/dev/null; then
+            native_errors+=("expected verify_status unknown with an 'unwinding assertion' message and no counterexample")
         fi
     fi
     if [ "$native_dir" = "fail" ]; then

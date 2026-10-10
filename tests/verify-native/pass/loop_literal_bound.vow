@@ -1,0 +1,24 @@
+// TEST: category invariant
+// A loop with a literal bound: the unwinding assertion holds at bound 8, so the
+// function is proven for the one iteration count it can have.
+module LoopLiteralBound
+
+fn fill_and_sum() -> u64 vow {
+  ensures: result == 36
+} {
+  let mut sum: u64 = 0;
+  let mut i: u64 = 0;
+  while i < 8 vow {
+    invariant: i <= 8,
+    invariant: sum == i * (i + 1) / 2
+  } {
+    sum = sum + i + 1;
+    i = i + 1;
+  }
+  sum
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill_and_sum());
+  0
+}

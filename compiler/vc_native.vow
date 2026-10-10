@@ -6,6 +6,7 @@ use vc_smt
 use vc_solver
 use vc_gate
 use vc_cfg
+use vc_loops
 use vc_exec
 use vc_unroll
 use vc_cex
@@ -131,11 +132,12 @@ fn vc_run_round(f: IrFunction, g: IrFunction, sites: Vec<ParsedArithSite>, start
 
 fn vc_verify_function(f: IrFunction, timeout_ms: i64, scratch: String) -> VcOutcome [io, read, write] {
     let bounds: Vec<i64> = vc_unwind_bounds();
+    let closed: IrFunction = vc_close_loops(f);
     let started: i64 = time_micros();
     let mut round: u64 = 0;
     while round < bounds.len() {
         let bound: i64 = bounds[round];
-        let u: VcUnrolled = vc_unroll(f, bound);
+        let u: VcUnrolled = vc_unroll(closed, bound);
         if u.status == VC_UNROLL_TOO_LARGE() {
             return vc_bare_outcome(vc_unknown_result(vc_unwinding_budget_reason(bound)));
         }

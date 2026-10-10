@@ -22,6 +22,10 @@ struct VcLoopInfo {
     chain_off: Vec<i64>,
     chain: Vec<i64>,
     max_depth: i64,
+    idom: Vec<i64>,
+    nums: Vec<i64>,
+    pred_off: Vec<i64>,
+    preds: Vec<i64>,
 }
 
 // Back edges as parallel (source, loop) lists; false when a retreating edge is
@@ -110,7 +114,7 @@ fn vc_loops_by_size_desc(n: u64, mem_off: Vec<i64>) -> Vec<i64> {
     order
 }
 
-fn vc_empty_loop_info(nb: u64, irreducible: bool) -> VcLoopInfo {
+fn vc_empty_loop_info(nb: u64, irreducible: bool, idom: Vec<i64>, nums: Vec<i64>, off: Vec<i64>, preds: Vec<i64>) -> VcLoopInfo {
     VcLoopInfo {
         irreducible: irreducible,
         n_loops: 0,
@@ -119,6 +123,10 @@ fn vc_empty_loop_info(nb: u64, irreducible: bool) -> VcLoopInfo {
         chain_off: dom_fill(nb + 1, 0),
         chain: Vec::new(),
         max_depth: 0,
+        idom: idom,
+        nums: nums,
+        pred_off: off,
+        preds: preds,
     }
 }
 
@@ -134,11 +142,11 @@ fn vc_loop_analysis(nb: u64, succ: Vec<i64>, rpo: Vec<i64>) -> VcLoopInfo {
     let be_src: Vec<i64> = Vec::new();
     let be_loop: Vec<i64> = Vec::new();
     if !vc_find_back_edges(nb, succ, rpo, nums, headers, loop_of_header, be_src, be_loop) {
-        return vc_empty_loop_info(nb, true);
+        return vc_empty_loop_info(nb, true, idom, nums, off, preds);
     }
     let n: u64 = headers.len();
     if n == 0 {
-        return vc_empty_loop_info(nb, false);
+        return vc_empty_loop_info(nb, false, idom, nums, off, preds);
     }
 
     let mark: Vec<i64> = dom_fill(nb, -1);
@@ -191,6 +199,10 @@ fn vc_loop_analysis(nb: u64, succ: Vec<i64>, rpo: Vec<i64>) -> VcLoopInfo {
         chain_off: chain_off,
         chain: chain,
         max_depth: max_depth,
+        idom: idom,
+        nums: nums,
+        pred_off: off,
+        preds: preds,
     }
 }
 
@@ -243,11 +255,11 @@ fn vc_def_table(f: IrFunction, rpo: Vec<i64>, n_ids: u64) -> VcDefs {
     VcDefs { blk: blk, pos: pos }
 }
 
-// True when block `bi` reads a value defined in a loop the block is not inside.
-// The unroller keeps one copy of a loop value per iteration, so after the loop
-// only the exit Phis (which belong to the block outside it) may carry a value
-// out.
-fn vc_escaping_read(f: IrFunction, li: VcLoopInfo, def_blk: Vec<i64>, bi: u64) -> bool {
+// The first value block `bi` reads that is defined in a loop the block is not
+// inside, or -1. The unroller keeps one copy of a loop value per iteration, so
+// after the loop only the exit Phis (which belong to the block outside it) may
+// carry a value out; `vc_close_loops` makes every other read go through one.
+fn vc_escaping_value(f: IrFunction, li: VcLoopInfo, def_blk: Vec<i64>, bi: u64) -> i64 {
     let blk: IrBlock = f.blocks[bi];
     let here: i64 = vc_chain_len(li, bi);
     let mut ii: u64 = 0;
@@ -260,14 +272,14 @@ fn vc_escaping_read(f: IrFunction, li: VcLoopInfo, def_blk: Vec<i64>, bi: u64) -
                 let db: u64 = def_blk[d as u64] as u64;
                 let dl: i64 = vc_chain_len(li, db);
                 if dl > here || vc_chain_common(li, db, bi) < dl {
-                    return true;
+                    return d;
                 }
             }
             ai = ai + 1;
         }
         ii = ii + 1;
     }
-    false
+    -1
 }
 
 // "" when every loop of the reachable CFG can be unrolled, else the detail of an
@@ -291,10 +303,239 @@ fn vc_loop_shape_detail(f: IrFunction, succ: Vec<i64>, rpo: Vec<i64>) -> String 
     let def_blk: Vec<i64> = defs.blk;
     let mut bi: u64 = 0;
     while bi < nb {
-        if rpo[bi] >= 0 && vc_escaping_read(f, li, def_blk, bi) {
+        if rpo[bi] >= 0 && vc_escaping_value(f, li, def_blk, bi) >= 0 {
             return String::from("loop value used outside its loop");
         }
         bi = bi + 1;
     }
     String::from("")
+}
+
+// Loop-closed form. A value defined in a loop and read after it (a `break` arm
+// reading the iteration's variable, a `return` of one) is routed through a Phi
+// at the block where control leaves the loop: that block's predecessors all
+// lie in the loop, each feeds the value to the Phi, and every read it
+// dominates reads the Phi instead. The Phi belongs to the enclosing loop, so a
+// read outside that one is closed again, innermost loop first. A read the
+// verifier cannot close this way is left alone and rejected by
+// `vc_loop_shape_detail`.
+
+fn VC_MAX_CLOSE_ROUNDS() -> i64 { 256 }
+
+struct VcClosed {
+    f: IrFunction,
+    changed: bool,
+}
+
+fn vc_in_loop(li: VcLoopInfo, b: u64, lp: i64) -> bool {
+    let n: i64 = vc_chain_len(li, b);
+    let mut i: i64 = 0;
+    while i < n {
+        if vc_chain_at(li, b, i) == lp {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn vc_preds_all_in_loop(li: VcLoopInfo, b: u64, lp: i64) -> bool {
+    let first: i64 = li.pred_off[b];
+    let last: i64 = li.pred_off[b + 1];
+    if first == last {
+        return false;
+    }
+    let mut pi: i64 = first;
+    while pi < last {
+        if !vc_in_loop(li, li.preds[pi as u64] as u64, lp) {
+            return false;
+        }
+        pi = pi + 1;
+    }
+    true
+}
+
+// The block on the dominator chain of `u` (u itself included) that control
+// enters from loop `lp` alone; -1 when there is none.
+fn vc_landing_block(li: VcLoopInfo, u: u64, lp: i64) -> i64 {
+    if vc_in_loop(li, u, lp) {
+        return -1;
+    }
+    let mut x: i64 = u as i64;
+    let mut steps: u64 = 0;
+    while x > 0 && steps <= li.idom.len() {
+        let p: i64 = li.idom[x as u64];
+        if p < 0 {
+            return -1;
+        }
+        if vc_in_loop(li, p as u64, lp) {
+            if vc_preds_all_in_loop(li, x as u64, lp) {
+                return x;
+            }
+            return -1;
+        }
+        x = p;
+        steps = steps + 1;
+    }
+    -1
+}
+
+fn vc_last_terminal(blk: IrBlock) -> i64 {
+    let mut i: i64 = blk.insts.len() as i64;
+    while i > 0 {
+        i = i - 1;
+        let inst: IrInst = blk.insts[i as u64];
+        if dom_is_terminal(inst.op) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn vc_replace_arg(inst: IrInst, v: i64, w: i64) -> IrInst {
+    let args: Vec<i64> = Vec::new();
+    let mut changed: bool = false;
+    let mut ai: u64 = 0;
+    while ai < inst.args.len() {
+        if inst.args[ai] == v {
+            args.push(w);
+            changed = true;
+        } else {
+            args.push(inst.args[ai]);
+        }
+        ai = ai + 1;
+    }
+    if !changed {
+        return inst;
+    }
+    IrInst {
+        id: inst.id,
+        op: inst.op,
+        ty: inst.ty,
+        args: args,
+        dk: inst.dk,
+        dv: inst.dv,
+        dv2: inst.dv2,
+        ds: inst.ds,
+        ostart: inst.ostart,
+        olen: inst.olen,
+        rgn: inst.rgn,
+    }
+}
+
+// `f` with a Phi for `v` (of type `ty`) at the head of block `e`, fed by an
+// Upsilon in each predecessor, and every read of `v` that `e` dominates
+// redirected to it.
+fn vc_close_value(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, e: u64, v: i64, ty: i64) -> IrFunction {
+    let nb: u64 = f.blocks.len();
+    let phi_id: i64 = dom_max_inst_id(f) + 1;
+    let mut next_id: i64 = phi_id + 1;
+    let g: IrFunction = ir_function_new(f.id, f.name, f.return_ty, f.effects, f.source_file);
+    let mut i: u64 = 0;
+    while i < f.params.len() {
+        g.params.push(f.params[i]);
+        i = i + 1;
+    }
+    i = 0;
+    while i < f.param_names.len() {
+        g.param_names.push(f.param_names[i]);
+        i = i + 1;
+    }
+    i = 0;
+    while i < f.vows.len() {
+        g.vows.push(f.vows[i]);
+        i = i + 1;
+    }
+    let is_pred: Vec<i64> = dom_fill(nb, 0);
+    let mut pi: i64 = li.pred_off[e];
+    while pi < li.pred_off[e + 1] {
+        is_pred[li.preds[pi as u64] as u64] = 1;
+        pi = pi + 1;
+    }
+    let mut bi: u64 = 0;
+    while bi < nb {
+        let src: IrBlock = f.blocks[bi];
+        let out: IrBlock = ir_block_new(src.id);
+        let redirect: bool = rpo[bi] >= 0 && dom_dominates(li.nums, nb, e as i64, bi as i64);
+        let term: i64 = vc_last_terminal(src);
+        if bi == e {
+            out.insts.push(ir_inst_new(phi_id, IOP_PHI(), ty, Vec::new(), IDATA_NONE(), 0, 0, String::from("")));
+        }
+        let mut ii: u64 = 0;
+        while ii < src.insts.len() {
+            if is_pred[bi] == 1 && ii as i64 == term {
+                let feed: Vec<i64> = Vec::new();
+                feed.push(v);
+                let ups: IrInst = ir_inst_new(next_id, IOP_UPSILON(), ITY_UNIT(), feed, IDATA_PHI_TARGET(), phi_id, 0, String::from(""));
+                let t: IrInst = src.insts[ii];
+                ups.ostart = t.ostart;
+                ups.olen = t.olen;
+                out.insts.push(ups);
+                next_id = next_id + 1;
+            }
+            let inst: IrInst = src.insts[ii];
+            if redirect {
+                out.insts.push(vc_replace_arg(inst, v, phi_id));
+            } else {
+                out.insts.push(inst);
+            }
+            ii = ii + 1;
+        }
+        g.blocks.push(out);
+        bi = bi + 1;
+    }
+    g
+}
+
+// One closing step: the function after routing the first escaping read through
+// a Phi, or `f` itself (`changed` false) when nothing is left or it cannot be
+// closed.
+fn vc_close_one(f: IrFunction) -> VcClosed {
+    let nb: u64 = f.blocks.len();
+    if nb == 0 {
+        return VcClosed { f: f, changed: false };
+    }
+    let succ: Vec<i64> = dom_successors(f, dom_block_id_table(f));
+    let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
+    let li: VcLoopInfo = vc_loop_analysis(nb, succ, rpo);
+    if li.irreducible || li.n_loops == 0 || li.max_depth > VC_MAX_LOOP_DEPTH() || li.loop_of_header[0] >= 0 {
+        return VcClosed { f: f, changed: false };
+    }
+    let defs: VcDefs = vc_def_table(f, rpo, (dom_max_inst_id(f) + 1) as u64);
+    let def_blk: Vec<i64> = defs.blk;
+    let def_pos: Vec<i64> = defs.pos;
+    let mut bi: u64 = 0;
+    while bi < nb {
+        if rpo[bi] >= 0 {
+            let v: i64 = vc_escaping_value(f, li, def_blk, bi);
+            if v >= 0 {
+                let db: u64 = def_blk[v as u64] as u64;
+                let lp: i64 = vc_chain_at(li, db, vc_chain_len(li, db) - 1);
+                let e: i64 = vc_landing_block(li, bi, lp);
+                if e < 0 {
+                    return VcClosed { f: f, changed: false };
+                }
+                let dblk: IrBlock = f.blocks[db];
+                let dinst: IrInst = dblk.insts[def_pos[v as u64] as u64];
+                return VcClosed { f: vc_close_value(f, li, rpo, e as u64, v, dinst.ty), changed: true };
+            }
+        }
+        bi = bi + 1;
+    }
+    VcClosed { f: f, changed: false }
+}
+
+// `f` in loop-closed form (see above); `f` itself when it has no escaping read.
+fn vc_close_loops(f: IrFunction) -> IrFunction {
+    let mut cur: IrFunction = f;
+    let mut round: i64 = 0;
+    while round < VC_MAX_CLOSE_ROUNDS() {
+        let r: VcClosed = vc_close_one(cur);
+        if !r.changed {
+            return cur;
+        }
+        cur = r.f;
+        round = round + 1;
+    }
+    cur
 }

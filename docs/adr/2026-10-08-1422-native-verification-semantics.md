@@ -246,3 +246,22 @@ weakened by this ADR.
   repeated here.
 - This ADR does not change language syntax, types, builtins, effects or CLI
   flags, so no `docs/spec` or help regeneration accompanies it.
+
+## Addendum (#1418): bounded loop unwinding
+
+Rule 2 is implemented for loops by unrolling the reducible natural loops of a
+function into an acyclic one before symbolic execution.
+
+- The bound counts back edges. A back edge past the bound goes to one sink block
+  whose reachability is the unwinding assertion: "no run takes more back edges
+  than the bound". It is a claim only and assumes nothing afterwards.
+- The internal schedule is 2, 4, 8, 16, 32, 64; the largest is at least ESBMC's
+  default `--max-k-step`. It is not a flag. All rounds share the function's
+  `--timeout`.
+- A failed hard claim inside the unrolled prefix is a real run and is `failed`
+  at once, whatever the unwinding claim says. An unwinding claim that is still
+  `sat` at the largest bound is `unknown`, never `proven`.
+- `invariant` is a claim checked on every header visit and is not assumed. Using
+  it as an inductive hypothesis belongs to the k-induction work (#1419, #1420).
+- Soft arithmetic sites are collected per source site from the round that proves
+  the function, so a loop body does not repeat its warning once per iteration.

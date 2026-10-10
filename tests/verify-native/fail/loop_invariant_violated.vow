@@ -1,0 +1,26 @@
+// TEST: category invariant
+// TEST: counterexample-fn fill_and_sum
+// TEST: counterexample-vow-id 2
+// TEST: counterexample-blame Callee
+// The invariant `sum == i` does not survive the first iteration.
+module LoopInvariantViolated
+
+fn fill_and_sum() -> u64 vow {
+  ensures: result == 36
+} {
+  let mut sum: u64 = 0;
+  let mut i: u64 = 0;
+  while i < 8 vow {
+    invariant: i <= 8,
+    invariant: sum == i
+  } {
+    sum = sum + i + 1;
+    i = i + 1;
+  }
+  sum
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill_and_sum());
+  0
+}

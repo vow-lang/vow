@@ -2,6 +2,7 @@ module TestVcWorker
 
 use verifier
 use vc_native
+use vc_cex
 use vc_worker
 
 fn sample_result() -> VerifyResult {
@@ -156,6 +157,46 @@ fn check_tail_keeps_whole_characters() -> i64 {
     0
 }
 
+fn check_unwinding_reason_round_trips() -> i64 {
+    let reason: String = vc_unwinding_reason(64);
+    if !vc_output_has_unwinding(reason) { return 20; }
+    if vc_output_has_unwinding(String::from("the solver answered unknown")) { return 21; }
+    if !vc_output_has_unwinding(vc_unwinding_budget_reason(8)) { return 22; }
+    let oc: VcOutcome = vc_bare_outcome(vc_unknown_result(reason));
+    let back: VcOutcome = match vc_wire_decode(vc_wire_encode(oc)) {
+        Option::Some(v) => { v },
+        Option::None => { return 23; },
+    };
+    let vr: VerifyResult = back.result;
+    if vr.status != VERIFY_UNKNOWN() || vr.raw_output != reason { return 24; }
+    0
+}
+
+fn check_unwind_schedule() -> i64 {
+    let b: Vec<i64> = vc_unwind_bounds();
+    if b.len() == 0 { return 30; }
+    let mut i: u64 = 1;
+    while i < b.len() {
+        if b[i] <= b[i - 1] { return 31; }
+        i = i + 1;
+    }
+    if b[0] < 1 { return 32; }
+    // ESBMC's default --max-k-step is 50: everything it proves must still prove.
+    if b[b.len() - 1] < 50 { return 33; }
+    0
+}
+
+fn check_round_decision() -> i64 {
+    if vc_round_decision(false, 0, 6) != VC_ROUND_PROVEN() { return 40; }
+    if vc_round_decision(false, 5, 6) != VC_ROUND_PROVEN() { return 41; }
+    if vc_round_decision(true, 0, 6) != VC_ROUND_NEXT() { return 42; }
+    if vc_round_decision(true, 4, 6) != VC_ROUND_NEXT() { return 43; }
+    // an open unwinding claim at the last bound is never proven
+    if vc_round_decision(true, 5, 6) != VC_ROUND_UNKNOWN() { return 44; }
+    if vc_round_decision(true, 0, 1) != VC_ROUND_UNKNOWN() { return 45; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_round_trip();
     if r == 0 { r = check_leading_noise_is_skipped(); }
@@ -165,5 +206,8 @@ fn main() -> i32 {
     if r == 0 { r = check_crash_is_panicked(); }
     if r == 0 { r = check_signal_decoding(); }
     if r == 0 { r = check_tail_keeps_whole_characters(); }
+    if r == 0 { r = check_unwinding_reason_round_trips(); }
+    if r == 0 { r = check_unwind_schedule(); }
+    if r == 0 { r = check_round_decision(); }
     i64_to_i32_wrap(r)
 }

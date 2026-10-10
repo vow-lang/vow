@@ -5,6 +5,7 @@ use vc_term
 use vc_smt
 use vc_gate
 use vc_exec
+use vc_unroll
 use tests.builders
 
 fn args1(a: i64) -> Vec<i64> {
@@ -650,6 +651,88 @@ fn check_literal_operands() -> i64 {
     0
 }
 
+// while i < 8 { i = i + 1 } with `invariant: i < 8`, as the lowerer shapes it.
+fn count_up_with_invariant() -> IrFunction {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_const_i64(0, 0));
+    e.push(mk_inst_upsilon(1, 0, 3));
+    e.push(mk_inst_jump(2, 1));
+    let h: Vec<IrInst> = Vec::new();
+    h.push(mk_inst_phi(3, ITY_I64()));
+    h.push(mk_inst_const_i64(4, 8));
+    h.push(mk_inst(5, IOP_LT(), ITY_BOOL(), args2(3, 4)));
+    h.push(mk_vow(6, IOP_VOW_INV(), 5, 7));
+    h.push(mk_inst_upsilon(7, 3, 20));
+    h.push(mk_inst_branch(8, 5, 2, 3));
+    let b: Vec<IrInst> = Vec::new();
+    b.push(mk_inst_const_i64(9, 1));
+    b.push(mk_inst_add(10, 3, 9));
+    b.push(mk_inst_upsilon(11, 10, 3));
+    b.push(mk_inst_jump(12, 1));
+    let x: Vec<IrInst> = Vec::new();
+    x.push(mk_inst_phi(20, ITY_I64()));
+    x.push(mk_inst_return(21, 20));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, h));
+    blocks.push(mk_block(2, b));
+    blocks.push(mk_block(3, x));
+    mk_function(1, String::from("count_up"), Vec::new(), ITY_I64(), blocks)
+}
+
+fn kind_count(cs: VcClaims, kind: i64) -> i64 {
+    let mut n: i64 = 0;
+    let mut k: u64 = 0;
+    while k < cs.kinds.len() {
+        if cs.kinds[k] == kind { n = n + 1; }
+        k = k + 1;
+    }
+    n
+}
+
+fn check_unrolled_loop_claims() -> i64 {
+    let f: IrFunction = count_up_with_invariant();
+    let g: IrFunction = vc_unroll(f, 2).f;
+    let cs: VcClaims = vc_claims(g);
+    // one invariant claim per header copy, each with the original vow id
+    if kind_count(cs, VC_CLAIM_ENSURES()) != 3 { return 800; }
+    let mut k: u64 = 0;
+    while k < cs.kinds.len() {
+        if cs.kinds[k] == VC_CLAIM_ENSURES() && cs.vow_ids[k] != 7 { return 801; }
+        k = k + 1;
+    }
+    // exactly one unwinding claim, and nothing is assumed after it
+    if kind_count(cs, VC_CLAIM_UNWIND()) != 1 { return 802; }
+    if cs.assumed.len() != 0 { return 803; }
+    let mut u: u64 = 0;
+    while cs.kinds[u] != VC_CLAIM_UNWIND() { u = u + 1; }
+    if cs.vow_ids[u] != -1 || cs.labels[u] != VC_LABEL_UNWIND() { return 804; }
+    // a loop-free function has no unwinding claim
+    let plain: VcClaims = vc_claims(vc_unroll(one_block(String::from("k"), Vec::new(), ITY_I64(), divide_free()), 4).f);
+    if kind_count(plain, VC_CLAIM_UNWIND()) != 0 { return 805; }
+    0
+}
+
+fn divide_free() -> Vec<IrInst> {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_const_i64(0, 3));
+    i.push(mk_inst_return(1, 0));
+    i
+}
+
+// A bound too small for the loop leaves the unwinding claim satisfiable; at a
+// bound that covers it the claim is the constant-false path.
+fn check_unwinding_claim_query() -> i64 {
+    let g: IrFunction = vc_unroll(count_up_with_invariant(), 1).f;
+    let cs: VcClaims = vc_claims(g);
+    let mut u: u64 = 0;
+    while cs.kinds[u] != VC_CLAIM_UNWIND() { u = u + 1; }
+    let q: String = query(cs, u);
+    if !q.contains(String::from("check-sat")) { return 810; }
+    if count_of(q, String::from("(assert")) != 1 { return 811; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_divide_with_requires();
     if r == 0 { r = check_rem_has_only_zero_claim(); }
@@ -676,5 +759,7 @@ fn main() -> i32 {
     if r == 0 { r = check_casts(); }
     if r == 0 { r = check_constants_are_masked_to_their_width(); }
     if r == 0 { r = check_literal_operands(); }
+    if r == 0 { r = check_unrolled_loop_claims(); }
+    if r == 0 { r = check_unwinding_claim_query(); }
     i64_to_i32_wrap(r)
 }

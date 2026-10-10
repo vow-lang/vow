@@ -1,0 +1,20 @@
+// TEST: category invariant
+// `break` carries a loop variable out: the verifier routes it through an exit Phi.
+module LoopBreakValue
+
+fn first_above_three() -> u64 vow {
+  ensures: result == 4
+} {
+  let mut s: u64 = 0;
+  let r: u64 = loop {
+    s = s + 1;
+    if s > 3 {
+      break s;
+    }
+  };
+  r
+}
+
+fn main() -> i32 [io] {
+  0
+}
