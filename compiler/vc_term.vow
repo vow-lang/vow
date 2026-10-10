@@ -60,8 +60,9 @@ fn VC_OP_BVUMULO() -> i64 { 32 }
 // `hashes` caches each term's node hash; `slots` is an open-addressing table
 // (power-of-two length, linear probing, -1 empty) over the interned term ids, so
 // building a node that already exists returns its id. `named` maps a composite
-// term to the variable the executor bound to it, `assumed` flags the terms that
-// are already an assumption; both are -1/0 until set.
+// term to the variable the executor bound to it, and that variable back to the
+// term (a variable is never named itself); `assumed` flags the terms that are
+// already an assumption. Both are -1/0 until set.
 struct VcArena {
     kinds: Vec<i64>,
     a: Vec<i64>,
@@ -199,6 +200,16 @@ fn vc_tm_var(ar: VcArena, name: String) -> i64 {
     vc_arena_push(ar, VC_T_VAR(), -1, -1, -1, si)
 }
 
+// A fresh variable `name` standing for the composite term `t`, which the caller
+// has defined under that name. Later requests for `t` share the variable, and a
+// simplifier rule sees through it to `t`'s structure.
+fn vc_tm_bind(ar: VcArena, t: i64, name: String) -> i64 {
+    let v: i64 = vc_tm_var(ar, name);
+    ar.named[t as u64] = v;
+    ar.named[v as u64] = t;
+    v
+}
+
 // A bit-vector constant of `width` bits from its two 64-bit limbs. Up to 64
 // bits the value is canonical (masked, high limb 0), so equal constants are
 // one id.
@@ -214,18 +225,6 @@ fn vc_tm_bool_const(ar: VcArena, value: bool) -> i64 {
     vc_arena_intern(ar, VC_T_BOOL(), -1, -1, -1, flag)
 }
 
-fn vc_tm_app1(ar: VcArena, op: i64, x: i64) -> i64 {
-    vc_arena_intern(ar, VC_T_APP(), x, -1, -1, op)
-}
-
-fn vc_tm_app2(ar: VcArena, op: i64, x: i64, y: i64) -> i64 {
-    vc_arena_intern(ar, VC_T_APP(), x, y, -1, op)
-}
-
-fn vc_tm_app3(ar: VcArena, op: i64, x: i64, y: i64, z: i64) -> i64 {
-    vc_arena_intern(ar, VC_T_APP(), x, y, z, op)
-}
-
 fn vc_tm_is_true(ar: VcArena, t: i64) -> bool {
     ar.kinds[t as u64] == VC_T_BOOL() && ar.aux[t as u64] == 1
 }
@@ -234,26 +233,289 @@ fn vc_tm_is_false(ar: VcArena, t: i64) -> bool {
     ar.kinds[t as u64] == VC_T_BOOL() && ar.aux[t as u64] == 0
 }
 
-// Boolean constructors that fold the constant `true`, so a path condition that
-// is trivially true never reaches the query text.
+// Every constructor below returns an existing or interned term and rewrites
+// before interning, so a term is always in simplified form. A rule fires only
+// when it is valid at every sort the operands can have: the arena keeps no sort
+// for variables and applications, so the only widths a rule may use are those
+// a bit-vector constant carries. Operators on 128-bit constants fold only by
+// width-independent rules.
+
+// True for variables and constants: terms that are printed as they are and
+// never named.
+fn vc_tm_is_leaf(ar: VcArena, t: i64) -> bool {
+    let kind: i64 = ar.kinds[t as u64];
+    kind != VC_T_APP() && kind != VC_T_EXT()
+}
+
+fn vc_is_bv(ar: VcArena, t: i64) -> bool {
+    ar.kinds[t as u64] == VC_T_BV()
+}
+
+fn vc_is_bool_const(ar: VcArena, t: i64) -> bool {
+    ar.kinds[t as u64] == VC_T_BOOL()
+}
+
+fn vc_bv_is_zero(ar: VcArena, t: i64) -> bool {
+    vc_is_bv(ar, t) && ar.aux[t as u64] == 0 && ar.b[t as u64] == 0
+}
+
+fn vc_bv_is_one(ar: VcArena, t: i64) -> bool {
+    vc_is_bv(ar, t) && ar.aux[t as u64] == 1 && ar.b[t as u64] == 0
+}
+
+fn vc_bv_is_ones(ar: VcArena, t: i64) -> bool {
+    if !vc_is_bv(ar, t) { return false; }
+    let w: i64 = ar.a[t as u64];
+    if w <= 64 { return ar.aux[t as u64] == vc_bvfold_mask(w, -1); }
+    ar.aux[t as u64] == -1 && ar.b[t as u64] == -1
+}
+
+// The operand of `t` when `t` is a negation, or a variable bound to one; -1
+// otherwise.
+fn vc_tm_negated(ar: VcArena, t: i64) -> i64 {
+    let mut d: i64 = t;
+    if ar.kinds[t as u64] == VC_T_VAR() {
+        d = ar.named[t as u64];
+        if d < 0 { return -1; }
+    }
+    if ar.kinds[d as u64] == VC_T_APP() && ar.aux[d as u64] == VC_OP_NOT() { return ar.a[d as u64]; }
+    -1
+}
+
+fn vc_is_not_of(ar: VcArena, t: i64, x: i64) -> bool {
+    vc_tm_negated(ar, t) == x
+}
+
+fn vc_bv_zero_like(ar: VcArena, t: i64) -> i64 {
+    vc_tm_bv(ar, ar.a[t as u64], 0, 0)
+}
+
+fn vc_tm_app1(ar: VcArena, op: i64, x: i64) -> i64 {
+    if op == VC_OP_NOT() {
+        if vc_is_bool_const(ar, x) { return vc_tm_bool_const(ar, ar.aux[x as u64] == 0); }
+        let inner: i64 = vc_tm_negated(ar, x);
+        if inner >= 0 { return inner; }
+    }
+    vc_arena_intern(ar, VC_T_APP(), x, -1, -1, op)
+}
+
+// The value of `op` on two constants of one width up to 64 bits, or -1.
+fn vc_fold_value(ar: VcArena, op: i64, w: i64, a: i64, b: i64) -> i64 {
+    let mut v: i64 = -1;
+    let mut known: bool = true;
+    if op == VC_OP_BVADD() { v = vc_bvfold_add(w, a, b); }
+    else if op == VC_OP_BVSUB() { v = vc_bvfold_sub(w, a, b); }
+    else if op == VC_OP_BVMUL() { v = vc_bvfold_mul(w, a, b); }
+    else if op == VC_OP_BVSDIV() { v = vc_bvfold_sdiv(w, a, b); }
+    else if op == VC_OP_BVSREM() { v = vc_bvfold_srem(w, a, b); }
+    else if op == VC_OP_BVUDIV() { v = vc_bvfold_udiv(w, a, b); }
+    else if op == VC_OP_BVUREM() { v = vc_bvfold_urem(w, a, b); }
+    else if op == VC_OP_BVAND() { v = a & b; }
+    else if op == VC_OP_BVOR() { v = a | b; }
+    else if op == VC_OP_BVXOR() { v = a ^ b; }
+    else if op == VC_OP_BVSHL() { v = vc_bvfold_shl(w, a, b); }
+    else if op == VC_OP_BVLSHR() { v = vc_bvfold_lshr(w, a, b); }
+    else if op == VC_OP_BVASHR() { v = vc_bvfold_ashr(w, a, b); }
+    else { known = false; }
+    if !known { return -1; }
+    vc_tm_bv(ar, w, v, 0)
+}
+
+// The truth value of the predicate `op` on two constants of one width up to 64
+// bits: 1, 0, or -1 when `op` is not a foldable predicate.
+fn vc_fold_pred(op: i64, w: i64, a: i64, b: i64) -> i64 {
+    let mut r: bool = false;
+    if op == VC_OP_BVULT() { r = vc_bvfold_ult(a, b); }
+    else if op == VC_OP_BVULE() { r = vc_bvfold_ule(a, b); }
+    else if op == VC_OP_BVUGT() { r = vc_bvfold_ult(b, a); }
+    else if op == VC_OP_BVUGE() { r = vc_bvfold_ule(b, a); }
+    else if op == VC_OP_BVSLT() { r = vc_bvfold_slt(w, a, b); }
+    else if op == VC_OP_BVSLE() { r = vc_bvfold_sle(w, a, b); }
+    else if op == VC_OP_BVSGT() { r = vc_bvfold_slt(w, b, a); }
+    else if op == VC_OP_BVSGE() { r = vc_bvfold_sle(w, b, a); }
+    else if op == VC_OP_BVSADDO() { r = vc_bvfold_saddo(w, a, b); }
+    else if op == VC_OP_BVUADDO() { r = vc_bvfold_uaddo(w, a, b); }
+    else if op == VC_OP_BVSSUBO() { r = vc_bvfold_ssubo(w, a, b); }
+    else if op == VC_OP_BVUSUBO() { r = vc_bvfold_usubo(w, a, b); }
+    else if op == VC_OP_BVSMULO() && vc_bvfold_mulo_ok(w) { r = vc_bvfold_smulo(w, a, b); }
+    else if op == VC_OP_BVUMULO() && vc_bvfold_mulo_ok(w) { r = vc_bvfold_umulo(w, a, b); }
+    else { return -1; }
+    if r { 1 } else { 0 }
+}
+
+fn vc_fold_consts(ar: VcArena, op: i64, x: i64, y: i64) -> i64 {
+    let w: i64 = ar.a[x as u64];
+    if w > 64 || w != ar.a[y as u64] { return -1; }
+    let a: i64 = ar.aux[x as u64];
+    let b: i64 = ar.aux[y as u64];
+    let v: i64 = vc_fold_value(ar, op, w, a, b);
+    if v >= 0 { return v; }
+    let p: i64 = vc_fold_pred(op, w, a, b);
+    if p < 0 { return -1; }
+    vc_tm_bool_const(ar, p == 1)
+}
+
+fn vc_is_cmp_reflexive_true(op: i64) -> bool {
+    op == VC_OP_BVULE() || op == VC_OP_BVUGE() || op == VC_OP_BVSLE() || op == VC_OP_BVSGE()
+}
+
+fn vc_is_cmp_reflexive_false(op: i64) -> bool {
+    op == VC_OP_BVULT() || op == VC_OP_BVUGT() || op == VC_OP_BVSLT() || op == VC_OP_BVSGT()
+}
+
+// `=`/`distinct` on equal terms, on two constants (equal values are one id),
+// and against a Bool constant.
+fn vc_simp_eq(ar: VcArena, is_eq: bool, x: i64, y: i64) -> i64 {
+    if x == y { return vc_tm_bool_const(ar, is_eq); }
+    if (vc_is_bv(ar, x) && vc_is_bv(ar, y)) || (vc_is_bool_const(ar, x) && vc_is_bool_const(ar, y)) {
+        return vc_tm_bool_const(ar, !is_eq);
+    }
+    if vc_is_bool_const(ar, x) {
+        if (ar.aux[x as u64] == 1) == is_eq { return y; }
+        return vc_tm_app1(ar, VC_OP_NOT(), y);
+    }
+    if vc_is_bool_const(ar, y) {
+        if (ar.aux[y as u64] == 1) == is_eq { return x; }
+        return vc_tm_app1(ar, VC_OP_NOT(), x);
+    }
+    -1
+}
+
+// An identity that returns an operand, or the zero constant of an operand's
+// width; -1 when none applies.
+fn vc_simp_identity(ar: VcArena, op: i64, x: i64, y: i64) -> i64 {
+    if op == VC_OP_BVADD() {
+        if vc_bv_is_zero(ar, x) { return y; }
+        if vc_bv_is_zero(ar, y) { return x; }
+    } else if op == VC_OP_BVSUB() {
+        if vc_bv_is_zero(ar, y) { return x; }
+    } else if op == VC_OP_BVMUL() {
+        if vc_bv_is_zero(ar, x) { return x; }
+        if vc_bv_is_zero(ar, y) { return y; }
+        if vc_bv_is_one(ar, x) { return y; }
+        if vc_bv_is_one(ar, y) { return x; }
+    } else if op == VC_OP_BVAND() {
+        if vc_bv_is_zero(ar, x) { return x; }
+        if vc_bv_is_zero(ar, y) { return y; }
+        if vc_bv_is_ones(ar, x) { return y; }
+        if vc_bv_is_ones(ar, y) { return x; }
+        if x == y { return x; }
+    } else if op == VC_OP_BVOR() {
+        if vc_bv_is_zero(ar, x) { return y; }
+        if vc_bv_is_zero(ar, y) { return x; }
+        if vc_bv_is_ones(ar, x) { return x; }
+        if vc_bv_is_ones(ar, y) { return y; }
+        if x == y { return x; }
+    } else if op == VC_OP_BVXOR() {
+        if vc_bv_is_zero(ar, x) { return y; }
+        if vc_bv_is_zero(ar, y) { return x; }
+    } else if op == VC_OP_BVSHL() || op == VC_OP_BVLSHR() || op == VC_OP_BVASHR() {
+        if vc_bv_is_zero(ar, y) || vc_bv_is_zero(ar, x) { return x; }
+    } else if op == VC_OP_BVUDIV() || op == VC_OP_BVSDIV() {
+        if vc_bv_is_one(ar, y) { return x; }
+    } else if op == VC_OP_BVUREM() || op == VC_OP_BVSREM() {
+        if vc_bv_is_one(ar, y) { return vc_bv_zero_like(ar, y); }
+    } else if op == VC_OP_BVSADDO() || op == VC_OP_BVUADDO() {
+        if vc_bv_is_zero(ar, x) || vc_bv_is_zero(ar, y) { return vc_tm_bool_const(ar, false); }
+    } else if op == VC_OP_BVSSUBO() || op == VC_OP_BVUSUBO() {
+        if vc_bv_is_zero(ar, y) { return vc_tm_bool_const(ar, false); }
+    } else if op == VC_OP_BVSMULO() || op == VC_OP_BVUMULO() {
+        if vc_bv_is_zero(ar, x) || vc_bv_is_one(ar, x) || vc_bv_is_zero(ar, y) || vc_bv_is_one(ar, y) {
+            return vc_tm_bool_const(ar, false);
+        }
+    } else if x == y && vc_is_cmp_reflexive_true(op) {
+        return vc_tm_bool_const(ar, true);
+    } else if x == y && vc_is_cmp_reflexive_false(op) {
+        return vc_tm_bool_const(ar, false);
+    }
+    -1
+}
+
+fn vc_simp_and(ar: VcArena, x: i64, y: i64) -> i64 {
+    if vc_tm_is_true(ar, x) { return y; }
+    if vc_tm_is_true(ar, y) { return x; }
+    if vc_tm_is_false(ar, x) { return x; }
+    if vc_tm_is_false(ar, y) { return y; }
+    if x == y { return x; }
+    if vc_is_not_of(ar, x, y) || vc_is_not_of(ar, y, x) { return vc_tm_bool_const(ar, false); }
+    -1
+}
+
+fn vc_simp_or(ar: VcArena, x: i64, y: i64) -> i64 {
+    if vc_tm_is_true(ar, x) { return x; }
+    if vc_tm_is_true(ar, y) { return y; }
+    if vc_tm_is_false(ar, x) { return y; }
+    if vc_tm_is_false(ar, y) { return x; }
+    if x == y { return x; }
+    if vc_is_not_of(ar, x, y) || vc_is_not_of(ar, y, x) { return vc_tm_bool_const(ar, true); }
+    -1
+}
+
+fn vc_tm_app2(ar: VcArena, op: i64, x: i64, y: i64) -> i64 {
+    let mut r: i64 = -1;
+    if op == VC_OP_AND() {
+        r = vc_simp_and(ar, x, y);
+    } else if op == VC_OP_OR() {
+        r = vc_simp_or(ar, x, y);
+    } else if op == VC_OP_EQ() || op == VC_OP_DISTINCT() {
+        r = vc_simp_eq(ar, op == VC_OP_EQ(), x, y);
+    } else if vc_is_bv(ar, x) && vc_is_bv(ar, y) {
+        r = vc_fold_consts(ar, op, x, y);
+    }
+    if r < 0 { r = vc_simp_identity(ar, op, x, y); }
+    if r >= 0 { return r; }
+    vc_arena_intern(ar, VC_T_APP(), x, y, -1, op)
+}
+
+fn vc_tm_app3(ar: VcArena, op: i64, x: i64, y: i64, z: i64) -> i64 {
+    if op == VC_OP_ITE() {
+        if vc_tm_is_true(ar, x) { return y; }
+        if vc_tm_is_false(ar, x) { return z; }
+        if y == z { return y; }
+        if vc_tm_is_true(ar, y) && vc_tm_is_false(ar, z) { return x; }
+        if vc_tm_is_false(ar, y) && vc_tm_is_true(ar, z) { return vc_tm_app1(ar, VC_OP_NOT(), x); }
+    }
+    vc_arena_intern(ar, VC_T_APP(), x, y, z, op)
+}
+
 fn vc_tm_and(ar: VcArena, a: i64, b: i64) -> i64 {
-    if vc_tm_is_true(ar, a) { return b; }
-    if vc_tm_is_true(ar, b) { return a; }
     vc_tm_app2(ar, VC_OP_AND(), a, b)
 }
 
 fn vc_tm_or(ar: VcArena, a: i64, b: i64) -> i64 {
-    if vc_tm_is_true(ar, a) || vc_tm_is_true(ar, b) { return vc_tm_bool_const(ar, true); }
     vc_tm_app2(ar, VC_OP_OR(), a, b)
 }
 
 fn vc_tm_implies(ar: VcArena, premise: i64, t: i64) -> i64 {
-    if vc_tm_is_true(ar, premise) { return t; }
-    vc_tm_app2(ar, VC_OP_OR(), vc_tm_app1(ar, VC_OP_NOT(), premise), t)
+    vc_tm_or(ar, vc_tm_app1(ar, VC_OP_NOT(), premise), t)
+}
+
+// The extension of a constant of at most 64 bits, or of the low bits of any
+// constant; -1 when the result would not be a bit-vector constant the arena
+// represents.
+fn vc_fold_ext(ar: VcArena, kind: i64, amount: i64, x: i64) -> i64 {
+    let sw: i64 = ar.a[x as u64];
+    let lo: i64 = ar.aux[x as u64];
+    if kind == VC_EXT_LOW() {
+        if amount > 64 { return -1; }
+        return vc_tm_bv(ar, amount, lo, 0);
+    }
+    if sw > 64 { return -1; }
+    let dw: i64 = sw + amount;
+    if kind == VC_EXT_ZERO() { return vc_tm_bv(ar, dw, lo, 0); }
+    let s: i64 = vc_bvfold_sext(sw, lo);
+    if dw <= 64 { return vc_tm_bv(ar, dw, s, 0); }
+    if dw == 128 { return vc_tm_bv(ar, dw, s, s >> 63); }
+    -1
 }
 
 // `zero_extend`/`sign_extend` by `amount` bits, or (`VC_EXT_LOW`) the low
 // `amount` bits of `x`.
 fn vc_tm_ext(ar: VcArena, kind: i64, amount: i64, x: i64) -> i64 {
+    if amount == 0 && kind != VC_EXT_LOW() { return x; }
+    if vc_is_bv(ar, x) {
+        let r: i64 = vc_fold_ext(ar, kind, amount, x);
+        if r >= 0 { return r; }
+    }
     vc_arena_intern(ar, VC_T_EXT(), x, amount, -1, kind)
 }

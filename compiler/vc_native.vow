@@ -12,6 +12,7 @@ use vc_loops
 use vc_exec
 use vc_unroll
 use vc_cex
+use vc_term
 
 // Native verification of one function inside the subset accepted by
 // `vc_skip_reason`. A function with loops is unrolled to a bound taken from
@@ -106,35 +107,63 @@ struct VcRound {
     frame: i64,
 }
 
+// True when claim `k` is `sat` without a solver: its negated goal is the
+// constant `true` and nothing is assumed before it, so the query is the header
+// (declarations and definitions only, which any assignment satisfies) alone. A
+// hard claim still goes to the solver, which supplies its counterexample.
+fn vc_claim_is_static_sat(cs: VcClaims, k: u64) -> bool {
+    let kind: i64 = cs.kinds[k];
+    if kind != VC_CLAIM_ARITH() && kind != VC_CLAIM_UNWIND() { return false; }
+    cs.assumed_lens[k] == 0 && vc_tm_is_true(cs.arena, cs.negated_goals[k])
+}
+
+// Records a `sat` verdict on a soft claim: the reachable abort of a checked
+// operator is a site, an unwinding claim leaves the round open. True when it
+// opens the round.
+fn vc_note_soft_sat(f: IrFunction, fr: VcFrames, cs: VcClaims, k: u64, sites: Vec<ParsedArithSite>) -> bool {
+    if cs.kinds[k] != VC_CLAIM_ARITH() { return true; }
+    let site: ParsedArithSite = ParsedArithSite { cause: cs.labels[k], owner: vc_frame_func(fr, cs.frames[k], f.id), ostart: cs.ostarts[k], olen: cs.olens[k] };
+    if !vc_has_site(sites, site) {
+        sites.push(site);
+    }
+    false
+}
+
 // One round: the claims of the unrolled function `g` of `f`. `sites` collects
 // the reachable soft aborts. Returns the verdict that ends the check (any
 // outcome but `unsat`/soft `sat`/open unwinding), or `proven` with `open` set
-// when only the unwinding claim was `sat`.
+// when only the unwinding claim was `sat`. The solver is located when the first
+// claim that needs it comes up.
 fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String) -> VcRound [io, read, write] {
     let cs: VcClaims = vc_claims_mode(g, fr, f.vows.len() == 0);
     if cs.kinds.len() == 0 {
         return VcRound { result: vc_proven_result(), ended: false, open: false, frame: -1 };
     }
-    let bin: String = vc_solver_locate();
-    if bin.len() == 0 {
-        let nf: VerifyResult = vc_claim_result(f, cs, 0, vc_answer_plain(VC_ANS_NOT_FOUND(), String::from("Bitwuzla not found")));
-        return VcRound { result: nf, ended: true, open: false, frame: -1 };
-    }
+    let mut bin: String = String::from("");
+    let mut located: bool = false;
     let mut open: bool = false;
     let mut k: u64 = 0;
     while k < cs.kinds.len() {
-        let spent_ms: i64 = (time_micros() - started) / 1000;
-        let ans: VcSolverAnswer = vc_check_claim(bin, cs, k, timeout_ms - spent_ms, scratch);
-        if ans.verdict != VC_ANS_UNSAT() {
-            if cs.kinds[k] == VC_CLAIM_ARITH() && ans.verdict == VC_ANS_SAT() {
-                let site: ParsedArithSite = ParsedArithSite { cause: cs.labels[k], owner: vc_frame_func(fr, cs.frames[k], f.id), ostart: cs.ostarts[k], olen: cs.olens[k] };
-                if !vc_has_site(sites, site) {
-                    sites.push(site);
+        if vc_claim_is_static_sat(cs, k) {
+            if vc_note_soft_sat(f, fr, cs, k, sites) { open = true; }
+        } else {
+            if !located {
+                bin = vc_solver_locate();
+                located = true;
+            }
+            if bin.len() == 0 {
+                let nf: VerifyResult = vc_claim_result(f, cs, k, vc_answer_plain(VC_ANS_NOT_FOUND(), String::from("Bitwuzla not found")));
+                return VcRound { result: nf, ended: true, open: false, frame: -1 };
+            }
+            let spent_ms: i64 = (time_micros() - started) / 1000;
+            let ans: VcSolverAnswer = vc_check_claim(bin, cs, k, timeout_ms - spent_ms, scratch);
+            if ans.verdict != VC_ANS_UNSAT() {
+                let soft: bool = cs.kinds[k] == VC_CLAIM_ARITH() || cs.kinds[k] == VC_CLAIM_UNWIND();
+                if soft && ans.verdict == VC_ANS_SAT() {
+                    if vc_note_soft_sat(f, fr, cs, k, sites) { open = true; }
+                } else {
+                    return VcRound { result: vc_claim_result(f, cs, k, ans), ended: true, open: false, frame: cs.frames[k] };
                 }
-            } else if cs.kinds[k] == VC_CLAIM_UNWIND() && ans.verdict == VC_ANS_SAT() {
-                open = true;
-            } else {
-                return VcRound { result: vc_claim_result(f, cs, k, ans), ended: true, open: false, frame: cs.frames[k] };
             }
         }
         k = k + 1;

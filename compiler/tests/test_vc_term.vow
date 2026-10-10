@@ -1,0 +1,581 @@
+module TestVcTerm
+
+use vc_term
+
+// Hash-consing, the simplifying constructors, and a differential check of the
+// simplifier: random term DAGs are built twice, once as raw nodes (no
+// simplification) and once through the constructors, and both are evaluated
+// under random environments by a small SMT-LIB evaluator that shares no code
+// with `vc_bvfold`.
+
+fn same_len(ar: VcArena) -> bool {
+    let n: u64 = ar.kinds.len();
+    ar.a.len() == n && ar.b.len() == n && ar.c.len() == n && ar.aux.len() == n
+        && ar.hashes.len() == n && ar.named.len() == n && ar.assumed.len() == n
+}
+
+fn check_interning() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let x: i64 = vc_tm_var(ar, String::from("x"));
+    let y: i64 = vc_tm_var(ar, String::from("y"));
+    let s1: i64 = vc_tm_app2(ar, VC_OP_BVADD(), x, y);
+    if vc_tm_app2(ar, VC_OP_BVADD(), x, y) != s1 { return 1; }
+    if vc_tm_app2(ar, VC_OP_BVADD(), y, x) == s1 { return 2; }
+    if vc_tm_app2(ar, VC_OP_BVSUB(), x, y) == s1 { return 3; }
+    if vc_tm_var(ar, String::from("x")) == x { return 4; }
+    if vc_tm_bv(ar, 32, -1, 0) != vc_tm_bv(ar, 32, 4294967295, 0) { return 5; }
+    if vc_tm_bv(ar, 32, 1, 0) == vc_tm_bv(ar, 64, 1, 0) { return 6; }
+    if vc_tm_bv(ar, 128, 1, 0) == vc_tm_bv(ar, 128, 1, 1) { return 7; }
+    if vc_tm_bv(ar, 8, 257, 5) != vc_tm_bv(ar, 8, 1, 0) { return 8; }
+    if vc_tm_bool_const(ar, true) != vc_tm_bool_const(ar, true) { return 9; }
+    if vc_tm_bool_const(ar, true) == vc_tm_bool_const(ar, false) { return 10; }
+    if vc_tm_ext(ar, VC_EXT_ZERO(), 8, x) != vc_tm_ext(ar, VC_EXT_ZERO(), 8, x) { return 11; }
+    if vc_tm_ext(ar, VC_EXT_ZERO(), 8, x) == vc_tm_ext(ar, VC_EXT_SIGN(), 8, x) { return 12; }
+    if !same_len(ar) { return 13; }
+    0
+}
+
+// Enough distinct terms to grow the table several times; every one is found
+// again afterwards, and ids are dense.
+fn check_growth() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let x: i64 = vc_tm_var(ar, String::from("x"));
+    let ids: Vec<i64> = Vec::new();
+    let mut k: i64 = 0;
+    while k < 5000 {
+        ids.push(vc_tm_app2(ar, VC_OP_BVXOR(), x, vc_tm_bv(ar, 64, k + 2, 0)));
+        k = k + 1;
+    }
+    let size: u64 = ar.kinds.len();
+    k = 0;
+    while k < 5000 {
+        if vc_tm_app2(ar, VC_OP_BVXOR(), x, vc_tm_bv(ar, 64, k + 2, 0)) != ids[k as u64] { return 20; }
+        k = k + 1;
+    }
+    if ar.kinds.len() != size { return 21; }
+    if size != 10001 { return 22; }
+    if !same_len(ar) { return 23; }
+    0
+}
+
+// Nodes forced onto one hash are told apart by their fields.
+fn check_collisions() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let x: i64 = vc_tm_var(ar, String::from("x"));
+    let y: i64 = vc_tm_var(ar, String::from("y"));
+    let a: i64 = vc_arena_intern_hashed(ar, 12345, VC_T_APP(), x, y, -1, VC_OP_BVADD());
+    let b: i64 = vc_arena_intern_hashed(ar, 12345, VC_T_APP(), y, x, -1, VC_OP_BVADD());
+    let c: i64 = vc_arena_intern_hashed(ar, 12345, VC_T_APP(), x, y, -1, VC_OP_BVSUB());
+    if a == b || a == c || b == c { return 30; }
+    if vc_arena_intern_hashed(ar, 12345, VC_T_APP(), x, y, -1, VC_OP_BVADD()) != a { return 31; }
+    if vc_arena_intern_hashed(ar, 12345, VC_T_APP(), y, x, -1, VC_OP_BVADD()) != b { return 32; }
+    if vc_arena_intern_hashed(ar, 12345, VC_T_APP(), x, y, -1, VC_OP_BVSUB()) != c { return 33; }
+    let mut k: i64 = 0;
+    while k < 400 {
+        vc_arena_intern_hashed(ar, 12345, VC_T_BV(), 64, 0, -1, k);
+        k = k + 1;
+    }
+    if vc_arena_intern_hashed(ar, 12345, VC_T_APP(), x, y, -1, VC_OP_BVSUB()) != c { return 34; }
+    if vc_arena_intern_hashed(ar, 12345, VC_T_BV(), 64, 0, -1, 399) != vc_arena_intern_hashed(ar, 12345, VC_T_BV(), 64, 0, -1, 399) { return 35; }
+    0
+}
+
+fn build_sequence(ar: VcArena) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let x: i64 = vc_tm_var(ar, String::from("x"));
+    let y: i64 = vc_tm_var(ar, String::from("y"));
+    let mut k: i64 = 0;
+    while k < 300 {
+        let c: i64 = vc_tm_bv(ar, 16, k * 7, 0);
+        let s: i64 = vc_tm_app2(ar, VC_OP_BVADD(), vc_tm_app2(ar, VC_OP_BVMUL(), x, c), y);
+        out.push(vc_tm_app2(ar, VC_OP_BVULT(), s, c));
+        k = k + 1;
+    }
+    out
+}
+
+fn check_deterministic() -> i64 {
+    let a: Vec<i64> = build_sequence(vc_arena_new());
+    let b: Vec<i64> = build_sequence(vc_arena_new());
+    let mut i: u64 = 0;
+    while i < a.len() {
+        if a[i] != b[i] { return 40; }
+        i = i + 1;
+    }
+    0
+}
+
+fn check_rules() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let x: i64 = vc_tm_var(ar, String::from("x"));
+    let y: i64 = vc_tm_var(ar, String::from("y"));
+    let p: i64 = vc_tm_var(ar, String::from("p"));
+    let q: i64 = vc_tm_var(ar, String::from("q"));
+    let t: i64 = vc_tm_bool_const(ar, true);
+    let f: i64 = vc_tm_bool_const(ar, false);
+    let z8: i64 = vc_tm_bv(ar, 8, 0, 0);
+    let o8: i64 = vc_tm_bv(ar, 8, 1, 0);
+    let m8: i64 = vc_tm_bv(ar, 8, 255, 0);
+    let not_p: i64 = vc_tm_app1(ar, VC_OP_NOT(), p);
+    if vc_tm_app1(ar, VC_OP_NOT(), not_p) != p { return 50; }
+    if vc_tm_app1(ar, VC_OP_NOT(), t) != f { return 51; }
+    if vc_tm_and(ar, p, not_p) != f { return 52; }
+    if vc_tm_or(ar, not_p, p) != t { return 53; }
+    if vc_tm_and(ar, p, p) != p { return 54; }
+    if vc_tm_and(ar, t, p) != p || vc_tm_and(ar, p, f) != f { return 55; }
+    if vc_tm_or(ar, f, p) != p || vc_tm_or(ar, p, t) != t { return 56; }
+    if vc_tm_implies(ar, t, q) != q { return 57; }
+    if vc_tm_implies(ar, f, q) != t { return 58; }
+    if vc_tm_app3(ar, VC_OP_ITE(), t, x, y) != x { return 59; }
+    if vc_tm_app3(ar, VC_OP_ITE(), f, x, y) != y { return 60; }
+    if vc_tm_app3(ar, VC_OP_ITE(), p, x, x) != x { return 61; }
+    if vc_tm_app3(ar, VC_OP_ITE(), p, t, f) != p { return 62; }
+    if vc_tm_app3(ar, VC_OP_ITE(), p, f, t) != not_p { return 63; }
+    if vc_tm_app2(ar, VC_OP_EQ(), x, x) != t { return 64; }
+    if vc_tm_app2(ar, VC_OP_DISTINCT(), x, x) != f { return 65; }
+    if vc_tm_app2(ar, VC_OP_EQ(), t, p) != p { return 66; }
+    if vc_tm_app2(ar, VC_OP_DISTINCT(), t, p) != not_p { return 67; }
+    if vc_tm_app2(ar, VC_OP_BVADD(), x, z8) != x { return 68; }
+    if vc_tm_app2(ar, VC_OP_BVADD(), z8, x) != x { return 69; }
+    if vc_tm_app2(ar, VC_OP_BVSUB(), x, z8) != x { return 70; }
+    if vc_tm_app2(ar, VC_OP_BVMUL(), o8, x) != x { return 71; }
+    if vc_tm_app2(ar, VC_OP_BVMUL(), x, z8) != z8 { return 72; }
+    if vc_tm_app2(ar, VC_OP_BVAND(), x, m8) != x { return 73; }
+    if vc_tm_app2(ar, VC_OP_BVAND(), z8, x) != z8 { return 74; }
+    if vc_tm_app2(ar, VC_OP_BVOR(), x, z8) != x { return 75; }
+    if vc_tm_app2(ar, VC_OP_BVOR(), x, m8) != m8 { return 76; }
+    if vc_tm_app2(ar, VC_OP_BVXOR(), z8, x) != x { return 77; }
+    if vc_tm_app2(ar, VC_OP_BVSHL(), x, z8) != x { return 78; }
+    if vc_tm_app2(ar, VC_OP_BVULE(), x, x) != t { return 79; }
+    if vc_tm_app2(ar, VC_OP_BVSLT(), x, x) != f { return 80; }
+    if vc_tm_app2(ar, VC_OP_BVADD(), vc_tm_bv(ar, 8, 200, 0), vc_tm_bv(ar, 8, 100, 0)) != vc_tm_bv(ar, 8, 44, 0) { return 81; }
+    if vc_tm_app2(ar, VC_OP_BVSLT(), m8, o8) != t { return 82; }
+    if vc_tm_app2(ar, VC_OP_BVULT(), m8, o8) != f { return 83; }
+    if vc_tm_app2(ar, VC_OP_BVSDIV(), m8, z8) != o8 { return 84; }
+    if vc_tm_app2(ar, VC_OP_BVUDIV(), m8, z8) != m8 { return 85; }
+    if vc_tm_app2(ar, VC_OP_BVSADDO(), vc_tm_bv(ar, 8, 127, 0), o8) != t { return 86; }
+    if vc_tm_app2(ar, VC_OP_BVUADDO(), x, z8) != f { return 87; }
+    if vc_tm_app2(ar, VC_OP_BVUMULO(), vc_tm_bv(ar, 64, -1, 0), vc_tm_bv(ar, 64, 2, 0)) != t { return 88; }
+    if vc_tm_ext(ar, VC_EXT_SIGN(), 8, m8) != vc_tm_bv(ar, 16, 65535, 0) { return 89; }
+    if vc_tm_ext(ar, VC_EXT_ZERO(), 8, m8) != vc_tm_bv(ar, 16, 255, 0) { return 90; }
+    if vc_tm_ext(ar, VC_EXT_LOW(), 4, m8) != vc_tm_bv(ar, 4, 15, 0) { return 91; }
+    if vc_tm_ext(ar, VC_EXT_SIGN(), 0, x) != x { return 92; }
+    if vc_tm_ext(ar, VC_EXT_SIGN(), 64, vc_tm_bv(ar, 64, -2, 0)) != vc_tm_bv(ar, 128, -2, -1) { return 93; }
+    // 128-bit operands are left alone except by width-free rules
+    let w1: i64 = vc_tm_bv(ar, 128, 1, 0);
+    let w2: i64 = vc_tm_bv(ar, 128, 2, 0);
+    if vc_tm_app2(ar, VC_OP_BVADD(), w1, w2) == vc_tm_bv(ar, 128, 3, 0) { return 94; }
+    if vc_tm_app2(ar, VC_OP_EQ(), w1, w2) != f { return 95; }
+    // a name stands for its definition
+    let n: i64 = vc_tm_bind(ar, not_p, String::from("g0"));
+    if vc_tm_or(ar, p, n) != t { return 96; }
+    if vc_tm_app1(ar, VC_OP_NOT(), n) != p { return 97; }
+    0
+}
+
+// --- differential evaluator -------------------------------------------------
+
+fn next(state: Vec<i64>) -> i64 {
+    let mut x: i64 = state[0];
+    x = x ^ (x << 13);
+    x = x ^ ((x >> 7) & 72057594037927935);
+    x = x ^ (x << 17);
+    state[0] = x;
+    (x >> 3) & 1048575
+}
+
+fn pick(state: Vec<i64>, n: i64) -> i64 {
+    next(state) % n
+}
+
+fn pat(w: i64, v: i64) -> i64 {
+    let m: i64 = 1 << w;
+    ((v % m) + m) % m
+}
+
+fn sv(w: i64, v: i64) -> i64 {
+    if v >= (1 << (w - 1)) { return v - (1 << w); }
+    v
+}
+
+fn flag(b: bool) -> i64 {
+    if b { 1 } else { 0 }
+}
+
+fn wd(ar: VcArena, t: i64, vsorts: Vec<i64>) -> i64 {
+    let k: i64 = ar.kinds[t as u64];
+    if k == VC_T_VAR() { return vsorts[ar.aux[t as u64] as u64]; }
+    if k == VC_T_BV() { return ar.a[t as u64]; }
+    if k == VC_T_BOOL() { return 0; }
+    if k == VC_T_EXT() {
+        if ar.aux[t as u64] == VC_EXT_LOW() { return ar.b[t as u64]; }
+        return wd(ar, ar.a[t as u64], vsorts) + ar.b[t as u64];
+    }
+    let op: i64 = ar.aux[t as u64];
+    if op == VC_OP_ITE() { return wd(ar, ar.b[t as u64], vsorts); }
+    if op == VC_OP_BVADD() || op == VC_OP_BVSUB() || op == VC_OP_BVMUL() || op == VC_OP_BVSDIV()
+        || op == VC_OP_BVSREM() || op == VC_OP_BVUDIV() || op == VC_OP_BVUREM() || op == VC_OP_BVAND()
+        || op == VC_OP_BVOR() || op == VC_OP_BVXOR() || op == VC_OP_BVSHL() || op == VC_OP_BVLSHR()
+        || op == VC_OP_BVASHR() {
+        return wd(ar, ar.a[t as u64], vsorts);
+    }
+    0
+}
+
+fn ev_cmp(op: i64, w: i64, a: i64, b: i64) -> i64 {
+    let sa: i64 = sv(w, a);
+    let sb: i64 = sv(w, b);
+    let m: i64 = 1 << w;
+    if op == VC_OP_BVULT() { return flag(a < b); }
+    if op == VC_OP_BVULE() { return flag(a <= b); }
+    if op == VC_OP_BVUGT() { return flag(a > b); }
+    if op == VC_OP_BVUGE() { return flag(a >= b); }
+    if op == VC_OP_BVSLT() { return flag(sa < sb); }
+    if op == VC_OP_BVSLE() { return flag(sa <= sb); }
+    if op == VC_OP_BVSGT() { return flag(sa > sb); }
+    if op == VC_OP_BVSGE() { return flag(sa >= sb); }
+    if op == VC_OP_BVSADDO() { return flag(sa + sb < 0 - (m / 2) || sa + sb >= m / 2); }
+    if op == VC_OP_BVUADDO() { return flag(a + b >= m); }
+    if op == VC_OP_BVSSUBO() { return flag(sa - sb < 0 - (m / 2) || sa - sb >= m / 2); }
+    if op == VC_OP_BVUSUBO() { return flag(a < b); }
+    if op == VC_OP_BVSMULO() { return flag(sa * sb < 0 - (m / 2) || sa * sb >= m / 2); }
+    if op == VC_OP_BVUMULO() { return flag(a * b >= m); }
+    -1
+}
+
+fn ev_value(op: i64, w: i64, a: i64, b: i64) -> i64 {
+    let sa: i64 = sv(w, a);
+    let sb: i64 = sv(w, b);
+    let m: i64 = 1 << w;
+    if op == VC_OP_BVADD() { return pat(w, a + b); }
+    if op == VC_OP_BVSUB() { return pat(w, a - b); }
+    if op == VC_OP_BVMUL() { return pat(w, a * b); }
+    if op == VC_OP_BVAND() { return a & b; }
+    if op == VC_OP_BVOR() { return a | b; }
+    if op == VC_OP_BVXOR() { return a ^ b; }
+    if op == VC_OP_BVUDIV() { if b == 0 { return m - 1; } return a / b; }
+    if op == VC_OP_BVUREM() { if b == 0 { return a; } return a % b; }
+    if op == VC_OP_BVSDIV() {
+        if b == 0 { if sa < 0 { return 1; } return m - 1; }
+        return pat(w, sa / sb);
+    }
+    if op == VC_OP_BVSREM() {
+        if b == 0 { return a; }
+        return pat(w, sa % sb);
+    }
+    if op == VC_OP_BVSHL() {
+        if b >= w { return 0; }
+        return pat(w, a * (1 << b));
+    }
+    if op == VC_OP_BVLSHR() {
+        if b >= w { return 0; }
+        return a / (1 << b);
+    }
+    if op == VC_OP_BVASHR() {
+        let fill: i64 = { if sa < 0 { m - 1 } else { 0 } };
+        if b >= w { return fill; }
+        let d: i64 = 1 << b;
+        let mut q: i64 = sa / d;
+        if sa % d != 0 && sa < 0 { q = q - 1; }
+        return pat(w, q);
+    }
+    -1
+}
+
+fn ev(ar: VcArena, t: i64, env: Vec<i64>, vsorts: Vec<i64>, memo: Vec<i64>) -> i64 {
+    if memo[t as u64] >= 0 { return memo[t as u64]; }
+    let k: i64 = ar.kinds[t as u64];
+    let mut r: i64 = 0;
+    if k == VC_T_VAR() {
+        r = env[ar.aux[t as u64] as u64];
+    } else if k == VC_T_BV() || k == VC_T_BOOL() {
+        r = ar.aux[t as u64];
+    } else if k == VC_T_EXT() {
+        let xt: i64 = ar.a[t as u64];
+        let x: i64 = ev(ar, xt, env, vsorts, memo);
+        let amount: i64 = ar.b[t as u64];
+        let kind: i64 = ar.aux[t as u64];
+        if kind == VC_EXT_LOW() {
+            r = pat(amount, x);
+        } else if kind == VC_EXT_ZERO() {
+            r = x;
+        } else {
+            let xw: i64 = wd(ar, xt, vsorts);
+            r = pat(xw + amount, sv(xw, x));
+        }
+    } else {
+        let op: i64 = ar.aux[t as u64];
+        let a: i64 = ev(ar, ar.a[t as u64], env, vsorts, memo);
+        if op == VC_OP_NOT() {
+            r = 1 - a;
+        } else if op == VC_OP_ITE() {
+            let bv: i64 = ev(ar, ar.b[t as u64], env, vsorts, memo);
+            let cv: i64 = ev(ar, ar.c[t as u64], env, vsorts, memo);
+            if a == 1 { r = bv; } else { r = cv; }
+        } else {
+            let b: i64 = ev(ar, ar.b[t as u64], env, vsorts, memo);
+            if op == VC_OP_AND() {
+                r = a & b;
+            } else if op == VC_OP_OR() {
+                r = a | b;
+            } else if op == VC_OP_EQ() {
+                r = flag(a == b);
+            } else if op == VC_OP_DISTINCT() {
+                r = flag(a != b);
+            } else {
+                let w: i64 = wd(ar, ar.a[t as u64], vsorts);
+                r = ev_cmp(op, w, a, b);
+                if r < 0 { r = ev_value(op, w, a, b); }
+            }
+        }
+    }
+    memo[t as u64] = r;
+    r
+}
+
+fn fresh_memo(n: u64) -> Vec<i64> {
+    let m: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < n {
+        m.push(-1);
+        i = i + 1;
+    }
+    m
+}
+
+fn value_ops() -> Vec<i64> {
+    let o: Vec<i64> = Vec::new();
+    o.push(VC_OP_BVADD());
+    o.push(VC_OP_BVSUB());
+    o.push(VC_OP_BVMUL());
+    o.push(VC_OP_BVSDIV());
+    o.push(VC_OP_BVSREM());
+    o.push(VC_OP_BVUDIV());
+    o.push(VC_OP_BVUREM());
+    o.push(VC_OP_BVAND());
+    o.push(VC_OP_BVOR());
+    o.push(VC_OP_BVXOR());
+    o.push(VC_OP_BVSHL());
+    o.push(VC_OP_BVLSHR());
+    o.push(VC_OP_BVASHR());
+    o
+}
+
+fn pred_ops() -> Vec<i64> {
+    let o: Vec<i64> = Vec::new();
+    o.push(VC_OP_EQ());
+    o.push(VC_OP_DISTINCT());
+    o.push(VC_OP_BVULT());
+    o.push(VC_OP_BVULE());
+    o.push(VC_OP_BVUGT());
+    o.push(VC_OP_BVUGE());
+    o.push(VC_OP_BVSLT());
+    o.push(VC_OP_BVSLE());
+    o.push(VC_OP_BVSGT());
+    o.push(VC_OP_BVSGE());
+    o.push(VC_OP_BVSADDO());
+    o.push(VC_OP_BVUADDO());
+    o.push(VC_OP_BVSSUBO());
+    o.push(VC_OP_BVUSUBO());
+    o.push(VC_OP_BVSMULO());
+    o.push(VC_OP_BVUMULO());
+    o
+}
+
+// One random DAG, as parallel raw / simplified ids over the same node list.
+// Sorts are 8-bit, 16-bit and Bool (0).
+struct Dag {
+    raw: VcArena,
+    smart: VcArena,
+    ids_raw: Vec<i64>,
+    ids_smart: Vec<i64>,
+    sorts: Vec<i64>,
+}
+
+fn dag_push(d: Dag, r: i64, s: i64, sort: i64) {
+    d.ids_raw.push(r);
+    d.ids_smart.push(s);
+    d.sorts.push(sort);
+}
+
+// A random node of `sort`, found by scanning on from a random start; the
+// variables guarantee every sort has one.
+fn operand_of(d: Dag, st: Vec<i64>, sort: i64) -> i64 {
+    let n: i64 = d.sorts.len() as i64;
+    let start: i64 = pick(st, n);
+    let mut k: i64 = 0;
+    while k < n {
+        let i: i64 = (start + k) % n;
+        if d.sorts[i as u64] == sort { return i; }
+        k = k + 1;
+    }
+    0
+}
+
+fn const_value(st: Vec<i64>, w: i64) -> i64 {
+    let c: i64 = pick(st, 8);
+    if c == 0 { return 0; }
+    if c == 1 { return 1; }
+    if c == 2 { return pat(w, -1); }
+    if c == 3 { return 1 << (w - 1); }
+    if c == 4 { return (1 << (w - 1)) - 1; }
+    pat(w, next(st))
+}
+
+fn add_const(d: Dag, st: Vec<i64>, w: i64) {
+    let v: i64 = const_value(st, w);
+    dag_push(d, vc_arena_intern(d.raw, VC_T_BV(), w, 0, -1, v), vc_tm_bv(d.smart, w, v, 0), w);
+}
+
+fn make_dag(st: Vec<i64>) -> Dag {
+    let d: Dag = Dag {
+        raw: vc_arena_new(),
+        smart: vc_arena_new(),
+        ids_raw: Vec::new(),
+        ids_smart: Vec::new(),
+        sorts: Vec::new(),
+    };
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("x0"));
+    names.push(String::from("x1"));
+    names.push(String::from("x2"));
+    names.push(String::from("y0"));
+    names.push(String::from("b0"));
+    names.push(String::from("b1"));
+    let vs: Vec<i64> = vsorts();
+    let mut v: u64 = 0;
+    while v < names.len() {
+        dag_push(d, vc_tm_var(d.raw, names[v]), vc_tm_var(d.smart, names[v]), vs[v]);
+        v = v + 1;
+    }
+    let vops: Vec<i64> = value_ops();
+    let pops: Vec<i64> = pred_ops();
+    let mut n: i64 = 0;
+    while n < 36 {
+        let choice: i64 = pick(st, 10);
+        if choice == 0 {
+            add_const(d, st, 8);
+        } else if choice == 1 {
+            add_const(d, st, 16);
+        } else if choice <= 4 {
+            let w: i64 = { if pick(st, 3) == 0 { 16 } else { 8 } };
+            let a: i64 = operand_of(d, st, w);
+            let b: i64 = operand_of(d, st, w);
+            let op: i64 = vops[pick(st, vops.len() as i64) as u64];
+            dag_push(d,
+                vc_arena_push(d.raw, VC_T_APP(), d.ids_raw[a as u64], d.ids_raw[b as u64], -1, op),
+                vc_tm_app2(d.smart, op, d.ids_smart[a as u64], d.ids_smart[b as u64]), w);
+        } else if choice <= 6 {
+            let w: i64 = { if pick(st, 3) == 0 { 16 } else { 8 } };
+            let a: i64 = operand_of(d, st, w);
+            let b: i64 = operand_of(d, st, w);
+            let op: i64 = pops[pick(st, pops.len() as i64) as u64];
+            dag_push(d,
+                vc_arena_push(d.raw, VC_T_APP(), d.ids_raw[a as u64], d.ids_raw[b as u64], -1, op),
+                vc_tm_app2(d.smart, op, d.ids_smart[a as u64], d.ids_smart[b as u64]), 0);
+        } else if choice == 7 {
+            let a: i64 = operand_of(d, st, 0);
+            let b: i64 = operand_of(d, st, 0);
+            let which: i64 = pick(st, 3);
+            if which == 0 {
+                dag_push(d, vc_arena_push(d.raw, VC_T_APP(), d.ids_raw[a as u64], -1, -1, VC_OP_NOT()),
+                    vc_tm_app1(d.smart, VC_OP_NOT(), d.ids_smart[a as u64]), 0);
+            } else {
+                let op: i64 = { if which == 1 { VC_OP_AND() } else { VC_OP_OR() } };
+                dag_push(d, vc_arena_push(d.raw, VC_T_APP(), d.ids_raw[a as u64], d.ids_raw[b as u64], -1, op),
+                    vc_tm_app2(d.smart, op, d.ids_smart[a as u64], d.ids_smart[b as u64]), 0);
+            }
+        } else if choice == 8 {
+            let w: i64 = { if pick(st, 2) == 0 { 16 } else { 8 } };
+            let c: i64 = operand_of(d, st, 0);
+            let a: i64 = operand_of(d, st, w);
+            let b: i64 = operand_of(d, st, w);
+            dag_push(d,
+                vc_arena_push(d.raw, VC_T_APP(), d.ids_raw[c as u64], d.ids_raw[a as u64], d.ids_raw[b as u64], VC_OP_ITE()),
+                vc_tm_app3(d.smart, VC_OP_ITE(), d.ids_smart[c as u64], d.ids_smart[a as u64], d.ids_smart[b as u64]), w);
+        } else {
+            let a: i64 = operand_of(d, st, 8);
+            let w: i64 = operand_of(d, st, 16);
+            let kind: i64 = pick(st, 3);
+            if kind == 2 {
+                dag_push(d, vc_arena_push(d.raw, VC_T_EXT(), d.ids_raw[w as u64], 8, -1, VC_EXT_LOW()),
+                    vc_tm_ext(d.smart, VC_EXT_LOW(), 8, d.ids_smart[w as u64]), 8);
+            } else {
+                dag_push(d, vc_arena_push(d.raw, VC_T_EXT(), d.ids_raw[a as u64], 8, -1, kind),
+                    vc_tm_ext(d.smart, kind, 8, d.ids_smart[a as u64]), 16);
+            }
+        }
+        n = n + 1;
+    }
+    d
+}
+
+fn vsorts() -> Vec<i64> {
+    let s: Vec<i64> = Vec::new();
+    s.push(8);
+    s.push(8);
+    s.push(8);
+    s.push(16);
+    s.push(0);
+    s.push(0);
+    s
+}
+
+fn random_env(st: Vec<i64>, vs: Vec<i64>) -> Vec<i64> {
+    let env: Vec<i64> = Vec::new();
+    let mut i: u64 = 0;
+    while i < vs.len() {
+        let w: i64 = vs[i];
+        if w == 0 {
+            env.push(pick(st, 2));
+        } else {
+            env.push(const_value(st, w));
+        }
+        i = i + 1;
+    }
+    env
+}
+
+// Operands and results agree under every environment: 1000 + node index on a
+// mismatch of simplified vs raw semantics.
+fn check_dag(st: Vec<i64>) -> i64 {
+    let d: Dag = make_dag(st);
+    let vs: Vec<i64> = vsorts();
+    let mut e: i64 = 0;
+    while e < 24 {
+        let env: Vec<i64> = random_env(st, vs);
+        let mr: Vec<i64> = fresh_memo(d.raw.kinds.len());
+        let ms: Vec<i64> = fresh_memo(d.smart.kinds.len());
+        let mut i: u64 = 0;
+        while i < d.ids_raw.len() {
+            let a: i64 = ev(d.raw, d.ids_raw[i], env, vs, mr);
+            let b: i64 = ev(d.smart, d.ids_smart[i], env, vs, ms);
+            if a != b { return 1000 + i as i64; }
+            i = i + 1;
+        }
+        e = e + 1;
+    }
+    0
+}
+
+fn check_differential() -> i64 {
+    let st: Vec<i64> = Vec::new();
+    st.push(88172645463325252);
+    let mut n: i64 = 0;
+    while n < 400 {
+        let r: i64 = check_dag(st);
+        if r != 0 { return r; }
+        n = n + 1;
+    }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_interning();
+    if r == 0 { r = check_growth(); }
+    if r == 0 { r = check_collisions(); }
+    if r == 0 { r = check_deterministic(); }
+    if r == 0 { r = check_rules(); }
+    if r == 0 { r = check_differential(); }
+    i64_to_i32_wrap(r)
+}

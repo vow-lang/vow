@@ -13,8 +13,10 @@ use ir_dominance
 // Symbolic execution of an acyclic integer/Bool function (one that
 // `vc_skip_reason` accepts, after `vc_unroll` removed its loops), with its
 // aggregates scalarised by `vc_agg`, into proof obligations. Blocks are walked in
-// reverse postorder (`vc_flow` holds the path conditions and merges). Each IR
-// value becomes a `define-fun`; each `requires` is an assumption for the claims
+// reverse postorder (`vc_flow` holds the path conditions and merges). A value
+// that is a variable or a constant is used as it is; a composite one becomes a
+// `define-fun` the first time its term is built, and every later value with the
+// same term shares that name. Each `requires` is an assumption for the claims
 // that follow it. A claim is only asked on the paths that reach it: its query
 // asserts the block's path condition next to the negated goal, and an
 // assumption made in a block is the implication `path condition => assumption`.
@@ -100,8 +102,21 @@ fn vc_param_name(k: i64) -> String {
     out
 }
 
+// Records the claim that `goal` holds on the paths satisfying `pc`, unless the
+// simplifier already decided it: the negated query is the constant `false`, or
+// `pc => goal` is itself an earlier assumption (the terms are hash-consed, so
+// equal formulas are one id). Both are `unsat` under any assumptions, so the
+// solver would only confirm what the claim list already says.
 fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, pc: i64, goal: i64, ostart: i64, olen: i64, frame: i64) {
     if cs.pre_only && kind != VC_CLAIM_CALLER_PRE() && kind != VC_CLAIM_UNWIND() {
+        return;
+    }
+    let ar: VcArena = cs.arena;
+    let negated: i64 = vc_tm_and(ar, pc, vc_tm_app1(ar, VC_OP_NOT(), goal));
+    if vc_tm_is_false(ar, negated) {
+        return;
+    }
+    if ar.assumed[vc_tm_implies(ar, pc, goal) as u64] == 1 {
         return;
     }
     let hdr: SmtScript = cs.header;
@@ -111,15 +126,19 @@ fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, pc: i64, go
     cs.labels.push(label);
     cs.ostarts.push(ostart);
     cs.olens.push(olen);
-    let ar: VcArena = cs.arena;
-    let negated: i64 = vc_tm_app1(ar, VC_OP_NOT(), goal);
-    cs.negated_goals.push(vc_tm_and(ar, pc, negated));
+    cs.negated_goals.push(negated);
     cs.header_lens.push(hdr.kinds.len() as i64);
     cs.assumed_lens.push(cs.assumed.len() as i64);
 }
 
 fn vc_assume(cs: VcClaims, pc: i64, t: i64) {
-    cs.assumed.push(vc_tm_implies(cs.arena, pc, t));
+    let ar: VcArena = cs.arena;
+    let fact: i64 = vc_tm_implies(ar, pc, t);
+    if vc_tm_is_true(ar, fact) {
+        return;
+    }
+    ar.assumed[fact as u64] = 1;
+    cs.assumed.push(fact);
 }
 
 // A claim that `goal` holds on the paths reaching `inst`, then the assumption
@@ -151,19 +170,30 @@ struct VcWalk {
     fl: VcFlow,
     ag: VcAgg,
     var_of: Vec<i64>,
-    def_of: Vec<i64>,
     obj_of: Vec<i64>,
     tys: Vec<i64>,
     lits: Vec<i64>,
     dvs: Vec<i64>,
 }
 
+// Binds the value of `inst` to `t`: a leaf is used as it is, a composite gets
+// a `define-fun` once, so a second instruction computing the same term shares
+// the first one's name.
 fn vc_define(w: VcWalk, inst: IrInst, t: i64) {
     let cs: VcClaims = w.cs;
     let ar: VcArena = cs.arena;
-    vc_script_define_fun(cs.header, vc_value_name(inst.id), vc_ty_sort(inst.ty), t);
-    w.def_of[inst.id as u64] = t;
-    w.var_of[inst.id as u64] = vc_tm_var(ar, vc_value_name(inst.id));
+    if vc_tm_is_leaf(ar, t) {
+        w.var_of[inst.id as u64] = t;
+        return;
+    }
+    let known: i64 = ar.named[t as u64];
+    if known >= 0 {
+        w.var_of[inst.id as u64] = known;
+        return;
+    }
+    let name: String = vc_value_name(inst.id);
+    vc_script_define_fun(cs.header, name, vc_ty_sort(inst.ty), t);
+    w.var_of[inst.id as u64] = vc_tm_bind(ar, t, name);
 }
 
 // The term for an operand read at type `at`: an `i64` literal against another
@@ -236,17 +266,17 @@ fn vc_exec_value(w: VcWalk, inst: IrInst, pc: i64) -> i64 {
     vc_exec_arith(w, inst, pc)
 }
 
-// Outcome of branching on `cond_id` at a block with path condition `pc` and
-// known outcomes `foff`/`flen`: 1 taken, 0 not taken, -1 undecided.
+// Outcome of branching on `cond_id` at a block with known outcomes `foff`/`flen`:
+// 1 taken, 0 not taken, -1 undecided. A condition is decided when its term is a
+// constant or the path already fixed that term (or its negation).
 fn vc_branch_outcome(w: VcWalk, cond_id: i64, foff: i64, flen: i64) -> i64 {
-    let cs: VcClaims = w.cs;
-    let ar: VcArena = cs.arena;
+    let ar: VcArena = w.cs.arena;
     let fl: VcFlow = w.fl;
-    let def: i64 = w.def_of[cond_id as u64];
-    if vc_tm_is_true(ar, def) { return 1; }
-    if vc_tm_is_false(ar, def) { return 0; }
-    if vc_flow_has_fact(fl, foff, flen, vc_flow_fact_lit(cond_id, true)) { return 1; }
-    if vc_flow_has_fact(fl, foff, flen, vc_flow_fact_lit(cond_id, false)) { return 0; }
+    let c: i64 = w.var_of[cond_id as u64];
+    if vc_tm_is_true(ar, c) { return 1; }
+    if vc_tm_is_false(ar, c) { return 0; }
+    if vc_flow_has_fact(fl, foff, flen, vc_flow_fact_lit(ar, c, true)) { return 1; }
+    if vc_flow_has_fact(fl, foff, flen, vc_flow_fact_lit(ar, c, false)) { return 0; }
     -1
 }
 
@@ -270,7 +300,7 @@ fn vc_branch_edge(w: VcWalk, bi: u64, cond_id: i64, outcome: bool, decided: bool
         } else {
             ec = vc_flow_and_not(fl, ar, hdr, pc, c);
         }
-        off = vc_flow_extend_facts(fl, off, len, vc_flow_fact_lit(cond_id, outcome));
+        off = vc_flow_extend_facts(fl, off, len, vc_flow_fact_lit(ar, c, outcome));
         len = fl.pool.len() as i64 - off;
     }
     vc_flow_add_edge(fl, dst as u64, bi as i64, ec, off, len);
@@ -437,7 +467,6 @@ fn vc_claims_mode(f: IrFunction, fr: VcFrames, pre_only: bool) -> VcClaims {
         fl: fl,
         ag: vc_agg_new(fl),
         var_of: dom_fill(tys.len(), -1),
-        def_of: dom_fill(tys.len(), -1),
         obj_of: dom_fill(tys.len(), -1),
         tys: tys,
         lits: vc_literal_table(f, tys),

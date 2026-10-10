@@ -46,8 +46,9 @@ fn check_golden_script() -> i64 {
 fn check_constants() -> i64 {
     let ar: VcArena = vc_arena_new();
     let s: SmtScript = vc_script_new();
-    vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_bv(ar, 64, -1, 0), vc_tm_bv(ar, 64, 7, 0)));
-    vc_script_assert(s, vc_tm_app2(ar, VC_OP_EQ(), vc_tm_bv(ar, 64, -9223372036854775807 - 1, 0), vc_tm_bv(ar, 64, 9223372036854775807, 0)));
+    // Raw nodes: the writer is under test, not the simplifier that would fold these.
+    vc_script_assert(s, vc_arena_push(ar, VC_T_APP(), vc_tm_bv(ar, 64, -1, 0), vc_tm_bv(ar, 64, 7, 0), -1, VC_OP_EQ()));
+    vc_script_assert(s, vc_arena_push(ar, VC_T_APP(), vc_tm_bv(ar, 64, -9223372036854775807 - 1, 0), vc_tm_bv(ar, 64, 9223372036854775807, 0), -1, VC_OP_EQ()));
     vc_script_assert(s, vc_tm_bool_const(ar, true));
     vc_script_assert(s, vc_tm_bool_const(ar, false));
     let want: String = String::from("(assert (= #xffffffffffffffff #x0000000000000007))\n");
