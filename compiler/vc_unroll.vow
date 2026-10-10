@@ -210,22 +210,6 @@ fn vc_upsilon_phi(st: VcUnrollState, defs: VcDefs, n: u64, orig: IrInst) -> i64 
     -1
 }
 
-fn vc_clone_inst(orig: IrInst, new_id: i64, args: Vec<i64>, dv: i64, dv2: i64) -> IrInst {
-    IrInst {
-        id: new_id,
-        op: orig.op,
-        ty: orig.ty,
-        args: args,
-        dk: orig.dk,
-        dv: dv,
-        dv2: dv2,
-        ds: orig.ds,
-        ostart: orig.ostart,
-        olen: orig.olen,
-        rgn: orig.rgn,
-    }
-}
-
 // The clone of instruction `p` of instance `n`, or a template with id -2 when
 // the instruction is dropped (an Upsilon along a cut edge).
 fn vc_clone_at(st: VcUnrollState, defs: VcDefs, f: IrFunction, n: u64, p: u64, sink_id: i64) -> IrInst {

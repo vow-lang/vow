@@ -193,10 +193,6 @@ fn vc_wire_decode(text: String) -> Option<VcOutcome> {
 // Classification of a finished worker
 // ---------------------------------------------------------------------------
 
-fn vc_plain_result(status: i64, raw: String) -> VerifyResult {
-    vc_verify_result(status, -1, Vec::new(), Vec::new(), raw)
-}
-
 // The runtime reports a signal death as -1000 - signal (see `process_start_capped`).
 fn vc_signal_of(exit_code: i64) -> i64 {
     if exit_code <= VC_PROC_SIGNAL_BASE() { return VC_PROC_SIGNAL_BASE() - exit_code; }

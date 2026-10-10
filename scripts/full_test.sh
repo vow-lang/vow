@@ -1382,8 +1382,9 @@ echo ""
 # each fixture is asserted against its directory (pass/ -> Verified, fail/ ->
 # VerifyFailed with the `counterexample-*` directives, skip/ -> Skipped, never
 # Verified, unknown/ -> VerifyFailed with `verify_status: "unknown"`, no
-# counterexample and an `unwinding assertion:` message, never Verified). The wiring tier uses a fake Bitwuzla and always runs; the
-# real-solver tier is skipped, not passed, when `bitwuzla` is not on PATH.
+# counterexample and an `unwinding assertion:` message, never Verified). The
+# wiring tier uses a fake Bitwuzla and always runs; the real-solver tier is
+# skipped, not passed, when `bitwuzla` is not on PATH.
 # tests/verify-native/ is deliberately outside Section 2c's explicit globs.
 
 section_begin "Section 4g: Native Verifier (self-hosted only)"

@@ -396,6 +396,23 @@ fn vc_last_terminal(blk: IrBlock) -> i64 {
     -1
 }
 
+// `orig` with a new id, argument list and branch/phi targets.
+fn vc_clone_inst(orig: IrInst, new_id: i64, args: Vec<i64>, dv: i64, dv2: i64) -> IrInst {
+    IrInst {
+        id: new_id,
+        op: orig.op,
+        ty: orig.ty,
+        args: args,
+        dk: orig.dk,
+        dv: dv,
+        dv2: dv2,
+        ds: orig.ds,
+        ostart: orig.ostart,
+        olen: orig.olen,
+        rgn: orig.rgn,
+    }
+}
+
 fn vc_replace_arg(inst: IrInst, v: i64, w: i64) -> IrInst {
     let args: Vec<i64> = Vec::new();
     let mut changed: bool = false;
@@ -412,19 +429,7 @@ fn vc_replace_arg(inst: IrInst, v: i64, w: i64) -> IrInst {
     if !changed {
         return inst;
     }
-    IrInst {
-        id: inst.id,
-        op: inst.op,
-        ty: inst.ty,
-        args: args,
-        dk: inst.dk,
-        dv: inst.dv,
-        dv2: inst.dv2,
-        ds: inst.ds,
-        ostart: inst.ostart,
-        olen: inst.olen,
-        rgn: inst.rgn,
-    }
+    vc_clone_inst(inst, inst.id, args, inst.dv, inst.dv2)
 }
 
 // `f`'s signature and contracts with no blocks, for a transformed copy.

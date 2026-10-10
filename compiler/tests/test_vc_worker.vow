@@ -162,7 +162,7 @@ fn check_unwinding_reason_round_trips() -> i64 {
     if !vc_output_has_unwinding(reason) { return 20; }
     if vc_output_has_unwinding(String::from("the solver answered unknown")) { return 21; }
     if !vc_output_has_unwinding(vc_unwinding_budget_reason(8)) { return 22; }
-    let oc: VcOutcome = vc_bare_outcome(vc_unknown_result(reason));
+    let oc: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), reason));
     let back: VcOutcome = match vc_wire_decode(vc_wire_encode(oc)) {
         Option::Some(v) => { v },
         Option::None => { return 23; },

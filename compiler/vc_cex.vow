@@ -102,10 +102,6 @@ fn vc_output_has_unwinding(raw: String) -> bool {
     str_find_str(raw, String::from("unwinding assertion")) >= 0
 }
 
-fn vc_unknown_result(raw: String) -> VerifyResult {
-    vc_verify_result(VERIFY_UNKNOWN(), -1, Vec::new(), Vec::new(), raw)
-}
-
-fn vc_error_result(raw: String) -> VerifyResult {
-    vc_verify_result(VERIFY_ERROR(), -1, Vec::new(), Vec::new(), raw)
+fn vc_plain_result(status: i64, raw: String) -> VerifyResult {
+    vc_verify_result(status, -1, Vec::new(), Vec::new(), raw)
 }

@@ -139,11 +139,11 @@ fn vc_verify_function(f: IrFunction, timeout_ms: i64, scratch: String) -> VcOutc
         let bound: i64 = bounds[round];
         let u: VcUnrolled = vc_unroll(closed, bound);
         if u.status == VC_UNROLL_TOO_LARGE() {
-            return vc_bare_outcome(vc_unknown_result(vc_unwinding_budget_reason(bound)));
+            return vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_unwinding_budget_reason(bound)));
         }
         let g: IrFunction = u.f;
         if u.status != VC_UNROLL_OK() || (u.looped && vc_unrolled_detail(g, vc_ty_table(g)).len() > 0) {
-            return vc_bare_outcome(vc_error_result(String::from("internal error: loop unrolling produced an unsupported control-flow graph")));
+            return vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("internal error: loop unrolling produced an unsupported control-flow graph")));
         }
         let sites: Vec<ParsedArithSite> = Vec::new();
         let r: VcRound = vc_run_round(f, g, sites, started, timeout_ms, scratch);
@@ -155,9 +155,9 @@ fn vc_verify_function(f: IrFunction, timeout_ms: i64, scratch: String) -> VcOutc
             return VcOutcome { result: vc_proven_result(), sites: sites };
         }
         if d == VC_ROUND_UNKNOWN() {
-            return vc_bare_outcome(vc_unknown_result(vc_unwinding_reason(bound)));
+            return vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_unwinding_reason(bound)));
         }
         round = round + 1;
     }
-    vc_bare_outcome(vc_unknown_result(vc_unwinding_reason(0)))
+    vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_unwinding_reason(0)))
 }
