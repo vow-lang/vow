@@ -8,7 +8,7 @@ use ir
 // vow-ir/src/lower/mod.rs: an i128 field takes two 8-byte slots, so later
 // fields move up one slot and the struct allocation grows with it.
 
-fn lower_layout() -> IrModule [io] {
+fn lower_layout() -> IrModule [io, read] {
     let lowered: LoweredFrontend = frontend_lower_path_with_root(
         String::from("tests/fixtures/wide_struct_layout.vow"), String::from("")
     );
@@ -79,7 +79,7 @@ fn reads_slot_3(insts: Vec<IrInst>) -> bool {
     false
 }
 
-fn main() -> i32 [io] {
+fn main() -> i32 [io, read] {
     let m: IrModule = lower_layout();
     let make: Vec<IrInst> = insts_of(m, String::from("make"));
     if !alloc_size_is_40(make) { return 1; }

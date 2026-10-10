@@ -9,7 +9,7 @@ use ir
 // index read, index write, and `for` go through the element-address helpers
 // and the two-slot WIDE_SLOT access instead of the 8-byte *_val helpers.
 
-fn lower_layout() -> IrModule [io] {
+fn lower_layout() -> IrModule [io, read] {
     let lowered: LoweredFrontend = frontend_lower_path_with_root(
         String::from("tests/fixtures/wide_vec_layout.vow"), String::from("")
     );
@@ -62,7 +62,7 @@ fn count_wide_slot(insts: Vec<IrInst>, op: i64) -> i64 {
     n
 }
 
-fn main() -> i32 [io] {
+fn main() -> i32 [io, read] {
     let m: IrModule = lower_layout();
 
     let push_one: Vec<IrInst> = insts_of(m, String::from("push_one"));
