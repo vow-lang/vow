@@ -116,8 +116,10 @@ fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, pc: i64, go
     if vc_tm_is_false(ar, negated) {
         return;
     }
-    if ar.assumed[vc_tm_implies(ar, pc, goal) as u64] == 1 {
-        return;
+    if cs.assumed.len() > 0 {
+        if ar.assumed[vc_tm_implies(ar, pc, goal) as u64] == 1 {
+            return;
+        }
     }
     let hdr: SmtScript = cs.header;
     cs.kinds.push(kind);
@@ -182,11 +184,7 @@ struct VcWalk {
 fn vc_define(w: VcWalk, inst: IrInst, t: i64) {
     let cs: VcClaims = w.cs;
     let ar: VcArena = cs.arena;
-    if vc_tm_is_leaf(ar, t) {
-        w.var_of[inst.id as u64] = t;
-        return;
-    }
-    let known: i64 = ar.named[t as u64];
+    let known: i64 = vc_tm_shared(ar, t);
     if known >= 0 {
         w.var_of[inst.id as u64] = known;
         return;

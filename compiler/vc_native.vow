@@ -107,13 +107,18 @@ struct VcRound {
     frame: i64,
 }
 
+// A soft claim is one whose `sat` is not a failure: a reachable checked-operator
+// abort, or an unwinding claim.
+fn vc_claim_is_soft(cs: VcClaims, k: u64) -> bool {
+    cs.kinds[k] == VC_CLAIM_ARITH() || cs.kinds[k] == VC_CLAIM_UNWIND()
+}
+
 // True when claim `k` is `sat` without a solver: its negated goal is the
 // constant `true` and nothing is assumed before it, so the query is the header
 // (declarations and definitions only, which any assignment satisfies) alone. A
 // hard claim still goes to the solver, which supplies its counterexample.
 fn vc_claim_is_static_sat(cs: VcClaims, k: u64) -> bool {
-    let kind: i64 = cs.kinds[k];
-    if kind != VC_CLAIM_ARITH() && kind != VC_CLAIM_UNWIND() { return false; }
+    if !vc_claim_is_soft(cs, k) { return false; }
     cs.assumed_lens[k] == 0 && vc_tm_is_true(cs.arena, cs.negated_goals[k])
 }
 
@@ -158,8 +163,7 @@ fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, sites: Vec<ParsedAri
             let spent_ms: i64 = (time_micros() - started) / 1000;
             let ans: VcSolverAnswer = vc_check_claim(bin, cs, k, timeout_ms - spent_ms, scratch);
             if ans.verdict != VC_ANS_UNSAT() {
-                let soft: bool = cs.kinds[k] == VC_CLAIM_ARITH() || cs.kinds[k] == VC_CLAIM_UNWIND();
-                if soft && ans.verdict == VC_ANS_SAT() {
+                if vc_claim_is_soft(cs, k) && ans.verdict == VC_ANS_SAT() {
                     if vc_note_soft_sat(f, fr, cs, k, sites) { open = true; }
                 } else {
                     return VcRound { result: vc_claim_result(f, cs, k, ans), ended: true, open: false, frame: cs.frames[k] };

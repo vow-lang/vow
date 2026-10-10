@@ -1,6 +1,7 @@
 module VcTerm
 
 use vc_bvfold
+use ir_dominance
 
 // Term arena for the native verifier. Terms live in parallel vectors and are
 // referred to by index, and equal terms are one index. All SMT
@@ -82,16 +83,6 @@ struct VcArena {
 
 fn VC_ARENA_SLOTS() -> i64 { 64 }
 
-fn vc_slots_new(n: i64) -> Vec<i64> {
-    let s: Vec<i64> = Vec::new();
-    let mut i: i64 = 0;
-    while i < n {
-        s.push(-1);
-        i = i + 1;
-    }
-    s
-}
-
 fn vc_arena_new() -> VcArena {
     VcArena {
         kinds: Vec::new(),
@@ -103,7 +94,7 @@ fn vc_arena_new() -> VcArena {
         hashes: Vec::new(),
         named: Vec::new(),
         assumed: Vec::new(),
-        slots: vc_slots_new(VC_ARENA_SLOTS()),
+        slots: dom_fill(VC_ARENA_SLOTS() as u64, -1),
         used: 0,
     }
 }
@@ -154,7 +145,7 @@ fn vc_arena_slot_of(h: i64, n: i64) -> i64 {
 fn vc_arena_grow(ar: VcArena) {
     let old: Vec<i64> = ar.slots;
     let n: i64 = old.len() as i64 * 2;
-    let fresh: Vec<i64> = vc_slots_new(n);
+    let fresh: Vec<i64> = dom_fill(n as u64, -1);
     let mut i: u64 = 0;
     while i < old.len() {
         let t: i64 = old[i];
@@ -248,6 +239,13 @@ fn vc_tm_is_false(ar: VcArena, t: i64) -> bool {
 fn vc_tm_is_leaf(ar: VcArena, t: i64) -> bool {
     let kind: i64 = ar.kinds[t as u64];
     kind != VC_T_APP() && kind != VC_T_EXT()
+}
+
+// The variable already standing for `t`, `t` itself when it is a leaf, or -1
+// when a composite `t` has no name yet.
+fn vc_tm_shared(ar: VcArena, t: i64) -> i64 {
+    if vc_tm_is_leaf(ar, t) { return t; }
+    ar.named[t as u64]
 }
 
 fn vc_is_bv(ar: VcArena, t: i64) -> bool {
@@ -371,13 +369,15 @@ fn vc_simp_eq(ar: VcArena, is_eq: bool, x: i64, y: i64) -> i64 {
     if (vc_is_bv(ar, x) && vc_is_bv(ar, y)) || (vc_is_bool_const(ar, x) && vc_is_bool_const(ar, y)) {
         return vc_tm_bool_const(ar, !is_eq);
     }
-    if vc_is_bool_const(ar, x) {
-        if (ar.aux[x as u64] == 1) == is_eq { return y; }
-        return vc_tm_app1(ar, VC_OP_NOT(), y);
-    }
+    let mut c: i64 = x;
+    let mut other: i64 = y;
     if vc_is_bool_const(ar, y) {
-        if (ar.aux[y as u64] == 1) == is_eq { return x; }
-        return vc_tm_app1(ar, VC_OP_NOT(), x);
+        c = y;
+        other = x;
+    }
+    if vc_is_bool_const(ar, c) {
+        if (ar.aux[c as u64] == 1) == is_eq { return other; }
+        return vc_tm_app1(ar, VC_OP_NOT(), other);
     }
     -1
 }
@@ -488,6 +488,7 @@ fn vc_tm_or(ar: VcArena, a: i64, b: i64) -> i64 {
 }
 
 fn vc_tm_implies(ar: VcArena, premise: i64, t: i64) -> i64 {
+    if vc_tm_is_true(ar, premise) { return t; }
     vc_tm_or(ar, vc_tm_app1(ar, VC_OP_NOT(), premise), t)
 }
 

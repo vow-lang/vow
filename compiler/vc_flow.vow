@@ -62,10 +62,7 @@ fn vc_flow_new(n_blocks: u64, n_ids: u64) -> VcFlow {
 // `t` bound to a name when it is composite; leaves and terms already named
 // share the name they have.
 fn vc_flow_name(fl: VcFlow, ar: VcArena, hdr: SmtScript, sort: i64, t: i64) -> i64 {
-    if vc_tm_is_leaf(ar, t) {
-        return t;
-    }
-    let known: i64 = ar.named[t as u64];
+    let known: i64 = vc_tm_shared(ar, t);
     if known >= 0 {
         return known;
     }
