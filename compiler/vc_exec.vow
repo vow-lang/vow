@@ -352,12 +352,14 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
         return true;
     }
     if op == IOP_REGION_ALLOC() {
-        w.obj_of[inst.id as u64] = vc_agg_alloc(ag);
+        let obj: i64 = vc_agg_alloc(ag);
+        ag.births[obj as u64] = w.fl.block_pc[bi];
+        w.obj_of[inst.id as u64] = obj;
         return true;
     }
     if op == IOP_FIELD_SET() {
         let val: i64 = inst.args[1];
-        vc_agg_set(ag, w.obj_of[inst.args[0] as u64], inst.dv, vc_ty_sort(w.tys[val as u64]), w.var_of[val as u64]);
+        vc_agg_write(ag, cs.arena, cs.header, w.obj_of[inst.args[0] as u64], inst.dv, vc_ty_sort(w.tys[val as u64]), w.var_of[val as u64], w.fl.block_pc[bi]);
         return true;
     }
     if op == IOP_FIELD_GET() {
