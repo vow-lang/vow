@@ -2,6 +2,7 @@ module VcWorker
 
 use ir
 use verifier
+use vc_cache
 use vc_native
 use vc_cex
 
@@ -317,8 +318,7 @@ struct VcPool {
     results: Vec<VcOutcome>,
     state: Vec<i64>,
     clauses: bool,
-    cache_dir: String,
-    solver_id: String,
+    cache: VcCache,
 }
 
 fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String>, jobs: i64, budget_ms: i64) -> VcPool [read] {
@@ -355,8 +355,7 @@ fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String
         results: results,
         state: state,
         clauses: false,
-        cache_dir: String::from(""),
-        solver_id: String::from(""),
+        cache: vc_cache_off(),
     }
 }
 
@@ -374,11 +373,11 @@ fn vc_worker_argv(p: VcPool, k: u64) -> Vec<String> {
         a.push(String::from("--worker-scratch"));
         a.push(p.scratch[k]);
     }
-    if p.cache_dir.len() > 0 && p.solver_id.len() > 0 {
+    if vc_cache_on(p.cache) {
         a.push(String::from("--worker-cache-dir"));
-        a.push(p.cache_dir);
+        a.push(p.cache.dir);
         a.push(String::from("--worker-solver-id"));
-        a.push(p.solver_id);
+        a.push(p.cache.solver_id);
     }
     if p.clauses {
         a.push(String::from("--worker-clauses"));

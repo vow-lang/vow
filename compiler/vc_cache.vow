@@ -1,6 +1,7 @@
 module VcCache
 
 use verifier
+use vc_smt
 use vc_solver
 
 // On-disk result cache for the native verifier's solver calls. An entry is the
@@ -48,19 +49,6 @@ fn vc_cache_salt(solver_id: String) -> String {
     s
 }
 
-fn vc_cache_hex(h: u64) -> String {
-    let digits: String = String::from("0123456789abcdef");
-    let out: String = String::from("");
-    let mut i: u64 = 0;
-    while i < 16 {
-        let shift: u64 = 60 - 4 * i;
-        let nib: u64 = (h >> shift) & 15;
-        out.push_str(digits.substring(nib, nib + 1));
-        i = i + 1;
-    }
-    out
-}
-
 // 32 hex characters: two FNV passes over the salted query, the second one
 // separated by a different prefix.
 fn vc_cache_key(salt: String, query: String) -> String {
@@ -70,8 +58,8 @@ fn vc_cache_key(salt: String, query: String) -> String {
     let b: String = String::from("b\n");
     b.push_str(salt);
     b.push_str(query);
-    let key: String = vc_cache_hex(hash_str(a));
-    key.push_str(vc_cache_hex(hash_str(b)));
+    let key: String = vc_hex_digits(hash_str(a) as i64, 16);
+    key.push_str(vc_hex_digits(hash_str(b) as i64, 16));
     key
 }
 
@@ -95,10 +83,12 @@ fn vc_cache_int(out: String, v: i64) {
 }
 
 // The entry text for a decisive answer. `values`/`highs` are empty for `unsat`.
-fn vc_cache_encode(verdict: i64, values: Vec<i64>, highs: Vec<i64>, query: String) -> String {
+fn vc_cache_encode(ans: VcSolverAnswer, query: String) -> String {
+    let values: Vec<i64> = ans.values;
+    let highs: Vec<i64> = ans.highs;
     let out: String = vc_cache_tag();
     out.push_str(String::from("\n"));
-    if verdict == VC_ANS_UNSAT() {
+    if ans.verdict == VC_ANS_UNSAT() {
         out.push_str(String::from("unsat\n"));
     } else {
         out.push_str(String::from("sat\n"));
@@ -179,9 +169,8 @@ fn vc_cache_decode(text: String, query: String, n_names: u64) -> Option<VcSolver
     Option::Some(vc_answer(verdict, values, highs, String::from("")))
 }
 
-fn vc_cache_lookup(c: VcCache, query: String, n_names: u64) -> Option<VcSolverAnswer> [read] {
+fn vc_cache_lookup(c: VcCache, key: String, query: String, n_names: u64) -> Option<VcSolverAnswer> [read] {
     if !vc_cache_on(c) { return Option::None; }
-    let key: String = vc_cache_key(vc_cache_salt(c.solver_id), query);
     vc_cache_decode(fs_read(vc_cache_entry_path(c.dir, key)), query, n_names)
 }
 
@@ -204,10 +193,9 @@ fn vc_cache_make_room(shard: String) [io, read] {
 
 // Stores a decisive answer to `query`. Written to a unique temporary name and
 // renamed into place, so a concurrent reader sees a whole entry or none.
-fn vc_cache_store(c: VcCache, query: String, ans: VcSolverAnswer) [io, read, write] {
+fn vc_cache_store(c: VcCache, key: String, query: String, ans: VcSolverAnswer) [io, read, write] {
     if !vc_cache_on(c) { return; }
     if ans.verdict != VC_ANS_SAT() && ans.verdict != VC_ANS_UNSAT() { return; }
-    let key: String = vc_cache_key(vc_cache_salt(c.solver_id), query);
     let shard: String = vc_cache_shard_path(c.dir, key);
     if fs_mkdir(shard) != 0 { return; }
     vc_cache_make_room(shard);
@@ -215,7 +203,7 @@ fn vc_cache_store(c: VcCache, query: String, ans: VcSolverAnswer) [io, read, wri
     tmp.push_str(String::from("."));
     tmp.push_str(i64_to_string(time_micros()));
     tmp.push_str(String::from(".tmp"));
-    let text: String = vc_cache_encode(ans.verdict, ans.values, ans.highs, query);
+    let text: String = vc_cache_encode(ans, query);
     if fs_write(tmp, text) != 0 {
         fs_remove(tmp);
         return;
@@ -231,11 +219,12 @@ fn vc_solver_check_cached(c: VcCache, bin: String, query: String, names: Vec<Str
     if budget_ms <= 0 || !vc_cache_on(c) {
         return vc_solver_check(bin, query, names, widths, budget_ms, scratch);
     }
-    match vc_cache_lookup(c, query, names.len()) {
+    let key: String = vc_cache_key(vc_cache_salt(c.solver_id), query);
+    match vc_cache_lookup(c, key, query, names.len()) {
         Option::Some(hit) => { hit },
         Option::None => {
             let ans: VcSolverAnswer = vc_solver_check(bin, query, names, widths, budget_ms, scratch);
-            vc_cache_store(c, query, ans);
+            vc_cache_store(c, key, query, ans);
             ans
         },
     }
@@ -261,18 +250,7 @@ fn vc_cache_dir_from(vow_cache_dir: String, home: String) -> String {
 
 // The first non-empty line of `--version` output, trimmed; "" when there is none.
 fn vc_cache_solver_id(out: String) -> String {
-    let n: u64 = out.len();
-    let mut start: u64 = 0;
-    while start <= n {
-        let mut end: u64 = start;
-        while end < n && out.byte_at(end) != 10 {
-            end = end + 1;
-        }
-        let line: String = str_trim(out.substring(start, end));
-        if line.len() > 0 { return line; }
-        start = end + 1;
-    }
-    String::from("")
+    vc_first_line(str_trim(out))
 }
 
 // The cache for this run: off when no directory can be made or `bin` does not
