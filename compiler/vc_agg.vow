@@ -41,6 +41,11 @@ struct VcAgg {
     sl_idx: Vec<i64>,
     sl_sort: Vec<i64>,
     sl_term: Vec<i64>,
+    ps_param: Vec<i64>,
+    ps_slot: Vec<i64>,
+    ps_sort: Vec<i64>,
+    ps_ty: Vec<i64>,
+    ps_hdr: Vec<i64>,
     junk: i64,
 }
 
@@ -57,6 +62,11 @@ fn vc_agg_new(fl: VcFlow) -> VcAgg {
         sl_idx: Vec::new(),
         sl_sort: Vec::new(),
         sl_term: Vec::new(),
+        ps_param: Vec::new(),
+        ps_slot: Vec::new(),
+        ps_sort: Vec::new(),
+        ps_ty: Vec::new(),
+        ps_hdr: Vec::new(),
         junk: 0,
     }
 }
@@ -146,14 +156,28 @@ fn vc_agg_junk(ag: VcAgg, ar: VcArena, hdr: SmtScript, sort: i64) -> i64 {
     vc_agg_declare(ar, hdr, name, sort)
 }
 
-fn vc_agg_param_symbol(ar: VcArena, hdr: SmtScript, k: i64, idx: i64, sort: i64) -> i64 {
+// Name of the symbol for slot `idx` of parameter `k` read at `sort`.
+fn vc_agg_symbol_name(k: i64, idx: i64, sort: i64) -> String {
     let name: String = String::from("p");
     name.push_str(i64_to_string(k));
     name.push_str(String::from("f"));
     name.push_str(i64_to_string(idx));
     name.push_str(String::from("s"));
     name.push_str(i64_to_string(sort));
-    vc_agg_declare(ar, hdr, name, sort)
+    name
+}
+
+// Declares the symbol of slot `idx` of parameter `k` at `sort` and records it
+// (`ps_*`, in declaration order) so a counterexample can read it back: `ps_hdr`
+// is its position in the header, `ps_ty` is filled in by the caller that knows
+// the IR type of the read.
+fn vc_agg_param_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, k: i64, idx: i64, sort: i64) -> i64 {
+    ag.ps_param.push(k);
+    ag.ps_slot.push(idx);
+    ag.ps_sort.push(sort);
+    ag.ps_ty.push(-1);
+    ag.ps_hdr.push(hdr.kinds.len() as i64);
+    vc_agg_declare(ar, hdr, vc_agg_symbol_name(k, idx, sort), sort)
 }
 
 // Term of slot `idx` of `obj` at `sort`. Any reachable object is final (see
@@ -166,7 +190,7 @@ fn vc_agg_get(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: 
     let kind: i64 = ag.kinds[obj as u64];
     let t: i64 = {
         if kind == VC_OBJ_PARAM() {
-            vc_agg_param_symbol(ar, hdr, ag.owners[obj as u64], idx, sort)
+            vc_agg_param_symbol(ag, ar, hdr, ag.owners[obj as u64], idx, sort)
         } else if kind == VC_OBJ_PHI() {
             // Named like a scalar Phi: merges of merges would otherwise print
             // every shared subterm once per use and grow exponentially.

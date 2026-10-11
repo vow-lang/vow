@@ -31,6 +31,9 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
         model_params: Vec::new(),
         model_tys: Vec::new(),
         model_widths: Vec::new(),
+        model_slots: Vec::new(),
+        model_hdr: Vec::new(),
+        model_ambig: Vec::new(),
     };
     cs.kinds.push(kind);
     cs.frames.push(-1);
@@ -42,7 +45,22 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
     cs.model_params.push(1);
     cs.model_tys.push(ITY_I64());
     cs.model_tys.push(ITY_I64());
+    cs.model_widths.push(64);
+    cs.model_widths.push(64);
+    cs.model_slots.push(-1);
+    cs.model_slots.push(-1);
+    cs.model_ambig.push(0);
+    cs.model_ambig.push(0);
     cs
+}
+
+fn push_field(cs: VcClaims, param: i64, slot: i64, ty: i64, width: i64, ambig: i64) {
+    cs.model_names.push(String::from("f"));
+    cs.model_params.push(param);
+    cs.model_tys.push(ty);
+    cs.model_widths.push(width);
+    cs.model_slots.push(slot);
+    cs.model_ambig.push(ambig);
 }
 
 fn answer(verdict: i64, a: i64, b: i64) -> VcSolverAnswer {
@@ -190,6 +208,64 @@ fn check_callee_clauses() -> i64 {
     0
 }
 
+fn check_aggregate_fields() -> i64 {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    p.push(ITY_PTR());
+    let f: IrFunction = mk_function(1, String::from("f"), p, ITY_I64(), Vec::new());
+    f.param_names[0] = String::from("x");
+    f.param_names[1] = String::from("o");
+    let fresh: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    fresh.model_names.pop();
+    fresh.model_params.pop();
+    fresh.model_tys.pop();
+    fresh.model_widths.pop();
+    fresh.model_slots.pop();
+    fresh.model_ambig.pop();
+    push_field(fresh, 1, 0, ITY_I64(), 64, 0);
+    push_field(fresh, 1, 1, ITY_BOOL(), 0, 0);
+    let values: Vec<i64> = Vec::new();
+    values.push(7);
+    values.push(1);
+    values.push(1);
+    let highs: Vec<i64> = Vec::new();
+    highs.push(0);
+    highs.push(0);
+    highs.push(0);
+    let ans: VcSolverAnswer = VcSolverAnswer { verdict: VC_ANS_SAT(), values: values, highs: highs, raw: String::from("") };
+    let r: VerifyResult = vc_claim_result(f, fresh, 0, ans);
+    if r.var_names.len() != 3 { return 60; }
+    if r.var_names[0] != String::from("x") { return 61; }
+    if r.var_names[1] != String::from("o.0") { return 62; }
+    if r.var_names[2] != String::from("o.1") { return 63; }
+    if r.var_values[0] != String::from("7") { return 64; }
+    if r.var_values[1] != String::from("1") { return 65; }
+    if r.var_values[2] != String::from("true") { return 66; }
+    // A slot read at two sorts: the suffix says which view each symbol is.
+    let amb: VcClaims = claims_with(VC_CLAIM_ENSURES(), 0, String::from(""));
+    amb.model_names.pop();
+    amb.model_params.pop();
+    amb.model_tys.pop();
+    amb.model_widths.pop();
+    amb.model_slots.pop();
+    amb.model_ambig.pop();
+    push_field(amb, 1, 1, ITY_I64(), 64, 1);
+    push_field(amb, 1, 1, ITY_BOOL(), 0, 1);
+    let r2: VerifyResult = vc_claim_result(f, amb, 0, ans);
+    if r2.var_names[1] != String::from("o.1:64") { return 67; }
+    if r2.var_names[2] != String::from("o.1:bool") { return 68; }
+    // The answer of an earlier claim carries only the symbols it declared.
+    let short_values: Vec<i64> = Vec::new();
+    short_values.push(9);
+    let short_highs: Vec<i64> = Vec::new();
+    short_highs.push(0);
+    let early: VcSolverAnswer = VcSolverAnswer { verdict: VC_ANS_SAT(), values: short_values, highs: short_highs, raw: String::from("") };
+    let r3: VerifyResult = vc_claim_result(f, fresh, 0, early);
+    if r3.var_names.len() != 1 { return 69; }
+    if r3.var_values[0] != String::from("9") { return 70; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_sat_ensures();
     if r == 0 { r = check_sat_abort_claims(); }
@@ -197,5 +273,6 @@ fn main() -> i32 {
     if r == 0 { r = check_values_follow_declared_types(); }
     if r == 0 { r = check_shift_and_arith_labels(); }
     if r == 0 { r = check_callee_clauses(); }
+    if r == 0 { r = check_aggregate_fields(); }
     i64_to_i32_wrap(r)
 }

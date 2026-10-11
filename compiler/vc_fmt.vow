@@ -25,8 +25,12 @@ fn vc_i128_decimal(hi: i64, lo: i64) -> String {
 }
 
 // Decimal text of the `ty`-typed value with limbs `hi:lo`; bits above the
-// type's width are ignored.
+// type's width are ignored. A Bool prints as `true` or `false`.
 fn vc_format_int(ty: i64, lo: i64, hi: i64) -> String {
+    if ty == ITY_BOOL() {
+        if lo != 0 { return String::from("true"); }
+        return String::from("false");
+    }
     let w: i64 = vc_ty_bits(ty);
     let signed: bool = vc_ty_signed(ty);
     if w == 128 {

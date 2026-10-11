@@ -451,6 +451,71 @@ fn check_wide_slot_overlap() -> i64 {
     0
 }
 
+fn two_param_ptr() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    p.push(ITY_PTR());
+    p
+}
+
+// g(x, p): ensures x == 0 (claim 0), then ensures p.1 == x (claim 1). The
+// second claim's header holds the field symbol, the first claim's does not.
+fn model_fn(extra_bool_read: bool) -> IrFunction {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_arg(1, ITY_PTR(), 1));
+    i.push(mk_inst_const_i64(2, 0));
+    i.push(mk_inst(3, IOP_EQ(), ITY_BOOL(), args2(0, 2)));
+    i.push(mk_vow(4, IOP_VOW_ENS(), 3, 0));
+    i.push(mk_inst_field_get(5, ITY_I64(), 1, 1));
+    i.push(mk_inst_field_get(6, ITY_I64(), 1, 1));
+    i.push(mk_inst(7, IOP_EQ(), ITY_BOOL(), args2(5, 0)));
+    i.push(mk_vow(8, IOP_VOW_ENS(), 7, 1));
+    if extra_bool_read {
+        i.push(mk_inst_field_get(9, ITY_BOOL(), 1, 1));
+        i.push(mk_vow(10, IOP_VOW_ENS(), 9, 2));
+    }
+    i.push(mk_inst_return(11, 0));
+    one_block(String::from("g"), two_param_ptr(), ITY_I64(), i)
+}
+
+fn check_param_field_symbols_are_model_entries() -> i64 {
+    let cs: VcClaims = vc_claims(model_fn(false));
+    if cs.model_names.len() != 2 { return 150; }
+    if cs.model_names[0] != String::from("p0") { return 151; }
+    if cs.model_names[1] != String::from("p1f1s64") { return 152; }
+    if cs.model_params[1] != 1 { return 153; }
+    if cs.model_slots[0] != -1 { return 154; }
+    if cs.model_slots[1] != 1 { return 155; }
+    if cs.model_tys[1] != ITY_I64() { return 156; }
+    if cs.model_widths[1] != 64 { return 157; }
+    if cs.model_ambig[1] != 0 { return 158; }
+    if cs.header_lens.len() != 2 { return 159; }
+    if vc_claim_model_count(cs, 0) != 1 { return 160; }
+    if vc_claim_model_count(cs, 1) != 2 { return 161; }
+    let names: Vec<String> = vc_claim_model_names(cs, 0);
+    if names.len() != 1 { return 162; }
+    if vc_claim_model_names(cs, 1).len() != 2 { return 163; }
+    if vc_claim_model_widths(cs, 1).len() != 2 { return 164; }
+    let q: String = query(cs, 0);
+    if q.contains(String::from("p1f1s64")) { return 165; }
+    if !query(cs, 1).contains(String::from("(get-value (p0 p1f1s64))")) { return 166; }
+    0
+}
+
+fn check_slot_read_at_two_sorts_is_ambiguous() -> i64 {
+    let cs: VcClaims = vc_claims(model_fn(true));
+    if cs.model_names.len() != 3 { return 170; }
+    if cs.model_names[1] != String::from("p1f1s64") { return 171; }
+    if cs.model_names[2] != String::from("p1f1s0") { return 172; }
+    if cs.model_tys[2] != ITY_BOOL() { return 173; }
+    if cs.model_widths[2] != 0 { return 174; }
+    if cs.model_ambig[0] != 0 { return 175; }
+    if cs.model_ambig[1] != 1 { return 176; }
+    if cs.model_ambig[2] != 1 { return 177; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_struct_gate_accepts();
     if r == 0 { r = check_param_read_accepted(); }
@@ -468,5 +533,7 @@ fn main() -> i32 {
     if r == 0 { r = check_wide_param_symbols(); }
     if r == 0 { r = check_wide_phi_merge(); }
     if r == 0 { r = check_wide_slot_overlap(); }
+    if r == 0 { r = check_param_field_symbols_are_model_entries(); }
+    if r == 0 { r = check_slot_read_at_two_sorts_is_ambiguous(); }
     i64_to_i32_wrap(r)
 }

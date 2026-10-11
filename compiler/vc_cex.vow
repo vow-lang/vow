@@ -23,6 +23,29 @@ fn vc_source_param_name(f: IrFunction, k: i64) -> String {
     out
 }
 
+// Name of model entry `j` in a counterexample: the source name of a scalar
+// parameter, `<param>.<slot>` for a field of an aggregate one (`.0` is an enum's
+// tag), with `:bool` or `:<bits>` after it when the function reads that slot at
+// more than one sort. The IR carries no field names, so the slot stands in.
+fn vc_model_symbol_name(f: IrFunction, cs: VcClaims, j: u64) -> String {
+    let base: String = vc_source_param_name(f, cs.model_params[j]);
+    if cs.model_slots[j] < 0 {
+        return base;
+    }
+    let out: String = String::from(base);
+    out.push_str(String::from("."));
+    out.push_str(i64_to_string(cs.model_slots[j]));
+    if cs.model_ambig[j] != 0 {
+        out.push_str(String::from(":"));
+        if cs.model_widths[j] == 0 {
+            out.push_str(String::from("bool"));
+        } else {
+            out.push_str(i64_to_string(cs.model_widths[j]));
+        }
+    }
+    out
+}
+
 fn vc_violated_property_text(label: String) -> String {
     let out: String = String::from("Violated property:\n  ");
     out.push_str(label);
@@ -57,7 +80,7 @@ fn vc_claim_result(f: IrFunction, cs: VcClaims, k: u64, ans: VcSolverAnswer) -> 
         let values: Vec<String> = Vec::new();
         let mut j: u64 = 0;
         while j < ans.values.len() {
-            names.push(vc_source_param_name(f, cs.model_params[j]));
+            names.push(vc_model_symbol_name(f, cs, j));
             values.push(vc_format_int(cs.model_tys[j], ans.values[j], ans.highs[j]));
             j = j + 1;
         }

@@ -126,15 +126,32 @@ fn vc_parse_bv_app(out: String, start: u64, width: i64) -> VcParsed {
     }
 }
 
+// `true` or `false` at `i`, ending at whitespace, `)` or the end: the value of
+// a Bool symbol (width 0), as 1 or 0.
+fn vc_parse_bool_at(out: String, i: u64) -> VcParsed {
+    let t: String = String::from("true");
+    let f: String = String::from("false");
+    if i + t.len() <= out.len() && out.substring(i, i + t.len()) == t && vc_value_end_ok(out, i + t.len()) {
+        return VcParsed { ok: 1, value: 1, high: 0 };
+    }
+    if i + f.len() <= out.len() && out.substring(i, i + f.len()) == f && vc_value_end_ok(out, i + f.len()) {
+        return VcParsed { ok: 1, value: 0, high: 0 };
+    }
+    vc_parsed_bad()
+}
+
 // A `width`-bit bit-vector literal at `pos` (after optional whitespace):
 // `#b` with `width` digits, `#x` with `width / 4` digits, or `(_ bvN width)`
-// for widths up to 64. Anything else, including a literal of another width,
-// is not ok.
+// for widths up to 64; for width 0 (a Bool symbol), `true` or `false`.
+// Anything else, including a literal of another width, is not ok.
 fn vc_parse_value_at(out: String, pos: u64, width: i64) -> VcParsed {
     let n: u64 = out.len();
     let mut i: u64 = pos;
     while i < n && is_ws(out.byte_at(i)) {
         i = i + 1;
+    }
+    if width == 0 {
+        return vc_parse_bool_at(out, i);
     }
     if i + 2 < n && out.byte_at(i) == 35 {
         let kind: i64 = out.byte_at(i + 1);
