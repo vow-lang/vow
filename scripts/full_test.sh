@@ -1425,7 +1425,9 @@ echo ""
 # each fixture is asserted against its directory (pass/ -> Verified, fail/ ->
 # VerifyFailed with the `counterexample-*` directives, skip/ -> Skipped, never
 # Verified, unknown/ -> VerifyFailed with `verify_status: "unknown"`, no
-# counterexample and an `unwinding assertion:` message, never Verified). The
+# counterexample and an `unwinding assertion:` message, never Verified; each
+# fixture is also run with VOW_VERIFY_NO_SLICE=1 and VOW_VERIFY_NO_INCREMENTAL=1
+# and must report byte-identical JSON). The
 # wiring tier uses a fake Bitwuzla and always runs; the real-solver tier is
 # skipped, not passed, when `bitwuzla` is not on PATH.
 # tests/verify-native/ is deliberately outside Section 2c's explicit globs.
@@ -1559,13 +1561,17 @@ print(sum(1 for d in ds if d.get('error_code') == sys.argv[2]))
         done < <(sed -nE 's#^// TEST: (warning|no-warning) (.*)$#\1 \2#p' "$vow_file")
     fi
     if [ "$native_dir" != "skip" ]; then
-        # Query slicing (#1424) must never change what the verifier reports:
-        # the unsliced run (VOW_VERIFY_NO_SLICE=1, test-only) is byte-identical.
-        native_full_json="" native_full_exit=0
-        native_full_json=$(VOW_VERIFY_NO_SLICE=1 run_self verify --backend native --no-cache "$vow_file" 2>/dev/null) || native_full_exit=$?
-        if [ "$native_full_json" != "$native_json" ] || [ "$native_full_exit" -ne "$native_exit" ]; then
-            native_errors+=("slicing changed the result: sliced and VOW_VERIFY_NO_SLICE=1 runs differ")
-        fi
+        # Query slicing (#1424) and incremental solver sessions (#1428) must
+        # never change what the verifier reports: the run with each switched off
+        # (test-only knobs; one solver process per claim for the latter) is
+        # byte-identical.
+        for native_knob in VOW_VERIFY_NO_SLICE VOW_VERIFY_NO_INCREMENTAL; do
+            native_alt_json="" native_alt_exit=0
+            native_alt_json=$(export "$native_knob=1"; run_self verify --backend native --no-cache "$vow_file" 2>/dev/null) || native_alt_exit=$?
+            if [ "$native_alt_json" != "$native_json" ] || [ "$native_alt_exit" -ne "$native_exit" ]; then
+                native_errors+=("$native_knob=1 changed the result: runs with and without it differ")
+            fi
+        done
     fi
     if [ ${#native_errors[@]} -eq 0 ]; then
         pass "verify-native/${native_dir}/${name}"

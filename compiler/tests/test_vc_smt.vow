@@ -219,6 +219,28 @@ fn check_array_vocabulary() -> i64 {
     0
 }
 
+fn check_render_range() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let s: SmtScript = vc_script_new();
+    vc_script_set_logic(s, String::from("QF_BV"));
+    vc_script_declare_const(s, String::from("p0"), 64);
+    vc_script_assert(s, vc_tm_bool_const(ar, true));
+    vc_script_assert(s, vc_tm_bool_const(ar, false));
+    vc_script_check_sat(s);
+    let n: u64 = s.kinds.len();
+    if vc_smt_render_cmds(ar, s, 0, n) != vc_smt_render(ar, s) { return 1000; }
+    let mid: String = String::from("(declare-const p0 (_ BitVec 64))\n");
+    mid.push_str(String::from("(assert true)\n"));
+    if vc_smt_render_cmds(ar, s, 1, 3) != mid { return 1001; }
+    if vc_smt_render_cmds(ar, s, 2, 2) != String::from("") { return 1002; }
+    if vc_smt_render_cmds(ar, s, 3, 1) != String::from("") { return 1003; }
+    if vc_smt_render_cmds(ar, s, 4, 99) != String::from("(check-sat)\n") { return 1004; }
+    let asserted: String = String::from("");
+    vc_smt_push_assert(asserted, ar, vc_tm_bool_const(ar, false));
+    if asserted != String::from("(assert false)") { return 1005; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_golden_script();
     if r == 0 { r = check_constants(); }
@@ -228,5 +250,6 @@ fn main() -> i32 {
     if r == 0 { r = check_prefix_is_independent(); }
     if r == 0 { r = check_get_value_without_names_is_omitted(); }
     if r == 0 { r = check_unmapped_operator_is_not_a_known_symbol(); }
+    if r == 0 { r = check_render_range(); }
     i64_to_i32_wrap(r)
 }

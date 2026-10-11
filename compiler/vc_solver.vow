@@ -14,6 +14,8 @@ fn VC_ANS_ERROR() -> i64 { 3 }
 fn VC_ANS_TIMEOUT() -> i64 { 4 }
 fn VC_ANS_NOT_FOUND() -> i64 { 5 }
 fn VC_ANS_MEMORY() -> i64 { 6 }
+// No verdict: a session that did not produce a well-formed reply.
+fn VC_ANS_NONE() -> i64 { 7 }
 
 // A parsed bit-vector literal: `value` is the low 64 bits, `high` the next 64.
 struct VcParsed {
@@ -215,10 +217,16 @@ fn vc_classify_run(exit_code: i64, stdout: String, stderr: String, names: Vec<St
     vc_answer(VC_ANS_SAT(), model.values, model.highs, raw)
 }
 
-fn vc_solver_args(file: String) -> Vec<String> {
+// Arguments of an interactive session: commands come from stdin.
+fn vc_solver_stdin_args() -> Vec<String> {
     let args: Vec<String> = Vec::new();
     args.push(String::from("--bv-output-format"));
     args.push(String::from("2"));
+    args
+}
+
+fn vc_solver_args(file: String) -> Vec<String> {
+    let args: Vec<String> = vc_solver_stdin_args();
     args.push(file);
     args
 }
