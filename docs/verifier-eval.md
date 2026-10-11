@@ -323,7 +323,7 @@ The decision record is
 | `SOUNDNESS` | `Verified`, but the `--mode debug` binary reports a `VowViolation` | 1 |
 | `PRECISION` | a counterexample replays `diverged` or `aborted`, or a `VerifierBug` diagnostic is emitted | 1 |
 | `REPLAY-GAP` | a replay was `skipped` for a reason other than "not a runtime abort", and the fixture carries no `// TEST: replay-skipped <why>` | 1 |
-| `unverified-call-site` | a Caller violation at a call the verifier said it did not verify (`VerificationSkipped`); counted, not a failure | 0 |
+| `unverified-call-site` | a Caller violation of a `requires` whose function a `VerificationSkipped` note names as not verified (calls from `main`); counted, not a failure | 0 |
 
 `--min-checked N` exits 2 if fewer than N fixtures reached an `ok` verdict.
 `results.json` carries `replay_skipped_by_reason`. Add a

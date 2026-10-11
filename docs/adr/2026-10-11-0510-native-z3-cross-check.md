@@ -56,13 +56,16 @@ implementation of QF_BV/QF_ABV, which is what a cross-check needs.
    fixture documents the limit with `// TEST: replay-skipped <why>`, the
    directive `full_test.sh` already enforces for `tests/verify-native/`. An
    unrecognised reason fails closed.
-6. **A `Verified` program that violates a Caller contract at a call the
+6. **A `Verified` program that violates the `requires` of a callee the
    verifier disclaimed is not a false proof.** Calls from a function the checker
    cannot model (`main`) to a contracted callee carry an explicit
-   `VerificationSkipped` note, and their `requires` is a debug-mode runtime
-   check by design. Under `--backend native` such a violation is reported as
-   `unverified-call-site` and counted. A Callee violation, or a Caller violation
-   with no such note, remains `SOUNDNESS`.
+   `VerificationSkipped` note naming the callee, and the callee's `requires` is
+   a debug-mode runtime check by design. Under `--backend native` a Caller
+   violation whose `vow_id` (mapped to its function with `vowc contracts`)
+   belongs to a callee named in such a note is reported as
+   `unverified-call-site` and counted. A violation of any other function, a
+   Callee violation, a `vow_id` that cannot be mapped, or a Caller violation
+   with no such note remains `SOUNDNESS`.
 7. **Placement.** One scheduled/push-to-`main` workflow (`native-oracle.yml`),
    sharded four ways, builds `build/vowc` with `bootstrap.sh --no-verify`
    (neither oracle needs ESBMC) and sweeps the fixture corpora plus a
