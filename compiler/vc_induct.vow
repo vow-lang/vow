@@ -257,32 +257,27 @@ fn vc_induct_vec_written_in_loop(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>) -
 // an invariant-based proof would be about the wrong state. Such a function is
 // not cut: bounded unwinding decides it alone.
 fn vc_induct_agg_written_in_loop(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>) -> bool {
+    let n_ids: u64 = (dom_max_inst_id(f) + 1) as u64;
+    let alloc_blk: Vec<i64> = dom_fill(n_ids, -1);
     let mut b: u64 = 0;
     while b < f.blocks.len() {
         if rpo[b] >= 0 && vc_chain_len(li, b) > 0 {
             let blk: IrBlock = f.blocks[b];
-            let local: Vec<i64> = Vec::new();
             let mut i: u64 = 0;
             while i < blk.insts.len() {
                 let inst: IrInst = blk.insts[i];
-                if inst.op == IOP_REGION_ALLOC() {
-                    local.push(inst.id);
-                } else if inst.op == IOP_FIELD_SET() && !vc_induct_has_id(local, inst.args[0]) {
-                    return true;
+                if inst.op == IOP_REGION_ALLOC() && inst.id >= 0 && (inst.id as u64) < n_ids {
+                    alloc_blk[inst.id as u64] = b as i64;
+                } else if inst.op == IOP_FIELD_SET() {
+                    let t: i64 = inst.args[0];
+                    if t < 0 || (t as u64) >= n_ids || alloc_blk[t as u64] != b as i64 {
+                        return true;
+                    }
                 }
                 i = i + 1;
             }
         }
         b = b + 1;
-    }
-    false
-}
-
-fn vc_induct_has_id(ids: Vec<i64>, id: i64) -> bool {
-    let mut i: u64 = 0;
-    while i < ids.len() {
-        if ids[i] == id { return true; }
-        i = i + 1;
     }
     false
 }

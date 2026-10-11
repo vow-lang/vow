@@ -199,7 +199,11 @@ known limits.
   or `Bool` term per field, merged field by field at joins. Parameter fields and
   discriminants, and fields no construction wrote, are unconstrained. A field
   write is modelled only on a value built in the same block; any other write,
-  and any aggregate nested in another, is `Skipped` (#1417).
+  and any aggregate nested in another, is `Skipped` (#1417). *Addendum (#1593):*
+  a field write is path-conditional (`ite(pc, new, old)`), so a write in a
+  branch, to a value built before one, or to the only pointer parameter is
+  modelled; a write through a merged value, or to a parameter of a function with
+  another pointer parameter, stays `Skipped`.
 - **Callee inlining** (epic D4) makes verification cost grow with the call tree;
   modular assume-guarantee verification is a separate future ADR.
 - **128-bit aggregates** (struct fields) stay gated. *Addendum (#1421):* struct
