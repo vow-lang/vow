@@ -59,3 +59,30 @@ Per term the arena now holds eight parallel words (`kinds a b c aux hashes
 named assumed`, plus two to four table slots) instead of five. Terms are bounded by
 the unrolled instruction cap, so the worst case stays far below the verify
 worker's address-space cap, and deduplication lowers the count.
+
+## Amendment (#1560, 2026-10-11)
+
+One rule joins the simplifier: `bvsub x (bvmul (bvsdiv x d) d)` is `bvsrem x d`,
+and the `bvudiv`/`bvurem` pair likewise, with the multiplication in either
+order. Operands are compared through bound names, so the idiom `x - (x / m) * m`
+matches although each intermediate value is a bound variable by the time the
+subtraction is built.
+
+The decision is unchanged and the rule is valid at every sort: SMT-LIB division
+and remainder are total, so the identity holds for a zero divisor and for the
+signed minimum over -1 as well. Division-by-zero and overflow aborts are
+separate claims built from the operands, not from the rewritten term, so they
+are unaffected.
+
+The reason it cannot be left to the solver is that Bitwuzla decides the signed
+identity only at width 8: the division-multiplication-subtraction chain over 16
+to 64 bits times out, while the same query over `bvsrem` is answered in
+milliseconds. The guard is `check_divrem_exhaustive` in
+`compiler/tests/test_vc_term.vow`, which compares the raw and simplified terms
+over all 65 536 width-8 operand pairs for both signednesses and multiply orders,
+plus the random-DAG differential, which builds the idiom with matching and
+near-miss divisors. A bound extension node shares operation codes with the
+arithmetic nodes, so a rule that follows a name must re-check the node kind.
+
+Not folded, tracked as follow-ups: the dual `(x / d) * d + x % d` to `x`, bounds
+such as `x / d * d <= x`, and an interval domain for `bvmul`/`bvsdiv`.
