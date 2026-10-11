@@ -170,6 +170,56 @@ fn check_rules() -> i64 {
     let n: i64 = vc_tm_bind(ar, not_p, String::from("g0"));
     if vc_tm_or(ar, p, n) != t { return 96; }
     if vc_tm_app1(ar, VC_OP_NOT(), n) != p { return 97; }
+    check_divrem_rules(ar)
+}
+
+fn is_sub_of(ar: VcArena, r: i64, a: i64, b: i64) -> bool {
+    ar.kinds[r as u64] == VC_T_APP() && ar.aux[r as u64] == VC_OP_BVSUB()
+        && ar.a[r as u64] == a && ar.b[r as u64] == b
+}
+
+// `x - (x / y) * y` is `x % y` at every width, with the matching signedness.
+fn check_divrem_rules(ar: VcArena) -> i64 {
+    let x: i64 = vc_tm_var(ar, String::from("dx"));
+    let y: i64 = vc_tm_var(ar, String::from("dy"));
+    let z: i64 = vc_tm_var(ar, String::from("dz"));
+    let x2: i64 = vc_tm_var(ar, String::from("dx2"));
+    let sq: i64 = vc_tm_app2(ar, VC_OP_BVSDIV(), x, y);
+    let sp: i64 = vc_tm_app2(ar, VC_OP_BVMUL(), sq, y);
+    if vc_tm_app2(ar, VC_OP_BVSUB(), x, sp) != vc_tm_app2(ar, VC_OP_BVSREM(), x, y) { return 98; }
+    let sp2: i64 = vc_tm_app2(ar, VC_OP_BVMUL(), y, sq);
+    if vc_tm_app2(ar, VC_OP_BVSUB(), x, sp2) != vc_tm_app2(ar, VC_OP_BVSREM(), x, y) { return 99; }
+    let uq: i64 = vc_tm_app2(ar, VC_OP_BVUDIV(), x, y);
+    let up: i64 = vc_tm_app2(ar, VC_OP_BVMUL(), uq, y);
+    if vc_tm_app2(ar, VC_OP_BVSUB(), x, up) != vc_tm_app2(ar, VC_OP_BVUREM(), x, y) { return 100; }
+    let k: i64 = vc_tm_bv(ar, 128, 3, 0);
+    let wq: i64 = vc_tm_app2(ar, VC_OP_BVUDIV(), x, k);
+    let wp: i64 = vc_tm_app2(ar, VC_OP_BVMUL(), wq, k);
+    if vc_tm_app2(ar, VC_OP_BVSUB(), x, wp) != vc_tm_app2(ar, VC_OP_BVUREM(), x, k) { return 101; }
+    // through names, as the executor binds each intermediate value
+    let bq: i64 = vc_tm_bind(ar, sq, String::from("dq"));
+    let bp: i64 = vc_tm_bind(ar, vc_tm_app2(ar, VC_OP_BVMUL(), bq, y), String::from("dp"));
+    if vc_tm_app2(ar, VC_OP_BVSUB(), x, bp) != vc_tm_app2(ar, VC_OP_BVSREM(), x, y) { return 102; }
+    // a bound extension shares op codes with the arithmetic nodes and must not match
+    let e: i64 = vc_tm_bind(ar, vc_tm_ext(ar, VC_EXT_LOW(), 8, z), String::from("de"));
+    let r1: i64 = vc_tm_app2(ar, VC_OP_BVSUB(), x, e);
+    if !is_sub_of(ar, r1, x, e) { return 103; }
+    let r2: i64 = vc_tm_app2(ar, VC_OP_BVSUB(), x, vc_tm_app2(ar, VC_OP_BVMUL(), e, y));
+    if ar.aux[r2 as u64] != VC_OP_BVSUB() { return 104; }
+    let r3: i64 = vc_tm_app2(ar, VC_OP_BVSUB(), x, vc_tm_app2(ar, VC_OP_BVMUL(), vc_tm_ext(ar, VC_EXT_SIGN(), 8, z), y));
+    if ar.aux[r3 as u64] != VC_OP_BVSUB() { return 105; }
+    // near misses keep the subtraction
+    let r4: i64 = vc_tm_app2(ar, VC_OP_BVSUB(), x2, sp);
+    if !is_sub_of(ar, r4, x2, sp) { return 106; }
+    let dz: i64 = vc_tm_app2(ar, VC_OP_BVMUL(), vc_tm_app2(ar, VC_OP_BVSDIV(), x, z), y);
+    let r5: i64 = vc_tm_app2(ar, VC_OP_BVSUB(), x, dz);
+    if !is_sub_of(ar, r5, x, dz) { return 107; }
+    let r6: i64 = vc_tm_app2(ar, VC_OP_BVSUB(), x, vc_tm_app2(ar, VC_OP_BVMUL(), sq, z));
+    if ar.aux[r6 as u64] != VC_OP_BVSUB() { return 108; }
+    let r7: i64 = vc_tm_app2(ar, VC_OP_BVADD(), x, sp);
+    if ar.aux[r7 as u64] != VC_OP_BVADD() { return 109; }
+    let r8: i64 = vc_tm_app2(ar, VC_OP_BVSUB(), sp, x);
+    if !is_sub_of(ar, r8, sp, x) { return 110; }
     0
 }
 
@@ -427,6 +477,30 @@ fn add_const(d: Dag, st: Vec<i64>, w: i64) {
     dag_push(d, vc_arena_intern(d.raw, VC_T_BV(), w, 0, -1, v), vc_tm_bv(d.smart, w, v, 0), w);
 }
 
+// Pushes `op(a, b)` over the pool nodes `a` and `b`; returns its pool index.
+fn dag_bin(d: Dag, op: i64, a: i64, b: i64, w: i64) -> i64 {
+    dag_push(d,
+        vc_arena_push(d.raw, VC_T_APP(), d.ids_raw[a as u64], d.ids_raw[b as u64], -1, op),
+        vc_tm_app2(d.smart, op, d.ids_smart[a as u64], d.ids_smart[b as u64]), w);
+    d.sorts.len() as i64 - 1
+}
+
+// `a - (a / b) * c` with `c` the divisor half the time, in either multiply
+// order and either signedness: matches and near misses of the remainder rule.
+fn add_divrem_shape(d: Dag, st: Vec<i64>) {
+    let w: i64 = { if pick(st, 3) == 0 { 16 } else { 8 } };
+    let a: i64 = operand_of(d, st, w);
+    let b: i64 = operand_of(d, st, w);
+    let mut c: i64 = b;
+    if pick(st, 2) == 0 { c = operand_of(d, st, w); }
+    let mut dop: i64 = VC_OP_BVUDIV();
+    if pick(st, 2) == 0 { dop = VC_OP_BVSDIV(); }
+    let q: i64 = dag_bin(d, dop, a, b, w);
+    let mut m: i64 = dag_bin(d, VC_OP_BVMUL(), c, q, w);
+    if pick(st, 2) == 0 { m = dag_bin(d, VC_OP_BVMUL(), q, c, w); }
+    dag_bin(d, VC_OP_BVSUB(), a, m, w);
+}
+
 fn make_dag(st: Vec<i64>) -> Dag {
     let d: Dag = Dag {
         raw: vc_arena_new(),
@@ -452,7 +526,7 @@ fn make_dag(st: Vec<i64>) -> Dag {
     let pops: Vec<i64> = pred_ops();
     let mut n: i64 = 0;
     while n < 36 {
-        let choice: i64 = pick(st, 10);
+        let choice: i64 = pick(st, 11);
         if choice == 0 {
             add_const(d, st, 8);
         } else if choice == 1 {
@@ -493,6 +567,8 @@ fn make_dag(st: Vec<i64>) -> Dag {
             dag_push(d,
                 vc_arena_push(d.raw, VC_T_APP(), d.ids_raw[c as u64], d.ids_raw[a as u64], d.ids_raw[b as u64], VC_OP_ITE()),
                 vc_tm_app3(d.smart, VC_OP_ITE(), d.ids_smart[c as u64], d.ids_smart[a as u64], d.ids_smart[b as u64]), w);
+        } else if choice == 10 {
+            add_divrem_shape(d, st);
         } else {
             let a: i64 = operand_of(d, st, 8);
             let w: i64 = operand_of(d, st, 16);
@@ -558,6 +634,60 @@ fn check_dag(st: Vec<i64>) -> i64 {
     0
 }
 
+// `x - (x / y) * y` against its simplification, over every pair of 8-bit
+// values: the simplified term is a remainder, and agrees with the raw chain
+// everywhere, division by zero and the signed minimum over -1 included. Bound
+// names are not used: `ev` reads variables from `env`, so see-through is
+// covered by the id comparison in `check_divrem_rules`.
+fn check_divrem_variant(signed: bool, swap: bool) -> i64 {
+    let mut v: i64 = 0;
+    if signed { v = 2; }
+    if swap { v = v + 1; }
+    let raw: VcArena = vc_arena_new();
+    let smart: VcArena = vc_arena_new();
+    let dop: i64 = { if signed { VC_OP_BVSDIV() } else { VC_OP_BVUDIV() } };
+    let rem: i64 = { if signed { VC_OP_BVSREM() } else { VC_OP_BVUREM() } };
+    let rx: i64 = vc_tm_var(raw, String::from("x"));
+    let ry: i64 = vc_tm_var(raw, String::from("y"));
+    let rq: i64 = vc_arena_push(raw, VC_T_APP(), rx, ry, -1, dop);
+    let mut rp: i64 = vc_arena_push(raw, VC_T_APP(), rq, ry, -1, VC_OP_BVMUL());
+    if swap { rp = vc_arena_push(raw, VC_T_APP(), ry, rq, -1, VC_OP_BVMUL()); }
+    let rr: i64 = vc_arena_push(raw, VC_T_APP(), rx, rp, -1, VC_OP_BVSUB());
+    let sx: i64 = vc_tm_var(smart, String::from("x"));
+    let sy: i64 = vc_tm_var(smart, String::from("y"));
+    let sq: i64 = vc_tm_app2(smart, dop, sx, sy);
+    let mut sp: i64 = vc_tm_app2(smart, VC_OP_BVMUL(), sq, sy);
+    if swap { sp = vc_tm_app2(smart, VC_OP_BVMUL(), sy, sq); }
+    let sr: i64 = vc_tm_app2(smart, VC_OP_BVSUB(), sx, sp);
+    if smart.kinds[sr as u64] != VC_T_APP() || smart.aux[sr as u64] != rem { return 200 + v; }
+    let vs: Vec<i64> = Vec::new();
+    vs.push(8);
+    vs.push(8);
+    let mut a: i64 = 0;
+    while a < 256 {
+        let mut b: i64 = 0;
+        while b < 256 {
+            let env: Vec<i64> = Vec::new();
+            env.push(a);
+            env.push(b);
+            let x: i64 = ev(raw, rr, env, vs, fresh_memo(raw.kinds.len()));
+            let y: i64 = ev(smart, sr, env, vs, fresh_memo(smart.kinds.len()));
+            if x != y { return 300 + v; }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    0
+}
+
+fn check_divrem_exhaustive() -> i64 {
+    let mut r: i64 = check_divrem_variant(false, false);
+    if r == 0 { r = check_divrem_variant(false, true); }
+    if r == 0 { r = check_divrem_variant(true, false); }
+    if r == 0 { r = check_divrem_variant(true, true); }
+    r
+}
+
 fn check_differential() -> i64 {
     let st: Vec<i64> = Vec::new();
     st.push(88172645463325252);
@@ -576,6 +706,7 @@ fn main() -> i32 {
     if r == 0 { r = check_collisions(); }
     if r == 0 { r = check_deterministic(); }
     if r == 0 { r = check_rules(); }
+    if r == 0 { r = check_divrem_exhaustive(); }
     if r == 0 { r = check_differential(); }
     i64_to_i32_wrap(r)
 }

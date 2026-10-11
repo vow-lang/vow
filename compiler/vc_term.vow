@@ -436,6 +436,48 @@ fn vc_simp_identity(ar: VcArena, op: i64, x: i64, y: i64) -> i64 {
     -1
 }
 
+// The operation node `t` is, or the operation a variable bound to one stands
+// for; -1 otherwise. The kind is re-checked after following a name: a bound
+// variable can stand for an extension, whose `aux` shares the operation codes.
+fn vc_tm_def(ar: VcArena, t: i64) -> i64 {
+    let mut d: i64 = t;
+    if ar.kinds[t as u64] == VC_T_VAR() { d = ar.named[t as u64]; }
+    if d >= 0 && ar.kinds[d as u64] == VC_T_APP() { return d; }
+    -1
+}
+
+// A bound variable's definition id, else `t`: equal ids are equal terms.
+fn vc_tm_canon(ar: VcArena, t: i64) -> i64 {
+    if ar.kinds[t as u64] == VC_T_VAR() && ar.named[t as u64] >= 0 { return ar.named[t as u64]; }
+    t
+}
+
+// `x % d` when `q` is `x / d` (or a variable bound to it) of either signedness.
+fn vc_quotient_rem(ar: VcArena, x: i64, q: i64, d: i64) -> i64 {
+    let n: i64 = vc_tm_def(ar, q);
+    if n < 0 { return -1; }
+    let op: i64 = ar.aux[n as u64];
+    let mut rem: i64 = VC_OP_BVUREM();
+    if op == VC_OP_BVSDIV() { rem = VC_OP_BVSREM(); }
+    else if op != VC_OP_BVUDIV() { return -1; }
+    if vc_tm_canon(ar, ar.a[n as u64]) != vc_tm_canon(ar, x) { return -1; }
+    if vc_tm_canon(ar, ar.b[n as u64]) != vc_tm_canon(ar, d) { return -1; }
+    vc_tm_app2(ar, rem, x, ar.b[n as u64])
+}
+
+// `x - (x / d) * d` is `x % d` at every width and for every `d`, including
+// zero and the signed minimum over -1, because the SMT-LIB division and
+// remainder are total and `bvsdiv`/`bvudiv` quotients wrap the same way.
+// Folding it keeps the query out of the nonlinear division-and-multiplication
+// chain that the solver cannot decide at 64 bits.
+fn vc_simp_sub_quotient(ar: VcArena, x: i64, y: i64) -> i64 {
+    let m: i64 = vc_tm_def(ar, y);
+    if m < 0 || ar.aux[m as u64] != VC_OP_BVMUL() { return -1; }
+    let r: i64 = vc_quotient_rem(ar, x, ar.a[m as u64], ar.b[m as u64]);
+    if r >= 0 { return r; }
+    vc_quotient_rem(ar, x, ar.b[m as u64], ar.a[m as u64])
+}
+
 fn vc_simp_and(ar: VcArena, x: i64, y: i64) -> i64 {
     if vc_tm_is_true(ar, x) { return y; }
     if vc_tm_is_true(ar, y) { return x; }
@@ -468,6 +510,7 @@ fn vc_tm_app2(ar: VcArena, op: i64, x: i64, y: i64) -> i64 {
         r = vc_fold_consts(ar, op, x, y);
     }
     if r < 0 { r = vc_simp_identity(ar, op, x, y); }
+    if r < 0 && op == VC_OP_BVSUB() { r = vc_simp_sub_quotient(ar, x, y); }
     if r >= 0 { return r; }
     vc_arena_intern(ar, VC_T_APP(), x, y, -1, op)
 }
