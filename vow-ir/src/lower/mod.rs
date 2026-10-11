@@ -7127,6 +7127,38 @@ fn unsigned_max() -> u128 {
         );
     }
 
+    #[test]
+    fn cast_to_u128_context_follows_literal_only_control_flow_and_unary_operands() {
+        let module = lower_source_to_module(
+            concat!(
+                "module CastShapes\n",
+                "fn neg() -> i128 { (-5) as i128 }\n",
+                "fn block() -> u128 { ({ 1 << 100 }) as u128 }\n",
+                "fn branch(c: bool) -> u128 { (if c { 1 << 100 } else { 3 }) as u128 }\n",
+                "fn arms(o: Option<i64>) -> u128 {\n",
+                "    (match o { Option::Some(n) => 3, Option::None => 1 << 70 }) as u128\n",
+                "}\n",
+                "fn spin() -> u128 { (loop { break 1 << 70; }) as u128 }\n",
+                "fn typed_branch(c: bool, i: u64) -> u128 { (if c { i } else { 2 }) as u128 }\n",
+                "fn typed_arms(m: Option<u64>) -> u128 {\n",
+                "    (match m { Option::Some(n) => n, Option::None => 2 }) as u128\n",
+                "}\n",
+                "fn main() -> i32 [io] { 0 }\n",
+            ),
+            "cast_shapes.vow",
+        );
+        let wide = |name: &str| {
+            let func = module.functions.iter().find(|f| f.name == name).unwrap();
+            wide_const_count(func)
+        };
+        for name in ["neg", "block", "branch", "arms", "spin"] {
+            assert!(wide(name) > 0, "{name} lost its wide literal context");
+        }
+        for name in ["typed_branch", "typed_arms"] {
+            assert_eq!(wide(name), 0, "{name} leaked a wide const");
+        }
+    }
+
     fn lower_source_to_module(source: &str, file: &str) -> Module {
         let (ast, diagnostics) = vow_syntax::parser::parse_module(source, file);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
