@@ -1573,6 +1573,60 @@ print(sum(1 for d in ds if d.get('error_code') == sys.argv[2]))
         fail "verify-native/${native_dir}/${name}" "$(IFS='; '; echo "${native_errors[*]}")"
     fi
 done
+
+# `vowc contracts --verify --backend native` (#1427): each fixture in
+# tests/verify-native/contracts/ pins the clause statuses and the weak-contract
+# probes (`vacuous`, `trivially_satisfiable`) the native pool must report.
+#   // TEST: contract-exit <n>
+#   // TEST: contract-status <fn> <kind> <status>   (some clause has that status)
+#   // TEST: contract-trivial <fn> <true|false>     (every `ensures` of fn)
+# Every fixture needs the solver, so the tier is skipped without one.
+if [ "$native_have_solver" -eq 0 ]; then
+    skip "verify-native/contracts fixtures" "bitwuzla not on PATH"
+else
+    for vow_file in tests/verify-native/contracts/*.vow; do
+        [ -f "$vow_file" ] || continue
+        name=$(basename "$vow_file" .vow)
+        native_json="" native_exit=0
+        native_json=$(run_self contracts --verify --backend native --no-cache "$vow_file" 2>/dev/null) || native_exit=$?
+        native_errors=()
+        native_want_exit=$(sed -n 's|^// TEST: contract-exit \(.*\)$|\1|p' "$vow_file" | head -1)
+        if [ -z "$native_want_exit" ]; then
+            native_errors+=("missing '// TEST: contract-exit <n>' directive")
+        elif [ "$native_exit" != "$native_want_exit" ]; then
+            native_errors+=("exit: expected $native_want_exit, got $native_exit")
+        fi
+        while read -r native_fn native_kind native_want; do
+            [ -n "$native_fn" ] || continue
+            native_hit=$(python3 -c "
+import json, sys
+cs = json.loads(sys.argv[1])['contracts']
+print(sum(1 for c in cs if c['function'] == sys.argv[2] and c['kind'] == sys.argv[3] and c['status'] == sys.argv[4]))
+" "$native_json" "$native_fn" "$native_kind" "$native_want" 2>/dev/null) || native_hit=-1
+            if [ "$native_hit" -lt 1 ]; then
+                native_errors+=("contract-status ${native_fn} ${native_kind}: no clause is '$native_want'")
+            fi
+        done < <(sed -n 's|^// TEST: contract-status \(.*\)$|\1|p' "$vow_file")
+        while read -r native_fn native_want; do
+            [ -n "$native_fn" ] || continue
+            native_bad=$(python3 -c "
+import json, sys
+cs = json.loads(sys.argv[1])['contracts']
+want = sys.argv[3] == 'true'
+rows = [c for c in cs if c['function'] == sys.argv[2] and c['kind'] == 'ensures']
+print(len([c for c in rows if c['trivially_satisfiable'] != want]) if rows else -1)
+" "$native_json" "$native_fn" "$native_want" 2>/dev/null) || native_bad=-1
+            if [ "$native_bad" -ne 0 ]; then
+                native_errors+=("contract-trivial ${native_fn}: expected every ensures clause to be $native_want")
+            fi
+        done < <(sed -n 's|^// TEST: contract-trivial \(.*\)$|\1|p' "$vow_file")
+        if [ ${#native_errors[@]} -eq 0 ]; then
+            pass "verify-native/contracts/${name}"
+        else
+            fail "verify-native/contracts/${name}" "$(IFS='; '; echo "${native_errors[*]}")"
+        fi
+    done
+fi
 echo ""
 
 # ─── Section 4h: Unknown CLI flags (tests/cli-flags/, #580) ────────

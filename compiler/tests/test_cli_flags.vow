@@ -119,6 +119,8 @@ fn check_other_tables() -> i64 {
     if !accepts_bool(CMD_VERIFY_WORKER(), w, String::from("--worker-clauses")) { return 17; }
     if !accepts_value(CMD_VERIFY_WORKER(), w, String::from("--worker-index")) { return 18; }
     if !rejects(CMD_VERIFY_WORKER(), w, String::from("--worker-clause")) { return 19; }
+    if !accepts_value(CMD_VERIFY_WORKER(), w, String::from("--worker-probe")) { return 20; }
+    if !accepts_value(CMD_VERIFY_WORKER(), w, String::from("--worker-module-root")) { return 21; }
     0
 }
 
@@ -184,6 +186,8 @@ fn check_takes_value_union() -> i64 {
     if cli_flag_takes_value(String::from("--no-verify")) { return 6; }
     if cli_flag_takes_value(String::from("--verify")) { return 7; }
     if cli_flag_takes_value(String::from("--worker-clauses")) { return 8; }
+    if !cli_flag_takes_value(String::from("--worker-probe")) { return 9; }
+    if !cli_flag_takes_value(String::from("--worker-module-root")) { return 10; }
     0
 }
 

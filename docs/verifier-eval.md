@@ -191,6 +191,42 @@ It is a developer and acceptance-gate tool (epic #1398, gate item 1), not a
 `full_test.sh` section: the native backend covers a growing subset, so most
 fixtures are `weaker` until it catches up.
 
+`--command contracts` and `--command test` (issue #1427) run the same corpus
+under `vowc contracts --verify` and `vowc test --verify` instead, with the same
+four classes and exit codes. `contracts` compares every clause by
+`(function, kind, vow_id)`: its status and its `trivially_satisfiable` flag. A
+clause is `soundness` when native proves what ESBMC refutes, `more_precise` when
+native proves what ESBMC leaves `unknown`/`skipped`, and `weaker` when native is
+less conclusive, reports `vacuous` where ESBMC does not, or the flags differ.
+ESBMC's `vacuous` for a function whose `requires` uses `&&`/`||` is
+`more_precise`, because its vacuity label is only planted in the entry block
+(see `cli.md`, "Native backend: `contracts` and `test`"). `test` compares the
+file's test status: `passed`/`failed`/`timeout` read as verified,
+`verify_failed` as refuted, `contract_skipped` as skipped; a fixture without
+`fn main` is left out, since `test` has nothing to run. The ESBMC test path fails
+a file for a reachable checked-arithmetic abort that `verify` only warns about,
+so a native pass of a program the corpus labels correct is `more_precise`. A
+fixture takes the most severe class of its clauses, and the report carries
+`command`.
+
+```bash
+python3 scripts/verify_diff.py --command contracts --output /tmp/contracts-diff.json
+python3 scripts/verify_diff.py --command test --jobs 4
+```
+
+The acceptance criterion for the native `contracts`/`test` backends is zero
+`soundness` rows, and every `weaker` row also non-`match` under
+`--command verify` (the native subset legitimately skips what ESBMC models) or
+listed in `cli.md` under "Verdict divergence from ESBMC". A clause that ESBMC
+calls `proven` or `failed` and native `unknown`, in a function the native
+`verify` refutes without any clause of its own failing (an abort, or a callee's
+precondition), is `more_precise`: the native report proves no clause of a
+function that can abort, where ESBMC judges the clause on the executions that
+continue past it. The two rows of the corpus left on the allow-list are
+`verify-fail/callee_ensures_wrong_function` (`verify` stops at the callee, so
+the caller is never refuted there) and `verify-fail/verify_jobs_ce_before_soft`
+(an unbounded loop without an `invariant`, which ESBMC's k-induction closes).
+
 ## Performance gate: native verifier vs ESBMC
 
 [`scripts/verify_perf.py`](../scripts/verify_perf.py) (epic #1398, issue #1420)

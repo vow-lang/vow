@@ -1,0 +1,20 @@
+// TEST: contract-exit 1
+// TEST: contract-status mixed requires unknown
+// TEST: contract-status mixed ensures proven
+// TEST: contract-status mixed ensures failed
+// A failed clause does not drag its proven sibling down, and a `requires` of a
+// function that does not fully prove is `unknown`, not `failed`.
+module MixedClauseStatuses
+
+fn mixed(a: i64) -> i64 vow {
+  requires: a > 0 && a < 1000
+  ensures: result > 0
+  ensures: result > a
+} {
+  a
+}
+
+fn main() -> i32 [io] {
+  print_i64(mixed(1));
+  0
+}

@@ -299,6 +299,12 @@ body divergence, since the label precedes the body. The label sits after the
 requires prefix rather than at the function end precisely so an unbounded loop or
 an `assume(0)` deeper in the body cannot make it spuriously unreachable.
 
+Under `--backend native` the probe is not a label but a rewrite of the same IR
+that the native engine checks: the function is cut right after its last
+`requires` and that point must be unreachable, so `&&`/`||` requires (which
+lower to branches) are covered. The `trivially_satisfiable` probe is a rewrite
+too. See "Native backend: `contracts` and `test`" in `cli.md`.
+
 **Interesting witnesses.** Beer et al. also propose the dual of a counterexample:
 for a proof that holds, emit a non-trivial *witness* — concrete inputs that
 exercise the property for a substantive reason — so the author can confirm the

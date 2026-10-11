@@ -1,0 +1,34 @@
+// TEST: contract-exit 1
+// TEST: contract-status unguarded_quotient ensures unknown
+// TEST: contract-status guarded_quotient requires proven
+// TEST: contract-status guarded_quotient ensures proven
+// TEST: contract-status wrong_and_aborts ensures failed
+// A function whose only counterexample is an abort (here a division by zero) is
+// not `proven`, whatever its clauses say about the executions that return. A
+// refuted clause is still `failed`, and a function that rules the abort out with
+// a `requires` is `proven`.
+module AbortProvesNoClause
+
+fn unguarded_quotient(a: u64, b: u64) -> u64 vow {
+  ensures: result <= a
+} {
+  a / b
+}
+
+fn guarded_quotient(a: u64, b: u64) -> u64 vow {
+  requires: b > 0
+  ensures: result <= a
+} {
+  a / b
+}
+
+fn wrong_and_aborts(a: u64, b: u64) -> u64 vow {
+  ensures: result > a
+} {
+  a / b
+}
+
+fn main() -> i32 [io] {
+  print_u64(unguarded_quotient(4, 2) + guarded_quotient(4, 2) + wrong_and_aborts(1, 1));
+  0
+}

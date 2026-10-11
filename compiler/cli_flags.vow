@@ -40,7 +40,7 @@ fn cf_is_complexity_value(f: String) -> bool {
 }
 
 fn cf_is_worker_value(f: String) -> bool {
-    f == "--worker-index" || f == "--worker-name" || f == "--worker-budget-ms" || f == "--worker-scratch"
+    f == "--worker-index" || f == "--worker-name" || f == "--worker-budget-ms" || f == "--worker-scratch" || f == "--worker-probe" || f == "--worker-module-root"
 }
 
 fn cf_kind_verify_worker(f: String) -> i64 {
