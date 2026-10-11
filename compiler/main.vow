@@ -739,16 +739,6 @@ fn replay_render_scalar(ty: i64, raw: String) -> String {
     String::from("")
 }
 
-// Counterexample value for source name `name`, or "" if absent.
-fn replay_value_for(name: String, names: Vec<String>, vals: Vec<String>) -> String {
-    let mut i: u64 = 0;
-    while i < names.len() {
-        if names[i] == name { return vals[i]; }
-        i = i + 1;
-    }
-    String::from("")
-}
-
 fn replay_find_fn(fns: Vec<IrFunction>, name: String) -> i64 {
     let mut i: i64 = 0;
     while i < fns.len() as i64 {
@@ -783,7 +773,7 @@ fn replay_confirm() -> ReplayVerdict {
     ReplayVerdict { status: String::from("confirmed"), reason: String::from("") }
 }
 
-fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, main_start: i64, argv0: String, abort_claims: bool) -> ReplayVerdict [io, read, write] {
+fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, main_start: i64, argv0: String, native: bool) -> ReplayVerdict [io, read, write] {
     if ce.function == String::from("main") {
         return replay_skip(String::from("cannot replay the entry function `main`"));
     }
@@ -791,7 +781,7 @@ fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, ma
     // exact id comparison would always diverge — skip them. The exception is
     // the native backend's unattributed id, which marks the language-specified
     // aborts (zero divisor, signed MIN / -1, unwrap on None) and replays.
-    let abort_claim: bool = abort_claims && ce.vow_id == verifier_unattributed_vow_id();
+    let abort_claim: bool = native && ce.vow_id == verifier_unattributed_vow_id();
     if abort_claim && ce.violation == describe_assert_label(String::from("integer shift count")) {
         return replay_skip(String::from("replay: a shift-count counterexample is a verifier obligation; the runtime masks the count (8-bit shifts excepted)"));
     }
@@ -835,7 +825,7 @@ fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, ma
         let pname: String = pnames[pi as u64];
         let mut lit: String = String::from("");
         let mut ty_text: String = replay_ty_name(ty);
-        if abort_claims && ty == ITY_PTR() {
+        if native && ty == ITY_PTR() {
             // The native counterexample lists an aggregate parameter's slots
             // (`p.0`, `p.1`, ...); the source declaration maps them back to
             // fields.
@@ -849,7 +839,7 @@ fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, ma
             if ty != ITY_I64() && ty != ITY_U64() && ty != ITY_BOOL() {
                 return replay_skip(str3(String::from("parameter "), i64_to_string(pi), String::from(": unsupported type (self-hosted v1: scalars only)")));
             }
-            let raw: String = replay_value_for(pname, ce.var_names, ce.var_values);
+            let raw: String = replay_cex_value(ce.var_names, ce.var_values, pname);
             if raw.len() == 0 {
                 return replay_skip(str3(String::from("parameter "), pname, String::from(": no counterexample value")));
             }
@@ -1112,12 +1102,12 @@ fn replay_main_start(argv: Vec<String>, fr: LoweredFrontend, path: String) -> i6
     replay_entry_main_start(fr.merged, fr.item_files, path)
 }
 
-fn replay_all(ces: Vec<VerifyCE>, m: Module, fns: Vec<IrFunction>, path: String, main_start: i64, argv0: String, abort_claims: bool) -> Vec<VerifyCE> [io, read, write] {
+fn replay_all(ces: Vec<VerifyCE>, m: Module, fns: Vec<IrFunction>, path: String, main_start: i64, argv0: String, native: bool) -> Vec<VerifyCE> [io, read, write] {
     let out: Vec<VerifyCE> = Vec::new();
     let mut i: u64 = 0;
     while i < ces.len() {
         let ce: VerifyCE = ces[i];
-        let v: ReplayVerdict = replay_one_ce(ce, m, fns, path, main_start, argv0, abort_claims);
+        let v: ReplayVerdict = replay_one_ce(ce, m, fns, path, main_start, argv0, native);
         let reason: String = {
             if v.status == String::from("confirmed") { String::from("") }
             else { v.reason }
