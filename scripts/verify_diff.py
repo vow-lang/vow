@@ -90,6 +90,8 @@ SOFT_FAILURES = ("panicked", "error", "crashed")
 
 WATCHDOG_SLACK = 30
 
+CONTRACTS_RUNS_PER_FUNCTION = 3
+
 FN_DECL = re.compile(r"^\s*(?:pub\s+)?fn\s", re.MULTILINE)
 MAIN_DECL = re.compile(r"^\s*fn\s+main\s*\(", re.MULTILINE)
 
@@ -234,6 +236,7 @@ def run_backend(vowc, backend, path, timeout, max_fns, command="verify"):
     args = command_args(vowc, command, backend, timeout, path)
     if command != "test":
         args += ["--timeout", str(timeout), path]
+    budgets = max_fns * (CONTRACTS_RUNS_PER_FUNCTION if command == "contracts" else 1)
     start = time.monotonic()
     proc = subprocess.Popen(
         args,
@@ -245,7 +248,7 @@ def run_backend(vowc, backend, path, timeout, max_fns, command="verify"):
         start_new_session=True,
     )
     try:
-        stdout, stderr = proc.communicate(timeout=timeout * max_fns + WATCHDOG_SLACK)
+        stdout, stderr = proc.communicate(timeout=timeout * budgets + WATCHDOG_SLACK)
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
         proc.communicate()
@@ -317,10 +320,18 @@ def classify_clause(truth, key, esbmc, native, esbmc_table, aborting=frozenset()
             return MATCH, None
         if e == "vacuous":
             if short_circuit_requires(esbmc_table, key[0]):
-                return (
-                    MORE_PRECISE,
-                    "ESBMC plants its vacuity label only in the entry block and "
-                    "this `requires` lowers to branches",
+                nv = CLAUSE_VERDICT[n]
+                if nv == PROVEN:
+                    return (
+                        MORE_PRECISE,
+                        "ESBMC plants its vacuity label only in the entry block "
+                        "and this `requires` lowers to branches",
+                    )
+                return classify(
+                    truth,
+                    INCONCLUSIVE,
+                    nv,
+                    native_status=n if n == "error" else None,
                 )
             return WEAKER, f"native is {n} where ESBMC reports vacuous"
         return WEAKER, f"native reports vacuous where ESBMC is {e}"
@@ -334,6 +345,13 @@ def compare_contracts(truth, esbmc_result, native_result, aborting=frozenset()):
     """(class, detail) of two `contracts --verify` reports of one fixture."""
     if esbmc_result is None or native_result is None:
         return HARNESS, "no usable contracts result"
+    stalled = native_result.get("verify_status")
+    if (
+        stalled in ("timeout", "crashed")
+        and esbmc_result.get("contracts")
+        and not native_result.get("contracts")
+    ):
+        return WEAKER, f"native produced no report (verify_status `{stalled}`)"
     etable, ntable = clause_table(esbmc_result), clause_table(native_result)
     if set(etable) != set(ntable):
         return HARNESS, "the two backends list different clauses"

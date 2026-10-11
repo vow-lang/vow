@@ -266,6 +266,27 @@ class ContractsTest(unittest.TestCase):
         )
         self.assertEqual(vd.MORE_PRECISE, self.cmp(e, n))
 
+    def test_entry_block_only_vacuity_does_not_hide_native_failures(self):
+        d = "requires a > 0 && a < 100"
+
+        def pair(status, kind_status=None):
+            return report(
+                clause("f", "requires", 0, kind_status or status, desc=d),
+                clause("f", "ensures", 1, status),
+            )
+
+        e = pair("vacuous")
+        self.assertEqual(vd.WEAKER, self.cmp(e, pair("error")))
+        self.assertEqual(vd.WEAKER, self.cmp(e, pair("failed"), "Verified"))
+        self.assertEqual(vd.MORE_PRECISE, self.cmp(e, pair("failed"), "VerifyFailed"))
+        self.assertEqual(vd.MORE_PRECISE, self.cmp(e, pair("proven")))
+
+    def test_native_without_a_report_is_weaker(self):
+        e = report(clause("f", "ensures", 1, "proven"))
+        for why in ("timeout", "crashed"):
+            n = {"status": "VerifyFailed", "verify_status": why, "counterexamples": []}
+            self.assertEqual(vd.WEAKER, self.cmp(e, n))
+
     def test_native_vacuity_esbmc_does_not_see_is_weaker(self):
         e = report(clause("f", "ensures", 1, "proven"))
         n = report(clause("f", "ensures", 1, "vacuous"))
