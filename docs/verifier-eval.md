@@ -303,3 +303,63 @@ Run it on an idle host with ESBMC 8.5 and the pinned Bitwuzla on `PATH`. The
 full run measures hundreds of fixtures six times per backend and takes hours. It
 is an acceptance-gate tool, not a `full_test.sh` section: it is host-dependent
 and its thresholds only become meaningful once native covers the corpus.
+
+## Native oracles: runtime differential and Z3 cross-check
+
+Two CI-only checks hold `vowc verify --backend native` to a second opinion
+(epic #1398, issue #1431). Both run from
+[`native-oracle.yml`](../.github/workflows/native-oracle.yml) on every push to
+`main` and nightly, sharded four ways, over `tests/verify`, `tests/verify-fail`,
+`tests/verify-native/{pass,fail,unknown}`, `examples/` and a `gen_corpus.py`
+corpus (seed `1431` on pushes, the UTC date on the nightly, echoed in the log).
+The decision record is
+[ADR-2026-10-11-0510](adr/2026-10-11-0510-native-z3-cross-check.md).
+
+**Verifier versus runtime**,
+[`scripts/verifier_runtime.py`](../scripts/verifier_runtime.py) `--backend native`:
+
+| Class | Meaning | Exit |
+|-------|---------|------|
+| `SOUNDNESS` | `Verified`, but the `--mode debug` binary reports a `VowViolation` | 1 |
+| `PRECISION` | a counterexample replays `diverged` or `aborted`, or a `VerifierBug` diagnostic is emitted | 1 |
+| `REPLAY-GAP` | a replay was `skipped` for a reason other than "not a runtime abort", and the fixture carries no `// TEST: replay-skipped <why>` | 1 |
+| `unverified-call-site` | a Caller violation of a `requires` whose function a `VerificationSkipped` note names as not verified (calls from `main`); counted, not a failure | 0 |
+
+`--min-checked N` exits 2 if fewer than N fixtures reached an `ok` verdict.
+`results.json` carries `replay_skipped_by_reason`. Add a
+`// TEST: replay-skipped <why>` line (at the end of the file, so spans do not
+move) only when the replay harness genuinely cannot model the fixture; the
+reason is then reported rather than failed.
+
+**Z3 cross-check**, [`scripts/z3_crosscheck.py`](../scripts/z3_crosscheck.py):
+`vowc verify --backend native --no-cache` runs with a `bitwuzla` shim first on
+`PATH` that copies each `.smt2` file it is handed and then `exec`s the real
+solver, with `VOW_VERIFY_NO_INCREMENTAL=1` so every claim is a standalone file.
+Each captured query is re-run under Bitwuzla (`--bv-output-format 2`) and Z3
+(`-smt2 -T:N`).
+
+| Class | Bitwuzla / Z3 | Exit |
+|-------|---------------|------|
+| `agree` | `sat`/`sat` or `unsat`/`unsat` | 0 |
+| `SOUNDNESS` | `unsat` / `sat`: a false proof | 1 |
+| `PRECISION` | `sat` / `unsat`: a spurious counterexample | 1 |
+| `inconclusive` | `unknown` or a timeout on either side, or a Bitwuzla error | 0 |
+| harness | a Z3 error, no query captured, a solver session bypassing capture, fewer than `--min-agreed` agreements, an unusable verifier | 2 |
+
+A disagreement leaves the query under `queries/` in `--output-dir`, which is
+the repro:
+
+```bash
+bitwuzla --bv-output-format 2 z3-crosscheck.out/queries/<fixture>.<n>.smt2
+z3 -smt2 z3-crosscheck.out/queries/<fixture>.<n>.smt2
+```
+
+```bash
+scripts/bootstrap.sh --skip-cargo --no-verify           # build/vowc
+python3 scripts/verifier_runtime.py --backend native --shard 0/4
+python3 scripts/z3_crosscheck.py --shard 0/4 --extra-root /path/to/generated
+```
+
+Not covered: incremental-session streams (a session `unsat` is not re-decided
+by the product), and runtime soundness depth beyond each program's own `main`
+until the generated-corpus axis of #1473 lands.

@@ -14,3 +14,4 @@ fn main() -> i32 [io] {
     at_least_one(18446744073709551616u128);
     0
 }
+// TEST: replay-skipped 128-bit parameter

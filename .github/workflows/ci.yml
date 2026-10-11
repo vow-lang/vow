@@ -99,6 +99,10 @@ jobs:
         run: python3 scripts/test_install_esbmc_action.py
       - name: Install-Bitwuzla action unit tests
         run: python3 scripts/test_install_bitwuzla_action.py
+      - name: Install-Z3 action unit tests
+        run: python3 scripts/test_install_z3_action.py
+      - name: Z3 cross-check unit tests
+        run: python3 scripts/test_z3_crosscheck.py
       - name: Docs site link-rewrite unit tests
         run: python3 scripts/test_build_docs_site.py
       - name: Help-coverage staleness-gate unit tests
