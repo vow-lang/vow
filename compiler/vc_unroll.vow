@@ -142,9 +142,7 @@ fn vc_discover(st: VcUnrollState, bound: i64) {
             let s: i64 = st.succ[b * 2 + k];
             if s >= 0 {
                 let nk: i64 = vc_edge_key(st, b, key, s as u64, bound);
-                if nk >= 0 && vc_step_exit_cut(st, b as i64, key, s, bound) {
-                    st.isucc[(n * 2) as u64 + k] = -2;
-                } else if nk < 0 {
+                if nk < 0 || vc_step_exit_cut(st, b as i64, key, s, bound) {
                     st.isucc[(n * 2) as u64 + k] = -2;
                 } else {
                     let slot: u64 = (st.slot_off[s as u64] + nk) as u64;
