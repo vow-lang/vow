@@ -120,6 +120,30 @@ fn check_neg_of_not_parenthesized() -> i64 {
     expect_descriptions(source, expected, 800)
 }
 
+// `?` over a cast is ill-typed, so the contracts fixtures cannot carry it. A
+// unary operand whose `?` chain ends in a cast must keep its parentheses:
+// `-x as u64?` parses as `((-x) as u64)?`.
+fn check_unary_of_question_of_cast_parenthesized() -> i64 {
+    let source: String = String::from("");
+    source.push_str("module T\n");
+    source.push_str("fn f(x: i64) -> bool vow {\n");
+    source.push_str("  requires: -(x as u64?)\n");
+    source.push_str("  requires: -((x as u64)?)\n");
+    source.push_str("  requires: !(((x as u64)?)?)\n");
+    source.push_str("  requires: -x as u64?\n");
+    source.push_str("  requires: -(x?)\n");
+    source.push_str("  requires: -(x? as u64)\n");
+    source.push_str("} { true }\n");
+    let expected: Vec<String> = Vec::new();
+    expected.push(String::from("requires -(x as u64?)"));
+    expected.push(String::from("requires -(x as u64?)"));
+    expected.push(String::from("requires !(x as u64??)"));
+    expected.push(String::from("requires (-x) as u64?"));
+    expected.push(String::from("requires -x?"));
+    expected.push(String::from("requires -(x? as u64)"));
+    expect_descriptions(source, expected, 900)
+}
+
 fn main() -> i32 {
     let r1: i64 = check_u128_limbs_to_text();
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -129,5 +153,7 @@ fn main() -> i32 {
     if r3 != 0 { return i64_to_i32_wrap(r3); }
     let r4: i64 = check_neg_of_not_parenthesized();
     if r4 != 0 { return i64_to_i32_wrap(r4); }
+    let r5: i64 = check_unary_of_question_of_cast_parenthesized();
+    if r5 != 0 { return i64_to_i32_wrap(r5); }
     0
 }
