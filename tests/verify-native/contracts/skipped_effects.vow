@@ -1,0 +1,25 @@
+// TEST: contract-exit 1
+// TEST: contract-status noisy ensures skipped
+// TEST: contract-status quiet ensures proven
+// A function outside the native subset is `skipped` and fails the run closed;
+// the rest of the module is still reported.
+module SkippedEffects
+
+fn noisy(x: i64) -> i64 [io] vow {
+  ensures: result == x
+} {
+  print_i64(x);
+  x
+}
+
+fn quiet(x: i64) -> i64 vow {
+  requires: x >= 0 && x < 100
+  ensures: result == x
+} {
+  x
+}
+
+fn main() -> i32 [io] {
+  print_i64(noisy(1) + quiet(1));
+  0
+}

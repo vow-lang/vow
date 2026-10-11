@@ -1,0 +1,120 @@
+module VcDriver
+
+use ir
+use verifier
+use vc_cex
+use vc_inline
+use vc_native
+use vc_probe
+use vc_worker
+
+// The native pool as `contracts --verify` and `test --verify` use it. Both ask
+// the same question of a module: for each function that carries a contract,
+// what does the native verifier say, and (for `contracts`) is the contract
+// weak. They differ only in what they report, so the pool, the task plan and
+// the probes live here and the commands only read the result.
+//
+// The report spans functions, so a failed function never cancels a later one
+// (`halt` is off). Each probe is its own task, with its own worker and
+// `--timeout` budget: a slow probe can only lose its own answer, never turn a
+// finished verdict into `timeout`.
+
+// Per function index of the module. `skip[i]` is the skip reason of a function
+// that was selected but is outside the native subset, "" otherwise. `ran[i]` is
+// 1 when function i was verified and `outcomes[i]` is its outcome. `vacuous[i]`
+// and `trivial[i]` are 1 when the matching probe was proven.
+struct VcDriverRun {
+    skip: Vec<String>,
+    ran: Vec<i64>,
+    outcomes: Vec<VcOutcome>,
+    vacuous: Vec<i64>,
+    trivial: Vec<i64>,
+}
+
+fn vc_driver_settled(p: VcPool) -> bool {
+    let mut k: u64 = 0;
+    while k < p.phase.len() {
+        if p.phase[k] != VC_TASK_DONE() && p.phase[k] != VC_TASK_CANCELLED() { return false; }
+        k = k + 1;
+    }
+    true
+}
+
+// Verifies every function of `ir_mod` that has a `vow` block and is inside the
+// native subset. `clauses` asks for per-clause verdicts, `probes` adds the two
+// weak-contract probes where they apply. `module_root` is the explicit root the
+// parent lowered with ("" when none): each worker lowers the program again and
+// has to see the same module graph.
+fn vc_driver_run(exe: String, path: String, module_root: String, ir_mod: IrModule, clauses: bool, probes: bool, jobs: i64, budget_ms: i64) -> VcDriverRun [io, read] {
+    let fns: Vec<IrFunction> = ir_mod.functions;
+    let run: VcDriverRun = VcDriverRun {
+        skip: Vec::new(),
+        ran: Vec::new(),
+        outcomes: Vec::new(),
+        vacuous: Vec::new(),
+        trivial: Vec::new(),
+    };
+    let task_fn: Vec<i64> = Vec::new();
+    let task_name: Vec<String> = Vec::new();
+    let task_kind: Vec<i64> = Vec::new();
+    let mut fi: u64 = 0;
+    while fi < fns.len() {
+        let f: IrFunction = fns[fi];
+        run.skip.push(String::from(""));
+        run.ran.push(0);
+        run.outcomes.push(vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("not run"))));
+        run.vacuous.push(0);
+        run.trivial.push(0);
+        if f.vows.len() > 0 {
+            let why: String = vc_module_skip_reason(f, ir_mod);
+            if why.len() > 0 {
+                run.skip[fi] = why;
+            } else {
+                task_fn.push(fi as i64);
+                task_name.push(f.name);
+                task_kind.push(VC_TASK_KIND_VERIFY());
+                if probes && vc_probe_vacuity_applicable(f) {
+                    task_fn.push(fi as i64);
+                    task_name.push(f.name);
+                    task_kind.push(VC_TASK_KIND_VACUITY());
+                }
+                if probes && vc_probe_trivial_applicable(f) {
+                    task_fn.push(fi as i64);
+                    task_name.push(f.name);
+                    task_kind.push(VC_TASK_KIND_TRIVIAL());
+                }
+            }
+        }
+        fi = fi + 1;
+    }
+    let pool: VcPool = vc_pool_new(vc_worker_exe(exe), path, task_fn, task_name, jobs, budget_ms);
+    pool.clauses = clauses;
+    pool.halt = false;
+    pool.kinds = task_kind;
+    pool.module_root = module_root;
+    while !vc_driver_settled(pool) {
+        vc_pool_step(pool);
+    }
+    vc_pool_abort(pool);
+    let mut k: u64 = 0;
+    while k < task_fn.len() {
+        let oc: VcOutcome = pool.results[k];
+        let idx: u64 = task_fn[k] as u64;
+        let proven: bool = oc.result.status == VERIFY_PROVEN();
+        if task_kind[k] == VC_TASK_KIND_VERIFY() {
+            run.ran[idx] = 1;
+            run.outcomes[idx] = oc;
+        } else if task_kind[k] == VC_TASK_KIND_VACUITY() {
+            if proven { run.vacuous[idx] = 1; }
+        } else if proven && oc.sites.len() == 0 {
+            // A reachable checked-arithmetic abort is a warning, not a failure,
+            // for `verify`. Here it means the replaced body is not a body that
+            // returns the default: the computation it kept can still abort, and
+            // an `ensures` that holds only because it always does is not met by
+            // one that returns (the ESBMC probe reads such a run as not proven).
+            run.trivial[idx] = 1;
+        }
+        k = k + 1;
+    }
+    run
+}

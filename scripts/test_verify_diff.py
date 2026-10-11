@@ -206,6 +206,211 @@ class RunBackendTest(unittest.TestCase):
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
 
 
+def clause(fn, kind, vow_id, status, trivial=False, desc=""):
+    return {
+        "function": fn,
+        "kind": kind,
+        "vow_id": vow_id,
+        "status": status,
+        "trivially_satisfiable": trivial,
+        "description": desc or f"{kind} x",
+    }
+
+
+def report(*clauses):
+    return {"contracts": list(clauses)}
+
+
+class ContractsTest(unittest.TestCase):
+    def cmp(self, esbmc, native, truth="Verified"):
+        return vd.compare_contracts(truth, esbmc, native)[0]
+
+    def test_equal_reports_match(self):
+        r = report(
+            clause("f", "ensures", 1, "proven", True),
+            clause("g", "requires", 0, "unknown"),
+        )
+        self.assertEqual(vd.MATCH, self.cmp(r, r))
+
+    def test_native_proving_a_failed_clause_is_soundness(self):
+        e = report(clause("f", "ensures", 1, "failed"))
+        n = report(clause("f", "ensures", 1, "proven"))
+        self.assertEqual(vd.SOUNDNESS, self.cmp(e, n, "VerifyFailed"))
+
+    def test_native_proving_what_esbmc_leaves_open_is_more_precise(self):
+        e = report(clause("f", "ensures", 1, "unknown"))
+        n = report(clause("f", "ensures", 1, "proven"))
+        self.assertEqual(vd.MORE_PRECISE, self.cmp(e, n, "VerifyFailed"))
+
+    def test_native_skipping_a_proven_clause_is_weaker(self):
+        e = report(clause("f", "ensures", 1, "proven"))
+        n = report(clause("f", "ensures", 1, "skipped"))
+        self.assertEqual(vd.WEAKER, self.cmp(e, n))
+
+    def test_vacuity_must_agree(self):
+        e = report(clause("f", "requires", 0, "vacuous", desc="requires a > 0"))
+        n = report(clause("f", "requires", 0, "proven", desc="requires a > 0"))
+        self.assertEqual(vd.WEAKER, self.cmp(e, n))
+        n = report(clause("f", "requires", 0, "vacuous", desc="requires a > 0"))
+        self.assertEqual(vd.MATCH, self.cmp(e, n))
+
+    def test_entry_block_only_vacuity_label_is_a_known_esbmc_divergence(self):
+        d = "requires a > 0 && a < 100"
+        e = report(
+            clause("f", "requires", 0, "vacuous", desc=d),
+            clause("f", "ensures", 1, "vacuous"),
+        )
+        n = report(
+            clause("f", "requires", 0, "proven", desc=d),
+            clause("f", "ensures", 1, "proven"),
+        )
+        self.assertEqual(vd.MORE_PRECISE, self.cmp(e, n))
+
+    def test_native_vacuity_esbmc_does_not_see_is_weaker(self):
+        e = report(clause("f", "ensures", 1, "proven"))
+        n = report(clause("f", "ensures", 1, "vacuous"))
+        self.assertEqual(vd.WEAKER, self.cmp(e, n))
+
+    def test_trivial_flag_must_agree(self):
+        e = report(clause("f", "ensures", 1, "proven", True))
+        n = report(clause("f", "ensures", 1, "proven", False))
+        self.assertEqual(vd.WEAKER, self.cmp(e, n))
+        self.assertEqual(vd.WEAKER, self.cmp(n, e))
+
+    def test_native_error_where_esbmc_is_inconclusive_is_weaker(self):
+        e = report(clause("f", "ensures", 1, "unknown"))
+        n = report(clause("f", "ensures", 1, "error"))
+        self.assertEqual(vd.WEAKER, self.cmp(e, n))
+
+    def test_abort_only_failure_proves_no_clause_is_not_weaker(self):
+        e = report(clause("f", "ensures", 1, "proven"))
+        n = report(clause("f", "ensures", 1, "unknown"))
+        self.assertEqual(vd.WEAKER, vd.compare_contracts("Verified", e, n)[0])
+        self.assertEqual(
+            vd.MORE_PRECISE, vd.compare_contracts("Verified", e, n, {"f"})[0]
+        )
+        e = report(clause("f", "ensures", 1, "failed"))
+        self.assertEqual(
+            vd.MORE_PRECISE, vd.compare_contracts("VerifyFailed", e, n, {"f"})[0]
+        )
+
+    def test_aborting_functions_are_refuted_without_a_failed_clause(self):
+        table = vd.clause_table(
+            report(
+                clause("f", "ensures", 1, "unknown"),
+                clause("g", "ensures", 1, "failed"),
+            )
+        )
+        cex = [
+            {"fn": "f", "blame": "Caller", "vow_id": 0},
+            {"fn": "g", "blame": "Callee", "vow_id": 1},
+            {"fn": "h", "blame": "None", "vow_id": 4294967293},
+        ]
+        with mock.patch.object(vd.verify_eval, "actual_cex", return_value=cex):
+            self.assertEqual({"f", "h"}, vd.aborting_functions({}, table))
+        with mock.patch.object(vd.verify_eval, "actual_cex", return_value=[]):
+            self.assertEqual(set(), vd.aborting_functions({}, table))
+
+    def test_fixture_takes_the_worst_clause(self):
+        e = report(
+            clause("f", "ensures", 1, "proven"), clause("g", "ensures", 1, "failed")
+        )
+        n = report(
+            clause("f", "ensures", 1, "skipped"), clause("g", "ensures", 1, "proven")
+        )
+        self.assertEqual(vd.SOUNDNESS, self.cmp(e, n, "VerifyFailed"))
+
+    def test_different_clause_sets_or_missing_reports_are_harness_rows(self):
+        e = report(clause("f", "ensures", 1, "proven"))
+        n = report(clause("f", "ensures", 2, "proven"))
+        self.assertEqual(vd.HARNESS, self.cmp(e, n))
+        self.assertEqual(vd.HARNESS, self.cmp(None, e))
+
+    def test_summary_text(self):
+        r = report(
+            clause("f", "ensures", 1, "proven", True),
+            clause("f", "requires", 0, "proven"),
+        )
+        self.assertEqual("proven:1,proven+trivial:1", vd.clause_summary(r))
+
+
+class TestCommandTests(unittest.TestCase):
+    def one_test(self, status):
+        return {"tests": [{"status": status}]}
+
+    def test_verdicts(self):
+        self.assertEqual(vd.PROVEN, vd.test_verdict(self.one_test("passed")))
+        self.assertEqual(vd.PROVEN, vd.test_verdict(self.one_test("failed")))
+        self.assertEqual(vd.REFUTED, vd.test_verdict(self.one_test("verify_failed")))
+        self.assertEqual(vd.SKIPPED, vd.test_verdict(self.one_test("contract_skipped")))
+        self.assertEqual(vd.ERROR, vd.test_verdict(self.one_test("compile_error")))
+        self.assertEqual(vd.ERROR, vd.test_verdict({"tests": []}))
+
+    def test_test_path_failing_a_correct_program_is_not_soundness(self):
+        cls, _ = vd.classify_test(
+            "Verified", self.one_test("verify_failed"), self.one_test("passed")
+        )
+        self.assertEqual(vd.MORE_PRECISE, cls)
+        cls, _ = vd.classify_test(
+            "VerifyFailed", self.one_test("verify_failed"), self.one_test("passed")
+        )
+        self.assertEqual(vd.SOUNDNESS, cls)
+
+    def test_synthetic_timeout_is_inconclusive(self):
+        hung = {
+            "status": "VerifyFailed",
+            "verify_status": "timeout",
+            "counterexamples": [],
+        }
+        self.assertEqual(vd.INCONCLUSIVE, vd.test_verdict(hung))
+        cls, _ = vd.classify_test("Verified", self.one_test("passed"), hung)
+        self.assertEqual(vd.WEAKER, cls)
+
+    def test_command_lines(self):
+        self.assertEqual(
+            ["v", "contracts", "--verify", "--no-cache", "--backend", "native"],
+            vd.command_args("v", "contracts", "native", 7, "x.vow"),
+        )
+        self.assertEqual(
+            ["v", "test", "--verify", "--backend", "native", "x.vow"],
+            vd.command_args("v", "test", "native", 7, "x.vow"),
+        )
+
+    def run_with(self, command, results):
+        exp = vd.verify_eval.Expect("tests/verify/x.vow", "Verified")
+        with (
+            mock.patch.object(vd, "function_count", return_value=1),
+            mock.patch.object(
+                vd,
+                "run_backend",
+                side_effect=lambda v, b, p, t, n, c="verify": (results[b], 0.0),
+            ),
+        ):
+            return vd.diff_fixture("vowc", 7, "verify", exp, command)
+
+    def test_test_row_classes(self):
+        row = self.run_with(
+            "test",
+            {
+                "esbmc": self.one_test("passed"),
+                "native": self.one_test("verify_failed"),
+            },
+        )
+        self.assertEqual(vd.WEAKER, row["class"])
+        self.assertEqual("test", row["command"])
+        row = self.run_with(
+            "test",
+            {"esbmc": self.one_test("passed"), "native": self.one_test("passed")},
+        )
+        self.assertEqual(vd.MATCH, row["class"])
+
+    def test_contracts_row(self):
+        r = report(clause("f", "ensures", 1, "proven"))
+        row = self.run_with("contracts", {"esbmc": r, "native": r})
+        self.assertEqual(vd.MATCH, row["class"])
+        self.assertEqual("proven:1", row["native"]["verdict"])
+
+
 class MainTest(unittest.TestCase):
     def run_main(self, argv, results):
         exp = vd.verify_eval.Expect("tests/verify/x.vow", "Verified")
@@ -217,7 +422,9 @@ class MainTest(unittest.TestCase):
             ),
             mock.patch.object(vd, "function_count", return_value=1),
             mock.patch.object(
-                vd, "run_backend", side_effect=lambda v, b, p, t, n: (results[b], 0.0)
+                vd,
+                "run_backend",
+                side_effect=lambda v, b, p, t, n, c="verify": (results[b], 0.0),
             ),
             mock.patch.object(sys, "stdout", out),
             mock.patch.object(sys, "stderr", io.StringIO()),
