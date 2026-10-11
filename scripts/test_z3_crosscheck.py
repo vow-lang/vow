@@ -12,6 +12,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import z3_crosscheck
@@ -402,28 +403,18 @@ class MainTest(WorkTest):
 
     def test_a_verifier_that_crashed_mid_fixture_is_a_harness_failure(self):
         self.fixture("a.vow", "unsat unsat")
-        self.vowc = executable(
-            self.bin,
-            "crashing-vowc",
-            'echo "unsat unsat" > "$TMPDIR/q.smt2"\n'
-            'bitwuzla "$TMPDIR/q.smt2" >/dev/null\nexit 134\n',
-        )
 
-        status, results = self.run_main(self.work / "corpus")
+        with mock.patch.dict(os.environ, {"FAKE_VOWC_EXIT": "134"}):
+            status, results = self.run_main(self.work / "corpus")
 
         self.assertEqual(2, status)
         self.assertTrue(any("exit 134" in h for h in results["harness"]))
 
     def test_exit_one_is_an_ordinary_verify_failed(self):
         self.fixture("a.vow", "unsat unsat")
-        self.vowc = executable(
-            self.bin,
-            "failing-vowc",
-            'echo "unsat unsat" > "$TMPDIR/q.smt2"\n'
-            'bitwuzla "$TMPDIR/q.smt2" >/dev/null\nexit 1\n',
-        )
 
-        status, _ = self.run_main(self.work / "corpus")
+        with mock.patch.dict(os.environ, {"FAKE_VOWC_EXIT": "1"}):
+            status, _ = self.run_main(self.work / "corpus")
 
         self.assertEqual(0, status)
 

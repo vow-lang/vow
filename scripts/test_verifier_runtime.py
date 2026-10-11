@@ -234,11 +234,31 @@ class ReplaySkippedDirectiveTest(unittest.TestCase):
 class DisclaimedCallSiteTest(unittest.TestCase):
     """A Caller violation at a call the verifier said it did not verify."""
 
-    def run_soundness(self, verify, violation):
+    CONTRACTS = {
+        "contracts": [
+            {"vow_id": 0, "function": "double", "kind": "requires"},
+            {"vow_id": 1, "function": "double", "kind": "ensures"},
+            {"vow_id": 2, "function": "other", "kind": "requires"},
+        ]
+    }
+
+    @staticmethod
+    def note(callee):
+        return {
+            "error_code": "VerificationSkipped",
+            "message": f"calls from `main` to contracted `{callee}` were not "
+            "verified: `main` cannot be modelled",
+        }
+
+    def run_soundness(self, diagnostics, violation):
         with (
             patch(
                 "verifier_runtime.run_json",
-                side_effect=[(verify, None), ({"executable": "x"}, None)],
+                side_effect=[
+                    ({"status": "Verified", "diagnostics": diagnostics}, None),
+                    ({"executable": "x"}, None),
+                    (self.CONTRACTS, None),
+                ],
             ),
             patch("verifier_runtime.run_debug_binary", return_value=(violation, None)),
         ):
@@ -246,33 +266,33 @@ class DisclaimedCallSiteTest(unittest.TestCase):
                 Path("f.vow"), "vowc", Path("/tmp"), 30, backend="native"
             )
 
-    NOTE = {
-        "error_code": "VerificationSkipped",
-        "message": "calls from `main` to contracted `double` were not verified: "
-        "`main` cannot be modelled",
-    }
+    def violation(self, vow_id=0, blame="Caller"):
+        return {"error": "VowViolation", "vow_id": vow_id, "blame": blame}
 
-    def test_caller_violation_with_a_disclaiming_note_is_not_a_false_proof(self):
-        result = self.run_soundness(
-            {"status": "Verified", "diagnostics": [self.NOTE]},
-            {"error": "VowViolation", "vow_id": 0, "blame": "Caller"},
-        )
+    def test_violated_requires_of_a_disclaimed_callee_is_not_a_false_proof(self):
+        result = self.run_soundness([self.note("double")], self.violation(0))
 
         self.assertEqual("unverified-call-site", result["verdict"])
 
-    def test_callee_violation_is_still_a_false_proof_despite_the_note(self):
+    def test_a_violation_of_a_different_callee_stays_a_false_proof(self):
+        result = self.run_soundness([self.note("double")], self.violation(2))
+
+        self.assertEqual("SOUNDNESS", result["verdict"])
+
+    def test_callee_blame_is_still_a_false_proof_despite_the_note(self):
         result = self.run_soundness(
-            {"status": "Verified", "diagnostics": [self.NOTE]},
-            {"error": "VowViolation", "vow_id": 0, "blame": "Callee"},
+            [self.note("double")], self.violation(1, blame="Callee")
         )
 
         self.assertEqual("SOUNDNESS", result["verdict"])
 
-    def test_caller_violation_without_a_note_is_a_false_proof(self):
-        result = self.run_soundness(
-            {"status": "Verified", "diagnostics": []},
-            {"error": "VowViolation", "vow_id": 0, "blame": "Caller"},
-        )
+    def test_without_a_note_it_is_a_false_proof(self):
+        result = self.run_soundness([], self.violation(0))
+
+        self.assertEqual("SOUNDNESS", result["verdict"])
+
+    def test_an_unmappable_vow_id_fails_closed(self):
+        result = self.run_soundness([self.note("double")], self.violation(99))
 
         self.assertEqual("SOUNDNESS", result["verdict"])
 

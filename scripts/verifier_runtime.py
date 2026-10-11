@@ -133,12 +133,28 @@ def run_debug_binary(path, timeout):
     return None, None
 
 
-def _disclaims_call_sites(verify):
-    return any(
-        d.get("error_code") == "VerificationSkipped"
-        and "were not verified" in (d.get("message") or "")
-        for d in verify.get("diagnostics") or []
-    )
+NOT_VERIFIED_NOTE = re.compile(r"to contracted (.+?) (?:were|was) not verified")
+
+
+def _disclaimed_callees(verify):
+    """Functions the verifier said calls into were not verified."""
+    callees = set()
+    for d in verify.get("diagnostics") or []:
+        if d.get("error_code") != "VerificationSkipped":
+            continue
+        note = NOT_VERIFIED_NOTE.search(d.get("message") or "")
+        if note:
+            callees.update(re.findall(r"`([^`]+)`", note.group(1)))
+    return callees
+
+
+def _violated_function(vow_file, verifier, vow_id, timeout):
+    """The function owning contract `vow_id`, or None if it cannot be mapped."""
+    contracts, _ = run_json(verifier, ["contracts", str(vow_file)], timeout)
+    for c in (contracts or {}).get("contracts") or []:
+        if c.get("vow_id") == vow_id:
+            return c.get("function")
+    return None
 
 
 def check_soundness(vow_file, verifier, outdir, timeout, backend=None):
@@ -193,15 +209,18 @@ def check_soundness(vow_file, verifier, outdir, timeout, backend=None):
         return {"direction": "soundness", "verdict": "skipped", "detail": err}
     if violation is None:
         return {"direction": "soundness", "verdict": "ok", "detail": "no violation"}
+    disclaimed = _disclaimed_callees(verify)
     if (
         backend == "native"
         and violation.get("blame") == "Caller"
-        and _disclaims_call_sites(verify)
+        and disclaimed
+        and _violated_function(vow_file, verifier, violation.get("vow_id"), timeout)
+        in disclaimed
     ):
-        # `Verified` carried an explicit note that calls into a contracted
-        # callee were not verified (their `requires` is a debug-mode runtime
-        # check only), so a Caller violation is the disclaimed obligation
-        # firing, not a proof that was false.
+        # `Verified` carried an explicit note that calls into this callee were
+        # not verified (its `requires` is a debug-mode runtime check only), so
+        # its Caller violation is the disclaimed obligation firing, not a
+        # proof that was false.
         return {
             "direction": "soundness",
             "verdict": "unverified-call-site",
