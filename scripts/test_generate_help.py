@@ -216,9 +216,12 @@ class VerificationSurfaceTest(unittest.TestCase):
 
     def test_no_text_calls_every_counterexample_an_esbmc_one(self):
         data = _help_data()
-        self.assertNotIn("ESBMC counterexample", json.dumps(data))
-        self.assertNotIn("ESBMC counterexample", generate_help.build_help_human(data))
-        self.assertNotIn("ESBMC counterexample", generate_help.SKILL_FRONTMATTER)
+        for text in (
+            json.dumps(data),
+            generate_help.build_help_human(data),
+            generate_help.SKILL_FRONTMATTER,
+        ):
+            self.assertNotIn("ESBMC counterexample", text)
 
     def test_build_help_lists_backend_flag(self):
         options = _help_data()["command_details"]["build"]["options"]
