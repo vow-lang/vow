@@ -1160,6 +1160,7 @@ fn emit_ce_vars(vr: VerifyResult) [io] {
 }
 
 // Skip non-modelable vowed functions before ESBMC runs; otherwise the C emitter emits __ESBMC_assert(0) traps and the build fails closed.
+// Callers invoke it for every verify target, even after a failure: a skip is a static fact about the program, so the warning set must not depend on how many ESBMC jobs were in flight (--verify-jobs).
 fn skip_if_non_modelable(f: IrFunction, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx) -> bool [io] {
     let reason: String = non_modelable_reason(f, ir_mod, const_fn_indices);
     if reason.len() == 0 {
@@ -1216,9 +1217,6 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
     while fi < fns.len() as i64 {
         let f: IrFunction = fns[fi as u64];
         if is_verify_target(f, ir_mod, const_fn_indices) {
-            // A skip is a static fact about the program, so it is reported even
-            // after a failure; otherwise the warning set would depend on how many
-            // ESBMC jobs happened to be in flight (--verify-jobs).
             if skip_if_non_modelable(f, ir_mod, const_fn_indices, dctx) {
                 // Fail closed: a non-modelable function is not statically proved.
                 any_skipped = 1;
@@ -2095,9 +2093,6 @@ fn build_verify_phase(
     while fi < fns.len() as i64 {
         let f: IrFunction = fns[fi as u64];
         if is_verify_target(f, ir_mod, const_fn_indices) {
-            // A skip is a static fact about the program, so it is reported even
-            // after a failure; otherwise the warning set would depend on how many
-            // ESBMC jobs happened to be in flight (--verify-jobs).
             if skip_if_non_modelable(f, ir_mod, const_fn_indices, dctx) {
                 // Fail closed: a non-modelable function is not statically proved.
                 any_skipped = 1;
@@ -2569,9 +2564,6 @@ fn run_test(argv: Vec<String>) -> i32 [io, read, write] {
                     let vf: IrFunction = vfns[vfi as u64];
                     let vows: Vec<IrVowEntry> = vf.vows;
                     if vows.len() > 0 {
-                        // A skip is a static fact about the program, so it is reported even
-                        // after a failure; otherwise the warning set would depend on how many
-                        // ESBMC jobs happened to be in flight (--verify-jobs).
                         // Fail closed: a non-modelable contract was not statically proved.
                         // Reported as contract_skipped (ESBMC never invoked) rather than
                         // verify_failed (a proved violation); a real violation in any other
