@@ -4812,17 +4812,47 @@ fn wide_context_contains_control_flow(expr: &Expr) -> bool {
     }
 }
 
-/// True when every leaf of an integer expression's result positions is an integer
-/// literal, i.e. the checker types the whole operand as `LitInt`. Only such operands
-/// take their width from an enclosing `as i128`/`as u128`; a typed leaf already pins
-/// the operand's width, and its literals are reconciled by binary-op lowering.
-fn int_expr_is_literal_only(expr: &Expr) -> bool {
+/// What an integer expression's result positions bottom out in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IntLeaf {
+    Literal,
+    Typed,
+    Diverges,
+}
+
+/// Combines the result positions of one expression: any typed leaf pins the whole
+/// operand, a diverging position (`return`, `break`, `continue`) is neutral, and
+/// at least one literal is needed for the operand to be literal-only.
+fn merge_int_leaves(leaves: impl IntoIterator<Item = IntLeaf>) -> IntLeaf {
+    let mut merged = IntLeaf::Diverges;
+    for leaf in leaves {
+        match leaf {
+            IntLeaf::Typed => return IntLeaf::Typed,
+            IntLeaf::Literal => merged = IntLeaf::Literal,
+            IntLeaf::Diverges => {}
+        }
+    }
+    merged
+}
+
+fn int_leaf_of_block(block: &Block) -> IntLeaf {
+    if let Some(result) = integer_marker_from_block(block) {
+        return int_leaf(result);
+    }
+    match block.stmts.last() {
+        Some(Stmt::Expr { expr, .. }) if int_leaf(expr) == IntLeaf::Diverges => IntLeaf::Diverges,
+        _ => IntLeaf::Typed,
+    }
+}
+
+fn int_leaf(expr: &Expr) -> IntLeaf {
     match &expr.kind {
-        ExprKind::Lit(Lit::Int(_)) => true,
+        ExprKind::Lit(Lit::Int(_)) => IntLeaf::Literal,
+        ExprKind::Return { .. } | ExprKind::Break { .. } | ExprKind::Continue => IntLeaf::Diverges,
         ExprKind::UnaryOp {
             op: UnOp::Neg,
             operand,
-        } => int_expr_is_literal_only(operand),
+        } => int_leaf(operand),
         ExprKind::BinaryOp {
             op:
                 BinOp::Add
@@ -4842,27 +4872,35 @@ fn int_expr_is_literal_only(expr: &Expr) -> bool {
                 | BinOp::Shr,
             lhs,
             rhs,
-        } => int_expr_is_literal_only(lhs) && int_expr_is_literal_only(rhs),
-        ExprKind::Block(block) => {
-            integer_marker_from_block(block).is_some_and(int_expr_is_literal_only)
-        }
+        } => merge_int_leaves([int_leaf(lhs), int_leaf(rhs)]),
+        ExprKind::Block(block) => int_leaf_of_block(block),
         ExprKind::If {
             then_branch,
             else_branch: Some(else_expr),
             ..
-        } => {
-            integer_marker_from_block(then_branch).is_some_and(int_expr_is_literal_only)
-                && int_expr_is_literal_only(else_expr)
-        }
-        ExprKind::Match { arms, .. } => {
-            !arms.is_empty() && arms.iter().all(|arm| int_expr_is_literal_only(&arm.body))
+        } => merge_int_leaves([int_leaf_of_block(then_branch), int_leaf(else_expr)]),
+        ExprKind::Match { arms, .. } if !arms.is_empty() => {
+            merge_int_leaves(arms.iter().map(|arm| int_leaf(&arm.body)))
         }
         ExprKind::Loop { body, .. } => {
             let values = loop_break_values(body);
-            !values.is_empty() && values.into_iter().all(int_expr_is_literal_only)
+            if values.is_empty() {
+                IntLeaf::Typed
+            } else {
+                merge_int_leaves(values.into_iter().map(int_leaf))
+            }
         }
-        _ => false,
+        _ => IntLeaf::Typed,
     }
+}
+
+/// True when the leaves of an integer expression's result positions are integer
+/// literals (diverging positions aside), i.e. the checker types the whole operand
+/// as `LitInt`. Only such operands take their width from an enclosing
+/// `as i128`/`as u128`; a typed leaf already pins the operand's width, and its
+/// literals are reconciled by binary-op lowering.
+fn int_expr_is_literal_only(expr: &Expr) -> bool {
+    int_leaf(expr) == IntLeaf::Literal
 }
 
 fn record_wide_marker_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
@@ -7156,6 +7194,34 @@ fn unsigned_max() -> u128 {
         }
         for name in ["typed_branch", "typed_arms"] {
             assert_eq!(wide(name), 0, "{name} leaked a wide const");
+        }
+    }
+
+    #[test]
+    fn cast_to_u128_context_survives_diverging_branches_of_literal_operand() {
+        let module = lower_source_to_module(
+            concat!(
+                "module CastDiverge\n",
+                "fn d_match(o: Option<i64>) -> u128 {\n",
+                "    (match o { Option::Some(_) => 1 << 100, Option::None => return 0 }) as u128\n",
+                "}\n",
+                "fn d_if(c: bool) -> u128 { (if c { 1 << 100 } else { return 0 }) as u128 }\n",
+                "fn d_if_stmt(c: bool) -> u128 { (if c { 1 << 100 } else { return 0; }) as u128 }\n",
+                "fn d_loop(c: bool) -> u128 {\n",
+                "    (loop { if c { return 0; } break 1 << 100; }) as u128\n",
+                "}\n",
+                "fn main() -> i32 [io] { 0 }\n",
+            ),
+            "cast_diverge.vow",
+        );
+        for name in ["d_match", "d_if", "d_if_stmt", "d_loop"] {
+            let func = module.functions.iter().find(|f| f.name == name).unwrap();
+            assert!(
+                insts_of(func).iter().any(|inst| {
+                    inst.opcode == Opcode::ConstU128 && inst.data == InstData::ConstU128(1)
+                }),
+                "{name} lost its wide literal context"
+            );
         }
     }
 
