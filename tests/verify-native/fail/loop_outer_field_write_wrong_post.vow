@@ -1,0 +1,29 @@
+// TEST: counterexample-fn "bump"
+// TEST: counterexample-vow-id 2
+// TEST: counterexample-blame Callee
+// The loop writes a field of a struct built before it. An invariant-based proof
+// would reason about the field as the loop was entered with it (0), so this
+// post must be refuted by unwinding, never proved.
+module LoopOuterFieldWriteWrongPost
+
+struct Acc { v: i64 }
+
+fn bump(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == 0
+} {
+  let acc: Acc = Acc { v: 0 };
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i >= 0 && i <= n
+  } {
+    acc.v = acc.v + 1;
+    i = i + 1;
+  }
+  acc.v
+}
+
+fn main() -> i32 [io] {
+  print_i64(bump(3));
+  0
+}

@@ -1,5 +1,3 @@
-// TEST: category unverifiable
-// TEST: skip-reason unsupported-opcode
 module FieldSetInBranch
 
 struct Cell { value: i64 }

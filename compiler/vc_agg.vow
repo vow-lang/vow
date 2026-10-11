@@ -22,10 +22,16 @@ use vc_flow
 // payload in one variant and a Bool in another. A 128-bit value is one term of
 // sort 128 that occupies slots `idx` and `idx + 1`.
 //
-// This is exact only because every write precedes every read of its object.
-// The gate (`vc_agg_shape_detail`) allows a `FieldSet` only on an object
-// allocated in the same block, so by the time any other block (or a Phi) reads
-// an object it is final; mutation anywhere else is `Skipped`, never guessed at.
+// A write at path condition `pc` stores `ite(pc, new, old)`. This is exact
+// because the executor walks the blocks of an acyclic function once, in
+// topological order, and `pc` is the condition for execution to reach the
+// writing block. A read walked before a write cannot execute after it, and two
+// blocks that do not reach each other never both run, so the chain of writes in
+// walk order is the object's state on whichever path is taken. A write whose
+// path condition is the one the object was created under, or `true`, has no
+// observable old value and replaces the slot. The gate
+// (`vc_agg_shape_detail`) allows a `FieldSet` only on an allocation or a
+// parameter; mutation of anything else is `Skipped`, never guessed at.
 
 fn VC_OBJ_ALLOC() -> i64 { 0 }
 fn VC_OBJ_PARAM() -> i64 { 1 }
@@ -41,6 +47,9 @@ struct VcAgg {
     sl_idx: Vec<i64>,
     sl_sort: Vec<i64>,
     sl_term: Vec<i64>,
+    sl_epoch: Vec<i64>,
+    births: Vec<i64>,
+    epoch: i64,
     ps_param: Vec<i64>,
     ps_slot: Vec<i64>,
     ps_sort: Vec<i64>,
@@ -62,6 +71,9 @@ fn vc_agg_new(fl: VcFlow) -> VcAgg {
         sl_idx: Vec::new(),
         sl_sort: Vec::new(),
         sl_term: Vec::new(),
+        sl_epoch: Vec::new(),
+        births: Vec::new(),
+        epoch: 0,
         ps_param: Vec::new(),
         ps_slot: Vec::new(),
         ps_sort: Vec::new(),
@@ -72,18 +84,23 @@ fn vc_agg_new(fl: VcFlow) -> VcAgg {
 }
 
 // `owner` is the parameter index of a parameter object and the block of a Phi
-// object (whose Phi is `phi`); -1 otherwise.
+// object (whose Phi is `phi`); -1 otherwise. `births` is the path condition an
+// allocation was created under; -1 for every other kind.
 fn vc_agg_push_obj(ag: VcAgg, kind: i64, owner: i64, phi: i64) -> i64 {
     let id: i64 = ag.kinds.len() as i64;
     ag.kinds.push(kind);
     ag.owners.push(owner);
     ag.phis.push(phi);
     ag.heads.push(-1);
+    ag.births.push(-1);
     id
 }
 
-fn vc_agg_alloc(ag: VcAgg) -> i64 {
-    vc_agg_push_obj(ag, VC_OBJ_ALLOC(), -1, -1)
+// `pc` is the path condition of the block that allocates the object.
+fn vc_agg_alloc(ag: VcAgg, pc: i64) -> i64 {
+    let obj: i64 = vc_agg_push_obj(ag, VC_OBJ_ALLOC(), -1, -1);
+    ag.births[obj as u64] = pc;
+    obj
 }
 
 // One object per parameter index, so a parameter's field symbols are declared once.
@@ -113,6 +130,7 @@ fn vc_agg_store(ag: VcAgg, obj: i64, idx: i64, sort: i64, term: i64) {
     let s: i64 = vc_agg_find(ag, obj, idx, sort);
     if s >= 0 {
         ag.sl_term[s as u64] = term;
+        ag.sl_epoch[s as u64] = ag.epoch;
         return;
     }
     let id: i64 = ag.sl_idx.len() as i64;
@@ -120,6 +138,7 @@ fn vc_agg_store(ag: VcAgg, obj: i64, idx: i64, sort: i64, term: i64) {
     ag.sl_idx.push(idx);
     ag.sl_sort.push(sort);
     ag.sl_term.push(term);
+    ag.sl_epoch.push(ag.epoch);
     ag.heads[obj as u64] = id;
 }
 
@@ -129,19 +148,48 @@ fn vc_agg_slot_width(sort: i64) -> i64 {
     1
 }
 
-// Writes `term` into slot `idx` at `sort`; every view of a slot the write covers
-// reads as unconstrained, then the exact view takes `term`.
+fn vc_agg_overlaps(ag: VcAgg, s: i64, idx: i64, end: i64) -> bool {
+    let si: i64 = ag.sl_idx[s as u64];
+    si < end && idx < si + vc_agg_slot_width(ag.sl_sort[s as u64])
+}
+
+// Unconditional write: `term` goes into slot `idx` at `sort`; every view of a
+// slot the write covers reads as unconstrained, then the exact view takes `term`.
 fn vc_agg_set(ag: VcAgg, obj: i64, idx: i64, sort: i64, term: i64) {
+    ag.epoch = ag.epoch + 1;
     let end: i64 = idx + vc_agg_slot_width(sort);
     let mut s: i64 = ag.heads[obj as u64];
     while s >= 0 {
-        let si: i64 = ag.sl_idx[s as u64];
-        if si < end && idx < si + vc_agg_slot_width(ag.sl_sort[s as u64]) {
+        if vc_agg_overlaps(ag, s, idx, end) {
             ag.sl_term[s as u64] = -1;
         }
         s = ag.sl_next[s as u64];
     }
     vc_agg_store(ag, obj, idx, sort, term);
+}
+
+// Writes `term` into slot `idx` of `obj` when the block runs under `pc`. A write
+// that always runs once the object exists replaces the slot; any other keeps the
+// old value on the paths that skip it, and every other view the write covers
+// becomes unconstrained on the paths that take it.
+fn vc_agg_write(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: i64, term: i64, pc: i64) {
+    if vc_tm_is_true(ar, pc) || pc == ag.births[obj as u64] {
+        vc_agg_set(ag, obj, idx, sort, term);
+        return;
+    }
+    let old: i64 = vc_agg_get(ag, ar, hdr, obj, idx, sort);
+    let end: i64 = idx + vc_agg_slot_width(sort);
+    let mut s: i64 = ag.heads[obj as u64];
+    while s >= 0 {
+        let view: i64 = ag.sl_term[s as u64];
+        if view >= 0 && vc_agg_overlaps(ag, s, idx, end) && !(ag.sl_idx[s as u64] == idx && ag.sl_sort[s as u64] == sort) {
+            let junk: i64 = vc_agg_junk(ag, ar, hdr, ag.sl_sort[s as u64]);
+            ag.sl_term[s as u64] = vc_tm_app3(ar, VC_OP_ITE(), pc, junk, view);
+        }
+        s = ag.sl_next[s as u64];
+    }
+    ag.epoch = ag.epoch + 1;
+    vc_agg_store(ag, obj, idx, sort, vc_tm_app3(ar, VC_OP_ITE(), pc, term, old));
 }
 
 fn vc_agg_declare(ar: VcArena, hdr: SmtScript, name: String, sort: i64) -> i64 {
@@ -180,16 +228,18 @@ fn vc_agg_param_symbol(ag: VcAgg, ar: VcArena, hdr: SmtScript, k: i64, idx: i64,
     vc_agg_declare(ar, hdr, vc_agg_symbol_name(k, idx, sort), sort)
 }
 
-// Term of slot `idx` of `obj` at `sort`. Any reachable object is final (see
-// the header), so a term computed here is cached in the slot for good.
+// Term of slot `idx` of `obj` at `sort` at the current point of the walk. A slot
+// is cached; a Phi object's slot only until the next write, because that write
+// may have changed one of the objects it merges. A view that a write covered
+// reads as a fresh unconstrained constant, whatever the object's kind.
 fn vc_agg_get(ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, idx: i64, sort: i64) -> i64 {
     let s: i64 = vc_agg_find(ag, obj, idx, sort);
-    if s >= 0 && ag.sl_term[s as u64] >= 0 {
+    let kind: i64 = ag.kinds[obj as u64];
+    if s >= 0 && ag.sl_term[s as u64] >= 0 && (kind != VC_OBJ_PHI() || ag.sl_epoch[s as u64] == ag.epoch) {
         return ag.sl_term[s as u64];
     }
-    let kind: i64 = ag.kinds[obj as u64];
     let t: i64 = {
-        if kind == VC_OBJ_PARAM() {
+        if kind == VC_OBJ_PARAM() && s < 0 {
             vc_agg_param_symbol(ag, ar, hdr, ag.owners[obj as u64], idx, sort)
         } else if kind == VC_OBJ_PHI() {
             // Named like a scalar Phi: merges of merges would otherwise print
@@ -241,24 +291,49 @@ fn vc_agg_phi(ag: VcAgg, bi: u64, phi_id: i64) -> i64 {
     base
 }
 
-// Gate rule for writes: a `FieldSet` must target a `RegionAlloc` of its own
-// block. "" when every one does, else the detail of an `unsupported-opcode`
-// skip. `n_ids` is the size of the instruction-id space.
+// Gate rule for writes: a `FieldSet` must target a `RegionAlloc` or a pointer
+// parameter. A write through a merged object would have to reach every object
+// the merge may stand for, and a parameter may be the very object another
+// parameter names, so neither is modelled. "" when every write is, else the
+// detail of an `unsupported-opcode` skip. `n_ids` is the size of the
+// instruction-id space.
 fn vc_agg_shape_detail(f: IrFunction, n_ids: u64) -> String {
-    let alloc_blk: Vec<i64> = dom_fill(n_ids, -1);
+    let def_op: Vec<i64> = dom_fill(n_ids, -1);
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
         let mut ii: u64 = 0;
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
-            if inst.op == IOP_REGION_ALLOC() && inst.id >= 0 {
-                alloc_blk[inst.id as u64] = bi as i64;
+            if inst.id >= 0 {
+                def_op[inst.id as u64] = inst.op;
             }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    let mut n_ptr_params: i64 = 0;
+    let mut pi: u64 = 0;
+    while pi < f.params.len() {
+        if f.params[pi] == ITY_PTR() { n_ptr_params = n_ptr_params + 1; }
+        pi = pi + 1;
+    }
+    bi = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
             if inst.op == IOP_FIELD_SET() {
-                let target: i64 = inst.args[0];
-                if alloc_blk[target as u64] != bi as i64 {
-                    return String::from("FieldSet outside the block that allocates its target");
+                let op: i64 = def_op[inst.args[0] as u64];
+                if op == IOP_PHI() {
+                    return String::from("FieldSet through a merged value");
+                }
+                if op == IOP_GET_ARG() && n_ptr_params > 1 {
+                    return String::from("FieldSet on a parameter that may alias another parameter");
+                }
+                if op != IOP_REGION_ALLOC() && op != IOP_GET_ARG() {
+                    return String::from("FieldSet on a value that is neither an allocation nor a parameter");
                 }
             }
             ii = ii + 1;

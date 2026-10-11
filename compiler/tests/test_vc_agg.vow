@@ -85,15 +85,7 @@ fn check_param_read_accepted() -> i64 {
     0
 }
 
-fn check_field_set_needs_own_block_alloc() -> i64 {
-    let i: Vec<IrInst> = Vec::new();
-    i.push(mk_inst_arg(0, ITY_PTR(), 0));
-    i.push(mk_inst_const_i64(1, 3));
-    i.push(mk_inst_field_set(2, 0, 0, 1));
-    i.push(mk_inst_return(3, 0));
-    let r: String = vc_skip_reason(one_block(String::from("s"), ptr_param(), ITY_PTR(), i));
-    if r != String::from("unsupported-opcode: FieldSet outside the block that allocates its target") { return 20; }
-
+fn two_block_set() -> IrFunction {
     let a: Vec<IrInst> = Vec::new();
     a.push(mk_inst_alloc(0, 16));
     a.push(mk_inst_const_i64(1, 3));
@@ -104,8 +96,53 @@ fn check_field_set_needs_own_block_alloc() -> i64 {
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, a));
     blocks.push(mk_block(1, b));
-    let g: IrFunction = mk_function(1, String::from("t"), Vec::new(), ITY_PTR(), blocks);
-    if vc_skip_reason(g) != r { return 21; }
+    mk_function(1, String::from("t"), Vec::new(), ITY_PTR(), blocks)
+}
+
+fn check_field_set_targets() -> i64 {
+    // a write to the only pointer parameter
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_PTR(), 0));
+    i.push(mk_inst_const_i64(1, 3));
+    i.push(mk_inst_field_set(2, 0, 0, 1));
+    i.push(mk_inst_return(3, 0));
+    if vc_skip_reason(one_block(String::from("s"), ptr_param(), ITY_PTR(), i)).len() != 0 { return 20; }
+    // a write in a block other than the one that allocates the target
+    if vc_skip_reason(two_block_set()).len() != 0 { return 21; }
+    // two pointer parameters may be one object
+    let two: Vec<i64> = Vec::new();
+    two.push(ITY_PTR());
+    two.push(ITY_PTR());
+    let j: Vec<IrInst> = Vec::new();
+    j.push(mk_inst_arg(0, ITY_PTR(), 1));
+    j.push(mk_inst_const_i64(1, 3));
+    j.push(mk_inst_field_set(2, 0, 0, 1));
+    j.push(mk_inst_return(3, 0));
+    let r: String = vc_skip_reason(one_block(String::from("s"), two, ITY_PTR(), j));
+    if r != String::from("unsupported-opcode: FieldSet on a parameter that may alias another parameter") { return 22; }
+    0
+}
+
+// A pointer defined by a call (a `Vec::new` result here) is neither an
+// allocation nor a parameter.
+fn check_field_set_on_call_result() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_const_i64(0, 8));
+    i.push(mk_inst_const_i64(1, 3));
+    i.push(mk_inst_call_extern(2, ITY_PTR(), args2(0, 0), String::from("__vow_vec_new")));
+    i.push(mk_inst_field_set(3, 2, 0, 1));
+    i.push(mk_inst_return(4, 2));
+    let r: String = vc_skip_reason(one_block(String::from("s"), Vec::new(), ITY_PTR(), i));
+    if r != String::from("unsupported-opcode: FieldSet on a value that is neither an allocation nor a parameter") { return 26; }
+    0
+}
+
+fn check_field_set_through_phi() -> i64 {
+    let f: IrFunction = alias_fn();
+    let m: IrBlock = f.blocks[3];
+    m.insts[3] = mk_inst_field_set(23, 20, 0, 22);
+    let r: String = vc_skip_reason(f);
+    if r != String::from("unsupported-opcode: FieldSet through a merged value") { return 25; }
     0
 }
 
@@ -324,7 +361,7 @@ fn check_slot_overwrite_and_sorts() -> i64 {
     let ar: VcArena = vc_arena_new();
     let hdr: SmtScript = vc_script_new();
     let ag: VcAgg = vc_agg_new(vc_flow_new(1, 1));
-    let o: i64 = vc_agg_alloc(ag);
+    let o: i64 = vc_agg_alloc(ag, -1);
     let a: i64 = vc_tm_bv(ar, 64, 1, 0);
     let b: i64 = vc_tm_bv(ar, 64, 2, 0);
     vc_agg_set(ag, o, 3, 64, a);
@@ -426,7 +463,7 @@ fn check_wide_slot_overlap() -> i64 {
     let ar: VcArena = vc_arena_new();
     let hdr: SmtScript = vc_script_new();
     let ag: VcAgg = vc_agg_new(vc_flow_new(1, 1));
-    let o: i64 = vc_agg_alloc(ag);
+    let o: i64 = vc_agg_alloc(ag, -1);
     let w: i64 = vc_tm_bv(ar, 128, 1, 0);
     let w2: i64 = vc_tm_bv(ar, 128, 2, 0);
     let n: i64 = vc_tm_bv(ar, 64, 3, 0);
@@ -448,6 +485,152 @@ fn check_wide_slot_overlap() -> i64 {
     vc_agg_set(ag, o, 2, 128, w);
     if vc_agg_get(ag, ar, hdr, o, 3, 64) == n { return 167; }
     if vc_agg_get(ag, ar, hdr, o, 1, 128) == w2 { return 168; }
+    0
+}
+
+fn cond_set_fn() -> IrFunction {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_arg(0, ITY_I64(), 0));
+    e.push(mk_inst_alloc(1, 16));
+    e.push(mk_inst_const_i64(2, 0));
+    e.push(mk_inst_field_set(3, 1, 0, 2));
+    e.push(mk_inst(4, IOP_GT(), ITY_BOOL(), args2(0, 2)));
+    e.push(mk_inst_branch(5, 4, 1, 2));
+    let t: Vec<IrInst> = Vec::new();
+    t.push(mk_inst_field_set(6, 1, 0, 0));
+    t.push(mk_inst_jump(7, 2));
+    let m: Vec<IrInst> = Vec::new();
+    m.push(mk_inst_field_get(8, ITY_I64(), 1, 0));
+    m.push(mk_inst(9, IOP_GE(), ITY_BOOL(), args2(8, 2)));
+    m.push(mk_vow(10, IOP_VOW_ENS(), 9, 0));
+    m.push(mk_inst_return(11, 1));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, t));
+    blocks.push(mk_block(2, m));
+    mk_function(1, String::from("cond_set"), mk_params1(), ITY_PTR(), blocks)
+}
+
+fn alias_fn() -> IrFunction {
+    let e: Vec<IrInst> = Vec::new();
+    e.push(mk_inst_arg(0, ITY_I64(), 0));
+    e.push(mk_inst_alloc(1, 16));
+    e.push(mk_inst_alloc(2, 16));
+    e.push(mk_inst_const_i64(3, 0));
+    e.push(mk_inst_const_i64(4, 1));
+    e.push(mk_inst_const_i64(5, 2));
+    e.push(mk_inst_field_set(6, 1, 0, 4));
+    e.push(mk_inst_field_set(7, 2, 0, 5));
+    e.push(mk_inst(8, IOP_GT(), ITY_BOOL(), args2(0, 3)));
+    e.push(mk_inst_branch(9, 8, 1, 2));
+    let t: Vec<IrInst> = Vec::new();
+    t.push(mk_inst_upsilon(10, 1, 20));
+    t.push(mk_inst_jump(11, 3));
+    let f: Vec<IrInst> = Vec::new();
+    f.push(mk_inst_upsilon(12, 2, 20));
+    f.push(mk_inst_jump(13, 3));
+    let m: Vec<IrInst> = Vec::new();
+    m.push(mk_inst_phi(20, ITY_PTR()));
+    m.push(mk_inst_field_get(21, ITY_I64(), 20, 0));
+    m.push(mk_inst_const_i64(22, 7));
+    m.push(mk_inst_field_set(23, 1, 0, 22));
+    m.push(mk_inst_field_get(24, ITY_I64(), 20, 0));
+    m.push(mk_inst(25, IOP_EQ(), ITY_BOOL(), args2(21, 24)));
+    m.push(mk_vow(26, IOP_VOW_ENS(), 25, 0));
+    m.push(mk_inst_return(27, 20));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, e));
+    blocks.push(mk_block(1, t));
+    blocks.push(mk_block(2, f));
+    blocks.push(mk_block(3, m));
+    mk_function(1, String::from("alias"), mk_params1(), ITY_PTR(), blocks)
+}
+
+fn check_conditional_write_is_ite() -> i64 {
+    let f: IrFunction = cond_set_fn();
+    if vc_skip_reason(f).len() != 0 { return 230; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 231; }
+    let all: String = query(cs, 0);
+    // the arm that skips the write keeps the stored 0
+    if !all.contains(String::from("(ite v4 p0 #x0000000000000000)")) { return 232; }
+    if all.contains(String::from("declare-const j")) { return 233; }
+    0
+}
+
+// A write that runs under the path condition the object was created under, or
+// under `true`, replaces the slot; any other keeps the old value elsewhere.
+fn check_write_path_conditions() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let hdr: SmtScript = vc_script_new();
+    let ag: VcAgg = vc_agg_new(vc_flow_new(1, 1));
+    let c1: i64 = vc_agg_declare(ar, hdr, String::from("c1"), VC_SORT_BOOL());
+    let c2: i64 = vc_agg_declare(ar, hdr, String::from("c2"), VC_SORT_BOOL());
+    let o: i64 = vc_agg_alloc(ag, c1);
+    let a: i64 = vc_tm_bv(ar, 64, 1, 0);
+    let b: i64 = vc_tm_bv(ar, 64, 2, 0);
+    vc_agg_write(ag, ar, hdr, o, 0, 64, a, c1);
+    if vc_agg_get(ag, ar, hdr, o, 0, 64) != a { return 240; }
+    vc_agg_write(ag, ar, hdr, o, 0, 64, b, c2);
+    if vc_agg_get(ag, ar, hdr, o, 0, 64) != vc_tm_app3(ar, VC_OP_ITE(), c2, b, a) { return 241; }
+    // a slot nothing wrote keeps an unconstrained constant on the other paths
+    vc_agg_write(ag, ar, hdr, o, 1, 64, a, c2);
+    let r: i64 = vc_agg_get(ag, ar, hdr, o, 1, 64);
+    if r == a { return 242; }
+    if !vc_smt_render(ar, hdr).contains(String::from("(declare-const j0 (_ BitVec 64))")) { return 243; }
+    vc_agg_write(ag, ar, hdr, o, 1, 64, b, vc_tm_bool_const(ar, true));
+    if vc_agg_get(ag, ar, hdr, o, 1, 64) != b { return 244; }
+    0
+}
+
+fn check_conditional_write_covers_other_views() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let hdr: SmtScript = vc_script_new();
+    let ag: VcAgg = vc_agg_new(vc_flow_new(1, 1));
+    let c: i64 = vc_agg_declare(ar, hdr, String::from("c"), VC_SORT_BOOL());
+    let o: i64 = vc_agg_alloc(ag, -1);
+    let n: i64 = vc_tm_bv(ar, 64, 3, 0);
+    let w: i64 = vc_tm_bv(ar, 128, 4, 0);
+    vc_agg_write(ag, ar, hdr, o, 3, 64, n, vc_tm_bool_const(ar, true));
+    vc_agg_write(ag, ar, hdr, o, 2, 128, w, c);
+    // on the paths that take the wide write the narrow view is gone, on the others it stays
+    let v: i64 = vc_agg_get(ag, ar, hdr, o, 3, 64);
+    if v == n { return 250; }
+    vc_script_define_fun(hdr, String::from("r"), 64, v);
+    if !vc_smt_render(ar, hdr).contains(String::from("(define-fun r () (_ BitVec 64) (ite c j1 #x0000000000000003))")) { return 251; }
+    0
+}
+
+fn check_parameter_writes() -> i64 {
+    let ar: VcArena = vc_arena_new();
+    let hdr: SmtScript = vc_script_new();
+    let ag: VcAgg = vc_agg_new(vc_flow_new(1, 1));
+    let c: i64 = vc_agg_declare(ar, hdr, String::from("c"), VC_SORT_BOOL());
+    let p: i64 = vc_agg_param(ag, 0);
+    let a: i64 = vc_tm_bv(ar, 64, 1, 0);
+    // a conditional write leaves the parameter's own symbol on the other paths
+    vc_agg_write(ag, ar, hdr, p, 2, 64, a, c);
+    let r: i64 = vc_agg_get(ag, ar, hdr, p, 2, 64);
+    if r == a { return 260; }
+    vc_script_define_fun(hdr, String::from("r"), 64, r);
+    if !vc_smt_render(ar, hdr).contains(String::from("(define-fun r () (_ BitVec 64) (ite c #x0000000000000001 p0f2s64))")) { return 261; }
+    // a write that always runs replaces it, and a view it covered is not the
+    // parameter's symbol again
+    let s: i64 = vc_agg_get(ag, ar, hdr, p, 6, 64);
+    vc_agg_write(ag, ar, hdr, p, 6, 128, vc_tm_bv(ar, 128, 9, 0), vc_tm_bool_const(ar, true));
+    if vc_agg_get(ag, ar, hdr, p, 6, 64) == s { return 262; }
+    if count_of(vc_smt_render(ar, hdr), String::from("(declare-const p0f6s64 ")) != 1 { return 263; }
+    0
+}
+
+// Reading a merge after a write to one of its objects sees the write.
+fn check_phi_read_follows_writes() -> i64 {
+    let f: IrFunction = alias_fn();
+    if vc_skip_reason(f).len() != 0 { return 270; }
+    let cs: VcClaims = vc_claims(f);
+    let all: String = query(cs, 0);
+    if count_of(all, String::from("(ite ")) != 2 { return 271; }
+    if !all.contains(String::from("#x0000000000000007")) { return 272; }
     0
 }
 
@@ -519,7 +702,9 @@ fn check_slot_read_at_two_sorts_is_ambiguous() -> i64 {
 fn main() -> i32 {
     let mut r: i64 = check_struct_gate_accepts();
     if r == 0 { r = check_param_read_accepted(); }
-    if r == 0 { r = check_field_set_needs_own_block_alloc(); }
+    if r == 0 { r = check_field_set_targets(); }
+    if r == 0 { r = check_field_set_through_phi(); }
+    if r == 0 { r = check_field_set_on_call_result(); }
     if r == 0 { r = check_unsupported_aggregate_shapes(); }
     if r == 0 { r = check_effects_and_unwrap_shape(); }
     if r == 0 { r = check_unwrap_claim(); }
@@ -533,6 +718,11 @@ fn main() -> i32 {
     if r == 0 { r = check_wide_param_symbols(); }
     if r == 0 { r = check_wide_phi_merge(); }
     if r == 0 { r = check_wide_slot_overlap(); }
+    if r == 0 { r = check_conditional_write_is_ite(); }
+    if r == 0 { r = check_write_path_conditions(); }
+    if r == 0 { r = check_conditional_write_covers_other_views(); }
+    if r == 0 { r = check_parameter_writes(); }
+    if r == 0 { r = check_phi_read_follows_writes(); }
     if r == 0 { r = check_param_field_symbols_are_model_entries(); }
     if r == 0 { r = check_slot_read_at_two_sorts_is_ambiguous(); }
     i64_to_i32_wrap(r)

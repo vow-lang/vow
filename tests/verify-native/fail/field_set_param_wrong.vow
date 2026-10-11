@@ -1,0 +1,19 @@
+// TEST: replay-skipped struct parameter
+// TEST: counterexample-fn "reset"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+module FieldSetParamWrong
+
+struct Cell { value: i64 }
+
+fn reset(c: Cell) -> i64 vow {
+  ensures: result == 1
+} {
+  c.value = 0;
+  c.value
+}
+
+fn main() -> i32 [io] {
+  print_i64(reset(Cell { value: 3 }));
+  0
+}
