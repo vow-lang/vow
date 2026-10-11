@@ -366,7 +366,7 @@ syntax say it":
 | 5. Dispatch totality | ✓ | ✓ | ✓ | ✓ (pure dispatch) | ✓ over finite domain |
 | 6a. Argument-relational | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 6b. Cross-fn uniqueness | ✓ (O(n²)) | ✓ | ✓ | ✓ | ✓ but unscalable → prefer structural encoding |
-| 7. Loop invariant | ✓ | ✓ | ✓ | ✓ | partial (bounded / k-induction) |
+| 7. Loop invariant | ✓ | ✓ | ✓ | ✓ | partial (bounded; native also by induction) |
 | Bounded quantifier (`forall i in 0..n`) | ✗ (no surface syntax) | — | — | — | — (roadmap #467/#470) |
 
 Contract expressions must be **pure** — they cannot call effectful functions
@@ -378,11 +378,13 @@ model limitations, not contract-language limitations.
 
 `vow contracts --verify` performs the **per-obligation** quality analysis tracked
 in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via
-ESBMC `--multi-property`), plus the three quality signals above:
+ESBMC `--multi-property`, or from one `verify-worker` per function under
+`--backend native`), plus the three quality signals above:
 
 - **Tautology** — the static `quality` field flags constant clauses (no verifier is run).
-- **Vacuity** — a contradictory `requires` is caught by the `--error-label`
-  reachability probe and reported `status: "vacuous"` (fail-closed).
+- **Vacuity** — a contradictory `requires` is caught by the reachability probe
+  (ESBMC `--error-label`, or the post-`requires` cut under `--backend native`) and
+  reported `status: "vacuous"` (fail-closed).
 - **Weakness** — the body-replace probe reports `trivially_satisfiable: true` for
   an `ensures` a trivial `return <default>` body satisfies (informational).
 

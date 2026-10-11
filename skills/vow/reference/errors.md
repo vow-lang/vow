@@ -1394,7 +1394,7 @@ The native backend names the reason with a code from a **closed** list, written 
 | `non-modelable-callee` | An inlined callee is itself `Skipped`. | `<callee> (<code>)` |
 | `reserved-verifier-symbol` | The function name collides with a reserved checker symbol. Defined; not emitted yet. | |
 
-The list is closed: a function that fits no row is a verifier bug, not a new `Skipped` reason. Under the ESBMC backend the reason is the older free-text `non_modelable_reason` of the C emitter instead, for example an opcode the C model cannot represent (`RegionAlloc` and `FieldSet` from a struct construction the model does not cover, `Load`/`Store`, `RemF*`, `LinearBorrow`), a 128-bit constant, checked operation or aggregate field, or a call that passes a `Vec`, `String`, map or `Option` argument to a user function (`Call target with a collection argument`). Native verification models the 128-bit cases, so those are `Skipped` only under ESBMC.
+The list is closed: a function that fits no row is a verifier bug, not a new `Skipped` reason. Under the ESBMC backend the reason is the older free-text `non_modelable_reason` of the C emitter instead, for example an opcode the C model cannot represent (`RegionAlloc` and `FieldSet` from a struct construction the model does not cover, `Load`/`Store`, `RemF*`, `LinearBorrow`), a 128-bit checked operation or aggregate field, or a call that passes a `Vec`, `String`, map or `Option` argument to a user function (`Call target with a collection argument`). Native verification models the 128-bit cases, so those are `Skipped` only under ESBMC.
 
 **Wrong:**
 

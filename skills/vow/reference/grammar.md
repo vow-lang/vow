@@ -779,7 +779,9 @@ reported as `VerificationSkipped` rather than checked.
 This idiom does not by itself make a length-bounded loop provable. A loop
 without an `invariant` that runs longer than the verifier's unwind bound
 (ESBMC's `--max-k-step`, or the native backend's internal bound of 64) returns
-`unknown`, for this form and the signed `while i >= 0` form alike. What the idiom buys is a
+`unknown` unless the native backend closes it by induction (`docs/spec/cli.md` →
+"Native backend", "Loops"), for this form and the signed `while i >= 0` form
+alike. What the idiom buys is a
 *writable* invariant rather than a stronger proof: `i <= n` is expressible on
 an unsigned index, whereas the signed form's companion clause `i >= -1` is not
 — a negative literal does not fit `u64` at all.

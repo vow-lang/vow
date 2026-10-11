@@ -496,7 +496,7 @@ callee, `violation`, `source` and `blame` are the callee's clause, and `vow_id`
 is the callee-local id (the id a debug-mode `VowViolation` for that callee would
 report). It is never resolved against the verified caller's same-numbered clause.
 
-A violation that is not a contract clause (a division or remainder by zero, `MIN / -1`, an over-wide shift, `unwrap()` on `None`, an out-of-bounds `Vec` index under the native backend) carries the unattributed `vow_id` `4294967293`, blame `None` and a `violation` text naming the abort. It is not a `requires`, so there is no clause to blame; bound the operand with a real `requires` or guard the operation.
+A violation that is not a contract clause (a division or remainder by zero or an over-wide shift under either backend; `MIN / -1`, `unwrap()` on `None` and an out-of-bounds `Vec` index under the native backend only) carries the unattributed `vow_id` `4294967293`, blame `None` and a `violation` text naming the abort. It is not a `requires`, so there is no clause to blame; bound the operand with a real `requires` or guard the operation.
 
 Under the ESBMC backend, variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot
 appear in a Vow identifier, so the prefix cannot collide with a source name.
@@ -528,10 +528,11 @@ Both backends treat `u64` as an unsigned 64-bit value (`uint64_t` and unsigned n
 128-bit scalars, constants, checked arithmetic and struct fields or enum payloads
 as 128-bit bit-vectors, so every value is exact (`i128::MIN`, `i128::MAX` and
 `u128::MAX` included) and a counterexample reports the full 128-bit value. Under
-the ESBMC backend 128-bit checked arithmetic, constants and aggregate fields are
-`Skipped`; a bit-vector proof is exact, and a proof from its `--encoding ir`
-timeout fallback is reported as plain `proven` and is weaker. A `Vec<i128>` or
-`Vec<u128>` element is `Skipped` under both backends:
+the ESBMC backend 128-bit constants are modelled exactly under the bit-vector
+encoding, and a proof from its `--encoding ir` timeout fallback is reported as
+plain `proven` and is weaker; 128-bit checked arithmetic and aggregate fields
+are `Skipped`. A `Vec<i128>` or `Vec<u128>` element is `Skipped` under both
+backends. A contract over 128-bit scalars and literals verifies under both:
 
 ```vow
 fn at_least_one(x: u128) -> u128
