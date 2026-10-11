@@ -14,16 +14,17 @@ use lower
 // operand, and must not leak into the literals next to a typed leaf (#1581).
 
 fn lower_probe() -> IrModule {
-    let source: String = String::from("module CastWideContext\nfn cast(i: u64, j: u64) -> u128 { (i * 10 + j) as u128 }\nfn cast_signed(i: i64, j: i64) -> i128 { (i * 10 + j) as i128 }\nfn fill(i: u64, j: u64) -> Vec<u128> {\n    let v: Vec<u128> = Vec::new();\n    v.push((i * 10 + j) as u128);\n    v\n}\nfn big() -> u128 { (1 << 100) as u128 }\n");
+    let source: String = String::from("module CastWideContext\nfn cast(i: u64, j: u64) -> u128 { (i * 10 + j) as u128 }\nfn cast_signed(i: i64, j: i64) -> i128 { (i * 10 + j) as i128 }\nfn fill(i: u64, j: u64) -> Vec<u128> {\n    let v: Vec<u128> = Vec::new();\n    v.push((i * 10 + j) as u128);\n    v\n}\nfn big() -> u128 { (1 << 100) as u128 }\nfn neg() -> i128 { (-5) as i128 }\nfn block() -> u128 { ({ 1 << 100 }) as u128 }\nfn branch(c: bool) -> u128 { (if c { 1 << 100 } else { 3 }) as u128 }\nfn arms(o: Option<i64>) -> u128 {\n    (match o { Option::Some(n) => 3, Option::None => 1 << 70 }) as u128\n}\nfn spin() -> u128 { (loop { break 1 << 70; }) as u128 }\nfn typed_branch(c: bool, i: u64) -> u128 { (if c { i } else { 2 }) as u128 }\nfn typed_arms(m: Option<u64>) -> u128 {\n    (match m { Option::Some(n) => n, Option::None => 2 }) as u128\n}\n");
     let arena: AstArena = arena_new();
     let parsed: Module = parse_module_into(
         lex(source), arena, diag_ctx_new(), String::from("cast_wide_context.vow")
     );
     let item_files: Vec<String> = Vec::new();
-    item_files.push(String::from("cast_wide_context.vow"));
-    item_files.push(String::from("cast_wide_context.vow"));
-    item_files.push(String::from("cast_wide_context.vow"));
-    item_files.push(String::from("cast_wide_context.vow"));
+    let mut n: u64 = 0;
+    while n < 11 {
+        item_files.push(String::from("cast_wide_context.vow"));
+        n = n + 1;
+    }
     lower_module_vow(
         parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
         Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
@@ -53,13 +54,21 @@ fn wide_const_count(m: IrModule, fn_index: u64) -> i64 {
 
 // Returns 0 when every assertion holds, otherwise the number of the first
 // violated one: 2 typed u64 operand, 3 typed i64 operand, 4 Vec push operand,
-// 5 literal-only operand lost its 128-bit constant.
+// 5 literal-only operand lost its 128-bit constant, 6 a literal-only neg/block/
+// if/match/loop operand lost it, 7 a mixed typed/literal if or match leaked it.
 fn main() -> i32 {
     let m: IrModule = lower_probe();
-    if m.functions.len() != 4 { return 1; }
+    if m.functions.len() != 11 { return 1; }
     if wide_const_count(m, 0) != 0 { return 2; }
     if wide_const_count(m, 1) != 0 { return 3; }
     if wide_const_count(m, 2) != 0 { return 4; }
     if count_op(m, 3, IOP_CONST_U128()) == 0 { return 5; }
+    let mut f: u64 = 4;
+    while f < 9 {
+        if wide_const_count(m, f) == 0 { return 6; }
+        f = f + 1;
+    }
+    if wide_const_count(m, 9) != 0 { return 7; }
+    if wide_const_count(m, 10) != 0 { return 7; }
     0
 }
