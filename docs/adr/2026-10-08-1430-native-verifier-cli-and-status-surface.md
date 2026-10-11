@@ -338,7 +338,7 @@ states what the compiler does today where it differs from the targets above:
 - **Native flag rejection text** is
   `error: --max-k-step is not supported with --backend native` (also `--solver`,
   `--encoding`), exit 1, and does not say the bound is internal.
-- **`--perfetto` under native** records the frontend, `codegen`, `link` and one
+- **`--perfetto` under native** records the frontend phase spans and one
   `verification` span, not per-claim worker or solver spans or per-worker RSS.
 - **`--timeout 0`** is a zero budget natively (no solver spawn) and an immediate
   watchdog kill under ESBMC.
