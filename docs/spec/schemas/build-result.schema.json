@@ -9,7 +9,7 @@
     "status": {
       "type": "string",
       "enum": ["Verified", "Unverified", "Skipped", "CompileFailed", "VerifyFailed"],
-      "description": "Build outcome. `Skipped` means ESBMC was invoked but at least one vowed function could not be modelled; the build fails closed with exit 1 (distinct from `Unverified`, which means ESBMC was not invoked, e.g. `--no-verify`/`--dump-ir`, exit 0)."
+      "description": "Build outcome. `Skipped` means verification was requested but at least one vowed function could not be modelled; the build fails closed with exit 1 (distinct from `Unverified`, which means no verifier was invoked, e.g. `--no-verify`/`--dump-ir`, exit 0)."
     },
     "executable": {
       "type": ["string", "null"],
@@ -35,7 +35,7 @@
     "counterexamples": {
       "type": "array",
       "items": { "$ref": "counterexample.schema.json" },
-      "description": "Structured counterexamples from ESBMC verification"
+      "description": "Structured counterexamples from verification (ESBMC or the native backend)"
     },
     "verify_status": {
       "type": "string",

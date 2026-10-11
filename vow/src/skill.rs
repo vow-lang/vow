@@ -394,7 +394,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--no-verify",
-          "description": "Skip ESBMC static verification",
+          "description": "Skip static verification",
           "long": "--no-verify",
           "value_kind": "flag"
         },
@@ -425,7 +425,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--max-k-step <N>",
-          "description": "ESBMC incremental BMC max iterations (default: 50)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (default: 50)",
           "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
@@ -433,7 +433,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--solver <boolector|z3|bitwuzla|auto>",
-          "description": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
           "long": "--solver",
           "value_name": "boolector|z3|bitwuzla|auto",
           "value_kind": "enum",
@@ -447,7 +447,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--encoding <bv|ir|auto>",
-          "description": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
           "long": "--encoding",
           "value_name": "bv|ir|auto",
           "value_kind": "enum",
@@ -460,7 +460,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--timeout <N>",
-          "description": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
+          "description": "Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed 300. ESBMC backend: under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under --backend native (default: 300 (or 30 when --encoding is auto))",
           "long": "--timeout",
           "value_name": "N",
           "value_kind": "integer",
@@ -468,11 +468,23 @@ fn skill_json() -> String {
         },
         {
           "form": "--verify-jobs <N>",
-          "description": "Max concurrent ESBMC verification jobs (default: num_cpus/2)",
+          "description": "Max concurrent verification jobs (ESBMC processes, or verify-worker subprocesses under --backend native)",
           "long": "--verify-jobs",
           "value_name": "N",
           "value_kind": "integer",
           "default": "num_cpus/2"
+        },
+        {
+          "form": "--backend <esbmc|native>",
+          "description": "Verification backend. native is accepted only by vowc verify, contracts --verify and test --verify; on build and the bare form it is a usage error (exit 1) that points at vowc verify, and esbmc is accepted silently (default: esbmc)",
+          "long": "--backend",
+          "value_name": "esbmc|native",
+          "value_kind": "enum",
+          "values": [
+            "esbmc",
+            "native"
+          ],
+          "default": "esbmc"
         },
         {
           "form": "--replay-cex",
@@ -482,7 +494,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--perfetto <path>",
-          "description": "Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache.",
+          "description": "Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link and, under the ESBMC backend, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache.",
           "long": "--perfetto",
           "value_name": "path",
           "value_kind": "string"
@@ -521,13 +533,13 @@ fn skill_json() -> String {
       "options": [
         {
           "form": "--no-cache",
-          "description": "Disable verification result caching",
+          "description": "Disable verification result caching; under --backend native it disables the native result cache of verify (see \"Result cache\" below)",
           "long": "--no-cache",
           "value_kind": "flag"
         },
         {
           "form": "--max-k-step <N>",
-          "description": "ESBMC incremental BMC max iterations (default: 50)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (default: 50)",
           "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
@@ -535,7 +547,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--solver <boolector|z3|bitwuzla|auto>",
-          "description": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
           "long": "--solver",
           "value_name": "boolector|z3|bitwuzla|auto",
           "value_kind": "enum",
@@ -549,7 +561,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--encoding <bv|ir|auto>",
-          "description": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
           "long": "--encoding",
           "value_name": "bv|ir|auto",
           "value_kind": "enum",
@@ -562,7 +574,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--timeout <N>",
-          "description": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
+          "description": "Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed 300. ESBMC backend: under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under --backend native (default: 300 (or 30 when --encoding is auto))",
           "long": "--timeout",
           "value_name": "N",
           "value_kind": "integer",
@@ -590,13 +602,13 @@ fn skill_json() -> String {
         },
         {
           "form": "--replay-cex",
-          "description": "Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by vow build.",
+          "description": "Differential test of the verifier model against runtime semantics. After the verifier reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by vow build.",
           "long": "--replay-cex",
           "value_kind": "flag"
         },
         {
           "form": "--perfetto <path>",
-          "description": "Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact.",
+          "description": "Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans and, under the ESBMC backend, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process; under --backend native it records the frontend phase spans (module-load, parse, typecheck, lower, ...) and one verification span (no per-claim worker or solver spans, no per-worker RSS yet). Accepted only by build and verify. Pure side artifact.",
           "long": "--perfetto",
           "value_name": "path",
           "value_kind": "string"
@@ -690,7 +702,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--max-k-step <N>",
-          "description": "ESBMC incremental BMC max iterations (with --verify)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (with --verify)",
           "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
@@ -698,7 +710,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--verify-jobs <N>",
-          "description": "Max concurrent ESBMC verification jobs (with --verify)",
+          "description": "Max concurrent verification jobs (with --verify)",
           "long": "--verify-jobs",
           "value_name": "N",
           "value_kind": "integer",
@@ -760,7 +772,7 @@ fn skill_json() -> String {
       "options": [
         {
           "form": "--verify",
-          "description": "Run verification (ESBMC, or the native backend with --backend native) and report per-contract status",
+          "description": "Run verification (the ESBMC backend by default, or the native backend with --backend native) and report per-contract status",
           "long": "--verify",
           "value_kind": "flag"
         },
@@ -772,7 +784,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--max-k-step <N>",
-          "description": "ESBMC incremental BMC max iterations (default: 50)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (with --verify)",
           "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
@@ -780,7 +792,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--solver <boolector|z3|bitwuzla|auto>",
-          "description": "ESBMC SMT solver (with --verify)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC SMT solver (with --verify)",
           "long": "--solver",
           "value_name": "boolector|z3|bitwuzla|auto",
           "value_kind": "enum",
@@ -794,7 +806,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--encoding <bv|ir|auto>",
-          "description": "ESBMC encoding mode (with --verify); ir requires z3 (default: auto)",
+          "description": "ESBMC backend only; a usage error under --backend native. ESBMC encoding mode (with --verify); ir requires z3 (default: auto)",
           "long": "--encoding",
           "value_name": "bv|ir|auto",
           "value_kind": "enum",
@@ -840,7 +852,7 @@ fn skill_json() -> String {
       },
       "notes": [
         "runs frontend only by default",
-        "use --verify for per-contract ESBMC status"
+        "use --verify for per-contract verification status"
       ]
     },
     "complexity": {
@@ -910,28 +922,29 @@ fn skill_json() -> String {
   "build_options": {
     "-o, --output <path>": "Output executable path (default: build/<stem>)",
     "--mode <debug|release|profile|sanitize>": "Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + use-after-region-close detection for Vecs (default: release)",
-    "--no-verify": "Skip ESBMC static verification",
+    "--no-verify": "Skip static verification",
     "--dump-ir": "Print IR text to stdout and exit (no JSON output, no codegen)",
     "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
     "--no-cache": "Disable verification result caching, and (for --no-verify builds) the compile-object cache. See \"Compile-object cache behavior\" below",
-    "--max-k-step <N>": "ESBMC incremental BMC max iterations (default: 50)",
-    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
-    "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
-    "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
-    "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (default: num_cpus/2)",
+    "--max-k-step <N>": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (default: 50)",
+    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC backend only; a usage error under --backend native. ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+    "--encoding <bv|ir|auto>": "ESBMC backend only; a usage error under --backend native. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+    "--timeout <N>": "Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed 300. ESBMC backend: under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under --backend native (default: 300 (or 30 when --encoding is auto))",
+    "--verify-jobs <N>": "Max concurrent verification jobs (ESBMC processes, or verify-worker subprocesses under --backend native)",
+    "--backend <esbmc|native>": "Verification backend. native is accepted only by vowc verify, contracts --verify and test --verify; on build and the bare form it is a usage error (exit 1) that points at vowc verify, and esbmc is accepted silently (default: esbmc)",
     "--replay-cex": "Differential test the verifier model against runtime semantics (same as vow verify --replay-cex; see below)",
-    "--perfetto <path>": "Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache."
+    "--perfetto <path>": "Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link and, under the ESBMC backend, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache."
   },
   "verify_options": {
-    "--no-cache": "Disable verification result caching",
-    "--max-k-step <N>": "ESBMC incremental BMC max iterations (default: 50)",
-    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
-    "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
-    "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
+    "--no-cache": "Disable verification result caching; under --backend native it disables the native result cache of verify (see \"Result cache\" below)",
+    "--max-k-step <N>": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (default: 50)",
+    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC backend only; a usage error under --backend native. ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+    "--encoding <bv|ir|auto>": "ESBMC backend only; a usage error under --backend native. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+    "--timeout <N>": "Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed 300. ESBMC backend: under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under --backend native (default: 300 (or 30 when --encoding is auto))",
     "--verify-jobs <N>": "Max concurrent verification jobs (ESBMC processes, or verify-worker subprocesses under --backend native)",
     "--backend <esbmc|native>": "Verification backend. native is the symbolic checker with Bitwuzla, run in per-function worker subprocesses (epic #1398); self-hosted vowc only, see \"Native backend\" below. Accepted by verify, contracts --verify and test --verify; contracts and test without --verify, build and the bare vowc <file> form (identical to build) reject --backend native with a usage error (exit 1) instead of silently running ESBMC or reporting not_verified as if the native backend had run. Any value other than esbmc or native is a usage error (default: esbmc)",
-    "--replay-cex": "Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by vow build.",
-    "--perfetto <path>": "Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact."
+    "--replay-cex": "Differential test of the verifier model against runtime semantics. After the verifier reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by vow build.",
+    "--perfetto <path>": "Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans and, under the ESBMC backend, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process; under --backend native it records the frontend phase spans (module-load, parse, typecheck, lower, ...) and one verification span (no per-claim worker or solver spans, no per-worker RSS yet). Accepted only by build and verify. Pure side artifact."
   },
   "test_options": {
     "--verify": "Run verification (ESBMC, or the native backend with --backend native) on test files",
@@ -941,18 +954,18 @@ fn skill_json() -> String {
     "--jobs <N>": "Max test files compiled and run concurrently (default: min(num_cpus/2, 8) (1 with --verify))",
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: (default))",
     "--timeout <ms>": "Per-test execution timeout in milliseconds (default: 30000)",
-    "--max-k-step <N>": "ESBMC incremental BMC max iterations (with --verify)",
-    "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (with --verify)"
+    "--max-k-step <N>": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (with --verify)",
+    "--verify-jobs <N>": "Max concurrent verification jobs (with --verify)"
   },
   "decl_options": {
     "-o, --output <path>": "Output declaration file path (default: <source>.vow.d)"
   },
   "contracts_options": {
-    "--verify": "Run verification (ESBMC, or the native backend with --backend native) and report per-contract status",
+    "--verify": "Run verification (the ESBMC backend by default, or the native backend with --backend native) and report per-contract status",
     "--no-cache": "Disable verification result caching",
-    "--max-k-step <N>": "ESBMC incremental BMC max iterations (default: 50)",
-    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver (with --verify)",
-    "--encoding <bv|ir|auto>": "ESBMC encoding mode (with --verify); ir requires z3 (default: auto)",
+    "--max-k-step <N>": "ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (with --verify)",
+    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC backend only; a usage error under --backend native. ESBMC SMT solver (with --verify)",
+    "--encoding <bv|ir|auto>": "ESBMC backend only; a usage error under --backend native. ESBMC encoding mode (with --verify); ir requires z3 (default: auto)",
     "--verify-jobs <N>": "Max concurrent verify-worker subprocesses under --backend native; a no-op under ESBMC (the ESBMC loop is serial)",
     "--backend <esbmc|native>": "Verification backend; native requires --verify (see \"Native backend: contracts and test\")",
     "--timeout <N>": "Seconds per function (and per probe) under --backend native; ESBMC's own timeout otherwise (default: 300 (native))"
@@ -1013,7 +1026,7 @@ fn skill_json() -> String {
     "diagnostics": "[array of {error_code, message, severity, span: {file, offset, length}}]",
     "message": "error detail (CompileFailed)",
     "function": "function name (VerifyFailed)",
-    "counterexample": "ESBMC counterexample description (VerifyFailed)"
+    "counterexample": "verifier counterexample description (VerifyFailed)"
   },
   "diagnostics": {
     "schema_ref": "schemas/diagnostic.schema.json",
@@ -1317,7 +1330,13 @@ fn skill_json() -> String {
   },
   "verification_defaults": {
     "strategy": "incremental-bmc",
-    "max_k_step": 50
+    "max_k_step": 50,
+    "native": {
+      "strategy": "bounded unwinding with invariant induction and k-induction",
+      "tuning_flags": [
+        "--timeout"
+      ]
+    }
   }
 }"##
     .to_string()
@@ -1342,28 +1361,29 @@ USAGE
 BUILD OPTIONS
   -o, --output <path>     Output executable path (default: build/<stem>)
   --mode <debug|release|profile|sanitize>  Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + use-after-region-close detection for Vecs (default: release)
-  --no-verify             Skip ESBMC static verification
+  --no-verify             Skip static verification
   --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)
   --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)
   --no-cache              Disable verification result caching, and (for --no-verify builds) the compile-object cache. See "Compile-object cache behavior" below
-  --max-k-step <N>        ESBMC incremental BMC max iterations (default: 50)
-  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
-  --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
-  --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))
-  --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)
+  --max-k-step <N>        ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (default: 50)
+  --solver <boolector|z3|bitwuzla|auto>  ESBMC backend only; a usage error under --backend native. ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
+  --encoding <bv|ir|auto>  ESBMC backend only; a usage error under --backend native. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
+  --timeout <N>           Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed 300. ESBMC backend: under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under --backend native (default: 300 (or 30 when --encoding is auto))
+  --verify-jobs <N>       Max concurrent verification jobs (ESBMC processes, or verify-worker subprocesses under --backend native)
+  --backend <esbmc|native>  Verification backend. native is accepted only by vowc verify, contracts --verify and test --verify; on build and the bare form it is a usage error (exit 1) that points at vowc verify, and esbmc is accepted silently (default: esbmc)
   --replay-cex            Differential test the verifier model against runtime semantics (same as vow verify --replay-cex; see below)
-  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache.
+  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link and, under the ESBMC backend, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache.
 
 VERIFY OPTIONS
-  --no-cache              Disable verification result caching
-  --max-k-step <N>        ESBMC incremental BMC max iterations (default: 50)
-  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
-  --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
-  --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))
+  --no-cache              Disable verification result caching; under --backend native it disables the native result cache of verify (see "Result cache" below)
+  --max-k-step <N>        ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (default: 50)
+  --solver <boolector|z3|bitwuzla|auto>  ESBMC backend only; a usage error under --backend native. ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
+  --encoding <bv|ir|auto>  ESBMC backend only; a usage error under --backend native. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
+  --timeout <N>           Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed 300. ESBMC backend: under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under --backend native (default: 300 (or 30 when --encoding is auto))
   --verify-jobs <N>       Max concurrent verification jobs (ESBMC processes, or verify-worker subprocesses under --backend native)
   --backend <esbmc|native>  Verification backend. native is the symbolic checker with Bitwuzla, run in per-function worker subprocesses (epic #1398); self-hosted vowc only, see "Native backend" below. Accepted by verify, contracts --verify and test --verify; contracts and test without --verify, build and the bare vowc <file> form (identical to build) reject --backend native with a usage error (exit 1) instead of silently running ESBMC or reporting not_verified as if the native backend had run. Any value other than esbmc or native is a usage error (default: esbmc)
-  --replay-cex            Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by vow build.
-  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact.
+  --replay-cex            Differential test of the verifier model against runtime semantics. After the verifier reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by vow build.
+  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans and, under the ESBMC backend, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process; under --backend native it records the frontend phase spans (module-load, parse, typecheck, lower, ...) and one verification span (no per-claim worker or solver spans, no per-worker RSS yet). Accepted only by build and verify. Pure side artifact.
 
 TEST OPTIONS
   --verify                Run verification (ESBMC, or the native backend with --backend native) on test files
@@ -1373,15 +1393,15 @@ TEST OPTIONS
   --jobs <N>              Max test files compiled and run concurrently (default: min(num_cpus/2, 8) (1 with --verify))
   --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))
   --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)
-  --max-k-step <N>        ESBMC incremental BMC max iterations (with --verify)
-  --verify-jobs <N>       Max concurrent ESBMC verification jobs (with --verify)
+  --max-k-step <N>        ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (with --verify)
+  --verify-jobs <N>       Max concurrent verification jobs (with --verify)
 
 CONTRACTS OPTIONS
-  --verify                Run verification (ESBMC, or the native backend with --backend native) and report per-contract status
+  --verify                Run verification (the ESBMC backend by default, or the native backend with --backend native) and report per-contract status
   --no-cache              Disable verification result caching
-  --max-k-step <N>        ESBMC incremental BMC max iterations (default: 50)
-  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver (with --verify)
-  --encoding <bv|ir|auto>  ESBMC encoding mode (with --verify); ir requires z3 (default: auto)
+  --max-k-step <N>        ESBMC backend only; a usage error under --backend native. ESBMC incremental BMC max iterations (with --verify)
+  --solver <boolector|z3|bitwuzla|auto>  ESBMC backend only; a usage error under --backend native. ESBMC SMT solver (with --verify)
+  --encoding <bv|ir|auto>  ESBMC backend only; a usage error under --backend native. ESBMC encoding mode (with --verify); ir requires z3 (default: auto)
   --verify-jobs <N>       Max concurrent verify-worker subprocesses under --backend native; a no-op under ESBMC (the ESBMC loop is serial)
   --backend <esbmc|native>  Verification backend; native requires --verify (see "Native backend: contracts and test")
   --timeout <N>           Seconds per function (and per probe) under --backend native; ESBMC's own timeout otherwise (default: 300 (native))
@@ -1406,7 +1426,7 @@ OUTPUT (JSON on stdout)
   diagnostics : array of {error_code, message, severity, span: {file, offset, length}}
   message     : error detail (CompileFailed)
   function    : function name (VerifyFailed)
-  counterexample: ESBMC counterexample (VerifyFailed)
+  counterexample: verifier counterexample (VerifyFailed)
 
 EXIT CODES
   0  success (Verified or Unverified)
@@ -1444,9 +1464,10 @@ METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v
             HashMap: HashMap::new/insert/get/contains_key/remove/len   BTreeMap: BTreeMap::new/insert/get/contains/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! ?
 
-VERIFICATION DEFAULTS (--max-k-step)
-  Strategy        : incremental-bmc (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)
-  Incremental BMC : 50 max iterations (--max-k-step)"##
+VERIFICATION DEFAULTS
+  ESBMC backend (default) : incremental-bmc (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)
+  Incremental BMC         : 50 max iterations (--max-k-step)
+  Native backend          : bounded unwinding with invariant induction and k-induction (--backend native; no bound flag, --timeout is the only knob)"##
         .to_string()
 }
 // GENERATE:SKILL_HUMAN:END
@@ -1457,7 +1478,7 @@ fn skill_entrypoint_markdown() -> String {
 name: vow
 description: >-
   Write, compile, debug, and verify Vow programs (.vow files) with contracts,
-  CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.
+  CEGIS, verifier counterexamples, diagnostics, and vow build / vow verify.
 when_to_use: >-
   Use when the user edits or creates .vow files, says "write a Vow program",
   "fix this counterexample", "add contracts", "why did verification fail",
@@ -1523,7 +1544,7 @@ fn skill_bundle_markdown() -> String {
 name: vow
 description: >-
   Write, compile, debug, and verify Vow programs (.vow files) with contracts,
-  CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.
+  CEGIS, verifier counterexamples, diagnostics, and vow build / vow verify.
 when_to_use: >-
   Use when the user edits or creates .vow files, says "write a Vow program",
   "fix this counterexample", "add contracts", "why did verification fail",
@@ -1533,7 +1554,7 @@ argument-hint: "[file.vow]"
 
 # Vow Language Reference
 
-Vow is a systems programming language with built-in contracts (preconditions, postconditions, loop invariants) that are statically verified by ESBMC bounded model checking. Programs compile to native executables via Cranelift. The compiler emits structured JSON for machine consumption.
+Vow is a systems programming language with built-in contracts (preconditions, postconditions, loop invariants) that are statically verified by a model-checking backend: ESBMC bounded model checking today (the default), or the native verifier with `--backend native`. Programs compile to native executables via Cranelift. The compiler emits structured JSON for machine consumption.
 
 In all documentation below, `vow` refers to the `build/vowc` binary.
 
@@ -1550,7 +1571,7 @@ The standard workflow for writing verified Vow programs:
 3. **Parse JSON** — Read the JSON object from stdout
 4. **Handle status:**
    - `Verified` → Done. Binary is at `executable`.
-   - `Unverified` → Compiled but ESBMC not available. Binary is at `executable`.
+   - `Unverified` → Compiled but verification was not run (`--no-verify` or `--dump-ir`). Binary is at `executable`.
    - `CompileFailed` → Read `diagnostics[]` for errors. Fix and retry.
    - `VerifyFailed` → Read `counterexamples[]`. Fix contracts or implementation. Retry.
 5. **Iterate** — Repeat steps 2–4 until `Verified`.
@@ -1740,8 +1761,8 @@ pub fn api_function(x: i64) -> i64 {
 | `u32`  | 32-bit unsigned integer  |
 | `u64`  | 64-bit unsigned integer  |
 | `u128` | 128-bit unsigned integer (verifier may time out; see below) |
-| `f32`  | 32-bit float (limited support — avoid in contracts) |
-| `f64`  | 64-bit float (limited support — avoid in contracts) |
+| `f32`  | 32-bit float (limited support — avoid in contracts; `--backend native` does not model float operations yet, so a contracted function using them is `Skipped`) |
+| `f64`  | 64-bit float (limited support — avoid in contracts; `--backend native` does not model float operations yet, so a contracted function using them is `Skipped`) |
 | `bool` | Boolean                  |
 | `()`   | Unit type; its only value is also written `()` (not allowed as a parameter type) |
 | `!`    | Never type (diverges)    |
@@ -1761,8 +1782,9 @@ index expression has exactly the type `u64` (see [Indexing](#indexing)), so
 **128-bit implementation status:** `i128`/`u128` are executable end to end:
 full-range literals, arithmetic, casts, narrowing, and `parse_i128`/`parse_u128`
 compile natively. A 128-bit value may be an `Option`, `Result`, or `enum`
-payload, a struct field, or a `Vec` element (see the layout below). ESBMC modelling of 128-bit aggregates and constants is not available, so
-verification reports `Skipped` rather than an unsound result. Never weaken
+payload, a struct field, or a `Vec` element (see the layout below). The ESBMC backend does not model 128-bit aggregates and constants, so
+it reports `Skipped` rather than an unsound result; the native backend
+(`--backend native`) models them exactly. Never weaken
 contracts to fit the verifier.
 
 **Aggregate layout:** every struct field and enum payload occupies one 8-byte
@@ -1984,9 +2006,9 @@ a `match` arm, `?`, or `.unwrap()`; at every payload position; and at every
 
 Verification is a separate matter. 128-bit literals (in a body or in
 `requires`/`ensures`/`invariant`) are verifiable, and are modelled exactly under
-the bit-vector encoding, `i128::MIN`, `i128::MAX` and `u128::MAX` included; a
-proof obtained by the `--encoding ir` timeout fallback is reported as `ProvenIr`
-and is weaker. Under the default ESBMC backend every 128-bit aggregate access
+the bit-vector encoding (both backends), `i128::MIN`, `i128::MAX` and `u128::MAX` included; under
+ESBMC a proof obtained by the `--encoding ir` timeout fallback is weaker (it is
+reported as plain `proven`). Under the default ESBMC backend every 128-bit aggregate access
 is `Skipped` rather than modelled: a contracted function that reads or writes a
 128-bit aggregate field or enum payload is reported `Skipped`, with `FieldGet at
 128-bit width` or `FieldSet at 128-bit width`, rather than being modelled through
@@ -2067,7 +2089,7 @@ the count's type.
 `>= bit-width(LHS)` is a compile-time error (`ShiftCountOutOfRange`), at every
 width: `(x: u8) << 8` and `(x: i64) << 64` do not compile. Dynamic shift counts
 (`x << n` where `n` is not a const expression) get a check on the operation
-that ESBMC proves: the count must satisfy `0 <= count < width(LHS)` at the point
+that the verifier proves: the count must satisfy `0 <= count < width(LHS)` at the point
 of the shift, so a negative signed count is rejected as well. At runtime only
 8-bit shifts trap (`i8`/`u8` with count `>= 8` aborts with `ArithmeticOverflow`);
 wider shifts mask the count to the operand width, like the hardware shift.
@@ -2198,8 +2220,8 @@ match i64_to_u8_try(big) {
 }
 ```
 
-These intrinsics are emitted by the compiler so ESBMC sees their semantics
-directly in the verification C model.
+These intrinsics are emitted by the compiler so the verifier sees their semantics
+directly in its model (the C model under ESBMC).
 
 For the `u8` target, the available narrowing source types are `i16`, `i32`,
 `i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three
@@ -2362,9 +2384,12 @@ A `print_*` call inside a contracted function gives that function an effect,
 and the verifier model is restricted to pure functions, so the contract is
 reported as `VerificationSkipped` rather than checked.
 
-This idiom does not by itself make a length-bounded loop provable. ESBMC's
-unwind bound sits below the modelled collection capacity, so this form and the
-signed `while i >= 0` form both return `unknown`. What the idiom buys is a
+This idiom does not by itself make a length-bounded loop provable. A loop
+without an `invariant` that runs longer than the verifier's unwind bound
+(ESBMC's `--max-k-step`, or the native backend's internal bound of 64) returns
+`unknown` unless the native backend closes it by induction (`docs/spec/cli.md` →
+"Native backend", "Loops"), for this form and the signed `while i >= 0` form
+alike. What the idiom buys is a
 *writable* invariant rather than a stronger proof: `i <= n` is expressible on
 an unsigned index, whereas the signed form's companion clause `i >= -1` is not
 — a negative literal does not fit `u64` at all.
@@ -2387,22 +2412,25 @@ first index read runs far out of bounds.
 
 Plain wrapping `-` is the correct decrement in the canonical form. The guard
 `i > 0` has already discharged the underflow obligation, so no check is
-needed, and plain `-` is exactly what ESBMC's bitvector encoding models — a
+needed, and plain `-` is exactly what the verifier's bit-vector encoding models — a
 *wrong* guard therefore stays observable through `invariant: i <= n`. Reserve
 `-!` for decrements whose non-negativity the guard does not establish.
 
-Note one asymmetry while reading that advice. `-!` does trap at runtime under
-`--mode debug`, reporting `{"error":"ArithmeticOverflow"}`, but the verifier
-does not model checked arithmetic at all: `n -! 1` and `n - 1` emit the same C
-and yield byte-identical counterexamples. Do not reach for `-!` expecting it
-to make an underflow statically visible.
+Note one asymmetry while reading that advice. `-!` traps at runtime under
+`--mode debug`, reporting `{"error":"ArithmeticOverflow"}`, and the verifier
+models that abort: an aborting execution never returns, so it cannot witness a
+violated `ensures`, and a reachable abort adds an `ArithOverflowReachable`
+warning instead of failing the build. `n -! 1` and `n - 1` are therefore
+different obligations. Do not reach for `-!` expecting it to turn an underflow
+into a failed proof.
 
 #### Why there is no reverse-range syntax
 
 Vow has no numeric range form, and adding one is rejected rather than pending:
 
 - `loop` is not an escape hatch. `break value` is restricted to `loop`, and
-  ESBMC cannot verify an unbounded `loop` at all.
+  an unbounded `loop` is verifiable only through its `invariant` and `break`
+  structure (the native backend models `loop`; ESBMC does not).
 - A reverse for-each would cover very little. Most reverse scans need the
   *index*, not the element — they read a parallel array at `i`, or write a
   second collection at the same `i`.
@@ -2446,7 +2474,7 @@ let idx: i64 = loop {
 };
 ```
 
-ESBMC cannot verify unbounded `loop` constructs — use `while` with invariants for verifiable loops.
+Under the ESBMC backend an unbounded `loop` cannot be verified; the native backend models `loop` with `break` and `continue`. Use `while` with invariants for loops that verify under both.
 
 ### Break
 
@@ -2616,7 +2644,7 @@ let some: Option<i64> = Option::Some(42);
 `Result<T, E>` has variants `Ok(T)` and `Err(E)`.
 For scalar payloads supported by native aggregate codegen, `match` and
 `.unwrap()` extract the declared type, including `f32` and `f64`; `?`
-currently propagates `Option` payloads only. The ESBMC C model moves `f32`
+currently propagates `Option` payloads only. The ESBMC backend's C model moves `f32`
 and `f64` enum payloads and struct fields through its integer slots by
 IEEE-754 bit pattern (an `f64` as its raw 64 bits, an `f32` as its 32 bits
 zero-extended), as native codegen does, so contracts over float payloads
@@ -3231,19 +3259,20 @@ The bare `vow <source.vow>` form is exactly `vow build`: it verifies by default,
 |-------------------|-------------|--------------------------------------------|
 | `-o, --output`    | `build/<stem>` | Output executable path                  |
 | `--mode <debug\|release\|profile\|sanitize>` | `release` | Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + use-after-region-close detection for Vecs |
-| `--no-verify`     | (off)       | Skip ESBMC static verification            |
+| `--no-verify`     | (off)       | Skip static verification                  |
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
 | `--no-cache`    | (off)       | Disable verification result caching, and (for `--no-verify` builds) the compile-object cache. See "Compile-object cache behavior" below |
-| `--max-k-step <N>` | `50`     | ESBMC incremental BMC max iterations          |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
-| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
-| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
+| `--max-k-step <N>` | `50`     | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed `300`. ESBMC backend: under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under `--backend native` |
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (ESBMC processes, or `verify-worker` subprocesses under `--backend native`) |
+| `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is accepted only by `vowc verify`, `contracts --verify` and `test --verify`; on `build` and the bare form it is a usage error (exit 1) that points at `vowc verify`, and `esbmc` is accepted silently |
 | `--replay-cex`    | (off)       | Differential test the verifier model against runtime semantics (same as `vow verify --replay-cex`; see below) |
-| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link and, under the ESBMC backend, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. |
 
-**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
+**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever static verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
 
 ### `vow verify`
 
@@ -3257,21 +3286,21 @@ vow verify [OPTIONS] <source.vow>
 
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
-| `--no-cache`      | (off)       | Disable verification result caching        |
-| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
-| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
+| `--no-cache`      | (off)       | Disable verification result caching; under `--backend native` it disables the native result cache of `verify` (see "Result cache" below) |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed `300`. ESBMC backend: under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under `--backend native` |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (ESBMC processes, or `verify-worker` subprocesses under `--backend native`) |
 | `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is the symbolic checker with Bitwuzla, run in per-function worker subprocesses (epic #1398); self-hosted `vowc` only, see "Native backend" below. Accepted by `verify`, `contracts --verify` and `test --verify`; `contracts` and `test` without `--verify`, `build` and the bare `vowc <file>` form (identical to `build`) reject `--backend native` with a usage error (exit 1) instead of silently running ESBMC or reporting `not_verified` as if the native backend had run. Any value other than `esbmc` or `native` is a usage error |
-| `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
-| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. |
+| `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After the verifier reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans and, under the ESBMC backend, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process; under `--backend native` it records the frontend phase spans (`module-load`, `parse`, `typecheck`, `lower`, ...) and one `verification` span (no per-claim worker or solver spans, no per-worker RSS yet). Accepted only by `build` and `verify`. Pure side artifact. |
 
 #### Native backend (`vowc verify --backend native`; also `contracts --verify` and `test --verify`, see "Native backend: `contracts` and `test`" below)
 
 Opt-in; the default stays `esbmc`. Implemented only by the self-hosted `vowc`: the Rust `vow` does not accept `--backend` until verification is delegated to a pinned seed `vowc`. Scope (issues #1408, #1411):
 
-- **Subset.** A function is verified when its only effect is `panic` (or it has none), its loops are reducible `while`/`loop` loops (see "Loops" below), and it uses only these operations on integers of every width (`i8`..`i128`, `u8`..`u128`) and `bool`: constants, integer parameters, wrapping `+ - * / %`, the checked `+! -! *! /! %!`, `& | ^`, `<<` and `>>` (the shifted type's signedness picks arithmetic or logical `>>`), integer `as` casts (widening, same-width, and the truncating casts the lowerer emits for coerced literals), comparisons (`==`/`!=` also on `bool`), `!`, `if`/`else` (including nested, early `return`, and the `&&`/`||` that lower to branches) with the variables they update, `while` and `loop` with `break`/`continue`, `requires`/`ensures` and loop `invariant` clauses, and struct, enum and `Option`/`Result` values (see "Aggregates" below). Integers are fixed-width bit-vectors, so wrapping, signedness and 128-bit values are exact. Everything else (calls of builtins (so the narrowing intrinsics such as `i64_to_u8_wrap`; calls of other functions are inlined, see "Calls" below), the `io`/`read`/`write`/`unsafe` effects, `bool` parameters, floats, `String` and maps) is **`Skipped`**, never `Verified`. A `Vec` of `bool` or integers up to 64 bits is modelled (see "Collections" below). The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from ADR-1430 (`function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`, `recursion-unsupported`, `non-modelable-callee`, `unmodeled-builtin` with detail the runtime symbol, `unsupported-opcode` with detail `Op[type]`, or a control-flow shape such as `irreducible loop (back edge to a block that does not dominate its source)`, `loop value used outside its loop`, `entry block is a loop header` or `loop nest deeper than 8`). A machine-readable `reason_code` field is not emitted yet.
+- **Subset.** A function is verified when its only effect is `panic` (or it has none), its loops are reducible `while`/`loop` loops (see "Loops" below), and it uses only these operations on integers of every width (`i8`..`i128`, `u8`..`u128`) and `bool`: constants, integer parameters, wrapping `+ - * / %`, the checked `+! -! *! /! %!`, `& | ^`, `<<` and `>>` (the shifted type's signedness picks arithmetic or logical `>>`), integer `as` casts (widening, same-width, and the truncating casts the lowerer emits for coerced literals), comparisons (`==`/`!=` also on `bool`), `!`, `if`/`else` (including nested, early `return`, and the `&&`/`||` that lower to branches) with the variables they update, `while` and `loop` with `break`/`continue`, `requires`/`ensures` and loop `invariant` clauses, and struct, enum and `Option`/`Result` values (see "Aggregates" below). Integers are fixed-width bit-vectors, so wrapping, signedness and 128-bit values are exact. Everything else (calls of builtins (so the narrowing intrinsics such as `i64_to_u8_wrap`; calls of other functions are inlined, see "Calls" below), the `io`/`read`/`write`/`unsafe` effects, `bool` parameters, floats, `String` and maps) is **`Skipped`**, never `Verified`. A `Vec` of `bool` or integers up to 64 bits is modelled (see "Collections" below). The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from the closed list in [`errors.md`](errors.md#verificationskipped) and a free-form detail (the runtime symbol, `Op[type]`, or a control-flow shape such as `irreducible loop (back edge to a block that does not dominate its source)`, `loop value used outside its loop`, `entry block is a loop header` or `loop nest deeper than 8`). A machine-readable `reason_code` field is not emitted yet.
 - **Proof obligations.** One query per `ensures` clause and per abort site, in walk order (blocks in reverse postorder); a `requires` is an assumption only for the obligations after it, and so is every earlier abort guard on the same path (an aborting run never reaches a later obligation). An obligation is asked only on the paths that reach it: its query asserts the block's path condition, and an assumption made inside a branch holds only under that branch's condition. A variable updated in a branch is merged with one `ite` over the incoming edges, and only when the arms supply different values; a branch whose condition is constant, or was already decided by an enclosing branch on the same value, leaves the other arm unexecuted. The query grows with the number of branches and updated variables, not with the number of paths. Three kinds of abort follow the language:
   - *Wrapping `/` and `%`* abort on a zero divisor, and signed `/` aborts on `MIN / -1` (`MIN % -1` is `0`). A shift aborts unless `0 <= count < width` of the shifted type, tested in the count's own type so a negative signed count is rejected. Each is its own obligation: a counterexample is `VerifyFailed`, with the unattributed vow id `4294967293`, blame `None` and violation text `division or remainder by zero`, `signed division overflow (MIN / -1)` or `shift amount exceeds the operand's bit width`.
   - *`.unwrap()` on `None` or `Err`* is an obligation of its own: any path that reaches the abort is a counterexample with the unattributed vow id `4294967293`, blame `None` and violation text `unwrap() called on None`. A function whose `Option` parameter is unwrapped without a guard is `VerifyFailed`; one that unwraps a value it just built as `Some`, or sits on the `Some` arm of a `match`, is `Verified`. ESBMC skips every function with the `panic` effect, so it has no verdict to compare with.
@@ -3279,26 +3308,26 @@ Opt-in; the default stays `esbmc`. Implemented only by the self-hosted `vowc`: t
 
   A function with no obligation is `Verified` without a solver call. Counterexample values are decimal text of the declared type (unsigned types as magnitudes, 128-bit values in full).
 - **Loops.** Each loop is unrolled to an internal bound and every obligation is checked on the unrolled prefix, together with a mandatory *unwinding assertion*: no run takes more back edges than the bound. The verifier tries the bounds 2, 4, 8, 16, 32 and 64 in turn (the largest is at least ESBMC's default `--max-k-step`); the bound is not a flag and `--timeout` stays the only knob, shared by all rounds. An `ensures` or `invariant` violated by a run inside the bound is a real counterexample: `VerifyFailed` with the clause's vow id, blame and source span, found at the smallest bound that reaches it. Unwinding alone proves a function only when no run needs more iterations than the largest bound. When every loop of the function has an `invariant`, the loops are also tried inductively: each loop is cut at its header, the variables it changes are unconstrained, and the function is `Verified` when each invariant holds on entry, is preserved by one iteration from any state that satisfies it and the loop condition, and, with the negated condition, establishes the rest of the function (including `ensures`). So a loop that can run longer than the bound (a bound that is a parameter, `while true`, a literal bound above 64) is `Verified` given an inductive invariant. Induction never produces `VerifyFailed`: a wrong invariant fails because unwinding finds a run that violates it, and an invariant that is true but not inductive, or violated only beyond the largest bound, leaves the verdict `verify_status: "unknown"` with a `verify_message` that starts `unwinding assertion:`, never `Verified`. A proof by induction is partial correctness: it covers the runs that terminate, so a loop that never exits satisfies any `ensures`. When a function has a checked operator, the unrolled rounds still run, so its warnings are the aborts they reach within the unrolled prefix; an inductive proof does not add any. When a round of unwinding ends open (every claim holds inside the bound, but some run needs more iterations), the k-induction *step case* is tried at that round's bound `k`, with or without an invariant, for a function with exactly one loop whose header carries no pointer and which writes no aggregate or Vec: the loop is unrolled `k` times from an arbitrary state, the claims of the earlier copies (and the loop test, which they took) are assumed, and the function is `Verified` when every claim of the last copy and of the exit from it holds. It proves a property that is true for every trip count but not 1-inductive (an alternating divisor, a counter against a parameter bound) and, like invariant induction, is partial correctness. A failing step case proves nothing and is never `VerifyFailed`; the unwinding verdict stands. A function with several loops, or a loop that carries a pointer or writes an aggregate or a Vec, is decided by unwinding and invariant induction alone. An unrolled program above the verifier's size budget is `unknown` with the same prefix unless induction proves it. Loops that cannot be unrolled stay `Skipped` as `unsupported-opcode` (details above): irreducible control flow, a loop value read after its loop through a path the verifier cannot close, a loop in the entry block, nesting deeper than 8. Checked-arithmetic warnings are reported once per source site, not once per iteration.
-- **Extra proofs.** ESBMC reports 128-bit checked arithmetic, 128-bit constants and 128-bit struct fields or enum payloads as `Skipped`; native models them, so the same program can be `Verified` (with `ArithOverflowReachable` warnings) or `VerifyFailed` natively where ESBMC says `Skipped`.
+- **Extra proofs.** ESBMC reports 128-bit checked arithmetic and 128-bit struct fields or enum payloads as `Skipped`; native models them, so the same program can be `Verified` (with `ArithOverflowReachable` warnings) or `VerifyFailed` natively where ESBMC says `Skipped`.
 - **Aggregates.** A struct, enum, `Option` or `Result` value is scalarised: each field is its own `bool` or integer term (a 128-bit field is one 128-bit term), so construction, field access and `match` need no heap model. A parameter's fields are unconstrained, and so is its discriminant: no range is assumed for an enum tag. A field a construction did not write (the payload of `None`) is unconstrained too, never `0`. Two aggregates merged by an `if`/`else` or a `match` are merged field by field. A struct or enum parameter has no counterexample values yet: its fields are not listed in `values`. The following are **`Skipped`** as `unsupported-opcode`: a field write to anything but a value constructed earlier in the same block (a parameter, or a value built before a branch), a struct, enum or collection nested in another aggregate's field, a field of any other type, and `linear` values. A `Vec<i128>` or `Vec<u128>` element is `Skipped` as `unmodeled-builtin` (see "Collections").
 - **Collections.** A `Vec<T>` with `T` of `bool` or an integer of up to 64 bits (`new`, `push`, `v[i]`, `v[i] = x`, `len`, `pop`) is an array plus a 64-bit symbolic length. There is no capacity: a parameter's length is unconstrained apart from the runtime's own limit (a Vec's length is below `2^63 - 1`, so `v.len() as i64 >= 0`), and a `push` is assumed to return only while the length stays below it, so a property over every length is proven for every length, not only up to ESBMC's model capacity. An index at or past the length is an obligation of its own on `get` and `set`: a counterexample is `VerifyFailed` with the unattributed vow id `4294967293`, blame `None` and violation text `index out of bounds`. A Vec parameter's length and contents are not listed in `values`; two `Vec` parameters are distinct. **`Skipped`**: `String`, maps, `clear`, `truncate`, `reserve`, `sort`, `from_raw_parts_copy`, `pin_to_root`, wide (`i128`/`u128`) or pointer elements (`Vec<Vec<_>>`, `Vec<String>`, `Vec<struct>`; only `len` of those is modelled), a `Vec<bool>` element read, an index that is not 64-bit, a Vec stored in a struct field, passed to another function, or merged by an `if`/`else` that yields different Vecs.
 - **Calls.** A call of another function whose arguments and result are integers, `bool` or `()` is inlined: the callee's body is spliced into the caller before execution, so the caller is verified together with everything it calls and the callee's clauses become obligations of the caller. A callee `requires` is an obligation blamed on the caller (the counterexample's `vow_id` is the callee's own id, `function` is the function being verified, and `call_sites` lists the calls from that function down to the failing clause, outermost first); a callee `ensures` or loop `invariant` is an obligation blamed on the callee. Each is assumed once asked, so the first violated clause on a path is the one reported. A function without a `vow` block that calls a contracted function is verified only for those callee preconditions, as under ESBMC. A function on a call cycle, directly or through other functions, is `Skipped` as `recursion-unsupported` with the cycle as detail (`a -> b -> a`); a function whose callee is outside the subset is `Skipped` as `non-modelable-callee` with the callee and its own code as detail (`g (float-rem-unsupported)`). A call with a struct, enum, `Option` or collection argument or result stays `Skipped` as `unsupported-opcode`. A call tree whose inlined body exceeds the verifier's size budget is `verify_status: "unknown"` with a message that starts `inlining budget:`, never `Verified`.
 - **Verdict divergence from ESBMC.** The ESBMC model does not check `MIN / -1` for `/`, so `examples/divide.vow` (`requires: y != 0`, body `x / y`) is `VerifyFailed` under `--backend native` (counterexample `x = i64::MIN`, `y = -1`) while ESBMC proves it.
 - **Workers.** Each function in the subset is verified in its own `verify-worker` subprocess of the same `vowc` binary (internal; its flags and output are not part of the CLI contract), at most `--verify-jobs` at a time. A worker runs in its own process group, so killing it also kills its solver. On Linux it runs under a fixed internal address-space cap; there is no user-facing memory flag. Results are reported in IR order whatever order the workers finish in, and reporting stops at the first function that is not proven, so the output is the same for every `--verify-jobs` value. A worker that runs out of memory (the runtime's structured `OutOfMemory` report, a solver out-of-memory message, or a kill from outside) is `verify_status: "unknown"` with `verify_message: "memory limit exceeded"`, never a proof and never a compiler crash. Any other abnormal worker death (a signal, a nonzero exit, no result) is `verify_status: "panicked"` and the message names the signal or exit status. Expiry of `--timeout` kills the whole group and is `"timeout"`.
 - **Solver.** `bitwuzla` is resolved from `PATH`. The obligations of one round of a function that has at least two for the solver share one interactive solver process of the worker (each obligation asked in its own scope); only an `unsat` answer, or a `sat` on a checked-operator or unwinding obligation, is taken from it. Any other answer, and any misbehaviour of that process (an error, an unrecognised reply, a timeout, an exit), is decided by one self-contained `.smt2` per obligation, written to a private temp directory owned by the parent (removed on every path, including a killed worker) and run as a child process of the worker, which alone supplies a counterexample, so the result does not depend on whether the process was shared. Only `unsat` is a proof. `unknown` is `verify_status: "unknown"`; a solver that outlives its budget is killed (`"timeout"`); a non-zero exit, `[error]` output, an unrecognised answer or an unparsable model is `"error"`. If `bitwuzla` is not on `PATH` and a function needs it, the result is `VerifyFailed` with `verify_status: "tool_not_found"` and no counterexample (ESBMC is not consulted). A module in which every function is `Skipped` needs no solver. The binary is not hash-checked; its `--version` output names it in the result cache key.
-- **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function, measured from the start of its worker; `--timeout 0` is an immediate `timeout` without spawning the solver. `--verify-jobs <N>` caps concurrent workers (default half the CPUs). `--no-cache` disables the native result cache of `verify` (see "Result cache" below). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--replay-cex` and `--perfetto` works as for ESBMC. `--replay-cex` also replays the division, remainder and `unwrap()` abort counterexamples and reports a counterexample that does not reproduce as a `VerifierBug` diagnostic (see "Counterexample replay" below).
+- **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function, measured from the start of its worker; `--timeout 0` is an immediate `timeout` without spawning the solver. `--verify-jobs <N>` caps concurrent workers (default half the CPUs). `--no-cache` disables the native result cache of `verify` (see "Result cache" below). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--replay-cex` works as for ESBMC; `--perfetto` is accepted and records the spans listed under the flag table. `--replay-cex` also replays the division, remainder and `unwrap()` abort counterexamples and reports a counterexample that does not reproduce as a `VerifierBug` diagnostic (see "Counterexample replay" below).
 - **Result cache.** Every solver answer that is `sat` (with its model) or `unsat` is stored on disk and replayed by a later run, so a warm run reports exactly what the cold run did without asking the solver again. An entry is keyed by a hash of the exact `.smt2` text of the query plus the solver's `bitwuzla --version` output and the fixed solver argument list, and holds that text, which a lookup compares byte for byte: a stale entry cannot exist (a new solver version or any change to the query is a different key), a hash collision is a miss, and a truncated, garbled or hand-edited entry is a miss. A claim is looked up under its full query text before a shared solver process is asked; an `unsat` from that process is stored under the same text, so a standalone run and a shared-process run replay each other's entries. A `sat` from the shared process of a soft claim carries no model and is not stored. `unknown`, `timeout`, memory, error and tool-not-found answers depend on the budget or the environment and are never stored, so they are asked again. A sliced query and the full query are cached under their own text; a cached `sat` for the sliced query still sends the claim to the full query. A non-positive budget is a `timeout` before the cache is consulted. The cache lives in `$VOW_CACHE_DIR/verify-native/` (default `~/.cache/vow/verify-native/`), sharded by the first two hex digits of the key, at most 64 entries per shard (a full shard drops an arbitrary half before it takes a new entry), written by temporary file and rename so concurrent workers never see a partial entry. Any problem with the directory or with the solver's `--version` disables the cache for that run and never fails verification. Only `verify` uses the cache: `contracts --verify` and `test --verify` ask the solver every time. `--no-cache` neither reads nor writes it, and the performance gate (`scripts/verify_perf.py`) always runs with it off and fails a sample if the cache directory is written. Unlike the ESBMC driver's cache, which only ever persists failures, this cache stores proofs: whoever can write the cache directory can forge an `unsat`, so use `--no-cache` when the result must come from a fresh solver run (a "green locally" claim). A solver call that timed out cold can be decided warm, since a hit costs nothing; the identical-verdict guarantee holds for runs in which no solver call times out.
 
 #### Native backend: `contracts` and `test`
 
 `vowc contracts --verify --backend native` and `vowc test --verify --backend native` (issue #1427) run the same native checker and worker pool as `verify`, with the status vocabulary, JSON schemas and exit codes of the ESBMC path unchanged. Self-hosted `vowc` only; the default stays `esbmc`.
 
-- **Selection.** Both commands check the functions that carry a `vow` block, exactly as the ESBMC path does (`verify` also checks callers of contracted functions, these do not). A function outside the native subset is `skipped` in `contracts` (a status only, no diagnostic, as for ESBMC) and makes the file `contract_skipped` in `test` (also reported as a `VerificationSkipped` warning), and needs no solver.
+- **Selection.** Both commands check the functions that carry a `vow` block, exactly as the ESBMC path does (`verify` also checks callers of contracted functions, these do not). A function outside the native subset is `skipped` in `contracts` (a status only, no diagnostic, as for ESBMC) and makes the file `contract_skipped` in `test` (with one `VerificationSkipped` diagnostic of severity `error` in the entry's `diagnostics`, fixed message `contract verification skipped: function not modelable`, no reason code), and needs no solver.
 - **No early stop.** `verify` reports up to the first function that is not proven; a `contracts` report or a `test` verdict spans functions, so a failed function never cancels a later one. Every function is verified at most `--verify-jobs` at a time, and the result does not depend on which worker finishes first.
 - **Clause status (`contracts`).** Each `ensures` and `invariant` clause carries the verdict of its own obligations, from one `verify-worker` that decides every obligation of the function. A `requires` clause (an assumption, never an obligation) is `proven` when the function is proven and `unknown` otherwise, as for ESBMC's `--multi-property` mode. A function whose only counterexample is an abort (no clause refuted) has no `proven` clause: they are all `unknown`. Statuses are `proven`, `failed`, `unknown`, `timeout`, `error`, `skipped` and `vacuous`; `proven-ir` is an ESBMC-only status and is never produced. When `bitwuzla` is not on `PATH`, every clause of a function that needs it is `error` and the run exits 1; a function without obligations, or a skipped one, still resolves without a solver.
 - **Weak-contract probes (`contracts`).** The two probes of the ESBMC path are IR rewrites checked by the same engine, each in its own worker with the full `--timeout` budget, so a slow probe loses only its own answer. *Vacuity*: the function is cut right after its last `requires` and the cut point must be unreachable. If the `requires` clauses are jointly unsatisfiable, every clause of the function is `vacuous` (this overrides the clause verdicts, as for ESBMC). The probe applies to functions with a `requires`. *Trivial*: the single returned value is replaced by the type's default (`0`, `false`) and every `ensures` must still hold; if it does, each `ensures` of the function has `trivially_satisfiable: true`. The computation that produced the value stays in the function, so what it can abort on is still checked. It applies to functions with an `ensures`, a scalar result and one `return` of a value computed in the body (not a parameter), as for ESBMC. A probe that is not proven (failed, `unknown`, timeout, error) never claims a weakness.
 - **Fail-closed `test`.** Every function with a `vow` block must be `proven`: `failed`, `unknown`, `timeout`, `error` and a worker that died all make the file `verify_failed` and the test program is not run. The ESBMC path lets an `error` outcome pass; the native path does not, because nothing was established for that function. Each function has the fixed `300` s budget; `test --timeout` is the per-test execution timeout in milliseconds and does not apply to verification. `--jobs` workers each run their own verify pool, so the total grows with `--jobs` times `--verify-jobs`.
-- **Verdict divergence from ESBMC.** The ESBMC path plants its vacuity label only in the entry block. A `requires` written with `&&` or `||` lowers to branches and lands in a later block, so ESBMC reports `vacuous` for a satisfiable `requires: a > 0 && a < 100`; the native probe follows the definition above and does not. The `MIN / -1` and 128-bit differences listed under "Verdict divergence from ESBMC" above apply to `contracts` and `test` as well. Two more are specific to the clause report. A function that fails only on an abort (a division or remainder by zero, `MIN / -1`, an over-wide shift, `unwrap()` on `None`, an out-of-bounds `Vec` index) and refutes no clause has no `proven` clause: its `ensures` and `invariant` clauses are `unknown`, like its `requires` clauses, and the run exits 1, as `verify` reports the same function `VerifyFailed`. ESBMC instead lets the run continue past the abort with an unconstrained value, so a clause over that value is `failed` there, while a clause that does not depend on it, or a function with no `requires`, can be `proven` and the run exit 0. A loop with no `invariant` whose bound is symbolic is decided by unwinding alone, so its clauses are `unknown` where ESBMC's k-induction may prove them. A function whose retained computation can still abort on a checked operator is never flagged `trivially_satisfiable`, as under ESBMC.
+- **Verdict divergence from ESBMC.** The ESBMC path plants its vacuity label only in the entry block. A `requires` written with `&&` or `||` lowers to branches and lands in a later block, so ESBMC reports `vacuous` for a satisfiable `requires: a > 0 && a < 100`; the native probe follows the definition above and does not. The `MIN / -1` and 128-bit differences listed under "Verdict divergence from ESBMC" above apply to `contracts` and `test` as well. Two more are specific to the clause report. A function that fails only on an abort (a division or remainder by zero, `MIN / -1`, an over-wide shift, `unwrap()` on `None`, an out-of-bounds `Vec` index) and refutes no clause has no `proven` clause: its `ensures` and `invariant` clauses are `unknown`, like its `requires` clauses, and the run exits 1, as `verify` reports the same function `VerifyFailed`. ESBMC instead lets the run continue past the abort with an unconstrained value, so a clause over that value is `failed` there, while a clause that does not depend on it, or a function with no `requires`, can be `proven` and the run exit 0. A loop with no `invariant` whose bound is symbolic is decided by unwinding alone, so its clauses are `unknown` where ESBMC's incremental BMC may close the forward condition. A function whose retained computation can still abort on a checked operator is never flagged `trivially_satisfiable`, as under ESBMC.
 - **Flags.** `--timeout <N>` (seconds) and `--verify-jobs <N>` are honoured by `contracts`; `--max-k-step`, `--solver` and `--encoding` are rejected with a usage error, as for `verify`. `--no-cache` is accepted and has no effect. `--replay-cex` and counterexamples are not part of either command.
 
 ### `vow contracts`
@@ -3313,18 +3342,18 @@ vow contracts [OPTIONS] <source.vow>
 
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
-| `--verify`        | (off)       | Run verification (ESBMC, or the native backend with `--backend native`) and report per-contract status |
+| `--verify`        | (off)       | Run verification (the ESBMC backend by default, or the native backend with `--backend native`) and report per-contract status |
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations (with --verify) |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver (with --verify) |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode (with --verify); ir requires z3 |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent `verify-worker` subprocesses under `--backend native`; a no-op under ESBMC (the ESBMC loop is serial) |
 | `--backend <esbmc\|native>` | `esbmc` | Verification backend; `native` requires `--verify` (see "Native backend: `contracts` and `test`") |
 | `--timeout <N>` | `300` (native) | Seconds per function (and per probe) under `--backend native`; ESBMC's own timeout otherwise |
 
-**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
+**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven` (or `proven-ir`, an ESBMC-only status no compiler produces today). Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
 
-When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
+When `--verify` is requested but the verifier is not installed (ESBMC, or `bitwuzla` under `--backend native`), the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` (under native, only for functions that need the solver) and exits with code 1 (fail-closed). Install the verifier, or omit `--verify`, to obtain proven/failed/unknown statuses.
 
 ### `vow skill`
 
@@ -3372,8 +3401,8 @@ vow test [OPTIONS] [<path>]
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
-| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations (with --verify) |
-| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations (with --verify) |
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 
@@ -3424,7 +3453,7 @@ A `timeout` counts toward `failed`, like `compile_error`, `verify_failed` and `c
 
 A `<path>` that does not exist is itself a failure: the result is `TestsFailed` with `total: 1` and `failed: 1`, holding one synthetic `failed` entry whose `file` is the path as given and whose `stderr` names it, and the exit code is 1. `total` equals the length of `tests` in every result, so the synthetic entry is counted.
 
-`contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed — a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.
+`contract_skipped` means no proof was attempted because a vowed function is non-modelable (distinct from `verify_failed`, where the verifier found a violation or could not decide). Both are fail-closed — a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.
 
 ### `vow decl`
 
@@ -3530,7 +3559,7 @@ silently ignored. The self-hosted `vowc` only accepts the `--flag value` form fo
 `--flag=value` is reported as an unknown argument with a hint. `vowc mutants` forwards its flags to
 its own parser and is not validated by the driver.
 
-`vow build` and `vow verify` both fail closed on `Skipped`: if ESBMC was asked to verify a vowed
+`vow build` and `vow verify` both fail closed on `Skipped`: if the verifier was asked to verify a vowed
 function but the verifier could not model the function body, the contract was not statically
 proved, so the run exits non-zero. Use `--no-verify` if you genuinely want to skip verification —
 that path produces `Unverified` (exit 0).
@@ -3556,11 +3585,11 @@ rationale.
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC, and every call from a verifiable uncontracted function into a contracted function satisfies the callee's `requires` (see [Callers Without a `vow` Block](contracts.md#callers-without-a-vow-block)). "Verifiable" excludes uncontracted callers that cannot be modelled (e.g. `main() [io]`) or whose proof the verifier could not finish; each carries a `VerificationSkipped` *Note* instead, and the note does not change the status. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
-| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
-| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `LinearBorrow`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
+| `Verified`      | Compiled + every vowed function's contract was statically proved by the verifier, and every call from a verifiable uncontracted function into a contracted function satisfies the callee's `requires` (see [Callers Without a `vow` Block](contracts.md#callers-without-a-vow-block)). "Verifiable" excludes uncontracted callers that cannot be modelled (e.g. `main() [io]`) or whose proof the verifier could not finish; each carries a `VerificationSkipped` *Note* instead, and the note does not change the status. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
+| `Unverified`    | Compiled but no verifier was invoked (`--no-verify`, `--dump-ir`). Exit 0. A missing verifier is not `Unverified`: it is `VerifyFailed` (exit 1). |
+| `Skipped`       | Verification was requested but at least one vowed function could not be modelled. The reason is one of the closed list in [`errors.md`](errors.md#verificationskipped) under the native backend, or free text such as `LinearBorrow`, `Load`/`Store`, `RemF*`, effects under ESBMC. **ESBMC backend:** struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled (the native backend models it). Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (a named backend limitation, such as `%` on floats), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
-| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
+| `VerifyFailed`  | The verifier produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`; under the native backend also an unwinding failure, `unwinding assertion: ...`, an exhausted inlining or size budget, or an out-of-memory worker, `memory limit exceeded`), tool error, the tool was not found (`tool_not_found`: ESBMC, or `bitwuzla` under native), or the verifier worker crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 For a multi-function `verify` or verified `build`, a halt-class result (definitive
 counterexample, timeout, unknown, tool error, missing tool, or worker panic) stops new function
@@ -3657,7 +3686,7 @@ argument. A `timeout`, `unknown`, `error` or `panicked` outcome has no
 counterexample and adds no such diagnostic. Both compilers emit the same
 `diagnostics[]`, `counterexample` and `counterexamples[]` for the same source;
 the only fields that are not specified byte for byte are `verify_message`
-(ESBMC's free text) and `values` entries named `$esbmc$...` (solver temporaries).
+(the verifier's free text) and, under ESBMC, `values` entries named `$esbmc$...` (solver temporaries).
 
 A diagnostic's `span` is exactly `{file, offset, length}`: positions are byte
 offsets, and neither compiler adds line or column fields.
@@ -3698,16 +3727,16 @@ shift count) rather than exposing raw verifier output.
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
 | `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
-| `counterexample`   | string              | VerifyFailed      | Legacy description string: `"[Counterexample]"` when ESBMC produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>`, ...) |
+| `counterexample`   | string              | VerifyFailed      | Legacy description string: `"[Counterexample]"` when the verifier produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>` (the prefix is kept whichever backend ran), ...) |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |
 | `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
-| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
+| `verify_message`   | string              | On backend failure | Verifier/backend error detail             |
 
 ### Counterexample replay
 
-With `--replay-cex`, each object in `counterexamples[]` gains a `replay` field — a **differential test** of the verifier's IR-to-C model against the executable's debug-mode runtime semantics. It is **not part of the soundness proof**: it neither strengthens nor weakens the static verdict, and the exit code is unchanged. It exists to catch *drift* between the two independent lowerings — `vow-verify`'s C emitter (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug runtime checks.
+With `--replay-cex`, each object in `counterexamples[]` gains a `replay` field — a **differential test** of the verifier's model against the executable's debug-mode runtime semantics. It is **not part of the soundness proof**: it neither strengthens nor weakens the static verdict, and the exit code is unchanged. It exists to catch *drift* between the two independent lowerings — `vow-verify`'s C emitter (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug runtime checks.
 
-For each counterexample, Vow maps the ESBMC assignment back to concrete Vow inputs, synthesizes a `--mode debug` harness that calls the failing function with those inputs, runs it, and compares the observed `VowViolation`.
+For each counterexample, Vow maps the verifier's assignment back to concrete Vow inputs, synthesizes a `--mode debug` harness that calls the failing function with those inputs, runs it, and compares the observed `VowViolation`.
 
 | `replay` value | Meaning |
 |----------------|---------|
@@ -3782,7 +3811,7 @@ the structured diagnostics documented under [Runtime Errors](errors.md#runtime-e
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
 | `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, `"skipped"`, or `"vacuous"` |
-| `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
+| `quality`     | string  | Static clause-shape classification (no verifier): `"weak"`, `"tautological"`, or `"substantive"` |
 | `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
 `description` is the clause kind followed by the predicate rendered by the canonical
@@ -3810,20 +3839,20 @@ compilers anchor on the byte offset of the parameter name instead.
 | Status          | Meaning                                              |
 |-----------------|------------------------------------------------------|
 | `not_verified`  | Verification not requested (no `--verify` flag)      |
-| `proven`        | ESBMC established this contract for the configured bounded verification model (bit-vector encoding, overflow modeled) |
-| `proven-ir`     | ESBMC established this contract for the configured bounded model under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
-| `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
-| `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
-| `error`         | ESBMC error or tool not found                        |
-| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `LinearBorrow`, `RemF*`) or the function has effects. (Struct construction and field ops are modelled — see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
-| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
+| `proven`        | The verifier established this contract. ESBMC: for the configured bounded verification model (bit-vector encoding, overflow modeled). Native: for every unwinding and collection length, never after a resource-limited weakened retry |
+| `proven-ir`     | ESBMC backend only, never produced natively (and not emitted as a clause status by either compiler today). ESBMC established this contract for the configured bounded model under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
+| `failed`        | The verifier found a counterexample violating this contract |
+| `unknown`       | The verifier could not conclude for this contract — under the native backend a solver `unknown`, an unwinding failure (`unwinding assertion:`), a budget or out-of-memory worker, or a function that fails only on an abort; under ESBMC either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
+| `timeout`       | The verifier timed out on the containing function (ESBMC: BV and — when applicable — IR fallback both timed out) |
+| `error`         | Verifier error, or the tool was not found (ESBMC, or `bitwuzla` under `--backend native`) |
+| `skipped`       | The containing function is outside what the verifier models, with a reason from the closed list in [`errors.md`](errors.md#verificationskipped) (e.g. effects, recursion, an unmodelled builtin, `Load`/`Store`). A machine-readable reason code is not emitted yet. Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke a verifier at all. |
+| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — the verifier proved nothing of substance (antecedent failure). Detected by a second run: under ESBMC a `vow_reach` label (`--error-label`) planted after the `requires` assumes is unreachable; under `--backend native` the function is cut right after its last `requires` and the cut point must be unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
 
 The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g. the BV→IR fallback) may never report a weakened check as `proven` are the verifier's soundness discipline — the safe-vs-unsafe retry rules are specified in `docs/verifier-discipline.md`.
 
 ### Quality Values
 
-`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.
+`quality` is a static classification of each clause's *shape*, computed without running a verifier and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.
 
 | Quality        | Meaning                                                                                      |
 |----------------|----------------------------------------------------------------------------------------------|
@@ -3940,7 +3969,7 @@ means region analysis placed the value too deep. `op` is one of `push`, `set`, `
 ```
 Parse JSON from stdout
 ├── status == "Verified"       → Success. Binary at `executable`.
-├── status == "Unverified"     → Compiled but unverified. ESBMC missing or --no-verify.
+├── status == "Unverified"     → Compiled but unverified (--no-verify or --dump-ir).
 ├── status == "CompileFailed"  → Read `diagnostics[]` for error details.
 │   ├── error_code is parse error  → Fix syntax (see grammar.md)
 │   ├── error_code is type error   → Fix types (see errors.md)
@@ -3960,20 +3989,23 @@ Always check stderr for human-readable diagnostics alongside the JSON on stdout.
 
 # Contract Authoring and Verification
 
-Vow uses ESBMC (bounded model checker) for static contract verification. This document covers contract patterns, verification behavior, and common pitfalls.
+Vow statically verifies contracts with one of two backends: ESBMC (a bounded model checker, `--backend esbmc`, the default today) or the native verifier (`--backend native`, self-hosted `vowc` only, which emits SMT-LIB for Bitwuzla). Both report the same verdict surface (statuses, blame, `vow_id`). This document covers contract patterns, verification behavior, and common pitfalls.
 
 ## Semantic Contracts Are Backend-Independent
 
 A contract states the function's real semantic domain and result. It does not
-state the limits of the tool currently used to check it. Replacing ESBMC with a
-stronger verifier must not require editing Vow source contracts.
+state the limits of the tool currently used to check it. Replacing the verifier
+with a stronger one must not require editing Vow source contracts.
 
 Lengths, capacities, indices, and struct fields may appear in contracts when
 they express a genuine algorithmic constraint or representation invariant. For
 example, an index may need to be within a vector's length, paired inputs may
 need equal lengths, or a ring buffer may need to be non-full before a write.
-They must not be capped merely because ESBMC uses a finite collection model or
-because a smaller struct state space is easier to solve.
+They must not be capped merely because a verifier uses a finite collection
+model or because a smaller struct state space is easier to solve. The internal
+unwinding bound of the native verifier is such a limit too: it never belongs in
+a `requires`/`ensures`/`invariant` clause, and an unwinding failure is
+`unknown`, never `proven`.
 
 The same distinction applies to numeric bounds. Exact overflow guards and real
 problem-domain restrictions are semantic; unwind caps and arbitrary
@@ -3982,17 +4014,26 @@ honest contract, report that limitation outside the contract.
 
 ## Verification Pipeline
 
-Codegen (Cranelift) and linking finish before verification starts, so peak memory is the larger of the two phases rather than their sum:
+Codegen (Cranelift) and linking finish before verification starts, so peak memory is the larger of the two phases rather than their sum. A codegen or link failure ends the build before any verifier process is started. Verification itself runs up to `--verify-jobs` verifier processes at a time.
 
-```
-Vow Source → Parse → Type Check → IR Lower → Cranelift → executable → C Emit → ESBMC → proof / counterexample
-```
+| | Native backend (`--backend native`) | ESBMC backend (`--backend esbmc`, default) |
+|---|---|---|
+| Pipeline | `IR → symbolic executor → SMT-LIB → Bitwuzla`, one `verify-worker` subprocess per function | `IR → C emit → ESBMC` |
+| Clauses | `requires` is an assumption for the obligations after it; `ensures`, `invariant` and every abort site are obligations | `requires` → `__ESBMC_assume()`, `ensures`/`invariant` → `__ESBMC_assert()` |
+| Loops | Unrolled to an internal bound (2, 4, 8, 16, 32, 64) with a mandatory unwinding assertion; loops with an `invariant` are also proven inductively, and an open round tries a k-induction step case | Incremental BMC, `--max-k-step` (default 50); no inductive step |
+| Tuning | `--timeout` is the only knob; `--max-k-step`, `--solver` and `--encoding` are usage errors | `--max-k-step`, `--solver`, `--encoding`, `--timeout` |
+| Collections | Array plus symbolic length, no capacity | Fixed-capacity arrays (see below) |
+| Bounded result | An unwinding failure, solver `unknown` or out-of-memory worker is `unknown`/`timeout`, never `proven` | `proven` describes the configured model, including its finite unwind and capacities |
 
-A codegen or link failure ends the build before any ESBMC process is started. Verification itself runs up to `--verify-jobs` ESBMC processes at a time.
+The table is the whole difference: contracts, blame and `vow_id` are the same under both. A contract is `proven` only when the verifier decides every obligation; the native backend never reports `proven` after a resource-limited weakened retry.
 
-Contract clauses become IR opcodes. The C emitter translates `requires` to `__ESBMC_assume()` (the verifier assumes preconditions hold) and `ensures`/`invariant` to `__ESBMC_assert()` (the verifier checks postconditions).
+### Native backend
 
-### ESBMC Configuration
+The native verifier executes the IR symbolically and encodes integers as fixed-width bit-vectors, so wrapping, signedness and 128-bit values are exact. Each `ensures` clause, loop `invariant` and abort site (division or remainder by zero, `MIN / -1`, an over-wide shift, `unwrap()` on `None`, an out-of-bounds `Vec` index) is a proof obligation; a `requires` is an assumption for the obligations after it. The exact subset, loop strategy and flags are in `docs/spec/cli.md` → "Native backend". A function outside the subset is `Skipped` with a code from the closed list in [`VerificationSkipped`](errors.md#verificationskipped), never `Verified`.
+
+**Known limits.** String parsing and formatting builtins are opaque (`Skipped`). Float arithmetic is not modelled yet: a function that uses floats is `Skipped` as `unsupported-opcode` today (the intended semantics are IEEE 754 round-to-nearest-even with a canonical NaN, and `RemF32`/`RemF64` are `Skipped` as `float-rem-unsupported` until codegen defines float `%`). NaN payload bits are not distinguished. Callee inlining makes a caller's query as large as its whole call tree, so a deep call tree can end `unknown` with `inlining budget:`.
+
+### ESBMC backend
 
 - Verification strategy: **incremental BMC** (`--incremental-bmc`) — base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC completes the configured model checks; otherwise the result is `unknown`. `proven` describes the configured verification model, including its finite unwind and collection capacities, not executions outside that model.
 - Incremental BMC with `--max-k-step` (default: **50**) — loops are verified incrementally up to N iterations
@@ -4001,7 +4042,9 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### Collection Models for Verification
 
-ESBMC is a *bounded* model checker, so it models collection types as
+**Native backend.** A `Vec<T>` whose element `T` is `bool` or an integer of up to 64 bits (`new`, `push`, `pop`, `len`, indexing, indexed assignment) is an array plus a 64-bit symbolic length. There is no capacity: a property over every length is proven for every length, an index at or past the length is its own obligation (`index out of bounds`), and no `ModelCapacityAssumed` note is ever emitted. `String`, the maps, wide (`i128`/`u128`) or pointer elements and the mutating operations `clear`, `truncate`, `reserve`, `sort`, `from_raw_parts_copy` and `pin_to_root` are `Skipped` (see `docs/spec/cli.md` → "Native backend", "Collections"). The rest of this section describes the ESBMC backend.
+
+**ESBMC backend.** ESBMC is a *bounded* model checker, so it models collection types as
 fixed-size arrays and reasons about them up to a finite capacity. These
 capacities are an internal property of the verifier, not of the language:
 
@@ -4022,7 +4065,7 @@ capacity that was actually applied.
 in a Vow program grows dynamically on the heap with no fixed maximum; the
 capacity above only describes how far the *bounded* model checker reasons. The
 language and its contracts are deliberately decoupled from what any particular
-prover can prove: replace ESBMC with a stronger (or unbounded) checker and the
+prover can prove: replace ESBMC with a stronger (or unbounded) checker, as the native backend does for `Vec`, and the
 same source, the same contracts, and the same CLI keep working — the only
 difference is that the verifier can cover more of the state space. For this
 reason a `requires`/`ensures` clause must never encode a verifier bound (e.g.
@@ -4117,9 +4160,9 @@ tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.
 
 ## Counterexample Replay (Differential Test)
 
-`vow verify --replay-cex` (also `vow build --replay-cex`) cross-checks a counterexample against the executable's runtime semantics. After ESBMC reports a violation, Vow maps the symbolic assignment to concrete Vow inputs, builds a `--mode debug` harness that calls the failing function with them, and checks whether the runtime `VowViolation` matches — **same `vow_id` and same blame**.
+`vow verify --replay-cex` (also `vow build --replay-cex`) cross-checks a counterexample against the executable's runtime semantics. After the verifier reports a violation, Vow maps the symbolic assignment to concrete Vow inputs, builds a `--mode debug` harness that calls the failing function with them, and checks whether the runtime `VowViolation` matches — **same `vow_id` and same blame**.
 
-This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's C model (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope. Under `--backend native` the replay is also the oracle for the native checker: a counterexample that does not reproduce is reported as a `VerifierBug` diagnostic.
+This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's model (the C model, `requires` → `__ESBMC_assume` and `ensures`/`invariant` → `__ESBMC_assert`, under ESBMC; the SMT-LIB encoding under the native backend) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope. Under `--backend native` the replay is also the oracle for the native checker: a counterexample that does not reproduce is reported as a `VerifierBug` diagnostic.
 
 ## Integer Contracts
 
@@ -4324,7 +4367,7 @@ fn double(x: i64) -> i64 vow {
 }
 ```
 
-ESBMC finds: `x = 4611686018427387904` → `result = -9223372036854775808` (wraps negative).
+The verifier finds: `x = 4611686018427387904` → `result = -9223372036854775808` (wraps negative).
 
 **Fix:** use checked arithmetic (`+!`), or bound the input.
 
@@ -4354,9 +4397,11 @@ This is not inductive — `v.len() == n` is only true after the loop.
 
 **Fix:** Use `invariant: i >= 0, invariant: i <= n`.
 
+Under the native backend the same mistake shows up differently: a wrong invariant is refuted by unwinding (a run that violates it inside the bound is `failed`), while an invariant that is true but not inductive leaves the verdict `unknown` with a `verify_message` that starts `unwinding assertion:`. A failing induction step is never `failed`.
+
 ### Unbound Loop Iterations
 
-Without a bound on loop iterations, ESBMC may timeout (default max-k-step is 50):
+Without a bound on loop iterations, the verifier may not finish. Under ESBMC the unwind stops at `--max-k-step` (default 50); under the native backend every loop is unrolled to an internal bound of at most 64 and an unrolling that is not enough is `unknown` with an `unwinding assertion:` message:
 
 ```vow
 fn fill(n: i64) -> Vec<i64> vow {
@@ -4365,11 +4410,11 @@ fn fill(n: i64) -> Vec<i64> vow {
 } { ... }
 ```
 
-ESBMC will only verify this for small `n` values. **Do not** add `requires: n <= 8` to the contract — that would distort the semantic specification. The contract is correct as-is; ESBMC's bounded verification provides partial assurance.
+The verifier unrolls only a bounded number of iterations, so for large `n` the verdict is `unknown` rather than `proven`. **Do not** add `requires: n <= 8` to the contract — that would distort the semantic specification. The contract is correct as-is; add a loop `invariant` so the native backend can prove it inductively, and accept an honest `unknown` otherwise.
 
 ### Verification-Driven Bounds (Anti-Pattern)
 
-**Never** add artificial bounds to contracts solely to help ESBMC verify them:
+**Never** add artificial bounds to contracts solely to help the verifier prove them:
 
 ```vow
 // WRONG: bounds exist only to appease the verifier
@@ -4393,7 +4438,7 @@ fn gcd(a: i64, b: i64) -> i64 vow {
 } { ... }
 ```
 
-Contracts express what is mathematically required for correctness. ESBMC verifies within its configured model (bounded loops, bounded arithmetic, bounded collection models) — if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
+Contracts express what is mathematically required for correctness. The verifier checks within its configured model (bounded loops, and under ESBMC bounded arithmetic and collection models) — if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
 
 **The overflow-guard bound is this anti-pattern's most common disguise.** A clause like `requires: a <= 4611686018427387903` on an adding function looks semantic — it does describe a real property of `i64` — but its only purpose is to keep wrapping unreachable, and it pays for that by excluding inputs the function handles perfectly well. Use the checked operator instead: `a +! b` aborts rather than wraps, the verifier models the abort, and the contract keeps its true domain. See [Range Bounds](#range-bounds) and [Wrapping Arithmetic Overflow](#wrapping-arithmetic-overflow).
 
@@ -4415,7 +4460,7 @@ A counterexample in the JSON output:
 | Field       | Meaning                                                        |
 |-------------|----------------------------------------------------------------|
 | `function`  | Which function's verification query failed                     |
-| `values`    | Source or ESBMC variable values in the counterexample           |
+| `values`    | Source variable values in the counterexample (decimal text of the declared type)           |
 | `violation` | Which contract clause was violated                             |
 | `vow_id`    | Function-local ID linking to the specific vow clause            |
 | `source`    | Byte offset in the source file of the violated clause           |
@@ -4440,7 +4485,9 @@ callee, `violation`, `source` and `blame` are the callee's clause, and `vow_id`
 is the callee-local id (the id a debug-mode `VowViolation` for that callee would
 report). It is never resolved against the verified caller's same-numbered clause.
 
-Variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot
+A violation that is not a contract clause (a division or remainder by zero or an over-wide shift under either backend; `MIN / -1`, `unwrap()` on `None` and an out-of-bounds `Vec` index under the native backend only) carries the unattributed `vow_id` `4294967293`, blame `None` and a `violation` text naming the abort. It is not a `requires`, so there is no clause to blame; bound the operand with a real `requires` or guard the operation.
+
+Under the ESBMC backend, variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot
 appear in a Vow identifier, so the prefix cannot collide with a source name.
 Named inputs map directly to function parameters, including source names that
 begin with `_esbmc`.
@@ -4462,15 +4509,19 @@ vow {
 }
 ```
 
-ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
+Both backends treat `u64` as an unsigned 64-bit value (`uint64_t` and unsigned nondet values under ESBMC, a 64-bit bit-vector with unsigned comparisons natively), so a counterexample reports the magnitude.
 
 ## 128-bit Integer Contracts
 
-`i128`/`u128` literals work in contracts and bodies. The verifier builds each
-literal from its two 64-bit limbs, so under the bit-vector encoding every
-value is exact (`i128::MIN`, `i128::MAX` and `u128::MAX` included) and a
-counterexample reports the full 128-bit value. A proof from the `--encoding ir`
-timeout fallback is reported as `ProvenIr` and is weaker:
+`i128`/`u128` literals work in contracts and bodies. The native backend models
+128-bit scalars, constants, checked arithmetic and struct fields or enum payloads
+as 128-bit bit-vectors, so every value is exact (`i128::MIN`, `i128::MAX` and
+`u128::MAX` included) and a counterexample reports the full 128-bit value. Under
+the ESBMC backend 128-bit constants are modelled exactly under the bit-vector
+encoding, and a proof from its `--encoding ir` timeout fallback is reported as
+plain `proven` and is weaker; 128-bit checked arithmetic and aggregate fields
+are `Skipped`. A `Vec<i128>` or `Vec<u128>` element is `Skipped` under both
+backends. A contract over 128-bit scalars and literals verifies under both:
 
 ```vow
 fn at_least_one(x: u128) -> u128
@@ -4507,7 +4558,7 @@ The contract applies to all functions declared in the block, and documents the e
 
 This document answers a question that `contracts.md` does not: given a function,
 **which** properties are worth proving, how do you tell a strong contract from a
-hollow one, and how do you express the strong shapes within ESBMC's reach.
+hollow one, and how do you express the strong shapes within the verifier's reach.
 
 `contracts.md` is the *reference* (syntax, blame, the verification pipeline,
 anti-patterns). This is the *methodology* (judgement). Read that first.
@@ -4532,7 +4583,7 @@ compiler carry this contract:
 fn EFF_IO() -> i64 vow { ensures: result > 0 } { 1 }
 ```
 
-ESBMC proves `1 > 0` in milliseconds. But `ensures: result > 0` also holds for
+The verifier proves `1 > 0` in milliseconds. But `ensures: result > 0` also holds for
 `{ 2 }`, `{ 99 }`, and every other positive constant — it does not pin the value
 this function is *supposed* to return. It is a real postcondition, but a **weak**
 one: it constrains the output to a half-line, not to a point. Proving 354 of
@@ -4790,13 +4841,15 @@ first runs, and trivial validity *always* indicated a real defect in the design,
 spec, or environment.
 
 **Detection (the reachability probe).** `vow contracts --verify` ships this check
-(#81). For any function carrying a `requires`, it re-runs ESBMC over the same
-model with a `vow_reach` label planted immediately after the `requires` assumes,
-under `--error-label vow_reach`. If ESBMC reports the label **unreachable**
-(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
+(#81). For any function carrying a `requires`, it re-checks the same model with
+a reachability probe immediately after the `requires` assumes. Under ESBMC the
+probe is a `vow_reach` label run under `--error-label vow_reach`; under
+`--backend native` the function is cut right after its last `requires` and the
+cut point must be unreachable. If the probe reports the point **unreachable**
+(ESBMC: `VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
 every `ensures` held only vacuously — all of the function's clauses are reported
-`status: "vacuous"` and the command fails closed. If the label is **reachable**
-(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
+`status: "vacuous"` and the command fails closed. If the point is **reachable**
+(ESBMC: `VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
 live. This is operationally the dual of the classic `ensures: false` re-check —
 asking "is the post-`requires` point reachable?" instead of "does `assert(false)`
 still pass?" — but it needs only one extra run per function and is unaffected by
@@ -4856,9 +4909,9 @@ syntax say it":
 - **expressible** — surface Vow has the syntax
 - **typechecked** — the checker validates the clause to `bool` (added in #81 Phase 0)
 - **lowerable** — the lowerer emits IR for the clause
-- **modelable** — the C emitter / ESBMC model supports the operations used
+- **modelable** — the verifier's model supports the operations used
   (pure, non-effectful helpers only; see `is_modelable` in the C emitter)
-- **backend** — ESBMC actually discharges it within bounds
+- **backend** — the verifier actually discharges it (ESBMC: within bounds; native: for every unwinding it can close, otherwise `unknown`)
 
 | Shape | expressible | typechecked | lowerable | modelable | backend |
 |-------|:-----------:|:-----------:|:---------:|:---------:|:-------:|
@@ -4869,7 +4922,7 @@ syntax say it":
 | 5. Dispatch totality | ✓ | ✓ | ✓ | ✓ (pure dispatch) | ✓ over finite domain |
 | 6a. Argument-relational | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 6b. Cross-fn uniqueness | ✓ (O(n²)) | ✓ | ✓ | ✓ | ✓ but unscalable → prefer structural encoding |
-| 7. Loop invariant | ✓ | ✓ | ✓ | ✓ | partial (bounded / k-induction) |
+| 7. Loop invariant | ✓ | ✓ | ✓ | ✓ | partial (bounded; native also by induction) |
 | Bounded quantifier (`forall i in 0..n`) | ✗ (no surface syntax) | — | — | — | — (roadmap #467/#470) |
 
 Contract expressions must be **pure** — they cannot call effectful functions
@@ -4881,11 +4934,13 @@ model limitations, not contract-language limitations.
 
 `vow contracts --verify` performs the **per-obligation** quality analysis tracked
 in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via
-ESBMC `--multi-property`), plus the three quality signals above:
+ESBMC `--multi-property`, or from one `verify-worker` per function under
+`--backend native`), plus the three quality signals above:
 
-- **Tautology** — the static `quality` field flags constant clauses (no ESBMC).
-- **Vacuity** — a contradictory `requires` is caught by the `--error-label`
-  reachability probe and reported `status: "vacuous"` (fail-closed).
+- **Tautology** — the static `quality` field flags constant clauses (no verifier is run).
+- **Vacuity** — a contradictory `requires` is caught by the reachability probe
+  (ESBMC `--error-label`, or the post-`requires` cut under `--backend native`) and
+  reported `status: "vacuous"` (fail-closed).
 - **Weakness** — the body-replace probe reports `trivially_satisfiable: true` for
   an `ensures` a trivial `return <default>` body satisfies (informational).
 
@@ -5287,7 +5342,7 @@ fn f(big: i64) -> u8 {
 ### ShiftCountOutOfRange
 
 **Phase:** Type Checker
-**Meaning:** A constant-expression shift count is negative or greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) are checked by ESBMC, which requires `0 <= count < width` at the shift (a negative signed count is a violation). At runtime only 8-bit shifts trap: an `i8`/`u8` shift whose count is `>= 8` aborts with `ArithmeticOverflow` in every build mode. Wider shifts are not trapped; the hardware shift masks the count to the operand width (`(x: i64) << 65` is `x << 1`), so only verification excludes them.
+**Meaning:** A constant-expression shift count is negative or greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) are checked by the verifier, which requires `0 <= count < width` at the shift (a negative signed count is a violation). At runtime only 8-bit shifts trap: an `i8`/`u8` shift whose count is `>= 8` aborts with `ArithmeticOverflow` in every build mode. Wider shifts are not trapped; the hardware shift masks the count to the operand width (`(x: i64) << 65` is `x << 1`), so only verification excludes them.
 
 **Wrong:**
 
@@ -5911,7 +5966,7 @@ A 128-bit integer as an `Option`, `Result`, or `enum` payload is supported, so `
 ### BTreeMapKeyTypeMustBeI64
 
 **Phase:** Type Checker
-**Meaning:** A `BTreeMap<K, V>` was instantiated with `K` not equal to `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys; the runtime helpers and ESBMC C model are hard-coded to i64.
+**Meaning:** A `BTreeMap<K, V>` was instantiated with `K` not equal to `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys; the runtime helpers and the verifier's model are hard-coded to i64.
 
 **Wrong:**
 
@@ -6023,8 +6078,8 @@ fn add(a: i64, b: i64) -> i64 vow {
 
 ### VowRequiresViolated
 
-**Phase:** Verification (ESBMC)
-**Meaning:** ESBMC found inputs that violate a `requires` precondition. This is a **static** verification error — it means the function's callers can reach it with invalid arguments.
+**Phase:** Verification
+**Meaning:** The verifier found inputs that violate a `requires` precondition. This is a **static** verification error — it means the function's callers can reach it with invalid arguments.
 
 **Wrong:**
 
@@ -6056,8 +6111,8 @@ fn caller(x: u64) -> u64 {
 
 ### VowEnsuresViolated
 
-**Phase:** Verification (ESBMC)
-**Meaning:** ESBMC found inputs where the function's return value does not satisfy the `ensures` postcondition.
+**Phase:** Verification
+**Meaning:** The verifier found inputs where the function's return value does not satisfy the `ensures` postcondition.
 
 **Wrong:**
 
@@ -6083,8 +6138,8 @@ fn max(a: i64, b: i64) -> i64 vow {
 
 ### VowInvariantViolated
 
-**Phase:** Verification (ESBMC)
-**Meaning:** ESBMC found a loop iteration where the `invariant` does not hold.
+**Phase:** Verification
+**Meaning:** The verifier found a loop iteration where the `invariant` does not hold.
 
 **Wrong:**
 
@@ -6119,7 +6174,7 @@ fn count_up() -> u64 {
 ### EsbmcNotFound
 
 **Phase:** Verification
-**Meaning:** ESBMC is not installed or not on `$PATH`. When verification is enabled (the default for `vowc build`, always for `vowc verify`), the compiler checks for ESBMC upfront before compilation. If ESBMC is not found, the build aborts immediately with exit code 1.
+**Meaning:** ESBMC is not installed or not on `$PATH`. When verification is enabled with the ESBMC backend (the default for `vowc build`, always for `vowc verify`), the compiler checks for ESBMC upfront before compilation. If ESBMC is not found, the build aborts immediately with exit code 1. Under `--backend native` the verifier is Bitwuzla instead: a missing `bitwuzla` is reported per function as `VerifyFailed` with `verify_status: "tool_not_found"` (clause `status` `error` in `vowc contracts --verify`), and ESBMC is never consulted.
 
 **Wrong:**
 
@@ -6336,7 +6391,22 @@ use util.math
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — for example `RegionAlloc` and `FieldSet` from a struct construction the model does not cover (a struct of scalar fields is modelled), also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) A call to a user function that passes a `Vec`, `String`, map or `Option` argument is also not modelable (`Call target with a collection argument`): the model has no representation for a collection crossing a user-function boundary. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but the verifier has no model for something its body does, so no proof is attempted. The contract becomes documentary: runtime checks still apply in `--mode debug`. A function is `Skipped` only for one of the reasons below; a timeout, a solver `unknown`, an unwinding failure and an out-of-memory worker are never `Skipped` (they are `timeout` / `unknown`, see `docs/spec/cli.md` → "Status Values").
+
+The native backend names the reason with a code from a **closed** list, written after the function name in the message (``skipped verification of `f`: <code>: <detail>``). `detail` is free-form (a function, opcode or builtin name) and is not part of the enumerated set; the message text is not a contract. A machine-readable `reason_code` field is specified additively but **not emitted yet**, so do not parse for it.
+
+| Code | When | Typical `detail` |
+|---|---|---|
+| `function-has-effects` | The function has an effect other than `panic` (`io`, `read`, `write`, `unsafe`). `panic`, the effect of `.unwrap()`, is modelled. | the effect |
+| `recursion-unsupported` | The function is directly or mutually recursive in the inlined call graph, or only reaches a recursive function. | the cycle, `a -> b -> a` |
+| `float-rem-unsupported` | The body uses float `%` (`RemF32`, `RemF64`). Lasts until codegen defines float `%`. | |
+| `ir-non-dominating-read` | The dominance validator rejects the IR (defensive gate). | |
+| `unmodeled-builtin` | An extern call whose runtime symbol has no `verifier_model: known` entry in `docs/spec/operations.json` (`String` and map operations, `Vec` `clear`/`sort`/..., a `Vec<i128>` element). Shrinks as builtins are modelled. | the runtime symbol |
+| `unsupported-opcode` | An opcode the symbolic executor does not encode (today floats other than `%`, string constants, `Load`/`Store`, `LinearBorrow`), a shape it cannot unroll, or an aggregate use outside the modelled subset. Shrinks. | `Op[type]`, or `irreducible loop (...)`, `loop value used outside its loop`, `entry block is a loop header`, `loop nest deeper than 8` |
+| `non-modelable-callee` | An inlined callee is itself `Skipped`. | `<callee> (<code>)` |
+| `reserved-verifier-symbol` | The function name collides with a reserved checker symbol. Defined; not emitted yet. | |
+
+The list is closed: a function that fits no row is a verifier bug, not a new `Skipped` reason. Under the ESBMC backend the reason is the older free-text `non_modelable_reason` of the C emitter instead, for example an opcode the C model cannot represent (`RegionAlloc` and `FieldSet` from a struct construction the model does not cover, `Load`/`Store`, `RemF*`, `LinearBorrow`), a 128-bit checked operation or aggregate field, or a call that passes a `Vec`, `String`, map or `Option` argument to a user function (`Call target with a collection argument`). Native verification models the 128-bit cases, so those are `Skipped` only under ESBMC.
 
 **Wrong:**
 
@@ -6363,7 +6433,7 @@ fn count(v: Vec<i64>) -> u64 vow {
 }
 ```
 
-**Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the function is skipped with a structured warning instead of tripping the defense-in-depth `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` that historically broke the bootstrap on every vowed struct-builder. But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke ESBMC at all (`Unverified`, exit 0).
+**Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier cannot represent a function's body, the function is skipped with a structured warning instead of tripping a defense-in-depth assertion (under ESBMC, `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")`, which historically broke the bootstrap on every vowed struct-builder). But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke a verifier at all (`Unverified`, exit 0).
 
 **Fix:** Refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.
 
@@ -6377,7 +6447,7 @@ fn count(v: Vec<i64>) -> u64 vow {
 }
 ```
 
-**Note form (uncontracted caller).** The same code also appears with `severity: "note"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed. The message ends with the reason, and the reasons need different fixes: `` `f` cannot be modelled `` (restructure `f`, or accept that it stays unverified), or `the verifier timed out for `f`` / `the verifier could not decide them for `f`` (the proof was attempted but not finished — constrain or simplify `f`, or raise the timeout):
+**Note form (uncontracted caller).** The same code also appears with `severity: "note"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed. This note form is produced by the ESBMC backend; under `--backend native` the uncontracted-caller selection is shared but a native timeout or `unknown` for such a caller is a hard `VerifyFailed`, not a note. The message ends with the reason, and the reasons need different fixes: `` `f` cannot be modelled `` (restructure `f`, or accept that it stays unverified), or `the verifier timed out for `f`` / `the verifier could not decide them for `f`` (the proof was attempted but not finished — constrain or simplify `f`, or raise the timeout):
 
 ```json
 {
@@ -6439,7 +6509,7 @@ fn twice(x: i64) -> i64 vow {
 ### VerifierAssertionUnattributed
 
 **Phase:** Verification
-**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero, a dynamic shift count that exceeds the operand's bit width, and (native backend only) `unwrap()` called on `None` or `Err`.
+**Meaning:** The verifier found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero, a dynamic shift count that exceeds the operand's bit width, signed `MIN / -1` (native backend only), `unwrap()` called on `None` or `Err` (native backend only) and an out-of-bounds `Vec` index (native backend only). Under `--backend native` the native `vow_id` is `4294967293` and blame is `None`.
 
 **Wrong:**
 
@@ -6460,7 +6530,7 @@ fn remainder(n: u64, d: u64) -> u64 vow {
 }
 ```
 
-The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
+The structured counterexample's `violation` field carries the stable property description instead of raw verifier text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
 
 **Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For `unwrap() called on None`, match on the value or require its discriminant instead of unwrapping. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
 
@@ -6497,7 +6567,7 @@ fn remainder(n: u64, d: u64) -> u64 vow {
 
 ### ModelCapacityAssumed
 
-**Phase:** Verification (Note; the build status stays `Verified`)
+**Phase:** Verification (Note; the build status stays `Verified`). **ESBMC backend only:** never emitted under `--backend native`, which models collections with a symbolic length and no capacity. The diagnostic is retired together with the ESBMC backend.
 **Meaning:** The function's contracts were proved, but the proof's model restricts at least one capacity to the verifier's model capacity (defaults: `Vec<T>` 128, `String` 256, `HashMap<K, V>` and `BTreeMap<K, V>` 64, user-struct `Heap` 1024 slots; the `String` capacity is raised to the longest string literal in the module, and the note's message reports the capacity actually applied; see [`contracts.md`](contracts.md#collection-models-for-verification)). A parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled as nondeterministic *within* its capacity, and struct allocations stop at the heap capacity, so executions with longer collections or more struct allocations were pruned, not checked: `Verified` means "verified for executions up to the capacities".
 
 **Wrong:**
@@ -6857,14 +6927,14 @@ under `stdlib/`. Each module is a self-contained directory: one or more library
 This is a **reference collection**, not a globally-importable package set. Vow has
 no module search path today (see [Consumption model](#consumption-model)). Modules
 carry contracts, but only some are statically verifiable under the current ESBMC
-model — read [Verification status](#verification-status) before relying on a
+backend model — read [Verification status](#verification-status) before relying on a
 contract as a proof rather than a runtime check.
 
 In all examples below, `vow` refers to `build/vowc`.
 
 ## Modules at a glance
 
-| Module path           | Provides                                                                 | ESBMC status |
+| Module path           | Provides                                                                 | ESBMC-backend status |
 |-----------------------|-------------------------------------------------------------------------|---------------------------|
 | `stdlib/math`         | `arithmetic`, `number_theory`, `vec_math` — integer & vector math        | VerifyFailed (env)        |
 | `stdlib/heap`         | `min_heap`, `max_heap` — binary heaps over `i64`                          | VerifyFailed (env)        |
@@ -6873,7 +6943,7 @@ In all examples below, `vow` refers to `build/vowc`.
 | `stdlib/bignum`       | `bignum` — arbitrary-precision signed integers                          | Skipped     |
 | `stdlib/gc`           | `gc` — mark-and-sweep garbage collector over `i64` slots                 | VerifyFailed              |
 
-These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0. `(env)` marks an environmental verifier limitation, not a contract
+These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0 (ESBMC backend; native results are not recorded here). `(env)` marks an environmental verifier limitation, not a contract
 defect. The statuses reflect the verifier's memory model, **not** the soundness of
 the contracts — see [Verification status](#verification-status).
 
@@ -6926,7 +6996,7 @@ alongside it.
 
 ## Verification status
 
-The verifier statuses below were measured with `vow verify` against ESBMC 8.3.0.
+The verifier statuses below were measured with `vow verify` (ESBMC backend) against ESBMC 8.3.0.
 They are **pre-existing properties of the code and the verifier**, unchanged by the
 move into `stdlib/`. A `Skipped`/`VerifyFailed` status does not mean a contract is
 wrong — in `--mode debug` every contract is still enforced at runtime via
@@ -7265,7 +7335,7 @@ $ vow build examples/divide.vow
 {"status":"Verified","executable":"examples/divide","diagnostics":[],"counterexamples":[]}
 ```
 
-ESBMC proves the contract: whenever `y != 0` holds, the division is safe.
+The verifier proves the contract: whenever `y != 0` holds, the division is safe.
 
 ### Step 3: Runtime behavior (debug mode)
 
@@ -7367,7 +7437,7 @@ $ vow build examples/cegis_fixed.vow
 {"status":"Verified","executable":"examples/cegis_fixed","diagnostics":[],"counterexamples":[]}
 ```
 
-Verified. With `a >= 0`, `b >= 0`, and `a >= b`, ESBMC proves `result >= 0`.
+Verified. With `a >= 0`, `b >= 0`, and `a >= b`, the verifier proves `result >= 0`.
 
 ---
 
@@ -7415,7 +7485,7 @@ $ vow verify examples/vec_fill.vow
 
 **Key points:**
 - `invariant: i <= n` is inductive: true on entry, preserved by the loop body. The lower bounds `i >= 0` and `n >= 0` are carried by the `u64` type, so they need no clause (and `TautologicalComparison` rejects one)
-- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
+- The Vec model tracks `len`, so the verifier can reason about `result.len() == n`
 - The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
 - `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 
@@ -7705,7 +7775,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "status": {
       "type": "string",
       "enum": ["Verified", "Unverified", "Skipped", "CompileFailed", "VerifyFailed"],
-      "description": "Build outcome. `Skipped` means ESBMC was invoked but at least one vowed function could not be modelled; the build fails closed with exit 1 (distinct from `Unverified`, which means ESBMC was not invoked, e.g. `--no-verify`/`--dump-ir`, exit 0)."
+      "description": "Build outcome. `Skipped` means verification was requested but at least one vowed function could not be modelled; the build fails closed with exit 1 (distinct from `Unverified`, which means no verifier was invoked, e.g. `--no-verify`/`--dump-ir`, exit 0)."
     },
     "executable": {
       "type": ["string", "null"],
@@ -7731,7 +7801,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "counterexamples": {
       "type": "array",
       "items": { "$ref": "counterexample.schema.json" },
-      "description": "Structured counterexamples from ESBMC verification"
+      "description": "Structured counterexamples from verification (ESBMC or the native backend)"
     },
     "verify_status": {
       "type": "string",
@@ -7995,7 +8065,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           "quality": {
             "type": "string",
             "enum": ["weak", "tautological", "substantive"],
-            "description": "Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
+            "description": "Static classification (no verifier is run) of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
           },
           "trivially_satisfiable": {
             "type": "boolean",
@@ -8045,7 +8115,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vow-lang.dev/schemas/counterexample.schema.json",
   "title": "Counterexample",
-  "description": "A structured counterexample from ESBMC verification failure",
+  "description": "A structured counterexample from a verification failure (ESBMC or the native backend)",
   "type": "object",
   "required": ["function", "values", "violation", "vow_id", "source", "blame"],
   "properties": {
@@ -8056,7 +8126,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "values": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Map of source names or $esbmc$-prefixed internal variable names to counterexample values"
+      "description": "Map of source names (or, under the ESBMC backend, $esbmc$-prefixed internal variable names) to counterexample values"
     },
     "violation": {
       "type": "string",
@@ -8396,7 +8466,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "status": {
           "type": "string",
           "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed", "contract_skipped"],
-          "description": "Per-test outcome (`contract_skipped`: ESBMC never invoked because a vowed function is non-modelable; fail-closed, counts toward `failed`)"
+          "description": "Per-test outcome (`contract_skipped`: no proof was attempted because a vowed function is non-modelable; fail-closed, counts toward `failed`)"
         },
         "exit_code": {
           "type": ["integer", "null"],
@@ -8413,7 +8483,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "counterexamples": {
           "type": "array",
           "items": { "$ref": "counterexample.schema.json" },
-          "description": "ESBMC counterexamples (on verify_failed)"
+          "description": "Verifier counterexamples (on verify_failed)"
         }
       }
     },
@@ -8643,8 +8713,8 @@ pub fn api_function(x: i64) -> i64 {
 | `u32`  | 32-bit unsigned integer  |
 | `u64`  | 64-bit unsigned integer  |
 | `u128` | 128-bit unsigned integer (verifier may time out; see below) |
-| `f32`  | 32-bit float (limited support — avoid in contracts) |
-| `f64`  | 64-bit float (limited support — avoid in contracts) |
+| `f32`  | 32-bit float (limited support — avoid in contracts; `--backend native` does not model float operations yet, so a contracted function using them is `Skipped`) |
+| `f64`  | 64-bit float (limited support — avoid in contracts; `--backend native` does not model float operations yet, so a contracted function using them is `Skipped`) |
 | `bool` | Boolean                  |
 | `()`   | Unit type; its only value is also written `()` (not allowed as a parameter type) |
 | `!`    | Never type (diverges)    |
@@ -8664,8 +8734,9 @@ index expression has exactly the type `u64` (see [Indexing](#indexing)), so
 **128-bit implementation status:** `i128`/`u128` are executable end to end:
 full-range literals, arithmetic, casts, narrowing, and `parse_i128`/`parse_u128`
 compile natively. A 128-bit value may be an `Option`, `Result`, or `enum`
-payload, a struct field, or a `Vec` element (see the layout below). ESBMC modelling of 128-bit aggregates and constants is not available, so
-verification reports `Skipped` rather than an unsound result. Never weaken
+payload, a struct field, or a `Vec` element (see the layout below). The ESBMC backend does not model 128-bit aggregates and constants, so
+it reports `Skipped` rather than an unsound result; the native backend
+(`--backend native`) models them exactly. Never weaken
 contracts to fit the verifier.
 
 **Aggregate layout:** every struct field and enum payload occupies one 8-byte
@@ -8887,9 +8958,9 @@ a `match` arm, `?`, or `.unwrap()`; at every payload position; and at every
 
 Verification is a separate matter. 128-bit literals (in a body or in
 `requires`/`ensures`/`invariant`) are verifiable, and are modelled exactly under
-the bit-vector encoding, `i128::MIN`, `i128::MAX` and `u128::MAX` included; a
-proof obtained by the `--encoding ir` timeout fallback is reported as `ProvenIr`
-and is weaker. Under the default ESBMC backend every 128-bit aggregate access
+the bit-vector encoding (both backends), `i128::MIN`, `i128::MAX` and `u128::MAX` included; under
+ESBMC a proof obtained by the `--encoding ir` timeout fallback is weaker (it is
+reported as plain `proven`). Under the default ESBMC backend every 128-bit aggregate access
 is `Skipped` rather than modelled: a contracted function that reads or writes a
 128-bit aggregate field or enum payload is reported `Skipped`, with `FieldGet at
 128-bit width` or `FieldSet at 128-bit width`, rather than being modelled through
@@ -8970,7 +9041,7 @@ the count's type.
 `>= bit-width(LHS)` is a compile-time error (`ShiftCountOutOfRange`), at every
 width: `(x: u8) << 8` and `(x: i64) << 64` do not compile. Dynamic shift counts
 (`x << n` where `n` is not a const expression) get a check on the operation
-that ESBMC proves: the count must satisfy `0 <= count < width(LHS)` at the point
+that the verifier proves: the count must satisfy `0 <= count < width(LHS)` at the point
 of the shift, so a negative signed count is rejected as well. At runtime only
 8-bit shifts trap (`i8`/`u8` with count `>= 8` aborts with `ArithmeticOverflow`);
 wider shifts mask the count to the operand width, like the hardware shift.
@@ -9101,8 +9172,8 @@ match i64_to_u8_try(big) {
 }
 ```
 
-These intrinsics are emitted by the compiler so ESBMC sees their semantics
-directly in the verification C model.
+These intrinsics are emitted by the compiler so the verifier sees their semantics
+directly in its model (the C model under ESBMC).
 
 For the `u8` target, the available narrowing source types are `i16`, `i32`,
 `i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three
@@ -9265,9 +9336,12 @@ A `print_*` call inside a contracted function gives that function an effect,
 and the verifier model is restricted to pure functions, so the contract is
 reported as `VerificationSkipped` rather than checked.
 
-This idiom does not by itself make a length-bounded loop provable. ESBMC's
-unwind bound sits below the modelled collection capacity, so this form and the
-signed `while i >= 0` form both return `unknown`. What the idiom buys is a
+This idiom does not by itself make a length-bounded loop provable. A loop
+without an `invariant` that runs longer than the verifier's unwind bound
+(ESBMC's `--max-k-step`, or the native backend's internal bound of 64) returns
+`unknown` unless the native backend closes it by induction (`docs/spec/cli.md` →
+"Native backend", "Loops"), for this form and the signed `while i >= 0` form
+alike. What the idiom buys is a
 *writable* invariant rather than a stronger proof: `i <= n` is expressible on
 an unsigned index, whereas the signed form's companion clause `i >= -1` is not
 — a negative literal does not fit `u64` at all.
@@ -9290,22 +9364,25 @@ first index read runs far out of bounds.
 
 Plain wrapping `-` is the correct decrement in the canonical form. The guard
 `i > 0` has already discharged the underflow obligation, so no check is
-needed, and plain `-` is exactly what ESBMC's bitvector encoding models — a
+needed, and plain `-` is exactly what the verifier's bit-vector encoding models — a
 *wrong* guard therefore stays observable through `invariant: i <= n`. Reserve
 `-!` for decrements whose non-negativity the guard does not establish.
 
-Note one asymmetry while reading that advice. `-!` does trap at runtime under
-`--mode debug`, reporting `{"error":"ArithmeticOverflow"}`, but the verifier
-does not model checked arithmetic at all: `n -! 1` and `n - 1` emit the same C
-and yield byte-identical counterexamples. Do not reach for `-!` expecting it
-to make an underflow statically visible.
+Note one asymmetry while reading that advice. `-!` traps at runtime under
+`--mode debug`, reporting `{"error":"ArithmeticOverflow"}`, and the verifier
+models that abort: an aborting execution never returns, so it cannot witness a
+violated `ensures`, and a reachable abort adds an `ArithOverflowReachable`
+warning instead of failing the build. `n -! 1` and `n - 1` are therefore
+different obligations. Do not reach for `-!` expecting it to turn an underflow
+into a failed proof.
 
 #### Why there is no reverse-range syntax
 
 Vow has no numeric range form, and adding one is rejected rather than pending:
 
 - `loop` is not an escape hatch. `break value` is restricted to `loop`, and
-  ESBMC cannot verify an unbounded `loop` at all.
+  an unbounded `loop` is verifiable only through its `invariant` and `break`
+  structure (the native backend models `loop`; ESBMC does not).
 - A reverse for-each would cover very little. Most reverse scans need the
   *index*, not the element — they read a parallel array at `i`, or write a
   second collection at the same `i`.
@@ -9349,7 +9426,7 @@ let idx: i64 = loop {
 };
 ```
 
-ESBMC cannot verify unbounded `loop` constructs — use `while` with invariants for verifiable loops.
+Under the ESBMC backend an unbounded `loop` cannot be verified; the native backend models `loop` with `break` and `continue`. Use `while` with invariants for loops that verify under both.
 
 ### Break
 
@@ -9519,7 +9596,7 @@ let some: Option<i64> = Option::Some(42);
 `Result<T, E>` has variants `Ok(T)` and `Err(E)`.
 For scalar payloads supported by native aggregate codegen, `match` and
 `.unwrap()` extract the declared type, including `f32` and `f64`; `?`
-currently propagates `Option` payloads only. The ESBMC C model moves `f32`
+currently propagates `Option` payloads only. The ESBMC backend's C model moves `f32`
 and `f64` enum payloads and struct fields through its integer slots by
 IEEE-754 bit pattern (an `f64` as its raw 64 bits, an `f32` as its 32 bits
 zero-extended), as native codegen does, so contracts over float payloads
@@ -10135,19 +10212,20 @@ The bare `vow <source.vow>` form is exactly `vow build`: it verifies by default,
 |-------------------|-------------|--------------------------------------------|
 | `-o, --output`    | `build/<stem>` | Output executable path                  |
 | `--mode <debug\|release\|profile\|sanitize>` | `release` | Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + use-after-region-close detection for Vecs |
-| `--no-verify`     | (off)       | Skip ESBMC static verification            |
+| `--no-verify`     | (off)       | Skip static verification                  |
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
 | `--no-cache`    | (off)       | Disable verification result caching, and (for `--no-verify` builds) the compile-object cache. See "Compile-object cache behavior" below |
-| `--max-k-step <N>` | `50`     | ESBMC incremental BMC max iterations          |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
-| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
-| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
+| `--max-k-step <N>` | `50`     | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed `300`. ESBMC backend: under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under `--backend native` |
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (ESBMC processes, or `verify-worker` subprocesses under `--backend native`) |
+| `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is accepted only by `vowc verify`, `contracts --verify` and `test --verify`; on `build` and the bare form it is a usage error (exit 1) that points at `vowc verify`, and `esbmc` is accepted silently |
 | `--replay-cex`    | (off)       | Differential test the verifier model against runtime semantics (same as `vow verify --replay-cex`; see below) |
-| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link and, under the ESBMC backend, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. |
 
-**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
+**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever static verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
 
 ### `vow verify`
 
@@ -10161,21 +10239,21 @@ vow verify [OPTIONS] <source.vow>
 
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
-| `--no-cache`      | (off)       | Disable verification result caching        |
-| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
-| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
+| `--no-cache`      | (off)       | Disable verification result caching; under `--backend native` it disables the native result cache of `verify` (see "Result cache" below) |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | Per-function verification timeout in seconds; the only resource knob of the native backend, where the default is a fixed `300`. ESBMC backend: under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is an immediate watchdog kill under ESBMC and a zero budget (no solver is spawned; statically decided claims still resolve) under `--backend native` |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (ESBMC processes, or `verify-worker` subprocesses under `--backend native`) |
 | `--backend <esbmc\|native>` | `esbmc` | Verification backend. `native` is the symbolic checker with Bitwuzla, run in per-function worker subprocesses (epic #1398); self-hosted `vowc` only, see "Native backend" below. Accepted by `verify`, `contracts --verify` and `test --verify`; `contracts` and `test` without `--verify`, `build` and the bare `vowc <file>` form (identical to `build`) reject `--backend native` with a usage error (exit 1) instead of silently running ESBMC or reporting `not_verified` as if the native backend had run. Any value other than `esbmc` or `native` is a usage error |
-| `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
-| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. |
+| `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After the verifier reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans and, under the ESBMC backend, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process; under `--backend native` it records the frontend phase spans (`module-load`, `parse`, `typecheck`, `lower`, ...) and one `verification` span (no per-claim worker or solver spans, no per-worker RSS yet). Accepted only by `build` and `verify`. Pure side artifact. |
 
 #### Native backend (`vowc verify --backend native`; also `contracts --verify` and `test --verify`, see "Native backend: `contracts` and `test`" below)
 
 Opt-in; the default stays `esbmc`. Implemented only by the self-hosted `vowc`: the Rust `vow` does not accept `--backend` until verification is delegated to a pinned seed `vowc`. Scope (issues #1408, #1411):
 
-- **Subset.** A function is verified when its only effect is `panic` (or it has none), its loops are reducible `while`/`loop` loops (see "Loops" below), and it uses only these operations on integers of every width (`i8`..`i128`, `u8`..`u128`) and `bool`: constants, integer parameters, wrapping `+ - * / %`, the checked `+! -! *! /! %!`, `& | ^`, `<<` and `>>` (the shifted type's signedness picks arithmetic or logical `>>`), integer `as` casts (widening, same-width, and the truncating casts the lowerer emits for coerced literals), comparisons (`==`/`!=` also on `bool`), `!`, `if`/`else` (including nested, early `return`, and the `&&`/`||` that lower to branches) with the variables they update, `while` and `loop` with `break`/`continue`, `requires`/`ensures` and loop `invariant` clauses, and struct, enum and `Option`/`Result` values (see "Aggregates" below). Integers are fixed-width bit-vectors, so wrapping, signedness and 128-bit values are exact. Everything else (calls of builtins (so the narrowing intrinsics such as `i64_to_u8_wrap`; calls of other functions are inlined, see "Calls" below), the `io`/`read`/`write`/`unsafe` effects, `bool` parameters, floats, `String` and maps) is **`Skipped`**, never `Verified`. A `Vec` of `bool` or integers up to 64 bits is modelled (see "Collections" below). The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from ADR-1430 (`function-has-effects`, `ir-non-dominating-read`, `float-rem-unsupported`, `recursion-unsupported`, `non-modelable-callee`, `unmodeled-builtin` with detail the runtime symbol, `unsupported-opcode` with detail `Op[type]`, or a control-flow shape such as `irreducible loop (back edge to a block that does not dominate its source)`, `loop value used outside its loop`, `entry block is a loop header` or `loop nest deeper than 8`). A machine-readable `reason_code` field is not emitted yet.
+- **Subset.** A function is verified when its only effect is `panic` (or it has none), its loops are reducible `while`/`loop` loops (see "Loops" below), and it uses only these operations on integers of every width (`i8`..`i128`, `u8`..`u128`) and `bool`: constants, integer parameters, wrapping `+ - * / %`, the checked `+! -! *! /! %!`, `& | ^`, `<<` and `>>` (the shifted type's signedness picks arithmetic or logical `>>`), integer `as` casts (widening, same-width, and the truncating casts the lowerer emits for coerced literals), comparisons (`==`/`!=` also on `bool`), `!`, `if`/`else` (including nested, early `return`, and the `&&`/`||` that lower to branches) with the variables they update, `while` and `loop` with `break`/`continue`, `requires`/`ensures` and loop `invariant` clauses, and struct, enum and `Option`/`Result` values (see "Aggregates" below). Integers are fixed-width bit-vectors, so wrapping, signedness and 128-bit values are exact. Everything else (calls of builtins (so the narrowing intrinsics such as `i64_to_u8_wrap`; calls of other functions are inlined, see "Calls" below), the `io`/`read`/`write`/`unsafe` effects, `bool` parameters, floats, `String` and maps) is **`Skipped`**, never `Verified`. A `Vec` of `bool` or integers up to 64 bits is modelled (see "Collections" below). The diagnostic is a `VerificationSkipped` warning whose message is ``skipped verification of `f`: <code>: <detail>`` with a code from the closed list in [`errors.md`](errors.md#verificationskipped) and a free-form detail (the runtime symbol, `Op[type]`, or a control-flow shape such as `irreducible loop (back edge to a block that does not dominate its source)`, `loop value used outside its loop`, `entry block is a loop header` or `loop nest deeper than 8`). A machine-readable `reason_code` field is not emitted yet.
 - **Proof obligations.** One query per `ensures` clause and per abort site, in walk order (blocks in reverse postorder); a `requires` is an assumption only for the obligations after it, and so is every earlier abort guard on the same path (an aborting run never reaches a later obligation). An obligation is asked only on the paths that reach it: its query asserts the block's path condition, and an assumption made inside a branch holds only under that branch's condition. A variable updated in a branch is merged with one `ite` over the incoming edges, and only when the arms supply different values; a branch whose condition is constant, or was already decided by an enclosing branch on the same value, leaves the other arm unexecuted. The query grows with the number of branches and updated variables, not with the number of paths. Three kinds of abort follow the language:
   - *Wrapping `/` and `%`* abort on a zero divisor, and signed `/` aborts on `MIN / -1` (`MIN % -1` is `0`). A shift aborts unless `0 <= count < width` of the shifted type, tested in the count's own type so a negative signed count is rejected. Each is its own obligation: a counterexample is `VerifyFailed`, with the unattributed vow id `4294967293`, blame `None` and violation text `division or remainder by zero`, `signed division overflow (MIN / -1)` or `shift amount exceeds the operand's bit width`.
   - *`.unwrap()` on `None` or `Err`* is an obligation of its own: any path that reaches the abort is a counterexample with the unattributed vow id `4294967293`, blame `None` and violation text `unwrap() called on None`. A function whose `Option` parameter is unwrapped without a guard is `VerifyFailed`; one that unwraps a value it just built as `Some`, or sits on the `Some` arm of a `match`, is `Verified`. ESBMC skips every function with the `panic` effect, so it has no verdict to compare with.
@@ -10183,26 +10261,26 @@ Opt-in; the default stays `esbmc`. Implemented only by the self-hosted `vowc`: t
 
   A function with no obligation is `Verified` without a solver call. Counterexample values are decimal text of the declared type (unsigned types as magnitudes, 128-bit values in full).
 - **Loops.** Each loop is unrolled to an internal bound and every obligation is checked on the unrolled prefix, together with a mandatory *unwinding assertion*: no run takes more back edges than the bound. The verifier tries the bounds 2, 4, 8, 16, 32 and 64 in turn (the largest is at least ESBMC's default `--max-k-step`); the bound is not a flag and `--timeout` stays the only knob, shared by all rounds. An `ensures` or `invariant` violated by a run inside the bound is a real counterexample: `VerifyFailed` with the clause's vow id, blame and source span, found at the smallest bound that reaches it. Unwinding alone proves a function only when no run needs more iterations than the largest bound. When every loop of the function has an `invariant`, the loops are also tried inductively: each loop is cut at its header, the variables it changes are unconstrained, and the function is `Verified` when each invariant holds on entry, is preserved by one iteration from any state that satisfies it and the loop condition, and, with the negated condition, establishes the rest of the function (including `ensures`). So a loop that can run longer than the bound (a bound that is a parameter, `while true`, a literal bound above 64) is `Verified` given an inductive invariant. Induction never produces `VerifyFailed`: a wrong invariant fails because unwinding finds a run that violates it, and an invariant that is true but not inductive, or violated only beyond the largest bound, leaves the verdict `verify_status: "unknown"` with a `verify_message` that starts `unwinding assertion:`, never `Verified`. A proof by induction is partial correctness: it covers the runs that terminate, so a loop that never exits satisfies any `ensures`. When a function has a checked operator, the unrolled rounds still run, so its warnings are the aborts they reach within the unrolled prefix; an inductive proof does not add any. When a round of unwinding ends open (every claim holds inside the bound, but some run needs more iterations), the k-induction *step case* is tried at that round's bound `k`, with or without an invariant, for a function with exactly one loop whose header carries no pointer and which writes no aggregate or Vec: the loop is unrolled `k` times from an arbitrary state, the claims of the earlier copies (and the loop test, which they took) are assumed, and the function is `Verified` when every claim of the last copy and of the exit from it holds. It proves a property that is true for every trip count but not 1-inductive (an alternating divisor, a counter against a parameter bound) and, like invariant induction, is partial correctness. A failing step case proves nothing and is never `VerifyFailed`; the unwinding verdict stands. A function with several loops, or a loop that carries a pointer or writes an aggregate or a Vec, is decided by unwinding and invariant induction alone. An unrolled program above the verifier's size budget is `unknown` with the same prefix unless induction proves it. Loops that cannot be unrolled stay `Skipped` as `unsupported-opcode` (details above): irreducible control flow, a loop value read after its loop through a path the verifier cannot close, a loop in the entry block, nesting deeper than 8. Checked-arithmetic warnings are reported once per source site, not once per iteration.
-- **Extra proofs.** ESBMC reports 128-bit checked arithmetic, 128-bit constants and 128-bit struct fields or enum payloads as `Skipped`; native models them, so the same program can be `Verified` (with `ArithOverflowReachable` warnings) or `VerifyFailed` natively where ESBMC says `Skipped`.
+- **Extra proofs.** ESBMC reports 128-bit checked arithmetic and 128-bit struct fields or enum payloads as `Skipped`; native models them, so the same program can be `Verified` (with `ArithOverflowReachable` warnings) or `VerifyFailed` natively where ESBMC says `Skipped`.
 - **Aggregates.** A struct, enum, `Option` or `Result` value is scalarised: each field is its own `bool` or integer term (a 128-bit field is one 128-bit term), so construction, field access and `match` need no heap model. A parameter's fields are unconstrained, and so is its discriminant: no range is assumed for an enum tag. A field a construction did not write (the payload of `None`) is unconstrained too, never `0`. Two aggregates merged by an `if`/`else` or a `match` are merged field by field. A struct or enum parameter has no counterexample values yet: its fields are not listed in `values`. The following are **`Skipped`** as `unsupported-opcode`: a field write to anything but a value constructed earlier in the same block (a parameter, or a value built before a branch), a struct, enum or collection nested in another aggregate's field, a field of any other type, and `linear` values. A `Vec<i128>` or `Vec<u128>` element is `Skipped` as `unmodeled-builtin` (see "Collections").
 - **Collections.** A `Vec<T>` with `T` of `bool` or an integer of up to 64 bits (`new`, `push`, `v[i]`, `v[i] = x`, `len`, `pop`) is an array plus a 64-bit symbolic length. There is no capacity: a parameter's length is unconstrained apart from the runtime's own limit (a Vec's length is below `2^63 - 1`, so `v.len() as i64 >= 0`), and a `push` is assumed to return only while the length stays below it, so a property over every length is proven for every length, not only up to ESBMC's model capacity. An index at or past the length is an obligation of its own on `get` and `set`: a counterexample is `VerifyFailed` with the unattributed vow id `4294967293`, blame `None` and violation text `index out of bounds`. A Vec parameter's length and contents are not listed in `values`; two `Vec` parameters are distinct. **`Skipped`**: `String`, maps, `clear`, `truncate`, `reserve`, `sort`, `from_raw_parts_copy`, `pin_to_root`, wide (`i128`/`u128`) or pointer elements (`Vec<Vec<_>>`, `Vec<String>`, `Vec<struct>`; only `len` of those is modelled), a `Vec<bool>` element read, an index that is not 64-bit, a Vec stored in a struct field, passed to another function, or merged by an `if`/`else` that yields different Vecs.
 - **Calls.** A call of another function whose arguments and result are integers, `bool` or `()` is inlined: the callee's body is spliced into the caller before execution, so the caller is verified together with everything it calls and the callee's clauses become obligations of the caller. A callee `requires` is an obligation blamed on the caller (the counterexample's `vow_id` is the callee's own id, `function` is the function being verified, and `call_sites` lists the calls from that function down to the failing clause, outermost first); a callee `ensures` or loop `invariant` is an obligation blamed on the callee. Each is assumed once asked, so the first violated clause on a path is the one reported. A function without a `vow` block that calls a contracted function is verified only for those callee preconditions, as under ESBMC. A function on a call cycle, directly or through other functions, is `Skipped` as `recursion-unsupported` with the cycle as detail (`a -> b -> a`); a function whose callee is outside the subset is `Skipped` as `non-modelable-callee` with the callee and its own code as detail (`g (float-rem-unsupported)`). A call with a struct, enum, `Option` or collection argument or result stays `Skipped` as `unsupported-opcode`. A call tree whose inlined body exceeds the verifier's size budget is `verify_status: "unknown"` with a message that starts `inlining budget:`, never `Verified`.
 - **Verdict divergence from ESBMC.** The ESBMC model does not check `MIN / -1` for `/`, so `examples/divide.vow` (`requires: y != 0`, body `x / y`) is `VerifyFailed` under `--backend native` (counterexample `x = i64::MIN`, `y = -1`) while ESBMC proves it.
 - **Workers.** Each function in the subset is verified in its own `verify-worker` subprocess of the same `vowc` binary (internal; its flags and output are not part of the CLI contract), at most `--verify-jobs` at a time. A worker runs in its own process group, so killing it also kills its solver. On Linux it runs under a fixed internal address-space cap; there is no user-facing memory flag. Results are reported in IR order whatever order the workers finish in, and reporting stops at the first function that is not proven, so the output is the same for every `--verify-jobs` value. A worker that runs out of memory (the runtime's structured `OutOfMemory` report, a solver out-of-memory message, or a kill from outside) is `verify_status: "unknown"` with `verify_message: "memory limit exceeded"`, never a proof and never a compiler crash. Any other abnormal worker death (a signal, a nonzero exit, no result) is `verify_status: "panicked"` and the message names the signal or exit status. Expiry of `--timeout` kills the whole group and is `"timeout"`.
 - **Solver.** `bitwuzla` is resolved from `PATH`. The obligations of one round of a function that has at least two for the solver share one interactive solver process of the worker (each obligation asked in its own scope); only an `unsat` answer, or a `sat` on a checked-operator or unwinding obligation, is taken from it. Any other answer, and any misbehaviour of that process (an error, an unrecognised reply, a timeout, an exit), is decided by one self-contained `.smt2` per obligation, written to a private temp directory owned by the parent (removed on every path, including a killed worker) and run as a child process of the worker, which alone supplies a counterexample, so the result does not depend on whether the process was shared. Only `unsat` is a proof. `unknown` is `verify_status: "unknown"`; a solver that outlives its budget is killed (`"timeout"`); a non-zero exit, `[error]` output, an unrecognised answer or an unparsable model is `"error"`. If `bitwuzla` is not on `PATH` and a function needs it, the result is `VerifyFailed` with `verify_status: "tool_not_found"` and no counterexample (ESBMC is not consulted). A module in which every function is `Skipped` needs no solver. The binary is not hash-checked; its `--version` output names it in the result cache key.
-- **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function, measured from the start of its worker; `--timeout 0` is an immediate `timeout` without spawning the solver. `--verify-jobs <N>` caps concurrent workers (default half the CPUs). `--no-cache` disables the native result cache of `verify` (see "Result cache" below). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--replay-cex` and `--perfetto` works as for ESBMC. `--replay-cex` also replays the division, remainder and `unwrap()` abort counterexamples and reports a counterexample that does not reproduce as a `VerifierBug` diagnostic (see "Counterexample replay" below).
+- **Flags.** `--timeout <N>` (seconds, default `300`) is the budget for each function, measured from the start of its worker; `--timeout 0` is an immediate `timeout` without spawning the solver. `--verify-jobs <N>` caps concurrent workers (default half the CPUs). `--no-cache` disables the native result cache of `verify` (see "Result cache" below). `--max-k-step`, `--solver` and `--encoding` are ESBMC options and are rejected with a usage error under `--backend native`. `--replay-cex` works as for ESBMC; `--perfetto` is accepted and records the spans listed under the flag table. `--replay-cex` also replays the division, remainder and `unwrap()` abort counterexamples and reports a counterexample that does not reproduce as a `VerifierBug` diagnostic (see "Counterexample replay" below).
 - **Result cache.** Every solver answer that is `sat` (with its model) or `unsat` is stored on disk and replayed by a later run, so a warm run reports exactly what the cold run did without asking the solver again. An entry is keyed by a hash of the exact `.smt2` text of the query plus the solver's `bitwuzla --version` output and the fixed solver argument list, and holds that text, which a lookup compares byte for byte: a stale entry cannot exist (a new solver version or any change to the query is a different key), a hash collision is a miss, and a truncated, garbled or hand-edited entry is a miss. A claim is looked up under its full query text before a shared solver process is asked; an `unsat` from that process is stored under the same text, so a standalone run and a shared-process run replay each other's entries. A `sat` from the shared process of a soft claim carries no model and is not stored. `unknown`, `timeout`, memory, error and tool-not-found answers depend on the budget or the environment and are never stored, so they are asked again. A sliced query and the full query are cached under their own text; a cached `sat` for the sliced query still sends the claim to the full query. A non-positive budget is a `timeout` before the cache is consulted. The cache lives in `$VOW_CACHE_DIR/verify-native/` (default `~/.cache/vow/verify-native/`), sharded by the first two hex digits of the key, at most 64 entries per shard (a full shard drops an arbitrary half before it takes a new entry), written by temporary file and rename so concurrent workers never see a partial entry. Any problem with the directory or with the solver's `--version` disables the cache for that run and never fails verification. Only `verify` uses the cache: `contracts --verify` and `test --verify` ask the solver every time. `--no-cache` neither reads nor writes it, and the performance gate (`scripts/verify_perf.py`) always runs with it off and fails a sample if the cache directory is written. Unlike the ESBMC driver's cache, which only ever persists failures, this cache stores proofs: whoever can write the cache directory can forge an `unsat`, so use `--no-cache` when the result must come from a fresh solver run (a "green locally" claim). A solver call that timed out cold can be decided warm, since a hit costs nothing; the identical-verdict guarantee holds for runs in which no solver call times out.
 
 #### Native backend: `contracts` and `test`
 
 `vowc contracts --verify --backend native` and `vowc test --verify --backend native` (issue #1427) run the same native checker and worker pool as `verify`, with the status vocabulary, JSON schemas and exit codes of the ESBMC path unchanged. Self-hosted `vowc` only; the default stays `esbmc`.
 
-- **Selection.** Both commands check the functions that carry a `vow` block, exactly as the ESBMC path does (`verify` also checks callers of contracted functions, these do not). A function outside the native subset is `skipped` in `contracts` (a status only, no diagnostic, as for ESBMC) and makes the file `contract_skipped` in `test` (also reported as a `VerificationSkipped` warning), and needs no solver.
+- **Selection.** Both commands check the functions that carry a `vow` block, exactly as the ESBMC path does (`verify` also checks callers of contracted functions, these do not). A function outside the native subset is `skipped` in `contracts` (a status only, no diagnostic, as for ESBMC) and makes the file `contract_skipped` in `test` (with one `VerificationSkipped` diagnostic of severity `error` in the entry's `diagnostics`, fixed message `contract verification skipped: function not modelable`, no reason code), and needs no solver.
 - **No early stop.** `verify` reports up to the first function that is not proven; a `contracts` report or a `test` verdict spans functions, so a failed function never cancels a later one. Every function is verified at most `--verify-jobs` at a time, and the result does not depend on which worker finishes first.
 - **Clause status (`contracts`).** Each `ensures` and `invariant` clause carries the verdict of its own obligations, from one `verify-worker` that decides every obligation of the function. A `requires` clause (an assumption, never an obligation) is `proven` when the function is proven and `unknown` otherwise, as for ESBMC's `--multi-property` mode. A function whose only counterexample is an abort (no clause refuted) has no `proven` clause: they are all `unknown`. Statuses are `proven`, `failed`, `unknown`, `timeout`, `error`, `skipped` and `vacuous`; `proven-ir` is an ESBMC-only status and is never produced. When `bitwuzla` is not on `PATH`, every clause of a function that needs it is `error` and the run exits 1; a function without obligations, or a skipped one, still resolves without a solver.
 - **Weak-contract probes (`contracts`).** The two probes of the ESBMC path are IR rewrites checked by the same engine, each in its own worker with the full `--timeout` budget, so a slow probe loses only its own answer. *Vacuity*: the function is cut right after its last `requires` and the cut point must be unreachable. If the `requires` clauses are jointly unsatisfiable, every clause of the function is `vacuous` (this overrides the clause verdicts, as for ESBMC). The probe applies to functions with a `requires`. *Trivial*: the single returned value is replaced by the type's default (`0`, `false`) and every `ensures` must still hold; if it does, each `ensures` of the function has `trivially_satisfiable: true`. The computation that produced the value stays in the function, so what it can abort on is still checked. It applies to functions with an `ensures`, a scalar result and one `return` of a value computed in the body (not a parameter), as for ESBMC. A probe that is not proven (failed, `unknown`, timeout, error) never claims a weakness.
 - **Fail-closed `test`.** Every function with a `vow` block must be `proven`: `failed`, `unknown`, `timeout`, `error` and a worker that died all make the file `verify_failed` and the test program is not run. The ESBMC path lets an `error` outcome pass; the native path does not, because nothing was established for that function. Each function has the fixed `300` s budget; `test --timeout` is the per-test execution timeout in milliseconds and does not apply to verification. `--jobs` workers each run their own verify pool, so the total grows with `--jobs` times `--verify-jobs`.
-- **Verdict divergence from ESBMC.** The ESBMC path plants its vacuity label only in the entry block. A `requires` written with `&&` or `||` lowers to branches and lands in a later block, so ESBMC reports `vacuous` for a satisfiable `requires: a > 0 && a < 100`; the native probe follows the definition above and does not. The `MIN / -1` and 128-bit differences listed under "Verdict divergence from ESBMC" above apply to `contracts` and `test` as well. Two more are specific to the clause report. A function that fails only on an abort (a division or remainder by zero, `MIN / -1`, an over-wide shift, `unwrap()` on `None`, an out-of-bounds `Vec` index) and refutes no clause has no `proven` clause: its `ensures` and `invariant` clauses are `unknown`, like its `requires` clauses, and the run exits 1, as `verify` reports the same function `VerifyFailed`. ESBMC instead lets the run continue past the abort with an unconstrained value, so a clause over that value is `failed` there, while a clause that does not depend on it, or a function with no `requires`, can be `proven` and the run exit 0. A loop with no `invariant` whose bound is symbolic is decided by unwinding alone, so its clauses are `unknown` where ESBMC's k-induction may prove them. A function whose retained computation can still abort on a checked operator is never flagged `trivially_satisfiable`, as under ESBMC.
+- **Verdict divergence from ESBMC.** The ESBMC path plants its vacuity label only in the entry block. A `requires` written with `&&` or `||` lowers to branches and lands in a later block, so ESBMC reports `vacuous` for a satisfiable `requires: a > 0 && a < 100`; the native probe follows the definition above and does not. The `MIN / -1` and 128-bit differences listed under "Verdict divergence from ESBMC" above apply to `contracts` and `test` as well. Two more are specific to the clause report. A function that fails only on an abort (a division or remainder by zero, `MIN / -1`, an over-wide shift, `unwrap()` on `None`, an out-of-bounds `Vec` index) and refutes no clause has no `proven` clause: its `ensures` and `invariant` clauses are `unknown`, like its `requires` clauses, and the run exits 1, as `verify` reports the same function `VerifyFailed`. ESBMC instead lets the run continue past the abort with an unconstrained value, so a clause over that value is `failed` there, while a clause that does not depend on it, or a function with no `requires`, can be `proven` and the run exit 0. A loop with no `invariant` whose bound is symbolic is decided by unwinding alone, so its clauses are `unknown` where ESBMC's incremental BMC may close the forward condition. A function whose retained computation can still abort on a checked operator is never flagged `trivially_satisfiable`, as under ESBMC.
 - **Flags.** `--timeout <N>` (seconds) and `--verify-jobs <N>` are honoured by `contracts`; `--max-k-step`, `--solver` and `--encoding` are rejected with a usage error, as for `verify`. `--no-cache` is accepted and has no effect. `--replay-cex` and counterexamples are not part of either command.
 
 ### `vow contracts`
@@ -10217,18 +10295,18 @@ vow contracts [OPTIONS] <source.vow>
 
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
-| `--verify`        | (off)       | Run verification (ESBMC, or the native backend with `--backend native`) and report per-contract status |
+| `--verify`        | (off)       | Run verification (the ESBMC backend by default, or the native backend with `--backend native`) and report per-contract status |
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
-| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |
-| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations (with --verify) |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC SMT solver (with --verify) |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC backend only; a usage error under `--backend native`. ESBMC encoding mode (with --verify); ir requires z3 |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent `verify-worker` subprocesses under `--backend native`; a no-op under ESBMC (the ESBMC loop is serial) |
 | `--backend <esbmc\|native>` | `esbmc` | Verification backend; `native` requires `--verify` (see "Native backend: `contracts` and `test`") |
 | `--timeout <N>` | `300` (native) | Seconds per function (and per probe) under `--backend native`; ESBMC's own timeout otherwise |
 
-**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
+**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven` (or `proven-ir`, an ESBMC-only status no compiler produces today). Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
 
-When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
+When `--verify` is requested but the verifier is not installed (ESBMC, or `bitwuzla` under `--backend native`), the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` (under native, only for functions that need the solver) and exits with code 1 (fail-closed). Install the verifier, or omit `--verify`, to obtain proven/failed/unknown statuses.
 
 ### `vow skill`
 
@@ -10276,8 +10354,8 @@ vow test [OPTIONS] [<path>]
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
-| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations (with --verify) |
-| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |
+| `--max-k-step <N>` | `50`       | ESBMC backend only; a usage error under `--backend native`. ESBMC incremental BMC max iterations (with --verify) |
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent verification jobs (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 
@@ -10328,7 +10406,7 @@ A `timeout` counts toward `failed`, like `compile_error`, `verify_failed` and `c
 
 A `<path>` that does not exist is itself a failure: the result is `TestsFailed` with `total: 1` and `failed: 1`, holding one synthetic `failed` entry whose `file` is the path as given and whose `stderr` names it, and the exit code is 1. `total` equals the length of `tests` in every result, so the synthetic entry is counted.
 
-`contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed — a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.
+`contract_skipped` means no proof was attempted because a vowed function is non-modelable (distinct from `verify_failed`, where the verifier found a violation or could not decide). Both are fail-closed — a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.
 
 ### `vow decl`
 
@@ -10434,7 +10512,7 @@ silently ignored. The self-hosted `vowc` only accepts the `--flag value` form fo
 `--flag=value` is reported as an unknown argument with a hint. `vowc mutants` forwards its flags to
 its own parser and is not validated by the driver.
 
-`vow build` and `vow verify` both fail closed on `Skipped`: if ESBMC was asked to verify a vowed
+`vow build` and `vow verify` both fail closed on `Skipped`: if the verifier was asked to verify a vowed
 function but the verifier could not model the function body, the contract was not statically
 proved, so the run exits non-zero. Use `--no-verify` if you genuinely want to skip verification —
 that path produces `Unverified` (exit 0).
@@ -10460,11 +10538,11 @@ rationale.
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC, and every call from a verifiable uncontracted function into a contracted function satisfies the callee's `requires` (see [Callers Without a `vow` Block](contracts.md#callers-without-a-vow-block)). "Verifiable" excludes uncontracted callers that cannot be modelled (e.g. `main() [io]`) or whose proof the verifier could not finish; each carries a `VerificationSkipped` *Note* instead, and the note does not change the status. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
-| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
-| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `LinearBorrow`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
+| `Verified`      | Compiled + every vowed function's contract was statically proved by the verifier, and every call from a verifiable uncontracted function into a contracted function satisfies the callee's `requires` (see [Callers Without a `vow` Block](contracts.md#callers-without-a-vow-block)). "Verifiable" excludes uncontracted callers that cannot be modelled (e.g. `main() [io]`) or whose proof the verifier could not finish; each carries a `VerificationSkipped` *Note* instead, and the note does not change the status. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). It may also carry one `ModelCapacityAssumed` *Note* per proved function whose proof is bounded by a verifier model capacity; the status and exit code are unchanged. See [`errors.md`](errors.md#modelcapacityassumed). |
+| `Unverified`    | Compiled but no verifier was invoked (`--no-verify`, `--dump-ir`). Exit 0. A missing verifier is not `Unverified`: it is `VerifyFailed` (exit 1). |
+| `Skipped`       | Verification was requested but at least one vowed function could not be modelled. The reason is one of the closed list in [`errors.md`](errors.md#verificationskipped) under the native backend, or free text such as `LinearBorrow`, `Load`/`Store`, `RemF*`, effects under ESBMC. **ESBMC backend:** struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled (the native backend models it). Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (a named backend limitation, such as `%` on floats), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
-| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
+| `VerifyFailed`  | The verifier produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`; under the native backend also an unwinding failure, `unwinding assertion: ...`, an exhausted inlining or size budget, or an out-of-memory worker, `memory limit exceeded`), tool error, the tool was not found (`tool_not_found`: ESBMC, or `bitwuzla` under native), or the verifier worker crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 For a multi-function `verify` or verified `build`, a halt-class result (definitive
 counterexample, timeout, unknown, tool error, missing tool, or worker panic) stops new function
@@ -10561,7 +10639,7 @@ argument. A `timeout`, `unknown`, `error` or `panicked` outcome has no
 counterexample and adds no such diagnostic. Both compilers emit the same
 `diagnostics[]`, `counterexample` and `counterexamples[]` for the same source;
 the only fields that are not specified byte for byte are `verify_message`
-(ESBMC's free text) and `values` entries named `$esbmc$...` (solver temporaries).
+(the verifier's free text) and, under ESBMC, `values` entries named `$esbmc$...` (solver temporaries).
 
 A diagnostic's `span` is exactly `{file, offset, length}`: positions are byte
 offsets, and neither compiler adds line or column fields.
@@ -10602,16 +10680,16 @@ shift count) rather than exposing raw verifier output.
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
 | `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
-| `counterexample`   | string              | VerifyFailed      | Legacy description string: `"[Counterexample]"` when ESBMC produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>`, ...) |
+| `counterexample`   | string              | VerifyFailed      | Legacy description string: `"[Counterexample]"` when the verifier produced a counterexample, otherwise the soft-failure text (`verification timed out`, `verification result unknown: <reason>`, `esbmc error: <message>` (the prefix is kept whichever backend ran), ...) |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |
 | `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
-| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
+| `verify_message`   | string              | On backend failure | Verifier/backend error detail             |
 
 ### Counterexample replay
 
-With `--replay-cex`, each object in `counterexamples[]` gains a `replay` field — a **differential test** of the verifier's IR-to-C model against the executable's debug-mode runtime semantics. It is **not part of the soundness proof**: it neither strengthens nor weakens the static verdict, and the exit code is unchanged. It exists to catch *drift* between the two independent lowerings — `vow-verify`'s C emitter (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug runtime checks.
+With `--replay-cex`, each object in `counterexamples[]` gains a `replay` field — a **differential test** of the verifier's model against the executable's debug-mode runtime semantics. It is **not part of the soundness proof**: it neither strengthens nor weakens the static verdict, and the exit code is unchanged. It exists to catch *drift* between the two independent lowerings — `vow-verify`'s C emitter (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug runtime checks.
 
-For each counterexample, Vow maps the ESBMC assignment back to concrete Vow inputs, synthesizes a `--mode debug` harness that calls the failing function with those inputs, runs it, and compares the observed `VowViolation`.
+For each counterexample, Vow maps the verifier's assignment back to concrete Vow inputs, synthesizes a `--mode debug` harness that calls the failing function with those inputs, runs it, and compares the observed `VowViolation`.
 
 | `replay` value | Meaning |
 |----------------|---------|
@@ -10686,7 +10764,7 @@ the structured diagnostics documented under [Runtime Errors](errors.md#runtime-e
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
 | `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, `"skipped"`, or `"vacuous"` |
-| `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
+| `quality`     | string  | Static clause-shape classification (no verifier): `"weak"`, `"tautological"`, or `"substantive"` |
 | `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
 `description` is the clause kind followed by the predicate rendered by the canonical
@@ -10714,20 +10792,20 @@ compilers anchor on the byte offset of the parameter name instead.
 | Status          | Meaning                                              |
 |-----------------|------------------------------------------------------|
 | `not_verified`  | Verification not requested (no `--verify` flag)      |
-| `proven`        | ESBMC established this contract for the configured bounded verification model (bit-vector encoding, overflow modeled) |
-| `proven-ir`     | ESBMC established this contract for the configured bounded model under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
-| `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
-| `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
-| `error`         | ESBMC error or tool not found                        |
-| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `LinearBorrow`, `RemF*`) or the function has effects. (Struct construction and field ops are modelled — see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
-| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
+| `proven`        | The verifier established this contract. ESBMC: for the configured bounded verification model (bit-vector encoding, overflow modeled). Native: for every unwinding and collection length, never after a resource-limited weakened retry |
+| `proven-ir`     | ESBMC backend only, never produced natively (and not emitted as a clause status by either compiler today). ESBMC established this contract for the configured bounded model under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
+| `failed`        | The verifier found a counterexample violating this contract |
+| `unknown`       | The verifier could not conclude for this contract — under the native backend a solver `unknown`, an unwinding failure (`unwinding assertion:`), a budget or out-of-memory worker, or a function that fails only on an abort; under ESBMC either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
+| `timeout`       | The verifier timed out on the containing function (ESBMC: BV and — when applicable — IR fallback both timed out) |
+| `error`         | Verifier error, or the tool was not found (ESBMC, or `bitwuzla` under `--backend native`) |
+| `skipped`       | The containing function is outside what the verifier models, with a reason from the closed list in [`errors.md`](errors.md#verificationskipped) (e.g. effects, recursion, an unmodelled builtin, `Load`/`Store`). A machine-readable reason code is not emitted yet. Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke a verifier at all. |
+| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — the verifier proved nothing of substance (antecedent failure). Detected by a second run: under ESBMC a `vow_reach` label (`--error-label`) planted after the `requires` assumes is unreachable; under `--backend native` the function is cut right after its last `requires` and the cut point must be unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
 
 The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g. the BV→IR fallback) may never report a weakened check as `proven` are the verifier's soundness discipline — the safe-vs-unsafe retry rules are specified in `docs/verifier-discipline.md`.
 
 ### Quality Values
 
-`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.
+`quality` is a static classification of each clause's *shape*, computed without running a verifier and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.
 
 | Quality        | Meaning                                                                                      |
 |----------------|----------------------------------------------------------------------------------------------|
@@ -10844,7 +10922,7 @@ means region analysis placed the value too deep. `op` is one of `push`, `set`, `
 ```
 Parse JSON from stdout
 ├── status == "Verified"       → Success. Binary at `executable`.
-├── status == "Unverified"     → Compiled but unverified. ESBMC missing or --no-verify.
+├── status == "Unverified"     → Compiled but unverified (--no-verify or --dump-ir).
 ├── status == "CompileFailed"  → Read `diagnostics[]` for error details.
 │   ├── error_code is parse error  → Fix syntax (see grammar.md)
 │   ├── error_code is type error   → Fix types (see errors.md)
@@ -10865,20 +10943,23 @@ Always check stderr for human-readable diagnostics alongside the JSON on stdout.
             r#"reference/contracts.md"#,
             r#"# Contract Authoring and Verification
 
-Vow uses ESBMC (bounded model checker) for static contract verification. This document covers contract patterns, verification behavior, and common pitfalls.
+Vow statically verifies contracts with one of two backends: ESBMC (a bounded model checker, `--backend esbmc`, the default today) or the native verifier (`--backend native`, self-hosted `vowc` only, which emits SMT-LIB for Bitwuzla). Both report the same verdict surface (statuses, blame, `vow_id`). This document covers contract patterns, verification behavior, and common pitfalls.
 
 ## Semantic Contracts Are Backend-Independent
 
 A contract states the function's real semantic domain and result. It does not
-state the limits of the tool currently used to check it. Replacing ESBMC with a
-stronger verifier must not require editing Vow source contracts.
+state the limits of the tool currently used to check it. Replacing the verifier
+with a stronger one must not require editing Vow source contracts.
 
 Lengths, capacities, indices, and struct fields may appear in contracts when
 they express a genuine algorithmic constraint or representation invariant. For
 example, an index may need to be within a vector's length, paired inputs may
 need equal lengths, or a ring buffer may need to be non-full before a write.
-They must not be capped merely because ESBMC uses a finite collection model or
-because a smaller struct state space is easier to solve.
+They must not be capped merely because a verifier uses a finite collection
+model or because a smaller struct state space is easier to solve. The internal
+unwinding bound of the native verifier is such a limit too: it never belongs in
+a `requires`/`ensures`/`invariant` clause, and an unwinding failure is
+`unknown`, never `proven`.
 
 The same distinction applies to numeric bounds. Exact overflow guards and real
 problem-domain restrictions are semantic; unwind caps and arbitrary
@@ -10887,17 +10968,26 @@ honest contract, report that limitation outside the contract.
 
 ## Verification Pipeline
 
-Codegen (Cranelift) and linking finish before verification starts, so peak memory is the larger of the two phases rather than their sum:
+Codegen (Cranelift) and linking finish before verification starts, so peak memory is the larger of the two phases rather than their sum. A codegen or link failure ends the build before any verifier process is started. Verification itself runs up to `--verify-jobs` verifier processes at a time.
 
-```
-Vow Source → Parse → Type Check → IR Lower → Cranelift → executable → C Emit → ESBMC → proof / counterexample
-```
+| | Native backend (`--backend native`) | ESBMC backend (`--backend esbmc`, default) |
+|---|---|---|
+| Pipeline | `IR → symbolic executor → SMT-LIB → Bitwuzla`, one `verify-worker` subprocess per function | `IR → C emit → ESBMC` |
+| Clauses | `requires` is an assumption for the obligations after it; `ensures`, `invariant` and every abort site are obligations | `requires` → `__ESBMC_assume()`, `ensures`/`invariant` → `__ESBMC_assert()` |
+| Loops | Unrolled to an internal bound (2, 4, 8, 16, 32, 64) with a mandatory unwinding assertion; loops with an `invariant` are also proven inductively, and an open round tries a k-induction step case | Incremental BMC, `--max-k-step` (default 50); no inductive step |
+| Tuning | `--timeout` is the only knob; `--max-k-step`, `--solver` and `--encoding` are usage errors | `--max-k-step`, `--solver`, `--encoding`, `--timeout` |
+| Collections | Array plus symbolic length, no capacity | Fixed-capacity arrays (see below) |
+| Bounded result | An unwinding failure, solver `unknown` or out-of-memory worker is `unknown`/`timeout`, never `proven` | `proven` describes the configured model, including its finite unwind and capacities |
 
-A codegen or link failure ends the build before any ESBMC process is started. Verification itself runs up to `--verify-jobs` ESBMC processes at a time.
+The table is the whole difference: contracts, blame and `vow_id` are the same under both. A contract is `proven` only when the verifier decides every obligation; the native backend never reports `proven` after a resource-limited weakened retry.
 
-Contract clauses become IR opcodes. The C emitter translates `requires` to `__ESBMC_assume()` (the verifier assumes preconditions hold) and `ensures`/`invariant` to `__ESBMC_assert()` (the verifier checks postconditions).
+### Native backend
 
-### ESBMC Configuration
+The native verifier executes the IR symbolically and encodes integers as fixed-width bit-vectors, so wrapping, signedness and 128-bit values are exact. Each `ensures` clause, loop `invariant` and abort site (division or remainder by zero, `MIN / -1`, an over-wide shift, `unwrap()` on `None`, an out-of-bounds `Vec` index) is a proof obligation; a `requires` is an assumption for the obligations after it. The exact subset, loop strategy and flags are in `docs/spec/cli.md` → "Native backend". A function outside the subset is `Skipped` with a code from the closed list in [`VerificationSkipped`](errors.md#verificationskipped), never `Verified`.
+
+**Known limits.** String parsing and formatting builtins are opaque (`Skipped`). Float arithmetic is not modelled yet: a function that uses floats is `Skipped` as `unsupported-opcode` today (the intended semantics are IEEE 754 round-to-nearest-even with a canonical NaN, and `RemF32`/`RemF64` are `Skipped` as `float-rem-unsupported` until codegen defines float `%`). NaN payload bits are not distinguished. Callee inlining makes a caller's query as large as its whole call tree, so a deep call tree can end `unknown` with `inlining budget:`.
+
+### ESBMC backend
 
 - Verification strategy: **incremental BMC** (`--incremental-bmc`) — base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC completes the configured model checks; otherwise the result is `unknown`. `proven` describes the configured verification model, including its finite unwind and collection capacities, not executions outside that model.
 - Incremental BMC with `--max-k-step` (default: **50**) — loops are verified incrementally up to N iterations
@@ -10906,7 +10996,9 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### Collection Models for Verification
 
-ESBMC is a *bounded* model checker, so it models collection types as
+**Native backend.** A `Vec<T>` whose element `T` is `bool` or an integer of up to 64 bits (`new`, `push`, `pop`, `len`, indexing, indexed assignment) is an array plus a 64-bit symbolic length. There is no capacity: a property over every length is proven for every length, an index at or past the length is its own obligation (`index out of bounds`), and no `ModelCapacityAssumed` note is ever emitted. `String`, the maps, wide (`i128`/`u128`) or pointer elements and the mutating operations `clear`, `truncate`, `reserve`, `sort`, `from_raw_parts_copy` and `pin_to_root` are `Skipped` (see `docs/spec/cli.md` → "Native backend", "Collections"). The rest of this section describes the ESBMC backend.
+
+**ESBMC backend.** ESBMC is a *bounded* model checker, so it models collection types as
 fixed-size arrays and reasons about them up to a finite capacity. These
 capacities are an internal property of the verifier, not of the language:
 
@@ -10927,7 +11019,7 @@ capacity that was actually applied.
 in a Vow program grows dynamically on the heap with no fixed maximum; the
 capacity above only describes how far the *bounded* model checker reasons. The
 language and its contracts are deliberately decoupled from what any particular
-prover can prove: replace ESBMC with a stronger (or unbounded) checker and the
+prover can prove: replace ESBMC with a stronger (or unbounded) checker, as the native backend does for `Vec`, and the
 same source, the same contracts, and the same CLI keep working — the only
 difference is that the verifier can cover more of the state space. For this
 reason a `requires`/`ensures` clause must never encode a verifier bound (e.g.
@@ -11022,9 +11114,9 @@ tuple's span. Compare the elements instead: `requires: a != 1 || b != 2`.
 
 ## Counterexample Replay (Differential Test)
 
-`vow verify --replay-cex` (also `vow build --replay-cex`) cross-checks a counterexample against the executable's runtime semantics. After ESBMC reports a violation, Vow maps the symbolic assignment to concrete Vow inputs, builds a `--mode debug` harness that calls the failing function with them, and checks whether the runtime `VowViolation` matches — **same `vow_id` and same blame**.
+`vow verify --replay-cex` (also `vow build --replay-cex`) cross-checks a counterexample against the executable's runtime semantics. After the verifier reports a violation, Vow maps the symbolic assignment to concrete Vow inputs, builds a `--mode debug` harness that calls the failing function with them, and checks whether the runtime `VowViolation` matches — **same `vow_id` and same blame**.
 
-This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's C model (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope. Under `--backend native` the replay is also the oracle for the native checker: a counterexample that does not reproduce is reported as a `VerifierBug` diagnostic.
+This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's model (the C model, `requires` → `__ESBMC_assume` and `ensures`/`invariant` → `__ESBMC_assert`, under ESBMC; the SMT-LIB encoding under the native backend) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope. Under `--backend native` the replay is also the oracle for the native checker: a counterexample that does not reproduce is reported as a `VerifierBug` diagnostic.
 
 ## Integer Contracts
 
@@ -11229,7 +11321,7 @@ fn double(x: i64) -> i64 vow {
 }
 ```
 
-ESBMC finds: `x = 4611686018427387904` → `result = -9223372036854775808` (wraps negative).
+The verifier finds: `x = 4611686018427387904` → `result = -9223372036854775808` (wraps negative).
 
 **Fix:** use checked arithmetic (`+!`), or bound the input.
 
@@ -11259,9 +11351,11 @@ This is not inductive — `v.len() == n` is only true after the loop.
 
 **Fix:** Use `invariant: i >= 0, invariant: i <= n`.
 
+Under the native backend the same mistake shows up differently: a wrong invariant is refuted by unwinding (a run that violates it inside the bound is `failed`), while an invariant that is true but not inductive leaves the verdict `unknown` with a `verify_message` that starts `unwinding assertion:`. A failing induction step is never `failed`.
+
 ### Unbound Loop Iterations
 
-Without a bound on loop iterations, ESBMC may timeout (default max-k-step is 50):
+Without a bound on loop iterations, the verifier may not finish. Under ESBMC the unwind stops at `--max-k-step` (default 50); under the native backend every loop is unrolled to an internal bound of at most 64 and an unrolling that is not enough is `unknown` with an `unwinding assertion:` message:
 
 ```vow
 fn fill(n: i64) -> Vec<i64> vow {
@@ -11270,11 +11364,11 @@ fn fill(n: i64) -> Vec<i64> vow {
 } { ... }
 ```
 
-ESBMC will only verify this for small `n` values. **Do not** add `requires: n <= 8` to the contract — that would distort the semantic specification. The contract is correct as-is; ESBMC's bounded verification provides partial assurance.
+The verifier unrolls only a bounded number of iterations, so for large `n` the verdict is `unknown` rather than `proven`. **Do not** add `requires: n <= 8` to the contract — that would distort the semantic specification. The contract is correct as-is; add a loop `invariant` so the native backend can prove it inductively, and accept an honest `unknown` otherwise.
 
 ### Verification-Driven Bounds (Anti-Pattern)
 
-**Never** add artificial bounds to contracts solely to help ESBMC verify them:
+**Never** add artificial bounds to contracts solely to help the verifier prove them:
 
 ```vow
 // WRONG: bounds exist only to appease the verifier
@@ -11298,7 +11392,7 @@ fn gcd(a: i64, b: i64) -> i64 vow {
 } { ... }
 ```
 
-Contracts express what is mathematically required for correctness. ESBMC verifies within its configured model (bounded loops, bounded arithmetic, bounded collection models) — if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
+Contracts express what is mathematically required for correctness. The verifier checks within its configured model (bounded loops, and under ESBMC bounded arithmetic and collection models) — if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
 
 **The overflow-guard bound is this anti-pattern's most common disguise.** A clause like `requires: a <= 4611686018427387903` on an adding function looks semantic — it does describe a real property of `i64` — but its only purpose is to keep wrapping unreachable, and it pays for that by excluding inputs the function handles perfectly well. Use the checked operator instead: `a +! b` aborts rather than wraps, the verifier models the abort, and the contract keeps its true domain. See [Range Bounds](#range-bounds) and [Wrapping Arithmetic Overflow](#wrapping-arithmetic-overflow).
 
@@ -11320,7 +11414,7 @@ A counterexample in the JSON output:
 | Field       | Meaning                                                        |
 |-------------|----------------------------------------------------------------|
 | `function`  | Which function's verification query failed                     |
-| `values`    | Source or ESBMC variable values in the counterexample           |
+| `values`    | Source variable values in the counterexample (decimal text of the declared type)           |
 | `violation` | Which contract clause was violated                             |
 | `vow_id`    | Function-local ID linking to the specific vow clause            |
 | `source`    | Byte offset in the source file of the violated clause           |
@@ -11345,7 +11439,9 @@ callee, `violation`, `source` and `blame` are the callee's clause, and `vow_id`
 is the callee-local id (the id a debug-mode `VowViolation` for that callee would
 report). It is never resolved against the verified caller's same-numbered clause.
 
-Variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot
+A violation that is not a contract clause (a division or remainder by zero or an over-wide shift under either backend; `MIN / -1`, `unwrap()` on `None` and an out-of-bounds `Vec` index under the native backend only) carries the unattributed `vow_id` `4294967293`, blame `None` and a `violation` text naming the abort. It is not a `requires`, so there is no clause to blame; bound the operand with a real `requires` or guard the operation.
+
+Under the ESBMC backend, variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot
 appear in a Vow identifier, so the prefix cannot collide with a source name.
 Named inputs map directly to function parameters, including source names that
 begin with `_esbmc`.
@@ -11367,15 +11463,19 @@ vow {
 }
 ```
 
-ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
+Both backends treat `u64` as an unsigned 64-bit value (`uint64_t` and unsigned nondet values under ESBMC, a 64-bit bit-vector with unsigned comparisons natively), so a counterexample reports the magnitude.
 
 ## 128-bit Integer Contracts
 
-`i128`/`u128` literals work in contracts and bodies. The verifier builds each
-literal from its two 64-bit limbs, so under the bit-vector encoding every
-value is exact (`i128::MIN`, `i128::MAX` and `u128::MAX` included) and a
-counterexample reports the full 128-bit value. A proof from the `--encoding ir`
-timeout fallback is reported as `ProvenIr` and is weaker:
+`i128`/`u128` literals work in contracts and bodies. The native backend models
+128-bit scalars, constants, checked arithmetic and struct fields or enum payloads
+as 128-bit bit-vectors, so every value is exact (`i128::MIN`, `i128::MAX` and
+`u128::MAX` included) and a counterexample reports the full 128-bit value. Under
+the ESBMC backend 128-bit constants are modelled exactly under the bit-vector
+encoding, and a proof from its `--encoding ir` timeout fallback is reported as
+plain `proven` and is weaker; 128-bit checked arithmetic and aggregate fields
+are `Skipped`. A `Vec<i128>` or `Vec<u128>` element is `Skipped` under both
+backends. A contract over 128-bit scalars and literals verifies under both:
 
 ```vow
 fn at_least_one(x: u128) -> u128
@@ -11413,7 +11513,7 @@ The contract applies to all functions declared in the block, and documents the e
 
 This document answers a question that `contracts.md` does not: given a function,
 **which** properties are worth proving, how do you tell a strong contract from a
-hollow one, and how do you express the strong shapes within ESBMC's reach.
+hollow one, and how do you express the strong shapes within the verifier's reach.
 
 `contracts.md` is the *reference* (syntax, blame, the verification pipeline,
 anti-patterns). This is the *methodology* (judgement). Read that first.
@@ -11438,7 +11538,7 @@ compiler carry this contract:
 fn EFF_IO() -> i64 vow { ensures: result > 0 } { 1 }
 ```
 
-ESBMC proves `1 > 0` in milliseconds. But `ensures: result > 0` also holds for
+The verifier proves `1 > 0` in milliseconds. But `ensures: result > 0` also holds for
 `{ 2 }`, `{ 99 }`, and every other positive constant — it does not pin the value
 this function is *supposed* to return. It is a real postcondition, but a **weak**
 one: it constrains the output to a half-line, not to a point. Proving 354 of
@@ -11696,13 +11796,15 @@ first runs, and trivial validity *always* indicated a real defect in the design,
 spec, or environment.
 
 **Detection (the reachability probe).** `vow contracts --verify` ships this check
-(#81). For any function carrying a `requires`, it re-runs ESBMC over the same
-model with a `vow_reach` label planted immediately after the `requires` assumes,
-under `--error-label vow_reach`. If ESBMC reports the label **unreachable**
-(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
+(#81). For any function carrying a `requires`, it re-checks the same model with
+a reachability probe immediately after the `requires` assumes. Under ESBMC the
+probe is a `vow_reach` label run under `--error-label vow_reach`; under
+`--backend native` the function is cut right after its last `requires` and the
+cut point must be unreachable. If the probe reports the point **unreachable**
+(ESBMC: `VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
 every `ensures` held only vacuously — all of the function's clauses are reported
-`status: "vacuous"` and the command fails closed. If the label is **reachable**
-(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
+`status: "vacuous"` and the command fails closed. If the point is **reachable**
+(ESBMC: `VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
 live. This is operationally the dual of the classic `ensures: false` re-check —
 asking "is the post-`requires` point reachable?" instead of "does `assert(false)`
 still pass?" — but it needs only one extra run per function and is unaffected by
@@ -11762,9 +11864,9 @@ syntax say it":
 - **expressible** — surface Vow has the syntax
 - **typechecked** — the checker validates the clause to `bool` (added in #81 Phase 0)
 - **lowerable** — the lowerer emits IR for the clause
-- **modelable** — the C emitter / ESBMC model supports the operations used
+- **modelable** — the verifier's model supports the operations used
   (pure, non-effectful helpers only; see `is_modelable` in the C emitter)
-- **backend** — ESBMC actually discharges it within bounds
+- **backend** — the verifier actually discharges it (ESBMC: within bounds; native: for every unwinding it can close, otherwise `unknown`)
 
 | Shape | expressible | typechecked | lowerable | modelable | backend |
 |-------|:-----------:|:-----------:|:---------:|:---------:|:-------:|
@@ -11775,7 +11877,7 @@ syntax say it":
 | 5. Dispatch totality | ✓ | ✓ | ✓ | ✓ (pure dispatch) | ✓ over finite domain |
 | 6a. Argument-relational | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 6b. Cross-fn uniqueness | ✓ (O(n²)) | ✓ | ✓ | ✓ | ✓ but unscalable → prefer structural encoding |
-| 7. Loop invariant | ✓ | ✓ | ✓ | ✓ | partial (bounded / k-induction) |
+| 7. Loop invariant | ✓ | ✓ | ✓ | ✓ | partial (bounded; native also by induction) |
 | Bounded quantifier (`forall i in 0..n`) | ✗ (no surface syntax) | — | — | — | — (roadmap #467/#470) |
 
 Contract expressions must be **pure** — they cannot call effectful functions
@@ -11787,11 +11889,13 @@ model limitations, not contract-language limitations.
 
 `vow contracts --verify` performs the **per-obligation** quality analysis tracked
 in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via
-ESBMC `--multi-property`), plus the three quality signals above:
+ESBMC `--multi-property`, or from one `verify-worker` per function under
+`--backend native`), plus the three quality signals above:
 
-- **Tautology** — the static `quality` field flags constant clauses (no ESBMC).
-- **Vacuity** — a contradictory `requires` is caught by the `--error-label`
-  reachability probe and reported `status: "vacuous"` (fail-closed).
+- **Tautology** — the static `quality` field flags constant clauses (no verifier is run).
+- **Vacuity** — a contradictory `requires` is caught by the reachability probe
+  (ESBMC `--error-label`, or the post-`requires` cut under `--backend native`) and
+  reported `status: "vacuous"` (fail-closed).
 - **Weakness** — the body-replace probe reports `trivially_satisfiable: true` for
   an `ensures` a trivial `return <default>` body satisfies (informational).
 
@@ -12194,7 +12298,7 @@ fn f(big: i64) -> u8 {
 ### ShiftCountOutOfRange
 
 **Phase:** Type Checker
-**Meaning:** A constant-expression shift count is negative or greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) are checked by ESBMC, which requires `0 <= count < width` at the shift (a negative signed count is a violation). At runtime only 8-bit shifts trap: an `i8`/`u8` shift whose count is `>= 8` aborts with `ArithmeticOverflow` in every build mode. Wider shifts are not trapped; the hardware shift masks the count to the operand width (`(x: i64) << 65` is `x << 1`), so only verification excludes them.
+**Meaning:** A constant-expression shift count is negative or greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) are checked by the verifier, which requires `0 <= count < width` at the shift (a negative signed count is a violation). At runtime only 8-bit shifts trap: an `i8`/`u8` shift whose count is `>= 8` aborts with `ArithmeticOverflow` in every build mode. Wider shifts are not trapped; the hardware shift masks the count to the operand width (`(x: i64) << 65` is `x << 1`), so only verification excludes them.
 
 **Wrong:**
 
@@ -12818,7 +12922,7 @@ A 128-bit integer as an `Option`, `Result`, or `enum` payload is supported, so `
 ### BTreeMapKeyTypeMustBeI64
 
 **Phase:** Type Checker
-**Meaning:** A `BTreeMap<K, V>` was instantiated with `K` not equal to `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys; the runtime helpers and ESBMC C model are hard-coded to i64.
+**Meaning:** A `BTreeMap<K, V>` was instantiated with `K` not equal to `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys; the runtime helpers and the verifier's model are hard-coded to i64.
 
 **Wrong:**
 
@@ -12930,8 +13034,8 @@ fn add(a: i64, b: i64) -> i64 vow {
 
 ### VowRequiresViolated
 
-**Phase:** Verification (ESBMC)
-**Meaning:** ESBMC found inputs that violate a `requires` precondition. This is a **static** verification error — it means the function's callers can reach it with invalid arguments.
+**Phase:** Verification
+**Meaning:** The verifier found inputs that violate a `requires` precondition. This is a **static** verification error — it means the function's callers can reach it with invalid arguments.
 
 **Wrong:**
 
@@ -12963,8 +13067,8 @@ fn caller(x: u64) -> u64 {
 
 ### VowEnsuresViolated
 
-**Phase:** Verification (ESBMC)
-**Meaning:** ESBMC found inputs where the function's return value does not satisfy the `ensures` postcondition.
+**Phase:** Verification
+**Meaning:** The verifier found inputs where the function's return value does not satisfy the `ensures` postcondition.
 
 **Wrong:**
 
@@ -12990,8 +13094,8 @@ fn max(a: i64, b: i64) -> i64 vow {
 
 ### VowInvariantViolated
 
-**Phase:** Verification (ESBMC)
-**Meaning:** ESBMC found a loop iteration where the `invariant` does not hold.
+**Phase:** Verification
+**Meaning:** The verifier found a loop iteration where the `invariant` does not hold.
 
 **Wrong:**
 
@@ -13026,7 +13130,7 @@ fn count_up() -> u64 {
 ### EsbmcNotFound
 
 **Phase:** Verification
-**Meaning:** ESBMC is not installed or not on `$PATH`. When verification is enabled (the default for `vowc build`, always for `vowc verify`), the compiler checks for ESBMC upfront before compilation. If ESBMC is not found, the build aborts immediately with exit code 1.
+**Meaning:** ESBMC is not installed or not on `$PATH`. When verification is enabled with the ESBMC backend (the default for `vowc build`, always for `vowc verify`), the compiler checks for ESBMC upfront before compilation. If ESBMC is not found, the build aborts immediately with exit code 1. Under `--backend native` the verifier is Bitwuzla instead: a missing `bitwuzla` is reported per function as `VerifyFailed` with `verify_status: "tool_not_found"` (clause `status` `error` in `vowc contracts --verify`), and ESBMC is never consulted.
 
 **Wrong:**
 
@@ -13243,7 +13347,22 @@ use util.math
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — for example `RegionAlloc` and `FieldSet` from a struct construction the model does not cover (a struct of scalar fields is modelled), also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) A call to a user function that passes a `Vec`, `String`, map or `Option` argument is also not modelable (`Call target with a collection argument`): the model has no representation for a collection crossing a user-function boundary. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but the verifier has no model for something its body does, so no proof is attempted. The contract becomes documentary: runtime checks still apply in `--mode debug`. A function is `Skipped` only for one of the reasons below; a timeout, a solver `unknown`, an unwinding failure and an out-of-memory worker are never `Skipped` (they are `timeout` / `unknown`, see `docs/spec/cli.md` → "Status Values").
+
+The native backend names the reason with a code from a **closed** list, written after the function name in the message (``skipped verification of `f`: <code>: <detail>``). `detail` is free-form (a function, opcode or builtin name) and is not part of the enumerated set; the message text is not a contract. A machine-readable `reason_code` field is specified additively but **not emitted yet**, so do not parse for it.
+
+| Code | When | Typical `detail` |
+|---|---|---|
+| `function-has-effects` | The function has an effect other than `panic` (`io`, `read`, `write`, `unsafe`). `panic`, the effect of `.unwrap()`, is modelled. | the effect |
+| `recursion-unsupported` | The function is directly or mutually recursive in the inlined call graph, or only reaches a recursive function. | the cycle, `a -> b -> a` |
+| `float-rem-unsupported` | The body uses float `%` (`RemF32`, `RemF64`). Lasts until codegen defines float `%`. | |
+| `ir-non-dominating-read` | The dominance validator rejects the IR (defensive gate). | |
+| `unmodeled-builtin` | An extern call whose runtime symbol has no `verifier_model: known` entry in `docs/spec/operations.json` (`String` and map operations, `Vec` `clear`/`sort`/..., a `Vec<i128>` element). Shrinks as builtins are modelled. | the runtime symbol |
+| `unsupported-opcode` | An opcode the symbolic executor does not encode (today floats other than `%`, string constants, `Load`/`Store`, `LinearBorrow`), a shape it cannot unroll, or an aggregate use outside the modelled subset. Shrinks. | `Op[type]`, or `irreducible loop (...)`, `loop value used outside its loop`, `entry block is a loop header`, `loop nest deeper than 8` |
+| `non-modelable-callee` | An inlined callee is itself `Skipped`. | `<callee> (<code>)` |
+| `reserved-verifier-symbol` | The function name collides with a reserved checker symbol. Defined; not emitted yet. | |
+
+The list is closed: a function that fits no row is a verifier bug, not a new `Skipped` reason. Under the ESBMC backend the reason is the older free-text `non_modelable_reason` of the C emitter instead, for example an opcode the C model cannot represent (`RegionAlloc` and `FieldSet` from a struct construction the model does not cover, `Load`/`Store`, `RemF*`, `LinearBorrow`), a 128-bit checked operation or aggregate field, or a call that passes a `Vec`, `String`, map or `Option` argument to a user function (`Call target with a collection argument`). Native verification models the 128-bit cases, so those are `Skipped` only under ESBMC.
 
 **Wrong:**
 
@@ -13270,7 +13389,7 @@ fn count(v: Vec<i64>) -> u64 vow {
 }
 ```
 
-**Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the function is skipped with a structured warning instead of tripping the defense-in-depth `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` that historically broke the bootstrap on every vowed struct-builder. But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke ESBMC at all (`Unverified`, exit 0).
+**Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier cannot represent a function's body, the function is skipped with a structured warning instead of tripping a defense-in-depth assertion (under ESBMC, `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")`, which historically broke the bootstrap on every vowed struct-builder). But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke a verifier at all (`Unverified`, exit 0).
 
 **Fix:** Refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.
 
@@ -13284,7 +13403,7 @@ fn count(v: Vec<i64>) -> u64 vow {
 }
 ```
 
-**Note form (uncontracted caller).** The same code also appears with `severity: "note"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed. The message ends with the reason, and the reasons need different fixes: `` `f` cannot be modelled `` (restructure `f`, or accept that it stays unverified), or `the verifier timed out for `f`` / `the verifier could not decide them for `f`` (the proof was attempted but not finished — constrain or simplify `f`, or raise the timeout):
+**Note form (uncontracted caller).** The same code also appears with `severity: "note"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed. This note form is produced by the ESBMC backend; under `--backend native` the uncontracted-caller selection is shared but a native timeout or `unknown` for such a caller is a hard `VerifyFailed`, not a note. The message ends with the reason, and the reasons need different fixes: `` `f` cannot be modelled `` (restructure `f`, or accept that it stays unverified), or `the verifier timed out for `f`` / `the verifier could not decide them for `f`` (the proof was attempted but not finished — constrain or simplify `f`, or raise the timeout):
 
 ```json
 {
@@ -13346,7 +13465,7 @@ fn twice(x: i64) -> i64 vow {
 ### VerifierAssertionUnattributed
 
 **Phase:** Verification
-**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero, a dynamic shift count that exceeds the operand's bit width, and (native backend only) `unwrap()` called on `None` or `Err`.
+**Meaning:** The verifier found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero, a dynamic shift count that exceeds the operand's bit width, signed `MIN / -1` (native backend only), `unwrap()` called on `None` or `Err` (native backend only) and an out-of-bounds `Vec` index (native backend only). Under `--backend native` the native `vow_id` is `4294967293` and blame is `None`.
 
 **Wrong:**
 
@@ -13367,7 +13486,7 @@ fn remainder(n: u64, d: u64) -> u64 vow {
 }
 ```
 
-The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
+The structured counterexample's `violation` field carries the stable property description instead of raw verifier text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
 
 **Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For `unwrap() called on None`, match on the value or require its discriminant instead of unwrapping. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
 
@@ -13404,7 +13523,7 @@ fn remainder(n: u64, d: u64) -> u64 vow {
 
 ### ModelCapacityAssumed
 
-**Phase:** Verification (Note; the build status stays `Verified`)
+**Phase:** Verification (Note; the build status stays `Verified`). **ESBMC backend only:** never emitted under `--backend native`, which models collections with a symbolic length and no capacity. The diagnostic is retired together with the ESBMC backend.
 **Meaning:** The function's contracts were proved, but the proof's model restricts at least one capacity to the verifier's model capacity (defaults: `Vec<T>` 128, `String` 256, `HashMap<K, V>` and `BTreeMap<K, V>` 64, user-struct `Heap` 1024 slots; the `String` capacity is raised to the longest string literal in the module, and the note's message reports the capacity actually applied; see [`contracts.md`](contracts.md#collection-models-for-verification)). A parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled as nondeterministic *within* its capacity, and struct allocations stop at the heap capacity, so executions with longer collections or more struct allocations were pruned, not checked: `Verified` means "verified for executions up to the capacities".
 
 **Wrong:**
@@ -13765,14 +13884,14 @@ under `stdlib/`. Each module is a self-contained directory: one or more library
 This is a **reference collection**, not a globally-importable package set. Vow has
 no module search path today (see [Consumption model](#consumption-model)). Modules
 carry contracts, but only some are statically verifiable under the current ESBMC
-model — read [Verification status](#verification-status) before relying on a
+backend model — read [Verification status](#verification-status) before relying on a
 contract as a proof rather than a runtime check.
 
 In all examples below, `vow` refers to `build/vowc`.
 
 ## Modules at a glance
 
-| Module path           | Provides                                                                 | ESBMC status |
+| Module path           | Provides                                                                 | ESBMC-backend status |
 |-----------------------|-------------------------------------------------------------------------|---------------------------|
 | `stdlib/math`         | `arithmetic`, `number_theory`, `vec_math` — integer & vector math        | VerifyFailed (env)        |
 | `stdlib/heap`         | `min_heap`, `max_heap` — binary heaps over `i64`                          | VerifyFailed (env)        |
@@ -13781,7 +13900,7 @@ In all examples below, `vow` refers to `build/vowc`.
 | `stdlib/bignum`       | `bignum` — arbitrary-precision signed integers                          | Skipped     |
 | `stdlib/gc`           | `gc` — mark-and-sweep garbage collector over `i64` slots                 | VerifyFailed              |
 
-These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0. `(env)` marks an environmental verifier limitation, not a contract
+These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0 (ESBMC backend; native results are not recorded here). `(env)` marks an environmental verifier limitation, not a contract
 defect. The statuses reflect the verifier's memory model, **not** the soundness of
 the contracts — see [Verification status](#verification-status).
 
@@ -13834,7 +13953,7 @@ alongside it.
 
 ## Verification status
 
-The verifier statuses below were measured with `vow verify` against ESBMC 8.3.0.
+The verifier statuses below were measured with `vow verify` (ESBMC backend) against ESBMC 8.3.0.
 They are **pre-existing properties of the code and the verifier**, unchanged by the
 move into `stdlib/`. A `Skipped`/`VerifyFailed` status does not mean a contract is
 wrong — in `--mode debug` every contract is still enforced at runtime via
@@ -14174,7 +14293,7 @@ $ vow build examples/divide.vow
 {"status":"Verified","executable":"examples/divide","diagnostics":[],"counterexamples":[]}
 ```
 
-ESBMC proves the contract: whenever `y != 0` holds, the division is safe.
+The verifier proves the contract: whenever `y != 0` holds, the division is safe.
 
 ### Step 3: Runtime behavior (debug mode)
 
@@ -14276,7 +14395,7 @@ $ vow build examples/cegis_fixed.vow
 {"status":"Verified","executable":"examples/cegis_fixed","diagnostics":[],"counterexamples":[]}
 ```
 
-Verified. With `a >= 0`, `b >= 0`, and `a >= b`, ESBMC proves `result >= 0`.
+Verified. With `a >= 0`, `b >= 0`, and `a >= b`, the verifier proves `result >= 0`.
 
 ---
 
@@ -14324,7 +14443,7 @@ $ vow verify examples/vec_fill.vow
 
 **Key points:**
 - `invariant: i <= n` is inductive: true on entry, preserved by the loop body. The lower bounds `i >= 0` and `n >= 0` are carried by the `u64` type, so they need no clause (and `TautologicalComparison` rejects one)
-- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
+- The Vec model tracks `len`, so the verifier can reason about `result.len() == n`
 - The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
 - `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 
@@ -14610,7 +14729,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "status": {
       "type": "string",
       "enum": ["Verified", "Unverified", "Skipped", "CompileFailed", "VerifyFailed"],
-      "description": "Build outcome. `Skipped` means ESBMC was invoked but at least one vowed function could not be modelled; the build fails closed with exit 1 (distinct from `Unverified`, which means ESBMC was not invoked, e.g. `--no-verify`/`--dump-ir`, exit 0)."
+      "description": "Build outcome. `Skipped` means verification was requested but at least one vowed function could not be modelled; the build fails closed with exit 1 (distinct from `Unverified`, which means no verifier was invoked, e.g. `--no-verify`/`--dump-ir`, exit 0)."
     },
     "executable": {
       "type": ["string", "null"],
@@ -14636,7 +14755,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "counterexamples": {
       "type": "array",
       "items": { "$ref": "counterexample.schema.json" },
-      "description": "Structured counterexamples from ESBMC verification"
+      "description": "Structured counterexamples from verification (ESBMC or the native backend)"
     },
     "verify_status": {
       "type": "string",
@@ -14898,7 +15017,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           "quality": {
             "type": "string",
             "enum": ["weak", "tautological", "substantive"],
-            "description": "Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
+            "description": "Static classification (no verifier is run) of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
           },
           "trivially_satisfiable": {
             "type": "boolean",
@@ -14947,7 +15066,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vow-lang.dev/schemas/counterexample.schema.json",
   "title": "Counterexample",
-  "description": "A structured counterexample from ESBMC verification failure",
+  "description": "A structured counterexample from a verification failure (ESBMC or the native backend)",
   "type": "object",
   "required": ["function", "values", "violation", "vow_id", "source", "blame"],
   "properties": {
@@ -14958,7 +15077,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "values": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Map of source names or $esbmc$-prefixed internal variable names to counterexample values"
+      "description": "Map of source names (or, under the ESBMC backend, $esbmc$-prefixed internal variable names) to counterexample values"
     },
     "violation": {
       "type": "string",
@@ -15295,7 +15414,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "status": {
           "type": "string",
           "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed", "contract_skipped"],
-          "description": "Per-test outcome (`contract_skipped`: ESBMC never invoked because a vowed function is non-modelable; fail-closed, counts toward `failed`)"
+          "description": "Per-test outcome (`contract_skipped`: no proof was attempted because a vowed function is non-modelable; fail-closed, counts toward `failed`)"
         },
         "exit_code": {
           "type": ["integer", "null"],
@@ -15312,7 +15431,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "counterexamples": {
           "type": "array",
           "items": { "$ref": "counterexample.schema.json" },
-          "description": "ESBMC counterexamples (on verify_failed)"
+          "description": "Verifier counterexamples (on verify_failed)"
         }
       }
     },

@@ -2,7 +2,7 @@
 
 This document answers a question that `contracts.md` does not: given a function,
 **which** properties are worth proving, how do you tell a strong contract from a
-hollow one, and how do you express the strong shapes within ESBMC's reach.
+hollow one, and how do you express the strong shapes within the verifier's reach.
 
 `contracts.md` is the *reference* (syntax, blame, the verification pipeline,
 anti-patterns). This is the *methodology* (judgement). Read that first.
@@ -27,7 +27,7 @@ compiler carry this contract:
 fn EFF_IO() -> i64 vow { ensures: result > 0 } { 1 }
 ```
 
-ESBMC proves `1 > 0` in milliseconds. But `ensures: result > 0` also holds for
+The verifier proves `1 > 0` in milliseconds. But `ensures: result > 0` also holds for
 `{ 2 }`, `{ 99 }`, and every other positive constant — it does not pin the value
 this function is *supposed* to return. It is a real postcondition, but a **weak**
 one: it constrains the output to a half-line, not to a point. Proving 354 of
@@ -285,13 +285,15 @@ first runs, and trivial validity *always* indicated a real defect in the design,
 spec, or environment.
 
 **Detection (the reachability probe).** `vow contracts --verify` ships this check
-(#81). For any function carrying a `requires`, it re-runs ESBMC over the same
-model with a `vow_reach` label planted immediately after the `requires` assumes,
-under `--error-label vow_reach`. If ESBMC reports the label **unreachable**
-(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
+(#81). For any function carrying a `requires`, it re-checks the same model with
+a reachability probe immediately after the `requires` assumes. Under ESBMC the
+probe is a `vow_reach` label run under `--error-label vow_reach`; under
+`--backend native` the function is cut right after its last `requires` and the
+cut point must be unreachable. If the probe reports the point **unreachable**
+(ESBMC: `VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
 every `ensures` held only vacuously — all of the function's clauses are reported
-`status: "vacuous"` and the command fails closed. If the label is **reachable**
-(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
+`status: "vacuous"` and the command fails closed. If the point is **reachable**
+(ESBMC: `VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
 live. This is operationally the dual of the classic `ensures: false` re-check —
 asking "is the post-`requires` point reachable?" instead of "does `assert(false)`
 still pass?" — but it needs only one extra run per function and is unaffected by
@@ -351,9 +353,9 @@ syntax say it":
 - **expressible** — surface Vow has the syntax
 - **typechecked** — the checker validates the clause to `bool` (added in #81 Phase 0)
 - **lowerable** — the lowerer emits IR for the clause
-- **modelable** — the C emitter / ESBMC model supports the operations used
+- **modelable** — the verifier's model supports the operations used
   (pure, non-effectful helpers only; see `is_modelable` in the C emitter)
-- **backend** — ESBMC actually discharges it within bounds
+- **backend** — the verifier actually discharges it (ESBMC: within bounds; native: for every unwinding it can close, otherwise `unknown`)
 
 | Shape | expressible | typechecked | lowerable | modelable | backend |
 |-------|:-----------:|:-----------:|:---------:|:---------:|:-------:|
@@ -364,7 +366,7 @@ syntax say it":
 | 5. Dispatch totality | ✓ | ✓ | ✓ | ✓ (pure dispatch) | ✓ over finite domain |
 | 6a. Argument-relational | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 6b. Cross-fn uniqueness | ✓ (O(n²)) | ✓ | ✓ | ✓ | ✓ but unscalable → prefer structural encoding |
-| 7. Loop invariant | ✓ | ✓ | ✓ | ✓ | partial (bounded / k-induction) |
+| 7. Loop invariant | ✓ | ✓ | ✓ | ✓ | partial (bounded; native also by induction) |
 | Bounded quantifier (`forall i in 0..n`) | ✗ (no surface syntax) | — | — | — | — (roadmap #467/#470) |
 
 Contract expressions must be **pure** — they cannot call effectful functions
@@ -376,11 +378,13 @@ model limitations, not contract-language limitations.
 
 `vow contracts --verify` performs the **per-obligation** quality analysis tracked
 in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via
-ESBMC `--multi-property`), plus the three quality signals above:
+ESBMC `--multi-property`, or from one `verify-worker` per function under
+`--backend native`), plus the three quality signals above:
 
-- **Tautology** — the static `quality` field flags constant clauses (no ESBMC).
-- **Vacuity** — a contradictory `requires` is caught by the `--error-label`
-  reachability probe and reported `status: "vacuous"` (fail-closed).
+- **Tautology** — the static `quality` field flags constant clauses (no verifier is run).
+- **Vacuity** — a contradictory `requires` is caught by the reachability probe
+  (ESBMC `--error-label`, or the post-`requires` cut under `--backend native`) and
+  reported `status: "vacuous"` (fail-closed).
 - **Weakness** — the body-replace probe reports `trivially_satisfiable: true` for
   an `ensures` a trivial `return <default>` body satisfies (informational).
 

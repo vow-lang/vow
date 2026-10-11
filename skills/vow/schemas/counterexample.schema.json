@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vow-lang.dev/schemas/counterexample.schema.json",
   "title": "Counterexample",
-  "description": "A structured counterexample from ESBMC verification failure",
+  "description": "A structured counterexample from a verification failure (ESBMC or the native backend)",
   "type": "object",
   "required": ["function", "values", "violation", "vow_id", "source", "blame"],
   "properties": {
@@ -13,7 +13,7 @@
     "values": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Map of source names or $esbmc$-prefixed internal variable names to counterexample values"
+      "description": "Map of source names (or, under the ESBMC backend, $esbmc$-prefixed internal variable names) to counterexample values"
     },
     "violation": {
       "type": "string",

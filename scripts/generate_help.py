@@ -311,9 +311,15 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
     # Collection model capacities (Vec/String/HashMap/BTreeMap) are deliberately
     # absent: they are internal verifier-model bounds, not language properties or
     # tunable CLI flags. See docs/design/verifier-model-bounds.md.
-    verification_defaults: dict[str, str | int] = {
+    # `strategy`/`max_k_step` describe the default ESBMC backend and stay as
+    # they are for agents that read them; `native` describes `--backend native`.
+    verification_defaults: dict[str, str | int | dict] = {
         "strategy": "incremental-bmc",
         "max_k_step": DEFAULT_MAX_K_STEP,
+        "native": {
+            "strategy": "bounded unwinding with invariant induction and k-induction",
+            "tuning_flags": ["--timeout"],
+        },
     }
 
     return {
@@ -472,7 +478,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 },
                 "notes": [
                     "runs frontend only by default",
-                    "use --verify for per-contract ESBMC status",
+                    "use --verify for per-contract verification status",
                 ],
             },
             "complexity": {
@@ -546,7 +552,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
             "diagnostics": "[array of {error_code, message, severity, span: {file, offset, length}}]",
             "message": "error detail (CompileFailed)",
             "function": "function name (VerifyFailed)",
-            "counterexample": "ESBMC counterexample description (VerifyFailed)",
+            "counterexample": "verifier counterexample description (VerifyFailed)",
         },
         "diagnostics": {
             "schema_ref": "schemas/diagnostic.schema.json",
@@ -755,7 +761,7 @@ def build_help_human(data: dict) -> str:
     )
     lines.append("  message     : error detail (CompileFailed)")
     lines.append("  function    : function name (VerifyFailed)")
-    lines.append("  counterexample: ESBMC counterexample (VerifyFailed)")
+    lines.append("  counterexample: verifier counterexample (VerifyFailed)")
     lines.append("")
 
     lines.append("EXIT CODES")
@@ -834,13 +840,18 @@ def build_help_human(data: dict) -> str:
 
     vdefaults = data.get("verification_defaults", {})
     if vdefaults:
-        lines.append("VERIFICATION DEFAULTS (--max-k-step)")
+        native = vdefaults.get("native", {})
+        lines.append("VERIFICATION DEFAULTS")
         lines.append(
-            f"  Strategy        : {vdefaults.get('strategy', 'incremental-bmc')} (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)"
+            f"  ESBMC backend (default) : {vdefaults.get('strategy', 'incremental-bmc')} (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)"
         )
         lines.append(
-            f"  Incremental BMC : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} max iterations (--max-k-step)"
+            f"  Incremental BMC         : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} max iterations (--max-k-step)"
         )
+        if native:
+            lines.append(
+                f"  Native backend          : {native.get('strategy', '')} (--backend native; no bound flag, {', '.join(native.get('tuning_flags', []))} is the only knob)"
+            )
 
     return "\n".join(lines)
 
@@ -962,7 +973,7 @@ SKILL_FRONTMATTER = """\
 name: vow
 description: >-
   Write, compile, debug, and verify Vow programs (.vow files) with contracts,
-  CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.
+  CEGIS, verifier counterexamples, diagnostics, and vow build / vow verify.
 when_to_use: >-
   Use when the user edits or creates .vow files, says "write a Vow program",
   "fix this counterexample", "add contracts", "why did verification fail",
