@@ -1337,6 +1337,7 @@ fn test_worker_common_flags(argv: Vec<String>) -> Vec<String> {
     push_test_flag_value(a, argv, String::from("--timeout"));
     push_test_flag_value(a, argv, String::from("--max-k-step"));
     push_test_flag_value(a, argv, String::from("--verify-jobs"));
+    push_test_flag_value(a, argv, String::from("--backend"));
     if has_flag(argv, String::from("--verify")) {
         a.push(String::from("--verify"));
     }
@@ -3991,8 +3992,9 @@ fn run_contracts(argv: Vec<String>) -> i32 [io, read, write] {
     exit_code
 }
 
-// Usage error for a misplaced or malformed `--backend`, else "". Only `verify`
-// has a native backend; accepting the flag elsewhere would run ESBMC silently.
+// Usage error for a misplaced or malformed `--backend`, else "". Only `verify`,
+// `contracts --verify` and `test --verify` have a native backend; accepting the
+// flag elsewhere would run ESBMC silently.
 fn backend_flag_error(argv: Vec<String>, cmd: i64) -> String {
     if !has_flag(argv, "--backend") {
         return String::from("");
@@ -4004,8 +4006,12 @@ fn backend_flag_error(argv: Vec<String>, cmd: i64) -> String {
     if backend == "esbmc" {
         return String::from("");
     }
-    if cmd != CMD_VERIFY() {
-        return String::from("error: --backend native is only supported by `vowc verify`");
+    let verifying: bool = cmd == CMD_VERIFY() || ((cmd == CMD_CONTRACTS() || cmd == CMD_TEST()) && has_flag(argv, "--verify"));
+    if !verifying {
+        if cmd == CMD_CONTRACTS() || cmd == CMD_TEST() {
+            return String::from("error: --backend native requires --verify");
+        }
+        return String::from("error: --backend native is only supported by `vowc verify`, `vowc contracts --verify` and `vowc test --verify`");
     }
     if has_flag(argv, "--max-k-step") {
         return String::from("error: --max-k-step is not supported with --backend native");

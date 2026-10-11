@@ -30,6 +30,12 @@ fn VC_TASK_RUNNING() -> i64 { 1 }
 fn VC_TASK_DONE() -> i64 { 2 }
 fn VC_TASK_CANCELLED() -> i64 { 3 }
 
+// What a pool task asks its worker to decide: the function's own contract, or
+// one of the two weak-contract probes of `contracts` (see `vc_probe`).
+fn VC_TASK_KIND_VERIFY() -> i64 { 0 }
+fn VC_TASK_KIND_VACUITY() -> i64 { 1 }
+fn VC_TASK_KIND_TRIVIAL() -> i64 { 2 }
+
 // Path the workers are started from: this binary, as invoked.
 fn vc_worker_exe(argv0: String) -> String [read] {
     if str_contains_byte(argv0, 47) { return argv0; }
@@ -301,7 +307,11 @@ fn vc_worker_result(exit_code: i64, stdout: String, stderr: String) -> VcOutcome
 // ---------------------------------------------------------------------------
 
 // `state` holds the counters at the VC_ST_* indices. `clauses` makes every
-// worker decide all claims of its function and report per-clause verdicts.
+// verify task decide all claims of its function and report per-clause verdicts.
+// `halt` is the `verify` early stop: nothing above the first task that did not
+// prove is started or kept, which is wrong for a report that spans functions
+// (`contracts`, `test`), so those clear it. `kinds` is per task and
+// `module_root` is the explicit module root the parent lowered with, if any.
 struct VcPool {
     exe: String,
     path: String,
@@ -317,6 +327,9 @@ struct VcPool {
     results: Vec<VcOutcome>,
     state: Vec<i64>,
     clauses: bool,
+    halt: bool,
+    kinds: Vec<i64>,
+    module_root: String,
 }
 
 fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String>, jobs: i64, budget_ms: i64) -> VcPool [read] {
@@ -325,8 +338,10 @@ fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String
     let started: Vec<i64> = Vec::new();
     let scratch: Vec<String> = Vec::new();
     let results: Vec<VcOutcome> = Vec::new();
+    let kinds: Vec<i64> = Vec::new();
     let mut k: u64 = 0;
     while k < fn_idx.len() {
+        kinds.push(VC_TASK_KIND_VERIFY());
         phase.push(VC_TASK_PENDING());
         handles.push(-1);
         started.push(0);
@@ -353,6 +368,9 @@ fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String
         results: results,
         state: state,
         clauses: false,
+        halt: true,
+        kinds: kinds,
+        module_root: String::from(""),
     }
 }
 
@@ -370,8 +388,19 @@ fn vc_worker_argv(p: VcPool, k: u64) -> Vec<String> {
         a.push(String::from("--worker-scratch"));
         a.push(p.scratch[k]);
     }
-    if p.clauses {
+    let kind: i64 = p.kinds[k];
+    if kind == VC_TASK_KIND_VACUITY() {
+        a.push(String::from("--worker-probe"));
+        a.push(String::from("vacuity"));
+    } else if kind == VC_TASK_KIND_TRIVIAL() {
+        a.push(String::from("--worker-probe"));
+        a.push(String::from("trivial"));
+    } else if p.clauses {
         a.push(String::from("--worker-clauses"));
+    }
+    if p.module_root.len() > 0 {
+        a.push(String::from("--worker-module-root"));
+        a.push(p.module_root);
     }
     a
 }
@@ -402,7 +431,7 @@ fn vc_pool_finish(p: VcPool, k: u64, oc: VcOutcome) [io] {
     p.state[VC_ST_RUNNING()] = p.state[VC_ST_RUNNING()] - 1;
     // Nothing above a task that did not prove is ever reported, so stop
     // starting those and stop the ones already running.
-    if oc.result.status != VERIFY_PROVEN() && (k as i64) < p.state[VC_ST_LIMIT()] {
+    if p.halt && oc.result.status != VERIFY_PROVEN() && (k as i64) < p.state[VC_ST_LIMIT()] {
         p.state[VC_ST_LIMIT()] = k as i64;
         let mut j: u64 = k + 1;
         while j < p.phase.len() {

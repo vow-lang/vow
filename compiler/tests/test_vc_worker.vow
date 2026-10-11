@@ -316,7 +316,77 @@ fn check_clause_mode_flag() -> i64 [read] {
     0
 }
 
-fn main() -> i32 [read] {
+fn argv_has_pair(a: Vec<String>, flag: String, val: String) -> bool {
+    let mut i: u64 = 0;
+    while i + 1 < a.len() {
+        if a[i] == flag && a[i + 1] == val { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn argv_has(a: Vec<String>, flag: String) -> bool {
+    let mut i: u64 = 0;
+    while i < a.len() {
+        if a[i] == flag { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn one_task_pool(n: u64) -> VcPool [read] {
+    let idx: Vec<i64> = Vec::new();
+    let names: Vec<String> = Vec::new();
+    let mut k: u64 = 0;
+    while k < n {
+        idx.push(k as i64);
+        names.push(String::from("f"));
+        k = k + 1;
+    }
+    vc_pool_new(String::from("vowc"), String::from("a.vow"), idx, names, 2, 1000)
+}
+
+// Probe tasks run a rewritten function with the first failing claim ending the
+// check, so they never ask for per-clause verdicts, and a module root travels
+// to the worker only when the parent lowered with one.
+fn check_probe_argv() -> i64 [read] {
+    let p: VcPool = one_task_pool(3);
+    p.clauses = true;
+    p.kinds[1] = VC_TASK_KIND_VACUITY();
+    p.kinds[2] = VC_TASK_KIND_TRIVIAL();
+    let verify: Vec<String> = vc_worker_argv(p, 0);
+    if argv_has(verify, String::from("--worker-probe")) { return 1; }
+    if !argv_has(verify, String::from("--worker-clauses")) { return 2; }
+    if argv_has(verify, String::from("--worker-module-root")) { return 3; }
+    let vac: Vec<String> = vc_worker_argv(p, 1);
+    if !argv_has_pair(vac, String::from("--worker-probe"), String::from("vacuity")) { return 4; }
+    if argv_has(vac, String::from("--worker-clauses")) { return 5; }
+    let triv: Vec<String> = vc_worker_argv(p, 2);
+    if !argv_has_pair(triv, String::from("--worker-probe"), String::from("trivial")) { return 6; }
+    p.module_root = String::from("/src/mods");
+    let rooted: Vec<String> = vc_worker_argv(p, 1);
+    if !argv_has_pair(rooted, String::from("--worker-module-root"), String::from("/src/mods")) { return 7; }
+    0
+}
+
+// Reporting stops at the first function that is not proven for `verify`, but a
+// clause report spans functions, so a pool built for it keeps every task alive.
+fn check_pool_halt() -> i64 [io, read] {
+    let failed: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_FAILED(), String::from("")));
+    let halting: VcPool = one_task_pool(3);
+    halting.phase[1] = VC_TASK_PENDING();
+    vc_pool_finish(halting, 0, failed);
+    if halting.state[VC_ST_LIMIT()] != 0 { return 1; }
+    let open: VcPool = one_task_pool(3);
+    open.halt = false;
+    vc_pool_finish(open, 0, failed);
+    if open.state[VC_ST_LIMIT()] != 3 { return 2; }
+    if !vc_pool_ready(open, 0) { return 3; }
+    if open.results[0].result.status != VERIFY_FAILED() { return 4; }
+    0
+}
+
+fn main() -> i32 [io, read] {
     let mut r: i64 = check_round_trip();
     if r == 0 { r = check_leading_noise_is_skipped(); }
     if r == 0 { r = check_truncation_never_decodes(); }
@@ -333,5 +403,7 @@ fn main() -> i32 [read] {
     if r == 0 { r = check_stale_tag_never_decodes(); }
     if r == 0 { r = check_clause_flag_is_checked(); }
     if r == 0 { r = check_clause_mode_flag(); }
+    if r == 0 { r = check_probe_argv(); }
+    if r == 0 { r = check_pool_halt(); }
     i64_to_i32_wrap(r)
 }
