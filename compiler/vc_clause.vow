@@ -43,17 +43,17 @@ fn vc_clause_acc_new() -> VcClauseAcc {
     VcClauseAcc { ids: Vec::new(), states: Vec::new() }
 }
 
-fn vc_clause_index(acc: VcClauseAcc, vow_id: i64) -> i64 {
+fn vc_clause_index(ids: Vec<i64>, vow_id: i64) -> i64 {
     let mut i: u64 = 0;
-    while i < acc.ids.len() {
-        if acc.ids[i] == vow_id { return i as i64; }
+    while i < ids.len() {
+        if ids[i] == vow_id { return i as i64; }
         i = i + 1;
     }
     -1
 }
 
 fn vc_clause_note(acc: VcClauseAcc, vow_id: i64, verdict: i64) {
-    let at: i64 = vc_clause_index(acc, vow_id);
+    let at: i64 = vc_clause_index(acc.ids, vow_id);
     if at < 0 {
         acc.ids.push(vow_id);
         acc.states.push(verdict);
@@ -83,7 +83,7 @@ fn vc_clause_finish(acc: VcClauseAcc, targets: Vec<i64>, round_closed: bool) -> 
     let mut t: u64 = 0;
     while t < targets.len() {
         let id: i64 = targets[t];
-        let at: i64 = vc_clause_index(acc, id);
+        let at: i64 = vc_clause_index(acc.ids, id);
         let mut state: i64 = VC_CLAUSE_UNSAT();
         if at >= 0 { state = acc.states[at as u64]; }
         if state == VC_CLAUSE_FAILED() {
@@ -110,13 +110,7 @@ fn vc_clause_targets(f: IrFunction) -> Vec<i64> {
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
             if inst.op == IOP_VOW_ENS() || inst.op == IOP_VOW_INV() {
-                let mut seen: bool = false;
-                let mut k: u64 = 0;
-                while k < out.len() {
-                    if out[k] == inst.dv { seen = true; }
-                    k = k + 1;
-                }
-                if !seen { out.push(inst.dv); }
+                if vc_clause_index(out, inst.dv) < 0 { out.push(inst.dv); }
             }
             ii = ii + 1;
         }
