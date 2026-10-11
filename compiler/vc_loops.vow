@@ -2,6 +2,7 @@ module VcLoops
 
 use ir
 use ir_dominance
+use vc_ops
 
 // Natural-loop analysis for the native verifier's loop unwinding. A retreating
 // edge of the reverse-postorder numbering is a back edge when its target
@@ -430,6 +431,23 @@ fn vc_clone_inst(orig: IrInst, new_id: i64, args: Vec<i64>, dv: i64, dv2: i64) -
         olen: orig.olen,
         rgn: orig.rgn,
     }
+}
+
+// `inst` with another opcode, no operands and no frame marker.
+fn vc_retag(inst: IrInst, op: i64, dk: i64, ds: String) -> IrInst {
+    let out: IrInst = vc_clone_inst(inst, inst.id, Vec::new(), 0, 0);
+    out.op = op;
+    out.dk = dk;
+    out.ds = ds;
+    out
+}
+
+// The unconstrained stand-in for a header Phi.
+fn vc_havoc_of(phi: IrInst) -> IrInst {
+    if phi.ty == ITY_UNIT() {
+        return vc_retag(phi, IOP_CONST_UNIT(), IDATA_NONE(), String::from(""));
+    }
+    vc_retag(phi, IOP_CALL(), IDATA_CALL_EXTERN(), VC_INTERNAL_HAVOC())
 }
 
 fn vc_replace_arg(inst: IrInst, v: i64, w: i64) -> IrInst {
