@@ -2563,6 +2563,10 @@ Struct literal names must be PascalCase:
 let p: Point = Point { x: 1, y: 2 };
 ```
 
+A struct literal must initialise every declared field. An omitted field is a
+`TypeMismatch` (``struct `Point` literal is missing field `y` ``, one per missing
+field in declaration order, at the literal's span), never zero-initialised.
+
 An identifier that does not start with an upper-case letter is never a struct
 literal: in `while c { }` and `if c { }` the `{` opens the body.
 
@@ -5192,6 +5196,24 @@ fn f() -> bool {
     true
 }
 ```
+
+A struct literal must name every declared field. Each omitted field is a
+`TypeMismatch` in both compilers, reported once per field in declaration order
+at the literal's span; a field is never zero-initialised:
+
+**Wrong:**
+
+```vow
+struct Pair { a: i64, b: i64 }
+
+fn f() -> Pair {
+    Pair { a: 1 }
+}
+```
+
+**Output:** ``struct `Pair` literal is missing field `b` ``
+
+**Fix:** Initialise the field explicitly (`Pair { a: 1, b: 0 }`).
 
 The `drop` intrinsic also reports `TypeMismatch` when it is called with an argument
 count other than one or with a value that is not a linear owner
@@ -9517,6 +9539,10 @@ Struct literal names must be PascalCase:
 let p: Point = Point { x: 1, y: 2 };
 ```
 
+A struct literal must initialise every declared field. An omitted field is a
+`TypeMismatch` (``struct `Point` literal is missing field `y` ``, one per missing
+field in declaration order, at the literal's span), never zero-initialised.
+
 An identifier that does not start with an upper-case letter is never a struct
 literal: in `while c { }` and `if c { }` the `{` opens the body.
 
@@ -12150,6 +12176,24 @@ fn f() -> bool {
     true
 }
 ```
+
+A struct literal must name every declared field. Each omitted field is a
+`TypeMismatch` in both compilers, reported once per field in declaration order
+at the literal's span; a field is never zero-initialised:
+
+**Wrong:**
+
+```vow
+struct Pair { a: i64, b: i64 }
+
+fn f() -> Pair {
+    Pair { a: 1 }
+}
+```
+
+**Output:** ``struct `Pair` literal is missing field `b` ``
+
+**Fix:** Initialise the field explicitly (`Pair { a: 1, b: 0 }`).
 
 The `drop` intrinsic also reports `TypeMismatch` when it is called with an argument
 count other than one or with a value that is not a linear owner

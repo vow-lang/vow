@@ -955,6 +955,10 @@ Struct literal names must be PascalCase:
 let p: Point = Point { x: 1, y: 2 };
 ```
 
+A struct literal must initialise every declared field. An omitted field is a
+`TypeMismatch` (``struct `Point` literal is missing field `y` ``, one per missing
+field in declaration order, at the literal's span), never zero-initialised.
+
 An identifier that does not start with an upper-case letter is never a struct
 literal: in `while c { }` and `if c { }` the `{` opens the body.
 

@@ -1,0 +1,11 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 3
+module StructLiteralMissingFields
+
+struct Inner { x: i32, y: i32 }
+struct Outer { inner: Inner, flag: bool, n: i64 }
+
+fn main() -> i32 {
+  let o: Outer = Outer { inner: Inner { y: 1 } };
+  0
+}

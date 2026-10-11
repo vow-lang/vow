@@ -181,6 +181,24 @@ fn f() -> bool {
 }
 ```
 
+A struct literal must name every declared field. Each omitted field is a
+`TypeMismatch` in both compilers, reported once per field in declaration order
+at the literal's span; a field is never zero-initialised:
+
+**Wrong:**
+
+```vow
+struct Pair { a: i64, b: i64 }
+
+fn f() -> Pair {
+    Pair { a: 1 }
+}
+```
+
+**Output:** ``struct `Pair` literal is missing field `b` ``
+
+**Fix:** Initialise the field explicitly (`Pair { a: 1, b: 0 }`).
+
 The `drop` intrinsic also reports `TypeMismatch` when it is called with an argument
 count other than one or with a value that is not a linear owner
 (``drop requires a linear value, found `i64` ``); see

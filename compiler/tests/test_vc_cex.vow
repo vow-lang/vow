@@ -18,6 +18,8 @@ fn claims_with(kind: i64, vow_id: i64, label: String) -> VcClaims {
         frames: Vec::new(),
         fr: vc_frames_new(),
         pre_only: false,
+        step: false,
+        hyp_now: false,
         vow_ids: Vec::new(),
         labels: Vec::new(),
         ostarts: Vec::new(),
