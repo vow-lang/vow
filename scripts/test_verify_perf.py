@@ -270,6 +270,15 @@ class RunOnceTest(unittest.TestCase):
         self.assertFalse(got["timed_out"])
         self.assertGreater(got["wall_s"], 0)
 
+    def test_cache_written_while_measuring_invalidates_the_sample(self):
+        with self.assertRaisesRegex(ValueError, "cache was used while measuring"):
+            self.run_stub(
+                "import os\n"
+                "open(os.path.join(os.environ['VOW_CACHE_DIR'], 'entry'), 'w')"
+                ".write('x')\n"
+                "print('{}')\n"
+            )
+
     def test_timeout_flag_only_when_explicit(self):
         got = self.run_stub(
             "import json, sys\nprint(json.dumps({'argv': sys.argv[1:]}))\n", timeout=7
