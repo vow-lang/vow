@@ -17,10 +17,7 @@ use vc_solver
 // well-formed, and the caller re-decides anything but `unsat` (and a soft
 // `sat`) with a standalone query, so counterexample models never come from it.
 
-fn VC_ANS_NONE() -> i64 { 7 }
-
 struct VcSession {
-    bin: String,
     handle: i64,
     live: bool,
     sent_hdr: u64,
@@ -29,7 +26,7 @@ struct VcSession {
 
 // `live` false makes every ask `VC_ANS_NONE` without starting a process.
 fn vc_session_new(live: bool) -> VcSession {
-    VcSession { bin: String::from(""), handle: -1, live: live, sent_hdr: 0, sent_assumed: 0 }
+    VcSession { handle: -1, live: live, sent_hdr: 0, sent_assumed: 0 }
 }
 
 fn vc_session_probe_sentinel() -> String {
@@ -112,8 +109,8 @@ fn vc_session_read_until(handle: i64, sentinel: String, deadline_us: i64, limit:
 // Starts the process on the first ask: the header up to claim `k`'s, then a
 // scope round trip. A solver without `push`/`pop` or `echo` support prints an
 // error and exits, which shows as end of file here.
-fn vc_session_start(ss: VcSession, cs: VcClaims, k: u64, deadline_us: i64) -> bool [io] {
-    let handle: i64 = process_start_piped(ss.bin, vc_solver_stdin_args());
+fn vc_session_start(ss: VcSession, bin: String, cs: VcClaims, k: u64, deadline_us: i64) -> bool [io] {
+    let handle: i64 = process_start_piped(bin, vc_solver_stdin_args());
     if handle < 0 { return false; }
     ss.handle = handle;
     let hello: String = vc_smt_render_cmds(cs.arena, cs.header, 0, cs.header_lens[k] as u64);
@@ -135,8 +132,7 @@ fn vc_session_ask(ss: VcSession, bin: String, cs: VcClaims, k: u64, wait_ms: i64
     if !ss.live || wait_ms <= 0 { return VC_ANS_NONE(); }
     let deadline_us: i64 = time_micros() + wait_ms * 1000;
     if ss.handle < 0 {
-        ss.bin = String::from(bin);
-        if !vc_session_start(ss, cs, k, deadline_us) {
+        if !vc_session_start(ss, bin, cs, k, deadline_us) {
             vc_session_kill(ss);
             return VC_ANS_NONE();
         }

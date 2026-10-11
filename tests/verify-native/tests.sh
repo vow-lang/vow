@@ -28,7 +28,7 @@ cat > "$FAKE_DIR/bitwuzla" <<'SHIM'
 #!/usr/bin/env bash
 set -eu
 file="${!#}"
-if [ ! -f "$file" ]; then
+if [ "${file%.smt2}" = "$file" ]; then
     # an interactive session: commands on stdin, one reply per `(check-sat)`.
     s=1
     until mkdir "$FAKE_BW_DIR/.sess.$s" 2>/dev/null; do s=$((s + 1)); done
@@ -1312,7 +1312,9 @@ expect "session unsat: no standalone query" "$(queries)" "0"
 expect "session: header sent once" "$(session_lines 1 '^(set-logic')" "1"
 expect "session: one check per claim" "$(session_lines 1 '^(check-sat)$')" "3"
 expect "session: one scope per claim and the probe" "$(session_lines 1 '^(push 1)$')" "4"
-expect "session: scopes are closed" "$(session_lines 1 '^(pop 1)$')" "4"
+# the last `(pop 1)` is written together with the last reply's question and the
+# session is killed once that reply is read, so the solver may never log it.
+if [ "$(session_lines 1 '^(pop 1)$')" -lt 3 ]; then fail "session: scopes are not closed"; fi
 expect "session: declarations sent once" "$(session_lines 1 '^(declare-const p0 ')" "1"
 expect "session: no model request" "$(session_lines 1 'get-value')" "0"
 grep -q -- '--bv-output-format 2' "$BW_DIR/sargs" || fail "session not run with --bv-output-format 2"
@@ -1409,6 +1411,24 @@ run_native sat "$CALL_CLAIMS" --verify-jobs 1
 expect "calls: report equals the standalone report" "$inc_out" "$RUN_OUT"
 no_survivors "calls"
 no_leftovers "calls session"
+
+# Per-clause mode with a session in front: every claim of the function is
+# asked, a hard `sat` leaves the session usable for the claims after it, and
+# the verdicts are the standalone ones.
+CLAUSES_OUT="$TMP_ROOT/clauses_out"
+VOW_VERIFY_NO_INCREMENTAL=0 worker_clauses session_unsat --worker-clauses > "$CLAUSES_OUT"
+expect "session clauses all proven" "$(cat "$CLAUSES_OUT")" "0 -1 2:1,3:1"
+expect "session clauses: one solver process" "$(sessions)" "1"
+expect "session clauses: no standalone query" "$(queries)" "0"
+no_survivors "session clauses"
+no_leftovers "session clauses"
+VOW_VERIFY_NO_INCREMENTAL=0 worker_clauses session_sat --worker-clauses > "$CLAUSES_OUT"
+expect "session clauses sat: overall result" "$(cut -d' ' -f1,2 "$CLAUSES_OUT")" "1 2"
+expect "session clauses sat: one solver process" "$(sessions)" "1"
+expect "session clauses sat: each claim asked in the session" "$(session_lines 1 '^(check-sat)$')" "2"
+expect "session clauses sat: each hard sat confirmed standalone" "$(queries)" "2"
+no_survivors "session clauses sat"
+no_leftovers "session clauses sat"
 
 if [ "$failures" -ne 0 ]; then
     echo "verify-native: $failures failure(s)" >&2
