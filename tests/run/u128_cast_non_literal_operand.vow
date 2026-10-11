@@ -1,0 +1,57 @@
+// TEST: stdout "0 0 34\n0 0 34\n0 0 71\n0 0 51\n0 192 5\n0 0 2\n64 0 0\n0 0 3\n5\n0 0 34\n0 0 44\n0 0 3\n0 0 2\n64 0 0\n"
+module U128CastNonLiteralOperand
+
+// A literal inside the operand of `as u128`/`as i128` must take its width from the
+// typed leaves next to it, not from the cast target (#1581). Each line prints the
+// u128 value as three bytes: bits 64..72, bits 56..64 and bits 0..8. Operands made
+// only of literals keep the cast target's width, so `1 << 70` still reaches bit 70.
+
+fn show(v: u128) -> () [io] {
+    print_i64(u128_to_u8_wrap(v >> 64) as i64);
+    print_str(" ");
+    print_i64(u128_to_u8_wrap(v >> 56) as i64);
+    print_str(" ");
+    print_i64(u128_to_u8_wrap(v) as i64);
+    print_str("\n");
+}
+
+fn lit_only(o: Option<i64>) -> u128 {
+    let w: u128 = (match o { Option::Some(n) => 3, Option::None => 1 << 70 }) as u128;
+    w
+}
+
+fn lit_diverge(o: Option<i64>) -> u128 {
+    let w: u128 = (match o { Option::Some(_) => 1 << 70, Option::None => return 0 }) as u128;
+    w
+}
+
+fn main() -> () [io, panic] {
+    let i: u64 = 3;
+    let j: u64 = 4;
+    let x: u128 = (i * 10 + j) as u128;
+    show(x);
+    let s: i128 = (i * 10 + j) as i128;
+    show(s as u128);
+    let a: u8 = 7;
+    show((a * 10 + 1) as u128);
+    let k: i32 = 5;
+    show((k * 10 + 1) as u128);
+    let big: u64 = 4611686018427387904;
+    show((big * 3 + 5) as u128);
+    show(((1 << 100) as u128) >> 99);
+    show(lit_only(Option::None));
+    show(lit_only(Option::Some(1)));
+    let neg: i128 = (-5) as i128;
+    print_i64(i128_to_u8_wrap(neg + 10) as i64);
+    print_str("\n");
+    let v: Vec<u128> = Vec::new();
+    v.push((i * 10 + j) as u128);
+    v.push(((i + 1) * 10 + j) as u128);
+    show(v[0]);
+    show(v[1]);
+    let c: bool = i > 2;
+    show((if c { i } else { 2 }) as u128);
+    let m: Option<u64> = Option::None;
+    show((match m { Option::Some(n) => n, Option::None => 2 }) as u128);
+    show(lit_diverge(Option::Some(1)));
+}

@@ -2301,6 +2301,15 @@ fn block_result_is_coercible_int_marker(a: AstArena, bid: i64) -> bool {
     result_eid != -1 && expr_is_coercible_int_marker(a, result_eid)
 }
 
+fn is_int_marker_binop(op: i64) -> bool {
+    op == BINOP_ADD() || op == BINOP_SUB()
+        || op == BINOP_MUL() || op == BINOP_DIV() || op == BINOP_REM()
+        || op == BINOP_ADD_CHK() || op == BINOP_SUB_CHK()
+        || op == BINOP_MUL_CHK() || op == BINOP_DIV_CHK() || op == BINOP_REM_CHK()
+        || op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR()
+        || op == BINOP_SHL() || op == BINOP_SHR()
+}
+
 fn expr_is_coercible_int_marker(a: AstArena, eid: i64) -> bool {
     let tag: i64 = expr_tag(a, eid);
     if tag == EXPR_LIT_INT() {
@@ -2315,13 +2324,7 @@ fn expr_is_coercible_int_marker(a: AstArena, eid: i64) -> bool {
     }
     if tag == EXPR_BINOP() {
         let op: i64 = expr_a(a, eid);
-        let marker_op: bool = op == BINOP_ADD() || op == BINOP_SUB()
-            || op == BINOP_MUL() || op == BINOP_DIV() || op == BINOP_REM()
-            || op == BINOP_ADD_CHK() || op == BINOP_SUB_CHK()
-            || op == BINOP_MUL_CHK() || op == BINOP_DIV_CHK() || op == BINOP_REM_CHK()
-            || op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR()
-            || op == BINOP_SHL() || op == BINOP_SHR();
-        if marker_op {
+        if is_int_marker_binop(op) {
             return expr_is_coercible_int_marker(a, expr_b(a, eid)) && expr_is_coercible_int_marker(a, expr_c(a, eid));
         }
         return false;
@@ -2354,6 +2357,98 @@ fn wide_context_contains_control_flow(a: AstArena, eid: i64) -> bool {
         return wide_context_contains_control_flow(a, block_result_eid(a, expr_a(a, eid)));
     }
     false
+}
+
+// Twin of `IntLeaf` in vow-ir/src/lower/mod.rs: what an integer expression's
+// result positions bottom out in.
+fn INT_LEAF_TYPED() -> i64 { 0 }
+fn INT_LEAF_LITERAL() -> i64 { 1 }
+fn INT_LEAF_DIVERGES() -> i64 { 2 }
+
+// Twin of `merge_int_leaves`: any typed leaf pins the operand, a diverging
+// position is neutral, and at least one literal is needed to stay literal-only.
+fn merge_int_leaves(x: i64, y: i64) -> i64 {
+    if x == INT_LEAF_TYPED() || y == INT_LEAF_TYPED() { return INT_LEAF_TYPED(); }
+    if x == INT_LEAF_LITERAL() || y == INT_LEAF_LITERAL() { return INT_LEAF_LITERAL(); }
+    INT_LEAF_DIVERGES()
+}
+
+fn int_leaf_of_block(a: AstArena, bid: i64) -> i64 {
+    let result_eid: i64 = block_result_eid(a, bid);
+    if result_eid != -1 { return int_leaf(a, result_eid); }
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    if n > 0 {
+        let last_sid: i64 = list_get(a, stmts_lid, n - 1);
+        if stmt_tag(a, last_sid) == STMT_EXPR()
+            && int_leaf(a, stmt_a(a, last_sid)) == INT_LEAF_DIVERGES() {
+            return INT_LEAF_DIVERGES();
+        }
+    }
+    INT_LEAF_TYPED()
+}
+
+// Folds merge_int_leaves over `eids`; an empty list has no result position to
+// classify, so it stays typed.
+fn int_leaf_of_all(a: AstArena, eids: Vec<i64>) -> i64 {
+    if eids.len() == 0 { return INT_LEAF_TYPED(); }
+    let mut merged: i64 = INT_LEAF_DIVERGES();
+    let mut i: u64 = 0;
+    while i < eids.len() {
+        merged = merge_int_leaves(merged, int_leaf(a, eids[i]));
+        if merged == INT_LEAF_TYPED() { return INT_LEAF_TYPED(); }
+        i = i + 1;
+    }
+    merged
+}
+
+fn int_leaf(a: AstArena, eid: i64) -> i64 {
+    if eid == -1 { return INT_LEAF_TYPED(); }
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_LIT_INT() { return INT_LEAF_LITERAL(); }
+    if tag == EXPR_RETURN() || tag == EXPR_BREAK() || tag == EXPR_CONTINUE() {
+        return INT_LEAF_DIVERGES();
+    }
+    if tag == EXPR_UNOP() {
+        if expr_a(a, eid) != UNOP_NEG() { return INT_LEAF_TYPED(); }
+        return int_leaf(a, expr_b(a, eid));
+    }
+    if tag == EXPR_BINOP() {
+        let op: i64 = expr_a(a, eid);
+        if !is_int_marker_binop(op) { return INT_LEAF_TYPED(); }
+        return merge_int_leaves(int_leaf(a, expr_b(a, eid)), int_leaf(a, expr_c(a, eid)));
+    }
+    if tag == EXPR_BLOCK() {
+        return int_leaf_of_block(a, expr_a(a, eid));
+    }
+    if tag == EXPR_IF() {
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid == -1 { return INT_LEAF_TYPED(); }
+        return merge_int_leaves(int_leaf_of_block(a, expr_b(a, eid)), int_leaf(a, else_eid));
+    }
+    if tag == EXPR_MATCH() {
+        let arms_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, arms_lid) / 2;
+        let bodies: Vec<i64> = Vec::new();
+        let mut i: i64 = 0;
+        while i < n {
+            bodies.push(list_get(a, arms_lid, i * 2 + 1));
+            i = i + 1;
+        }
+        return int_leaf_of_all(a, bodies);
+    }
+    if tag == EXPR_LOOP() {
+        return int_leaf_of_all(a, loop_break_value_eids(a, expr_a(a, eid)));
+    }
+    INT_LEAF_TYPED()
+}
+
+// Twin of `int_expr_is_literal_only` in vow-ir/src/lower/mod.rs: true when the
+// leaves of an integer expression's result positions are integer literals
+// (diverging positions aside), so the operand types as a bare literal and takes
+// its width from an enclosing `as i128`/`as u128`.
+fn int_expr_is_literal_only(a: AstArena, eid: i64) -> bool {
+    int_leaf(a, eid) == INT_LEAF_LITERAL()
 }
 
 fn lctx_record_wide_marker_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) {
@@ -5232,7 +5327,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
         let inner_eid: i64 = expr_a(a, eid);
         let target_ast_tid: i64 = expr_b(a, eid);
         let tgt_ty: i64 = lctx_lower_ast_ty(ctx, target_ast_tid);
-        if tgt_ty == ITY_I128() || tgt_ty == ITY_U128() {
+        if (tgt_ty == ITY_I128() || tgt_ty == ITY_U128()) && int_expr_is_literal_only(a, inner_eid) {
             lctx_record_wide_marker_context(ctx, a, inner_eid, tgt_ty);
         }
         let val_id: i64 = lower_expr(ctx, inner_eid);

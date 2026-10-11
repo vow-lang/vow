@@ -82,6 +82,26 @@ if [ "${file%.smt2}" = "$file" ]; then
     done
     exit 0
 fi
+# `sat` and a model: every scalar parameter symbol (`p<k>`) and aggregate
+# field symbol (`p<k>f<slot>s<sort>`) the query declares gets `$1`, except a
+# slot-0 field (an enum's discriminant), which gets `$2`. A Bool is true unless 0.
+emit_model() {
+    echo sat
+    echo "("
+    grep -oE '^\(declare-const p[0-9]+(f[0-9]+s[0-9]+)? (Bool|\(_ BitVec [0-9]+\))\)' "$file" \
+        | sed -E 's/^\(declare-const (p[0-9]+(f[0-9]+s[0-9]+)?) (Bool|\(_ BitVec ([0-9]+)\))\)/\1 \4/' | while read -r name width; do
+        v=$1
+        case "$name" in p*f0s*) v=$2 ;; esac
+        if [ -z "$width" ]; then
+            if [ "$v" -ne 0 ]; then echo "  ($name true)"; else echo "  ($name false)"; fi
+        elif [ "$width" -gt 64 ]; then
+            printf '  (%s #x%0*x)\n' "$name" $((width / 4)) "$v"
+        else
+            echo "  ($name (_ bv$v $width))"
+        fi
+    done
+    echo ")"
+}
 n=1
 until mkdir "$FAKE_BW_DIR/.slot.$n" 2>/dev/null; do n=$((n + 1)); done
 cp "$file" "$FAKE_BW_DIR/q.$n.smt2"
@@ -124,29 +144,15 @@ case "$FAKE_BW_MODE" in
         want=1
         [ "$FAKE_BW_MODE" = sat_unless_contains ] && want=0
         if [ "$hit" -ne "$want" ]; then echo unsat; exit 0; fi
-        echo sat
-        echo "("
-        grep -o '^(declare-const p[0-9]* (_ BitVec [0-9]*)' "$file" \
-            | sed -E 's/\(declare-const (p[0-9]+) \(_ BitVec ([0-9]+)\)/\1 \2/' | while read -r name width; do
-            echo "  ($name (_ bv7 $width))"
-        done
-        echo ")"
+        emit_model 7 7
         ;;
     sat|sat_zero)
         val=7
         [ "$FAKE_BW_MODE" = sat_zero ] && val=0
-        echo sat
-        echo "("
-        grep -o '^(declare-const p[0-9]* (_ BitVec [0-9]*)' "$file" \
-            | sed -E 's/\(declare-const (p[0-9]+) \(_ BitVec ([0-9]+)\)/\1 \2/' | while read -r name width; do
-            if [ "$width" -gt 64 ]; then
-                printf '  (%s #x%0*x)\n' "$name" $((width / 4)) "$val"
-            else
-                echo "  ($name (_ bv$val $width))"
-            fi
-        done
-        echo ")"
+        emit_model "$val" "$val"
         ;;
+    sat_tag_some) emit_model 0 1 ;;
+    sat_tag_9) emit_model 0 9 ;;
     *) echo "unknown fake mode" >&2; exit 2 ;;
 esac
 SHIM
@@ -824,6 +830,128 @@ expect "skipped replay is not a verifier bug" "$(field "$RUN_OUT" diagnostics.1.
 run_native sat "$REPLAY_SRC"
 expect "no replay without the flag" "$(field "$RUN_OUT" counterexamples.0.replay)" ""
 expect "no bug report without the flag" "$(field "$RUN_OUT" diagnostics.0.error_code)" "VerifierAssertionUnattributed"
+
+# aggregate parameters: a counterexample lists the fields of a struct, enum,
+# `Option` or `Result` parameter as `<param>.<slot>` (an enum's discriminant is
+# slot 0) and `--replay-cex` rebuilds the argument from them. The fake solver
+# gives every slot a value and, in `sat_tag_*`, every discriminant another one.
+ce_value() {
+    python3 -c 'import json, sys
+ce = json.loads(sys.argv[1])["counterexamples"][int(sys.argv[2])]
+print(ce.get("values", {}).get(sys.argv[3], "<absent>"))' "$RUN_OUT" 0 "$1"
+}
+
+AGG_OPTION="$TMP_ROOT/agg_option.vow"
+cat > "$AGG_OPTION" <<'SRC'
+module AggOption
+
+fn get(o: Option<i64>) -> i64 [panic] vow {
+  ensures: result == result
+} {
+  o.unwrap()
+}
+SRC
+run_native sat_zero "$AGG_OPTION" --replay-cex
+expect "option param status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "option param tag value" "$(ce_value o.0)" "0"
+expect "option param payload value" "$(ce_value o.1)" "0"
+expect "option param replay" "$(field "$RUN_OUT" counterexamples.0.replay)" "confirmed"
+expect "option param confirmed is not a bug" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
+no_leftovers "option param"
+
+# a deliberately wrong model value: `Some(0)` does not abort on unwrap.
+run_native sat_tag_some "$AGG_OPTION" --replay-cex
+expect "wrong option tag value" "$(ce_value o.0)" "1"
+expect "wrong option tag replay" "$(field "$RUN_OUT" counterexamples.0.replay)" "diverged"
+expect "wrong option tag bug code" "$(field "$RUN_OUT" diagnostics.1.error_code)" "VerifierBug"
+no_leftovers "wrong option tag"
+
+AGG_STRUCT="$TMP_ROOT/agg_struct.vow"
+cat > "$AGG_STRUCT" <<'SRC'
+module AggStruct
+
+struct Pair { lo: i64, hi: i64 }
+
+fn span(p: Pair) -> i64 vow {
+  ensures: result == p.lo
+} {
+  p.hi - p.lo
+}
+SRC
+run_native sat "$AGG_STRUCT" --replay-cex
+expect "struct param field lo" "$(ce_value p.0)" "7"
+expect "struct param field hi" "$(ce_value p.1)" "7"
+expect "struct param replay" "$(field "$RUN_OUT" counterexamples.0.replay)" "confirmed"
+no_leftovers "struct param"
+
+run_native sat_zero "$AGG_STRUCT" --replay-cex
+expect "struct param all-zero replay" "$(field "$RUN_OUT" counterexamples.0.replay)" "diverged"
+expect "struct param all-zero bug code" "$(field "$RUN_OUT" diagnostics.1.error_code)" "VerifierBug"
+no_leftovers "struct param all-zero"
+
+AGG_ENUM="$TMP_ROOT/agg_enum.vow"
+cat > "$AGG_ENUM" <<'SRC'
+module AggEnum
+
+enum Shape { Circle(i64), Rect(i64, i64), Empty }
+
+fn area(s: Shape) -> i64 vow {
+  ensures: result == 1
+} {
+  match s {
+    Shape::Circle(r) => r,
+    Shape::Rect(w, h) => w + h,
+    Shape::Empty => 0,
+  }
+}
+SRC
+run_native sat_tag_9 "$AGG_ENUM" --replay-cex
+expect "enum param discriminant value" "$(ce_value s.0)" "9"
+expect "enum param out-of-range replay" "$(field "$RUN_OUT" counterexamples.0.replay)" "skipped"
+case "$(field "$RUN_OUT" counterexamples.0.replay_reason)" in
+    *"discriminant 9 outside Shape (3 variants)"*) ;;
+    *) fail "enum param skip reason: $(field "$RUN_OUT" counterexamples.0.replay_reason)" ;;
+esac
+expect "skipped enum replay is not a bug" "$(field "$RUN_OUT" diagnostics.1.error_code)" ""
+no_leftovers "enum param"
+
+run_native sat_zero "$AGG_ENUM" --replay-cex
+expect "enum param in-range replay" "$(field "$RUN_OUT" counterexamples.0.replay)" "confirmed"
+no_leftovers "enum param in range"
+
+# a `Result` payload read at two sorts: the slot's symbols are told apart.
+AGG_RESULT="$TMP_ROOT/agg_result.vow"
+cat > "$AGG_RESULT" <<'SRC'
+module AggResult
+
+fn pick(r: Result<i64, bool>) -> i64 vow {
+  ensures: result == 5
+} {
+  match r {
+    Result::Ok(v) => v,
+    Result::Err(e) => if e { 1 } else { 0 },
+  }
+}
+SRC
+run_native sat_zero "$AGG_RESULT"
+expect "result param tag" "$(ce_value r.0)" "0"
+expect "result param i64 view" "$(ce_value r.1:64)" "0"
+expect "result param bool view" "$(ce_value r.1:bool)" "false"
+expect "result param unsuffixed name is absent" "$(ce_value r.1)" "<absent>"
+no_leftovers "result param"
+
+# the cache keeps the field values: a warm run reports the same counterexample.
+AGG_CACHE="$TMP_ROOT/agg_cache"
+mkdir -p "$AGG_CACHE"
+BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
+RUN_OUT=$(PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE=sat FAKE_BW_DIR="$BW_DIR" VOW_CACHE_DIR="$AGG_CACHE" \
+    "$VOWC_BIN" verify --backend native "$AGG_STRUCT" 2>/dev/null) || true
+cold=$(ce_value p.1)
+RUN_OUT=$(PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE=sat FAKE_BW_DIR="$BW_DIR" VOW_CACHE_DIR="$AGG_CACHE" \
+    "$VOWC_BIN" verify --backend native "$AGG_STRUCT" 2>/dev/null) || true
+expect "cold struct field value" "$cold" "7"
+expect "warm struct field value" "$(ce_value p.1)" "7"
+no_leftovers "aggregate cache"
 
 # a Vec function is decided in the array logic: every query of it declares an
 # array sort and uses select/store, and none carries a bound on a length (the

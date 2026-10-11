@@ -1,0 +1,14 @@
+// A struct parameter: its field values are listed as `p.0` / `p.1` and replay rebuilds `Pair`.
+// TEST: counterexample-fn "span"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result == p.lo"
+module StructParamWrongPost
+
+struct Pair { lo: i64, hi: i64 }
+
+fn span(p: Pair) -> i64 vow {
+  ensures: result == p.lo
+} {
+  p.hi - p.lo
+}

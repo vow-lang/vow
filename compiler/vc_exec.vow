@@ -103,6 +103,9 @@ struct VcClaims {
     model_params: Vec<i64>,
     model_tys: Vec<i64>,
     model_widths: Vec<i64>,
+    model_slots: Vec<i64>,
+    model_hdr: Vec<i64>,
+    model_ambig: Vec<i64>,
 }
 
 fn vc_value_name(id: i64) -> String {
@@ -168,12 +171,79 @@ fn vc_guard(cs: VcClaims, kind: i64, label: String, pc: i64, goal: i64, inst: Ir
     vc_assume(cs, pc, goal);
 }
 
+// Number of model symbols claim `k`'s query declares: the header is only
+// declared up to `header_lens[k]`, and `get-value` of a symbol declared later
+// is a solver error. Symbols are listed in declaration order, so these are the
+// first entries of every `model_*` list.
+fn vc_claim_model_count(cs: VcClaims, k: u64) -> u64 {
+    let mut n: u64 = 0;
+    while n < cs.model_hdr.len() && cs.model_hdr[n] < cs.header_lens[k] {
+        n = n + 1;
+    }
+    n
+}
+
+fn vc_claim_model_names(cs: VcClaims, k: u64) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    let n: u64 = vc_claim_model_count(cs, k);
+    let mut j: u64 = 0;
+    while j < n {
+        out.push(cs.model_names[j]);
+        j = j + 1;
+    }
+    out
+}
+
+fn vc_claim_model_widths(cs: VcClaims, k: u64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let n: u64 = vc_claim_model_count(cs, k);
+    let mut j: u64 = 0;
+    while j < n {
+        out.push(cs.model_widths[j]);
+        j = j + 1;
+    }
+    out
+}
+
+// Appends the scalar fields of aggregate parameters the walk read (declared
+// lazily, so only now are they all known) after the scalar parameters, with the
+// slot each came from (a symbol's width is its sort: 0 for Bool). A slot read
+// at two sorts is `ambig` in every entry so reporting and replay can tell the
+// symbols apart.
+fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg) {
+    let mut i: u64 = 0;
+    while i < ag.ps_param.len() {
+        cs.model_names.push(vc_agg_symbol_name(ag.ps_param[i], ag.ps_slot[i], ag.ps_sort[i]));
+        cs.model_params.push(ag.ps_param[i]);
+        cs.model_tys.push(ag.ps_ty[i]);
+        cs.model_widths.push(ag.ps_sort[i]);
+        cs.model_slots.push(ag.ps_slot[i]);
+        cs.model_hdr.push(ag.ps_hdr[i]);
+        i = i + 1;
+    }
+    let mut j: u64 = 0;
+    while j < cs.model_slots.len() {
+        let mut amb: i64 = 0;
+        if cs.model_slots[j] >= 0 {
+            let mut o: u64 = 0;
+            while o < cs.model_slots.len() {
+                if o != j && cs.model_params[o] == cs.model_params[j] && cs.model_slots[o] == cs.model_slots[j] && cs.model_widths[o] != cs.model_widths[j] {
+                    amb = 1;
+                }
+                o = o + 1;
+            }
+        }
+        cs.model_ambig.push(amb);
+        j = j + 1;
+    }
+}
+
 // The tail every query of claim `k` ends in: its negated goal, the check and
 // the model request.
 fn vc_claim_script_finish(s: SmtScript, cs: VcClaims, k: u64) -> SmtScript {
     vc_script_assert(s, cs.negated_goals[k]);
     vc_script_check_sat(s);
-    vc_script_get_value(s, cs.model_names);
+    vc_script_get_value(s, vc_claim_model_names(cs, k));
     s
 }
 
@@ -362,7 +432,13 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
         return true;
     }
     if op == IOP_FIELD_GET() {
+        let seen: u64 = ag.ps_param.len();
         let t: i64 = vc_agg_get(ag, cs.arena, cs.header, w.obj_of[inst.args[0] as u64], inst.dv, vc_ty_sort(inst.ty));
+        let mut j: u64 = seen;
+        while j < ag.ps_param.len() {
+            ag.ps_ty[j] = inst.ty;
+            j = j + 1;
+        }
         vc_define(w, inst, t);
         return true;
     }
@@ -524,12 +600,17 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         model_params: Vec::new(),
         model_tys: Vec::new(),
         model_widths: Vec::new(),
+        model_slots: Vec::new(),
+        model_hdr: Vec::new(),
+        model_ambig: Vec::new(),
     };
     vc_script_set_logic(hdr, String::from("QF_BV"));
     vc_script_set_option(hdr, String::from(":produce-models"), String::from("true"));
     let mut pi: u64 = 0;
     while pi < f.params.len() {
         if vc_ty_is_int(f.params[pi]) {
+            cs.model_hdr.push(hdr.kinds.len() as i64);
+            cs.model_slots.push(-1);
             vc_script_declare_const(hdr, vc_param_name(pi as i64), vc_ty_sort(f.params[pi]));
             cs.model_names.push(vc_param_name(pi as i64));
             cs.model_params.push(pi as i64);
@@ -579,6 +660,7 @@ fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) ->
         }
         oi = oi + 1;
     }
+    vc_claims_harvest_fields(cs, w.ag);
     if vc_vec_count(w.vv) > 0 {
         vc_script_replace_logic(hdr, String::from("QF_ABV"));
     }
