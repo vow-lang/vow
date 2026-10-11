@@ -1,16 +1,17 @@
-// TEST: contract-exit 0
+// TEST: contract-exit 1
 // TEST: contract-status weak ensures proven
 // TEST: contract-trivial weak true
 // TEST: contract-status pinned ensures proven
 // TEST: contract-trivial pinned false
-// TEST: contract-status unguarded ensures proven
+// TEST: contract-status unguarded ensures unknown
 // TEST: contract-trivial unguarded false
 // TEST: contract-status doomed ensures proven
 // TEST: contract-trivial doomed false
 // `result >= 0` is satisfied by a body that returns 0, so the clause is
 // `trivially_satisfiable`; `result == a + 1` is not. The replaced body keeps
 // what its computation can abort on: `unguarded` divides by an unconstrained
-// `b`, so the probe still fails on that claim and the clause is not flagged.
+// `b`, so the probe still fails on that claim and the clause is not flagged (the
+// function itself can abort, so no clause of it reads `proven`).
 // `doomed` holds its `ensures` only because its checked add always aborts; a body
 // that returned the default would not, so it is not flagged either.
 module WeakEnsuresTrivial
