@@ -386,6 +386,26 @@ fn check_pool_halt() -> i64 [io, read] {
     0
 }
 
+// A halted pool is settled once the tasks below the limit are done, though the
+// ones above it were never started.
+fn check_pool_settled() -> i64 [io, read] {
+    let failed: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_FAILED(), String::from("")));
+    let p: VcPool = one_task_pool(3);
+    if vc_pool_settled(p) { return 1; }
+    p.state[VC_ST_NEXT()] = 3;
+    p.state[VC_ST_RUNNING()] = 1;
+    if vc_pool_settled(p) { return 2; }
+    p.phase[0] = VC_TASK_RUNNING();
+    vc_pool_finish(p, 0, failed);
+    if !vc_pool_settled(p) { return 3; }
+    let h: VcPool = one_task_pool(3);
+    h.state[VC_ST_NEXT()] = 1;
+    h.state[VC_ST_RUNNING()] = 1;
+    vc_pool_finish(h, 0, failed);
+    if !vc_pool_settled(h) { return 4; }
+    0
+}
+
 fn main() -> i32 [io, read] {
     let mut r: i64 = check_round_trip();
     if r == 0 { r = check_leading_noise_is_skipped(); }
@@ -405,5 +425,6 @@ fn main() -> i32 [io, read] {
     if r == 0 { r = check_clause_mode_flag(); }
     if r == 0 { r = check_probe_argv(); }
     if r == 0 { r = check_pool_halt(); }
+    if r == 0 { r = check_pool_settled(); }
     i64_to_i32_wrap(r)
 }

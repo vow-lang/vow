@@ -2385,7 +2385,7 @@ struct TestNativeVerdict {
 }
 
 fn test_native_verify(ir_mod: IrModule, exe: String, test_path: String, module_root: String, jobs: i64, dctx: DiagCtx) -> TestNativeVerdict [io, read] {
-    let drv: VcDriverRun = vc_driver_run(exe, test_path, module_root, ir_mod, false, false, jobs, watchdog_ms_for(String::from("")));
+    let drv: VcDriverRun = vc_driver_run(exe, test_path, module_root, ir_mod, false, jobs, watchdog_ms_for(String::from("")));
     let fns: Vec<IrFunction> = ir_mod.functions;
     let mut failed: bool = false;
     let mut skipped: bool = false;
@@ -3784,7 +3784,7 @@ fn native_failed_on_abort_only(oc: VcOutcome) -> bool {
 // probe marks its `ensures` clauses. A missing solver is an `error` status on
 // every clause that needed it; the exit code follows from the statuses.
 fn contracts_native_verify(ir_mod: IrModule, exe: String, path: String, jobs: i64, budget_ms: i64, vow_ids: Vec<i64>, func_ids: Vec<i64>, kinds: Vec<String>, statuses: Vec<String>, trivial: Vec<i64>) [io, read] {
-    let drv: VcDriverRun = vc_driver_run(exe, path, String::from(""), ir_mod, true, true, jobs, budget_ms);
+    let drv: VcDriverRun = vc_driver_run(exe, path, String::from(""), ir_mod, true, jobs, budget_ms);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let mut fi: u64 = 0;
     while fi < fns.len() {

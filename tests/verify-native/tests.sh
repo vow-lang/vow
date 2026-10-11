@@ -266,12 +266,17 @@ print("" if v is None else v)' "$1" "$2"
 RUN_OUT=""
 RUN_RC=0
 BW_DIR=""
-run_native() {
+run_cmd() {
     local mode="$1"; shift
     BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
     RUN_RC=0
     RUN_OUT=$(PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE="$mode" FAKE_BW_DIR="$BW_DIR" \
-        "$VOWC_BIN" verify --no-cache --backend native "$@" 2>/dev/null) || RUN_RC=$?
+        "$VOWC_BIN" "$@" 2>/dev/null) || RUN_RC=$?
+}
+
+run_native() {
+    local mode="$1"; shift
+    run_cmd "$mode" verify --no-cache --backend native "$@"
 }
 
 queries() { find "$BW_DIR" -name 'q.*.smt2' | wc -l | tr -d ' '; }
@@ -1023,14 +1028,6 @@ fn main() -> i32 [io] {
   0
 }
 SRC
-
-run_cmd() {
-    local mode="$1"; shift
-    BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
-    RUN_RC=0
-    RUN_OUT=$(PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE="$mode" FAKE_BW_DIR="$BW_DIR" \
-        "$VOWC_BIN" "$@" 2>/dev/null) || RUN_RC=$?
-}
 
 # Nothing proven: every ensures is failed, every requires unknown, and the
 # second function is reported although the first one failed.

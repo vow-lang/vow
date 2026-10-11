@@ -509,6 +509,11 @@ fn vc_pool_ready(p: VcPool, k: u64) -> bool {
     p.phase[k] == VC_TASK_DONE()
 }
 
+// True once no task is running and none is left to start below the halt limit.
+fn vc_pool_settled(p: VcPool) -> bool {
+    p.state[VC_ST_NEXT()] >= p.state[VC_ST_LIMIT()] && p.state[VC_ST_RUNNING()] == 0
+}
+
 // Stops every worker still running. Safe to call more than once.
 fn vc_pool_abort(p: VcPool) [io] {
     let mut k: u64 = 0;
