@@ -13,7 +13,7 @@
     "values": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Map of source names (or, under the ESBMC backend, $esbmc$-prefixed internal variable names) to counterexample values"
+      "description": "Map of source names (or, under the ESBMC backend, $esbmc$-prefixed internal variable names) to counterexample values. Under the native backend a field of a struct, enum, Option or Result parameter is named <param>.<slot> (an enum's discriminant is slot 0), with a :bool or :<bits> suffix when the function reads that slot at two widths; bool values are true or false"
     },
     "violation": {
       "type": "string",
