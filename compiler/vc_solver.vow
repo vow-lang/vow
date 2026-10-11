@@ -217,19 +217,17 @@ fn vc_classify_run(exit_code: i64, stdout: String, stderr: String, names: Vec<St
     vc_answer(VC_ANS_SAT(), model.values, model.highs, raw)
 }
 
-fn vc_solver_args(file: String) -> Vec<String> {
-    let args: Vec<String> = Vec::new();
-    args.push(String::from("--bv-output-format"));
-    args.push(String::from("2"));
-    args.push(file);
-    args
-}
-
 // Arguments of an interactive session: commands come from stdin.
 fn vc_solver_stdin_args() -> Vec<String> {
     let args: Vec<String> = Vec::new();
     args.push(String::from("--bv-output-format"));
     args.push(String::from("2"));
+    args
+}
+
+fn vc_solver_args(file: String) -> Vec<String> {
+    let args: Vec<String> = vc_solver_stdin_args();
+    args.push(file);
     args
 }
 

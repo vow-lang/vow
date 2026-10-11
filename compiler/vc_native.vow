@@ -125,14 +125,20 @@ fn vc_chain_outcome(f: IrFunction, fr: VcFrames, frame: i64, result: VerifyResul
     oc
 }
 
+// Asks claim `k`'s full query, prefix and all, in a standalone process.
+fn vc_check_claim_full(bin: String, cs: VcClaims, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+    let query: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
+    vc_solver_check(bin, query, cs.model_names, cs.model_widths, budget_ms, scratch)
+}
+
 // Decides claim `k` with standalone queries. With slicing on, the query holds
 // only the claim's cone of influence and an `unsat` answer to it is final: the
-// sliced query is a relaxation of the full one. Any other answer says nothing about the full
-// query (the dropped assumptions may be contradictory on their own, which makes
-// the claim vacuously proven), so the full query is asked in what is left of the
-// budget and alone decides. The one exception is a soft claim from which only
-// definitions were dropped: that query is equisatisfiable with the full one and
-// its answer carries no model, so it stands.
+// sliced query is a relaxation of the full one. Any other answer says nothing
+// about the full query (the dropped assumptions may be contradictory on their
+// own, which makes the claim vacuously proven), so the full query is asked in
+// what is left of the budget and alone decides. The one exception is a soft
+// claim from which only definitions were dropped: that query is equisatisfiable
+// with the full one and its answer carries no model, so it stands.
 fn vc_check_claim_oneshot(bin: String, cs: VcClaims, sx: VcSlicer, slicing: bool, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     if slicing {
         let sl: VcSlice = vc_slice_claim(sx, cs, k);
@@ -143,12 +149,10 @@ fn vc_check_claim_oneshot(bin: String, cs: VcClaims, sx: VcSlicer, slicing: bool
             if ans.verdict == VC_ANS_UNSAT() { return ans; }
             if !sl.dropped_asserts && vc_claim_is_soft(cs, k) { return ans; }
             let left_ms: i64 = budget_ms - (time_micros() - started) / 1000;
-            let query: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
-            return vc_solver_check(bin, query, cs.model_names, cs.model_widths, left_ms, scratch);
+            return vc_check_claim_full(bin, cs, k, left_ms, scratch);
         }
     }
-    let query: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
-    vc_solver_check(bin, query, cs.model_names, cs.model_widths, budget_ms, scratch)
+    vc_check_claim_full(bin, cs, k, budget_ms, scratch)
 }
 
 // Decides claim `k`. A live session is asked first, with at most half of the
@@ -164,10 +168,7 @@ fn vc_check_claim(bin: String, cs: VcClaims, sx: VcSlicer, ss: VcSession, slicin
     if said == VC_ANS_UNSAT() { return vc_answer_plain(VC_ANS_UNSAT(), String::from("")); }
     if said == VC_ANS_SAT() && vc_claim_is_soft(cs, k) { return vc_answer_plain(VC_ANS_SAT(), String::from("")); }
     let left_ms: i64 = budget_ms - (time_micros() - started) / 1000;
-    if said == VC_ANS_SAT() {
-        let query: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
-        return vc_solver_check(bin, query, cs.model_names, cs.model_widths, left_ms, scratch);
-    }
+    if said == VC_ANS_SAT() { return vc_check_claim_full(bin, cs, k, left_ms, scratch); }
     vc_check_claim_oneshot(bin, cs, sx, slicing, k, left_ms, scratch)
 }
 

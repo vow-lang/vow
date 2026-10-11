@@ -266,7 +266,7 @@ fn vc_command_text(ar: VcArena, s: SmtScript, i: u64) -> String {
         out.push_str(vc_term_text(ar, s.terms[i]));
         out.push_str(String::from(")"));
     } else if kind == VC_CMD_ASSERT() {
-        out.push_str(vc_smt_assert_text(ar, s.terms[i]));
+        vc_smt_push_assert(out, ar, s.terms[i]);
     } else if kind == VC_CMD_CHECK_SAT() {
         out.push_str(String::from("(check-sat)"));
     } else {
@@ -295,11 +295,10 @@ fn vc_smt_render(ar: VcArena, s: SmtScript) -> String {
     vc_smt_render_cmds(ar, s, 0, s.kinds.len())
 }
 
-// `(assert <term>)` for a term id, no trailing newline. `vc_command_text` writes
-// its assertion commands through it.
-fn vc_smt_assert_text(ar: VcArena, t: i64) -> String {
-    let out: String = String::from("(assert ");
+// Appends `(assert <term>)` for a term id to `out`, no trailing newline.
+// `vc_command_text` writes its assertion commands through it.
+fn vc_smt_push_assert(out: String, ar: VcArena, t: i64) {
+    out.push_str(String::from("(assert "));
     out.push_str(vc_term_text(ar, t));
     out.push_str(String::from(")"));
-    out
 }

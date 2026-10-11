@@ -70,7 +70,8 @@ fn two_claims() -> VcClaims {
 }
 
 fn tail_of(cs: VcClaims, k: u64) -> String {
-    let out: String = vc_smt_assert_text(cs.arena, cs.negated_goals[k]);
+    let out: String = String::from("");
+    vc_smt_push_assert(out, cs.arena, cs.negated_goals[k]);
     out.push_str(String::from("\n(check-sat)\n(get-value (p0 p1))\n"));
     out
 }
@@ -117,7 +118,7 @@ fn check_repeated_ask_sends_no_delta() -> i64 {
 fn check_frame_text() -> i64 {
     let cs: VcClaims = two_claims();
     let want: String = String::from("(push 1)\n");
-    want.push_str(vc_smt_assert_text(cs.arena, cs.negated_goals[1]));
+    vc_smt_push_assert(want, cs.arena, cs.negated_goals[1]);
     want.push_str(String::from("\n(check-sat)\n(echo \"vow-1\")\n(pop 1)\n"));
     if vc_session_frame(cs, 1) != want { return 1; }
     if vc_session_sentinel(12) != String::from("\"vow-12\"") { return 2; }

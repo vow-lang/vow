@@ -235,7 +235,9 @@ fn check_render_range() -> i64 {
     if vc_smt_render_cmds(ar, s, 2, 2) != String::from("") { return 1002; }
     if vc_smt_render_cmds(ar, s, 3, 1) != String::from("") { return 1003; }
     if vc_smt_render_cmds(ar, s, 4, 99) != String::from("(check-sat)\n") { return 1004; }
-    if vc_smt_assert_text(ar, vc_tm_bool_const(ar, false)) != String::from("(assert false)") { return 1005; }
+    let asserted: String = String::from("");
+    vc_smt_push_assert(asserted, ar, vc_tm_bool_const(ar, false));
+    if asserted != String::from("(assert false)") { return 1005; }
     0
 }
 

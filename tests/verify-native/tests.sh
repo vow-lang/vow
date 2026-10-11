@@ -64,7 +64,7 @@ if [ "${file%.smt2}" = "$file" ]; then
                 case "$FAKE_BW_MODE" in
                     garbage) echo "what is this" ;;
                     session_error_line) echo '(error "boom")' ;;
-                    sat|session_sat) echo sat ;;
+                    sat) echo sat ;;
                     unknown|session_unknown) echo unknown ;;
                     *) echo unsat ;;
                 esac
@@ -83,7 +83,7 @@ cp "$file" "$FAKE_BW_DIR/q.$n.smt2"
 echo "$file" >> "$FAKE_BW_DIR/paths"
 echo "$*" >> "$FAKE_BW_DIR/args"
 case "$FAKE_BW_MODE" in
-    unsat|session_unsat|session_unknown|session_die_after_*|session_error_line|session_noscope) echo unsat ;;
+    unsat|session_unknown|session_die_after_*|session_error_line|session_noscope) echo unsat ;;
     unknown) echo unknown ;;
     garbage) echo "what is this" ;;
     exit1) echo "[error] boom" >&2; exit 1 ;;
@@ -127,7 +127,7 @@ case "$FAKE_BW_MODE" in
         done
         echo ")"
         ;;
-    sat|sat_zero|session_sat)
+    sat|sat_zero)
         val=7
         [ "$FAKE_BW_MODE" = sat_zero ] && val=0
         echo sat
@@ -333,10 +333,7 @@ run_native() {
 
 # the same, with the claims of a round sharing one solver process.
 run_incremental() {
-    local saved="$VOW_VERIFY_NO_INCREMENTAL"
-    export VOW_VERIFY_NO_INCREMENTAL=0
-    run_native "$@"
-    export VOW_VERIFY_NO_INCREMENTAL="$saved"
+    VOW_VERIFY_NO_INCREMENTAL=0 run_native "$@"
 }
 
 queries() { find "$BW_DIR" -name 'q.*.smt2' | wc -l | tr -d ' '; }
@@ -1304,7 +1301,7 @@ no_survivors() {
     done < "$BW_DIR/spids"
 }
 
-run_incremental session_unsat "$THREE_CLAIMS"
+run_incremental unsat "$THREE_CLAIMS"
 expect "session unsat status" "$(field "$RUN_OUT" status)" "Verified"
 expect "session unsat exit" "$RUN_RC" "0"
 expect "session unsat: one solver process" "$(sessions)" "1"
@@ -1322,7 +1319,7 @@ no_survivors "session unsat"
 no_leftovers "session unsat"
 
 # a hard `sat` is re-decided by one standalone full query: same report, byte for byte.
-run_incremental session_sat "$THREE_CLAIMS"
+run_incremental sat "$THREE_CLAIMS"
 inc_out="$RUN_OUT"
 expect "session sat: one solver process" "$(sessions)" "1"
 expect "session sat: one standalone confirmation" "$(queries)" "1"
@@ -1392,20 +1389,20 @@ all_dead "$BW_DIR/pid" "hung solver"
 no_leftovers "session hang"
 
 # a round with a single claim for the solver has nothing to share.
-run_incremental session_unsat "$ONE_CLAIM"
+run_incremental unsat "$ONE_CLAIM"
 expect "single claim: verified" "$(field "$RUN_OUT" status)" "Verified"
 expect "single claim: no session" "$(sessions)" "0"
 expect "single claim: one standalone query" "$(queries)" "1"
 
 # a function with a loop runs one session per unwinding round.
-run_incremental session_unsat "$LOOP_CLAIMS"
+run_incremental unsat "$LOOP_CLAIMS"
 expect "loop session status" "$(field "$RUN_OUT" status)" "Verified"
 expect "loop session: no standalone query" "$(queries)" "0"
 no_survivors "loop session"
 no_leftovers "loop session"
 
 # inlined calls: the same report with and without sessions.
-run_incremental session_sat "$CALL_CLAIMS" --verify-jobs 1
+run_incremental sat "$CALL_CLAIMS" --verify-jobs 1
 inc_out="$RUN_OUT"
 run_native sat "$CALL_CLAIMS" --verify-jobs 1
 expect "calls: report equals the standalone report" "$inc_out" "$RUN_OUT"
@@ -1416,13 +1413,13 @@ no_leftovers "calls session"
 # asked, a hard `sat` leaves the session usable for the claims after it, and
 # the verdicts are the standalone ones.
 CLAUSES_OUT="$TMP_ROOT/clauses_out"
-VOW_VERIFY_NO_INCREMENTAL=0 worker_clauses session_unsat --worker-clauses > "$CLAUSES_OUT"
+VOW_VERIFY_NO_INCREMENTAL=0 worker_clauses unsat --worker-clauses > "$CLAUSES_OUT"
 expect "session clauses all proven" "$(cat "$CLAUSES_OUT")" "0 -1 2:1,3:1"
 expect "session clauses: one solver process" "$(sessions)" "1"
 expect "session clauses: no standalone query" "$(queries)" "0"
 no_survivors "session clauses"
 no_leftovers "session clauses"
-VOW_VERIFY_NO_INCREMENTAL=0 worker_clauses session_sat --worker-clauses > "$CLAUSES_OUT"
+VOW_VERIFY_NO_INCREMENTAL=0 worker_clauses sat --worker-clauses > "$CLAUSES_OUT"
 expect "session clauses sat: overall result" "$(cut -d' ' -f1,2 "$CLAUSES_OUT")" "1 2"
 expect "session clauses sat: one solver process" "$(sessions)" "1"
 expect "session clauses sat: each claim asked in the session" "$(session_lines 1 '^(check-sat)$')" "2"
