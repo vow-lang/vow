@@ -246,8 +246,5 @@ fn vc_claim_script_sliced(cs: VcClaims, k: u64, sl: VcSlice) -> SmtScript {
         vc_script_assert(s, cs.assumed[sl.assumed[j] as u64]);
         j = j + 1;
     }
-    vc_script_assert(s, cs.negated_goals[k]);
-    vc_script_check_sat(s);
-    vc_script_get_value(s, cs.model_names);
-    s
+    vc_claim_script_finish(s, cs, k)
 }

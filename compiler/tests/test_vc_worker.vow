@@ -248,15 +248,16 @@ fn check_stopped_outcome_keeps_earlier_failure() -> i64 {
     targets.push(3);
     targets.push(4);
     let frozen: VcRound = vc_round(sample_result(), true, true, -1, false);
+    let unfrozen: VcRound = vc_round(sample_result(), false, false, -1, false);
     let kept_fb: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), String::from("budget")));
-    let kept: VcOutcome = vc_stopped_outcome(f, fr, true, frozen, kept_fb, acc, targets, true);
+    let kept: VcOutcome = vc_stopped_outcome(f, fr, frozen, kept_fb, acc, targets, true);
     if kept.result.status != VERIFY_FAILED() { return 1; }
     if kept.clause_ids.len() != 1 || kept.clause_ids[0] != 3 || kept.clause_proven[0] != 0 { return 2; }
     let none_fb: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), String::from("budget")));
-    let none: VcOutcome = vc_stopped_outcome(f, fr, false, frozen, none_fb, acc, targets, true);
+    let none: VcOutcome = vc_stopped_outcome(f, fr, unfrozen, none_fb, acc, targets, true);
     if none.result.status != VERIFY_UNKNOWN() { return 3; }
     let plain_fb: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), String::from("budget")));
-    let plain: VcOutcome = vc_stopped_outcome(f, fr, false, frozen, plain_fb, acc, targets, false);
+    let plain: VcOutcome = vc_stopped_outcome(f, fr, unfrozen, plain_fb, acc, targets, false);
     if plain.clause_ids.len() != 0 { return 4; }
     0
 }
