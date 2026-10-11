@@ -1,0 +1,25 @@
+// TEST: category invariant
+// The invariant is true but too weak to give the postcondition on exit from an
+// arbitrary state (`i >= 0 && i >= n` does not imply `i == n`), so the
+// 1-induction of ADR-2026-10-08-1422 does not close. The k-induction step case
+// does: with the loop test of the two earlier copies as hypotheses the counter
+// reaches the exit one below `n` plus one, so `i == n`.
+module LoopInvariantKInductive
+
+fn count(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == n
+} {
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i >= 0
+  } {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_i64(count(3));
+  0
+}

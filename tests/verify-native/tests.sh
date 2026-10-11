@@ -537,9 +537,11 @@ no_leftovers "loop sat"
 # a loop with a literal bound folds to constants: every claim, the unwinding
 # claim of the rounds that stop short and the invariants of the covering round
 # included, is decided by the simplifier, so no bounded round spawns a query. The
-# solver answers `unknown` so the inductive attempt (the loop has an invariant)
-# cannot prove the function itself and leave the bounded rounds unexercised: its
-# first claim is the one query.
+# solver answers `unknown`, so neither inductive attempt proves the function:
+# the 1-induction of the invariant (the loop has one) is the first query, and
+# each of the two rounds that stop short (bounds 2 and 4) runs its k-induction
+# step case, whose first claim is one more query. The covering round at bound 8
+# then ends the check on its own, with no query.
 LITERAL_LOOP="$TMP_ROOT/literal_loop.vow"
 cat > "$LITERAL_LOOP" <<'SRC'
 module LiteralLoop
@@ -565,7 +567,7 @@ fn main() -> i32 [io] {
 SRC
 run_native unknown "$LITERAL_LOOP"
 expect "literal loop status" "$(field "$RUN_OUT" status)" "Verified"
-expect "literal loop bounded rounds spawn nothing" "$(queries)" "1"
+expect "literal loop bounded rounds spawn nothing" "$(queries)" "3"
 no_leftovers "literal loop"
 
 # the same loop with a `requires` keeps its unwinding claim for the solver: a

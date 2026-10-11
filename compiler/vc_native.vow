@@ -41,6 +41,15 @@ use vc_term
 // the bounded rounds still run, so the warnings are the aborts they find, and
 // the proof is used where they end `unknown` (open at the largest bound, over
 // the size budget, or undecided). It never changes a counterexample.
+//
+// A round that is open (its base case holds, its unwinding claim does not) also
+// runs the k-induction step case at its own bound (`vc_step_attempt`), for a
+// function with exactly one loop and whatever invariants it has: the loop is
+// unrolled from an arbitrary header state with the earlier iterations as
+// hypotheses, so a property that is k-inductive but not 1-inductive, or has no
+// invariant at all, is still proven for every trip count. Its outcome is used
+// as an inductive proof is: all claims `unsat` proves, anything else is
+// silently "not proved" and the bounded schedule goes on. It is never `failed`.
 
 // A verdict plus the reachable checked-arithmetic aborts found on the way. The
 // sites are meaningful only when the result is `proven`. A failure inside an
@@ -151,9 +160,10 @@ fn vc_note_soft_sat(f: IrFunction, fr: VcFrames, cs: VcClaims, k: u64, sites: Ve
 // outcome but `unsat`/soft `sat`/open unwinding), or `proven` with `open` set
 // when only the unwinding claim was `sat`. The solver is located when the first
 // claim that needs it comes up. `soft` tells whether `g` has a soft claim, and
-// is meaningful only for a round that ran every claim.
-fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String) -> VcRound [io, read, write] {
-    let cs: VcClaims = vc_claims_mode(g, fr, f.vows.len() == 0);
+// is meaningful only for a round that ran every claim. `hyp` is the hypothesis
+// marking of a step function, empty otherwise.
+fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, hyp: Vec<i64>, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String) -> VcRound [io, read, write] {
+    let cs: VcClaims = vc_claims_step(g, fr, f.vows.len() == 0, hyp);
     if cs.kinds.len() == 0 {
         return VcRound { result: vc_proven_result(), ended: false, open: false, frame: -1, soft: false };
     }
@@ -210,7 +220,28 @@ fn vc_induction_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, started
     }
     let g: IrFunction = c.f;
     let sites: Vec<ParsedArithSite> = Vec::new();
-    let r: VcRound = vc_run_round(f, g, fr, sites, started, timeout_ms, scratch);
+    let r: VcRound = vc_run_round(f, g, fr, Vec::new(), sites, started, timeout_ms, scratch);
+    VcInduction { proves: !r.ended && !r.open, soft: r.soft }
+}
+
+// The k-induction step case at `bound` = k, run only after the bounded round at
+// the same bound found its base case `unsat` and its unwinding claim open: the
+// copies 0..k of that round are the base, so a step function with every claim
+// `unsat` proves the target for every trip count. `proves` is the only thing
+// acted on, as for `vc_induction_attempt`: a counterexample to the step may be a
+// state no run reaches, so a failing step is never a verdict.
+fn vc_step_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, bound: i64, started: i64, timeout_ms: i64, scratch: String) -> VcInduction [io, read, write] {
+    let none: VcInduction = VcInduction { proves: false, soft: false };
+    let u: VcUnrolled = vc_unroll_step(closed, bound);
+    if u.status != VC_UNROLL_OK() {
+        return none;
+    }
+    let g: IrFunction = u.f;
+    if vc_unrolled_detail(g, vc_ty_table(g)).len() > 0 {
+        return none;
+    }
+    let sites: Vec<ParsedArithSite> = Vec::new();
+    let r: VcRound = vc_run_round(f, g, fr, u.hyp, sites, started, timeout_ms, scratch);
     VcInduction { proves: !r.ended && !r.open, soft: r.soft }
 }
 
@@ -259,7 +290,7 @@ fn vc_verify_function(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: Stri
     }
     let closed: IrFunction = vc_close_loops(inl.f);
     let started: i64 = time_micros();
-    let ind: VcInduction = vc_induction_attempt(f, closed, inl.frames, started, timeout_ms, scratch);
+    let mut ind: VcInduction = vc_induction_attempt(f, closed, inl.frames, started, timeout_ms, scratch);
     if ind.proves && !ind.soft {
         return vc_proven_with(Vec::new());
     }
@@ -276,7 +307,7 @@ fn vc_verify_function(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: Stri
             return vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("internal error: loop unrolling produced an unsupported control-flow graph")));
         }
         let sites: Vec<ParsedArithSite> = Vec::new();
-        let r: VcRound = vc_run_round(f, g, inl.frames, sites, started, timeout_ms, scratch);
+        let r: VcRound = vc_run_round(f, g, inl.frames, Vec::new(), sites, started, timeout_ms, scratch);
         if r.ended {
             if ind.proves && vc_undecided(r) {
                 return vc_proven_with(vc_merge_sites(sites, last_sites));
@@ -287,6 +318,15 @@ fn vc_verify_function(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: Stri
             return vc_proven_with(sites);
         }
         last_sites = sites;
+        if !ind.proves {
+            let st: VcInduction = vc_step_attempt(f, closed, inl.frames, bound, started, timeout_ms, scratch);
+            if st.proves {
+                ind = VcInduction { proves: true, soft: st.soft || r.soft };
+                if !ind.soft {
+                    return vc_proven_with(Vec::new());
+                }
+            }
+        }
         if round + 1 == bounds.len() {
             return vc_open_outcome(ind, last_sites, vc_unwinding_reason(bound));
         }
