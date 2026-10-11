@@ -1,6 +1,7 @@
 module TestVcWorker
 
 use verifier
+use vc_clause
 use vc_native
 use vc_cex
 use vc_worker
@@ -234,6 +235,32 @@ fn check_chain_outcome() -> i64 {
     0
 }
 
+// A larger unrolling that cannot be built after a round found a failure must
+// not turn that failure into `unknown`: the failure and the failed clauses stay,
+// and nothing is proven.
+fn check_stopped_outcome_keeps_earlier_failure() -> i64 {
+    let fr: VcFrames = vc_frames_new();
+    let f: IrFunction = mk_function(20, String::from("t"), Vec::new(), ITY_I64(), Vec::new());
+    let acc: VcClauseAcc = vc_clause_acc_new();
+    vc_clause_note(acc, 3, VC_CLAUSE_FAILED());
+    vc_clause_note(acc, 4, VC_CLAUSE_UNSAT());
+    let targets: Vec<i64> = Vec::new();
+    targets.push(3);
+    targets.push(4);
+    let frozen: VcRound = vc_round(sample_result(), true, true, -1, false);
+    let kept_fb: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), String::from("budget")));
+    let kept: VcOutcome = vc_stopped_outcome(f, fr, true, frozen, kept_fb, acc, targets, true);
+    if kept.result.status != VERIFY_FAILED() { return 1; }
+    if kept.clause_ids.len() != 1 || kept.clause_ids[0] != 3 || kept.clause_proven[0] != 0 { return 2; }
+    let none_fb: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), String::from("budget")));
+    let none: VcOutcome = vc_stopped_outcome(f, fr, false, frozen, none_fb, acc, targets, true);
+    if none.result.status != VERIFY_UNKNOWN() { return 3; }
+    let plain_fb: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), String::from("budget")));
+    let plain: VcOutcome = vc_stopped_outcome(f, fr, false, frozen, plain_fb, acc, targets, false);
+    if plain.clause_ids.len() != 0 { return 4; }
+    0
+}
+
 fn check_inline_budget_reason_round_trips() -> i64 {
     let reason: String = vc_inline_budget_reason(200000);
     if !vc_output_has_inline_budget(reason) { return 1; }
@@ -301,6 +328,7 @@ fn main() -> i32 [read] {
     if r == 0 { r = check_unwind_schedule(); }
     if r == 0 { r = check_chain_outcome(); }
     if r == 0 { r = check_inline_budget_reason_round_trips(); }
+    if r == 0 { r = check_stopped_outcome_keeps_earlier_failure(); }
     if r == 0 { r = check_stale_tag_never_decodes(); }
     if r == 0 { r = check_clause_flag_is_checked(); }
     if r == 0 { r = check_clause_mode_flag(); }

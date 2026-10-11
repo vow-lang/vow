@@ -233,16 +233,15 @@ fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, sites: Vec<ParsedAri
             } else if vc_claim_is_soft(cs, k) && ans.verdict == VC_ANS_SAT() {
                 if vc_note_soft_sat(f, fr, cs, k, sites) { open = true; }
             } else {
-                let res: VerifyResult = vc_claim_result(f, cs, k, ans);
                 if !all_claims {
-                    return vc_round(res, true, false, cs.frames[k], false);
+                    return vc_round(vc_claim_result(f, cs, k, ans), true, false, cs.frames[k], false);
                 }
                 let mut verdict: i64 = VC_CLAUSE_UNDECIDED();
                 if ans.verdict == VC_ANS_SAT() { verdict = VC_CLAUSE_FAILED(); }
                 vc_note_clause(acc, cs, k, verdict);
                 if cs.kinds[k] == VC_CLAIM_UNWIND() { stuck = true; }
                 if !failed {
-                    first = res;
+                    first = vc_claim_result(f, cs, k, ans);
                     first_frame = cs.frames[k];
                     failed = true;
                 }
@@ -269,8 +268,14 @@ fn vc_with_clauses(oc: VcOutcome, acc: VcClauseAcc, targets: Vec<i64>, all_claim
     oc
 }
 
-fn vc_verify_function(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: String) -> VcOutcome [io, read, write] {
-    vc_verify_function_mode(f, m, timeout_ms, scratch, false)
+// The outcome of a check that stops with its last round open (a larger
+// unrolling that cannot be built, or the schedule's end): the failure an earlier
+// round found when there is one, else `fallback`. The failing clauses of the
+// earlier rounds keep their verdicts, nothing is proven.
+fn vc_stopped_outcome(f: IrFunction, fr: VcFrames, have_frozen: bool, frozen: VcRound, fallback: VcOutcome, acc: VcClauseAcc, targets: Vec<i64>, all_claims: bool) -> VcOutcome {
+    let mut oc: VcOutcome = fallback;
+    if have_frozen { oc = vc_chain_outcome(f, fr, frozen.frame, frozen.result); }
+    vc_with_clauses(oc, acc, targets, all_claims, false)
 }
 
 // The engine. Without `all_claims` the first hard claim that is not `unsat`
@@ -301,11 +306,13 @@ fn vc_verify_function_mode(f: IrFunction, m: IrModule, timeout_ms: i64, scratch:
         let bound: i64 = bounds[round];
         let u: VcUnrolled = vc_unroll(closed, bound);
         if u.status == VC_UNROLL_TOO_LARGE() {
-            return vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_unwinding_budget_reason(bound)));
+            let big: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_unwinding_budget_reason(bound)));
+            return vc_stopped_outcome(f, inl.frames, have_frozen, frozen, big, acc, targets, all_claims);
         }
         let g: IrFunction = u.f;
         if u.status != VC_UNROLL_OK() || (u.looped && vc_unrolled_detail(g, vc_ty_table(g)).len() > 0) {
-            return vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("internal error: loop unrolling produced an unsupported control-flow graph")));
+            let bad: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_ERROR(), String::from("internal error: loop unrolling produced an unsupported control-flow graph")));
+            return vc_stopped_outcome(f, inl.frames, have_frozen, frozen, bad, acc, targets, all_claims);
         }
         let sites: Vec<ParsedArithSite> = Vec::new();
         let r: VcRound = vc_run_round(f, g, inl.frames, sites, started, timeout_ms, scratch, slicing, all_claims, acc);
@@ -327,9 +334,8 @@ fn vc_verify_function_mode(f: IrFunction, m: IrModule, timeout_ms: i64, scratch:
             return vc_with_clauses(proven, acc, targets, all_claims, true);
         }
         if !r.ended && round + 1 == bounds.len() {
-            let mut oc: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_unwinding_reason(bound)));
-            if have_frozen { oc = vc_chain_outcome(f, inl.frames, frozen.frame, frozen.result); }
-            return vc_with_clauses(oc, acc, targets, all_claims, false);
+            let open: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), vc_unwinding_reason(bound)));
+            return vc_stopped_outcome(f, inl.frames, have_frozen, frozen, open, acc, targets, all_claims);
         }
         if all_claims { vc_clause_next_round(acc); }
         round = round + 1;

@@ -76,8 +76,8 @@ fn vc_clause_next_round(acc: VcClauseAcc) {
     }
 }
 
-// The verdicts of the clauses in `targets` (each once, in order), given whether
-// the last round was closed.
+// The verdicts of the clauses in `targets` (distinct ids, as `vc_clause_targets`
+// returns them), in order, given whether the last round was closed.
 fn vc_clause_finish(acc: VcClauseAcc, targets: Vec<i64>, round_closed: bool) -> VcClauseVerdicts {
     let out: VcClauseVerdicts = VcClauseVerdicts { ids: Vec::new(), proven: Vec::new() };
     let mut t: u64 = 0;
@@ -86,20 +86,12 @@ fn vc_clause_finish(acc: VcClauseAcc, targets: Vec<i64>, round_closed: bool) -> 
         let at: i64 = vc_clause_index(acc, id);
         let mut state: i64 = VC_CLAUSE_UNSAT();
         if at >= 0 { state = acc.states[at as u64]; }
-        let mut seen: bool = false;
-        let mut s: u64 = 0;
-        while s < out.ids.len() {
-            if out.ids[s] == id { seen = true; }
-            s = s + 1;
-        }
-        if !seen {
-            if state == VC_CLAUSE_FAILED() {
-                out.ids.push(id);
-                out.proven.push(0);
-            } else if state == VC_CLAUSE_UNSAT() && round_closed {
-                out.ids.push(id);
-                out.proven.push(1);
-            }
+        if state == VC_CLAUSE_FAILED() {
+            out.ids.push(id);
+            out.proven.push(0);
+        } else if state == VC_CLAUSE_UNSAT() && round_closed {
+            out.ids.push(id);
+            out.proven.push(1);
         }
         t = t + 1;
     }
