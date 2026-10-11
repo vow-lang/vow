@@ -307,6 +307,21 @@ fn check_step_not_applicable() -> i64 {
     }
     w.blocks[2] = mk_block(2, inner);
     if vc_unroll_step(w, 2).status != VC_UNROLL_NOT_APPLICABLE() { return 93; }
+
+    let v: IrFunction = count_up();
+    let push: Vec<IrInst> = Vec::new();
+    let pargs: Vec<i64> = Vec::new();
+    pargs.push(1);
+    pargs.push(1);
+    push.push(mk_inst_call_extern(32, ITY_UNIT(), pargs, String::from("__vow_vec_push_val")));
+    let vb: IrBlock = v.blocks[2];
+    i = 0;
+    while i < vb.insts.len() {
+        push.push(vb.insts[i]);
+        i = i + 1;
+    }
+    v.blocks[2] = mk_block(2, push);
+    if vc_unroll_step(v, 2).status != VC_UNROLL_NOT_APPLICABLE() { return 94; }
     0
 }
 

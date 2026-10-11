@@ -507,9 +507,10 @@ no C-emitter or ESBMC change; it exists only in the self-hosted verifier.
   already prove the function, so it never changes a counterexample or a proof
   a bounded round reaches. It shares `--timeout` with the rounds.
 - **Scope.** A function whose loop-closed form has exactly one loop (hence no
-  nesting), no pointer carried by its header Phi and no aggregate field written
-  in the loop. A written aggregate would keep its entry state in copy 0 while
-  the scalars are havoc'd, which is not an arbitrary state; such a function and
+  nesting), no pointer carried by its header Phi, no aggregate field written
+  and no Vec written (`push`, `set`, `pop`) in the loop. A written aggregate or
+  Vec would keep its entry state in copy 0 while the scalars are havoc'd, which
+  is not an arbitrary state; such a function and
   a function with several loops keep their bounded and #1422 verdicts. The
   step is tried at every bound of the schedule (2 to 64), the first one that
   closes ends the check.

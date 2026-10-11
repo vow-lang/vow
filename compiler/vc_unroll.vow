@@ -284,9 +284,10 @@ fn vc_unroll_status(f: IrFunction, status: i64, looped: bool) -> VcUnrolled {
 }
 
 // True when the step case can be built: exactly one loop, no pointer carried by
-// its header Phi and no aggregate written in it. An object keeps its entry state
-// in the first copy (only the header Phis are havoc'd), so a write in the loop
-// would make the step start from a state no iteration has.
+// its header Phi and no aggregate or Vec written in it. An object keeps its entry
+// state in the first copy (only the header Phis are havoc'd), and so does a
+// Vec's `(array, length)`, so a write in the loop would make the step start from
+// a state no iteration has.
 fn vc_step_applicable(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>) -> bool {
     if li.n_loops != 1 {
         return false;
@@ -299,6 +300,10 @@ fn vc_step_applicable(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>) -> bool {
             while i < blk.insts.len() {
                 let inst: IrInst = blk.insts[i];
                 if inst.op == IOP_FIELD_SET() || (inst.op == IOP_PHI() && inst.ty == ITY_PTR()) {
+                    return false;
+                }
+                let vk: i64 = vc_inst_vec_kind(inst);
+                if vk == VC_VEC_PUSH() || vk == VC_VEC_SET() || vk == VC_VEC_POP() {
                     return false;
                 }
                 i = i + 1;
