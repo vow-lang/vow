@@ -116,8 +116,9 @@ fn check_long_main_keeps_tail() -> i32 [io] {
     0
 }
 
-// Splits `a=1,b=2` into the parallel name/value lists a counterexample carries.
-fn kv_names(kv: String) -> Vec<String> {
+// Splits `a=1,b=2` into the parallel name/value lists a counterexample carries:
+// the names when `values` is false, the values when it is true.
+fn kv_part(kv: String, values: bool) -> Vec<String> {
     let out: Vec<String> = Vec::new();
     let mut start: u64 = 0u64;
     let mut i: u64 = 0u64;
@@ -125,26 +126,12 @@ fn kv_names(kv: String) -> Vec<String> {
         if i == kv.len() || kv.byte_at(i) == 44 {
             if i > start {
                 let pair: String = kv.substring(start, i);
-                let at: i64 = index_of(pair, String::from("="));
-                out.push(pair.substring(0u64, at as u64));
-            }
-            start = i + 1u64;
-        }
-        i = i + 1u64;
-    }
-    out
-}
-
-fn kv_values(kv: String) -> Vec<String> {
-    let out: Vec<String> = Vec::new();
-    let mut start: u64 = 0u64;
-    let mut i: u64 = 0u64;
-    while i <= kv.len() {
-        if i == kv.len() || kv.byte_at(i) == 44 {
-            if i > start {
-                let pair: String = kv.substring(start, i);
-                let at: i64 = index_of(pair, String::from("="));
-                out.push(pair.substring(at as u64 + 1u64, pair.len()));
+                let at: u64 = index_of(pair, String::from("=")) as u64;
+                if values {
+                    out.push(pair.substring(at + 1u64, pair.len()));
+                } else {
+                    out.push(pair.substring(0u64, at));
+                }
             }
             start = i + 1u64;
         }
@@ -181,7 +168,7 @@ fn agg_src() -> String {
 
 fn agg(fname: String, pi: i64, kv: String) -> ReplayArg [io] {
     let m: Module = parse_src(agg_src());
-    replay_agg_arg(m, fname, pi, kv_names(kv), kv_values(kv))
+    replay_agg_arg(m, fname, pi, kv_part(kv, false), kv_part(kv, true))
 }
 
 fn lit_of(fname: String, kv: String) -> String [io] {

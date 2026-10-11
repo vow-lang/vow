@@ -129,12 +129,11 @@ fn vc_parse_bv_app(out: String, start: u64, width: i64) -> VcParsed {
 // `true` or `false` at `i`, ending at whitespace, `)` or the end: the value of
 // a Bool symbol (width 0), as 1 or 0.
 fn vc_parse_bool_at(out: String, i: u64) -> VcParsed {
-    let t: String = String::from("true");
-    let f: String = String::from("false");
-    if i + t.len() <= out.len() && out.substring(i, i + t.len()) == t && vc_value_end_ok(out, i + t.len()) {
+    let n: u64 = out.len();
+    if i + 4 <= n && out.byte_at(i) == 116 && out.byte_at(i + 1) == 114 && out.byte_at(i + 2) == 117 && out.byte_at(i + 3) == 101 && vc_value_end_ok(out, i + 4) {
         return VcParsed { ok: 1, value: 1, high: 0 };
     }
-    if i + f.len() <= out.len() && out.substring(i, i + f.len()) == f && vc_value_end_ok(out, i + f.len()) {
+    if i + 5 <= n && out.byte_at(i) == 102 && out.byte_at(i + 1) == 97 && out.byte_at(i + 2) == 108 && out.byte_at(i + 3) == 115 && out.byte_at(i + 4) == 101 && vc_value_end_ok(out, i + 5) {
         return VcParsed { ok: 1, value: 0, high: 0 };
     }
     vc_parsed_bad()

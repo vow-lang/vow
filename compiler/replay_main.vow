@@ -230,20 +230,21 @@ fn replay_slot_key(pname: String, slot: i64) -> String {
 
 // The counterexample value of slot `slot` of `pname` viewed at `label`
 // (`bool` or a bit width), or "" when the model never read it. The suffixed
-// name is the one used when the slot has two views.
+// name is the one used when the slot has two views; the plain name is never
+// emitted for such a slot, so the plain lookup goes first.
 fn replay_slot_value(pname: String, slot: i64, label: String, names: Vec<String>, vals: Vec<String>) -> String {
     let key: String = replay_slot_key(pname, slot);
+    let hit: String = replay_cex_value(names, vals, key);
+    if hit.len() > 0 { return hit; }
     let suffixed: String = String::from(key);
     suffixed.push_str(String::from(":"));
     suffixed.push_str(label);
-    let hit: String = replay_cex_value(names, vals, suffixed);
-    if hit.len() > 0 { return hit; }
-    replay_cex_value(names, vals, key)
+    replay_cex_value(names, vals, suffixed)
 }
 
-// Literal of the scalar (or `()`) a field of AST type `tid` holds at `slot`. A slot the
-// model never read cannot have influenced the path to the claim, so it takes
-// the zero value.
+// Literal of the scalar (or `()`) a field of AST type `tid` holds at `slot`. A
+// slot the model never read cannot have influenced the path to the claim, so it
+// takes the zero value.
 fn replay_field_arg(a: AstArena, tid: i64, pname: String, slot: i64, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
     let shown: String = print_type_text(a, tid);
     if type_tag(a, tid) == TY_UNIT() {

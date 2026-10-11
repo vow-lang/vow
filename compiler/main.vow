@@ -773,6 +773,21 @@ fn replay_confirm() -> ReplayVerdict {
     ReplayVerdict { status: String::from("confirmed"), reason: String::from("") }
 }
 
+// Source literal and type text of argument `pi` (named `pname`, of IR type `ty`)
+// of the replayed function, or the reason it cannot be rebuilt. An aggregate is
+// rebuilt from the native counterexample's `<param>.<slot>` entries via the
+// source declaration; anything else is an i64, u64 or bool taken by name.
+fn replay_param_arg(m: Module, ce: VerifyCE, aggregate: bool, pi: i64, pname: String, ty: i64) -> ReplayArg {
+    if aggregate {
+        return replay_agg_arg(m, ce.function, pi, ce.var_names, ce.var_values);
+    }
+    let raw: String = replay_cex_value(ce.var_names, ce.var_values, pname);
+    if raw.len() == 0 { return replay_arg_skip(String::from("no counterexample value")); }
+    let lit: String = replay_render_scalar(ty, raw);
+    if lit.len() == 0 { return replay_arg_skip(String::from("value not renderable as a literal")); }
+    replay_arg_ok(lit, replay_ty_name(ty))
+}
+
 fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, main_start: i64, argv0: String, native: bool) -> ReplayVerdict [io, read, write] {
     if ce.function == String::from("main") {
         return replay_skip(String::from("cannot replay the entry function `main`"));
@@ -823,38 +838,21 @@ fn replay_one_ce(ce: VerifyCE, m: Module, fns: Vec<IrFunction>, path: String, ma
             return replay_skip(String::from("function has a Unit parameter"));
         }
         let pname: String = pnames[pi as u64];
-        let mut lit: String = String::from("");
-        let mut ty_text: String = replay_ty_name(ty);
-        if native && ty == ITY_PTR() {
-            // The native counterexample lists an aggregate parameter's slots
-            // (`p.0`, `p.1`, ...); the source declaration maps them back to
-            // fields.
-            let agg: ReplayArg = replay_agg_arg(m, ce.function, pi, ce.var_names, ce.var_values);
-            if agg.reason.len() > 0 {
-                return replay_skip(str3(String::from("parameter "), pname, str2(String::from(": "), agg.reason)));
-            }
-            lit = agg.lit;
-            ty_text = agg.ty_text;
-        } else {
-            if ty != ITY_I64() && ty != ITY_U64() && ty != ITY_BOOL() {
-                return replay_skip(str3(String::from("parameter "), i64_to_string(pi), String::from(": unsupported type (self-hosted v1: scalars only)")));
-            }
-            let raw: String = replay_cex_value(ce.var_names, ce.var_values, pname);
-            if raw.len() == 0 {
-                return replay_skip(str3(String::from("parameter "), pname, String::from(": no counterexample value")));
-            }
-            lit = replay_render_scalar(ty, raw);
-            if lit.len() == 0 {
-                return replay_skip(str3(String::from("parameter "), pname, String::from(": value not renderable as a literal")));
-            }
+        let aggregate: bool = native && ty == ITY_PTR();
+        if !aggregate && ty != ITY_I64() && ty != ITY_U64() && ty != ITY_BOOL() {
+            return replay_skip(str3(String::from("parameter "), i64_to_string(pi), String::from(": unsupported type (self-hosted v1: scalars only)")));
+        }
+        let arg: ReplayArg = replay_param_arg(m, ce, aggregate, pi, pname, ty);
+        if arg.reason.len() > 0 {
+            return replay_skip(str3(String::from("parameter "), pname, str2(String::from(": "), arg.reason)));
         }
         let aname: String = str2(String::from("__replay_a"), i64_to_string(pi));
         body.push_str(String::from("    let "));
         body.push_str(aname);
         body.push_str(String::from(": "));
-        body.push_str(ty_text);
+        body.push_str(arg.ty_text);
         body.push_str(String::from(" = "));
-        body.push_str(lit);
+        body.push_str(arg.lit);
         body.push_str(String::from(";\n"));
         if pi > 0 { call_args.push_str(String::from(", ")); }
         call_args.push_str(aname);

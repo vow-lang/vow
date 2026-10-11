@@ -207,8 +207,9 @@ fn vc_claim_model_widths(cs: VcClaims, k: u64) -> Vec<i64> {
 
 // Appends the scalar fields of aggregate parameters the walk read (declared
 // lazily, so only now are they all known) after the scalar parameters, with the
-// slot each came from (a symbol's width is its sort: 0 for Bool). A slot read at two sorts is `ambig` in every entry so
-// reporting and replay can tell the symbols apart.
+// slot each came from (a symbol's width is its sort: 0 for Bool). A slot read
+// at two sorts is `ambig` in every entry so reporting and replay can tell the
+// symbols apart.
 fn vc_claims_harvest_fields(cs: VcClaims, ag: VcAgg) {
     let mut i: u64 = 0;
     while i < ag.ps_param.len() {
