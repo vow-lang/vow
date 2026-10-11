@@ -234,6 +234,21 @@ def _parse_args(argv):
     return ap.parse_args(argv)
 
 
+def _abnormal_exit(cap):
+    """Why a `verify` run did not finish like a verifier, or None.
+
+    Exit 0 and 1 (and a compile error's small codes) are verdicts. A timeout, a
+    signal or a shell "cannot run" is the verifier itself failing, which would
+    otherwise just look like a fixture with fewer queries.
+    """
+    if cap["timed_out"]:
+        return "timed out"
+    code = cap["exit_code"]
+    if code is None or code < 0 or code >= 126:
+        return f"exited abnormally (exit {code})"
+    return None
+
+
 def _resolve(explicit, name):
     found = explicit or shutil.which(name)
     if found and (Path(found).exists() or shutil.which(found)):
@@ -299,6 +314,9 @@ def main(argv=None):
                 harness.append(
                     f"{rel}: {cap['sessions']} incremental session(s) bypassed capture"
                 )
+            crash = _abnormal_exit(cap)
+            if crash:
+                harness.append(f"{rel}: verifier {crash}")
             fixture_counts = {c: 0 for c in CLASSES}
             for n, query in enumerate(cap["queries"]):
                 b = run_bitwuzla(bitwuzla, query, args.solver_timeout)
