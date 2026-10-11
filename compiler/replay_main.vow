@@ -112,16 +112,32 @@ fn replay_cex_value(names: Vec<String>, vals: Vec<String>, key: String) -> Strin
     String::from("")
 }
 
+// Ids of the items of `kind`, in declaration order. Kept apart from the name
+// lookups below on purpose: this is the only code here that calls the contracted
+// `item_kind`/`item_id`, so it is the only code the C verifier model sees, and
+// that model cannot type the `String` `arena_str` reads out of a `Vec`.
+fn replay_item_ids(m: Module, kind: i64) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let items: Vec<i64> = m.items;
+    let mut i: u64 = 0u64;
+    while i < items.len() {
+        let it: i64 = items[i];
+        if it >= 0 && item_kind(it) == kind {
+            out.push(item_id(it));
+        }
+        i = i + 1u64;
+    }
+    out
+}
+
 fn replay_find_fn_item(m: Module, name: String) -> i64 {
     let a: AstArena = m.arena;
+    let ids: Vec<i64> = replay_item_ids(m, ITEM_FN());
     let mut i: u64 = 0u64;
-    while i < m.items.len() {
-        let it: i64 = m.items[i];
-        if it >= 0 && item_kind(it) == ITEM_FN() {
-            let fid: i64 = item_id(it);
-            if !fn_is_declaration(a, fid) && arena_str(a, fn_name_sid(a, fid)) == name {
-                return fid;
-            }
+    while i < ids.len() {
+        let fid: i64 = ids[i];
+        if !fn_is_declaration(a, fid) && arena_str(a, fn_name_sid(a, fid)) == name {
+            return fid;
         }
         i = i + 1u64;
     }
@@ -130,12 +146,10 @@ fn replay_find_fn_item(m: Module, name: String) -> i64 {
 
 fn replay_find_struct(m: Module, name: String) -> i64 {
     let a: AstArena = m.arena;
+    let ids: Vec<i64> = replay_item_ids(m, ITEM_STRUCT());
     let mut i: u64 = 0u64;
-    while i < m.items.len() {
-        let it: i64 = m.items[i];
-        if it >= 0 && item_kind(it) == ITEM_STRUCT() && arena_str(a, sdef_name_sid(a, item_id(it))) == name {
-            return item_id(it);
-        }
+    while i < ids.len() {
+        if arena_str(a, sdef_name_sid(a, ids[i])) == name { return ids[i]; }
         i = i + 1u64;
     }
     -1
@@ -143,12 +157,10 @@ fn replay_find_struct(m: Module, name: String) -> i64 {
 
 fn replay_find_enum(m: Module, name: String) -> i64 {
     let a: AstArena = m.arena;
+    let ids: Vec<i64> = replay_item_ids(m, ITEM_ENUM());
     let mut i: u64 = 0u64;
-    while i < m.items.len() {
-        let it: i64 = m.items[i];
-        if it >= 0 && item_kind(it) == ITEM_ENUM() && arena_str(a, edef_name_sid(a, item_id(it))) == name {
-            return item_id(it);
-        }
+    while i < ids.len() {
+        if arena_str(a, edef_name_sid(a, ids[i])) == name { return ids[i]; }
         i = i + 1u64;
     }
     -1
