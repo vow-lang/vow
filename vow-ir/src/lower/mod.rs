@@ -4312,7 +4312,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         }
         ExprKind::Cast { expr, target_ty } => {
             let tgt = lower_ty_with_linear(target_ty, &ctx.linear_owner_names, &ctx.type_aliases);
-            if matches!(tgt, Ty::I128 | Ty::U128) {
+            if matches!(tgt, Ty::I128 | Ty::U128) && int_expr_is_literal_only(expr) {
                 record_wide_marker_context(ctx, expr, tgt);
             }
             let val = lower_expr(ctx, expr);
@@ -4807,6 +4807,59 @@ fn wide_context_contains_control_flow(expr: &Expr) -> bool {
         }
         ExprKind::Block(block) => {
             integer_marker_from_block(block).is_some_and(wide_context_contains_control_flow)
+        }
+        _ => false,
+    }
+}
+
+/// True when every leaf of an integer expression's result positions is an integer
+/// literal, i.e. the checker types the whole operand as `LitInt`. Only such operands
+/// take their width from an enclosing `as i128`/`as u128`; a typed leaf already pins
+/// the operand's width, and its literals are reconciled by binary-op lowering.
+fn int_expr_is_literal_only(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Lit(Lit::Int(_)) => true,
+        ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand,
+        } => int_expr_is_literal_only(operand),
+        ExprKind::BinaryOp {
+            op:
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::Rem
+                | BinOp::AddChecked
+                | BinOp::SubChecked
+                | BinOp::MulChecked
+                | BinOp::DivChecked
+                | BinOp::RemChecked
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor
+                | BinOp::Shl
+                | BinOp::Shr,
+            lhs,
+            rhs,
+        } => int_expr_is_literal_only(lhs) && int_expr_is_literal_only(rhs),
+        ExprKind::Block(block) => {
+            integer_marker_from_block(block).is_some_and(int_expr_is_literal_only)
+        }
+        ExprKind::If {
+            then_branch,
+            else_branch: Some(else_expr),
+            ..
+        } => {
+            integer_marker_from_block(then_branch).is_some_and(int_expr_is_literal_only)
+                && int_expr_is_literal_only(else_expr)
+        }
+        ExprKind::Match { arms, .. } => {
+            !arms.is_empty() && arms.iter().all(|arm| int_expr_is_literal_only(&arm.body))
+        }
+        ExprKind::Loop { body, .. } => {
+            let values = loop_break_values(body);
+            !values.is_empty() && values.into_iter().all(int_expr_is_literal_only)
         }
         _ => false,
     }
@@ -6983,6 +7036,95 @@ fn unsigned_max() -> u128 {
             .filter(|inst| inst.opcode == Opcode::ConstI128)
             .count();
         assert_eq!(zeros, 1, "only the negation's own zero may be emitted");
+    }
+
+    fn wide_const_count(func: &Function) -> usize {
+        insts_of(func)
+            .iter()
+            .filter(|inst| matches!(inst.opcode, Opcode::ConstU128 | Opcode::ConstI128))
+            .count()
+    }
+
+    fn operand_signature(func: &Function) -> Vec<(Opcode, Ty)> {
+        insts_of(func)
+            .iter()
+            .filter(|inst| {
+                !matches!(
+                    inst.opcode,
+                    Opcode::IntCast | Opcode::Return | Opcode::ConstI64 | Opcode::ConstU64
+                )
+            })
+            .map(|inst| (inst.opcode, inst.ty))
+            .collect()
+    }
+
+    #[test]
+    fn cast_to_u128_keeps_typed_operand_literals_at_their_own_width() {
+        let module = lower_source_to_module(
+            concat!(
+                "module CastOperand\n",
+                "fn cast(i: u64, j: u64) -> u128 { (i * 10 + j) as u128 }\n",
+                "fn cast_signed(i: i64, j: i64) -> i128 { (i * 10 + j) as i128 }\n",
+                "fn base(i: u64, j: u64) -> u64 { i * 10 + j }\n",
+                "fn base_signed(i: i64, j: i64) -> i64 { i * 10 + j }\n",
+                "fn main() -> i32 [io] { 0 }\n",
+            ),
+            "cast_operand.vow",
+        );
+        let find = |name: &str| module.functions.iter().find(|f| f.name == name).unwrap();
+        for (cast, base) in [("cast", "base"), ("cast_signed", "base_signed")] {
+            assert_eq!(
+                wide_const_count(find(cast)),
+                0,
+                "{cast} leaked a wide const"
+            );
+            assert_eq!(
+                operand_signature(find(cast)),
+                operand_signature(find(base)),
+                "{cast} operand must compute at the width of the uncast baseline"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_to_u128_in_vec_push_keeps_typed_operand_at_its_own_width() {
+        let module = lower_source_to_module(
+            concat!(
+                "module CastPush\n",
+                "fn fill(i: u64, j: u64) -> Vec<u128> {\n",
+                "    let v: Vec<u128> = Vec::new();\n",
+                "    v.push((i * 10 + j) as u128);\n",
+                "    v\n",
+                "}\n",
+                "fn main() -> i32 [io] { 0 }\n",
+            ),
+            "cast_push.vow",
+        );
+        let fill = module.functions.iter().find(|f| f.name == "fill").unwrap();
+        assert_eq!(
+            wide_const_count(fill),
+            0,
+            "push operand leaked a wide const"
+        );
+    }
+
+    #[test]
+    fn cast_to_u128_of_literal_only_operand_stays_wide() {
+        let module = lower_source_to_module(
+            concat!(
+                "module CastLiteral\n",
+                "fn big() -> u128 { (1 << 100) as u128 }\n",
+                "fn main() -> i32 [io] { 0 }\n",
+            ),
+            "cast_literal.vow",
+        );
+        let big = module.functions.iter().find(|f| f.name == "big").unwrap();
+        assert!(
+            insts_of(big)
+                .iter()
+                .any(|inst| inst.opcode == Opcode::ConstU128 && inst.data == InstData::ConstU128(1)),
+            "literal operand lost its wide context"
+        );
     }
 
     fn lower_source_to_module(source: &str, file: &str) -> Module {
