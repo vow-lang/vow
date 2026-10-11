@@ -1143,6 +1143,9 @@ for fixture in tests/verify-fail/skip_after_failure.vow stdlib/heap/main.vow tes
 
     base_json=$($RUST verify --no-cache --verify-jobs 1 "$fixture" 2>/dev/null) || true
     base=$(skip_set_summary "$base_json")
+    if [ "$base" = "<unparseable>" ]; then
+        errors+=("baseline produced no parseable verify JSON; the comparisons below would be vacuous")
+    fi
     for pass in "no-cache-jobs4" "cold-jobs4" "warm-jobs4" "warm-jobs1"; do
         case "$pass" in
             no-cache-jobs4) pass_json=$($RUST verify --no-cache --verify-jobs 4 "$fixture" 2>/dev/null) || true ;;

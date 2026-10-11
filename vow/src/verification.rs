@@ -359,8 +359,10 @@ fn record_proof_span(
 
 /// Drive verification across a module's vowed functions.
 ///
-/// Collects the vowed functions, then hands the index space to [`run_pool`]
-/// with [`verify_one_function`] as the per-function verdict.
+/// Collects the vowed functions, reports every non-modelable one as a
+/// `VerificationSkipped` warning (lifting a clean run to `SkippedNonModelable`),
+/// then hands the modelable remainder to [`run_pool`] with
+/// [`verify_one_function`] as the per-function verdict.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_verification_sync(
     ir_module: &vow_ir::Module,

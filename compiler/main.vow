@@ -2568,48 +2568,51 @@ fn run_test(argv: Vec<String>) -> i32 [io, read, write] {
                 while vfi < vfns.len() as i64 {
                     let vf: IrFunction = vfns[vfi as u64];
                     let vows: Vec<IrVowEntry> = vf.vows;
-                    // Stop launching new ESBMC jobs after a failure is observed.
-                    if vows.len() > 0 && !verify_failed {
-                        while vin_flight_h.len() as i64 >= t_jobs {
-                            let oh: i64 = vin_flight_h[0];
-                            let ofi: i64 = vin_flight_fi[0];
-                            let otmp: String = vin_flight_tmp[0];
-                            let ovf: IrFunction = vfns[ofi as u64];
-                            vec_i64_remove_front(vin_flight_h);
-                            vec_i64_remove_front(vin_flight_fi);
-                            vec_string_remove_front(vin_flight_tmp);
-                            if oh == -1 || oh == -3 {
-                                // ESBMC spawn/not-found failure: treat as verification failure, not silent success.
-                                cleanup_verify_tmp_path(otmp);
-                                verify_failed = true;
-                            } else if oh != -2 {
-                                // cmd_test launches verify_start with empty solver/encoding/timeout,
-                                // so effective_timeout matches what start_esbmc passed: 30s under auto.
-                                let t_eff: String = effective_timeout_for(String::from(""), String::from(""), String::from(""));
-                                let ovr: VerifyResult = verify_collect(oh, ovf, t_eff, otmp, trace_off());
-                                if ovr.status == VERIFY_FAILED() {
+                    if vows.len() > 0 {
+                        // A skip is a static fact about the program, so it is reported even
+                        // after a failure; otherwise the warning set would depend on how many
+                        // ESBMC jobs happened to be in flight (--verify-jobs).
+                        // Fail closed: a non-modelable contract was not statically proved.
+                        // Reported as contract_skipped (ESBMC never invoked) rather than
+                        // verify_failed (a proved violation); a real violation in any other
+                        // function still sets verify_failed, which takes precedence (#386).
+                        if skip_if_non_modelable(vf, ir_mod, t_const_fns, t_dctx) {
+                            contract_skipped = true;
+                        } else if !verify_failed {
+                            // Stop launching new ESBMC jobs after a failure is observed.
+                            while vin_flight_h.len() as i64 >= t_jobs {
+                                let oh: i64 = vin_flight_h[0];
+                                let ofi: i64 = vin_flight_fi[0];
+                                let otmp: String = vin_flight_tmp[0];
+                                let ovf: IrFunction = vfns[ofi as u64];
+                                vec_i64_remove_front(vin_flight_h);
+                                vec_i64_remove_front(vin_flight_fi);
+                                vec_string_remove_front(vin_flight_tmp);
+                                if oh == -1 || oh == -3 {
+                                    // ESBMC spawn/not-found failure: treat as verification failure, not silent success.
+                                    cleanup_verify_tmp_path(otmp);
                                     verify_failed = true;
-                                } else if bv_resource_limited(ovr.status, ovr.raw_output) {
-                                    // BV timed out or hit the memory cap; retry with IR before failing.
-                                    let ovr2: VerifyResult = verify_function_ir_fallback(esbmc_bin, ovf, ir_mod, t_max_k_step, false, String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
-                                    if ovr2.status != VERIFY_PROVEN() && ovr2.status != VERIFY_PROVEN_IR() {
+                                } else if oh != -2 {
+                                    // cmd_test launches verify_start with empty solver/encoding/timeout,
+                                    // so effective_timeout matches what start_esbmc passed: 30s under auto.
+                                    let t_eff: String = effective_timeout_for(String::from(""), String::from(""), String::from(""));
+                                    let ovr: VerifyResult = verify_collect(oh, ovf, t_eff, otmp, trace_off());
+                                    if ovr.status == VERIFY_FAILED() {
+                                        verify_failed = true;
+                                    } else if bv_resource_limited(ovr.status, ovr.raw_output) {
+                                        // BV timed out or hit the memory cap; retry with IR before failing.
+                                        let ovr2: VerifyResult = verify_function_ir_fallback(esbmc_bin, ovf, ir_mod, t_max_k_step, false, String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
+                                        if ovr2.status != VERIFY_PROVEN() && ovr2.status != VERIFY_PROVEN_IR() {
+                                            verify_failed = true;
+                                        }
+                                    } else if ovr.status == VERIFY_UNKNOWN() {
+                                        // UNKNOWN is an explicit inconclusive BV outcome; do not let
+                                        // a weaker IR proof turn it into a passing test.
                                         verify_failed = true;
                                     }
-                                } else if ovr.status == VERIFY_UNKNOWN() {
-                                    // UNKNOWN is an explicit inconclusive BV outcome; do not let
-                                    // a weaker IR proof turn it into a passing test.
-                                    verify_failed = true;
                                 }
                             }
-                        }
-                        if !verify_failed {
-                            // Fail closed: a non-modelable contract was not statically proved.
-                            // Reported as contract_skipped (ESBMC never invoked) rather than
-                            // verify_failed (a proved violation); a real violation in any other
-                            // function still sets verify_failed, which takes precedence (#386).
-                            if skip_if_non_modelable(vf, ir_mod, t_const_fns, t_dctx) {
-                                contract_skipped = true;
-                            } else {
+                            if !verify_failed {
                                 let vstarted: EsbmcStart = verify_start(esbmc_bin, vf, ir_mod, t_max_k_step, vfi, false, String::from(""), String::from(""), String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
                                 vin_flight_h.push(vstarted.handle);
                                 vin_flight_fi.push(vfi);
