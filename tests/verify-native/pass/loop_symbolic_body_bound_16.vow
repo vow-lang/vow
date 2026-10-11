@@ -1,0 +1,26 @@
+// TEST: category invariant
+// TEST: no-warning CheckedArithmeticReachable
+// A literal-bound loop whose body adds a symbolic parameter with a checked
+// operator: every unrolled copy keeps an overflow claim the simplifier cannot
+// fold, so each round of the unwinding schedule puts several claims to the
+// solver. They share one incremental solver process; the report is the one the
+// per-claim solver runs give.
+module LoopSymbolicBodyBound16
+
+fn times16(a: u64) -> u64 vow {
+  requires: a < 1000000
+  ensures: result == a * 16
+} {
+  let mut sum: u64 = 0;
+  let mut i: u64 = 0;
+  while i < 16 {
+    sum = sum +! a;
+    i = i + 1;
+  }
+  sum
+}
+
+fn main() -> i32 [io] {
+  print_u64(times16(3));
+  0
+}

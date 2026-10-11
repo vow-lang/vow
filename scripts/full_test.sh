@@ -1425,7 +1425,9 @@ echo ""
 # each fixture is asserted against its directory (pass/ -> Verified, fail/ ->
 # VerifyFailed with the `counterexample-*` directives, skip/ -> Skipped, never
 # Verified, unknown/ -> VerifyFailed with `verify_status: "unknown"`, no
-# counterexample and an `unwinding assertion:` message, never Verified). The
+# counterexample and an `unwinding assertion:` message, never Verified; each
+# fixture is also run with VOW_VERIFY_NO_SLICE=1 and VOW_VERIFY_NO_INCREMENTAL=1
+# and must report byte-identical JSON). The
 # wiring tier uses a fake Bitwuzla and always runs; the real-solver tier is
 # skipped, not passed, when `bitwuzla` is not on PATH.
 # tests/verify-native/ is deliberately outside Section 2c's explicit globs.
@@ -1565,6 +1567,14 @@ print(sum(1 for d in ds if d.get('error_code') == sys.argv[2]))
         native_full_json=$(VOW_VERIFY_NO_SLICE=1 run_self verify --backend native --no-cache "$vow_file" 2>/dev/null) || native_full_exit=$?
         if [ "$native_full_json" != "$native_json" ] || [ "$native_full_exit" -ne "$native_exit" ]; then
             native_errors+=("slicing changed the result: sliced and VOW_VERIFY_NO_SLICE=1 runs differ")
+        fi
+        # Incremental solver sessions (#1428) must be as invisible: the claims
+        # of a round share one solver process, and the run with a process per
+        # claim (VOW_VERIFY_NO_INCREMENTAL=1, test-only) is byte-identical.
+        native_oneshot_json="" native_oneshot_exit=0
+        native_oneshot_json=$(VOW_VERIFY_NO_INCREMENTAL=1 run_self verify --backend native --no-cache "$vow_file" 2>/dev/null) || native_oneshot_exit=$?
+        if [ "$native_oneshot_json" != "$native_json" ] || [ "$native_oneshot_exit" -ne "$native_exit" ]; then
+            native_errors+=("incremental sessions changed the result: shared and VOW_VERIFY_NO_INCREMENTAL=1 runs differ")
         fi
     fi
     if [ ${#native_errors[@]} -eq 0 ]; then
