@@ -1137,6 +1137,41 @@ fn emit_no_such_field(e: CheckEnv, sname: String, fname: String, span: i64) {
     env_emit_error_code(e, EC_TYPE_MISMATCH(), msg, span);
 }
 
+fn emit_missing_struct_field(e: CheckEnv, sname: String, fname: String, span: i64) {
+    let msg: String = String::from("struct `");
+    msg.push_str(sname);
+    msg.push_str(String::from("` literal is missing field `"));
+    msg.push_str(fname);
+    msg.push_str(String::from("`"));
+    env_emit_error_code(e, EC_TYPE_MISMATCH(), msg, span);
+}
+
+fn check_struct_literal_complete(e: CheckEnv, a: AstArena, eid: i64, sidx: i64, sname: String) {
+    let fields_lid: i64 = expr_b(a, eid);
+    let n_literal: i64 = list_len(a, fields_lid) / 2;
+    let fname_lid: i64 = e.sdef_field_name_lids[sidx as u64];
+    let nf: i64 = e.sdef_field_count[sidx as u64];
+    let mut field_index: i64 = 0;
+    while field_index < nf {
+        let declared_sid: i64 = ts_arg_get(e.ts, fname_lid, field_index);
+        let ts_local: TyStore = e.ts;
+        let declared: String = ts_local.strs[declared_sid as u64];
+        let mut present: bool = false;
+        let mut j: i64 = 0;
+        while j < n_literal {
+            let given_sid: i64 = list_get(a, fields_lid, j * 2);
+            if arena_str(a, given_sid) == declared {
+                present = true;
+            }
+            j = j + 1;
+        }
+        if !present {
+            emit_missing_struct_field(e, sname, declared, expr_span(a, eid));
+        }
+        field_index = field_index + 1;
+    }
+}
+
 fn emit_undefined_variable(e: CheckEnv, name: String, span: i64) {
     let msg: String = String::from("undefined variable `");
     msg.push_str(name);
@@ -3888,6 +3923,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if sidx == -1 {
             return CTY_UNKNOWN();
         }
+        check_struct_literal_complete(e, a, eid, sidx, sname);
         return ts_make_struct(e.ts, sname);
     }
 

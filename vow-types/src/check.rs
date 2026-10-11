@@ -3255,6 +3255,17 @@ impl<'e> Checker<'e> {
                                 );
                             }
                         }
+                        for (declared, _) in &info.fields {
+                            if !fields.iter().any(|(n, _)| n == declared) {
+                                self.emit_error(
+                                    ErrorCode::TypeMismatch,
+                                    format!(
+                                        "struct `{name}` literal is missing field `{declared}`"
+                                    ),
+                                    expr.span,
+                                );
+                            }
+                        }
                         Ty::Struct(name.clone())
                     }
                 }
@@ -7093,6 +7104,41 @@ mod tests {
             fields: vec![("x".to_string(), bool_lit())],
         }));
         assert!(checker.has_errors());
+    }
+
+    #[test]
+    fn struct_literal_missing_fields_report_each_in_declaration_order() {
+        use crate::env::StructInfo;
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_struct(
+            "Point3",
+            StructInfo {
+                fields: vec![
+                    ("x".to_string(), Ty::I32),
+                    ("y".to_string(), Ty::I32),
+                    ("z".to_string(), Ty::I32),
+                ],
+                is_linear: false,
+            },
+        );
+        checker.env.push_scope();
+        let ty = checker.check_expr(&make_expr(ExprKind::StructLiteral {
+            name: "Point3".to_string(),
+            fields: vec![("y".to_string(), int_lit())],
+        }));
+        assert_eq!(ty, Ty::Struct("Point3".to_string()));
+        assert_eq!(emitter.0.len(), 2);
+        assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
+        assert_eq!(
+            emitter.0[0].message,
+            "struct `Point3` literal is missing field `x`"
+        );
+        assert_eq!(emitter.0[1].code, ErrorCode::TypeMismatch);
+        assert_eq!(
+            emitter.0[1].message,
+            "struct `Point3` literal is missing field `z`"
+        );
     }
 
     #[test]
