@@ -547,6 +547,16 @@ fn print_head(expr: &Expr, level: usize) -> String {
 
 // An unparenthesised block-like expression ends the expression, so it needs
 // parentheses before any postfix operator and as a left binary operand.
+/// `-x as T?` parses as `((-x) as T)?`, so a unary operand whose `?` chain
+/// wraps a cast must keep its parentheses.
+fn question_chain_ends_in_cast(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Cast { .. } => true,
+        ExprKind::Question { expr } => question_chain_ends_in_cast(expr),
+        _ => false,
+    }
+}
+
 fn print_postfix_base(expr: &Expr, level: usize) -> String {
     if expr.kind.is_block_like()
         || matches!(
@@ -605,6 +615,7 @@ fn print_expr_at(expr: &Expr, level: usize) -> String {
             // `-!` would lex as the checked-subtraction token.
             let needs_parens = match &operand.kind {
                 ExprKind::BinaryOp { .. } | ExprKind::Cast { .. } => true,
+                ExprKind::Question { expr } => question_chain_ends_in_cast(expr),
                 ExprKind::UnaryOp { op: inner_op, .. } => {
                     matches!((op, inner_op), (UnOp::Neg, UnOp::Not))
                 }
@@ -1306,6 +1317,27 @@ mod tests {
             },
             span: s(),
         }
+    }
+
+    #[test]
+    fn test_unary_of_question_of_cast_is_parenthesised() {
+        let cast = Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(ident_expr("a")),
+                target_ty: Box::new(named_ty("i8")),
+            },
+            span: s(),
+        };
+        let question = Expr {
+            kind: ExprKind::Question {
+                expr: Box::new(cast),
+            },
+            span: s(),
+        };
+        let neg = unary_expr(UnOp::Neg, question.clone());
+        assert_eq!(print_expr(&neg), "-(a as i8?)");
+        let not = unary_expr(UnOp::Not, question);
+        assert_eq!(print_expr(&not), "!(a as i8?)");
     }
 
     #[test]

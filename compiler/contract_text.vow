@@ -159,6 +159,18 @@ fn binop_precedence(op: i64) -> i64 {
     9
 }
 
+// Mirrors `question_chain_ends_in_cast` in vow-syntax/src/printer.rs: `-x as T?`
+// parses as `((-x) as T)?`, so a unary operand that is a `?` chain wrapping a
+// cast keeps its parentheses.
+fn question_chain_ends_in_cast(a: AstArena, eid: i64) -> bool {
+    let mut cur: i64 = eid;
+    while expr_tag(a, cur) == EXPR_QUESTION() {
+        cur = expr_a(a, cur);
+        if expr_tag(a, cur) == EXPR_CAST() { return true; }
+    }
+    false
+}
+
 // Mirrors `print_postfix_base`: an unparenthesised block-like expression ends
 // the expression, so it (like any operator expression) is parenthesized before
 // a postfix `.`, `[`, `(` or `?`.
@@ -244,7 +256,8 @@ fn print_expr_text_at(a: AstArena, eid: i64, level: i64) -> String {
         let operand_eid: i64 = expr_b(a, eid);
         let operand_tag: i64 = expr_tag(a, operand_eid);
         let mut inner_s: String = print_expr_text_at(a, operand_eid, level);
-        if operand_tag == EXPR_BINOP() || operand_tag == EXPR_CAST() {
+        if operand_tag == EXPR_BINOP() || operand_tag == EXPR_CAST()
+            || question_chain_ends_in_cast(a, operand_eid) {
             inner_s = parenthesize_text(inner_s);
         }
         // `-!x` would lex as the checked-subtraction token `-!`.
