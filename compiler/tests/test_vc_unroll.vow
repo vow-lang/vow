@@ -72,7 +72,7 @@ fn sink_count(f: IrFunction) -> i64 {
     n
 }
 
-fn upsilon_count(f: IrFunction) -> i64 {
+fn count_op(f: IrFunction, op: i64) -> i64 {
     let mut n: i64 = 0;
     let mut b: u64 = 0;
     while b < f.blocks.len() {
@@ -80,7 +80,7 @@ fn upsilon_count(f: IrFunction) -> i64 {
         let mut i: u64 = 0;
         while i < blk.insts.len() {
             let inst: IrInst = blk.insts[i];
-            if inst.op == IOP_UPSILON() {
+            if inst.op == op {
                 n = n + 1;
             }
             i = i + 1;
@@ -88,6 +88,28 @@ fn upsilon_count(f: IrFunction) -> i64 {
         b = b + 1;
     }
     n
+}
+
+fn count_marker(f: IrFunction, marker: String) -> i64 {
+    let mut n: i64 = 0;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            let inst: IrInst = blk.insts[i];
+            if inst.ds == marker {
+                n = n + 1;
+            }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    n
+}
+
+fn upsilon_count(f: IrFunction) -> i64 {
+    count_op(f, IOP_UPSILON())
 }
 
 fn check_structure() -> i64 {
@@ -206,56 +228,6 @@ fn check_nested() -> i64 {
     0
 }
 
-fn op_count(f: IrFunction, op: i64) -> i64 {
-    let mut n: i64 = 0;
-    let mut b: u64 = 0;
-    while b < f.blocks.len() {
-        let blk: IrBlock = f.blocks[b];
-        let mut i: u64 = 0;
-        while i < blk.insts.len() {
-            let inst: IrInst = blk.insts[i];
-            if inst.op == op {
-                n = n + 1;
-            }
-            i = i + 1;
-        }
-        b = b + 1;
-    }
-    n
-}
-
-fn cut_end_count(f: IrFunction) -> i64 {
-    let mut n: i64 = 0;
-    let mut b: u64 = 0;
-    while b < f.blocks.len() {
-        let blk: IrBlock = f.blocks[b];
-        let last: IrInst = blk.insts[blk.insts.len() - 1];
-        if vc_is_cut_end(last) {
-            n = n + 1;
-        }
-        b = b + 1;
-    }
-    n
-}
-
-fn havoc_count(f: IrFunction) -> i64 {
-    let mut n: i64 = 0;
-    let mut b: u64 = 0;
-    while b < f.blocks.len() {
-        let blk: IrBlock = f.blocks[b];
-        let mut i: u64 = 0;
-        while i < blk.insts.len() {
-            let inst: IrInst = blk.insts[i];
-            if vc_is_havoc(inst) {
-                n = n + 1;
-            }
-            i = i + 1;
-        }
-        b = b + 1;
-    }
-    n
-}
-
 fn ones(v: Vec<i64>) -> i64 {
     let mut n: i64 = 0;
     let mut i: u64 = 0;
@@ -278,10 +250,10 @@ fn check_step_structure() -> i64 {
     // entry + 3 header + 3 body + exit + cut end
     if g.blocks.len() != 9 { return 71; }
     if sink_count(g) != 0 { return 72; }
-    if cut_end_count(g) != 1 { return 73; }
+    if count_marker(g, VC_INTERNAL_CUT_END()) != 1 { return 73; }
     // header copies 1 and 2 keep their Phis; copy 0 is a havoc
-    if havoc_count(g) != 1 { return 74; }
-    if op_count(g, IOP_PHI()) != 3 { return 75; }
+    if count_marker(g, VC_INTERNAL_HAVOC()) != 1 { return 74; }
+    if count_op(g, IOP_PHI()) != 3 { return 75; }
     // body0 -> h1, body1 -> h2, exit from h2; the entry Upsilon, the exits of
     // copies 0 and 1 and the back edge of copy 2 are gone
     if upsilon_count(g) != 3 { return 76; }

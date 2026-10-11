@@ -487,6 +487,7 @@ fn vc_claims(f: IrFunction) -> VcClaims {
     vc_claims_mode(f, vc_frames_new(), false)
 }
 
+// `vc_claims_step` with no hypothesis marking.
 fn vc_claims_mode(f: IrFunction, fr: VcFrames, pre_only: bool) -> VcClaims {
     vc_claims_step(f, fr, pre_only, Vec::new())
 }

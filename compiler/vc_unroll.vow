@@ -27,7 +27,7 @@ fn VC_UNROLL_MALFORMED() -> i64 { 2 }
 fn VC_UNROLL_NOT_APPLICABLE() -> i64 { 3 }
 
 // `hyp` is empty for a plain unrolling; for a step function (`vc_unroll_step`)
-// it holds one 0/1 per block of `f`, 1 for a hypothesis block.
+// it holds one 0/1 per block of the unrolled `f`, 1 for a hypothesis block.
 struct VcUnrolled {
     f: IrFunction,
     status: i64,
@@ -124,6 +124,12 @@ fn vc_step_exit_cut(st: VcUnrollState, b: i64, key: i64, s: i64, bound: i64) -> 
 // below the bound, whose claims are assumed instead of asked.
 fn vc_step_hypothesis(st: VcUnrollState, n: u64, bound: i64) -> bool {
     vc_chain_len(st.li, st.iblk[n] as u64) == 1 && st.ikey[n] < bound
+}
+
+// True when instance (`b`, `key`) is the header of the step function's first
+// copy, whose Phis are havoc'd and fed by no Upsilon.
+fn vc_step_havoc_header(st: VcUnrollState, b: u64, key: i64) -> bool {
+    st.step && key == 0 && st.li.loop_of_header[b] >= 0
 }
 
 // Assigns instance numbers and resolves each instance's two successors:
@@ -225,7 +231,7 @@ fn vc_upsilon_phi(st: VcUnrollState, defs: VcDefs, n: u64, orig: IrInst) -> i64 
                 st.bad = 1;
                 return -1;
             }
-            if st.step && st.ikey[t as u64] == 0 && st.li.loop_of_header[st.iblk[t as u64] as u64] >= 0 {
+            if vc_step_havoc_header(st, st.iblk[t as u64] as u64, st.ikey[t as u64]) {
                 return -2;
             }
             return st.base[t as u64] + def_pos[p as u64];
@@ -267,7 +273,7 @@ fn vc_clone_at(st: VcUnrollState, defs: VcDefs, f: IrFunction, n: u64, p: u64, s
         dv = vc_target_block(st, n, 0, orig, sink_id);
     }
     let out: IrInst = vc_clone_inst(orig, new_id, args, dv, dv2);
-    if st.step && key == 0 && orig.op == IOP_PHI() && st.li.loop_of_header[b] >= 0 {
+    if orig.op == IOP_PHI() && vc_step_havoc_header(st, b, key) {
         return vc_havoc_of(out);
     }
     out

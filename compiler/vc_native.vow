@@ -299,6 +299,11 @@ struct VcInduction {
     soft: bool,
 }
 
+// A round proves the target when it ran every claim to `unsat`.
+fn vc_round_proves(r: VcRound) -> VcInduction {
+    VcInduction { proves: !r.ended && !r.open, soft: r.soft }
+}
+
 fn vc_induction_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, started: i64, timeout_ms: i64, scratch: String, slicing: bool) -> VcInduction [io, read, write] {
     let none: VcInduction = VcInduction { proves: false, soft: false };
     let c: VcInduct = vc_induct_cut(closed);
@@ -308,7 +313,7 @@ fn vc_induction_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, started
     let g: IrFunction = c.f;
     let sites: Vec<ParsedArithSite> = Vec::new();
     let r: VcRound = vc_run_round(f, g, fr, Vec::new(), sites, started, timeout_ms, scratch, slicing, false, vc_clause_acc_new());
-    VcInduction { proves: !r.ended && !r.open, soft: r.soft }
+    vc_round_proves(r)
 }
 
 // The k-induction step case at `bound` = k, run only after the bounded round at
@@ -329,7 +334,7 @@ fn vc_step_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, bound: i64, 
     }
     let sites: Vec<ParsedArithSite> = Vec::new();
     let r: VcRound = vc_run_round(f, g, fr, u.hyp, sites, started, timeout_ms, scratch, slicing, false, vc_clause_acc_new());
-    VcInduction { proves: !r.ended && !r.open, soft: r.soft }
+    vc_round_proves(r)
 }
 
 fn vc_proven_with(sites: Vec<ParsedArithSite>) -> VcOutcome {
