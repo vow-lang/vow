@@ -317,6 +317,26 @@ class TestCommandTests(unittest.TestCase):
         self.assertEqual(vd.ERROR, vd.test_verdict(self.one_test("compile_error")))
         self.assertEqual(vd.ERROR, vd.test_verdict({"tests": []}))
 
+    def test_test_path_failing_a_correct_program_is_not_soundness(self):
+        cls, _ = vd.classify_test(
+            "Verified", self.one_test("verify_failed"), self.one_test("passed")
+        )
+        self.assertEqual(vd.MORE_PRECISE, cls)
+        cls, _ = vd.classify_test(
+            "VerifyFailed", self.one_test("verify_failed"), self.one_test("passed")
+        )
+        self.assertEqual(vd.SOUNDNESS, cls)
+
+    def test_synthetic_timeout_is_inconclusive(self):
+        hung = {
+            "status": "VerifyFailed",
+            "verify_status": "timeout",
+            "counterexamples": [],
+        }
+        self.assertEqual(vd.INCONCLUSIVE, vd.test_verdict(hung))
+        cls, _ = vd.classify_test("Verified", self.one_test("passed"), hung)
+        self.assertEqual(vd.WEAKER, cls)
+
     def test_command_lines(self):
         self.assertEqual(
             ["v", "contracts", "--verify", "--no-cache", "--backend", "native"],

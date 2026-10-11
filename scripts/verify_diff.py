@@ -91,6 +91,7 @@ SOFT_FAILURES = ("panicked", "error", "crashed")
 WATCHDOG_SLACK = 30
 
 FN_DECL = re.compile(r"^\s*(?:pub\s+)?fn\s", re.MULTILINE)
+MAIN_DECL = re.compile(r"^\s*fn\s+main\s*\(", re.MULTILINE)
 
 
 def verdict_of(result):
@@ -216,6 +217,12 @@ def command_args(vowc, command, backend, timeout, path):
     return [vowc, "verify", "--no-cache", "--backend", backend]
 
 
+def has_main(path):
+    """`vowc test` runs `main`: a fixture without one has nothing to run."""
+    with open(path, "r", encoding="utf-8") as fh:
+        return MAIN_DECL.search(fh.read()) is not None
+
+
 def run_backend(vowc, backend, path, timeout, max_fns, command="verify"):
     """Run one backend under `--timeout`; a hung or crashed process is inconclusive.
 
@@ -333,6 +340,8 @@ def test_verdict(result):
     A test that passed verification counts as proven whatever the program then
     did when it ran: the run is not the verifier's to answer for.
     """
+    if (result or {}).get("verify_status") in ("timeout", "crashed"):
+        return INCONCLUSIVE
     tests = (result or {}).get("tests") or []
     if not tests:
         return ERROR
@@ -344,6 +353,24 @@ def test_verdict(result):
     if status in ("passed", "failed", "timeout"):
         return PROVEN
     return ERROR
+
+
+def classify_test(truth, esbmc_result, native_result):
+    """(class, detail) of two `vowc test --verify` results of one fixture.
+
+    The ESBMC test path fails a file for a reachable checked-arithmetic abort,
+    which `verify` only warns about, so a native pass of a program the corpus
+    labels correct is not a soundness row.
+    """
+    esbmc, native = test_verdict(esbmc_result), test_verdict(native_result)
+    if native == PROVEN and esbmc == REFUTED and truth == "Verified":
+        return (
+            MORE_PRECISE,
+            "native passes a program the corpus labels correct; the ESBMC test "
+            "path fails it",
+        )
+    status = (native_result or {}).get("verify_status")
+    return classify(truth, esbmc, native, native_status=status)
 
 
 def clause_summary(result):
@@ -384,8 +411,8 @@ def diff_clauses(vowc, timeout, sub, exp, command, truth, max_fns):
             truth, results["esbmc"], results["native"]
         )
     else:
-        row["class"], row["detail"] = classify(
-            truth, test_verdict(results["esbmc"]), test_verdict(results["native"])
+        row["class"], row["detail"] = classify_test(
+            truth, results["esbmc"], results["native"]
         )
     return row
 
@@ -528,7 +555,7 @@ def main(argv=None):
         fixtures = [
             (sub, exp)
             for sub, exp in verify_eval.collect(args.filter)
-            if not exp.skip_reason
+            if not exp.skip_reason and (args.command != "test" or has_main(exp.path))
         ]
         if not fixtures:
             print("verify_diff: no fixtures selected", file=sys.stderr)

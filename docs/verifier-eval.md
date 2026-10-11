@@ -202,8 +202,12 @@ ESBMC's `vacuous` for a function whose `requires` uses `&&`/`||` is
 `more_precise`, because its vacuity label is only planted in the entry block
 (see `cli.md`, "Native backend: `contracts` and `test`"). `test` compares the
 file's test status: `passed`/`failed`/`timeout` read as verified,
-`verify_failed` as refuted, `contract_skipped` as skipped. A fixture takes the
-most severe class of its clauses, and the report carries `command`.
+`verify_failed` as refuted, `contract_skipped` as skipped; a fixture without
+`fn main` is left out, since `test` has nothing to run. The ESBMC test path fails
+a file for a reachable checked-arithmetic abort that `verify` only warns about,
+so a native pass of a program the corpus labels correct is `more_precise`. A
+fixture takes the most severe class of its clauses, and the report carries
+`command`.
 
 ```bash
 python3 scripts/verify_diff.py --command contracts --output /tmp/contracts-diff.json
