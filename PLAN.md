@@ -16,15 +16,20 @@ Self-hosted compiler only (scoped exception, ADR-2026-10-08-1421): no Rust twin,
 - **What is cached.** Only `unsat` and `sat`-with-model. `unknown`, timeout, memory, error and
   not-found depend on budget/environment and are never stored. A `sat` hit replays the stored
   model values, so the counterexample JSON is byte-identical to the cold run. (best guess)
-- **Proofs are cached (trust decision).** The Rust `VerifyCache` stores only FAILED so a forged
-  entry can only make a build red. The native cache must store `unsat` or it has no value for
-  AC1. Mitigations, recorded in the ADR: content-addressed (stale entries are impossible; only
-  forgery can mislead), exact stored-query comparison on every hit (hash collisions cannot
-  produce a verdict), every malformed/short/mismatching entry is a miss, atomic temp+rename
-  writes, cache dir is the same user-owned trust domain as `build/vowc`, `$PATH`'s `bitwuzla` and
-  the compile-object cache. Residual risk (an attacker with write access to the user's cache dir
-  can forge `unsat`) is stated, not hidden; `--no-cache` and bootstrap's `--no-cache` remain the
-  defence in depth. Alternative rejected: caching only `sat` (no speed-up for proven functions).
+- **Proofs are cached (trust decision) — this REVERSES an existing security stance.** The Rust
+  `VerifyCache` (`vow/src/cache.rs`) and the `compiler/verifier.vow:1679` note deliberately never
+  trust a cached PROVEN, and `docs/spec/cli.md:34` disables the compile-object cache during
+  verification for the same reason (an attacker-supplied artifact must not bypass the checker).
+  Storing `unsat` is what makes warm runs fast and AC1 meaningful, and the epic's "Cache" decision
+  calls for it, so the plan caches it but does not pretend it is equivalent: a forged `unsat`
+  entry makes a build wrongly GREEN, not just wrongly red. Mitigations: content-addressed (a stale
+  entry is impossible; only forgery can mislead), the full query is stored and compared
+  byte-for-byte on every hit (a hash collision cannot produce a verdict), every malformed, short
+  or mismatching entry is a miss, writes are temp+rename. Residual risk: anyone with write access
+  to the cache directory can forge `unsat`. `--no-cache` is the opt-out, and stays mandatory for
+  "green locally" claims (CLAUDE.md). Alternative rejected: cache only `sat` (zero benefit for
+  proven functions, which is the common case). The implementation stage posts this decision and
+  the rejected alternative as a `gh issue comment 1429` and records it in the ADR.
 - **Solver identity = `bitwuzla --version` output**, probed once by the parent when there is a
   task to run. Probe failure/empty output => cache disabled for the run (fail closed). The cache
   salt also includes a schema tag and the fixed solver argv (`--bv-output-format 2`).
@@ -32,8 +37,8 @@ Self-hosted compiler only (scoped exception, ADR-2026-10-08-1421): no Rust twin,
   as the compile-object cache; documented in cli.md). Dir creation failure => cache off, silently
   (a cache problem must never fail verification).
 - **Bounded disk.** Sharded by the first two hex digits of the key; a shard holds at most
-  `VC_CACHE_SHARD_CAP` (64) entries; a store into a full shard first evicts the oldest-listed half
-  (`fs_listdir`, no mtime builtin exists). Total ≤ 256 × 64 entries.
+  `VC_CACHE_SHARD_CAP` (64) entries; a store into a full shard first evicts an arbitrary half
+  (`fs_listdir` order is not age order and no mtime builtin exists; eviction is arbitrary, not LRU). Total ≤ 256 × 64 entries.
 - **`--timeout 0` / non-positive remaining budget stays an immediate `timeout`, checked before
   the lookup**, so cold and warm results are identical there too.
 - **Observability for tests** is the fake solver's invocation log (already in
@@ -56,6 +61,7 @@ Self-hosted compiler only (scoped exception, ADR-2026-10-08-1421): no Rust twin,
 | `docs/adr/2026-10-11-1500-native-result-cache.md` [new] | decision record (schema above) | — |
 | `docs/adr/2026-10-08-1430-native-verifier-cli-and-status-surface.md` | `--no-cache` row already promises the key; add "landed in #1429" pointer | 49 |
 | `scripts/verify_perf.py`, `scripts/test_verify_perf.py` | AC3 enforcement | 285-325 / 249-270 |
+| `scripts/concat_vow.sh` | `clif` module list: insert `vc_cache` after `vc_solver` | 23 |
 | `tests/verify-native/tests.sh` | fake `bitwuzla` shim (add `--version`), new cache section | 24-96 |
 | `scripts/full_test.sh` | Section 4g real-solver cold/warm/no-cache comparison | 1421-1480 |
 | `compiler/tests/test_vc_cache.vow` [new], `compiler/tests/test_vc_worker.vow` | unit tests | — |
@@ -85,8 +91,10 @@ rest of `vc_*`; effectful IO functions are `Skipped` by the gate anyway).
 - Resolution (called by the parent): `vc_cache_dir_from(vow_cache_dir, home) -> String` (pure,
   precedence `VOW_CACHE_DIR` > `$HOME/.cache/vow`, `""` if neither; appends `/verify-native`),
   `vc_cache_solver_id(out: String) -> String` (pure: first non-empty trimmed line),
-  `vc_cache_resolve(bin) -> VcCache [io, read]` (reads env, `process_start(bin, ["--version"])`
-  with a 10 s `process_wait_timeout`, nonzero/empty/timeout => off, creates the dir).
+  `vc_cache_resolve(bin) -> VcCache [io, read, write]` (empty `bin` => off; reads env;
+  `process_start(bin, ["--version"])` with a 10 s `process_wait_timeout`; reads stdout/stderr,
+  then `process_kill(handle)` to free the process-table entry as `vc_solver_check` does
+  (`vc_solver.vow:249-253`); nonzero/empty/timeout => off; creates the dir).
 
 ### 2. Thread the cache through the engine (`compiler/vc_native.vow`)
 - `vc_check_claim`: replace both `vc_solver_check(...)` with `vc_solver_check_cached(cache, ...)`;
@@ -114,7 +122,22 @@ rest of `vc_*`; effectful IO functions are `Skipped` by the gate anyway).
   mark the sample invalid (exit 2 from the harness, same class as corpus drift).
 - Keep `--no-cache` first in `args` (already `scripts/verify_perf.py:285`).
 
-### 5. Docs and generated help
+### 5. Harness sweep (done in planning; the implementation must keep it true)
+- Every `--backend native` call site passes `--no-cache`: `scripts/full_test.sh:1461,1520,1565`,
+  `scripts/verify_diff.py:196`, `scripts/verify_perf.py:285`, and the `run_native`/`combined`
+  helpers in `tests/verify-native/tests.sh:271-274,457`. The only fake `bitwuzla` shim is
+  `tests/verify-native/tests.sh:24-96`; `.github/actions/install-bitwuzla` is the real pin. No
+  oracle can pass vacuously because of a warm cache. Do not remove those flags.
+- Shim: handle `--version` as the first statement, before the slot counter, `q.N.smt2` copy,
+  `paths`/`args` logs and any mode (`hang` writes `$FAKE_BW_DIR/pid`): print
+  `${FAKE_BW_VERSION:-}` and exit 0 if set, else exit 2. A `--version` probe must never appear in
+  the query log or block.
+- Add `run_native_cached` (same as `run_native` minus `--no-cache`, plus `VOW_CACHE_DIR`); only
+  the new cache section uses it.
+- `scripts/concat_vow.sh:23`: add `vc_cache` to the `clif` file list after `vc_solver` and before
+  `vc_native` (the concatenated bootstrap triple test breaks on a missing module).
+
+### 6. Docs and generated help
 - `docs/spec/cli.md`: native bullet (line 77) says `--no-cache` disables the native result cache;
   add a "Native result cache" paragraph (location, key, what is cached, solver version
   invalidation, `--no-cache`, perf gate runs with it off); keep the `--no-cache` table rows.
@@ -139,9 +162,10 @@ rest of `vc_*`; effectful IO functions are `Skipped` by the gate anyway).
    and leave no `.tmp`. Green: IO functions + eviction.
 3. **Resolution** — same file: `vc_cache_dir_from` precedence/empty; `vc_cache_solver_id`
    (blank lines, trailing newline, empty => `""` => off).
-4. **Wrapper budget rule** — same file: `vc_solver_check_cached` with `budget_ms = 0` returns
-   `VC_ANS_TIMEOUT` without a lookup or a spawn (hit behaviour needs the real driver; it is
-   covered in slice 6 through the fake shim).
+4. **Wrapper budget rule** — same file: store an entry for query Q in a temp cache dir, then
+   call `vc_solver_check_cached` with `budget_ms = 0` and the same cache; expect
+   `VC_ANS_TIMEOUT`, not the stored answer (budget is checked before the lookup). A hit with
+   positive budget returns the stored answer without spawning (`bin = ""` proves no spawn).
 5. **Plumbing** — `compiler/tests/test_vc_worker.vow`: `vc_worker_argv` contains the two flags
    only when set and never when `--no-cache` is modelled by empty fields. Green: step 3.
 6. **End-to-end with fake solver** — `tests/verify-native/tests.sh` (extend the shim: handle
@@ -158,17 +182,22 @@ rest of `vc_*`; effectful IO functions are `Skipped` by the gate anyway).
    this file that lacks `--no-cache` so they cannot touch `$HOME/.cache/vow`.
 7. **Real solver** — `scripts/full_test.sh` Section 4g: after the existing `--no-cache` loop,
    run every pass/fail/unknown fixture twice with one fresh shared `VOW_CACHE_DIR` and require
-   JSON + exit status equal to the `--no-cache` baseline in both passes.
+   JSON + exit status equal to the `--no-cache` baseline in both passes. Non-vacuity: after the
+   cold pass assert `$VOW_CACHE_DIR/verify-native` contains at least one entry (a failed
+   `--version` probe silently disables the cache and would otherwise make cold == warm trivially);
+   fail the section if the real `bitwuzla --version` probe yields nothing.
 8. **Perf guard** — `scripts/test_verify_perf.py`: a stub that writes into `$VOW_CACHE_DIR`
    makes `run_once` flag the sample; the existing `test_cache_off_flags_env_and_result_json`
    still passes. Green: step 4.
 
 ## Verification surface
-- No contracts or C-model change. `compiler/vc_cache.vow` is verified like the rest of `vc_*`
-  by bootstrap stage-1 verification (acceptance gate item 4: native verifies all of
-  `compiler/*.vow`): IO functions carry effects and are `Skipped`, pure helpers have no `vow`
-  blocks, so nothing is claimed that ESBMC or Bitwuzla must prove. Keep pure loops simple
-  (single index, no nested aliasing) so they stay inside the subset.
+- No contracts or C-model change. The native verifier does not verify `compiler/` yet (no
+  `scripts/seed.toml`): bootstrap verifies it through Rust stage 0 + ESBMC. So `vc_cache.vow`
+  must type-check under the Rust compiler and its pure helpers must pass ESBMC's bounds checks on
+  `byte_at`/`substring`. Shape the decoder like `vc_wire_read_int`/`vc_wire_read_str`
+  (`vc_worker.vow:117-150`), which already verify: index only after a `< len` guard, explicit
+  failed-cursor state, no nested index arithmetic. Mark nothing unverifiable unless ESBMC rejects
+  a correct function; never weaken a contract. IO functions carry effects and no `vow` blocks.
 - Fixtures: none under `tests/run/` or `examples/`. New coverage lives in
   `compiler/tests/test_vc_cache.vow`, `tests/verify-native/tests.sh` and the Section 4g loop.
 - Run: `build/vowc test compiler/tests/test_vc_cache.vow`, `... test_vc_worker.vow`,
@@ -186,6 +215,9 @@ rest of `vc_*`; effectful IO functions are `Skipped` by the gate anyway).
   test opts in, and every other invocation sets `VOW_CACHE_DIR` to a temp dir.
 - **Concurrency.** Workers share the dir: unique temp name + `fs_rename` (atomic), torn/short
   reads decode to a miss, eviction racing a read is a miss.
+- **Timeouts are not reproducible.** A hit costs ~0 ms, so a claim that timed out cold can be
+  decided warm. "Cold and warm verdicts identical" therefore holds only for runs in which no
+  solver call times out; the ADR and cli.md say so. The test slices use no near-limit budgets.
 - **Warm run changing output.** Only `unsat`/`sat`+values are stored; reports for
   unknown/timeout/error are never replayed. `raw` is not needed for those two verdicts
   (`vc_cex.vow:60-92` reads `ans.raw` only for non-decisive answers).
