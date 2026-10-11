@@ -1,0 +1,26 @@
+// TEST: category invariant
+// No invariant. The divisor alternates 1, 2, 1, 2 and never reaches 0, but the
+// division is not 1-inductive (a state with `d == 3` flips to 0) and the bound
+// is a parameter, so unwinding stays open: only the k-induction step case at
+// k = 2 proves the division-by-zero claim for every trip count.
+module LoopKInductionAlternatingDivisor
+
+fn weigh(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == n
+} {
+  let mut i: i64 = 0;
+  let mut d: i64 = 1;
+  let mut acc: i64 = 0;
+  while i < n {
+    acc = acc + 100 / d;
+    d = 3 - d;
+    i = i + 1;
+  }
+  i + acc - acc
+}
+
+fn main() -> i32 [io] {
+  print_i64(weigh(5));
+  0
+}
