@@ -918,6 +918,51 @@ fn check_caller_precondition_role() -> i64 {
     0
 }
 
+// counted_loop(true, false) with `100 / i` in the body: a hard claim `i != 0` per
+// copy of the body.
+fn div_loop() -> IrFunction {
+    let f: IrFunction = counted_loop(true, false);
+    let b: IrBlock = f.blocks[2];
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(30, 100));
+    insts.push(mk_inst(31, IOP_WDIV(), ITY_I64(), args2(30, 3)));
+    let mut i: u64 = 0;
+    while i < b.insts.len() {
+        insts.push(b.insts[i]);
+        i = i + 1;
+    }
+    f.blocks[2] = mk_block(2, insts);
+    f
+}
+
+fn first_of_kind(cs: VcClaims, kind: i64) -> u64 {
+    let mut k: u64 = 0;
+    while k < cs.kinds.len() && cs.kinds[k] != kind { k = k + 1; }
+    k
+}
+
+// In the step function the iteration copies below k are hypotheses: their claims
+// are not asked, their goals (guards and the invariant) are assumed, and the
+// copy at k asks its own claims and then assumes its invariant.
+fn check_step_hypotheses_are_assumed() -> i64 {
+    let u: VcUnrolled = vc_unroll_step(div_loop(), 2);
+    if u.status != VC_UNROLL_OK() { return 900; }
+    let every: VcClaims = vc_claims_step(u.f, vc_frames_new(), false, Vec::new());
+    if kind_count(every, VC_CLAIM_DIV_ZERO()) != 3 { return 901; }
+    if kind_count(every, VC_CLAIM_ENSURES()) != 3 { return 902; }
+    let cs: VcClaims = vc_claims_step(u.f, vc_frames_new(), false, u.hyp);
+    if kind_count(cs, VC_CLAIM_DIV_ZERO()) != 1 { return 903; }
+    if kind_count(cs, VC_CLAIM_ENSURES()) != 1 { return 904; }
+    if kind_count(cs, VC_CLAIM_UNWIND()) != 0 { return 905; }
+    // inv0, div0, inv1, div1, inv2 before the claim at copy 2
+    let d: u64 = first_of_kind(cs, VC_CLAIM_DIV_ZERO());
+    if cs.assumed_lens[d] != 5 { return 906; }
+    // the invariant at copy k is assumed after it is asked, then the division guard
+    let assumed: Vec<i64> = cs.assumed;
+    if assumed.len() != 6 { return 907; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_divide_with_requires();
     if r == 0 { r = check_rem_has_only_zero_claim(); }
@@ -955,5 +1000,6 @@ fn main() -> i32 {
     if r == 0 { r = check_callee_clauses_are_claims(); }
     if r == 0 { r = check_frame_free_clauses_are_unchanged(); }
     if r == 0 { r = check_caller_precondition_role(); }
+    if r == 0 { r = check_step_hypotheses_are_assumed(); }
     i64_to_i32_wrap(r)
 }

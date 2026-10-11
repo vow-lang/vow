@@ -1,0 +1,31 @@
+// TEST: category invariant
+// The divisor reaches a callee whose `requires: d != 0` is a claim blamed on the
+// caller in every iteration copy. The alternating divisor satisfies it, but only
+// the k-induction step case at k = 2 can show that for every trip count.
+module LoopKInductionCalleeRequires
+
+fn inverse(d: i64) -> i64 vow {
+  requires: d != 0
+} {
+  100 / d
+}
+
+fn weigh(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == n
+} {
+  let mut i: i64 = 0;
+  let mut d: i64 = 1;
+  let mut acc: i64 = 0;
+  while i < n {
+    acc = acc + inverse(d);
+    d = 3 - d;
+    i = i + 1;
+  }
+  i + acc - acc
+}
+
+fn main() -> i32 [io] {
+  print_i64(weigh(5));
+  0
+}

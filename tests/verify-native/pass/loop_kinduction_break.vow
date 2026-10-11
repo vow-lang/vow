@@ -1,0 +1,29 @@
+// TEST: category invariant
+// The alternating divisor of loop_kinduction_alternating_divisor with a `break`
+// arm: the loop is left from the body as well as from the header. The exits of the
+// copies below k are cut and the break of copy k is a real exit, so the
+// postcondition still holds for every trip count.
+module LoopKInductionBreak
+
+fn weigh(n: i64, lim: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result <= n
+} {
+  let mut i: i64 = 0;
+  let mut d: i64 = 1;
+  let mut acc: i64 = 0;
+  while i < n {
+    if acc > lim {
+      break;
+    }
+    acc = acc + 100 / d;
+    d = 3 - d;
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_i64(weigh(5, 1000));
+  0
+}

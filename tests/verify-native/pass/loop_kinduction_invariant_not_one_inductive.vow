@@ -1,0 +1,27 @@
+// TEST: category invariant
+// The invariant `a <= 1` is true but not 1-inductive: `a` takes the old value of
+// `b`, which the invariant does not constrain, so ADR-2026-10-08-1422's
+// induction fails at the loop body. At k = 2 the invariant of the first copy is a
+// hypothesis about `b`, and the step case proves it and the postcondition.
+module LoopKInductionInvariantNotOneInductive
+
+fn track(n: i64) -> i64 vow {
+  ensures: result <= 1
+} {
+  let mut i: i64 = 0;
+  let mut a: i64 = 0;
+  let mut b: i64 = 0;
+  while i < n vow {
+    invariant: a <= 1
+  } {
+    a = b;
+    b = 1;
+    i = i + 1;
+  }
+  a
+}
+
+fn main() -> i32 [io] {
+  print_i64(track(5));
+  0
+}

@@ -558,9 +558,13 @@ no_leftovers "loop sat"
 # a loop with a literal bound folds to constants: every claim, the unwinding
 # claim of the rounds that stop short and the invariants of the covering round
 # included, is decided by the simplifier, so no bounded round spawns a query. The
-# solver answers `unknown` so the inductive attempt (the loop has an invariant)
-# cannot prove the function itself and leave the bounded rounds unexercised: its
-# first claim is the one query.
+# solver answers `unknown`, so neither inductive attempt proves the function:
+# the 1-induction of the invariant (the loop has one) is the first query, and
+# each of the two rounds that stop short (bounds 2 and 4) runs its k-induction
+# step case, whose first claim is one more query. The covering round at bound 8
+# then ends the check on its own, with no query. Sliced, the hypotheses of a
+# step are outside the cone of its first claim, so that claim is asked sliced
+# and then again in full: two queries per step case.
 LITERAL_LOOP="$TMP_ROOT/literal_loop.vow"
 cat > "$LITERAL_LOOP" <<'SRC'
 module LiteralLoop
@@ -586,7 +590,11 @@ fn main() -> i32 [io] {
 SRC
 run_native unknown "$LITERAL_LOOP"
 expect "literal loop status" "$(field "$RUN_OUT" status)" "Verified"
-expect "literal loop bounded rounds spawn nothing" "$(queries)" "1"
+expect "literal loop bounded rounds spawn nothing" "$(queries)" "5"
+export VOW_VERIFY_NO_SLICE=1
+run_native unknown "$LITERAL_LOOP"
+unset VOW_VERIFY_NO_SLICE
+expect "literal loop unsliced queries" "$(queries)" "3"
 no_leftovers "literal loop"
 
 # the same loop with a `requires` keeps its unwinding claim for the solver: a
@@ -767,7 +775,9 @@ fn main() -> i32 [io] {
   0
 }
 SRC
+export VOW_VERIFY_NO_SLICE=1
 run_native unsat "$VEC_CLAIMS"
+unset VOW_VERIFY_NO_SLICE
 expect "vec status" "$(field "$RUN_OUT" status)" "Verified"
 if [ "$(queries)" -lt 1 ]; then fail "vec: no query reached the solver"; fi
 for q in "$BW_DIR"/q.*.smt2; do
@@ -976,7 +986,9 @@ SRC
     expect "real: closed loop proves every clause" \
         "$(real_clauses tests/verify-native/pass/loop_literal_bound.vow 0 fill_and_sum)" "0 -1 0:1,1:1,2:1"
     expect "real: open loop proves no clause" \
-        "$(real_clauses tests/verify-native/unknown/loop_literal_100.vow 0 hundred)" "6 -1 "
+        "$(real_clauses tests/verify-native/unknown/loop_bug_beyond_bound.vow 0 count)" "6 -1 "
+    expect "real: k-induction proves the clause of an invariant-free loop" \
+        "$(real_clauses tests/verify-native/pass/loop_symbolic_bound.vow 0 count)" "0 -1 1:1"
     expect "real: failure in a late iteration" \
         "$(real_clauses tests/verify-native/fail/loop_bug_at_iteration_40.vow 0 trip)" "1 1 0:1,1:0,2:1"
 fi
@@ -984,7 +996,27 @@ fi
 # An unwinding claim the solver cannot decide leaves the round open: nothing is
 # proven although every clause claim was `unsat` (rule 2 of
 # ADR-2026-10-08-1422), and the overall result is `unknown`.
-SYMBOLIC_LOOP="tests/verify-native/unknown/loop_symbolic_bound.vow"
+# The function has two loops, so neither induction applies: the k-induction step
+# case would otherwise prove the single loop with every non-unwinding claim
+# `unsat`.
+SYMBOLIC_LOOP="$TMP_ROOT/two_loops.vow"
+cat > "$SYMBOLIC_LOOP" <<'SRC'
+module TwoLoops
+
+fn count(n: u64) -> u64 vow {
+  ensures: result == n
+} {
+  let mut i: u64 = 0;
+  while i < n {
+    i = i + 1;
+  }
+  let mut j: u64 = 0;
+  while j < n {
+    j = j + 1;
+  }
+  i
+}
+SRC
 BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
 expect "undecided unwinding proves no clause" \
     "$(PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE=unknown_unwinding FAKE_BW_DIR="$BW_DIR" \

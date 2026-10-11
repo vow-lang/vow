@@ -1,7 +1,8 @@
 // TEST: category invariant
 // A loop that really runs 100 times is deeper than the verifier's largest
-// unrolling bound. It has no invariant to use inductively, so the unwinding
-// assertion fails and the result is unknown, never Verified.
+// unrolling bound, and has no invariant. The k-induction step case proves it at
+// k = 2: the earlier copies took the back edge, so the counter is below 100 and
+// the exit gives `i == 100`.
 module LoopLiteral100
 
 fn hundred() -> u64 vow {

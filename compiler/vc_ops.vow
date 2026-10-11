@@ -145,7 +145,8 @@ fn vc_is_unwind_sink(inst: IrInst) -> bool {
     inst.op == IOP_UNREACHABLE() && inst.ds == VC_INTERNAL_UNWIND_SINK()
 }
 
-// The two markers of the inductive loop cut (`vc_induct`). A havoc call defines
+// The two markers of the inductive loop cut (`vc_induct`) and of the k-induction
+// step function (`vc_unroll_step`). A havoc call defines
 // a header Phi's value as an unconstrained constant of its type; the `Unreachable`
 // ends the preservation copy of a loop header, where control returns to the
 // header and no claim is left to make.

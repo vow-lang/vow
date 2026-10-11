@@ -1,6 +1,9 @@
 // TEST: category invariant
 // The bound is a parameter: no finite unrolling covers every `n`, so the
-// unwinding assertion fails and the result is unknown, as it is for ESBMC.
+// unwinding assertion stays open. With no invariant to use, the k-induction step
+// case closes it (ADR-2026-10-08-1422, addendum #1425): at k = 2 the loop test of
+// the two earlier copies bounds the counter, which cannot wrap, and the exit
+// gives `i == n` for every trip count.
 module LoopSymbolicBound
 
 fn count(n: i64) -> i64 vow {
