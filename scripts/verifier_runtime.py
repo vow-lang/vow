@@ -41,6 +41,30 @@ DIRECTIVE_SKIP = re.compile(r'^// TEST: skip "(.*)"$', re.M)
 # A tracked verifier soundness gap (verify_eval.py's KNOWN_GAP): the program is
 # genuinely incorrect and the verifier currently accepts it. Reported, not fatal.
 DIRECTIVE_KNOWN_GAP = re.compile(r"^// TEST: known-soundness-gap\s*(\S*)", re.M)
+# A fixture whose counterexample the native replay harness deliberately cannot
+# confirm (full_test.sh enforces that the claim matches reality for the native
+# fixtures); a documented skip, reported and not fatal.
+DIRECTIVE_REPLAY_SKIPPED = re.compile(r"^// TEST: replay-skipped (.+)$", re.M)
+
+# `replay_reason` fragments for counterexamples that are verifier obligations
+# rather than runtime-observable aborts (cli.md "Counterexample replay"). There
+# is nothing to replay, so a `skipped` with one of these is not a replay gap.
+# Any other reason fails closed.
+NOT_A_RUNTIME_ABORT = (
+    "a shift-count counterexample is a verifier obligation",
+    "no runtime abort is predicted for this obligation",
+    "counterexample belongs to a co-emitted callee",
+)
+
+DEFAULT_VERIFIERS = {None: "target/release/vow", "esbmc": "target/release/vow"}
+
+
+def default_verifier(backend):
+    return DEFAULT_VERIFIERS.get(backend, "build/vowc")
+
+
+def _backend_args(backend):
+    return ["--backend", backend] if backend else []
 
 
 def run_json(binary, args, timeout):
@@ -101,13 +125,25 @@ def run_debug_binary(path, timeout):
     return None, None
 
 
-def check_soundness(vow_file, verifier, outdir, timeout):
+def _disclaims_call_sites(verify):
+    return any(
+        d.get("error_code") == "VerificationSkipped"
+        and "were not verified" in (d.get("message") or "")
+        for d in verify.get("diagnostics") or []
+    )
+
+
+def check_soundness(vow_file, verifier, outdir, timeout, backend=None):
     """Verified ⇒ no VowViolation at runtime.
 
     Only programs the verifier actually proved are subjects: a fixture it
     already rejects cannot produce a false proof.
     """
-    verify, err = run_json(verifier, ["verify", "--no-cache", str(vow_file)], timeout)
+    verify, err = run_json(
+        verifier,
+        ["verify", *_backend_args(backend), "--no-cache", str(vow_file)],
+        timeout,
+    )
     if verify is None:
         return {"direction": "soundness", "verdict": "skipped", "detail": err}
     if verify.get("status") != "Verified":
@@ -149,6 +185,23 @@ def check_soundness(vow_file, verifier, outdir, timeout):
         return {"direction": "soundness", "verdict": "skipped", "detail": err}
     if violation is None:
         return {"direction": "soundness", "verdict": "ok", "detail": "no violation"}
+    if (
+        backend == "native"
+        and violation.get("blame") == "Caller"
+        and _disclaims_call_sites(verify)
+    ):
+        # `Verified` carried an explicit note that calls into a contracted
+        # callee were not verified (their `requires` is a debug-mode runtime
+        # check only), so a Caller violation is the disclaimed obligation
+        # firing, not a proof that was false.
+        return {
+            "direction": "soundness",
+            "verdict": "unverified-call-site",
+            "detail": (
+                f"runtime Caller violation vow_id={violation.get('vow_id')} at a "
+                "call the verifier reported as not verified"
+            ),
+        }
     return {
         "direction": "soundness",
         "verdict": "SOUNDNESS",
@@ -159,16 +212,28 @@ def check_soundness(vow_file, verifier, outdir, timeout):
     }
 
 
-def check_precision(vow_file, verifier, timeout):
+def check_precision(vow_file, verifier, timeout, backend=None):
     """VerifyFailed ⇒ every counterexample replays concretely.
 
-    `replay: diverged` is the finding. `aborted` is an honest runtime failure
-    that preempted the predicted vow check, while `skipped` means the replay
-    harness declined a case it cannot model. Neither is a precision failure.
+    `replay: diverged` is the finding. Under the ESBMC backend `aborted` is an
+    honest runtime failure that preempted the predicted vow check and `skipped`
+    means the replay harness declined a case it cannot model; neither is a
+    precision failure.
+
+    The native backend is held to the stricter contract of cli.md ("a
+    counterexample that does not replay is a verifier bug"): `aborted` and any
+    `VerifierBug` diagnostic are PRECISION findings, and a `skipped` replay is
+    a REPLAY-GAP (the counterexample was never shown to reproduce).
     """
     result, err = run_json(
         verifier,
-        ["verify", "--replay-cex", "--no-cache", str(vow_file)],
+        [
+            "verify",
+            *_backend_args(backend),
+            "--replay-cex",
+            "--no-cache",
+            str(vow_file),
+        ],
         timeout,
     )
     if result is None:
@@ -188,7 +253,9 @@ def check_precision(vow_file, verifier, timeout):
             "detail": "VerifyFailed with no counterexample",
         }
 
+    native = backend == "native"
     diverged, aborted, skipped, confirmed = [], [], [], 0
+    skipped_reasons = []
     buckets = {"diverged": diverged, "aborted": aborted}
     for ce in ces:
         replay = ce.get("replay")
@@ -201,12 +268,31 @@ def check_precision(vow_file, verifier, timeout):
             confirmed += 1
         else:
             skipped.append(f"{ce.get('function')}: {ce.get('replay_reason')}")
+            skipped_reasons.append(ce.get("replay_reason") or "no replay reported")
 
-    if diverged:
+    bugs = [
+        f"VerifierBug: {d.get('message')}"
+        for d in result.get("diagnostics") or []
+        if d.get("error_code") == "VerifierBug"
+    ]
+    findings = diverged + (aborted if native else []) + bugs
+    if findings:
         return {
             "direction": "precision",
             "verdict": "PRECISION",
-            "detail": "; ".join(diverged),
+            "detail": "; ".join(findings),
+        }
+    gaps = [
+        f
+        for f, r in zip(skipped, skipped_reasons)
+        if not any(frag in r for frag in NOT_A_RUNTIME_ABORT)
+    ]
+    if native and gaps:
+        return {
+            "direction": "precision",
+            "verdict": "REPLAY-GAP",
+            "detail": f"{len(gaps)} replay(s) skipped: " + "; ".join(gaps),
+            "replay_skipped": skipped_reasons,
         }
     if confirmed:
         detail = f"{confirmed} counterexample(s) confirmed"
@@ -217,6 +303,7 @@ def check_precision(vow_file, verifier, timeout):
             "direction": "precision",
             "verdict": "ok",
             "detail": detail,
+            "replay_skipped": skipped_reasons,
         }
     if aborted:
         # No counterexample confirmed a VowViolation, so an abort-only result
@@ -232,7 +319,36 @@ def check_precision(vow_file, verifier, timeout):
         "direction": "precision",
         "verdict": "skipped",
         "detail": "; ".join(skipped) or "replay not attempted",
+        "replay_skipped": skipped_reasons,
     }
+
+
+def default_roots(backend=None):
+    roots = [REPO_ROOT / "tests" / "verify", REPO_ROOT / "tests" / "verify-fail"]
+    if backend == "native":
+        roots += [
+            REPO_ROOT / "tests" / "verify-native" / d
+            for d in ("pass", "fail", "unknown")
+        ]
+    return roots + [REPO_ROOT / "examples"]
+
+
+def collect_corpus(roots, shard=None):
+    """Sorted, de-duplicated `.vow` files under `roots`, optionally one shard.
+
+    Relative roots resolve against the repo so a CLI argument and an absolute
+    default agree; the report keys on repo-relative paths.
+    """
+    corpus = []
+    for root in roots:
+        p = Path(root)
+        p = p if p.is_absolute() else (REPO_ROOT / p)
+        corpus.extend([p] if p.is_file() else sorted(p.rglob("*.vow")))
+    corpus = sorted({c.resolve() for c in corpus}, key=str)
+    if shard:
+        k, n = (int(x) for x in shard.split("/"))
+        corpus = [f for i, f in enumerate(corpus) if i % n == k]
+    return corpus
 
 
 def main():
@@ -240,7 +356,13 @@ def main():
         description="Verifier-model vs concrete-runtime differential (#1084)"
     )
     ap.add_argument("roots", nargs="*", default=None)
-    ap.add_argument("--verifier", default="target/release/vow")
+    ap.add_argument("--verifier", default=None)
+    ap.add_argument(
+        "--backend",
+        choices=("esbmc", "native"),
+        default=None,
+        help="verification backend passed to `verify` (native needs a vowc)",
+    )
     ap.add_argument("--output-dir", default="verifier-runtime.out")
     ap.add_argument("--timeout", type=int, default=300)
     ap.add_argument("--shard", default=None, metavar="K/N")
@@ -252,36 +374,30 @@ def main():
     )
     args = ap.parse_args()
 
-    verifier = Path(args.verifier)
+    verifier = Path(args.verifier or default_verifier(args.backend))
+    if args.backend == "native" and verifier.name == "vow":
+        print(
+            "error: --backend native needs the self-hosted compiler "
+            f"(build/vowc); {verifier} is the Rust stage 0 and rejects it",
+            file=sys.stderr,
+        )
+        return 2
     if not verifier.exists():
         print(f"error: verifier not found: {verifier}", file=sys.stderr)
         return 2
 
-    roots = args.roots or [
-        REPO_ROOT / "tests" / "verify",
-        REPO_ROOT / "tests" / "verify-fail",
-        REPO_ROOT / "examples",
-    ]
-    corpus = []
-    for root in roots:
-        # Resolve so a relative CLI argument and an absolute default agree; the
-        # report keys on repo-relative paths.
-        p = Path(root)
-        p = p if p.is_absolute() else (REPO_ROOT / p)
-        corpus.extend([p] if p.is_file() else sorted(p.rglob("*.vow")))
-    corpus = sorted({c.resolve() for c in corpus}, key=str)
-    if args.shard:
-        k, n = (int(x) for x in args.shard.split("/"))
-        corpus = [f for i, f in enumerate(corpus) if i % n == k]
+    corpus = collect_corpus(args.roots or default_roots(args.backend), args.shard)
 
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     print(f"=== Verifier-model vs runtime: {len(corpus)} fixtures ===")
     print(f"  verifier: {verifier}")
+    print(f"  backend : {args.backend or 'default'}")
     print()
 
     records, soundness, precision, checked = [], [], [], 0
+    replay_gaps, replay_skipped = [], {}
     for i, f in enumerate(corpus, 1):
         rel = str(f.relative_to(REPO_ROOT))
         text = f.read_text(errors="replace")
@@ -297,10 +413,11 @@ def main():
             )
             continue
         known_gap = DIRECTIVE_KNOWN_GAP.search(text)
+        replay_skipped_note = DIRECTIVE_REPLAY_SKIPPED.search(text)
 
         checks = [
-            check_soundness(f, verifier, outdir, args.timeout),
-            check_precision(f, verifier, args.timeout),
+            check_soundness(f, verifier, outdir, args.timeout, args.backend),
+            check_precision(f, verifier, args.timeout, args.backend),
         ]
         for c in checks:
             if c["verdict"] == "SOUNDNESS":
@@ -316,6 +433,18 @@ def main():
                 precision.append((rel, c))
                 print(f"  PRECISION {rel}")
                 print(f"            {c['detail']}")
+            elif c["verdict"] == "REPLAY-GAP":
+                if replay_skipped_note:
+                    c["verdict"] = "documented-replay-skip"
+                    c["detail"] += f" (documented: {replay_skipped_note.group(1)})"
+                else:
+                    replay_gaps.append((rel, c))
+                    print(f"  REPLAY-GAP {rel}")
+                    print(f"            {c['detail']}")
+        for c in checks:
+            for reason in c.get("replay_skipped", []):
+                key = reason[:60]
+                replay_skipped[key] = replay_skipped.get(key, 0) + 1
         if any(c["verdict"] == "ok" for c in checks):
             checked += 1
         records.append({"file": rel, "checks": checks})
@@ -325,10 +454,13 @@ def main():
     results = {
         "schema_version": 1,
         "verifier": str(verifier),
+        "backend": args.backend,
         "corpus_size": len(corpus),
         "checked": checked,
         "soundness_failures": [f for f, _ in soundness],
         "precision_failures": [f for f, _ in precision],
+        "replay_gaps": [f for f, _ in replay_gaps],
+        "replay_skipped_by_reason": replay_skipped,
         "records": records,
     }
     (outdir / "results.json").write_text(json.dumps(results, indent=2) + "\n")
@@ -339,6 +471,17 @@ def main():
     print(f"  reached an ok : {checked}")
     print(f"  SOUNDNESS     : {len(soundness)}  (false proofs)")
     print(f"  PRECISION     : {len(precision)}  (counterexamples that do not replay)")
+    disclaimed = sum(
+        c["verdict"] == "unverified-call-site" for r in records for c in r["checks"]
+    )
+    if disclaimed:
+        print(
+            f"  unverified    : {disclaimed}  (Caller violation at a disclaimed call)"
+        )
+    if args.backend == "native":
+        print(f"  REPLAY-GAP    : {len(replay_gaps)}  (replays skipped, undocumented)")
+        for reason, count in sorted(replay_skipped.items(), key=lambda kv: -kv[1]):
+            print(f"    {count:5d}  skipped: {reason}")
     # Why a fixture produced no verdict matters as much as the verdicts: a sweep
     # where everything was not-applicable measured nothing.
     reasons = {}
@@ -360,7 +503,7 @@ def main():
             file=sys.stderr,
         )
         return 2
-    return 1 if (soundness or precision) else 0
+    return 1 if (soundness or precision or replay_gaps) else 0
 
 
 if __name__ == "__main__":

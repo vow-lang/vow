@@ -204,6 +204,10 @@ def parse_directives(path, default_status):
                         f"(expected: counterexample-vow-id <N>): {body!r}"
                     )
                 legacy["vow_id"] = int(parts[1].strip())
+            elif body.startswith("replay-skipped"):
+                # A documented native replay limit, consumed by
+                # verifier_runtime.py and full_test.sh, not an expectation.
+                continue
             elif body.startswith("replay"):
                 rm = re.match(r"replay\s+(\w+)$", body)
                 if not rm or rm.group(1) not in VALID_REPLAY:

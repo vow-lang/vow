@@ -15,3 +15,4 @@ fn main() -> i32 [io] {
     narrow_claim(340282366920938463463374607431768211455u128);
     0
 }
+// TEST: replay-skipped 128-bit parameter

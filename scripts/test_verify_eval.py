@@ -123,6 +123,23 @@ class ParseDirectivesKnownGapTest(unittest.TestCase):
                 verify_eval.REPO_ROOT = old_repo_root
 
 
+class ParseDirectivesReplaySkippedTest(unittest.TestCase):
+    def test_replay_skipped_note_is_not_a_malformed_replay_directive(self):
+        # `replay-skipped <why>` documents a native replay limit and is read by
+        # verifier_runtime.py and full_test.sh; it must not trip the `replay
+        # <status>` validator that shares its prefix.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tests" / "verify-fail" / "r.vow"
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                "// TEST: replay-skipped 128-bit parameter\n", encoding="utf-8"
+            )
+
+            exp = verify_eval.parse_directives(str(path), "VerifyFailed")
+
+            self.assertIsNone(exp.replay_expect)
+
+
 class ParseDirectivesBlameCasingTest(unittest.TestCase):
     def parse(self, directive):
         with tempfile.TemporaryDirectory() as tmp:

@@ -22,3 +22,4 @@ fn main() -> i32 [io] {
   print_i64(t2.c);
   0
 }
+// TEST: replay-skipped struct parameter
