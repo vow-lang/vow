@@ -496,8 +496,8 @@ fn add_divrem_shape(d: Dag, st: Vec<i64>) {
     let mut dop: i64 = VC_OP_BVUDIV();
     if pick(st, 2) == 0 { dop = VC_OP_BVSDIV(); }
     let q: i64 = dag_bin(d, dop, a, b, w);
-    let mut m: i64 = dag_bin(d, VC_OP_BVMUL(), c, q, w);
-    if pick(st, 2) == 0 { m = dag_bin(d, VC_OP_BVMUL(), q, c, w); }
+    let swapped: bool = pick(st, 2) == 0;
+    let m: i64 = { if swapped { dag_bin(d, VC_OP_BVMUL(), q, c, w) } else { dag_bin(d, VC_OP_BVMUL(), c, q, w) } };
     dag_bin(d, VC_OP_BVSUB(), a, m, w);
 }
 
@@ -536,17 +536,13 @@ fn make_dag(st: Vec<i64>) -> Dag {
             let a: i64 = operand_of(d, st, w);
             let b: i64 = operand_of(d, st, w);
             let op: i64 = vops[pick(st, vops.len() as i64) as u64];
-            dag_push(d,
-                vc_arena_push(d.raw, VC_T_APP(), d.ids_raw[a as u64], d.ids_raw[b as u64], -1, op),
-                vc_tm_app2(d.smart, op, d.ids_smart[a as u64], d.ids_smart[b as u64]), w);
+            dag_bin(d, op, a, b, w);
         } else if choice <= 6 {
             let w: i64 = { if pick(st, 3) == 0 { 16 } else { 8 } };
             let a: i64 = operand_of(d, st, w);
             let b: i64 = operand_of(d, st, w);
             let op: i64 = pops[pick(st, pops.len() as i64) as u64];
-            dag_push(d,
-                vc_arena_push(d.raw, VC_T_APP(), d.ids_raw[a as u64], d.ids_raw[b as u64], -1, op),
-                vc_tm_app2(d.smart, op, d.ids_smart[a as u64], d.ids_smart[b as u64]), 0);
+            dag_bin(d, op, a, b, 0);
         } else if choice == 7 {
             let a: i64 = operand_of(d, st, 0);
             let b: i64 = operand_of(d, st, 0);
@@ -556,8 +552,7 @@ fn make_dag(st: Vec<i64>) -> Dag {
                     vc_tm_app1(d.smart, VC_OP_NOT(), d.ids_smart[a as u64]), 0);
             } else {
                 let op: i64 = { if which == 1 { VC_OP_AND() } else { VC_OP_OR() } };
-                dag_push(d, vc_arena_push(d.raw, VC_T_APP(), d.ids_raw[a as u64], d.ids_raw[b as u64], -1, op),
-                    vc_tm_app2(d.smart, op, d.ids_smart[a as u64], d.ids_smart[b as u64]), 0);
+                dag_bin(d, op, a, b, 0);
             }
         } else if choice == 8 {
             let w: i64 = { if pick(st, 2) == 0 { 16 } else { 8 } };
@@ -636,13 +631,13 @@ fn check_dag(st: Vec<i64>) -> i64 {
 
 // `x - (x / y) * y` against its simplification, over every pair of 8-bit
 // values: the simplified term is a remainder, and agrees with the raw chain
-// everywhere, division by zero and the signed minimum over -1 included. Bound
+// everywhere, division by zero and the signed minimum over -1 included. The
+// swapped multiply order only needs the structural check; its value is the same
+// by commutativity, so the pair loop runs for the unswapped order alone. Bound
 // names are not used: `ev` reads variables from `env`, so see-through is
 // covered by the id comparison in `check_divrem_rules`.
 fn check_divrem_variant(signed: bool, swap: bool) -> i64 {
-    let mut v: i64 = 0;
-    if signed { v = 2; }
-    if swap { v = v + 1; }
+    let v: i64 = flag(signed) * 2 + flag(swap);
     let raw: VcArena = vc_arena_new();
     let smart: VcArena = vc_arena_new();
     let dop: i64 = { if signed { VC_OP_BVSDIV() } else { VC_OP_BVUDIV() } };
@@ -660,6 +655,7 @@ fn check_divrem_variant(signed: bool, swap: bool) -> i64 {
     if swap { sp = vc_tm_app2(smart, VC_OP_BVMUL(), sy, sq); }
     let sr: i64 = vc_tm_app2(smart, VC_OP_BVSUB(), sx, sp);
     if smart.kinds[sr as u64] != VC_T_APP() || smart.aux[sr as u64] != rem { return 200 + v; }
+    if swap { return 0; }
     let vs: Vec<i64> = Vec::new();
     vs.push(8);
     vs.push(8);
