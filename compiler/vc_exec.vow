@@ -44,6 +44,12 @@ use ir_dominance
 // instead: a header Phi is a havoc marker, a fresh unconstrained constant, and
 // the invariant of the havoc copy is a plain `requires`, an assumption.
 //
+// The step function of k-induction (`vc_unroll_step`) is the same acyclic walk
+// with a per-block hypothesis marking: in a hypothesis block no claim is asked
+// but every goal is still assumed (a guard, a callee clause, the target's own
+// `invariant`), and the invariant of the block that is not a hypothesis is
+// assumed once asked, so the exit continues under it.
+//
 // A call has been spliced into its caller before this point (`vc_inline`), and
 // the clauses of the copy carry the frame they came from (`vc_frame_of`). In a
 // frame a `requires` is a claim blamed on the caller and an `ensures` or loop
@@ -80,6 +86,8 @@ struct VcClaims {
     frames: Vec<i64>,
     fr: VcFrames,
     pre_only: bool,
+    step: bool,
+    hyp_now: bool,
     vow_ids: Vec<i64>,
     labels: Vec<String>,
     ostarts: Vec<i64>,
@@ -111,6 +119,9 @@ fn vc_param_name(k: i64) -> String {
 // equal formulas are one id). Both are `unsat` under any assumptions, so the
 // solver would only confirm what the claim list already says.
 fn vc_add_claim(cs: VcClaims, kind: i64, vow_id: i64, label: String, pc: i64, goal: i64, ostart: i64, olen: i64, frame: i64) {
+    if cs.hyp_now {
+        return;
+    }
     if cs.pre_only && kind != VC_CLAIM_CALLER_PRE() && kind != VC_CLAIM_UNWIND() {
         return;
     }
@@ -366,6 +377,9 @@ fn vc_walk_clause(w: VcWalk, inst: IrInst, pc: i64) {
             vc_assume(cs, pc, goal);
         } else {
             vc_add_claim(cs, VC_CLAIM_ENSURES(), inst.dv, String::from(""), pc, goal, inst.ostart, inst.olen, -1);
+            if cs.step {
+                vc_assume(cs, pc, goal);
+            }
         }
         return;
     }
@@ -423,10 +437,17 @@ fn vc_claims(f: IrFunction) -> VcClaims {
     vc_claims_mode(f, vc_frames_new(), false)
 }
 
+fn vc_claims_mode(f: IrFunction, fr: VcFrames, pre_only: bool) -> VcClaims {
+    vc_claims_step(f, fr, pre_only, Vec::new())
+}
+
 // The same for the flattened function of a call tree: `fr` names the frames its
 // markers refer to, `pre_only` demotes every claim but the callees'
-// preconditions and the unwinding claim.
-fn vc_claims_mode(f: IrFunction, fr: VcFrames, pre_only: bool) -> VcClaims {
+// preconditions and the unwinding claim. `hyp` is the hypothesis marking of a
+// step function (`vc_unroll_step`), one 0/1 per block: the claims of a block
+// marked 1 are not asked, only assumed, and the function's own `invariant`s are
+// assumed once asked. Empty for every other function.
+fn vc_claims_step(f: IrFunction, fr: VcFrames, pre_only: bool, hyp: Vec<i64>) -> VcClaims {
     let ar: VcArena = vc_arena_new();
     let hdr: SmtScript = vc_script_new();
     let assumed: Vec<i64> = Vec::new();
@@ -438,6 +459,8 @@ fn vc_claims_mode(f: IrFunction, fr: VcFrames, pre_only: bool) -> VcClaims {
         frames: Vec::new(),
         fr: fr,
         pre_only: pre_only,
+        step: hyp.len() > 0,
+        hyp_now: false,
         vow_ids: Vec::new(),
         labels: Vec::new(),
         ostarts: Vec::new(),
@@ -491,6 +514,7 @@ fn vc_claims_mode(f: IrFunction, fr: VcFrames, pre_only: bool) -> VcClaims {
             live = vc_flow_enter(fl, ar, hdr, bi);
         }
         if live {
+            cs.hyp_now = bi < hyp.len() && hyp[bi] == 1;
             let blk: IrBlock = f.blocks[bi];
             let mut ii: u64 = 0;
             while ii < blk.insts.len() {
