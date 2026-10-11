@@ -376,13 +376,7 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
         vc_vec_create(vv, w.ag, ar, hdr, obj, b);
         return true;
     }
-    let s: i64 = vc_vec_slot(vv, w.ag, ar, hdr, w.obj_of[inst.args[0] as u64]);
-    let facts: Vec<i64> = vc_vec_take_facts(vv);
-    let mut fi: u64 = 0;
-    while fi < facts.len() {
-        vc_assume(cs, vc_tm_bool_const(ar, true), facts[fi]);
-        fi = fi + 1;
-    }
+    let s: i64 = vc_vec_slot(vv, w.ag, ar, hdr, cs.assumed, w.obj_of[inst.args[0] as u64]);
     if kind == VC_VEC_LEN() {
         vc_define(w, inst, vc_vec_cur_len(vv, s, b));
     } else if kind == VC_VEC_POP() {
@@ -442,7 +436,7 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
     if op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE() {
         return;
     }
-    if vc_walk_agg(w, bi, inst) {
+    if vc_walk_agg(w, bi, inst) || vc_walk_vec(w, bi, inst, pc) {
         return;
     }
     if op == IOP_PHI() {
@@ -459,8 +453,6 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
         let name: String = String::from("h");
         name.push_str(i64_to_string(inst.id));
         vc_define(w, inst, vc_agg_declare(cs.arena, cs.header, name, vc_ty_sort(inst.ty)));
-    } else if vc_walk_vec(w, bi, inst, pc) {
-        return;
     } else if vc_is_unwrap_abort(inst) {
         vc_guard(cs, VC_CLAIM_UNWRAP_NONE(), VC_LABEL_UNWRAP_NONE(), pc, vc_tm_bool_const(cs.arena, false), inst);
     } else if vc_is_unwind_sink(inst) {
@@ -556,7 +548,7 @@ fn vc_claims_mode(f: IrFunction, fr: VcFrames, pre_only: bool) -> VcClaims {
         oi = oi + 1;
     }
     if vc_vec_count(w.vv) > 0 {
-        hdr.names[0] = String::from("QF_ABV");
+        vc_script_replace_logic(hdr, String::from("QF_ABV"));
     }
     cs
 }

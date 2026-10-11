@@ -368,6 +368,7 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
     // has to be modelled, and the generic one would hide it behind a parameter
     // or constant that precedes it.
     let mut have_generic: bool = false;
+    let mut has_vec: bool = false;
     let mut generic: String = String::from("");
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
@@ -375,6 +376,7 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
         let mut ii: u64 = 0;
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_CALL() && vc_inst_vec_kind(inst) != VC_VEC_NONE() { has_vec = true; }
             if !vc_inst_supported(f, inst, tys, lits, calls) {
                 let specific: String = vc_inst_specific_reason(inst);
                 if specific.len() > 0 { return specific; }
@@ -392,9 +394,11 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
     if shape.len() > 0 {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), shape);
     }
-    let vec_shape: String = vc_vec_shape_detail(f, tys.len());
-    if vec_shape.len() > 0 {
-        return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), vec_shape);
+    if has_vec {
+        let vec_shape: String = vc_vec_shape_detail(f, tys.len());
+        if vec_shape.len() > 0 {
+            return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), vec_shape);
+        }
     }
     let cfg: String = vc_cfg_detail(f, tys);
     if cfg.len() > 0 {

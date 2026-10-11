@@ -36,12 +36,10 @@ struct VcVec {
     n_blocks: u64,
     slot_of: Vec<i64>,
     kinds: Vec<i64>,
-    owners: Vec<i64>,
     base_arr: Vec<i64>,
     base_len: Vec<i64>,
     arr: Vec<i64>,
     len: Vec<i64>,
-    pending: Vec<i64>,
     names: i64,
 }
 
@@ -51,12 +49,10 @@ fn vc_vec_new_state(fl: VcFlow, n_blocks: u64) -> VcVec {
         n_blocks: n_blocks,
         slot_of: Vec::new(),
         kinds: Vec::new(),
-        owners: Vec::new(),
         base_arr: Vec::new(),
         base_len: Vec::new(),
         arr: Vec::new(),
         len: Vec::new(),
-        pending: Vec::new(),
         names: 0,
     }
 }
@@ -75,14 +71,13 @@ fn vc_vec_fresh_name(vv: VcVec, prefix: String) -> String {
 }
 
 // A new slot for object `obj`; its states are absent in every block.
-fn vc_vec_push_slot(vv: VcVec, obj: i64, kind: i64, owner: i64) -> i64 {
+fn vc_vec_push_slot(vv: VcVec, obj: i64, kind: i64) -> i64 {
     while vv.slot_of.len() as i64 <= obj {
         vv.slot_of.push(-1);
     }
     let s: i64 = vv.kinds.len() as i64;
     vv.slot_of[obj as u64] = s;
     vv.kinds.push(kind);
-    vv.owners.push(owner);
     vv.base_arr.push(-1);
     vv.base_len.push(-1);
     let mut k: u64 = 0;
@@ -101,20 +96,23 @@ fn vc_vec_pos(vv: VcVec, s: i64, bi: i64) -> u64 {
 // The slot of `obj`, created on first use. A parameter starts as an
 // unconstrained array and length, valid in every block; an object nothing
 // created (the gate does not let one through) is treated the same way, which
-// only loses precision.
-fn vc_vec_slot(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64) -> i64 {
+// only loses precision. A new slot's length fact (a runtime Vec's length is
+// below the capacity mask) is appended to `assumed`, to hold on every path.
+fn vc_vec_slot(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, assumed: Vec<i64>, obj: i64) -> i64 {
     if (obj as u64) < vv.slot_of.len() && vv.slot_of[obj as u64] >= 0 {
         return vv.slot_of[obj as u64];
     }
     let kind: i64 = ag.kinds[obj as u64];
-    let mut owner: i64 = -1;
-    if kind == VC_OBJ_PARAM() { owner = ag.owners[obj as u64]; }
-    let s: i64 = vc_vec_push_slot(vv, obj, kind, owner);
-    let mut prefix: String = String::from("p");
-    prefix.push_str(i64_to_string(owner));
-    if kind != VC_OBJ_PARAM() {
-        prefix = vc_vec_fresh_name(vv, String::from("vo"));
-    }
+    let s: i64 = vc_vec_push_slot(vv, obj, kind);
+    let prefix: String = {
+        if kind == VC_OBJ_PARAM() {
+            let p: String = String::from("p");
+            p.push_str(i64_to_string(ag.owners[obj as u64]));
+            p
+        } else {
+            vc_vec_fresh_name(vv, String::from("vo"))
+        }
+    };
     let a_name: String = String::from(prefix);
     a_name.push_str(String::from("_varr"));
     let l_name: String = String::from(prefix);
@@ -122,14 +120,14 @@ fn vc_vec_slot(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64) -> i
     vv.base_arr[s as u64] = vc_agg_declare(ar, hdr, a_name, VC_SORT_ARRAY64());
     let len: i64 = vc_agg_declare(ar, hdr, l_name, 64);
     vv.base_len[s as u64] = len;
-    vv.pending.push(vc_tm_app2(ar, VC_OP_BVULT(), len, vc_vec_len_mask(ar)));
+    assumed.push(vc_tm_app2(ar, VC_OP_BVULT(), len, vc_vec_len_mask(ar)));
     s
 }
 
 // A `Vec::new()` result: length 0, contents unconstrained (readable only behind
 // the bounds claim, which fails for any index at length 0).
 fn vc_vec_create(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, bi: i64) {
-    let s: i64 = vc_vec_push_slot(vv, obj, VC_OBJ_ALLOC(), -1);
+    let s: i64 = vc_vec_push_slot(vv, obj, VC_OBJ_ALLOC());
     let name: String = vc_vec_fresh_name(vv, String::from("vc"));
     name.push_str(String::from("_varr"));
     let p: u64 = vc_vec_pos(vv, s, bi);
@@ -204,23 +202,12 @@ fn vc_vec_elem64(ar: VcArena, ty: i64, t: i64) -> i64 {
     if ty == ITY_BOOL() {
         return vc_tm_app3(ar, VC_OP_ITE(), t, vc_tm_bv(ar, 64, 1, 0), vc_tm_bv(ar, 64, 0, 0));
     }
-    let bits: i64 = vc_ty_bits(ty);
-    if bits >= 64 { return t; }
-    if vc_ty_signed(ty) { return vc_tm_ext(ar, VC_EXT_SIGN(), 64 - bits, t); }
-    vc_tm_ext(ar, VC_EXT_ZERO(), 64 - bits, t)
+    vc_cast(ar, ty, ITY_I64(), t)
 }
 
 // `VOW_CAP_VALUE_MASK`: every length of a runtime Vec is below it.
 fn vc_vec_len_mask(ar: VcArena) -> i64 {
     vc_tm_bv(ar, 64, 9223372036854775807, 0)
-}
-
-// Facts about a symbol the slot just introduced, to be assumed for every path
-// (a parameter exists at entry): its length is a runtime Vec's length.
-fn vc_vec_take_facts(vv: VcVec) -> Vec<i64> {
-    let out: Vec<i64> = vv.pending;
-    vv.pending = Vec::new();
-    out
 }
 
 // `idx < len` as unsigned 64-bit values: a negative `i64` index is a huge
@@ -257,6 +244,15 @@ fn vc_vec_pop(vv: VcVec, ar: VcArena, hdr: SmtScript, s: i64, bi: i64) {
     let dec: i64 = vc_tm_app2(ar, VC_OP_BVSUB(), len, vc_tm_bv(ar, 64, 1, 0));
     let next: i64 = vc_tm_app3(ar, VC_OP_ITE(), vc_tm_app2(ar, VC_OP_EQ(), len, zero), zero, dec);
     vc_vec_write(vv, ar, hdr, s, bi, arr, next);
+}
+
+fn vc_vec_any_arg(inst: IrInst, is_vec: Vec<i64>) -> bool {
+    let mut k: u64 = 0;
+    while k < inst.args.len() {
+        if is_vec[inst.args[k] as u64] == 1 { return true; }
+        k = k + 1;
+    }
+    false
 }
 
 // Gate rule: a Vec lives only in its own function, as an object no other
@@ -333,22 +329,10 @@ fn vc_vec_shape_detail(f: IrFunction, n_ids: u64) -> String {
                     return String::from("Vec used as a struct");
                 }
             }
-            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
-                let mut k: u64 = 0;
-                while k < inst.args.len() {
-                    if is_vec[inst.args[k] as u64] == 1 {
-                        return String::from("Vec passed to a call");
-                    }
-                    k = k + 1;
-                }
-            }
-            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && vc_inst_vec_kind(inst) == VC_VEC_NONE() {
-                let mut k: u64 = 0;
-                while k < inst.args.len() {
-                    if is_vec[inst.args[k] as u64] == 1 {
-                        return String::from("Vec passed to an unmodelled builtin");
-                    }
-                    k = k + 1;
+            if inst.op == IOP_CALL() && vc_vec_any_arg(inst, is_vec) {
+                if inst.dk == IDATA_CALL_TARGET() { return String::from("Vec passed to a call"); }
+                if inst.dk == IDATA_CALL_EXTERN() && vc_inst_vec_kind(inst) == VC_VEC_NONE() {
+                    return String::from("Vec passed to an unmodelled builtin");
                 }
             }
             ii = ii + 1;

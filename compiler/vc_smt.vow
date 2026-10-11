@@ -55,6 +55,11 @@ fn vc_script_set_logic(s: SmtScript, logic: String) {
     vc_script_push(s, VC_CMD_SET_LOGIC(), logic, String::from(""), 0, -1);
 }
 
+// Swaps the logic a script was opened with (command 0, from `set_logic`).
+fn vc_script_replace_logic(s: SmtScript, logic: String) {
+    s.names[0] = logic;
+}
+
 fn vc_script_set_option(s: SmtScript, key: String, val: String) {
     vc_script_push(s, VC_CMD_SET_OPTION(), key, val, 0, -1);
 }

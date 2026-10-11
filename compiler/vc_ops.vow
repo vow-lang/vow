@@ -114,13 +114,20 @@ fn VC_VEC_SET() -> i64 { 4 }
 fn VC_VEC_LEN() -> i64 { 5 }
 fn VC_VEC_POP() -> i64 { 6 }
 
+// Dispatched on the symbol's length, so a call to anything else costs one
+// comparison instead of one per operation.
 fn vc_vec_op_kind(sym: String) -> i64 {
-    if sym == String::from("__vow_vec_new") { return VC_VEC_NEW(); }
-    if sym == String::from("__vow_vec_push_val") { return VC_VEC_PUSH(); }
-    if sym == String::from("__vow_vec_get_val") { return VC_VEC_GET(); }
-    if sym == String::from("__vow_vec_set_val") { return VC_VEC_SET(); }
-    if sym == String::from("__vow_vec_len") { return VC_VEC_LEN(); }
-    if sym == String::from("__vow_vec_pop") { return VC_VEC_POP(); }
+    let n: u64 = sym.len();
+    if n == 13 {
+        if sym == String::from("__vow_vec_new") { return VC_VEC_NEW(); }
+        if sym == String::from("__vow_vec_len") { return VC_VEC_LEN(); }
+        if sym == String::from("__vow_vec_pop") { return VC_VEC_POP(); }
+    } else if n == 17 {
+        if sym == String::from("__vow_vec_get_val") { return VC_VEC_GET(); }
+        if sym == String::from("__vow_vec_set_val") { return VC_VEC_SET(); }
+    } else if n == 18 {
+        if sym == String::from("__vow_vec_push_val") { return VC_VEC_PUSH(); }
+    }
     VC_VEC_NONE()
 }
 
