@@ -1,0 +1,65 @@
+module TestLowerCastWideContext
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+
+// Twin of cast_to_u128_keeps_typed_operand_literals_at_their_own_width,
+// cast_to_u128_in_vec_push_keeps_typed_operand_at_its_own_width and
+// cast_to_u128_of_literal_only_operand_stays_wide in vow-ir/src/lower/mod.rs:
+// the `as i128`/`as u128` target must reach the literals of a literal-only
+// operand, and must not leak into the literals next to a typed leaf (#1581).
+
+fn lower_probe() -> IrModule {
+    let source: String = String::from("module CastWideContext\nfn cast(i: u64, j: u64) -> u128 { (i * 10 + j) as u128 }\nfn cast_signed(i: i64, j: i64) -> i128 { (i * 10 + j) as i128 }\nfn fill(i: u64, j: u64) -> Vec<u128> {\n    let v: Vec<u128> = Vec::new();\n    v.push((i * 10 + j) as u128);\n    v\n}\nfn big() -> u128 { (1 << 100) as u128 }\n");
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, diag_ctx_new(), String::from("cast_wide_context.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    item_files.push(String::from("cast_wide_context.vow"));
+    item_files.push(String::from("cast_wide_context.vow"));
+    item_files.push(String::from("cast_wide_context.vow"));
+    item_files.push(String::from("cast_wide_context.vow"));
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), item_files
+    )
+}
+
+fn count_op(m: IrModule, fn_index: u64, op: i64) -> i64 {
+    let function: IrFunction = m.functions[fn_index];
+    let mut count: i64 = 0;
+    let mut block_index: u64 = 0;
+    while block_index < function.blocks.len() {
+        let block: IrBlock = function.blocks[block_index];
+        let mut inst_index: u64 = 0;
+        while inst_index < block.insts.len() {
+            if block.insts[inst_index].op == op { count = count + 1; }
+            inst_index = inst_index + 1;
+        }
+        block_index = block_index + 1;
+    }
+    count
+}
+
+fn wide_const_count(m: IrModule, fn_index: u64) -> i64 {
+    count_op(m, fn_index, IOP_CONST_U128()) + count_op(m, fn_index, IOP_CONST_I128())
+}
+
+// Returns 0 when every assertion holds, otherwise the number of the first
+// violated one: 2 typed u64 operand, 3 typed i64 operand, 4 Vec push operand,
+// 5 literal-only operand lost its 128-bit constant.
+fn main() -> i32 {
+    let m: IrModule = lower_probe();
+    if m.functions.len() != 4 { return 1; }
+    if wide_const_count(m, 0) != 0 { return 2; }
+    if wide_const_count(m, 1) != 0 { return 3; }
+    if wide_const_count(m, 2) != 0 { return 4; }
+    if count_op(m, 3, IOP_CONST_U128()) == 0 { return 5; }
+    0
+}

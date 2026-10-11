@@ -2356,6 +2356,57 @@ fn wide_context_contains_control_flow(a: AstArena, eid: i64) -> bool {
     false
 }
 
+// Twin of `int_expr_is_literal_only` in vow-ir/src/lower/mod.rs: true when every
+// result position of an integer expression is an integer literal, so the operand
+// types as a bare literal and takes its width from an enclosing `as i128`/`as u128`.
+fn int_expr_is_literal_only(a: AstArena, eid: i64) -> bool {
+    if eid == -1 { return false; }
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_LIT_INT() { return true; }
+    if tag == EXPR_UNOP() {
+        return expr_a(a, eid) == UNOP_NEG() && int_expr_is_literal_only(a, expr_b(a, eid));
+    }
+    if tag == EXPR_BINOP() {
+        let op: i64 = expr_a(a, eid);
+        let marker_op: bool = op == BINOP_ADD() || op == BINOP_SUB()
+            || op == BINOP_MUL() || op == BINOP_DIV() || op == BINOP_REM()
+            || op == BINOP_ADD_CHK() || op == BINOP_SUB_CHK()
+            || op == BINOP_MUL_CHK() || op == BINOP_DIV_CHK() || op == BINOP_REM_CHK()
+            || op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR()
+            || op == BINOP_SHL() || op == BINOP_SHR();
+        return marker_op && int_expr_is_literal_only(a, expr_b(a, eid)) && int_expr_is_literal_only(a, expr_c(a, eid));
+    }
+    if tag == EXPR_BLOCK() {
+        return int_expr_is_literal_only(a, block_result_eid(a, expr_a(a, eid)));
+    }
+    if tag == EXPR_IF() {
+        return int_expr_is_literal_only(a, block_result_eid(a, expr_b(a, eid))) &&
+            int_expr_is_literal_only(a, expr_c(a, eid));
+    }
+    if tag == EXPR_MATCH() {
+        let arms_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, arms_lid) / 2;
+        if n == 0 { return false; }
+        let mut i: i64 = 0;
+        while i < n {
+            if !int_expr_is_literal_only(a, list_get(a, arms_lid, i * 2 + 1)) { return false; }
+            i = i + 1;
+        }
+        return true;
+    }
+    if tag == EXPR_LOOP() {
+        let values: Vec<i64> = loop_break_value_eids(a, expr_a(a, eid));
+        if values.len() == 0 { return false; }
+        let mut i: u64 = 0;
+        while i < values.len() {
+            if !int_expr_is_literal_only(a, values[i]) { return false; }
+            i = i + 1;
+        }
+        return true;
+    }
+    false
+}
+
 fn lctx_record_wide_marker_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) {
     if eid == -1 || !diverges_from_speculative_int(ty) { return; }
     while ctx.wide_context_tys.len() as i64 <= eid {
@@ -5232,7 +5283,7 @@ fn lower_expr_inner(ctx: LowerCtx, eid: i64) -> i64 {
         let inner_eid: i64 = expr_a(a, eid);
         let target_ast_tid: i64 = expr_b(a, eid);
         let tgt_ty: i64 = lctx_lower_ast_ty(ctx, target_ast_tid);
-        if tgt_ty == ITY_I128() || tgt_ty == ITY_U128() {
+        if (tgt_ty == ITY_I128() || tgt_ty == ITY_U128()) && int_expr_is_literal_only(a, inner_eid) {
             lctx_record_wide_marker_context(ctx, a, inner_eid, tgt_ty);
         }
         let val_id: i64 = lower_expr(ctx, inner_eid);
