@@ -123,6 +123,20 @@ fn check_field_set_targets() -> i64 {
     0
 }
 
+// A pointer defined by a call (a `Vec::new` result here) is neither an
+// allocation nor a parameter.
+fn check_field_set_on_call_result() -> i64 {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_const_i64(0, 8));
+    i.push(mk_inst_const_i64(1, 3));
+    i.push(mk_inst_call_extern(2, ITY_PTR(), args2(0, 0), String::from("__vow_vec_new")));
+    i.push(mk_inst_field_set(3, 2, 0, 1));
+    i.push(mk_inst_return(4, 2));
+    let r: String = vc_skip_reason(one_block(String::from("s"), Vec::new(), ITY_PTR(), i));
+    if r != String::from("unsupported-opcode: FieldSet on a value that is neither an allocation nor a parameter") { return 26; }
+    0
+}
+
 fn check_field_set_through_phi() -> i64 {
     let f: IrFunction = alias_fn();
     let m: IrBlock = f.blocks[3];
@@ -626,6 +640,7 @@ fn main() -> i32 {
     if r == 0 { r = check_param_read_accepted(); }
     if r == 0 { r = check_field_set_targets(); }
     if r == 0 { r = check_field_set_through_phi(); }
+    if r == 0 { r = check_field_set_on_call_result(); }
     if r == 0 { r = check_unsupported_aggregate_shapes(); }
     if r == 0 { r = check_effects_and_unwrap_shape(); }
     if r == 0 { r = check_unwrap_claim(); }
