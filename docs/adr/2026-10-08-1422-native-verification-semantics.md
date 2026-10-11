@@ -429,6 +429,12 @@ of this change and stay `Skipped`.
   values (two model objects for one runtime Vec would diverge); a Phi that
   always supplies the same value is a no-op. Only the length of a
   `Vec<Vec<_>>`/`Vec<String>` is modelled (its elements are never read).
+- **Induction.** A function whose loop body writes a Vec (`push`, `set`, `pop`)
+  is not cut for invariant-based induction (`vc_induct_vec_written_in_loop`): a
+  Vec's `(array, length)` is the executor's flow-sensitive state, not a header
+  Phi, so the havoc copy of the header would keep the state the loop was entered
+  with and prove facts about the wrong length. Bounded unwinding decides such a
+  function alone; a loop that only reads a Vec is cut as before.
 - **Aliasing.** Two `Vec` parameters are distinct objects, as they are for
   ESBMC and for every `vc_agg` parameter object.
 - **Op table.** The Vec symbols are listed by hand in `vc_vec_op_kind`, like
