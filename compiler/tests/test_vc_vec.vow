@@ -87,7 +87,7 @@ fn check_param_length_is_unconstrained() -> i64 {
     let q: String = render(cs, 0);
     if !contains(q, String::from("(declare-const p0_vlen (_ BitVec 64))")) { return 7; }
     if !contains(q, String::from("(declare-const p0_varr (Array (_ BitVec 64) (_ BitVec 64)))")) { return 8; }
-    if !contains(q, String::from("(bvult v1 p0_vlen)")) { return 9; }
+    if !contains(q, String::from("(bvult p1 p0_vlen)")) { return 9; }
     if contains(q, String::from("bvule")) { return 10; }
     0
 }
@@ -123,14 +123,15 @@ fn local_two_pushes() -> IrFunction {
     one_block(Vec::new(), ITY_U64(), insts)
 }
 
-// A new Vec starts empty and only the pushes change its length; no claim and
-// no assumption besides the two push guards.
+// A new Vec starts empty and only the pushes change its length; the two push
+// guards compare a concrete length, so they fold away: no claim and no
+// assumption.
 fn check_local_vec_length() -> i64 {
     let f: IrFunction = local_two_pushes();
     if vc_skip_reason(f).len() != 0 { return 30; }
     let cs: VcClaims = vc_claims(f);
     if cs.kinds.len() != 0 { return 31; }
-    if cs.assumed.len() != 2 { return 32; }
+    if cs.assumed.len() != 0 { return 32; }
     let hdr: SmtScript = cs.header;
     if hdr.names[0] != String::from("QF_ABV") { return 33; }
     0
