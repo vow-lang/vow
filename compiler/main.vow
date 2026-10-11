@@ -2374,6 +2374,41 @@ fn emit_test_entry_json(file: String, name: String, status: String, exit_code: i
     r
 }
 
+// What `test --verify --backend native` found in one test file. Every vowed
+// function must be proven: unlike the ESBMC path, an `error` or `panicked`
+// verdict fails the test, since nothing was established for that function.
+// `failed` takes precedence over `skipped`, as in the ESBMC path.
+struct TestNativeVerdict {
+    failed: bool,
+    skipped: bool,
+    diag_json: String,
+}
+
+fn test_native_verify(ir_mod: IrModule, exe: String, test_path: String, module_root: String, jobs: i64, dctx: DiagCtx) -> TestNativeVerdict [io, read] {
+    let drv: VcDriverRun = vc_driver_run(exe, test_path, module_root, ir_mod, false, false, jobs, watchdog_ms_for(String::from("")));
+    let fns: Vec<IrFunction> = ir_mod.functions;
+    let mut failed: bool = false;
+    let mut skipped: bool = false;
+    let mut fi: u64 = 0;
+    while fi < fns.len() {
+        if drv.skip[fi].len() > 0 {
+            native_skip_function(fns[fi], drv.skip[fi], dctx);
+            skipped = true;
+        } else if drv.ran[fi] == 1 {
+            let oc: VcOutcome = drv.outcomes[fi];
+            if oc.result.status != VERIFY_PROVEN() { failed = true; }
+        }
+        fi = fi + 1;
+    }
+    let mut diag: String = String::from("[]");
+    if failed {
+        diag = String::from("[{\"error_code\":\"VerifyFailed\",\"message\":\"contract verification failed\",\"severity\":\"error\"}]");
+    } else if skipped {
+        diag = String::from("[{\"error_code\":\"VerificationSkipped\",\"message\":\"contract verification skipped: function not modelable\",\"severity\":\"error\"}]");
+    }
+    TestNativeVerdict { failed: failed, skipped: skipped, diag_json: diag }
+}
+
 fn run_test(argv: Vec<String>) -> i32 [io, read, write] {
     let mut path: String = get_source_path_sub(argv);
     if path.len() == 0 {
@@ -2396,8 +2431,9 @@ fn run_test(argv: Vec<String>) -> i32 [io, read, write] {
         else { 30000 }
     };
     let do_verify: bool = has_flag(argv, "--verify");
+    let t_native: bool = get_flag_arg(argv, "--backend") == "native";
     let esbmc_bin: String = {
-        if do_verify { esbmc_path() }
+        if do_verify && !t_native { esbmc_path() }
         else { String::from("") }
     };
     let t_mks_str: String = get_flag_arg(argv, "--max-k-step");
@@ -2493,7 +2529,17 @@ fn run_test(argv: Vec<String>) -> i32 [io, read, write] {
 
             // Verify if requested — bounded pool honoring --verify-jobs.
             let mut skip_exec: bool = false;
-            if do_verify {
+            if do_verify && t_native {
+                let nv: TestNativeVerdict = test_native_verify(ir_mod, argv[0], test_path, module_root, t_jobs, checked.dctx);
+                if nv.failed || nv.skipped {
+                    let duration: i64 = time_unix_ms() - start_time;
+                    let status_nv: String = { if nv.failed { String::from("verify_failed") } else { String::from("contract_skipped") } };
+                    entries_json.push(emit_test_entry_json(test_path, short_name, status_nv, -1, String::from(""), String::from(""), duration, nv.diag_json));
+                    failed = failed + 1;
+                    skip_exec = true;
+                }
+            }
+            if do_verify && !t_native {
                 let vfns: Vec<IrFunction> = ir_mod.functions;
                 let vin_flight_h: Vec<i64> = Vec::new();
                 let vin_flight_fi: Vec<i64> = Vec::new();
