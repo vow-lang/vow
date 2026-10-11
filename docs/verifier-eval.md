@@ -191,6 +191,30 @@ It is a developer and acceptance-gate tool (epic #1398, gate item 1), not a
 `full_test.sh` section: the native backend covers a growing subset, so most
 fixtures are `weaker` until it catches up.
 
+`--command contracts` and `--command test` (issue #1427) run the same corpus
+under `vowc contracts --verify` and `vowc test --verify` instead, with the same
+four classes and exit codes. `contracts` compares every clause by
+`(function, kind, vow_id)`: its status and its `trivially_satisfiable` flag. A
+clause is `soundness` when native proves what ESBMC refutes, `more_precise` when
+native proves what ESBMC leaves `unknown`/`skipped`, and `weaker` when native is
+less conclusive, reports `vacuous` where ESBMC does not, or the flags differ.
+ESBMC's `vacuous` for a function whose `requires` uses `&&`/`||` is
+`more_precise`, because its vacuity label is only planted in the entry block
+(see `cli.md`, "Native backend: `contracts` and `test`"). `test` compares the
+file's test status: `passed`/`failed`/`timeout` read as verified,
+`verify_failed` as refuted, `contract_skipped` as skipped. A fixture takes the
+most severe class of its clauses, and the report carries `command`.
+
+```bash
+python3 scripts/verify_diff.py --command contracts --output /tmp/contracts-diff.json
+python3 scripts/verify_diff.py --command test --jobs 4
+```
+
+The acceptance criterion for the native `contracts`/`test` backends is zero
+`soundness` rows, and every `weaker` row also non-`match` under
+`--command verify` (the native subset legitimately skips what ESBMC models) or
+listed in `cli.md` under "Verdict divergence from ESBMC".
+
 ## Performance gate: native verifier vs ESBMC
 
 [`scripts/verify_perf.py`](../scripts/verify_perf.py) (epic #1398, issue #1420)
