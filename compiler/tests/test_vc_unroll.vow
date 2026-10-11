@@ -206,6 +206,143 @@ fn check_nested() -> i64 {
     0
 }
 
+fn op_count(f: IrFunction, op: i64) -> i64 {
+    let mut n: i64 = 0;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            let inst: IrInst = blk.insts[i];
+            if inst.op == op {
+                n = n + 1;
+            }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    n
+}
+
+fn cut_end_count(f: IrFunction) -> i64 {
+    let mut n: i64 = 0;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let last: IrInst = blk.insts[blk.insts.len() - 1];
+        if vc_is_cut_end(last) {
+            n = n + 1;
+        }
+        b = b + 1;
+    }
+    n
+}
+
+fn havoc_count(f: IrFunction) -> i64 {
+    let mut n: i64 = 0;
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        let blk: IrBlock = f.blocks[b];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            let inst: IrInst = blk.insts[i];
+            if vc_is_havoc(inst) {
+                n = n + 1;
+            }
+            i = i + 1;
+        }
+        b = b + 1;
+    }
+    n
+}
+
+fn ones(v: Vec<i64>) -> i64 {
+    let mut n: i64 = 0;
+    let mut i: u64 = 0;
+    while i < v.len() {
+        if v[i] == 1 {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+// The header instance of copy 0 holds a havoc where the Phi was and the step
+// function ends in a cut marker instead of the unwinding sink.
+fn check_step_structure() -> i64 {
+    let f: IrFunction = count_up();
+    let u: VcUnrolled = vc_unroll_step(f, 2);
+    if u.status != VC_UNROLL_OK() || !u.looped { return 70; }
+    let g: IrFunction = u.f;
+    // entry + 3 header + 3 body + exit + cut end
+    if g.blocks.len() != 9 { return 71; }
+    if sink_count(g) != 0 { return 72; }
+    if cut_end_count(g) != 1 { return 73; }
+    // header copies 1 and 2 keep their Phis; copy 0 is a havoc
+    if havoc_count(g) != 1 { return 74; }
+    if op_count(g, IOP_PHI()) != 3 { return 75; }
+    // body0 -> h1, body1 -> h2, exit from h2; the entry Upsilon, the exits of
+    // copies 0 and 1 and the back edge of copy 2 are gone
+    if upsilon_count(g) != 3 { return 76; }
+    if vc_unrolled_detail(g, vc_ty_table(g)).len() != 0 { return 77; }
+    if ir_non_dominating_read(g).len() != 0 { return 78; }
+    if u.hyp.len() != g.blocks.len() { return 79; }
+    // h0, b0, h1, b1 are hypotheses; h2, b2, exit, entry and the cut end are not
+    if ones(u.hyp) != 4 { return 80; }
+    let e: Vec<i64> = u.hyp;
+    if e[0] != 0 || e[1] != 1 { return 81; }
+    if print_function(g) != print_function(vc_unroll_step(count_up(), 2).f) { return 82; }
+    // a plain unrolling carries no hypothesis blocks
+    if vc_unroll(f, 2).hyp.len() != 0 { return 83; }
+    0
+}
+
+fn check_step_not_applicable() -> i64 {
+    if vc_unroll_step(nested(), 2).status != VC_UNROLL_NOT_APPLICABLE() { return 90; }
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_const_i64(0, 5));
+    i.push(mk_inst_return(1, 0));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, i));
+    let flat: IrFunction = mk_function(1, String::from("k"), Vec::new(), ITY_I64(), blocks);
+    if vc_unroll_step(flat, 2).status != VC_UNROLL_NOT_APPLICABLE() { return 91; }
+    // a pointer carried across iterations
+    let p: IrFunction = count_up();
+    let e: IrBlock = p.blocks[0];
+    e.insts[0] = mk_inst_alloc(0, 8);
+    let h: IrBlock = p.blocks[1];
+    h.insts[0] = mk_inst_phi(3, ITY_PTR());
+    if vc_unroll_step(p, 2).status != VC_UNROLL_NOT_APPLICABLE() { return 92; }
+    // an aggregate written inside the loop keeps its entry state in copy 0
+    let w: IrFunction = count_up();
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(mk_inst_alloc(30, 8));
+    let we: IrBlock = w.blocks[0];
+    let mut i: u64 = 0;
+    while i < we.insts.len() {
+        pre.push(we.insts[i]);
+        i = i + 1;
+    }
+    w.blocks[0] = mk_block(0, pre);
+    let inner: Vec<IrInst> = Vec::new();
+    inner.push(mk_inst_field_set(31, 30, 0, 9));
+    let wb: IrBlock = w.blocks[2];
+    i = 0;
+    while i < wb.insts.len() {
+        inner.push(wb.insts[i]);
+        i = i + 1;
+    }
+    w.blocks[2] = mk_block(2, inner);
+    if vc_unroll_step(w, 2).status != VC_UNROLL_NOT_APPLICABLE() { return 93; }
+    0
+}
+
+fn check_step_too_large() -> i64 {
+    if vc_unroll_build(count_up(), 4, 10, true).status != VC_UNROLL_TOO_LARGE() { return 100; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_structure();
     if r == 0 { r = check_bounds_grow(); }
@@ -213,5 +350,8 @@ fn main() -> i32 {
     if r == 0 { r = check_too_large(); }
     if r == 0 { r = check_loop_free_unchanged(); }
     if r == 0 { r = check_nested(); }
+    if r == 0 { r = check_step_structure(); }
+    if r == 0 { r = check_step_not_applicable(); }
+    if r == 0 { r = check_step_too_large(); }
     i64_to_i32_wrap(r)
 }

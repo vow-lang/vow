@@ -388,23 +388,6 @@ fn vc_induct_copy(st: VcCut, j: i64, back: bool) {
     }
 }
 
-// `inst` with another opcode, no operands and no frame marker.
-fn vc_induct_retag(inst: IrInst, op: i64, dk: i64, ds: String) -> IrInst {
-    let out: IrInst = vc_clone_inst(inst, inst.id, Vec::new(), 0, 0);
-    out.op = op;
-    out.dk = dk;
-    out.ds = ds;
-    out
-}
-
-// The unconstrained stand-in for a header Phi.
-fn vc_induct_havoc(phi: IrInst) -> IrInst {
-    if phi.ty == ITY_UNIT() {
-        return vc_induct_retag(phi, IOP_CONST_UNIT(), IDATA_NONE(), String::from(""));
-    }
-    vc_induct_retag(phi, IOP_CALL(), IDATA_CALL_EXTERN(), VC_INTERNAL_HAVOC())
-}
-
 // A header-region invariant as the assumption it is in the havoc state. The
 // frame marker is cleared: an invariant of a spliced callee is a claim in the
 // copies and a plain assumption here.
@@ -454,7 +437,7 @@ fn vc_induct_rebuild_inst(st: VcCut, b: u64, inst: IrInst) -> IrInst {
     let op: i64 = inst.op;
     let hl: i64 = st.li.loop_of_header[b];
     if op == IOP_PHI() && hl >= 0 && inst.id >= 0 && st.phi_loop[inst.id as u64] == hl {
-        return vc_induct_havoc(inst);
+        return vc_havoc_of(inst);
     }
     if op == IOP_VOW_INV() && st.owner[b] >= 0 {
         return vc_induct_assume(inst);

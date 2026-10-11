@@ -24,11 +24,15 @@ fn VC_UNWIND_INST_CAP() -> i64 { 200000 }
 fn VC_UNROLL_OK() -> i64 { 0 }
 fn VC_UNROLL_TOO_LARGE() -> i64 { 1 }
 fn VC_UNROLL_MALFORMED() -> i64 { 2 }
+fn VC_UNROLL_NOT_APPLICABLE() -> i64 { 3 }
 
+// `hyp` is empty for a plain unrolling; for a step function (`vc_unroll_step`)
+// it holds one 0/1 per block of `f`, 1 for a hypothesis block.
 struct VcUnrolled {
     f: IrFunction,
     status: i64,
     looped: bool,
+    hyp: Vec<i64>,
 }
 
 struct VcUnrollState {
@@ -45,6 +49,7 @@ struct VcUnrollState {
     sink_used: bool,
     sink_start: i64,
     sink_len: i64,
+    step: bool,
 }
 
 // `r` to the power `d`, stopping once the value exceeds `limit`.
@@ -103,6 +108,24 @@ fn vc_edge_key(st: VcUnrollState, b: u64, key: i64, s: u64, bound: i64) -> i64 {
     p * vc_sat_pow(st.r, ds - cp, lim)
 }
 
+// True when the step function cuts the edge from instance (`b`, `key`) to block
+// `s`: it leaves the loop from an iteration copy below the bound. A run that
+// exits there is not "k consecutive iterations, then the next state"; its
+// post-loop claims are covered by the base case, not asked again.
+fn vc_step_exit_cut(st: VcUnrollState, b: i64, key: i64, s: i64, bound: i64) -> bool {
+    if !st.step {
+        return false;
+    }
+    let li: VcLoopInfo = st.li;
+    vc_chain_len(li, b as u64) == 1 && key < bound && vc_chain_len(li, s as u64) == 0
+}
+
+// True when block `b` of the step function is a hypothesis: an iteration copy
+// below the bound, whose claims are assumed instead of asked.
+fn vc_step_hypothesis(st: VcUnrollState, n: u64, bound: i64) -> bool {
+    vc_chain_len(st.li, st.iblk[n] as u64) == 1 && st.ikey[n] < bound
+}
+
 // Assigns instance numbers and resolves each instance's two successors:
 // an instance number, -1 for none and -2 for an edge cut at the bound.
 fn vc_discover(st: VcUnrollState, bound: i64) {
@@ -119,7 +142,9 @@ fn vc_discover(st: VcUnrollState, bound: i64) {
             let s: i64 = st.succ[b * 2 + k];
             if s >= 0 {
                 let nk: i64 = vc_edge_key(st, b, key, s as u64, bound);
-                if nk < 0 {
+                if nk >= 0 && vc_step_exit_cut(st, b as i64, key, s, bound) {
+                    st.isucc[(n * 2) as u64 + k] = -2;
+                } else if nk < 0 {
                     st.isucc[(n * 2) as u64 + k] = -2;
                 } else {
                     let slot: u64 = (st.slot_off[s as u64] + nk) as u64;
@@ -202,6 +227,9 @@ fn vc_upsilon_phi(st: VcUnrollState, defs: VcDefs, n: u64, orig: IrInst) -> i64 
                 st.bad = 1;
                 return -1;
             }
+            if st.step && st.ikey[t as u64] == 0 && st.li.loop_of_header[st.iblk[t as u64] as u64] >= 0 {
+                return -2;
+            }
             return st.base[t as u64] + def_pos[p as u64];
         }
         k = k + 1;
@@ -240,17 +268,68 @@ fn vc_clone_at(st: VcUnrollState, defs: VcDefs, f: IrFunction, n: u64, p: u64, s
     } else if orig.op == IOP_JUMP() && orig.dk == IDATA_JUMP_TARGET() {
         dv = vc_target_block(st, n, 0, orig, sink_id);
     }
-    vc_clone_inst(orig, new_id, args, dv, dv2)
+    let out: IrInst = vc_clone_inst(orig, new_id, args, dv, dv2);
+    if st.step && key == 0 && orig.op == IOP_PHI() && st.li.loop_of_header[b] >= 0 {
+        return vc_havoc_of(out);
+    }
+    out
 }
 
 fn vc_unroll_status(f: IrFunction, status: i64, looped: bool) -> VcUnrolled {
-    VcUnrolled { f: f, status: status, looped: looped }
+    VcUnrolled { f: f, status: status, looped: looped, hyp: Vec::new() }
+}
+
+// True when the step case can be built: exactly one loop, no pointer carried by
+// its header Phi and no aggregate written in it. An object keeps its entry state
+// in the first copy (only the header Phis are havoc'd), so a write in the loop
+// would make the step start from a state no iteration has.
+fn vc_step_applicable(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>) -> bool {
+    if li.n_loops != 1 {
+        return false;
+    }
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        if rpo[b] >= 0 && vc_chain_len(li, b) > 0 {
+            let blk: IrBlock = f.blocks[b];
+            let mut i: u64 = 0;
+            while i < blk.insts.len() {
+                let inst: IrInst = blk.insts[i];
+                if inst.op == IOP_FIELD_SET() || (inst.op == IOP_PHI() && inst.ty == ITY_PTR()) {
+                    return false;
+                }
+                i = i + 1;
+            }
+        }
+        b = b + 1;
+    }
+    true
 }
 
 // Unrolls every loop of `f` (already accepted by `vc_loop_shape_detail`) to
 // `bound` back edges; more than `cap` unrolled instructions is `TOO_LARGE`. A
 // function without a loop is returned as is.
 fn vc_unroll_capped(f: IrFunction, bound: i64, cap: i64) -> VcUnrolled {
+    vc_unroll_build(f, bound, cap, false)
+}
+
+// The k-induction step case of the single loop of `f`, k = `bound`: the loop
+// unrolled to `bound` back edges from an arbitrary header state.
+//
+//   copy 0     each header Phi is a havoc constant, the entry Upsilons into it
+//              are dropped;
+//   copy < k   a hypothesis block (`hyp`): its claims are assumed, not asked, and
+//              every edge out of the loop is cut, so only runs that took the back
+//              edge continue;
+//   copy k     claims and the exit are real; the back edge ends in a cut marker
+//              that claims and assumes nothing.
+//
+// `NOT_APPLICABLE` for a function with no loop or more than one, a loop that
+// carries a pointer or writes an aggregate.
+fn vc_unroll_step(f: IrFunction, bound: i64) -> VcUnrolled {
+    vc_unroll_build(f, bound, VC_UNWIND_INST_CAP(), true)
+}
+
+fn vc_unroll_build(f: IrFunction, bound: i64, cap: i64, step: bool) -> VcUnrolled {
     let nb: u64 = f.blocks.len();
     let id_to_idx: Vec<i64> = dom_block_id_table(f);
     let succ: Vec<i64> = dom_successors(f, id_to_idx);
@@ -259,8 +338,11 @@ fn vc_unroll_capped(f: IrFunction, bound: i64, cap: i64) -> VcUnrolled {
     if li.irreducible || nb == 0 || bound < 0 || li.loop_of_header[0] >= 0 {
         return vc_unroll_status(f, VC_UNROLL_MALFORMED(), true);
     }
-    if li.n_loops == 0 {
+    if li.n_loops == 0 && !step {
         return vc_unroll_status(f, VC_UNROLL_OK(), false);
+    }
+    if step && !vc_step_applicable(f, li, rpo) {
+        return vc_unroll_status(f, VC_UNROLL_NOT_APPLICABLE(), false);
     }
     let r: i64 = bound + 1;
     if vc_unrolled_cost(f, li, rpo, r, cap) > cap {
@@ -290,6 +372,7 @@ fn vc_unroll_capped(f: IrFunction, bound: i64, cap: i64) -> VcUnrolled {
         sink_used: false,
         sink_start: 0,
         sink_len: 0,
+        step: step,
     };
     vc_discover(st, bound);
 
@@ -305,10 +388,17 @@ fn vc_unroll_capped(f: IrFunction, bound: i64, cap: i64) -> VcUnrolled {
     let defs: VcDefs = vc_def_table(f, rpo, (dom_max_inst_id(f) + 1) as u64);
     let g: IrFunction = vc_function_shell(f);
     let sink_id: i64 = n_inst as i64;
+    let hyp: Vec<i64> = Vec::new();
     n = 0;
     while n < n_inst {
         let src: IrBlock = f.blocks[st.iblk[n] as u64];
         let out: IrBlock = ir_block_new(n as i64);
+        if step {
+            hyp.push(0);
+            if vc_step_hypothesis(st, n, bound) {
+                hyp[n] = 1;
+            }
+        }
         let mut p: u64 = 0;
         while p < src.insts.len() {
             let c: IrInst = vc_clone_at(st, defs, f, n, p, sink_id);
@@ -322,16 +412,23 @@ fn vc_unroll_capped(f: IrFunction, bound: i64, cap: i64) -> VcUnrolled {
     }
     if st.sink_used {
         let sink: IrBlock = ir_block_new(sink_id);
-        let marker: IrInst = ir_inst_new(n_ids, IOP_UNREACHABLE(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, VC_INTERNAL_UNWIND_SINK());
+        let mut mark: String = VC_INTERNAL_UNWIND_SINK();
+        if step {
+            mark = VC_INTERNAL_CUT_END();
+        }
+        let marker: IrInst = ir_inst_new(n_ids, IOP_UNREACHABLE(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, mark);
         marker.ostart = st.sink_start;
         marker.olen = st.sink_len;
         sink.insts.push(marker);
         g.blocks.push(sink);
+        if step {
+            hyp.push(0);
+        }
     }
     if st.bad != 0 {
         return vc_unroll_status(f, VC_UNROLL_MALFORMED(), true);
     }
-    vc_unroll_status(g, VC_UNROLL_OK(), true)
+    VcUnrolled { f: g, status: VC_UNROLL_OK(), looped: true, hyp: hyp }
 }
 
 fn vc_unroll(f: IrFunction, bound: i64) -> VcUnrolled {
