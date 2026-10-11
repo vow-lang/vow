@@ -1,0 +1,234 @@
+module TestVcVec
+
+use ir
+use vc_ops
+use vc_term
+use vc_smt
+use vc_gate
+use vc_exec
+use verifier
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = args1(a);
+    v.push(b);
+    v
+}
+
+fn args3(a: i64, b: i64, c: i64) -> Vec<i64> {
+    let v: Vec<i64> = args2(a, b);
+    v.push(c);
+    v
+}
+
+fn ptr_u64_params() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_U64());
+    p
+}
+
+fn one_block(params: Vec<i64>, ret: i64, insts: Vec<IrInst>) -> IrFunction {
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    mk_function(1, String::from("f"), params, ret, blocks)
+}
+
+fn contains(hay: String, needle: String) -> bool {
+    str_find_str(hay, needle) >= 0
+}
+
+fn render(cs: VcClaims, k: u64) -> String {
+    vc_smt_render(cs.arena, vc_claim_script(cs, k))
+}
+
+// fn f(v: Vec<i64>, i: u64) -> i64 { v[i] }
+fn param_get() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_U64(), 1));
+    insts.push(mk_inst_call_extern(2, ITY_I64(), args2(0, 1), String::from("__vow_vec_get_val")));
+    insts.push(mk_inst_return(3, 2));
+    one_block(ptr_u64_params(), ITY_I64(), insts)
+}
+
+// fn f(v: Vec<i64>, i: u64) -> i64 { v.push(1); v[i] }
+fn param_push_get() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_U64(), 1));
+    insts.push(mk_inst_const_i64(2, 1));
+    insts.push(mk_inst_call_extern(3, ITY_UNIT(), args2(0, 2), String::from("__vow_vec_push_val")));
+    insts.push(mk_inst_call_extern(4, ITY_I64(), args2(0, 1), String::from("__vow_vec_get_val")));
+    insts.push(mk_inst_return(5, 4));
+    one_block(ptr_u64_params(), ITY_I64(), insts)
+}
+
+// A parameter's length has no capacity: its one assumption is the runtime's
+// representation invariant (below `VOW_CAP_VALUE_MASK`), and the bounds claim
+// compares the index against the length symbol itself.
+fn check_param_length_is_unconstrained() -> i64 {
+    let f: IrFunction = param_get();
+    if vc_skip_reason(f).len() != 0 { return 1; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 2; }
+    if cs.kinds[0] != VC_CLAIM_VEC_BOUNDS() { return 3; }
+    if cs.labels[0] != VC_LABEL_VEC_BOUNDS() { return 4; }
+    if cs.assumed_lens[0] != 1 { return 5; }
+    if vc_term_text(cs.arena, cs.assumed[0]) != String::from("(bvult p0_vlen #x7fffffffffffffff)") { return 11; }
+    let hdr: SmtScript = cs.header;
+    if hdr.names[0] != String::from("QF_ABV") { return 6; }
+    let q: String = render(cs, 0);
+    if !contains(q, String::from("(declare-const p0_vlen (_ BitVec 64))")) { return 7; }
+    if !contains(q, String::from("(declare-const p0_varr (Array (_ BitVec 64) (_ BitVec 64)))")) { return 8; }
+    if !contains(q, String::from("(bvult p1 p0_vlen)")) { return 9; }
+    if contains(q, String::from("bvule")) { return 10; }
+    0
+}
+
+// A push assumes only that the new length stays within the representation
+// invariant: besides the invariant of the parameter itself, no bound on the
+// length is introduced.
+fn check_push_assumes_only_the_invariant() -> i64 {
+    let f: IrFunction = param_push_get();
+    if vc_skip_reason(f).len() != 0 { return 20; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 1 { return 21; }
+    if cs.assumed_lens[0] != 2 { return 22; }
+    let got: String = vc_term_text(cs.arena, cs.assumed[1]);
+    if got != String::from("(bvult p0_vlen #x7ffffffffffffffe)") { return 23; }
+    let q: String = render(cs, 0);
+    if !contains(q, String::from("(store p0_varr p0_vlen")) { return 24; }
+    if !contains(q, String::from("(bvadd p0_vlen #x0000000000000001)")) { return 25; }
+    0
+}
+
+// let v = Vec::new(); v.push(1); v.push(2); return v.len()
+fn local_two_pushes() -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 8));
+    insts.push(mk_inst_const_i64(1, 8));
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), args2(0, 1), String::from("__vow_vec_new")));
+    insts.push(mk_inst_const_i64(3, 1));
+    insts.push(mk_inst_call_extern(4, ITY_UNIT(), args2(2, 3), String::from("__vow_vec_push_val")));
+    insts.push(mk_inst_call_extern(5, ITY_UNIT(), args2(2, 3), String::from("__vow_vec_push_val")));
+    insts.push(mk_inst_call_extern(6, ITY_U64(), args1(2), String::from("__vow_vec_len")));
+    insts.push(mk_inst_return(7, 6));
+    one_block(Vec::new(), ITY_U64(), insts)
+}
+
+// A new Vec starts empty and only the pushes change its length; the two push
+// guards compare a concrete length, so they fold away: no claim and no
+// assumption.
+fn check_local_vec_length() -> i64 {
+    let f: IrFunction = local_two_pushes();
+    if vc_skip_reason(f).len() != 0 { return 30; }
+    let cs: VcClaims = vc_claims(f);
+    if cs.kinds.len() != 0 { return 31; }
+    if cs.assumed.len() != 0 { return 32; }
+    let hdr: SmtScript = cs.header;
+    if hdr.names[0] != String::from("QF_ABV") { return 33; }
+    0
+}
+
+// A function without a Vec keeps the plain bit-vector logic.
+fn check_no_vec_stays_bit_vector() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    insts.push(mk_inst_return(1, 0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    let cs: VcClaims = vc_claims(one_block(p, ITY_I64(), insts));
+    let hdr: SmtScript = cs.header;
+    if hdr.names[0] != String::from("QF_BV") { return 40; }
+    0
+}
+
+// A Vec call spliced from a callee carries its frame in `dv2`, like the unwrap
+// abort, so its bounds claim is attributed to that frame.
+fn check_frame_travels_in_dv2() -> i64 {
+    let get: IrInst = mk_inst_call_extern(2, ITY_I64(), args2(0, 1), String::from("__vow_vec_get_val"));
+    if vc_frame_of(get) != -1 { return 50; }
+    get.dv2 = 4;
+    if vc_frame_of(get) != 3 { return 51; }
+    let len: IrInst = mk_inst_call_extern(3, ITY_U64(), args1(0), String::from("__vow_vec_len"));
+    len.dv2 = 4;
+    if vc_frame_of(len) != -1 { return 52; }
+    0
+}
+
+fn two_ptr_params() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_PTR());
+    p
+}
+
+// The shape rule is called on IR the instruction gate would already have
+// refused, so each rejection class is checked on its own: a Vec pointer that is
+// read as a struct, handed to a call, or merged by a Phi that supplies two
+// different values; a Phi that always supplies one value is accepted.
+fn check_shape_rejections() -> i64 {
+    let used: Vec<IrInst> = Vec::new();
+    used.push(mk_inst_arg(0, ITY_PTR(), 0));
+    used.push(mk_inst_const_i64(1, 1));
+    used.push(mk_inst_call_extern(2, ITY_UNIT(), args2(0, 1), String::from("__vow_vec_push_val")));
+    used.push(mk_inst_field_get(3, ITY_I64(), 0, 0));
+    used.push(mk_inst_return(4, 3));
+    let as_struct: IrFunction = one_block(ptr_u64_params(), ITY_I64(), used);
+    if vc_vec_shape_detail(as_struct, 8) != String::from("Vec used as a struct") { return 60; }
+
+    let called: Vec<IrInst> = Vec::new();
+    called.push(mk_inst_arg(0, ITY_PTR(), 0));
+    called.push(mk_inst_call_extern(1, ITY_U64(), args1(0), String::from("__vow_vec_len")));
+    called.push(mk_inst_call_target(2, ITY_U64(), args1(0), 7));
+    called.push(mk_inst_return(3, 2));
+    let to_call: IrFunction = one_block(ptr_u64_params(), ITY_U64(), called);
+    if vc_vec_shape_detail(to_call, 8) != String::from("Vec passed to a call") { return 61; }
+
+    let builtin: Vec<IrInst> = Vec::new();
+    builtin.push(mk_inst_arg(0, ITY_PTR(), 0));
+    builtin.push(mk_inst_call_extern(1, ITY_U64(), args1(0), String::from("__vow_vec_len")));
+    builtin.push(mk_inst_call_extern(2, ITY_U64(), args1(0), String::from("__vow_string_len")));
+    builtin.push(mk_inst_return(3, 2));
+    let to_builtin: IrFunction = one_block(ptr_u64_params(), ITY_U64(), builtin);
+    if vc_vec_shape_detail(to_builtin, 8) != String::from("Vec passed to an unmodelled builtin") { return 62; }
+
+    let merged: Vec<IrInst> = Vec::new();
+    merged.push(mk_inst_arg(0, ITY_PTR(), 0));
+    merged.push(mk_inst_arg(1, ITY_PTR(), 1));
+    merged.push(mk_inst_phi(2, ITY_PTR()));
+    merged.push(mk_inst_upsilon(3, 0, 2));
+    merged.push(mk_inst_upsilon(4, 1, 2));
+    merged.push(mk_inst_call_extern(5, ITY_U64(), args1(2), String::from("__vow_vec_len")));
+    merged.push(mk_inst_return(6, 5));
+    let by_phi: IrFunction = one_block(two_ptr_params(), ITY_U64(), merged);
+    if vc_vec_shape_detail(by_phi, 8) != String::from("Vec merged by a Phi") { return 63; }
+
+    let same: Vec<IrInst> = Vec::new();
+    same.push(mk_inst_arg(0, ITY_PTR(), 0));
+    same.push(mk_inst_phi(1, ITY_PTR()));
+    same.push(mk_inst_upsilon(2, 0, 1));
+    same.push(mk_inst_upsilon(3, 0, 1));
+    same.push(mk_inst_call_extern(4, ITY_U64(), args1(1), String::from("__vow_vec_len")));
+    same.push(mk_inst_return(5, 4));
+    let one_value: IrFunction = one_block(ptr_u64_params(), ITY_U64(), same);
+    if vc_vec_shape_detail(one_value, 8).len() != 0 { return 64; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_param_length_is_unconstrained();
+    if r == 0 { r = check_push_assumes_only_the_invariant(); }
+    if r == 0 { r = check_local_vec_length(); }
+    if r == 0 { r = check_no_vec_stays_bit_vector(); }
+    if r == 0 { r = check_frame_travels_in_dv2(); }
+    if r == 0 { r = check_shape_rejections(); }
+    i64_to_i32_wrap(r)
+}

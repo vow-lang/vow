@@ -55,7 +55,23 @@ fn check_builtin_model() -> i64 {
     if catalogue_verifier_known(String::from("__vow_fs_exists")) { return 700; }
     if catalogue_verifier_known(String::from("__vow_string_print")) { return 701; }
     if catalogue_verifier_known(String::from("__vow_vec_len")) { return 702; }
+    if catalogue_verifier_known(String::from("__vow_vec_push_val")) { return 704; }
     if catalogue_verifier_known(String::from("")) { return 703; }
+    0
+}
+
+// `Vec` operations are modelled through their own table, keyed by runtime symbol.
+fn check_vec_op_table() -> i64 {
+    if vc_vec_op_kind(String::from("__vow_vec_new")) != VC_VEC_NEW() { return 710; }
+    if vc_vec_op_kind(String::from("__vow_vec_push_val")) != VC_VEC_PUSH() { return 711; }
+    if vc_vec_op_kind(String::from("__vow_vec_get_val")) != VC_VEC_GET() { return 712; }
+    if vc_vec_op_kind(String::from("__vow_vec_set_val")) != VC_VEC_SET() { return 713; }
+    if vc_vec_op_kind(String::from("__vow_vec_len")) != VC_VEC_LEN() { return 714; }
+    if vc_vec_op_kind(String::from("__vow_vec_pop")) != VC_VEC_POP() { return 715; }
+    if vc_vec_op_kind(String::from("__vow_vec_clear")) != VC_VEC_NONE() { return 716; }
+    if vc_vec_op_kind(String::from("__vow_vec_from_raw_parts_copy_val")) != VC_VEC_NONE() { return 717; }
+    if vc_vec_op_kind(String::from("__vow_vec_push_val_in_arena")) != VC_VEC_NONE() { return 718; }
+    if vc_vec_op_kind(String::from("__vow_vec_get_wide_ptr")) != VC_VEC_NONE() { return 719; }
     0
 }
 
@@ -78,6 +94,7 @@ fn main() -> i32 {
     if r == 0 { r = check_classes_are_disjoint(); }
     if r == 0 { r = check_known_classes(); }
     if r == 0 { r = check_builtin_model(); }
+    if r == 0 { r = check_vec_op_table(); }
     if r == 0 { r = check_closed_code_list(); }
     i64_to_i32_wrap(r)
 }

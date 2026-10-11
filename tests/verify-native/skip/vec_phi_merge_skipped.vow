@@ -1,0 +1,18 @@
+// TEST: skip-reason unsupported-opcode
+module VecPhiMergeSkipped
+
+fn pick(c: i64) -> u64 vow {
+  ensures: result <= 2
+} {
+  let a: Vec<i64> = Vec::new();
+  let b: Vec<i64> = Vec::new();
+  b.push(1);
+  b.push(2);
+  let v: Vec<i64> = if c > 0 { a } else { b };
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(pick(1));
+  0
+}

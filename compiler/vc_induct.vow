@@ -29,10 +29,10 @@ use vc_inline
 // copy of the block holding the last `VowInv` stops right after it.
 //
 // A loop the cut cannot treat exactly (a loop without an invariant, a pointer
-// carried by a header Phi, an irregular header) makes the whole function `NA`:
-// the caller keeps the bounded verdict, as it does for a cut the executor cannot
-// walk. An accepted cut is only a transformation: it never produces a verdict
-// itself.
+// carried by a header Phi, a Vec written in a loop, an irregular header) makes
+// the whole function `NA`: the caller keeps the bounded verdict, as it does for
+// a cut the executor cannot walk. An accepted cut is only a transformation: it
+// never produces a verdict itself.
 
 fn VC_INDUCT_OK() -> i64 { 0 }
 fn VC_INDUCT_NA() -> i64 { 1 }
@@ -223,6 +223,30 @@ fn vc_induct_ptr_phi(f: IrFunction, li: VcLoopInfo) -> bool {
             i = i + 1;
         }
         j = j + 1;
+    }
+    false
+}
+
+// True when a loop body writes a Vec (`push`, `set`, `pop`). A Vec's state
+// is the executor's own flow-sensitive `(array, length)` pair, not a header Phi,
+// so the havoc copy of the header would keep the length and contents the loop was
+// entered with and an invariant-based proof would be about the wrong state. Such
+// a function is not cut: bounded unwinding decides it alone.
+fn vc_induct_vec_written_in_loop(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>) -> bool {
+    let mut b: u64 = 0;
+    while b < f.blocks.len() {
+        if rpo[b] >= 0 && vc_chain_len(li, b) > 0 {
+            let blk: IrBlock = f.blocks[b];
+            let mut i: u64 = 0;
+            while i < blk.insts.len() {
+                let k: i64 = vc_inst_vec_kind(blk.insts[i]);
+                if k == VC_VEC_PUSH() || k == VC_VEC_SET() || k == VC_VEC_POP() {
+                    return true;
+                }
+                i = i + 1;
+            }
+        }
+        b = b + 1;
     }
     false
 }
@@ -512,7 +536,7 @@ fn vc_induct_cut(f: IrFunction) -> VcInduct {
     let succ: Vec<i64> = dom_successors(f, id_to_idx);
     let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
     let li: VcLoopInfo = vc_loop_analysis(nb, succ, rpo);
-    if li.n_loops == 0 || vc_loop_shape_detail(f, succ, rpo).len() > 0 || vc_induct_ptr_phi(f, li) {
+    if li.n_loops == 0 || vc_loop_shape_detail(f, succ, rpo).len() > 0 || vc_induct_ptr_phi(f, li) || vc_induct_vec_written_in_loop(f, li, rpo) {
         return vc_induct_status(f, VC_INDUCT_NA());
     }
     let rg: VcRegions = vc_induct_regions(f, li, succ, rpo);

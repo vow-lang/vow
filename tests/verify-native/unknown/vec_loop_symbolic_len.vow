@@ -1,0 +1,21 @@
+// TEST: category invariant
+// The loop bound is a parameter: no finite unrolling covers every `n`, so the
+// unwinding assertion stays open and the result is unknown, never proven.
+module VecLoopSymbolicLen
+
+fn fill(n: u64) -> Vec<i64> vow {
+  ensures: result.len() == n
+} {
+  let v: Vec<i64> = Vec::new();
+  let mut i: u64 = 0;
+  while i < n {
+    v.push(0);
+    i = i + 1;
+  }
+  v
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill(3).len());
+  0
+}
