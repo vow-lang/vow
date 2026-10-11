@@ -1615,6 +1615,27 @@ fn ir_ty_is_integer(ty: Ty) -> bool {
     )
 }
 
+fn is_int_marker_binop(op: BinOp) -> bool {
+    matches!(
+        op,
+        BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::Rem
+            | BinOp::AddChecked
+            | BinOp::SubChecked
+            | BinOp::MulChecked
+            | BinOp::DivChecked
+            | BinOp::RemChecked
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::BitXor
+            | BinOp::Shl
+            | BinOp::Shr
+    )
+}
+
 fn expr_is_coercible_int_marker(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Lit(Lit::Int(_)) => true,
@@ -1622,26 +1643,9 @@ fn expr_is_coercible_int_marker(expr: &Expr) -> bool {
             op: UnOp::Neg,
             operand,
         } => expr_is_coercible_int_marker(operand),
-        ExprKind::BinaryOp {
-            op:
-                BinOp::Add
-                | BinOp::Sub
-                | BinOp::Mul
-                | BinOp::Div
-                | BinOp::Rem
-                | BinOp::AddChecked
-                | BinOp::SubChecked
-                | BinOp::MulChecked
-                | BinOp::DivChecked
-                | BinOp::RemChecked
-                | BinOp::BitAnd
-                | BinOp::BitOr
-                | BinOp::BitXor
-                | BinOp::Shl
-                | BinOp::Shr,
-            lhs,
-            rhs,
-        } => expr_is_coercible_int_marker(lhs) && expr_is_coercible_int_marker(rhs),
+        ExprKind::BinaryOp { op, lhs, rhs } if is_int_marker_binop(*op) => {
+            expr_is_coercible_int_marker(lhs) && expr_is_coercible_int_marker(rhs)
+        }
         ExprKind::Block(block) => block_result_is_coercible_int_marker(block),
         ExprKind::If {
             then_branch,
@@ -4853,26 +4857,9 @@ fn int_leaf(expr: &Expr) -> IntLeaf {
             op: UnOp::Neg,
             operand,
         } => int_leaf(operand),
-        ExprKind::BinaryOp {
-            op:
-                BinOp::Add
-                | BinOp::Sub
-                | BinOp::Mul
-                | BinOp::Div
-                | BinOp::Rem
-                | BinOp::AddChecked
-                | BinOp::SubChecked
-                | BinOp::MulChecked
-                | BinOp::DivChecked
-                | BinOp::RemChecked
-                | BinOp::BitAnd
-                | BinOp::BitOr
-                | BinOp::BitXor
-                | BinOp::Shl
-                | BinOp::Shr,
-            lhs,
-            rhs,
-        } => merge_int_leaves([int_leaf(lhs), int_leaf(rhs)]),
+        ExprKind::BinaryOp { op, lhs, rhs } if is_int_marker_binop(*op) => {
+            merge_int_leaves([int_leaf(lhs), int_leaf(rhs)])
+        }
         ExprKind::Block(block) => int_leaf_of_block(block),
         ExprKind::If {
             then_branch,
@@ -7126,7 +7113,7 @@ fn unsigned_max() -> u128 {
 
     #[test]
     fn cast_to_u128_in_vec_push_keeps_typed_operand_at_its_own_width() {
-        let module = lower_source_to_module(
+        let fill = lowered_function(
             concat!(
                 "module CastPush\n",
                 "fn fill(i: u64, j: u64) -> Vec<u128> {\n",
@@ -7136,11 +7123,10 @@ fn unsigned_max() -> u128 {
                 "}\n",
                 "fn main() -> i32 [io] { 0 }\n",
             ),
-            "cast_push.vow",
+            "fill",
         );
-        let fill = module.functions.iter().find(|f| f.name == "fill").unwrap();
         assert_eq!(
-            wide_const_count(fill),
+            wide_const_count(&fill),
             0,
             "push operand leaked a wide const"
         );
@@ -7148,17 +7134,16 @@ fn unsigned_max() -> u128 {
 
     #[test]
     fn cast_to_u128_of_literal_only_operand_stays_wide() {
-        let module = lower_source_to_module(
+        let big = lowered_function(
             concat!(
                 "module CastLiteral\n",
                 "fn big() -> u128 { (1 << 100) as u128 }\n",
                 "fn main() -> i32 [io] { 0 }\n",
             ),
-            "cast_literal.vow",
+            "big",
         );
-        let big = module.functions.iter().find(|f| f.name == "big").unwrap();
         assert!(
-            insts_of(big)
+            insts_of(&big)
                 .iter()
                 .any(|inst| inst.opcode == Opcode::ConstU128 && inst.data == InstData::ConstU128(1)),
             "literal operand lost its wide context"

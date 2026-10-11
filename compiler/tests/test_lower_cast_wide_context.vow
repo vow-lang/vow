@@ -32,23 +32,8 @@ fn lower_probe() -> IrModule {
     )
 }
 
-fn count_op(m: IrModule, fn_index: u64, op: i64) -> i64 {
-    let function: IrFunction = m.functions[fn_index];
-    let mut count: i64 = 0;
-    let mut block_index: u64 = 0;
-    while block_index < function.blocks.len() {
-        let block: IrBlock = function.blocks[block_index];
-        let mut inst_index: u64 = 0;
-        while inst_index < block.insts.len() {
-            if block.insts[inst_index].op == op { count = count + 1; }
-            inst_index = inst_index + 1;
-        }
-        block_index = block_index + 1;
-    }
-    count
-}
-
-fn count_wide_one(m: IrModule, fn_index: u64) -> i64 {
+// Counts instructions of `op`; `dv` of -1 matches any data value.
+fn count_op(m: IrModule, fn_index: u64, op: i64, dv: i64) -> i64 {
     let function: IrFunction = m.functions[fn_index];
     let mut count: i64 = 0;
     let mut block_index: u64 = 0;
@@ -57,7 +42,7 @@ fn count_wide_one(m: IrModule, fn_index: u64) -> i64 {
         let mut inst_index: u64 = 0;
         while inst_index < block.insts.len() {
             let inst: IrInst = block.insts[inst_index];
-            if inst.op == IOP_CONST_U128() && inst.dv == 1 { count = count + 1; }
+            if inst.op == op && (dv == -1 || inst.dv == dv) { count = count + 1; }
             inst_index = inst_index + 1;
         }
         block_index = block_index + 1;
@@ -66,7 +51,7 @@ fn count_wide_one(m: IrModule, fn_index: u64) -> i64 {
 }
 
 fn wide_const_count(m: IrModule, fn_index: u64) -> i64 {
-    count_op(m, fn_index, IOP_CONST_U128()) + count_op(m, fn_index, IOP_CONST_I128())
+    count_op(m, fn_index, IOP_CONST_U128(), -1) + count_op(m, fn_index, IOP_CONST_I128(), -1)
 }
 
 // Returns 0 when every assertion holds, otherwise the number of the first
@@ -80,16 +65,20 @@ fn main() -> i32 {
     if wide_const_count(m, 0) != 0 { return 2; }
     if wide_const_count(m, 1) != 0 { return 3; }
     if wide_const_count(m, 2) != 0 { return 4; }
-    if count_op(m, 3, IOP_CONST_U128()) == 0 { return 5; }
+    if count_op(m, 3, IOP_CONST_U128(), -1) == 0 { return 5; }
     let mut f: u64 = 4;
     while f < 9 {
         if wide_const_count(m, f) == 0 { return 6; }
         f = f + 1;
     }
-    if wide_const_count(m, 9) != 0 { return 7; }
-    if wide_const_count(m, 10) != 0 { return 7; }
-    if count_wide_one(m, 11) == 0 { return 8; }
-    if count_wide_one(m, 12) == 0 { return 8; }
-    if count_wide_one(m, 13) == 0 { return 8; }
+    f = 9;
+    while f < 11 {
+        if wide_const_count(m, f) != 0 { return 7; }
+        f = f + 1;
+    }
+    while f < 14 {
+        if count_op(m, f, IOP_CONST_U128(), 1) == 0 { return 8; }
+        f = f + 1;
+    }
     0
 }
