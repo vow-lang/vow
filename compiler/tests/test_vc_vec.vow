@@ -162,11 +162,72 @@ fn check_frame_travels_in_dv2() -> i64 {
     0
 }
 
+fn two_ptr_params() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_PTR());
+    p.push(ITY_PTR());
+    p
+}
+
+// The shape rule is called on IR the instruction gate would already have
+// refused, so each rejection class is checked on its own: a Vec pointer that is
+// read as a struct, handed to a call, or merged by a Phi that supplies two
+// different values; a Phi that always supplies one value is accepted.
+fn check_shape_rejections() -> i64 {
+    let used: Vec<IrInst> = Vec::new();
+    used.push(mk_inst_arg(0, ITY_PTR(), 0));
+    used.push(mk_inst_const_i64(1, 1));
+    used.push(mk_inst_call_extern(2, ITY_UNIT(), args2(0, 1), String::from("__vow_vec_push_val")));
+    used.push(mk_inst_field_get(3, ITY_I64(), 0, 0));
+    used.push(mk_inst_return(4, 3));
+    let as_struct: IrFunction = one_block(ptr_u64_params(), ITY_I64(), used);
+    if vc_vec_shape_detail(as_struct, 8) != String::from("Vec used as a struct") { return 60; }
+
+    let called: Vec<IrInst> = Vec::new();
+    called.push(mk_inst_arg(0, ITY_PTR(), 0));
+    called.push(mk_inst_call_extern(1, ITY_U64(), args1(0), String::from("__vow_vec_len")));
+    called.push(mk_inst_call_target(2, ITY_U64(), args1(0), 7));
+    called.push(mk_inst_return(3, 2));
+    let to_call: IrFunction = one_block(ptr_u64_params(), ITY_U64(), called);
+    if vc_vec_shape_detail(to_call, 8) != String::from("Vec passed to a call") { return 61; }
+
+    let builtin: Vec<IrInst> = Vec::new();
+    builtin.push(mk_inst_arg(0, ITY_PTR(), 0));
+    builtin.push(mk_inst_call_extern(1, ITY_U64(), args1(0), String::from("__vow_vec_len")));
+    builtin.push(mk_inst_call_extern(2, ITY_U64(), args1(0), String::from("__vow_string_len")));
+    builtin.push(mk_inst_return(3, 2));
+    let to_builtin: IrFunction = one_block(ptr_u64_params(), ITY_U64(), builtin);
+    if vc_vec_shape_detail(to_builtin, 8) != String::from("Vec passed to an unmodelled builtin") { return 62; }
+
+    let merged: Vec<IrInst> = Vec::new();
+    merged.push(mk_inst_arg(0, ITY_PTR(), 0));
+    merged.push(mk_inst_arg(1, ITY_PTR(), 1));
+    merged.push(mk_inst_phi(2, ITY_PTR()));
+    merged.push(mk_inst_upsilon(3, 0, 2));
+    merged.push(mk_inst_upsilon(4, 1, 2));
+    merged.push(mk_inst_call_extern(5, ITY_U64(), args1(2), String::from("__vow_vec_len")));
+    merged.push(mk_inst_return(6, 5));
+    let by_phi: IrFunction = one_block(two_ptr_params(), ITY_U64(), merged);
+    if vc_vec_shape_detail(by_phi, 8) != String::from("Vec merged by a Phi") { return 63; }
+
+    let same: Vec<IrInst> = Vec::new();
+    same.push(mk_inst_arg(0, ITY_PTR(), 0));
+    same.push(mk_inst_phi(1, ITY_PTR()));
+    same.push(mk_inst_upsilon(2, 0, 1));
+    same.push(mk_inst_upsilon(3, 0, 1));
+    same.push(mk_inst_call_extern(4, ITY_U64(), args1(1), String::from("__vow_vec_len")));
+    same.push(mk_inst_return(5, 4));
+    let one_value: IrFunction = one_block(ptr_u64_params(), ITY_U64(), same);
+    if vc_vec_shape_detail(one_value, 8).len() != 0 { return 64; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_param_length_is_unconstrained();
     if r == 0 { r = check_push_assumes_only_the_invariant(); }
     if r == 0 { r = check_local_vec_length(); }
     if r == 0 { r = check_no_vec_stays_bit_vector(); }
     if r == 0 { r = check_frame_travels_in_dv2(); }
+    if r == 0 { r = check_shape_rejections(); }
     i64_to_i32_wrap(r)
 }

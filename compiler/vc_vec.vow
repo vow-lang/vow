@@ -67,11 +67,6 @@ fn vc_vec_count(vv: VcVec) -> u64 {
     vv.kinds.len()
 }
 
-fn vc_vec_declare(ar: VcArena, hdr: SmtScript, name: String, sort: i64) -> i64 {
-    vc_script_declare_const(hdr, name, sort);
-    vc_tm_var(ar, name)
-}
-
 fn vc_vec_fresh_name(vv: VcVec, prefix: String) -> String {
     let name: String = String::from(prefix);
     name.push_str(i64_to_string(vv.names));
@@ -124,8 +119,8 @@ fn vc_vec_slot(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64) -> i
     a_name.push_str(String::from("_varr"));
     let l_name: String = String::from(prefix);
     l_name.push_str(String::from("_vlen"));
-    vv.base_arr[s as u64] = vc_vec_declare(ar, hdr, a_name, VC_SORT_ARRAY64());
-    let len: i64 = vc_vec_declare(ar, hdr, l_name, 64);
+    vv.base_arr[s as u64] = vc_agg_declare(ar, hdr, a_name, VC_SORT_ARRAY64());
+    let len: i64 = vc_agg_declare(ar, hdr, l_name, 64);
     vv.base_len[s as u64] = len;
     vv.pending.push(vc_tm_app2(ar, VC_OP_BVULT(), len, vc_vec_len_mask(ar)));
     s
@@ -138,7 +133,7 @@ fn vc_vec_create(vv: VcVec, ag: VcAgg, ar: VcArena, hdr: SmtScript, obj: i64, bi
     let name: String = vc_vec_fresh_name(vv, String::from("vc"));
     name.push_str(String::from("_varr"));
     let p: u64 = vc_vec_pos(vv, s, bi);
-    vv.arr[p] = vc_vec_declare(ar, hdr, name, VC_SORT_ARRAY64());
+    vv.arr[p] = vc_agg_declare(ar, hdr, name, VC_SORT_ARRAY64());
     vv.len[p] = vc_tm_bv(ar, 64, 0, 0);
 }
 

@@ -380,7 +380,7 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
     let facts: Vec<i64> = vc_vec_take_facts(vv);
     let mut fi: u64 = 0;
     while fi < facts.len() {
-        cs.assumed.push(facts[fi]);
+        vc_assume(cs, vc_tm_bool_const(ar, true), facts[fi]);
         fi = fi + 1;
     }
     if kind == VC_VEC_LEN() {
