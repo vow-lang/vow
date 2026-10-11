@@ -1,0 +1,25 @@
+// TEST: category invariant
+// TEST: counterexample-fn times16
+// TEST: counterexample-blame Callee
+// The twin of pass/loop_symbolic_body_bound_16.vow with a wrong postcondition:
+// the claim is `sat` in the shared solver session and its counterexample comes
+// from the standalone full query, never from the session.
+module LoopSymbolicBodyBound16WrongPost
+
+fn times16(a: u64) -> u64 vow {
+  requires: a < 1000000
+  ensures: result == a * 16 + 1
+} {
+  let mut sum: u64 = 0;
+  let mut i: u64 = 0;
+  while i < 16 {
+    sum = sum +! a;
+    i = i + 1;
+  }
+  sum
+}
+
+fn main() -> i32 [io] {
+  print_u64(times16(3));
+  0
+}

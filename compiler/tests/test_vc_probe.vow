@@ -1,0 +1,364 @@
+module TestVcProbe
+
+use ir
+use verifier
+use vc_gate
+use vc_ops
+use vc_probe
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn params2() -> Vec<i64> {
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    p.push(ITY_I64());
+    p
+}
+
+fn mk_vow(id: i64, op: i64, pred: i64, vow_id: i64) -> IrInst {
+    ir_inst_new(id, op, ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+fn add_vow(f: IrFunction, kind: String) {
+    let e: IrVowEntry = IrVowEntry {
+        id: f.vows.len() as i64,
+        description: kind,
+        blame: BLAME_CALLEE(),
+        binding_ids: Vec::new(),
+        binding_names: Vec::new(),
+        file: String::from("t.vow"),
+        offset: 0,
+    };
+    f.vows.push(e);
+}
+
+fn count_ops(f: IrFunction, op: i64) -> i64 {
+    let mut n: i64 = 0;
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == op { n = n + 1; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    n
+}
+
+fn find_inst(f: IrFunction, id: i64) -> IrInst {
+    let mut bi: u64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: u64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id == id { return inst; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    mk_inst_unreachable(-1)
+}
+
+// fn f(a, b) requires a > 0 && b > 0 ensures result >= 0 { a + b }
+// The `&&` makes the requires land in the join block.
+fn join_requires() -> IrFunction {
+    let b0: Vec<IrInst> = Vec::new();
+    b0.push(mk_inst_arg(0, ITY_I64(), 0));
+    b0.push(mk_inst_arg(1, ITY_I64(), 1));
+    b0.push(mk_inst_const_i64(2, 0));
+    b0.push(mk_inst(3, IOP_GT(), ITY_BOOL(), args2(0, 2)));
+    b0.push(mk_inst_branch(4, 3, 1, 2));
+    let b1: Vec<IrInst> = Vec::new();
+    b1.push(mk_inst_const_i64(5, 0));
+    b1.push(mk_inst(6, IOP_GT(), ITY_BOOL(), args2(1, 5)));
+    b1.push(mk_inst_upsilon(7, 6, 12));
+    b1.push(mk_inst_jump(8, 3));
+    let b2: Vec<IrInst> = Vec::new();
+    b2.push(mk_inst_const_bool(9, 0));
+    b2.push(mk_inst_upsilon(10, 9, 12));
+    b2.push(mk_inst_jump(11, 3));
+    let b3: Vec<IrInst> = Vec::new();
+    b3.push(mk_inst_phi(12, ITY_BOOL()));
+    b3.push(mk_vow(13, IOP_VOW_REQ(), 12, 0));
+    b3.push(mk_inst_add(14, 0, 1));
+    b3.push(mk_inst_const_i64(15, 0));
+    b3.push(mk_inst(16, IOP_GE(), ITY_BOOL(), args2(14, 15)));
+    b3.push(mk_vow(17, IOP_VOW_ENS(), 16, 1));
+    b3.push(mk_inst_return(18, 14));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, b0));
+    blocks.push(mk_block(1, b1));
+    blocks.push(mk_block(2, b2));
+    blocks.push(mk_block(3, b3));
+    let f: IrFunction = mk_function(1, String::from("f"), params2(), ITY_I64(), blocks);
+    add_vow(f, String::from("requires a > 0 && b > 0"));
+    add_vow(f, String::from("ensures result >= 0"));
+    f
+}
+
+// fn h(a, b) requires b != 0 ensures result >= 0 { a / b }
+fn divide() -> IrFunction {
+    let b0: Vec<IrInst> = Vec::new();
+    b0.push(mk_inst_arg(0, ITY_I64(), 0));
+    b0.push(mk_inst_arg(1, ITY_I64(), 1));
+    b0.push(mk_inst_const_i64(2, 0));
+    b0.push(mk_inst(3, IOP_NE(), ITY_BOOL(), args2(1, 2)));
+    b0.push(mk_vow(4, IOP_VOW_REQ(), 3, 0));
+    b0.push(mk_inst(5, IOP_WDIV(), ITY_I64(), args2(0, 1)));
+    b0.push(mk_inst_const_i64(6, 0));
+    b0.push(mk_inst(7, IOP_GE(), ITY_BOOL(), args2(5, 6)));
+    b0.push(mk_vow(8, IOP_VOW_ENS(), 7, 1));
+    b0.push(mk_inst_return(9, 5));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, b0));
+    let f: IrFunction = mk_function(2, String::from("h"), params2(), ITY_I64(), blocks);
+    add_vow(f, String::from("requires b != 0"));
+    add_vow(f, String::from("ensures result >= 0"));
+    f
+}
+
+// fn g(c, x) ensures result >= 0 { if c > 0 { x } else { 0 } }
+fn phi_result() -> IrFunction {
+    let b0: Vec<IrInst> = Vec::new();
+    b0.push(mk_inst_arg(0, ITY_I64(), 0));
+    b0.push(mk_inst_arg(1, ITY_I64(), 1));
+    b0.push(mk_inst_const_i64(2, 0));
+    b0.push(mk_inst(3, IOP_GT(), ITY_BOOL(), args2(0, 2)));
+    b0.push(mk_inst_branch(4, 3, 1, 2));
+    let b1: Vec<IrInst> = Vec::new();
+    b1.push(mk_inst_upsilon(5, 1, 10));
+    b1.push(mk_inst_jump(6, 3));
+    let b2: Vec<IrInst> = Vec::new();
+    b2.push(mk_inst_const_i64(7, 0));
+    b2.push(mk_inst_upsilon(8, 7, 10));
+    b2.push(mk_inst_jump(9, 3));
+    let b3: Vec<IrInst> = Vec::new();
+    b3.push(mk_inst_phi(10, ITY_I64()));
+    b3.push(mk_inst_const_i64(11, 0));
+    b3.push(mk_inst(12, IOP_GE(), ITY_BOOL(), args2(10, 11)));
+    b3.push(mk_vow(13, IOP_VOW_ENS(), 12, 0));
+    b3.push(mk_inst_return(14, 10));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, b0));
+    blocks.push(mk_block(1, b1));
+    blocks.push(mk_block(2, b2));
+    blocks.push(mk_block(3, b3));
+    let f: IrFunction = mk_function(3, String::from("g"), params2(), ITY_I64(), blocks);
+    add_vow(f, String::from("ensures result >= 0"));
+    f
+}
+
+// fn k(a) -> bool ensures result == result { a > 0 } with a requires in the
+// entry block and both arms of an `if` after it.
+fn branching_body() -> IrFunction {
+    let b0: Vec<IrInst> = Vec::new();
+    b0.push(mk_inst_arg(0, ITY_I64(), 0));
+    b0.push(mk_inst_const_i64(1, 0));
+    b0.push(mk_inst(2, IOP_GT(), ITY_BOOL(), args2(0, 1)));
+    b0.push(mk_vow(3, IOP_VOW_REQ(), 2, 0));
+    b0.push(mk_inst_branch(4, 2, 1, 2));
+    let b1: Vec<IrInst> = Vec::new();
+    b1.push(mk_inst_return(5, 0));
+    let b2: Vec<IrInst> = Vec::new();
+    b2.push(mk_inst_return(6, 1));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, b0));
+    blocks.push(mk_block(1, b1));
+    blocks.push(mk_block(2, b2));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    let f: IrFunction = mk_function(4, String::from("k"), p, ITY_I64(), blocks);
+    add_vow(f, String::from("requires a > 0"));
+    f
+}
+
+fn check_vacuity_cuts_in_join_block() -> i64 {
+    let f: IrFunction = join_requires();
+    if !vc_probe_vacuity_applicable(f) { return 1; }
+    let g: IrFunction = vc_probe_vacuity(f);
+    if g.blocks.len() != 4 { return 2; }
+    let join: IrBlock = g.blocks[3];
+    if join.insts.len() != 5 { return 3; }
+    let term: IrInst = join.insts[4];
+    if term.op != IOP_UNREACHABLE() || !vc_is_cut_end(term) { return 4; }
+    let claim: IrInst = join.insts[3];
+    if claim.op != IOP_VOW_ENS() || claim.dv != 2 { return 5; }
+    let falsum: IrInst = find_inst(g, claim.args[0]);
+    if falsum.op != IOP_CONST_BOOL() || falsum.dv != 0 { return 6; }
+    if g.vows.len() != 3 || f.vows.len() != 2 { return 7; }
+    let added: IrVowEntry = g.vows[2];
+    if added.id != 2 { return 8; }
+    if count_ops(g, IOP_VOW_REQ()) != 1 || count_ops(g, IOP_VOW_ENS()) != 1 { return 9; }
+    if count_ops(g, IOP_WADD()) != 0 { return 10; }
+    let src: IrBlock = f.blocks[3];
+    if src.insts.len() != 7 { return 11; }
+    if vc_skip_reason(g).len() != 0 { return 12; }
+    0
+}
+
+fn check_vacuity_drops_unreachable_body() -> i64 {
+    let f: IrFunction = branching_body();
+    let g: IrFunction = vc_probe_vacuity(f);
+    if g.blocks.len() != 1 { return 1; }
+    if count_ops(g, IOP_RETURN()) != 0 || count_ops(g, IOP_BRANCH()) != 0 { return 2; }
+    if vc_skip_reason(g).len() != 0 { return 3; }
+    0
+}
+
+fn check_vacuity_needs_a_requires() -> i64 {
+    if vc_probe_vacuity_applicable(phi_result()) { return 1; }
+    let g: IrFunction = phi_result();
+    if vc_probe_vacuity(g).blocks.len() != 4 { return 2; }
+    0
+}
+
+fn check_trivial_replaces_reads_keeps_computation() -> i64 {
+    let f: IrFunction = divide();
+    if !vc_probe_trivial_applicable(f) { return 1; }
+    let g: IrFunction = vc_probe_trivial(f);
+    let div: IrInst = find_inst(g, 5);
+    if div.op != IOP_WDIV() || div.args[0] != 0 || div.args[1] != 1 { return 2; }
+    let c: IrInst = find_inst(g, 10);
+    if c.op != IOP_CONST_I64() || c.dv != 0 || c.ty != ITY_I64() { return 3; }
+    let ge: IrInst = find_inst(g, 7);
+    if ge.args[0] != 10 || ge.args[1] != 6 { return 4; }
+    let ret: IrInst = find_inst(g, 9);
+    if ret.args[0] != 10 { return 5; }
+    let entry: IrBlock = g.blocks[0];
+    let after: IrInst = entry.insts[6];
+    if after.id != 10 { return 6; }
+    let orig: IrInst = find_inst(f, 7);
+    if orig.args[0] != 5 { return 7; }
+    if vc_skip_reason(g).len() != 0 { return 8; }
+    0
+}
+
+// A Phi result is replaced too; the Phi stays first in its block and the
+// Upsilons that feed it keep naming it.
+fn check_trivial_phi_result() -> i64 {
+    let f: IrFunction = phi_result();
+    if !vc_probe_trivial_applicable(f) { return 1; }
+    let g: IrFunction = vc_probe_trivial(f);
+    let join: IrBlock = g.blocks[3];
+    if join.insts[0].op != IOP_PHI() { return 2; }
+    let c: IrInst = join.insts[1];
+    if c.op != IOP_CONST_I64() || c.id != 15 { return 3; }
+    let ge: IrInst = find_inst(g, 12);
+    if ge.args[0] != 15 { return 4; }
+    let ret: IrInst = find_inst(g, 14);
+    if ret.args[0] != 15 { return 5; }
+    let up: IrInst = find_inst(g, 5);
+    if up.dv != 10 || up.args[0] != 1 { return 6; }
+    if count_ops(g, IOP_UPSILON()) != 2 { return 7; }
+    if vc_skip_reason(g).len() != 0 { return 8; }
+    0
+}
+
+fn check_trivial_inapplicable() -> i64 {
+    if vc_probe_trivial_applicable(join_requires()) == false { return 1; }
+    if vc_probe_trivial_applicable(branching_body()) { return 2; }
+    let f: IrFunction = divide();
+    let blk: IrBlock = f.blocks[0];
+    blk.insts[9] = mk_inst_return(9, 0);
+    if vc_probe_trivial_applicable(f) { return 3; }
+    let u: IrFunction = divide();
+    u.return_ty = ITY_UNIT();
+    if vc_probe_trivial_applicable(u) { return 4; }
+    let none: IrFunction = divide();
+    none.vows.pop();
+    let blk2: IrBlock = none.blocks[0];
+    blk2.insts[8] = mk_inst_const_i64(8, 0);
+    if vc_probe_trivial_applicable(none) { return 5; }
+    0
+}
+
+fn check_default_constants() -> i64 {
+    if vc_probe_default_op(ITY_BOOL()) != IOP_CONST_BOOL() { return 1; }
+    if vc_probe_default_op(ITY_I64()) != IOP_CONST_I64() { return 2; }
+    if vc_probe_default_op(ITY_U64()) != IOP_CONST_U64() { return 3; }
+    if vc_probe_default_op(ITY_I32()) != IOP_CONST_I32() { return 4; }
+    if vc_probe_default_op(ITY_U16()) != IOP_CONST_I32() { return 5; }
+    if vc_probe_default_op(ITY_I8()) != IOP_CONST_U8() { return 6; }
+    if vc_probe_default_op(ITY_U128()) != IOP_CONST_U128() { return 7; }
+    if vc_probe_default_op(ITY_I128()) != IOP_CONST_I128() { return 8; }
+    if vc_probe_default_op(ITY_F64()) >= 0 { return 9; }
+    if vc_probe_default_op(ITY_PTR()) >= 0 { return 10; }
+    // Each constant opcode the probe emits is one the gate accepts for its type.
+    let tys: Vec<i64> = Vec::new();
+    tys.push(ITY_I64());
+    tys.push(ITY_U64());
+    tys.push(ITY_I32());
+    tys.push(ITY_U32());
+    tys.push(ITY_I16());
+    tys.push(ITY_U16());
+    tys.push(ITY_I8());
+    tys.push(ITY_U8());
+    tys.push(ITY_I128());
+    tys.push(ITY_U128());
+    let mut i: u64 = 0;
+    while i < tys.len() {
+        if !vc_const_ty_ok(vc_probe_default_op(tys[i]), tys[i]) { return 11 + i as i64; }
+        i = i + 1;
+    }
+    0
+}
+
+// A returned `bool` is replaced by a `false` constant.
+fn check_trivial_bool_result() -> i64 {
+    let b0: Vec<IrInst> = Vec::new();
+    b0.push(mk_inst_arg(0, ITY_I64(), 0));
+    b0.push(mk_inst_const_i64(1, 0));
+    b0.push(mk_inst(2, IOP_GT(), ITY_BOOL(), args2(0, 1)));
+    b0.push(mk_vow(3, IOP_VOW_ENS(), 2, 0));
+    b0.push(mk_inst_return(4, 2));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, b0));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    let f: IrFunction = mk_function(5, String::from("pos"), p, ITY_BOOL(), blocks);
+    add_vow(f, String::from("ensures result"));
+    if !vc_probe_trivial_applicable(f) { return 1; }
+    let g: IrFunction = vc_probe_trivial(f);
+    let ret: IrInst = find_inst(g, 4);
+    let c: IrInst = find_inst(g, ret.args[0]);
+    if c.op != IOP_CONST_BOOL() || c.dv != 0 || c.ty != ITY_BOOL() { return 2; }
+    let claim: IrInst = find_inst(g, 3);
+    if claim.args[0] != c.id { return 3; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_vacuity_cuts_in_join_block();
+    if r != 0 { return i64_to_i32_wrap(10 + r); }
+    r = check_vacuity_drops_unreachable_body();
+    if r != 0 { return i64_to_i32_wrap(40 + r); }
+    r = check_vacuity_needs_a_requires();
+    if r != 0 { return i64_to_i32_wrap(60 + r); }
+    r = check_trivial_replaces_reads_keeps_computation();
+    if r != 0 { return i64_to_i32_wrap(80 + r); }
+    r = check_trivial_phi_result();
+    if r != 0 { return i64_to_i32_wrap(100 + r); }
+    r = check_trivial_inapplicable();
+    if r != 0 { return i64_to_i32_wrap(120 + r); }
+    r = check_default_constants();
+    if r != 0 { return i64_to_i32_wrap(140 + r); }
+    r = check_trivial_bool_result();
+    if r != 0 { return i64_to_i32_wrap(170 + r); }
+    0
+}

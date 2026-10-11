@@ -1425,7 +1425,9 @@ echo ""
 # each fixture is asserted against its directory (pass/ -> Verified, fail/ ->
 # VerifyFailed with the `counterexample-*` directives, skip/ -> Skipped, never
 # Verified, unknown/ -> VerifyFailed with `verify_status: "unknown"`, no
-# counterexample and an `unwinding assertion:` message, never Verified). The
+# counterexample and an `unwinding assertion:` message, never Verified; each
+# fixture is also run with VOW_VERIFY_NO_SLICE=1 and VOW_VERIFY_NO_INCREMENTAL=1
+# and must report byte-identical JSON). The
 # wiring tier uses a fake Bitwuzla and always runs; the real-solver tier is
 # skipped, not passed, when `bitwuzla` is not on PATH.
 # tests/verify-native/ is deliberately outside Section 2c's explicit globs.
@@ -1560,13 +1562,17 @@ print(sum(1 for d in ds if d.get('error_code') == sys.argv[2]))
         done < <(sed -nE 's#^// TEST: (warning|no-warning) (.*)$#\1 \2#p' "$vow_file")
     fi
     if [ "$native_dir" != "skip" ]; then
-        # Query slicing (#1424) must never change what the verifier reports:
-        # the unsliced run (VOW_VERIFY_NO_SLICE=1, test-only) is byte-identical.
-        native_full_json="" native_full_exit=0
-        native_full_json=$(VOW_VERIFY_NO_SLICE=1 run_self verify --backend native --no-cache "$vow_file" 2>/dev/null) || native_full_exit=$?
-        if [ "$native_full_json" != "$native_json" ] || [ "$native_full_exit" -ne "$native_exit" ]; then
-            native_errors+=("slicing changed the result: sliced and VOW_VERIFY_NO_SLICE=1 runs differ")
-        fi
+        # Query slicing (#1424) and incremental solver sessions (#1428) must
+        # never change what the verifier reports: the run with each switched off
+        # (test-only knobs; one solver process per claim for the latter) is
+        # byte-identical.
+        for native_knob in VOW_VERIFY_NO_SLICE VOW_VERIFY_NO_INCREMENTAL; do
+            native_alt_json="" native_alt_exit=0
+            native_alt_json=$(export "$native_knob=1"; run_self verify --backend native --no-cache "$vow_file" 2>/dev/null) || native_alt_exit=$?
+            if [ "$native_alt_json" != "$native_json" ] || [ "$native_alt_exit" -ne "$native_exit" ]; then
+                native_errors+=("$native_knob=1 changed the result: runs with and without it differ")
+            fi
+        done
         # The result cache (#1429) must never change what the verifier reports:
         # a cold run on an empty cache and a warm run that replays it equal the
         # --no-cache baseline in JSON and exit status.
@@ -1599,6 +1605,61 @@ if [ "$native_have_solver" -eq 1 ]; then
     else
         pass "verify-native/cache-stored"
     fi
+fi
+
+
+# `vowc contracts --verify --backend native` (#1427): each fixture in
+# tests/verify-native/contracts/ pins the clause statuses and the weak-contract
+# probes (`vacuous`, `trivially_satisfiable`) the native pool must report.
+#   // TEST: contract-exit <n>
+#   // TEST: contract-status <fn> <kind> <status>   (some clause has that status)
+#   // TEST: contract-trivial <fn> <true|false>     (every `ensures` of fn)
+# Every fixture needs the solver, so the tier is skipped without one.
+if [ "$native_have_solver" -eq 0 ]; then
+    skip "verify-native/contracts fixtures" "bitwuzla not on PATH"
+else
+    for vow_file in tests/verify-native/contracts/*.vow; do
+        [ -f "$vow_file" ] || continue
+        name=$(basename "$vow_file" .vow)
+        native_json="" native_exit=0
+        native_json=$(run_self contracts --verify --backend native --no-cache "$vow_file" 2>/dev/null) || native_exit=$?
+        native_errors=()
+        native_want_exit=$(sed -n 's|^// TEST: contract-exit \(.*\)$|\1|p' "$vow_file" | head -1)
+        if [ -z "$native_want_exit" ]; then
+            native_errors+=("missing '// TEST: contract-exit <n>' directive")
+        elif [ "$native_exit" != "$native_want_exit" ]; then
+            native_errors+=("exit: expected $native_want_exit, got $native_exit")
+        fi
+        while read -r native_fn native_kind native_want; do
+            [ -n "$native_fn" ] || continue
+            native_hit=$(python3 -c "
+import json, sys
+cs = json.loads(sys.argv[1])['contracts']
+print(sum(1 for c in cs if c['function'] == sys.argv[2] and c['kind'] == sys.argv[3] and c['status'] == sys.argv[4]))
+" "$native_json" "$native_fn" "$native_kind" "$native_want" 2>/dev/null) || native_hit=-1
+            if [ "$native_hit" -lt 1 ]; then
+                native_errors+=("contract-status ${native_fn} ${native_kind}: no clause is '$native_want'")
+            fi
+        done < <(sed -n 's|^// TEST: contract-status \(.*\)$|\1|p' "$vow_file")
+        while read -r native_fn native_want; do
+            [ -n "$native_fn" ] || continue
+            native_bad=$(python3 -c "
+import json, sys
+cs = json.loads(sys.argv[1])['contracts']
+want = sys.argv[3] == 'true'
+rows = [c for c in cs if c['function'] == sys.argv[2] and c['kind'] == 'ensures']
+print(len([c for c in rows if c['trivially_satisfiable'] != want]) if rows else -1)
+" "$native_json" "$native_fn" "$native_want" 2>/dev/null) || native_bad=-1
+            if [ "$native_bad" -ne 0 ]; then
+                native_errors+=("contract-trivial ${native_fn}: expected every ensures clause to be $native_want")
+            fi
+        done < <(sed -n 's|^// TEST: contract-trivial \(.*\)$|\1|p' "$vow_file")
+        if [ ${#native_errors[@]} -eq 0 ]; then
+            pass "verify-native/contracts/${name}"
+        else
+            fail "verify-native/contracts/${name}" "$(IFS='; '; echo "${native_errors[*]}")"
+        fi
+    done
 fi
 echo ""
 

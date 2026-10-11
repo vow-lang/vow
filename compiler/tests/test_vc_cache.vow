@@ -257,6 +257,30 @@ fn check_miss_without_solver_stores_nothing() -> i64 [io, read, write] {
     0
 }
 
+// `vc_cache_peek` is the lookup a session-decided claim goes through; its miss
+// is verdict `VC_ANS_NONE`, and `vc_cache_put` files an answer under the text.
+fn check_peek_and_put() -> i64 [io, read, write] {
+    let c: VcCache = disk_cache(String::from("vc-cache-d-"));
+    let q: String = query();
+    if vc_cache_peek(c, q, 0).verdict != VC_ANS_NONE() { return 1; }
+    vc_cache_put(c, q, unsat_answer());
+    if vc_cache_peek(c, q, 0).verdict != VC_ANS_UNSAT() { return 2; }
+    let other: String = String::from("(check-sat)\n");
+    if vc_cache_peek(c, other, 0).verdict != VC_ANS_NONE() { return 3; }
+    vc_cache_put(c, other, vc_answer_plain(VC_ANS_UNKNOWN(), String::from("")));
+    if vc_cache_peek(c, other, 0).verdict != VC_ANS_NONE() { return 4; }
+    let off: VcCache = vc_cache_off();
+    vc_cache_put(off, q, unsat_answer());
+    if vc_cache_peek(off, q, 0).verdict != VC_ANS_NONE() { return 5; }
+    let modelled: String = String::from("(assert true)\n(check-sat)\n");
+    vc_cache_put(c, modelled, sat_answer());
+    if vc_cache_peek(c, modelled, 3).verdict != VC_ANS_NONE() { return 6; }
+    let hit: VcSolverAnswer = vc_cache_peek(c, modelled, 2);
+    if hit.verdict != VC_ANS_SAT() || hit.values[1] != 42 { return 7; }
+    fs_remove_dir_all(c.dir);
+    0
+}
+
 fn main() -> i32 [io, read, write] {
     let mut r: i64 = check_round_trip();
     if r == 0 { r = check_query_with_newlines_and_marker(); }
@@ -268,5 +292,6 @@ fn main() -> i32 [io, read, write] {
     if r == 0 { r = check_shard_stays_bounded(); }
     if r == 0 { r = check_budget_precedes_lookup(); }
     if r == 0 { r = check_miss_without_solver_stores_nothing(); }
+    if r == 0 { r = check_peek_and_put(); }
     i64_to_i32_wrap(r)
 }

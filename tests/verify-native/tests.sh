@@ -6,7 +6,9 @@ set -euo pipefail
 # query it is given, so this tier needs no real solver: it checks that one
 # self-contained .smt2 reaches the solver per claim, that each solver outcome
 # maps to the right verdict, that temp files and child processes are cleaned up,
-# and that the CLI rejects what the native backend does not support.
+# and that the CLI rejects what the native backend does not support. The
+# incremental sessions of #1428 are off for everything but the section that
+# tests them (`run_incremental`), so the counts above stay per-claim.
 
 VOWC_BIN="${VOWC_BIN:-build/vowc}"
 VOWC_BIN=$(cd "$(dirname "$VOWC_BIN")" && pwd)/$(basename "$VOWC_BIN")
@@ -20,6 +22,7 @@ FAKE_DIR="$TMP_ROOT/fake"
 EMPTY_DIR="$TMP_ROOT/empty"
 SCRATCH="$TMP_ROOT/tmp"
 mkdir -p "$FAKE_DIR" "$EMPTY_DIR" "$SCRATCH"
+export VOW_VERIFY_NO_INCREMENTAL=1
 
 cat > "$FAKE_DIR/bitwuzla" <<'SHIM'
 #!/usr/bin/env bash
@@ -30,13 +33,62 @@ if [ "${1:-}" = "--version" ]; then
     exit 0
 fi
 file="${!#}"
+if [ "${file%.smt2}" = "$file" ]; then
+    # an interactive session: commands on stdin, one reply per `(check-sat)`.
+    s=1
+    until mkdir "$FAKE_BW_DIR/.sess.$s" 2>/dev/null; do s=$((s + 1)); done
+    t="$FAKE_BW_DIR/s.$s.smt2"
+    : > "$t"
+    echo "$*" >> "$FAKE_BW_DIR/sargs"
+    echo $$ >> "$FAKE_BW_DIR/spids"
+    case "$FAKE_BW_MODE" in
+        exit1) echo "[error] boom" >&2; exit 1 ;;
+        oom_msg) echo "(error) Out of memory" >&2; exit 1 ;;
+        hang) echo $$ > "$FAKE_BW_DIR/pid"; exec sleep 29 ;;
+        kill_worker) kill -9 "$PPID"; sleep 5 ;;
+        crash_worker) kill -6 "$PPID"; sleep 5 ;;
+    esac
+    die_after=-1
+    case "$FAKE_BW_MODE" in session_die_after_*) die_after="${FAKE_BW_MODE#session_die_after_}" ;; esac
+    checks=0
+    while IFS= read -r line; do
+        echo "$line" >> "$t"
+        case "$line" in
+            "(push 1)")
+                if [ "$FAKE_BW_MODE" = session_noscope ]; then
+                    echo "[error] push is not supported" >&2
+                    exit 1
+                fi
+                ;;
+            "(check-sat)")
+                checks=$((checks + 1))
+                if [ "$die_after" -ge 0 ] && [ "$checks" -gt "$die_after" ]; then
+                    echo "[error] session died" >&2
+                    exit 1
+                fi
+                case "$FAKE_BW_MODE" in
+                    garbage) echo "what is this" ;;
+                    session_error_line) echo '(error "boom")' ;;
+                    sat) echo sat ;;
+                    unknown|session_unknown) echo unknown ;;
+                    *) echo unsat ;;
+                esac
+                ;;
+            "(echo "*)
+                msg="${line#\(echo }"
+                echo "${msg%)}"
+                ;;
+        esac
+    done
+    exit 0
+fi
 n=1
 until mkdir "$FAKE_BW_DIR/.slot.$n" 2>/dev/null; do n=$((n + 1)); done
 cp "$file" "$FAKE_BW_DIR/q.$n.smt2"
 echo "$file" >> "$FAKE_BW_DIR/paths"
 echo "$*" >> "$FAKE_BW_DIR/args"
 case "$FAKE_BW_MODE" in
-    unsat) echo unsat ;;
+    unsat|session_unknown|session_die_after_*|session_error_line|session_noscope) echo unsat ;;
     unknown) echo unknown ;;
     garbage) echo "what is this" ;;
     exit1) echo "[error] boom" >&2; exit 1 ;;
@@ -271,15 +323,27 @@ print("" if v is None else v)' "$1" "$2"
 RUN_OUT=""
 RUN_RC=0
 BW_DIR=""
-run_native() {
+run_cmd() {
     local mode="$1"; shift
     BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
     RUN_RC=0
     RUN_OUT=$(PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE="$mode" FAKE_BW_DIR="$BW_DIR" \
-        "$VOWC_BIN" verify --no-cache --backend native "$@" 2>/dev/null) || RUN_RC=$?
+        "$VOWC_BIN" "$@" 2>/dev/null) || RUN_RC=$?
+}
+
+run_native() {
+    local mode="$1"; shift
+    run_cmd "$mode" verify --no-cache --backend native "$@"
+}
+
+# the same, with the claims of a round sharing one solver process.
+run_incremental() {
+    VOW_VERIFY_NO_INCREMENTAL=0 run_native "$@"
 }
 
 queries() { find "$BW_DIR" -name 'q.*.smt2' | wc -l | tr -d ' '; }
+sessions() { find "$BW_DIR" -name 's.*.smt2' | wc -l | tr -d ' '; }
+session_lines() { grep -c -- "$2" "$BW_DIR/s.$1.smt2" || true; }
 
 expect() {
     local what="$1" got="$2" want="$3"
@@ -811,8 +875,11 @@ usage_error() {
 usage_error "--backend must be" verify --backend bogus "$ONE_CLAIM"
 usage_error "--backend must be" verify "$ONE_CLAIM" --backend
 usage_error "only supported by" build --backend native "$ONE_CLAIM"
-usage_error "only supported by" contracts --backend native "$ONE_CLAIM"
-usage_error "only supported by" test --backend native "$ONE_CLAIM"
+usage_error "requires --verify" contracts --backend native "$ONE_CLAIM"
+usage_error "requires --verify" test --backend native "$ONE_CLAIM"
+usage_error "--solver" contracts --verify --backend native --solver z3 "$ONE_CLAIM"
+usage_error "--solver" test --verify --backend native --solver z3 "$ONE_CLAIM"
+usage_error "--max-k-step" test --verify --backend native --max-k-step 5 "$ONE_CLAIM"
 usage_error "only supported by" "$ONE_CLAIM" --backend native
 usage_error "--max-k-step" verify --backend native --max-k-step 5 "$ONE_CLAIM"
 usage_error "--solver" verify --backend native --solver z3 "$ONE_CLAIM"
@@ -1029,6 +1096,190 @@ expect "undecided unwinding proves no clause" \
         --worker-budget-ms 60000 --worker-clauses 2>/dev/null | python3 "$WIRE_DECODE")" "6 -1 "
 no_leftovers "undecided unwinding"
 
+# `contracts --verify` and `test --verify` on the native backend (#1427). The
+# weak-contract probes are separate worker tasks, so a fake solver that answers
+# `unsat` to everything reads as "every requires is contradictory" and
+# `sat_empty` as "nothing is proven": the cases below pin the plumbing, and the
+# real-solver fixtures in tests/verify-native/contracts/ pin the verdicts.
+TWO_FUNCS="$TMP_ROOT/two_funcs.vow"
+cat > "$TWO_FUNCS" <<'SRC'
+module TwoFuncs
+
+fn inc(a: i64) -> i64 vow {
+  requires: a > 0 && a < 1000
+  ensures: result - a == 1
+} {
+  a + 1
+}
+
+fn dec(a: i64) -> i64 vow {
+  requires: a > 0 && a < 1000
+  ensures: a - result == 1
+} {
+  a - 1
+}
+
+fn main() -> i32 [io] {
+  print_i64(inc(1) + dec(2));
+  0
+}
+SRC
+
+# Nothing proven: every ensures is failed, every requires unknown, and the
+# second function is reported although the first one failed.
+run_cmd sat contracts --verify --backend native "$TWO_FUNCS"
+expect "contracts sat exit" "$RUN_RC" "1"
+expect "contracts sat total" "$(field "$RUN_OUT" summary.total)" "4"
+expect "contracts sat failed" "$(field "$RUN_OUT" summary.failed)" "2"
+expect "contracts sat unknown" "$(field "$RUN_OUT" summary.unknown)" "2"
+expect "contracts sat vacuous" "$(field "$RUN_OUT" summary.vacuous)" "0"
+expect "contracts sat trivial" "$(field "$RUN_OUT" summary.trivially_satisfiable)" "0"
+expect "contracts later function status" "$(field "$RUN_OUT" contracts.3.status)" "failed"
+expect "contracts later function name" "$(field "$RUN_OUT" contracts.3.function)" "dec"
+if [ "$(queries)" -lt 2 ]; then fail "contracts native reached the solver for fewer than both functions"; fi
+no_leftovers "contracts sat"
+
+# Every query unsat: both probes are proven, so both contracts are vacuous and
+# both ensures clauses trivially satisfiable.
+run_cmd unsat contracts --verify --backend native "$TWO_FUNCS"
+expect "contracts unsat exit" "$RUN_RC" "1"
+expect "contracts unsat vacuous" "$(field "$RUN_OUT" summary.vacuous)" "4"
+expect "contracts unsat trivial" "$(field "$RUN_OUT" summary.trivially_satisfiable)" "2"
+expect "contracts unsat requires status" "$(field "$RUN_OUT" contracts.0.status)" "vacuous"
+expect "contracts unsat ensures flag" "$(field "$RUN_OUT" contracts.1.trivially_satisfiable)" "True"
+expect "contracts unsat requires flag" "$(field "$RUN_OUT" contracts.0.trivially_satisfiable)" "False"
+no_leftovers "contracts unsat"
+
+# Without a solver every clause that needed one is `error`, the JSON is still
+# complete and the run fails closed.
+RUN_RC=0
+RUN_OUT=$(PATH="$EMPTY_DIR" TMPDIR="$SCRATCH" "$VOWC_BIN" contracts --verify --backend native "$TWO_FUNCS" 2>/dev/null) || RUN_RC=$?
+expect "contracts no solver exit" "$RUN_RC" "1"
+expect "contracts no solver error" "$(field "$RUN_OUT" summary.error)" "4"
+expect "contracts no solver total" "$(field "$RUN_OUT" summary.total)" "4"
+no_leftovers "contracts no solver"
+
+# A function outside the native subset is `skipped`, needs no solver and fails
+# the run closed; the clause rows keep the schema's shape.
+RUN_RC=0
+RUN_OUT=$(PATH="$EMPTY_DIR" TMPDIR="$SCRATCH" "$VOWC_BIN" contracts --verify --backend native tests/verify-native/skip/effects_skipped.vow 2>/dev/null) || RUN_RC=$?
+expect "contracts skipped exit" "$RUN_RC" "1"
+expect "contracts skipped status" "$(field "$RUN_OUT" contracts.0.status)" "skipped"
+expect "contracts skipped count" "$(field "$RUN_OUT" summary.skipped)" "$(field "$RUN_OUT" summary.total)"
+
+python3 - "$RUN_OUT" <<'PY' || fail "contracts native JSON does not match contracts-result.schema.json"
+import json, sys
+schema = json.load(open("docs/spec/schemas/contracts-result.schema.json"))
+out = json.loads(sys.argv[1])
+assert set(schema["required"]) <= set(out), (schema["required"], list(out))
+row_schema = schema["properties"]["contracts"]["items"]
+for row in out["contracts"]:
+    assert set(row_schema["required"]) <= set(row), (row_schema["required"], list(row))
+    assert row["status"] in row_schema["properties"]["status"]["enum"], row["status"]
+summary_schema = schema["properties"]["summary"]
+assert set(summary_schema["required"]) <= set(out["summary"]), list(out["summary"])
+PY
+
+# `--verify-jobs` and `--timeout` are honoured, not just accepted.
+run_cmd unsat contracts --verify --backend native --verify-jobs 4 --timeout 30 "$TWO_FUNCS"
+expect "contracts jobs exit" "$RUN_RC" "1"
+expect "contracts jobs total" "$(field "$RUN_OUT" summary.total)" "4"
+
+# `test --verify`: a proven module runs, an unproven one fails before running.
+run_cmd unsat test --verify --backend native "$ONE_CLAIM"
+expect "test proven status" "$(field "$RUN_OUT" status)" "TestsPassed"
+expect "test proven entry" "$(field "$RUN_OUT" tests.0.status)" "passed"
+expect "test proven exit" "$RUN_RC" "0"
+no_leftovers "test proven"
+
+run_cmd sat test --verify --backend native "$ONE_CLAIM"
+expect "test failed status" "$(field "$RUN_OUT" status)" "TestsFailed"
+expect "test failed entry" "$(field "$RUN_OUT" tests.0.status)" "verify_failed"
+expect "test failed code" "$(field "$RUN_OUT" tests.0.diagnostics.0.error_code)" "VerifyFailed"
+expect "test failed stdout" "$(field "$RUN_OUT" tests.0.stdout)" ""
+expect "test failed exit" "$RUN_RC" "1"
+no_leftovers "test failed"
+
+# An undecided function fails closed too: the ESBMC path lets an `error` pass.
+run_cmd unknown test --verify --backend native "$ONE_CLAIM"
+expect "test unknown entry" "$(field "$RUN_OUT" tests.0.status)" "verify_failed"
+run_cmd garbage test --verify --backend native "$ONE_CLAIM"
+expect "test error entry" "$(field "$RUN_OUT" tests.0.status)" "verify_failed"
+
+RUN_RC=0
+RUN_OUT=$(PATH="$EMPTY_DIR" TMPDIR="$SCRATCH" "$VOWC_BIN" test --verify --backend native "$ONE_CLAIM" 2>/dev/null) || RUN_RC=$?
+expect "test no solver entry" "$(field "$RUN_OUT" tests.0.status)" "verify_failed"
+
+RUN_RC=0
+RUN_OUT=$(PATH="$EMPTY_DIR" TMPDIR="$SCRATCH" "$VOWC_BIN" test --verify --backend native tests/verify-native/skip/effects_skipped.vow 2>/dev/null) || RUN_RC=$?
+expect "test skipped entry" "$(field "$RUN_OUT" tests.0.status)" "contract_skipped"
+expect "test skipped code" "$(field "$RUN_OUT" tests.0.diagnostics.0.error_code)" "VerificationSkipped"
+expect "test skipped exit" "$RUN_RC" "1"
+
+# Parallel test workers inherit the backend: both files reach the fake solver.
+TEST_DIR="$TMP_ROOT/test_dir"
+mkdir -p "$TEST_DIR"
+cp "$ONE_CLAIM" "$TEST_DIR/test_one.vow"
+sed 's/module One/module Two/' "$ONE_CLAIM" > "$TEST_DIR/test_two.vow"
+run_cmd unsat test --verify --backend native --jobs 2 "$TEST_DIR"
+expect "test parallel status" "$(field "$RUN_OUT" status)" "TestsPassed"
+expect "test parallel total" "$(field "$RUN_OUT" total)" "2"
+expect "test parallel queries" "$(queries)" "2"
+no_leftovers "test parallel"
+
+# A sibling module found through `--module-root` is lowered the same way by the
+# worker as by the parent.
+MOD_DIR="$TMP_ROOT/modroot"
+mkdir -p "$MOD_DIR/lib" "$MOD_DIR/t"
+cat > "$MOD_DIR/lib/helper.vow" <<'SRC'
+module Helper
+
+fn bump(x: i64) -> i64 vow {
+  ensures: result - x == 1
+} {
+  x + 1
+}
+SRC
+cat > "$MOD_DIR/t/test_helper.vow" <<'SRC'
+module TestHelper
+
+use lib.helper
+
+fn main() -> i32 [io] {
+  if bump(1) == 2 { 0 } else { 1 }
+}
+SRC
+run_cmd unsat test --verify --backend native --module-root "$MOD_DIR" "$MOD_DIR/t/test_helper.vow"
+expect "test module root entry" "$(field "$RUN_OUT" tests.0.status)" "passed"
+expect "test module root queries" "$(queries)" "1"
+no_leftovers "test module root"
+
+# Real solver: the verdicts agree with what the program does.
+if command -v bitwuzla >/dev/null 2>&1; then
+    RUN_RC=0
+    RUN_OUT=$("$VOWC_BIN" test --verify --backend native "$ONE_CLAIM" 2>/dev/null) || RUN_RC=$?
+    expect "real: test proven entry" "$(field "$RUN_OUT" tests.0.status)" "passed"
+    BROKEN="$TMP_ROOT/broken.vow"
+    cat > "$BROKEN" <<'SRC'
+module Broken
+
+fn inc(a: i64) -> i64 vow {
+  requires: a > 0 && a < 1000
+  ensures: result == a + 2
+} {
+  a + 1
+}
+
+fn main() -> i32 [io] {
+  0
+}
+SRC
+    RUN_RC=0
+    RUN_OUT=$("$VOWC_BIN" test --verify --backend native "$BROKEN" 2>/dev/null) || RUN_RC=$?
+    expect "real: test failed entry" "$(field "$RUN_OUT" tests.0.status)" "verify_failed"
+    expect "real: test failed exit" "$RUN_RC" "1"
+fi
+
 # A clause is only ever given 1/0 here; its status string comes from
 # `resolve_clause_status`, whose vocabulary must stay inside the schema's.
 python3 - <<'PY' || fail "clause statuses are not in contracts-result.schema.json"
@@ -1134,6 +1385,181 @@ run_native_cached unsat "fake 1.0" "$ONE_CLAIM" --timeout 0
 expect "cached timeout 0 verify_status" "$(field "$RUN_OUT" verify_status)" "timeout"
 expect "cached timeout 0 spawns nothing" "$(queries)" "0"
 no_leftovers "cache"
+# Incremental solver sessions (#1428): the claims of a round share one solver
+# process (header and assumptions asserted once, each negated goal in a
+# push/pop scope). Only `unsat`, and `sat` on a soft claim, is taken from it; a
+# `sat` on a hard claim is re-decided by a standalone full query, which alone
+# supplies the model, and anything else falls back to standalone queries.
+no_survivors() {
+    local what="$1" p
+    [ -f "$BW_DIR/spids" ] || return 0
+    while read -r p; do
+        case "$(ps -p "$p" -o stat= 2>/dev/null | tr -d ' ')" in
+            ""|Z*) ;;
+            *) fail "$what: solver session $p survived"; kill -9 "$p" 2>/dev/null || true ;;
+        esac
+    done < "$BW_DIR/spids"
+}
+
+run_incremental unsat "$THREE_CLAIMS"
+expect "session unsat status" "$(field "$RUN_OUT" status)" "Verified"
+expect "session unsat exit" "$RUN_RC" "0"
+expect "session unsat: one solver process" "$(sessions)" "1"
+expect "session unsat: no standalone query" "$(queries)" "0"
+expect "session: header sent once" "$(session_lines 1 '^(set-logic')" "1"
+expect "session: one check per claim" "$(session_lines 1 '^(check-sat)$')" "3"
+expect "session: one scope per claim and the probe" "$(session_lines 1 '^(push 1)$')" "4"
+# the last `(pop 1)` is written together with the last reply's question and the
+# session is killed once that reply is read, so the solver may never log it.
+if [ "$(session_lines 1 '^(pop 1)$')" -lt 3 ]; then fail "session: scopes are not closed"; fi
+expect "session: declarations sent once" "$(session_lines 1 '^(declare-const p0 ')" "1"
+expect "session: no model request" "$(session_lines 1 'get-value')" "0"
+grep -q -- '--bv-output-format 2' "$BW_DIR/sargs" || fail "session not run with --bv-output-format 2"
+no_survivors "session unsat"
+no_leftovers "session unsat"
+
+# a hard `sat` is re-decided by one standalone full query: same report, byte for byte.
+run_incremental sat "$THREE_CLAIMS"
+inc_out="$RUN_OUT"
+expect "session sat: one solver process" "$(sessions)" "1"
+expect "session sat: one standalone confirmation" "$(queries)" "1"
+no_survivors "session sat"
+no_leftovers "session sat"
+run_native sat "$THREE_CLAIMS"
+expect "session sat: report equals the standalone report" "$inc_out" "$RUN_OUT"
+expect "session sat status" "$(field "$inc_out" status)" "VerifyFailed"
+expect "session sat model" "$(field "$inc_out" counterexamples.0.values.a)" "7"
+
+# a session that says `unknown` leaves the claim to the standalone queries.
+run_incremental session_unknown "$THREE_CLAIMS"
+expect "session unknown status" "$(field "$RUN_OUT" status)" "Verified"
+expect "session unknown: every claim falls back" "$(queries)" "3"
+no_survivors "session unknown"
+no_leftovers "session unknown"
+
+# a solver that dies mid-round: the claims it answered stand, the rest are
+# standalone, and the verdict is the one-shot verdict.
+run_incremental session_die_after_1 "$THREE_CLAIMS"
+expect "session death status" "$(field "$RUN_OUT" status)" "Verified"
+expect "session death exit" "$RUN_RC" "0"
+expect "session death: one session" "$(sessions)" "1"
+expect "session death: later claims standalone" "$(queries)" "2"
+no_survivors "session death"
+no_leftovers "session death"
+
+# a solver that cannot run a session (no push/pop, an error line, junk) never
+# decides a claim: every claim is standalone and the verdict is unchanged.
+for mode in session_noscope session_error_line session_die_after_0; do
+    run_incremental "$mode" "$THREE_CLAIMS"
+    expect "$mode status" "$(field "$RUN_OUT" status)" "Verified"
+    expect "$mode: every claim standalone" "$(queries)" "3"
+    no_survivors "$mode"
+    no_leftovers "$mode"
+done
+
+# the failure modes of the one-shot path hold with a session in front of it.
+for mode in garbage exit1; do
+    run_incremental "$mode" "$THREE_CLAIMS"
+    expect "session $mode verify_status" "$(field "$RUN_OUT" verify_status)" "error"
+    expect "session $mode exit" "$RUN_RC" "1"
+    no_survivors "session $mode"
+    no_leftovers "session $mode"
+done
+for mode in kill_worker oom_msg; do
+    run_incremental "$mode" "$THREE_CLAIMS"
+    expect "session $mode verify_status" "$(field "$RUN_OUT" verify_status)" "unknown"
+    case "$(field "$RUN_OUT" verify_message)" in
+        *"memory limit exceeded"*) ;;
+        *) fail "session $mode lacks a memory reason: $(field "$RUN_OUT" verify_message)" ;;
+    esac
+    no_survivors "session $mode"
+    no_leftovers "session $mode"
+done
+run_incremental crash_worker "$THREE_CLAIMS"
+expect "session crash verify_status" "$(field "$RUN_OUT" verify_status)" "panicked"
+
+# a hung session is killed at the budget, with the same status as without one.
+start=$(date +%s)
+run_incremental hang "$THREE_CLAIMS" --timeout 1
+elapsed=$(( $(date +%s) - start ))
+expect "session hang verify_status" "$(field "$RUN_OUT" verify_status)" "timeout"
+if [ "$elapsed" -gt 10 ]; then fail "session hang took ${elapsed}s with --timeout 1"; fi
+all_dead "$BW_DIR/spids" "hung session"
+all_dead "$BW_DIR/pid" "hung solver"
+no_leftovers "session hang"
+
+# a round with a single claim for the solver has nothing to share.
+run_incremental unsat "$ONE_CLAIM"
+expect "single claim: verified" "$(field "$RUN_OUT" status)" "Verified"
+expect "single claim: no session" "$(sessions)" "0"
+expect "single claim: one standalone query" "$(queries)" "1"
+
+# a function with a loop runs one session per unwinding round.
+run_incremental unsat "$LOOP_CLAIMS"
+expect "loop session status" "$(field "$RUN_OUT" status)" "Verified"
+expect "loop session: no standalone query" "$(queries)" "0"
+no_survivors "loop session"
+no_leftovers "loop session"
+
+# inlined calls: the same report with and without sessions.
+run_incremental sat "$CALL_CLAIMS" --verify-jobs 1
+inc_out="$RUN_OUT"
+run_native sat "$CALL_CLAIMS" --verify-jobs 1
+expect "calls: report equals the standalone report" "$inc_out" "$RUN_OUT"
+no_survivors "calls"
+no_leftovers "calls session"
+
+# Per-clause mode with a session in front: every claim of the function is
+# asked, a hard `sat` leaves the session usable for the claims after it, and
+# the verdicts are the standalone ones.
+CLAUSES_OUT="$TMP_ROOT/clauses_out"
+VOW_VERIFY_NO_INCREMENTAL=0 worker_clauses unsat --worker-clauses > "$CLAUSES_OUT"
+expect "session clauses all proven" "$(cat "$CLAUSES_OUT")" "0 -1 2:1,3:1"
+expect "session clauses: one solver process" "$(sessions)" "1"
+expect "session clauses: no standalone query" "$(queries)" "0"
+no_survivors "session clauses"
+no_leftovers "session clauses"
+VOW_VERIFY_NO_INCREMENTAL=0 worker_clauses sat --worker-clauses > "$CLAUSES_OUT"
+expect "session clauses sat: overall result" "$(cut -d' ' -f1,2 "$CLAUSES_OUT")" "1 2"
+expect "session clauses sat: one solver process" "$(sessions)" "1"
+expect "session clauses sat: each claim asked in the session" "$(session_lines 1 '^(check-sat)$')" "2"
+expect "session clauses sat: each hard sat confirmed standalone" "$(queries)" "2"
+no_survivors "session clauses sat"
+no_leftovers "session clauses sat"
+
+# The result cache in front of a session: an `unsat` the session decided is
+# stored under the claim's standalone query text, so a warm run spawns neither a
+# session nor a solver, and a standalone run on the same cache replays it too.
+new_cache
+VOW_VERIFY_NO_INCREMENTAL=0 run_native_cached unsat "fake 1.0" "$THREE_CLAIMS"
+cold_out="$RUN_OUT"
+expect "cached session cold status" "$(field "$RUN_OUT" status)" "Verified"
+expect "cached session cold: one session" "$(sessions)" "1"
+expect "cached session cold: no standalone query" "$(queries)" "0"
+[ "$(cache_entries)" -gt 0 ] || fail "cached session cold: nothing stored"
+no_survivors "cached session cold"
+VOW_VERIFY_NO_INCREMENTAL=0 run_native_cached unsat "fake 1.0" "$THREE_CLAIMS"
+expect "cached session warm: no session" "$(sessions)" "0"
+expect "cached session warm: no standalone query" "$(queries)" "0"
+expect "cached session warm json" "$RUN_OUT" "$cold_out"
+run_native_cached unsat "fake 1.0" "$THREE_CLAIMS"
+expect "cached session entries serve a standalone run" "$(queries)" "0"
+expect "cached session entries standalone json" "$RUN_OUT" "$cold_out"
+no_leftovers "cached session"
+
+# A hard `sat` is re-decided by one standalone full query; its model is cached,
+# so the warm run reports the same counterexample without asking anything.
+new_cache
+VOW_VERIFY_NO_INCREMENTAL=0 run_native_cached sat "fake 1.0" "$THREE_CLAIMS"
+cold_out="$RUN_OUT"
+expect "cached session sat cold: one confirmation" "$(queries)" "1"
+expect "cached session sat cold status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+VOW_VERIFY_NO_INCREMENTAL=0 run_native_cached sat "fake 1.0" "$THREE_CLAIMS"
+expect "cached session sat warm: no session" "$(sessions)" "0"
+expect "cached session sat warm: no standalone query" "$(queries)" "0"
+expect "cached session sat warm json" "$RUN_OUT" "$cold_out"
+no_survivors "cached session sat"
+no_leftovers "cached session sat"
 
 if [ "$failures" -ne 0 ]; then
     echo "verify-native: $failures failure(s)" >&2

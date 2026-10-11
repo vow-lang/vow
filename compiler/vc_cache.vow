@@ -213,6 +213,26 @@ fn vc_cache_store(c: VcCache, key: String, query: String, ans: VcSolverAnswer) [
     }
 }
 
+// The decisive answer stored for `query`, or one with verdict `VC_ANS_NONE` when
+// the cache is off or holds nothing usable. `n_names` is the model arity.
+fn vc_cache_peek(c: VcCache, query: String, n_names: u64) -> VcSolverAnswer [read] {
+    let miss: VcSolverAnswer = vc_answer_plain(VC_ANS_NONE(), String::from(""));
+    if !vc_cache_on(c) { return miss; }
+    let key: String = vc_cache_key(vc_cache_salt(c.solver_id), query);
+    match vc_cache_lookup(c, key, query, n_names) {
+        Option::Some(hit) => { hit },
+        Option::None => { miss },
+    }
+}
+
+// Stores a decisive answer for `query` that was reached without a standalone
+// call (an `unsat` from a shared session): the same entry a standalone `unsat`
+// of that text would have written.
+fn vc_cache_put(c: VcCache, query: String, ans: VcSolverAnswer) [io, read, write] {
+    if !vc_cache_on(c) { return; }
+    vc_cache_store(c, vc_cache_key(vc_cache_salt(c.solver_id), query), query, ans);
+}
+
 // `vc_solver_check` through the cache. A non-positive budget is a timeout
 // before any lookup, so a warm run reports it exactly as a cold one does.
 fn vc_solver_check_cached(c: VcCache, bin: String, query: String, names: Vec<String>, widths: Vec<i64>, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {

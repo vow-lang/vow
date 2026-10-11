@@ -19,11 +19,17 @@ proven function fast; this cache has to.
 ## Decision
 
 1. **The seam is the solver call, keyed by its query text**
-   (`compiler/vc_cache.vow`, `vc_solver_check_cached`). `vc_check_claim` sends
-   both its sliced and its full query through the wrapper. An answer is filed
-   under the text it answered, so a sliced `sat` is a fact about the sliced
-   text and the caller still re-asks the full one, exactly as in ADR-1200. No
-   entry is ever keyed by a claim index or by a text other than the one sent.
+   (`compiler/vc_cache.vow`, `vc_solver_check_cached`). Every standalone query
+   of `vc_check_claim`, sliced or full, goes through the wrapper. An answer is
+   filed under the text it answered, so a sliced `sat` is a fact about the
+   sliced text and the caller still re-asks the full one, exactly as in
+   ADR-1200. No entry is ever keyed by a claim index or by a text other than
+   the one sent. A shared solver session (ADR-1500 incremental sessions) never
+   sees a standalone text, so `vc_check_claim` also looks the claim's full text
+   up *before* asking the session (`vc_cache_peek`) and files a session `unsat`
+   under that same text (`vc_cache_put`): a session's claim is by construction
+   the standalone full query's claim, so a decision made either way serves
+   both. A session `sat` on a soft claim carries no model and is not stored.
 2. **Key** = two FNV-1a passes (`hash_str`, 128 bits in 32 hex characters) over
    a salt and the query. The salt is a schema tag (`vow-native-cache v1`), the
    first non-empty line of `bitwuzla --version` and the fixed solver argument
@@ -77,7 +83,8 @@ proven function fast; this cache has to.
   cold: a hit costs nothing, so a claim that timed out cold may be decided warm.
   The tests use no near-limit budgets.
 - `contracts --verify` and `test --verify` on the native backend (#1427)
-  inherit the cache through `VcPool`.
+  build their own pool (`vc_driver_run`) and do not use the cache; only
+  `verify` resolves it. Threading it through is a follow-up.
 - Every oracle that must exercise the solver passes `--no-cache`
   (`scripts/full_test.sh`, `scripts/verify_diff.py`, `scripts/verify_perf.py`,
   `tests/verify-native/tests.sh`); the cache cases in those files use a private
