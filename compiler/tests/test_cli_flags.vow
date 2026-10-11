@@ -115,6 +115,10 @@ fn check_other_tables() -> i64 {
     if !accepts_bool(CMD_SKILL(), sk, String::from("--local")) { return 14; }
     if !accepts_bool(CMD_SKILL(), sk, String::from("--global")) { return 15; }
     if !rejects(CMD_SKILL(), sk, String::from("--foo")) { return 16; }
+    let w: String = String::from("verify-worker");
+    if !accepts_bool(CMD_VERIFY_WORKER(), w, String::from("--worker-clauses")) { return 17; }
+    if !accepts_value(CMD_VERIFY_WORKER(), w, String::from("--worker-index")) { return 18; }
+    if !rejects(CMD_VERIFY_WORKER(), w, String::from("--worker-clause")) { return 19; }
     0
 }
 
@@ -179,6 +183,7 @@ fn check_takes_value_union() -> i64 {
     if !cli_flag_takes_value(String::from("--max-score")) { return 5; }
     if cli_flag_takes_value(String::from("--no-verify")) { return 6; }
     if cli_flag_takes_value(String::from("--verify")) { return 7; }
+    if cli_flag_takes_value(String::from("--worker-clauses")) { return 8; }
     0
 }
 

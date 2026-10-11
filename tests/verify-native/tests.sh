@@ -54,6 +54,27 @@ case "$FAKE_BW_MODE" in
         wait
         ;;
     slow_unsat) echo $$ >> "$FAKE_BW_DIR/pids"; sleep 0.3; echo unsat ;;
+    unknown_unwinding)
+        # `unsat` for a claim whose goal is a negation (an ensures or invariant),
+        # `unknown` for the unwinding claim, whose query ends in the bare path
+        # condition.
+        last=$(grep '^(assert' "$file" | tail -1)
+        case "$last" in *"(not "*) echo unsat ;; *) echo unknown ;; esac
+        ;;
+    sat_if_contains|sat_unless_contains)
+        hit=0
+        grep -qF -- "$FAKE_BW_NEEDLE" "$file" && hit=1
+        want=1
+        [ "$FAKE_BW_MODE" = sat_unless_contains ] && want=0
+        if [ "$hit" -ne "$want" ]; then echo unsat; exit 0; fi
+        echo sat
+        echo "("
+        grep -o '^(declare-const p[0-9]* (_ BitVec [0-9]*)' "$file" \
+            | sed -E 's/\(declare-const (p[0-9]+) \(_ BitVec ([0-9]+)\)/\1 \2/' | while read -r name width; do
+            echo "  ($name (_ bv7 $width))"
+        done
+        echo ")"
+        ;;
     sat|sat_zero)
         val=7
         [ "$FAKE_BW_MODE" = sat_zero ] && val=0
@@ -570,7 +591,9 @@ no_leftovers "literal loop"
 
 # the same loop with a `requires` keeps its unwinding claim for the solver: a
 # contradictory assumption would make it `unsat`, which only the solver can tell.
-# With `unknown` the inductive attempt and the unwinding claim are one query each.
+# With `unknown` the inductive attempt and the unwinding claim are one query each
+# unsliced; sliced, the `requires` is outside both cones, so each undecided
+# sliced query is asked again in full and alone decides.
 GUARDED_LOOP="$TMP_ROOT/guarded_loop.vow"
 sed -e 's/fn tally() -> u64 vow {/fn tally(n: u64) -> u64 vow {/' \
     -e 's/  ensures: result == 36/  requires: n > 0,\n  ensures: result == 36/' \
@@ -579,6 +602,10 @@ sed -e 's/fn tally() -> u64 vow {/fn tally(n: u64) -> u64 vow {/' \
 run_native unknown "$GUARDED_LOOP"
 expect "guarded loop status" "$(field "$RUN_OUT" status)" "VerifyFailed"
 expect "guarded loop verify_status" "$(field "$RUN_OUT" verify_status)" "unknown"
+expect "guarded loop sliced queries" "$(queries)" "4"
+export VOW_VERIFY_NO_SLICE=1
+run_native unknown "$GUARDED_LOOP"
+unset VOW_VERIFY_NO_SLICE
 expect "guarded loop unwinding claim reaches the solver" "$(queries)" "2"
 no_leftovers "guarded loop"
 
@@ -775,6 +802,205 @@ usage_error "only supported by" "$ONE_CLAIM" --backend native
 usage_error "--max-k-step" verify --backend native --max-k-step 5 "$ONE_CLAIM"
 usage_error "--solver" verify --backend native --solver z3 "$ONE_CLAIM"
 usage_error "--encoding" verify --backend native --encoding bv "$ONE_CLAIM"
+
+# Query slicing (#1424). Each claim's query keeps only its cone of influence; a
+# sliced query that is not `unsat` is re-asked in full, which alone decides, so
+# slicing can change query sizes and counts but never a verdict or a model.
+# VOW_VERIFY_NO_SLICE=1 (test-only) restores the unsliced queries.
+SLICE_INDEP="tests/verify-native/pass/slice_independent_clauses.vow"
+SLICE_VACUOUS="tests/verify-native/pass/slice_vacuous_unrelated_requires.vow"
+
+query_bytes() {
+    local total=0 q n
+    for q in "$BW_DIR"/q.*.smt2; do
+        n=$(wc -c < "$q" | tr -d ' ')
+        total=$((total + n))
+    done
+    echo "$total"
+}
+
+run_native unsat "$SLICE_INDEP"
+sliced_bytes=$(query_bytes)
+expect "slice independent status" "$(field "$RUN_OUT" status)" "Verified"
+expect "slice independent queries" "$(queries)" "2"
+export VOW_VERIFY_NO_SLICE=1
+run_native unsat "$SLICE_INDEP"
+unset VOW_VERIFY_NO_SLICE
+full_bytes=$(query_bytes)
+expect "unsliced independent queries" "$(queries)" "2"
+if [ "$sliced_bytes" -ge "$full_bytes" ]; then
+    fail "slicing did not shrink the queries: $sliced_bytes bytes sliced, $full_bytes unsliced"
+fi
+no_leftovers "slice independent"
+
+# A claim whose sliced query is `sat` is re-asked on the full query; the verdict
+# and the counterexample are the unsliced run's. The needle is the negated goal
+# of the second clause, so the fake solver agrees with both query shapes.
+export FAKE_BW_NEEDLE="(assert (not v37))"
+run_native sat_if_contains "$SLICE_INDEP"
+sliced_out="$RUN_OUT"
+expect "confirmed sat status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "confirmed sat queries" "$(queries)" "3"
+export VOW_VERIFY_NO_SLICE=1
+run_native sat_if_contains "$SLICE_INDEP"
+unset VOW_VERIFY_NO_SLICE
+expect "unsliced sat queries" "$(queries)" "2"
+if [ "$sliced_out" != "$RUN_OUT" ]; then
+    fail "slicing changed the counterexample report: '$sliced_out' vs '$RUN_OUT'"
+fi
+no_leftovers "slice confirm sat"
+
+# Dropping a contradictory `requires` on an unrelated parameter must not turn a
+# vacuous proof into a failure: the sliced query is `sat`, the full one `unsat`.
+export FAKE_BW_NEEDLE="#x0000000000000003"
+run_native sat_unless_contains "$SLICE_VACUOUS"
+expect "vacuous status" "$(field "$RUN_OUT" status)" "Verified"
+expect "vacuous exit" "$RUN_RC" "0"
+expect "vacuous queries" "$(queries)" "2"
+unset FAKE_BW_NEEDLE
+no_leftovers "slice vacuous"
+
+# Per-clause verdicts (#1424). `verify-worker --worker-clauses` decides every
+# claim of its function and reports, per ensures/invariant clause, 1 (proven) or
+# 0 (failed) after the usual result; the overall result is the default mode's.
+# Wire statuses: 0 proven, 1 failed, 2 timeout, 3 error, 6 unknown.
+WIRE_DECODE="$TMP_ROOT/wire_decode.py"
+cat > "$WIRE_DECODE" <<'PY'
+import sys
+t = sys.stdin.read()
+i = t.index("VOWRES3\n") + 8
+def line():
+    global i
+    j = t.index("\n", i)
+    v = int(t[i:j])
+    i = j + 1
+    return v
+def text():
+    global i
+    n = line()
+    v = t[i:i + n]
+    i += n + 1
+    return v
+status = line()
+vow = line()
+for _ in range(4):
+    line()
+for _ in range(line()):
+    text(); text()
+for _ in range(line()):
+    line()
+text()
+for _ in range(line()):
+    text(); line(); line(); line()
+for _ in range(line()):
+    line(); line(); line()
+n = line()
+print(status, vow, ",".join("%d:%d" % (line(), line()) for _ in range(n)))
+PY
+
+CLAUSES_SRC="$TMP_ROOT/clauses.vow"
+cat > "$CLAUSES_SRC" <<'SRC'
+module Clauses
+
+fn two(a: i64, b: i64) -> i64 vow {
+  requires: a > 0 && a < 1000000000
+  requires: b > 0 && b < 1000000000
+  ensures: a * 2 > a
+  ensures: b * 7 > b
+} {
+  a + b
+}
+
+fn main() -> i32 [io] {
+  print_i64(two(1, 1));
+  0
+}
+SRC
+
+# Prints "<status> <vow id> <id:verdict,...>" for the worker of `two`.
+worker_clauses() {
+    local mode="$1"; shift
+    BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
+    PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE="$mode" FAKE_BW_DIR="$BW_DIR" \
+        "$VOWC_BIN" verify-worker "$CLAUSES_SRC" --worker-index 0 --worker-name two \
+        --worker-budget-ms "${WORKER_BUDGET_MS:-60000}" "$@" 2>/dev/null | python3 "$WIRE_DECODE"
+}
+
+export FAKE_BW_NEEDLE="#x0000000000000007"
+expect "clauses all proven" "$(worker_clauses unsat --worker-clauses)" "0 -1 2:1,3:1"
+expect "clauses: only the second sat" "$(worker_clauses sat_if_contains --worker-clauses)" "1 3 2:1,3:0"
+expect "default mode has no clauses" "$(worker_clauses sat_if_contains)" "1 3 "
+expect "clauses: first failure is the overall result" \
+    "$(worker_clauses sat --worker-clauses | cut -d' ' -f1,2)" "1 2"
+unset FAKE_BW_NEEDLE
+no_leftovers "worker clauses"
+
+# A solver answer that no later claim can improve on stops the schedule, and the
+# clauses it left undecided get no verdict (the caller maps them to the overall).
+expect "clauses: unknown does not stop" "$(worker_clauses unknown --worker-clauses)" "6 -1 "
+expect "clauses: error stops with no verdicts" "$(worker_clauses garbage --worker-clauses)" "3 -1 "
+expect "clauses: error stops after the confirming query" "$(queries)" "2"
+no_leftovers "worker clause halt"
+
+# The same decisions against the real solver (skipped without one): a hard abort
+# leaves the ensures verdicts intact, a clause with no claim is proven next to a
+# failing sibling, and a loop's clauses are proven only by its closing round.
+if command -v bitwuzla >/dev/null 2>&1; then
+    CLAUSES_REAL="$TMP_ROOT/clauses_real.vow"
+    cat > "$CLAUSES_REAL" <<'SRC'
+module ClausesReal
+
+fn quo(a: i64, b: i64) -> i64 vow {
+  requires: a > 0 && a < 1000000000
+  ensures: a * 2 > a
+} {
+  a / b
+}
+
+fn scale_wrong(a: i64, b: i64) -> i64 vow {
+  requires: a > 0 && a < 1000000000
+  requires: b > 0 && b < 1000000000
+  ensures: a * 2 > a
+  ensures: b * 3 > b + 2
+  ensures: result == a * 2 + b * 3
+} {
+  a * 2 + b * 3
+}
+SRC
+    real_clauses() {
+        "$VOWC_BIN" verify-worker "$1" --worker-index "$2" --worker-name "$3" \
+            --worker-budget-ms 60000 --worker-clauses 2>/dev/null | python3 "$WIRE_DECODE"
+    }
+    expect "real: abort claim leaves the ensures proven" "$(real_clauses "$CLAUSES_REAL" 0 quo)" "1 -1 1:1"
+    expect "real: wrong clause and a clause without claims" "$(real_clauses "$CLAUSES_REAL" 1 scale_wrong)" "1 3 2:1,3:0,4:1"
+    expect "real: closed loop proves every clause" \
+        "$(real_clauses tests/verify-native/pass/loop_literal_bound.vow 0 fill_and_sum)" "0 -1 0:1,1:1,2:1"
+    expect "real: open loop proves no clause" \
+        "$(real_clauses tests/verify-native/unknown/loop_literal_100.vow 0 hundred)" "6 -1 "
+    expect "real: failure in a late iteration" \
+        "$(real_clauses tests/verify-native/fail/loop_bug_at_iteration_40.vow 0 trip)" "1 1 0:1,1:0,2:1"
+fi
+
+# An unwinding claim the solver cannot decide leaves the round open: nothing is
+# proven although every clause claim was `unsat` (rule 2 of
+# ADR-2026-10-08-1422), and the overall result is `unknown`.
+SYMBOLIC_LOOP="tests/verify-native/unknown/loop_symbolic_bound.vow"
+BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
+expect "undecided unwinding proves no clause" \
+    "$(PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE=unknown_unwinding FAKE_BW_DIR="$BW_DIR" \
+        "$VOWC_BIN" verify-worker "$SYMBOLIC_LOOP" --worker-index 0 --worker-name count \
+        --worker-budget-ms 60000 --worker-clauses 2>/dev/null | python3 "$WIRE_DECODE")" "6 -1 "
+no_leftovers "undecided unwinding"
+
+# A clause is only ever given 1/0 here; its status string comes from
+# `resolve_clause_status`, whose vocabulary must stay inside the schema's.
+python3 - <<'PY' || fail "clause statuses are not in contracts-result.schema.json"
+import json
+schema = json.load(open("docs/spec/schemas/contracts-result.schema.json"))
+enum = schema["properties"]["contracts"]["items"]["properties"]["status"]["enum"]
+missing = {"proven", "failed", "unknown", "timeout", "error"} - set(enum)
+assert not missing, missing
+PY
 
 if [ "$failures" -ne 0 ]; then
     echo "verify-native: $failures failure(s)" >&2

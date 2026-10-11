@@ -58,6 +58,7 @@ Every verification-related flag in `docs/spec/cli.md`, for `build`, `verify`,
 | `VOW_VERIFY_DEBUG` (Rust driver env) | env | removed with the ESBMC driver (`vow-verify/src/esbmc.rs` reads it; the self-hosted driver never wired it) | The native replacement (retained `.smt2` under `VOW_CACHE_DIR`, perfetto) is decided in the P1 solver-driver child. |
 | `VOW_VERIFY_RUN_MEMLIMIT_RSS` (test-only env) | env | removed with ESBMC | Not part of the CLI contract. |
 | `VOW_VERIFY_WORKER_MEM_KB` (test-only env) | env | new, test-only | Lowers the internal address-space cap of a `verify-worker` (KiB) so tests can force an out-of-memory worker. Not part of the CLI contract and not a user-facing memory flag; the default cap is fixed (issue #1410). |
+| `VOW_VERIFY_NO_SLICE` (test-only env) | env | new, test-only | `1` sends every claim's full query instead of its cone of influence, so the corpus can be run both ways to show slicing never changes a verdict. Not a user flag and not in `--help` (issue #1424, [ADR-2026-10-11-1200](2026-10-11-1200-query-slicing-and-per-clause-verdicts.md)). |
 | `verify-worker` subcommand, `--worker-entry` | internal | not CLI contract | Output and flags are unstable. |
 
 Not verification-related, therefore out of scope for this classification:

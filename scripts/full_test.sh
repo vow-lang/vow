@@ -1558,6 +1558,15 @@ print(sum(1 for d in ds if d.get('error_code') == sys.argv[2]))
             fi
         done < <(sed -nE 's#^// TEST: (warning|no-warning) (.*)$#\1 \2#p' "$vow_file")
     fi
+    if [ "$native_dir" != "skip" ]; then
+        # Query slicing (#1424) must never change what the verifier reports:
+        # the unsliced run (VOW_VERIFY_NO_SLICE=1, test-only) is byte-identical.
+        native_full_json="" native_full_exit=0
+        native_full_json=$(VOW_VERIFY_NO_SLICE=1 run_self verify --backend native --no-cache "$vow_file" 2>/dev/null) || native_full_exit=$?
+        if [ "$native_full_json" != "$native_json" ] || [ "$native_full_exit" -ne "$native_exit" ]; then
+            native_errors+=("slicing changed the result: sliced and VOW_VERIFY_NO_SLICE=1 runs differ")
+        fi
+    fi
     if [ ${#native_errors[@]} -eq 0 ]; then
         pass "verify-native/${native_dir}/${name}"
     else

@@ -1,0 +1,13 @@
+module SliceVacuousUnrelatedRequires
+
+fn double(a: i64, b: i64) -> i64 vow {
+  requires: b > 5 && b < 3
+  ensures: result == a * 2
+} {
+  a + a
+}
+
+fn main() -> i32 [io] {
+  print_i64(double(2, 6));
+  0
+}

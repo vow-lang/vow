@@ -157,6 +157,15 @@ fn vc_guard(cs: VcClaims, kind: i64, label: String, pc: i64, goal: i64, inst: Ir
     vc_assume(cs, pc, goal);
 }
 
+// The tail every query of claim `k` ends in: its negated goal, the check and
+// the model request.
+fn vc_claim_script_finish(s: SmtScript, cs: VcClaims, k: u64) -> SmtScript {
+    vc_script_assert(s, cs.negated_goals[k]);
+    vc_script_check_sat(s);
+    vc_script_get_value(s, cs.model_names);
+    s
+}
+
 // The self-contained query that decides claim `k`.
 fn vc_claim_script(cs: VcClaims, k: u64) -> SmtScript {
     let hdr: SmtScript = cs.header;
@@ -167,10 +176,7 @@ fn vc_claim_script(cs: VcClaims, k: u64) -> SmtScript {
         vc_script_assert(s, cs.assumed[i]);
         i = i + 1;
     }
-    vc_script_assert(s, cs.negated_goals[k]);
-    vc_script_check_sat(s);
-    vc_script_get_value(s, cs.model_names);
-    s
+    vc_claim_script_finish(s, cs, k)
 }
 
 // Symbolic state shared by the block walk.
