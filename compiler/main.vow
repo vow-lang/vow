@@ -1878,7 +1878,7 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
     let task_names: Vec<String> = Vec::new();
     let entries: Vec<NativeEntry> = native_plan(fns, ir_mod, const_fn_indices, task_idx, task_names);
     let pool: VcPool = vc_pool_new(vc_worker_exe(argv[0]), path, task_idx, task_names, jobs, timeout_ms);
-    if !has_flag(argv, "--no-cache") && task_idx.len() > 0 {
+    if !has_flag(argv, "--no-cache") && task_idx.len() > 0 && timeout_ms > 0 {
         let cache: VcCache = vc_cache_resolve(vc_solver_locate());
         if vc_cache_on(cache) {
             pool.cache_dir = cache.dir;

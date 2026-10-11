@@ -185,8 +185,8 @@ fn vc_cache_lookup(c: VcCache, query: String, n_names: u64) -> Option<VcSolverAn
     vc_cache_decode(fs_read(vc_cache_entry_path(c.dir, key)), query, n_names)
 }
 
-// Keeps a shard directory at fewer than `VC_CACHE_SHARD_CAP()` entries by
-// removing an arbitrary half once it is full. `fs_listdir` order is not age
+// Keeps a shard directory at no more than `VC_CACHE_SHARD_CAP()` entries by
+// removing a half once it is full. `fs_listdir` order is not age
 // order and the runtime has no mtime, so this is not LRU.
 fn vc_cache_make_room(shard: String) [io, read] {
     let entries: Vec<String> = fs_listdir(shard);

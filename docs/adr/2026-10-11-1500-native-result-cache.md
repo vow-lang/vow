@@ -57,8 +57,8 @@ proven function fast; this cache has to.
    as `vc_solver_locate`). Accepted.
 6. **Location and bound.** `$VOW_CACHE_DIR/verify-native/`, else
    `$HOME/.cache/vow/verify-native/`, sharded by the first two hex digits. A
-   shard holds fewer than 64 entries: a store into a full shard first removes an
-   arbitrary half (`fs_listdir` order is not age order and there is no mtime
+   shard holds at most 64 entries: a store into a full shard first removes half
+   of them, chosen by name order (`fs_listdir` order is not age order and there is no mtime
    builtin, so this is not LRU). Total at most 256 x 64 entries. A directory
    that cannot be created disables the cache; a cache failure never fails
    verification.
