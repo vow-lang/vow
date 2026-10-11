@@ -275,15 +275,21 @@ fn vc_bv_is_ones(ar: VcArena, t: i64) -> bool {
     ar.aux[t as u64] == -1 && ar.b[t as u64] == -1
 }
 
+// The operation node `t` is, or the operation a variable bound to one stands
+// for; -1 otherwise. The kind is re-checked after following a name: a bound
+// variable can stand for an extension, whose `aux` shares the operation codes.
+fn vc_tm_def(ar: VcArena, t: i64) -> i64 {
+    let mut d: i64 = t;
+    if ar.kinds[t as u64] == VC_T_VAR() { d = ar.named[t as u64]; }
+    if d >= 0 && ar.kinds[d as u64] == VC_T_APP() { return d; }
+    -1
+}
+
 // The operand of `t` when `t` is a negation, or a variable bound to one; -1
 // otherwise.
 fn vc_tm_negated(ar: VcArena, t: i64) -> i64 {
-    let mut d: i64 = t;
-    if ar.kinds[t as u64] == VC_T_VAR() {
-        d = ar.named[t as u64];
-        if d < 0 { return -1; }
-    }
-    if ar.kinds[d as u64] == VC_T_APP() && ar.aux[d as u64] == VC_OP_NOT() { return ar.a[d as u64]; }
+    let d: i64 = vc_tm_def(ar, t);
+    if d >= 0 && ar.aux[d as u64] == VC_OP_NOT() { return ar.a[d as u64]; }
     -1
 }
 
@@ -433,16 +439,6 @@ fn vc_simp_identity(ar: VcArena, op: i64, x: i64, y: i64) -> i64 {
     } else if x == y && vc_is_cmp_reflexive_false(op) {
         return vc_tm_bool_const(ar, false);
     }
-    -1
-}
-
-// The operation node `t` is, or the operation a variable bound to one stands
-// for; -1 otherwise. The kind is re-checked after following a name: a bound
-// variable can stand for an extension, whose `aux` shares the operation codes.
-fn vc_tm_def(ar: VcArena, t: i64) -> i64 {
-    let mut d: i64 = t;
-    if ar.kinds[t as u64] == VC_T_VAR() { d = ar.named[t as u64]; }
-    if d >= 0 && ar.kinds[d as u64] == VC_T_APP() { return d; }
     -1
 }
 
