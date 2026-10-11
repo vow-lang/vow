@@ -1,0 +1,17 @@
+// TEST: counterexample-fn "mod_nonneg"
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result >= 0"
+module ModuloNegativeDividend
+
+fn mod_nonneg(x: i64, m: i64) -> i64 vow {
+  requires: m > 0
+  ensures: result >= 0
+} {
+  x - (x / m) * m
+}
+
+fn main() -> i32 [io] {
+  print_i64(mod_nonneg(7, 3));
+  0
+}
