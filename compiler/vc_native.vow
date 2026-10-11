@@ -4,6 +4,7 @@ use ir
 use verifier
 use vc_smt
 use vc_solver
+use vc_cache
 use vc_ops
 use vc_gate
 use vc_inline
@@ -116,7 +117,8 @@ fn vc_chain_outcome(f: IrFunction, fr: VcFrames, frame: i64, result: VerifyResul
     oc
 }
 
-// Decides claim `k`. With slicing on, the query holds only the claim's cone of
+// Decides claim `k`; every solver answer goes through `cache`, keyed by the
+// exact query text it answers. With slicing on, the query holds only the claim's cone of
 // influence and an `unsat` answer to it is final: the sliced query is a
 // relaxation of the full one. Any other answer says nothing about the full
 // query (the dropped assumptions may be contradictory on their own, which makes
@@ -124,22 +126,22 @@ fn vc_chain_outcome(f: IrFunction, fr: VcFrames, frame: i64, result: VerifyResul
 // budget and alone decides. The one exception is a soft claim from which only
 // definitions were dropped: that query is equisatisfiable with the full one and
 // its answer carries no model, so it stands.
-fn vc_check_claim(bin: String, cs: VcClaims, sx: VcSlicer, slicing: bool, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+fn vc_check_claim(cache: VcCache, bin: String, cs: VcClaims, sx: VcSlicer, slicing: bool, k: u64, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
     if slicing {
         let sl: VcSlice = vc_slice_claim(sx, cs, k);
         if sl.dropped_asserts || sl.dropped_defs {
             let started: i64 = time_micros();
             let small: String = vc_smt_render(cs.arena, vc_claim_script_sliced(cs, k, sl));
-            let ans: VcSolverAnswer = vc_solver_check(bin, small, cs.model_names, cs.model_widths, budget_ms, scratch);
+            let ans: VcSolverAnswer = vc_solver_check_cached(cache, bin, small, cs.model_names, cs.model_widths, budget_ms, scratch);
             if ans.verdict == VC_ANS_UNSAT() { return ans; }
             if !sl.dropped_asserts && vc_claim_is_soft(cs, k) { return ans; }
             let left_ms: i64 = budget_ms - (time_micros() - started) / 1000;
             let query: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
-            return vc_solver_check(bin, query, cs.model_names, cs.model_widths, left_ms, scratch);
+            return vc_solver_check_cached(cache, bin, query, cs.model_names, cs.model_widths, left_ms, scratch);
         }
     }
     let query: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
-    vc_solver_check(bin, query, cs.model_names, cs.model_widths, budget_ms, scratch)
+    vc_solver_check_cached(cache, bin, query, cs.model_names, cs.model_widths, budget_ms, scratch)
 }
 
 // Every unrolled copy of a checked operator repeats one source site.
@@ -225,7 +227,7 @@ fn vc_note_soft_sat(f: IrFunction, fr: VcFrames, cs: VcClaims, k: u64, sites: Ve
 // clause in that mode. `soft` tells whether `g` has a soft claim, and is
 // meaningful only for a round that ran every claim. `hyp` is the hypothesis
 // marking of a step function, empty otherwise.
-fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, hyp: Vec<i64>, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String, slicing: bool, all_claims: bool, acc: VcClauseAcc) -> VcRound [io, read, write] {
+fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, hyp: Vec<i64>, sites: Vec<ParsedArithSite>, started: i64, timeout_ms: i64, scratch: String, cache: VcCache, slicing: bool, all_claims: bool, acc: VcClauseAcc) -> VcRound [io, read, write] {
     let cs: VcClaims = vc_claims_step(g, fr, f.vows.len() == 0, hyp);
     if cs.kinds.len() == 0 {
         return vc_round(vc_proven_result(), false, false, -1, false, false);
@@ -256,7 +258,7 @@ fn vc_run_round(f: IrFunction, g: IrFunction, fr: VcFrames, hyp: Vec<i64>, sites
                 return vc_round(nf, true, false, -1, true, false);
             }
             let spent_ms: i64 = (time_micros() - started) / 1000;
-            let ans: VcSolverAnswer = vc_check_claim(bin, cs, sx, slicing, k, timeout_ms - spent_ms, scratch);
+            let ans: VcSolverAnswer = vc_check_claim(cache, bin, cs, sx, slicing, k, timeout_ms - spent_ms, scratch);
             if ans.verdict == VC_ANS_UNSAT() {
                 vc_note_clause(acc, cs, k, VC_CLAUSE_UNSAT());
             } else if vc_claim_is_soft(cs, k) && ans.verdict == VC_ANS_SAT() {
@@ -304,7 +306,7 @@ fn vc_round_proves(r: VcRound) -> VcInduction {
     VcInduction { proves: !r.ended && !r.open, soft: r.soft }
 }
 
-fn vc_induction_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, started: i64, timeout_ms: i64, scratch: String, slicing: bool) -> VcInduction [io, read, write] {
+fn vc_induction_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, started: i64, timeout_ms: i64, scratch: String, cache: VcCache, slicing: bool) -> VcInduction [io, read, write] {
     let none: VcInduction = VcInduction { proves: false, soft: false };
     let c: VcInduct = vc_induct_cut(closed);
     if c.status != VC_INDUCT_OK() {
@@ -312,7 +314,7 @@ fn vc_induction_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, started
     }
     let g: IrFunction = c.f;
     let sites: Vec<ParsedArithSite> = Vec::new();
-    let r: VcRound = vc_run_round(f, g, fr, Vec::new(), sites, started, timeout_ms, scratch, slicing, false, vc_clause_acc_new());
+    let r: VcRound = vc_run_round(f, g, fr, Vec::new(), sites, started, timeout_ms, scratch, cache, slicing, false, vc_clause_acc_new());
     vc_round_proves(r)
 }
 
@@ -322,7 +324,7 @@ fn vc_induction_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, started
 // `unsat` proves the target for every trip count. `proves` is the only thing
 // acted on, as for `vc_induction_attempt`: a counterexample to the step may be a
 // state no run reaches, so a failing step is never a verdict.
-fn vc_step_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, bound: i64, started: i64, timeout_ms: i64, scratch: String, slicing: bool) -> VcInduction [io, read, write] {
+fn vc_step_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, bound: i64, started: i64, timeout_ms: i64, scratch: String, cache: VcCache, slicing: bool) -> VcInduction [io, read, write] {
     let none: VcInduction = VcInduction { proves: false, soft: false };
     let u: VcUnrolled = vc_unroll_step(closed, bound);
     if u.status != VC_UNROLL_OK() {
@@ -333,7 +335,7 @@ fn vc_step_attempt(f: IrFunction, closed: IrFunction, fr: VcFrames, bound: i64, 
         return none;
     }
     let sites: Vec<ParsedArithSite> = Vec::new();
-    let r: VcRound = vc_run_round(f, g, fr, u.hyp, sites, started, timeout_ms, scratch, slicing, false, vc_clause_acc_new());
+    let r: VcRound = vc_run_round(f, g, fr, u.hyp, sites, started, timeout_ms, scratch, cache, slicing, false, vc_clause_acc_new());
     vc_round_proves(r)
 }
 
@@ -414,7 +416,7 @@ fn vc_decided_outcome(f: IrFunction, fr: VcFrames, ind: VcInduction, frozen: VcR
 // per `ensures`/`invariant` clause. A round with a failure is followed by larger
 // ones while its unwinding claim is open, since only a closed round can prove
 // the clauses that did not fail.
-fn vc_verify_function_mode(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: String, all_claims: bool) -> VcOutcome [io, read, write] {
+fn vc_verify_function_mode(f: IrFunction, m: IrModule, timeout_ms: i64, scratch: String, cache: VcCache, all_claims: bool) -> VcOutcome [io, read, write] {
     let bounds: Vec<i64> = vc_unwind_bounds();
     let inl: VcInlined = vc_inline(f, m, VC_INLINE_INST_CAP());
     if inl.status == VC_INLINE_TOO_LARGE() {
@@ -429,7 +431,7 @@ fn vc_verify_function_mode(f: IrFunction, m: IrModule, timeout_ms: i64, scratch:
     let acc: VcClauseAcc = vc_clause_acc_new();
     let mut targets: Vec<i64> = Vec::new();
     if all_claims { targets = vc_clause_targets(f); }
-    let mut ind: VcInduction = vc_induction_attempt(f, closed, inl.frames, started, timeout_ms, scratch, slicing);
+    let mut ind: VcInduction = vc_induction_attempt(f, closed, inl.frames, started, timeout_ms, scratch, cache, slicing);
     if ind.proves && !ind.soft {
         return vc_with_clauses(vc_proven_with(Vec::new()), acc, targets, all_claims, true);
     }
@@ -448,7 +450,7 @@ fn vc_verify_function_mode(f: IrFunction, m: IrModule, timeout_ms: i64, scratch:
             return vc_stopped_outcome(f, inl.frames, frozen, bad, acc, targets, all_claims);
         }
         let sites: Vec<ParsedArithSite> = Vec::new();
-        let r: VcRound = vc_run_round(f, g, inl.frames, Vec::new(), sites, started, timeout_ms, scratch, slicing, all_claims, acc);
+        let r: VcRound = vc_run_round(f, g, inl.frames, Vec::new(), sites, started, timeout_ms, scratch, cache, slicing, all_claims, acc);
         if r.ended && !frozen.ended {
             frozen = r;
         }
@@ -463,7 +465,7 @@ fn vc_verify_function_mode(f: IrFunction, m: IrModule, timeout_ms: i64, scratch:
         }
         last_sites = sites;
         if !r.ended && !ind.proves {
-            let st: VcInduction = vc_step_attempt(f, closed, inl.frames, bound, started, timeout_ms, scratch, slicing);
+            let st: VcInduction = vc_step_attempt(f, closed, inl.frames, bound, started, timeout_ms, scratch, cache, slicing);
             if st.proves {
                 ind = VcInduction { proves: true, soft: st.soft || r.soft };
                 if !ind.soft && (!frozen.ended || vc_undecided(frozen)) {

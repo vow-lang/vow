@@ -24,6 +24,11 @@ mkdir -p "$FAKE_DIR" "$EMPTY_DIR" "$SCRATCH"
 cat > "$FAKE_DIR/bitwuzla" <<'SHIM'
 #!/usr/bin/env bash
 set -eu
+if [ "${1:-}" = "--version" ]; then
+    [ -n "${FAKE_BW_VERSION:-}" ] || exit 2
+    echo "$FAKE_BW_VERSION"
+    exit 0
+fi
 file="${!#}"
 n=1
 until mkdir "$FAKE_BW_DIR/.slot.$n" 2>/dev/null; do n=$((n + 1)); done
@@ -1033,6 +1038,102 @@ enum = schema["properties"]["contracts"]["items"]["properties"]["status"]["enum"
 missing = {"proven", "failed", "unknown", "timeout", "error"} - set(enum)
 assert not missing, missing
 PY
+
+# Native result cache (#1429). The fake solver reports a version only when a
+# test sets FAKE_BW_VERSION, so every run above is cache-off. A cold run asks
+# the solver and stores its decisive answers; a warm run on the same cache
+# directory and solver version replays them and reaches the same JSON.
+CACHE_DIR=""
+run_native_cached() {
+    local mode="$1" version="$2"; shift 2
+    BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
+    RUN_RC=0
+    RUN_OUT=$(PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE="$mode" FAKE_BW_DIR="$BW_DIR" \
+        FAKE_BW_VERSION="$version" VOW_CACHE_DIR="$CACHE_DIR" \
+        "$VOWC_BIN" verify --backend native "$@" 2>/dev/null) || RUN_RC=$?
+}
+
+cache_entries() { find "$CACHE_DIR/verify-native" -type f 2>/dev/null | wc -l | tr -d ' '; }
+
+new_cache() { CACHE_DIR=$(mktemp -d "$TMP_ROOT/cache.XXXXXX"); }
+
+for pair in "unsat:$THREE_CLAIMS" "sat:$THREE_CLAIMS" "sat:$ONE_CLAIM"; do
+    mode="${pair%%:*}"
+    src="${pair#*:}"
+    new_cache
+    run_native_cached "$mode" "fake 1.0" "$src"
+    cold_out="$RUN_OUT"; cold_rc="$RUN_RC"; cold_q=$(queries)
+    [ "$cold_q" -gt 0 ] || fail "cache cold $mode: no solver query"
+    [ "$(cache_entries)" -gt 0 ] || fail "cache cold $mode: nothing stored"
+    run_native_cached "$mode" "fake 1.0" "$src"
+    expect "cache warm $mode queries" "$(queries)" "0"
+    expect "cache warm $mode json" "$RUN_OUT" "$cold_out"
+    expect "cache warm $mode exit" "$RUN_RC" "$cold_rc"
+    run_native "$mode" "$src"
+    expect "cache off $mode json" "$RUN_OUT" "$cold_out"
+done
+no_leftovers "cache warm"
+
+# A different solver version is a different key.
+new_cache
+run_native_cached unsat "fake 1.0" "$THREE_CLAIMS"
+run_native_cached unsat "fake 2.0" "$THREE_CLAIMS"
+expect "new solver version asks again" "$(queries)" "3"
+run_native_cached unsat "fake 2.0" "$THREE_CLAIMS"
+expect "same solver version replays" "$(queries)" "0"
+
+# --no-cache neither reads nor writes.
+new_cache
+run_native_cached unsat "fake 1.0" "$THREE_CLAIMS" --no-cache
+run_native_cached unsat "fake 1.0" "$THREE_CLAIMS" --no-cache
+expect "no-cache asks every run" "$(queries)" "3"
+expect "no-cache stores nothing" "$(cache_entries)" "0"
+
+# A solver that does not report a version cannot name the entries it answers:
+# verdicts are right and nothing is stored.
+new_cache
+run_native_cached unsat "" "$THREE_CLAIMS"
+expect "no version status" "$(field "$RUN_OUT" status)" "Verified"
+run_native_cached unsat "" "$THREE_CLAIMS"
+expect "no version asks every run" "$(queries)" "3"
+expect "no version stores nothing" "$(cache_entries)" "0"
+
+# Damaged entries are misses, never verdicts.
+new_cache
+run_native_cached unsat "fake 1.0" "$THREE_CLAIMS"
+find "$CACHE_DIR/verify-native" -type f | while read -r entry; do
+    printf 'vow-native-cache v1\nunsat\n0\n' > "$entry"
+done
+run_native_cached unsat "fake 1.0" "$THREE_CLAIMS"
+expect "garbled entries status" "$(field "$RUN_OUT" status)" "Verified"
+expect "garbled entries asked again" "$(queries)" "3"
+find "$CACHE_DIR/verify-native" -type f | while read -r entry; do
+    : > "$entry"
+done
+run_native_cached unsat "fake 1.0" "$THREE_CLAIMS"
+expect "emptied entries asked again" "$(queries)" "3"
+run_native_cached unsat "fake 1.0" "$THREE_CLAIMS"
+expect "rewritten entries replay" "$(queries)" "0"
+
+# A function whose sliced query is `sat` and whose full query is `unsat` is
+# proven warm as it is cold: each query is cached under its own text.
+export FAKE_BW_NEEDLE="#x0000000000000003"
+new_cache
+run_native_cached sat_unless_contains "fake 1.0" "$SLICE_VACUOUS"
+cold_out="$RUN_OUT"
+expect "cached vacuous cold status" "$(field "$RUN_OUT" status)" "Verified"
+run_native_cached sat_unless_contains "fake 1.0" "$SLICE_VACUOUS"
+expect "cached vacuous warm queries" "$(queries)" "0"
+expect "cached vacuous warm json" "$RUN_OUT" "$cold_out"
+unset FAKE_BW_NEEDLE
+
+# An exhausted budget is a timeout before the cache is consulted.
+new_cache
+run_native_cached unsat "fake 1.0" "$ONE_CLAIM"
+run_native_cached unsat "fake 1.0" "$ONE_CLAIM" --timeout 0
+expect "cached timeout 0 verify_status" "$(field "$RUN_OUT" verify_status)" "timeout"
+expect "cached timeout 0 spawns nothing" "$(queries)" "0"
+no_leftovers "cache"
 
 if [ "$failures" -ne 0 ]; then
     echo "verify-native: $failures failure(s)" >&2
