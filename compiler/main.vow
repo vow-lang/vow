@@ -13,6 +13,8 @@ use vc_inline
 use vc_native
 use vc_cex
 use vc_worker
+use vc_probe
+use vc_driver
 use vc_solver
 use diag
 use perfetto
@@ -1912,14 +1914,17 @@ fn run_verify_native(argv: Vec<String>, fr: LoweredFrontend, path: String, tctx:
 }
 
 // `verify-worker <source> --worker-index N --worker-name F --worker-budget-ms MS
-// [--worker-clauses]`: internal. Lowers the program again, verifies function N and prints the result
-// in the `vc_worker` wire format. Exit 3 when the program no longer matches what
-// the parent planned; the parent reports that as a crashed worker.
+// [--worker-clauses] [--worker-probe vacuity|trivial] [--worker-module-root DIR]`:
+// internal. Lowers the program again (against `DIR` when the parent did), verifies function N
+// and prints the result in the `vc_worker` wire format. A probe verifies the
+// weak-contract rewrite of function N instead (see `vc_probe`) and never asks for
+// per-clause verdicts. Exit 3 when the program no longer matches what the parent
+// planned; the parent reports that as a crashed worker.
 fn run_verify_worker(argv: Vec<String>) -> i32 [io, read, write] {
     let path: String = frontend_path_from_argv(argv, true, String::from("verify-worker"));
     let index: i64 = str_to_i64(get_flag_arg(argv, "--worker-index"));
     let budget_ms: i64 = str_to_i64(get_flag_arg(argv, "--worker-budget-ms"));
-    let fr: LoweredFrontend = frontend_lower_path_traced(path, String::from(""), trace_off());
+    let fr: LoweredFrontend = frontend_lower_path_traced(path, get_flag_arg(argv, "--worker-module-root"), trace_off());
     let checked: CheckedFrontend = fr.checked;
     let fns: Vec<IrFunction> = fr.ir_mod.functions;
     if checked.n_errors > 0 || index < 0 || index >= fns.len() as i64 {
@@ -1931,7 +1936,18 @@ fn run_verify_worker(argv: Vec<String>) -> i32 [io, read, write] {
         diag_eprintln_best_effort(String::from("verify-worker: function name does not match the planned index"));
         return 3;
     }
-    print_str(vc_wire_encode(vc_verify_function_mode(f, fr.ir_mod, budget_ms, get_flag_arg(argv, "--worker-scratch"), has_flag(argv, "--worker-clauses"))));
+    let probe: String = get_flag_arg(argv, "--worker-probe");
+    let mut target: IrFunction = f;
+    if probe == "vacuity" && vc_probe_vacuity_applicable(f) {
+        target = vc_probe_vacuity(f);
+    } else if probe == "trivial" && vc_probe_trivial_applicable(f) {
+        target = vc_probe_trivial(f);
+    } else if probe.len() > 0 {
+        diag_eprintln_best_effort(String::from("verify-worker: probe does not apply to the planned function"));
+        return 3;
+    }
+    let clauses: bool = has_flag(argv, "--worker-clauses") && probe.len() == 0;
+    print_str(vc_wire_encode(vc_verify_function_mode(target, fr.ir_mod, budget_ms, get_flag_arg(argv, "--worker-scratch"), clauses)));
     0
 }
 
@@ -3690,6 +3706,44 @@ fn cq_classify(kind: String, desc: String) -> String {
     String::from("substantive")
 }
 
+// Fills the `status` and `trivially_satisfiable` columns of the `contracts`
+// entries from the native pool. The entry arrays are parallel: entry `i` is
+// clause `vow_ids[i]` of the function with id `func_ids[i]`. A function outside
+// the native subset is `skipped`; otherwise each clause takes its per-clause
+// verdict (the same fallbacks as the ESBMC multi-property run), a proven
+// vacuity probe overrides every clause of the function with `vacuous`, and a
+// proven trivial probe marks its `ensures` clauses. A missing solver is an
+// `error` status on every clause that needed it; the exit code follows from the
+// statuses.
+fn contracts_native_verify(ir_mod: IrModule, exe: String, path: String, jobs: i64, budget_ms: i64, vow_ids: Vec<i64>, func_ids: Vec<i64>, kinds: Vec<String>, statuses: Vec<String>, trivial: Vec<i64>) [io, read] {
+    let drv: VcDriverRun = vc_driver_run(exe, path, String::from(""), ir_mod, true, true, jobs, budget_ms);
+    let fns: Vec<IrFunction> = ir_mod.functions;
+    let mut fi: u64 = 0;
+    while fi < fns.len() {
+        let func: IrFunction = fns[fi];
+        if func.vows.len() > 0 {
+            let oc: VcOutcome = drv.outcomes[fi];
+            let mut ei: u64 = 0;
+            while ei < func_ids.len() {
+                if func_ids[ei] == func.id {
+                    if drv.skip[fi].len() > 0 {
+                        statuses[ei] = String::from("skipped");
+                    } else if drv.vacuous[fi] == 1 {
+                        statuses[ei] = String::from("vacuous");
+                    } else {
+                        statuses[ei] = resolve_clause_status(vow_ids[ei], oc.clause_ids, oc.clause_proven, oc.result.status, false);
+                    }
+                    if drv.skip[fi].len() == 0 && drv.trivial[fi] == 1 && kinds[ei] == String::from("ensures") {
+                        trivial[ei] = 1;
+                    }
+                }
+                ei = ei + 1;
+            }
+        }
+        fi = fi + 1;
+    }
+}
+
 fn run_contracts(argv: Vec<String>) -> i32 [io, read, write] {
     let path: String = frontend_path_from_argv(argv, true, String::from("contracts"));
     let fr: LoweredFrontend = frontend_lower_path(path);
@@ -3729,9 +3783,10 @@ fn run_contracts(argv: Vec<String>) -> i32 [io, read, write] {
     let string_max_c: i64 = VOW_STRING_MAX();
     let hashmap_max_c: i64 = VOW_HASHMAP_MAX();
     let btreemap_max_c: i64 = VOW_BTREEMAP_MAX();
-    // Accepted for CLI parity with build/verify/test; resolved via the same
-    // path, then discarded because the contracts verify loop is serial.
-    let _cjobs: i64 = resolve_verify_jobs(argv);
+    // The ESBMC loop below is serial and ignores it; the native pool runs this
+    // many workers at a time.
+    let cjobs: i64 = resolve_verify_jobs(argv);
+    let native: bool = get_flag_arg(argv, "--backend") == "native";
 
     // Collect per-contract entries into parallel arrays
     let e_vow_ids: Vec<i64> = Vec::new();
@@ -3780,10 +3835,13 @@ fn run_contracts(argv: Vec<String>) -> i32 [io, read, write] {
     // If --verify, run verification per function and update statuses
     let mut exit_code: i32 = 0;
     let esbmc_bin: String = {
-        if do_verify { esbmc_path() }
+        if do_verify && !native { esbmc_path() }
         else { String::from("") }
     };
-    if do_verify {
+    if do_verify && native {
+        contracts_native_verify(ir_mod, argv[0], path, cjobs, watchdog_ms_for(timeout_secs), e_vow_ids, e_func_ids, e_kinds, e_statuses, e_trivial);
+    }
+    if do_verify && !native {
         if !esbmc_exists(esbmc_bin) {
             let mut ei_missing: u64 = 0;
             while ei_missing < e_statuses.len() {
