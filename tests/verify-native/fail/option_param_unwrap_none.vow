@@ -1,0 +1,14 @@
+// Native-only: ESBMC skips `[panic]` functions (see tests/verify-skip/unwrap_panic_effect.vow).
+// An `Option` parameter: tag 0 is `None`, so replay builds `Option::None` and the unwrap aborts.
+// TEST: counterexample-fn "get"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// TEST: counterexample-violation "unwrap() called on None"
+// TEST: counterexample-value o.0 0
+module OptionParamUnwrapNone
+
+fn get(o: Option<i64>) -> i64 [panic] vow {
+  ensures: result == result
+} {
+  o.unwrap()
+}

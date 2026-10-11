@@ -175,6 +175,7 @@ fn agg_src() -> String {
     s.push_str(String::from("fn fa(a: Alias) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fu(u: Unknown) -> i64 { 0 }\n"));
     s.push_str(String::from("fn fq(x: i64, p: Pair) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fe(r: Result<(), bool>) -> i64 { 0 }\n"));
     s
 }
 
@@ -225,6 +226,8 @@ fn check_option_result_arg() -> i32 [io] {
     if lit_of(String::from("fr"), String::from("r.0=0,r.1=4")) != String::from("Result::Ok(4)") { return 124; }
     if lit_of(String::from("fr"), String::from("r.0=1,r.1=false")) != String::from("Result::Err(false)") { return 125; }
     if agg(String::from("fr"), 0, String::from("r.0=0")).ty_text != String::from("Result<i64, bool>") { return 126; }
+    if lit_of(String::from("fe"), String::from("r.0=0")) != String::from("Result::Ok(())") { return 129; }
+    if lit_of(String::from("fe"), String::from("r.0=1,r.1=true")) != String::from("Result::Err(true)") { return 130; }
     // One slot read at two sorts: each variant's payload takes its own view.
     let both: String = String::from("r.0=1,r.1:64=4,r.1:bool=true");
     if lit_of(String::from("fr"), both) != String::from("Result::Err(true)") { return 127; }

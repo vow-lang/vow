@@ -229,11 +229,14 @@ fn replay_slot_value(pname: String, slot: i64, label: String, names: Vec<String>
     replay_cex_value(names, vals, key)
 }
 
-// Literal of the scalar a field of AST type `tid` holds at `slot`. A slot the
+// Literal of the scalar (or `()`) a field of AST type `tid` holds at `slot`. A slot the
 // model never read cannot have influenced the path to the claim, so it takes
 // the zero value.
 fn replay_field_arg(a: AstArena, tid: i64, pname: String, slot: i64, names: Vec<String>, vals: Vec<String>) -> ReplayArg {
     let shown: String = print_type_text(a, tid);
+    if type_tag(a, tid) == TY_UNIT() {
+        return replay_arg_ok(String::from("()"), shown);
+    }
     if type_tag(a, tid) != TY_NAMED() {
         return replay_arg_skip(str3r(String::from("field of type `"), shown, String::from("` is not a scalar")));
     }

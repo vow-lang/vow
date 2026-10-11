@@ -1,0 +1,17 @@
+// A `Result` parameter: tag 0 is `Ok`, whose payload follows at `r.1`. The bug sits in
+// the `Ok` arm, entered only by an exact discriminant compare.
+// TEST: counterexample-fn "unwrap_or_zero"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result >= 0"
+// TEST: counterexample-value r.0 0
+module ResultParamWrongPost
+
+fn unwrap_or_zero(r: Result<i64, ()>) -> i64 vow {
+  ensures: result >= 0
+} {
+  match r {
+    Result::Ok(v) => v,
+    Result::Err(_) => 0,
+  }
+}
