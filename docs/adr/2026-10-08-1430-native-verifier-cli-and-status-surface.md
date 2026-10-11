@@ -43,7 +43,7 @@ Every verification-related flag in `docs/spec/cli.md`, for `build`, `verify`,
 
 | Flag / env | Commands | Verdict | Notes |
 |---|---|---|---|
-| `--backend` | build, verify, contracts `--verify`, test `--verify` | **new, transitional** | See section 1. |
+| `--backend` | build, verify, contracts `--verify`, test `--verify` | **new, transitional** | See section 1. Addendum (#1427, [ADR-2026-10-11-1500](2026-10-11-1500-native-contract-probes-and-pool-independence.md)): `contracts` and `test` accept `--backend native` only together with `--verify`; without it they reject it. |
 | `--no-verify` | build | kept, text changed | "Skip ESBMC static verification" becomes "skip static verification". Result is still `Unverified`. |
 | `--verify` | contracts, test | kept, text changed | Same wording change. |
 | `--no-cache` | build, verify, contracts | kept | Still disables the verification-result cache and, for `--no-verify` builds, the compile-object cache. The native cache key is the canonical sliced query plus the Bitwuzla pin (P4). |

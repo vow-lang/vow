@@ -20,12 +20,19 @@ classifies each fixture:
 Output is a single JSON document (stdout, or --output FILE); a short human
 summary of every non-match row goes to stderr.
 
+`--command contracts` and `--command test` (issue #1427) compare the same
+corpus under `vowc contracts --verify` and `vowc test --verify`: per clause
+(status and `trivially_satisfiable`) for `contracts`, and the per-file test
+status for `test`. The same four classes apply, a fixture takes the most severe
+class of its clauses.
+
 Exit code: 0 when no row is `weaker` or `soundness`; 1 otherwise; 2 when the
 harness itself cannot run (missing binary or solver, unparseable verifier
 output).
 
 Usage:
     scripts/verify_diff.py [--vowc build/vowc] [--filter NAME] [--output FILE]
+                           [--command verify|contracts|test]
 """
 
 import argparse
@@ -64,6 +71,20 @@ FAILING_CLASSES = (WEAKER, SOUNDNESS)
 CONCLUSIVE = (PROVEN, REFUTED)
 
 BACKENDS = ("esbmc", "native")
+
+COMMANDS = ("verify", "contracts", "test")
+
+CLAUSE_VERDICT = {
+    "proven": PROVEN,
+    "proven-ir": PROVEN,
+    "failed": REFUTED,
+    "unknown": INCONCLUSIVE,
+    "timeout": INCONCLUSIVE,
+    "error": INCONCLUSIVE,
+    "skipped": SKIPPED,
+}
+
+SEVERITY = {MATCH: 0, MORE_PRECISE: 1, HARNESS: 2, WEAKER: 3, SOUNDNESS: 4}
 
 SOFT_FAILURES = ("panicked", "error", "crashed")
 
@@ -182,7 +203,20 @@ def function_count(path):
         return max(1, len(FN_DECL.findall(fh.read())))
 
 
-def run_backend(vowc, backend, path, timeout, max_fns):
+def command_args(vowc, command, backend, timeout, path):
+    """The `vowc` command line of `command` under `backend`.
+
+    `test --timeout` is the per-test execution timeout, not the verifier's, so
+    `test` takes none: native verification has its own fixed budget there.
+    """
+    if command == "contracts":
+        return [vowc, "contracts", "--verify", "--no-cache", "--backend", backend]
+    if command == "test":
+        return [vowc, "test", "--verify", "--backend", backend, path]
+    return [vowc, "verify", "--no-cache", "--backend", backend]
+
+
+def run_backend(vowc, backend, path, timeout, max_fns, command="verify"):
     """Run one backend under `--timeout`; a hung or crashed process is inconclusive.
 
     The watchdog scales with the number of functions and adds slack so the
@@ -190,16 +224,9 @@ def run_backend(vowc, backend, path, timeout, max_fns):
     to honour it. The child runs in its own process group so a kill also
     reaches the solver processes it spawned.
     """
-    args = [
-        vowc,
-        "verify",
-        "--no-cache",
-        "--backend",
-        backend,
-        "--timeout",
-        str(timeout),
-        path,
-    ]
+    args = command_args(vowc, command, backend, timeout, path)
+    if command != "test":
+        args += ["--timeout", str(timeout), path]
     start = time.monotonic()
     proc = subprocess.Popen(
         args,
@@ -230,9 +257,144 @@ def run_backend(vowc, backend, path, timeout, max_fns):
     return None, elapsed
 
 
-def diff_fixture(vowc, timeout, sub, exp):
+def clause_table(result):
+    """(function, kind, vow_id) -> clause row of one `contracts --verify` result."""
+    table = {}
+    for c in (result or {}).get("contracts") or []:
+        table[(c["function"], c["kind"], c["vow_id"])] = c
+    return table
+
+
+def short_circuit_requires(table, function):
+    """True when a `requires` of `function` lowers to branches (`&&`, `||`).
+
+    ESBMC plants its vacuity label only in the entry block, so such a function
+    reads as `vacuous` there whatever its requires say.
+    """
+    return any(
+        fn == function
+        and kind == "requires"
+        and ("&&" in c["description"] or "||" in c["description"])
+        for (fn, kind, _), c in table.items()
+    )
+
+
+def classify_clause(truth, key, esbmc, native, esbmc_table):
+    """Class and detail for one clause present in both `contracts` reports."""
+    e, n = esbmc["status"], native["status"]
+    if "not_verified" in (e, n):
+        return (
+            HARNESS,
+            f"`{key[0]}` {key[1]} was not verified (esbmc: {e}, native: {n})",
+        )
+    if "vacuous" in (e, n):
+        if e == n:
+            return MATCH, None
+        if e == "vacuous":
+            if short_circuit_requires(esbmc_table, key[0]):
+                return (
+                    MORE_PRECISE,
+                    "ESBMC plants its vacuity label only in the entry block and "
+                    "this `requires` lowers to branches",
+                )
+            return WEAKER, f"native is {n} where ESBMC reports vacuous"
+        return WEAKER, f"native reports vacuous where ESBMC is {e}"
+    ev, nv = CLAUSE_VERDICT[e], CLAUSE_VERDICT[n]
+    if nv == PROVEN and ev in (SKIPPED, INCONCLUSIVE):
+        return MORE_PRECISE, f"native proves a clause ESBMC leaves {e}"
+    return classify(truth, ev, nv, native_status=n if n == "error" else None)
+
+
+def compare_contracts(truth, esbmc_result, native_result):
+    """(class, detail) of two `contracts --verify` reports of one fixture."""
+    if esbmc_result is None or native_result is None:
+        return HARNESS, "no usable contracts result"
+    etable, ntable = clause_table(esbmc_result), clause_table(native_result)
+    if set(etable) != set(ntable):
+        return HARNESS, "the two backends list different clauses"
+    worst, detail = MATCH, None
+    for key in sorted(etable, key=repr):
+        e, n = etable[key], ntable[key]
+        cls, why = classify_clause(truth, key, e, n, etable)
+        if cls == MATCH and e["trivially_satisfiable"] != n["trivially_satisfiable"]:
+            cls = WEAKER
+            why = (
+                f"`{key[0]}` {key[1]} trivially_satisfiable differs "
+                f"(esbmc: {e['trivially_satisfiable']}, native: {n['trivially_satisfiable']})"
+            )
+        if SEVERITY[cls] > SEVERITY[worst]:
+            worst, detail = cls, f"`{key[0]}` {key[1]} #{key[2]}: {why}"
+    return worst, detail
+
+
+def test_verdict(result):
+    """File-level verdict of one `vowc test --verify` result.
+
+    A test that passed verification counts as proven whatever the program then
+    did when it ran: the run is not the verifier's to answer for.
+    """
+    tests = (result or {}).get("tests") or []
+    if not tests:
+        return ERROR
+    status = tests[0].get("status")
+    if status == "verify_failed":
+        return REFUTED
+    if status == "contract_skipped":
+        return SKIPPED
+    if status in ("passed", "failed", "timeout"):
+        return PROVEN
+    return ERROR
+
+
+def clause_summary(result):
+    """Compact verdict text of a `contracts` report, e.g. `proven:3,failed:1`."""
+    counts = {}
+    for c in (result or {}).get("contracts") or []:
+        label = c["status"] + ("+trivial" if c["trivially_satisfiable"] else "")
+        counts[label] = counts.get(label, 0) + 1
+    return ",".join(f"{k}:{v}" for k, v in sorted(counts.items())) or "none"
+
+
+def diff_clauses(vowc, timeout, sub, exp, command, truth, max_fns):
+    """The row of one fixture under `contracts` or `test`."""
+    row = {
+        "fixture": f"{sub}/{exp.name}",
+        "truth": truth,
+        "known_gap": bool(exp.known_gap),
+        "command": command,
+    }
+    results = {}
+    for backend in BACKENDS:
+        result, seconds = run_backend(
+            vowc, backend, exp.path, timeout, max_fns, command
+        )
+        results[backend] = result
+        verdict = (
+            clause_summary(result) if command == "contracts" else test_verdict(result)
+        )
+        row[backend] = {
+            "verdict": verdict,
+            "seconds": round(seconds, 3),
+            "status": (result or {}).get("status"),
+            "verify_status": None,
+            "counterexamples": [],
+        }
+    if command == "contracts":
+        row["class"], row["detail"] = compare_contracts(
+            truth, results["esbmc"], results["native"]
+        )
+    else:
+        row["class"], row["detail"] = classify(
+            truth, test_verdict(results["esbmc"]), test_verdict(results["native"])
+        )
+    return row
+
+
+def diff_fixture(vowc, timeout, sub, exp, command="verify"):
     truth = "VerifyFailed" if exp.known_gap else exp.expected_status
     max_fns = function_count(exp.path)
+    if command != "verify":
+        return diff_clauses(vowc, timeout, sub, exp, command, truth, max_fns)
     row = {
         "fixture": f"{sub}/{exp.name}",
         "truth": truth,
@@ -267,13 +429,14 @@ def diff_fixture(vowc, timeout, sub, exp):
     return row
 
 
-def build_report(vowc, rows):
+def build_report(vowc, rows, command="verify"):
     counts = dict.fromkeys(CLASSES, 0)
     for row in rows:
         counts[row["class"]] += 1
     return {
         "schema_version": SCHEMA_VERSION,
         "vowc": vowc,
+        "command": command,
         "summary": {"total": len(rows), **counts},
         "rows": rows,
     }
@@ -338,6 +501,12 @@ def main(argv=None):
         help="per-function verifier budget in seconds for each backend (default 60)",
     )
     ap.add_argument(
+        "--command",
+        choices=COMMANDS,
+        default="verify",
+        help="compare `vowc verify` (default), `contracts --verify` or `test --verify`",
+    )
+    ap.add_argument(
         "--jobs",
         type=int,
         default=1,
@@ -366,13 +535,16 @@ def main(argv=None):
             return 2
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
             rows = list(
-                pool.map(lambda f: diff_fixture(args.vowc, args.timeout, *f), fixtures)
+                pool.map(
+                    lambda f: diff_fixture(args.vowc, args.timeout, *f, args.command),
+                    fixtures,
+                )
             )
     except (OSError, ValueError) as err:
         print(f"verify_diff: harness failure: {err}", file=sys.stderr)
         return 2
 
-    report = build_report(args.vowc, rows)
+    report = build_report(args.vowc, rows, args.command)
     text = json.dumps(report, indent=2) + "\n"
     if args.output:
         with open(args.output, "w", encoding="utf-8") as fh:
