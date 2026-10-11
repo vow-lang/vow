@@ -35,7 +35,7 @@ $ vow build examples/divide.vow
 {"status":"Verified","executable":"examples/divide","diagnostics":[],"counterexamples":[]}
 ```
 
-ESBMC proves the contract: whenever `y != 0` holds, the division is safe.
+The verifier proves the contract: whenever `y != 0` holds, the division is safe.
 
 ### Step 3: Runtime behavior (debug mode)
 
@@ -137,7 +137,7 @@ $ vow build examples/cegis_fixed.vow
 {"status":"Verified","executable":"examples/cegis_fixed","diagnostics":[],"counterexamples":[]}
 ```
 
-Verified. With `a >= 0`, `b >= 0`, and `a >= b`, ESBMC proves `result >= 0`.
+Verified. With `a >= 0`, `b >= 0`, and `a >= b`, the verifier proves `result >= 0`.
 
 ---
 
@@ -185,7 +185,7 @@ $ vow verify examples/vec_fill.vow
 
 **Key points:**
 - `invariant: i <= n` is inductive: true on entry, preserved by the loop body. The lower bounds `i >= 0` and `n >= 0` are carried by the `u64` type, so they need no clause (and `TautologicalComparison` rejects one)
-- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
+- The Vec model tracks `len`, so the verifier can reason about `result.len() == n`
 - The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
 - `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 

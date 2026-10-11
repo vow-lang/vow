@@ -199,6 +199,32 @@ class VowPayloadEmissionTest(unittest.TestCase):
         self.assertLess(statements, source_lines)
 
 
+class VerificationSurfaceTest(unittest.TestCase):
+    def test_esbmc_defaults_stay_and_native_defaults_are_added(self):
+        defaults = _help_data()["verification_defaults"]
+        self.assertEqual(defaults["strategy"], "incremental-bmc")
+        self.assertEqual(defaults["max_k_step"], 50)
+        native = defaults["native"]
+        self.assertIn("k-induction", native["strategy"])
+        self.assertEqual(native["tuning_flags"], ["--timeout"])
+
+    def test_human_help_labels_defaults_per_backend(self):
+        human = generate_help.build_help_human(_help_data())
+        block = human[human.index("VERIFICATION DEFAULTS") :]
+        self.assertIn("ESBMC backend", block)
+        self.assertIn("Native backend", block)
+
+    def test_no_text_calls_every_counterexample_an_esbmc_one(self):
+        data = _help_data()
+        self.assertNotIn("ESBMC counterexample", json.dumps(data))
+        self.assertNotIn("ESBMC counterexample", generate_help.build_help_human(data))
+        self.assertNotIn("ESBMC counterexample", generate_help.SKILL_FRONTMATTER)
+
+    def test_build_help_lists_backend_flag(self):
+        options = _help_data()["command_details"]["build"]["options"]
+        self.assertIn("--backend <esbmc|native>", [o["form"] for o in options])
+
+
 class SkillDoNotsTest(unittest.TestCase):
     def _section(self) -> str:
         entry = generate_help.build_skill_entrypoint()

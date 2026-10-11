@@ -321,3 +321,38 @@ terminal Ctrl-C no longer reaches them; they stop at their own budget.
   assertion:` (the largest bound was reached, or the unrolled program exceeded
   the size budget).
 - Provenance (`proven-ir`) and `ModelCapacityAssumed` are untouched.
+
+## Addendum (#1430, P3): what the spec documents
+
+P3 rewrote `docs/spec/` and the embedded help and skill to this surface. Both
+backends are documented, ESBMC text is labelled "ESBMC backend", and the spec
+states what the compiler does today where it differs from the targets above:
+
+- **`reason_code` is not emitted.** The code appears only in the message
+  (``skipped verification of `f`: <code>: <detail>``); the spec lists the closed
+  code table in `errors.md` and says the field is not yet emitted. The schemas do
+  not declare it.
+- **`build` and the bare form** accept `--backend esbmc` and reject
+  `--backend native` with a usage error (exit 1); the build option table lists
+  the flag with that behaviour.
+- **Native flag rejection text** is
+  `error: --max-k-step is not supported with --backend native` (also `--solver`,
+  `--encoding`), exit 1, and does not say the bound is internal.
+- **`--perfetto` under native** records the frontend, `codegen`, `link` and one
+  `verification` span, not per-claim worker or solver spans or per-worker RSS.
+- **`--timeout 0`** is a zero budget natively (no solver spawn) and an immediate
+  watchdog kill under ESBMC.
+- **Floats** are `unsupported-opcode` natively; IEEE semantics are a target.
+- **`esbmc error: <message>`** remains the legacy `counterexample` text for
+  `verify_status: "error"` under both backends.
+- **Uncontracted callers** keep ESBMC's selection and its Note form; a native
+  timeout or `unknown` for such a caller is a hard `VerifyFailed`.
+- **`test --verify` skip** is a fixed-message `VerificationSkipped` diagnostic
+  of severity `error` without a reason code.
+- `--no-cache` disables the native result cache of `verify` and is a no-op for
+  `contracts` and `test`; the Bitwuzla binary is not hash-pinned (its
+  `--version` output is part of the cache key).
+
+`scripts/test_spec_surface.py` checks that every flag the driver accepts has a
+row in its command table, that the contracts status vocabulary matches the
+schema, and that every `Skipped` code is documented.

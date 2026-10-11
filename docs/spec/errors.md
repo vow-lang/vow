@@ -330,7 +330,7 @@ fn f(big: i64) -> u8 {
 ### ShiftCountOutOfRange
 
 **Phase:** Type Checker
-**Meaning:** A constant-expression shift count is negative or greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) are checked by ESBMC, which requires `0 <= count < width` at the shift (a negative signed count is a violation). At runtime only 8-bit shifts trap: an `i8`/`u8` shift whose count is `>= 8` aborts with `ArithmeticOverflow` in every build mode. Wider shifts are not trapped; the hardware shift masks the count to the operand width (`(x: i64) << 65` is `x << 1`), so only verification excludes them.
+**Meaning:** A constant-expression shift count is negative or greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) are checked by the verifier, which requires `0 <= count < width` at the shift (a negative signed count is a violation). At runtime only 8-bit shifts trap: an `i8`/`u8` shift whose count is `>= 8` aborts with `ArithmeticOverflow` in every build mode. Wider shifts are not trapped; the hardware shift masks the count to the operand width (`(x: i64) << 65` is `x << 1`), so only verification excludes them.
 
 **Wrong:**
 
@@ -954,7 +954,7 @@ A 128-bit integer as an `Option`, `Result`, or `enum` payload is supported, so `
 ### BTreeMapKeyTypeMustBeI64
 
 **Phase:** Type Checker
-**Meaning:** A `BTreeMap<K, V>` was instantiated with `K` not equal to `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys; the runtime helpers and ESBMC C model are hard-coded to i64.
+**Meaning:** A `BTreeMap<K, V>` was instantiated with `K` not equal to `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys; the runtime helpers and the verifier's model are hard-coded to i64.
 
 **Wrong:**
 
@@ -1066,8 +1066,8 @@ fn add(a: i64, b: i64) -> i64 vow {
 
 ### VowRequiresViolated
 
-**Phase:** Verification (ESBMC)
-**Meaning:** ESBMC found inputs that violate a `requires` precondition. This is a **static** verification error — it means the function's callers can reach it with invalid arguments.
+**Phase:** Verification
+**Meaning:** The verifier found inputs that violate a `requires` precondition. This is a **static** verification error — it means the function's callers can reach it with invalid arguments.
 
 **Wrong:**
 
@@ -1099,8 +1099,8 @@ fn caller(x: u64) -> u64 {
 
 ### VowEnsuresViolated
 
-**Phase:** Verification (ESBMC)
-**Meaning:** ESBMC found inputs where the function's return value does not satisfy the `ensures` postcondition.
+**Phase:** Verification
+**Meaning:** The verifier found inputs where the function's return value does not satisfy the `ensures` postcondition.
 
 **Wrong:**
 
@@ -1126,8 +1126,8 @@ fn max(a: i64, b: i64) -> i64 vow {
 
 ### VowInvariantViolated
 
-**Phase:** Verification (ESBMC)
-**Meaning:** ESBMC found a loop iteration where the `invariant` does not hold.
+**Phase:** Verification
+**Meaning:** The verifier found a loop iteration where the `invariant` does not hold.
 
 **Wrong:**
 
@@ -1162,7 +1162,7 @@ fn count_up() -> u64 {
 ### EsbmcNotFound
 
 **Phase:** Verification
-**Meaning:** ESBMC is not installed or not on `$PATH`. When verification is enabled (the default for `vowc build`, always for `vowc verify`), the compiler checks for ESBMC upfront before compilation. If ESBMC is not found, the build aborts immediately with exit code 1.
+**Meaning:** ESBMC is not installed or not on `$PATH`. When verification is enabled with the ESBMC backend (the default for `vowc build`, always for `vowc verify`), the compiler checks for ESBMC upfront before compilation. If ESBMC is not found, the build aborts immediately with exit code 1. Under `--backend native` the verifier is Bitwuzla instead: a missing `bitwuzla` is reported per function as `VerifyFailed` with `verify_status: "tool_not_found"` (clause `status` `error` in `vowc contracts --verify`), and ESBMC is never consulted.
 
 **Wrong:**
 
@@ -1379,7 +1379,22 @@ use util.math
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
-**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — for example `RegionAlloc` and `FieldSet` from a struct construction the model does not cover (a struct of scalar fields is modelled), also `Load`/`Store`, `RemF*`, and `LinearBorrow`. (`LinearConsume`, which every consume including `drop` lowers to, is a data no-op and is modelled.) A call to a user function that passes a `Vec`, `String`, map or `Option` argument is also not modelable (`Call target with a collection argument`): the model has no representation for a collection crossing a user-function boundary. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+**Meaning:** The function carries a `vow {}` block but the verifier has no model for something its body does, so no proof is attempted. The contract becomes documentary: runtime checks still apply in `--mode debug`. A function is `Skipped` only for one of the reasons below; a timeout, a solver `unknown`, an unwinding failure and an out-of-memory worker are never `Skipped` (they are `timeout` / `unknown`, see `docs/spec/cli.md` → "Status Values").
+
+The native backend names the reason with a code from a **closed** list, written after the function name in the message (``skipped verification of `f`: <code>: <detail>``). `detail` is free-form (a function, opcode or builtin name) and is not part of the enumerated set; the message text is not a contract. A machine-readable `reason_code` field is specified additively but **not emitted yet**, so do not parse for it.
+
+| Code | When | Typical `detail` |
+|---|---|---|
+| `function-has-effects` | The function has an effect other than `panic` (`io`, `read`, `write`, `unsafe`). `panic`, the effect of `.unwrap()`, is modelled. | the effect |
+| `recursion-unsupported` | The function is directly or mutually recursive in the inlined call graph, or only reaches a recursive function. | the cycle, `a -> b -> a` |
+| `float-rem-unsupported` | The body uses float `%` (`RemF32`, `RemF64`). Lasts until codegen defines float `%`. | |
+| `ir-non-dominating-read` | The dominance validator rejects the IR (defensive gate). | |
+| `unmodeled-builtin` | An extern call whose runtime symbol has no `verifier_model: known` entry in `docs/spec/operations.json` (`String` and map operations, `Vec` `clear`/`sort`/..., a `Vec<i128>` element). Shrinks as builtins are modelled. | the runtime symbol |
+| `unsupported-opcode` | An opcode the symbolic executor does not encode (today floats other than `%`, string constants, `Load`/`Store`, `LinearBorrow`), a shape it cannot unroll, or an aggregate use outside the modelled subset. Shrinks. | `Op[type]`, or `irreducible loop (...)`, `loop value used outside its loop`, `entry block is a loop header`, `loop nest deeper than 8` |
+| `non-modelable-callee` | An inlined callee is itself `Skipped`. | `<callee> (<code>)` |
+| `reserved-verifier-symbol` | The function name collides with a reserved checker symbol. Defined; not emitted yet. | |
+
+The list is closed: a function that fits no row is a verifier bug, not a new `Skipped` reason. Under the ESBMC backend the reason is the older free-text `non_modelable_reason` of the C emitter instead, for example an opcode the C model cannot represent (`RegionAlloc` and `FieldSet` from a struct construction the model does not cover, `Load`/`Store`, `RemF*`, `LinearBorrow`), a 128-bit constant, checked operation or aggregate field, or a call that passes a `Vec`, `String`, map or `Option` argument to a user function (`Call target with a collection argument`). Native verification models the 128-bit cases, so those are `Skipped` only under ESBMC.
 
 **Wrong:**
 
@@ -1406,7 +1421,7 @@ fn count(v: Vec<i64>) -> u64 vow {
 }
 ```
 
-**Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the function is skipped with a structured warning instead of tripping the defense-in-depth `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` that historically broke the bootstrap on every vowed struct-builder. But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke ESBMC at all (`Unverified`, exit 0).
+**Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier cannot represent a function's body, the function is skipped with a structured warning instead of tripping a defense-in-depth assertion (under ESBMC, `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")`, which historically broke the bootstrap on every vowed struct-builder). But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke a verifier at all (`Unverified`, exit 0).
 
 **Fix:** Refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.
 
@@ -1420,7 +1435,7 @@ fn count(v: Vec<i64>) -> u64 vow {
 }
 ```
 
-**Note form (uncontracted caller).** The same code also appears with `severity: "note"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed. The message ends with the reason, and the reasons need different fixes: `` `f` cannot be modelled `` (restructure `f`, or accept that it stays unverified), or `the verifier timed out for `f`` / `the verifier could not decide them for `f`` (the proof was attempted but not finished — constrain or simplify `f`, or raise the timeout):
+**Note form (uncontracted caller).** The same code also appears with `severity: "note"` for a function that has no `vow` block, cannot be modelled (effects such as `[io]`, unsupported operations, a collection passed to a user function), and calls contracted functions. The callee `requires` at those call sites are not statically checked, but no contract of its own went unproved, so the build status does **not** fail closed. This note form is produced by the ESBMC backend; under `--backend native` the uncontracted-caller selection is shared but a native timeout or `unknown` for such a caller is a hard `VerifyFailed`, not a note. The message ends with the reason, and the reasons need different fixes: `` `f` cannot be modelled `` (restructure `f`, or accept that it stays unverified), or `the verifier timed out for `f`` / `the verifier could not decide them for `f`` (the proof was attempted but not finished — constrain or simplify `f`, or raise the timeout):
 
 ```json
 {
@@ -1482,7 +1497,7 @@ fn twice(x: i64) -> i64 vow {
 ### VerifierAssertionUnattributed
 
 **Phase:** Verification
-**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero, a dynamic shift count that exceeds the operand's bit width, and (native backend only) `unwrap()` called on `None` or `Err`.
+**Meaning:** The verifier found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "None"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero, a dynamic shift count that exceeds the operand's bit width, signed `MIN / -1` (native backend only), `unwrap()` called on `None` or `Err` (native backend only) and an out-of-bounds `Vec` index (native backend only). Under `--backend native` the native `vow_id` is `4294967293` and blame is `None`.
 
 **Wrong:**
 
@@ -1503,7 +1518,7 @@ fn remainder(n: u64, d: u64) -> u64 vow {
 }
 ```
 
-The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
+The structured counterexample's `violation` field carries the stable property description instead of raw verifier text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
 
 **Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For `unwrap() called on None`, match on the value or require its discriminant instead of unwrapping. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
 
@@ -1540,7 +1555,7 @@ fn remainder(n: u64, d: u64) -> u64 vow {
 
 ### ModelCapacityAssumed
 
-**Phase:** Verification (Note; the build status stays `Verified`)
+**Phase:** Verification (Note; the build status stays `Verified`). **ESBMC backend only:** never emitted under `--backend native`, which models collections with a symbolic length and no capacity. The diagnostic is retired together with the ESBMC backend.
 **Meaning:** The function's contracts were proved, but the proof's model restricts at least one capacity to the verifier's model capacity (defaults: `Vec<T>` 128, `String` 256, `HashMap<K, V>` and `BTreeMap<K, V>` 64, user-struct `Heap` 1024 slots; the `String` capacity is raised to the longest string literal in the module, and the note's message reports the capacity actually applied; see [`contracts.md`](contracts.md#collection-models-for-verification)). A parameter, struct-field collection, `String::from_cstr` result, or non-constant `from_raw_parts_copy` length is modelled as nondeterministic *within* its capacity, and struct allocations stop at the heap capacity, so executions with longer collections or more struct allocations were pruned, not checked: `Verified` means "verified for executions up to the capacities".
 
 **Wrong:**

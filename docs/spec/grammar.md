@@ -153,8 +153,8 @@ pub fn api_function(x: i64) -> i64 {
 | `u32`  | 32-bit unsigned integer  |
 | `u64`  | 64-bit unsigned integer  |
 | `u128` | 128-bit unsigned integer (verifier may time out; see below) |
-| `f32`  | 32-bit float (limited support — avoid in contracts) |
-| `f64`  | 64-bit float (limited support — avoid in contracts) |
+| `f32`  | 32-bit float (limited support — avoid in contracts; `--backend native` does not model float operations yet, so a contracted function using them is `Skipped`) |
+| `f64`  | 64-bit float (limited support — avoid in contracts; `--backend native` does not model float operations yet, so a contracted function using them is `Skipped`) |
 | `bool` | Boolean                  |
 | `()`   | Unit type; its only value is also written `()` (not allowed as a parameter type) |
 | `!`    | Never type (diverges)    |
@@ -174,8 +174,9 @@ index expression has exactly the type `u64` (see [Indexing](#indexing)), so
 **128-bit implementation status:** `i128`/`u128` are executable end to end:
 full-range literals, arithmetic, casts, narrowing, and `parse_i128`/`parse_u128`
 compile natively. A 128-bit value may be an `Option`, `Result`, or `enum`
-payload, a struct field, or a `Vec` element (see the layout below). ESBMC modelling of 128-bit aggregates and constants is not available, so
-verification reports `Skipped` rather than an unsound result. Never weaken
+payload, a struct field, or a `Vec` element (see the layout below). The ESBMC backend does not model 128-bit aggregates and constants, so
+it reports `Skipped` rather than an unsound result; the native backend
+(`--backend native`) models them exactly. Never weaken
 contracts to fit the verifier.
 
 **Aggregate layout:** every struct field and enum payload occupies one 8-byte
@@ -397,9 +398,9 @@ a `match` arm, `?`, or `.unwrap()`; at every payload position; and at every
 
 Verification is a separate matter. 128-bit literals (in a body or in
 `requires`/`ensures`/`invariant`) are verifiable, and are modelled exactly under
-the bit-vector encoding, `i128::MIN`, `i128::MAX` and `u128::MAX` included; a
-proof obtained by the `--encoding ir` timeout fallback is reported as `ProvenIr`
-and is weaker. Under the default ESBMC backend every 128-bit aggregate access
+the bit-vector encoding (both backends), `i128::MIN`, `i128::MAX` and `u128::MAX` included; under
+ESBMC a proof obtained by the `--encoding ir` timeout fallback is weaker (it is
+reported as plain `proven`). Under the default ESBMC backend every 128-bit aggregate access
 is `Skipped` rather than modelled: a contracted function that reads or writes a
 128-bit aggregate field or enum payload is reported `Skipped`, with `FieldGet at
 128-bit width` or `FieldSet at 128-bit width`, rather than being modelled through
@@ -480,7 +481,7 @@ the count's type.
 `>= bit-width(LHS)` is a compile-time error (`ShiftCountOutOfRange`), at every
 width: `(x: u8) << 8` and `(x: i64) << 64` do not compile. Dynamic shift counts
 (`x << n` where `n` is not a const expression) get a check on the operation
-that ESBMC proves: the count must satisfy `0 <= count < width(LHS)` at the point
+that the verifier proves: the count must satisfy `0 <= count < width(LHS)` at the point
 of the shift, so a negative signed count is rejected as well. At runtime only
 8-bit shifts trap (`i8`/`u8` with count `>= 8` aborts with `ArithmeticOverflow`);
 wider shifts mask the count to the operand width, like the hardware shift.
@@ -611,8 +612,8 @@ match i64_to_u8_try(big) {
 }
 ```
 
-These intrinsics are emitted by the compiler so ESBMC sees their semantics
-directly in the verification C model.
+These intrinsics are emitted by the compiler so the verifier sees their semantics
+directly in its model (the C model under ESBMC).
 
 For the `u8` target, the available narrowing source types are `i16`, `i32`,
 `i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three
@@ -775,9 +776,10 @@ A `print_*` call inside a contracted function gives that function an effect,
 and the verifier model is restricted to pure functions, so the contract is
 reported as `VerificationSkipped` rather than checked.
 
-This idiom does not by itself make a length-bounded loop provable. ESBMC's
-unwind bound sits below the modelled collection capacity, so this form and the
-signed `while i >= 0` form both return `unknown`. What the idiom buys is a
+This idiom does not by itself make a length-bounded loop provable. A loop
+without an `invariant` that runs longer than the verifier's unwind bound
+(ESBMC's `--max-k-step`, or the native backend's internal bound of 64) returns
+`unknown`, for this form and the signed `while i >= 0` form alike. What the idiom buys is a
 *writable* invariant rather than a stronger proof: `i <= n` is expressible on
 an unsigned index, whereas the signed form's companion clause `i >= -1` is not
 — a negative literal does not fit `u64` at all.
@@ -800,22 +802,25 @@ first index read runs far out of bounds.
 
 Plain wrapping `-` is the correct decrement in the canonical form. The guard
 `i > 0` has already discharged the underflow obligation, so no check is
-needed, and plain `-` is exactly what ESBMC's bitvector encoding models — a
+needed, and plain `-` is exactly what the verifier's bit-vector encoding models — a
 *wrong* guard therefore stays observable through `invariant: i <= n`. Reserve
 `-!` for decrements whose non-negativity the guard does not establish.
 
-Note one asymmetry while reading that advice. `-!` does trap at runtime under
-`--mode debug`, reporting `{"error":"ArithmeticOverflow"}`, but the verifier
-does not model checked arithmetic at all: `n -! 1` and `n - 1` emit the same C
-and yield byte-identical counterexamples. Do not reach for `-!` expecting it
-to make an underflow statically visible.
+Note one asymmetry while reading that advice. `-!` traps at runtime under
+`--mode debug`, reporting `{"error":"ArithmeticOverflow"}`, and the verifier
+models that abort: an aborting execution never returns, so it cannot witness a
+violated `ensures`, and a reachable abort adds an `ArithOverflowReachable`
+warning instead of failing the build. `n -! 1` and `n - 1` are therefore
+different obligations. Do not reach for `-!` expecting it to turn an underflow
+into a failed proof.
 
 #### Why there is no reverse-range syntax
 
 Vow has no numeric range form, and adding one is rejected rather than pending:
 
 - `loop` is not an escape hatch. `break value` is restricted to `loop`, and
-  ESBMC cannot verify an unbounded `loop` at all.
+  an unbounded `loop` is verifiable only through its `invariant` and `break`
+  structure (the native backend models `loop`; ESBMC does not).
 - A reverse for-each would cover very little. Most reverse scans need the
   *index*, not the element — they read a parallel array at `i`, or write a
   second collection at the same `i`.
@@ -859,7 +864,7 @@ let idx: i64 = loop {
 };
 ```
 
-ESBMC cannot verify unbounded `loop` constructs — use `while` with invariants for verifiable loops.
+Under the ESBMC backend an unbounded `loop` cannot be verified; the native backend models `loop` with `break` and `continue`. Use `while` with invariants for loops that verify under both.
 
 ### Break
 
@@ -1029,7 +1034,7 @@ let some: Option<i64> = Option::Some(42);
 `Result<T, E>` has variants `Ok(T)` and `Err(E)`.
 For scalar payloads supported by native aggregate codegen, `match` and
 `.unwrap()` extract the declared type, including `f32` and `f64`; `?`
-currently propagates `Option` payloads only. The ESBMC C model moves `f32`
+currently propagates `Option` payloads only. The ESBMC backend's C model moves `f32`
 and `f64` enum payloads and struct fields through its integer slots by
 IEEE-754 bit pattern (an `f64` as its raw 64 bits, an `f32` as its 32 bits
 zero-extended), as native codegen does, so contracts over float payloads

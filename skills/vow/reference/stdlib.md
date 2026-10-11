@@ -7,14 +7,14 @@ under `stdlib/`. Each module is a self-contained directory: one or more library
 This is a **reference collection**, not a globally-importable package set. Vow has
 no module search path today (see [Consumption model](#consumption-model)). Modules
 carry contracts, but only some are statically verifiable under the current ESBMC
-model — read [Verification status](#verification-status) before relying on a
+backend model — read [Verification status](#verification-status) before relying on a
 contract as a proof rather than a runtime check.
 
 In all examples below, `vow` refers to `build/vowc`.
 
 ## Modules at a glance
 
-| Module path           | Provides                                                                 | ESBMC status |
+| Module path           | Provides                                                                 | ESBMC-backend status |
 |-----------------------|-------------------------------------------------------------------------|---------------------------|
 | `stdlib/math`         | `arithmetic`, `number_theory`, `vec_math` — integer & vector math        | VerifyFailed (env)        |
 | `stdlib/heap`         | `min_heap`, `max_heap` — binary heaps over `i64`                          | VerifyFailed (env)        |
@@ -23,7 +23,7 @@ In all examples below, `vow` refers to `build/vowc`.
 | `stdlib/bignum`       | `bignum` — arbitrary-precision signed integers                          | Skipped     |
 | `stdlib/gc`           | `gc` — mark-and-sweep garbage collector over `i64` slots                 | VerifyFailed              |
 
-These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0. `(env)` marks an environmental verifier limitation, not a contract
+These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0 (ESBMC backend; native results are not recorded here). `(env)` marks an environmental verifier limitation, not a contract
 defect. The statuses reflect the verifier's memory model, **not** the soundness of
 the contracts — see [Verification status](#verification-status).
 
@@ -76,7 +76,7 @@ alongside it.
 
 ## Verification status
 
-The verifier statuses below were measured with `vow verify` against ESBMC 8.3.0.
+The verifier statuses below were measured with `vow verify` (ESBMC backend) against ESBMC 8.3.0.
 They are **pre-existing properties of the code and the verifier**, unchanged by the
 move into `stdlib/`. A `Skipped`/`VerifyFailed` status does not mean a contract is
 wrong — in `--mode debug` every contract is still enforced at runtime via
