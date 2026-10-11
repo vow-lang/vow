@@ -307,6 +307,11 @@ def run_once(vowc, backend, path, jobs, timeout, watchdog_s):
             measured = wait_measured(proc.pid, watchdog_s, start)
         # wait4 reaped the child behind Popen's back; mark it finished
         proc.returncode = os.waitstatus_to_exitcode(measured["status"])
+        leftovers = os.listdir(cache)
+        if leftovers:
+            raise ValueError(
+                f"cache was used while measuring {path}: {sorted(leftovers)}"
+            )
         with open(out_path, "r", encoding="utf-8", errors="replace") as fh:
             stdout = fh.read()
         result = parse_result(stdout, measured["killed"], measured["status"])

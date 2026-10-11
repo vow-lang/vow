@@ -316,6 +316,15 @@ fn check_clause_mode_flag() -> i64 [read] {
     0
 }
 
+fn argv_value(a: Vec<String>, flag: String) -> String {
+    let mut i: u64 = 0;
+    while i + 1 < a.len() {
+        if a[i] == flag { return a[i + 1]; }
+        i = i + 1;
+    }
+    String::from("")
+}
+
 fn argv_has_pair(a: Vec<String>, flag: String, val: String) -> bool {
     let mut i: u64 = 0;
     while i + 1 < a.len() {
@@ -332,6 +341,26 @@ fn argv_has(a: Vec<String>, flag: String) -> bool {
         i = i + 1;
     }
     false
+}
+
+// The worker is told the parent's cache only when both halves are known.
+fn check_cache_flags() -> i64 [read] {
+    let idx: Vec<i64> = Vec::new();
+    idx.push(0);
+    let names: Vec<String> = Vec::new();
+    names.push(String::from("f"));
+    let p: VcPool = vc_pool_new(String::from("vowc"), String::from("a.vow"), idx, names, 1, 1000);
+    let plain: Vec<String> = vc_worker_argv(p, 0);
+    if argv_has(plain, String::from("--worker-cache-dir")) || argv_has(plain, String::from("--worker-solver-id")) { return 1; }
+    p.cache = VcCache { dir: String::from("/c/verify-native"), solver_id: String::from("") };
+    let half: Vec<String> = vc_worker_argv(p, 0);
+    if argv_has(half, String::from("--worker-cache-dir")) || argv_has(half, String::from("--worker-solver-id")) { return 2; }
+    p.cache = VcCache { dir: String::from("/c/verify-native"), solver_id: String::from("0.7.0") };
+    let both: Vec<String> = vc_worker_argv(p, 0);
+    if argv_value(both, String::from("--worker-cache-dir")) != String::from("/c/verify-native") { return 3; }
+    if argv_value(both, String::from("--worker-solver-id")) != String::from("0.7.0") { return 4; }
+    if both.len() != plain.len() + 4 { return 5; }
+    0
 }
 
 fn one_task_pool(n: u64) -> VcPool [read] {
@@ -423,6 +452,7 @@ fn main() -> i32 [io, read] {
     if r == 0 { r = check_stale_tag_never_decodes(); }
     if r == 0 { r = check_clause_flag_is_checked(); }
     if r == 0 { r = check_clause_mode_flag(); }
+    if r == 0 { r = check_cache_flags(); }
     if r == 0 { r = check_probe_argv(); }
     if r == 0 { r = check_pool_halt(); }
     if r == 0 { r = check_pool_settled(); }

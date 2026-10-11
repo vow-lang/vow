@@ -233,7 +233,8 @@ the caller is never refuted there) and `verify-fail/verify_jobs_ce_before_soft`
 encodes acceptance gate item 3. It times `vowc verify --backend esbmc` against
 `--backend native` with the cache off (`--no-cache`, fresh `VOW_CACHE_DIR` per
 run), one fixture at a time on one machine, and reports the median of five runs
-per backend.
+per backend. The harness asserts that the cache directory is still empty after
+each run, so a native result cache (#1429) can never answer a timed run.
 
 **Corpus** (read-only, enumerated at start; a benchmark count other than 23 is
 corpus drift and exits `2`):

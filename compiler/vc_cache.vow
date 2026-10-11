@@ -1,0 +1,295 @@
+module VcCache
+
+use verifier
+use vc_smt
+use vc_solver
+
+// On-disk result cache for the native verifier's solver calls. An entry is the
+// answer to one exact query text, keyed by a hash of that text plus the solver
+// identity. Only `sat` (with its model) and `unsat` are stored: every other
+// answer depends on the budget or the environment. The entry carries the whole
+// query and a lookup compares it byte for byte, so a hash collision, a torn
+// write or a hand-edited file is a miss, never a verdict. A cache problem
+// (unreadable directory, failed write) is never an error: it is a miss.
+
+struct VcCache {
+    dir: String,
+    solver_id: String,
+}
+
+fn VC_CACHE_SHARD_CAP() -> u64 { 64 }
+
+fn vc_cache_off() -> VcCache {
+    VcCache { dir: String::from(""), solver_id: String::from("") }
+}
+
+fn vc_cache_on(c: VcCache) -> bool {
+    c.dir.len() > 0 && c.solver_id.len() > 0
+}
+
+fn vc_cache_tag() -> String {
+    String::from("vow-native-cache v1")
+}
+
+// Everything besides the query that the answer depends on: the schema tag, the
+// solver's own version string and the fixed solver argument list.
+fn vc_cache_salt(solver_id: String) -> String {
+    let s: String = vc_cache_tag();
+    s.push_str(String::from("\n"));
+    s.push_str(solver_id);
+    s.push_str(String::from("\n"));
+    let args: Vec<String> = vc_solver_args(String::from("<query>"));
+    let mut i: u64 = 0;
+    while i < args.len() {
+        s.push_str(args[i]);
+        s.push_str(String::from(" "));
+        i = i + 1;
+    }
+    s.push_str(String::from("\n"));
+    s
+}
+
+// 32 hex characters: two FNV passes over the salted query, the second one
+// separated by a different prefix.
+fn vc_cache_key(salt: String, query: String) -> String {
+    let a: String = String::from("a\n");
+    a.push_str(salt);
+    a.push_str(query);
+    let b: String = String::from("b\n");
+    b.push_str(salt);
+    b.push_str(query);
+    let key: String = vc_hex_digits(hash_str(a) as i64, 16);
+    key.push_str(vc_hex_digits(hash_str(b) as i64, 16));
+    key
+}
+
+fn vc_cache_shard_path(dir: String, key: String) -> String {
+    let p: String = String::from(dir);
+    p.push_str(String::from("/"));
+    p.push_str(key.substring(0, 2));
+    p
+}
+
+fn vc_cache_entry_path(dir: String, key: String) -> String {
+    let p: String = vc_cache_shard_path(dir, key);
+    p.push_str(String::from("/"));
+    p.push_str(key);
+    p
+}
+
+fn vc_cache_int(out: String, v: i64) {
+    out.push_str(i64_to_string(v));
+    out.push_str(String::from("\n"));
+}
+
+// The entry text for a decisive answer. `values`/`highs` are empty for `unsat`.
+fn vc_cache_encode(ans: VcSolverAnswer, query: String) -> String {
+    let values: Vec<i64> = ans.values;
+    let highs: Vec<i64> = ans.highs;
+    let out: String = vc_cache_tag();
+    out.push_str(String::from("\n"));
+    if ans.verdict == VC_ANS_UNSAT() {
+        out.push_str(String::from("unsat\n"));
+    } else {
+        out.push_str(String::from("sat\n"));
+    }
+    vc_cache_int(out, values.len() as i64);
+    let mut k: u64 = 0;
+    while k < values.len() {
+        vc_cache_int(out, values[k]);
+        vc_cache_int(out, highs[k]);
+        k = k + 1;
+    }
+    vc_cache_int(out, query.len() as i64);
+    out.push_str(query);
+    out.push_str(String::from("\nEND\n"));
+    out
+}
+
+// A line of `s` from `cur[0]`, advancing past its newline. A failed cursor
+// (`cur[1] != 0`) stays failed and yields "".
+fn vc_cache_read_line(s: String, cur: Vec<i64>) -> String {
+    if cur[1] != 0 { return String::from(""); }
+    let n: i64 = s.len() as i64;
+    let start: i64 = cur[0];
+    let mut i: i64 = start;
+    while i < n && s.byte_at(i as u64) != 10 {
+        i = i + 1;
+    }
+    if i >= n {
+        cur[1] = 1;
+        return String::from("");
+    }
+    cur[0] = i + 1;
+    s.substring(start as u64, i as u64)
+}
+
+fn vc_cache_read_int(s: String, cur: Vec<i64>) -> i64 {
+    let line: String = vc_cache_read_line(s, cur);
+    if cur[1] != 0 { return 0; }
+    match parse_i64(line) {
+        Option::Some(v) => { v },
+        Option::None => { cur[1] = 1; 0 },
+    }
+}
+
+// The answer an entry text stores, or `None` unless the whole text is a
+// well-formed entry for exactly `query` whose model has `n_names` values.
+fn vc_cache_decode(text: String, query: String, n_names: u64) -> Option<VcSolverAnswer> {
+    let cur: Vec<i64> = Vec::new();
+    cur.push(0);
+    cur.push(0);
+    if vc_cache_read_line(text, cur) != vc_cache_tag() { return Option::None; }
+    let word: String = vc_cache_read_line(text, cur);
+    let mut verdict: i64 = -1;
+    if word == String::from("sat") { verdict = VC_ANS_SAT(); }
+    if word == String::from("unsat") { verdict = VC_ANS_UNSAT(); }
+    let count: i64 = vc_cache_read_int(text, cur);
+    if cur[1] != 0 || verdict < 0 { return Option::None; }
+    let mut want: i64 = 0;
+    if verdict == VC_ANS_SAT() { want = n_names as i64; }
+    if count != want { return Option::None; }
+    let values: Vec<i64> = Vec::new();
+    let highs: Vec<i64> = Vec::new();
+    let mut k: i64 = 0;
+    while k < count && cur[1] == 0 {
+        values.push(vc_cache_read_int(text, cur));
+        highs.push(vc_cache_read_int(text, cur));
+        k = k + 1;
+    }
+    let qlen: i64 = vc_cache_read_int(text, cur);
+    if cur[1] != 0 || qlen != query.len() as i64 { return Option::None; }
+    let start: u64 = cur[0] as u64;
+    let end: u64 = start + qlen as u64;
+    let tail: String = String::from("\nEND\n");
+    if end + tail.len() != text.len() { return Option::None; }
+    if text.substring(start, end) != query || text.substring(end, end + tail.len()) != tail {
+        return Option::None;
+    }
+    Option::Some(vc_answer(verdict, values, highs, String::from("")))
+}
+
+fn vc_cache_lookup(c: VcCache, key: String, query: String, n_names: u64) -> Option<VcSolverAnswer> [read] {
+    if !vc_cache_on(c) { return Option::None; }
+    vc_cache_decode(fs_read(vc_cache_entry_path(c.dir, key)), query, n_names)
+}
+
+// Keeps a shard directory at no more than `VC_CACHE_SHARD_CAP()` entries by
+// removing a half once it is full. `fs_listdir` order is not age
+// order and the runtime has no mtime, so this is not LRU.
+fn vc_cache_make_room(shard: String) [io, read] {
+    let entries: Vec<String> = fs_listdir(shard);
+    if entries.len() < VC_CACHE_SHARD_CAP() { return; }
+    let drop: u64 = entries.len() / 2;
+    let mut i: u64 = 0;
+    while i < drop {
+        let p: String = String::from(shard);
+        p.push_str(String::from("/"));
+        p.push_str(entries[i]);
+        fs_remove(p);
+        i = i + 1;
+    }
+}
+
+// Stores a decisive answer to `query`. Written to a unique temporary name and
+// renamed into place, so a concurrent reader sees a whole entry or none.
+fn vc_cache_store(c: VcCache, key: String, query: String, ans: VcSolverAnswer) [io, read, write] {
+    if !vc_cache_on(c) { return; }
+    if ans.verdict != VC_ANS_SAT() && ans.verdict != VC_ANS_UNSAT() { return; }
+    let shard: String = vc_cache_shard_path(c.dir, key);
+    if fs_mkdir(shard) != 0 { return; }
+    vc_cache_make_room(shard);
+    let tmp: String = vc_cache_entry_path(c.dir, key);
+    tmp.push_str(String::from("."));
+    tmp.push_str(i64_to_string(time_micros()));
+    tmp.push_str(String::from(".tmp"));
+    let text: String = vc_cache_encode(ans, query);
+    if fs_write(tmp, text) != 0 {
+        fs_remove(tmp);
+        return;
+    }
+    if fs_rename(tmp, vc_cache_entry_path(c.dir, key)) != 0 {
+        fs_remove(tmp);
+    }
+}
+
+// The decisive answer stored for `query`, or one with verdict `VC_ANS_NONE` when
+// the cache is off or holds nothing usable. `n_names` is the model arity.
+fn vc_cache_peek(c: VcCache, query: String, n_names: u64) -> VcSolverAnswer [read] {
+    let miss: VcSolverAnswer = vc_answer_plain(VC_ANS_NONE(), String::from(""));
+    if !vc_cache_on(c) { return miss; }
+    let key: String = vc_cache_key(vc_cache_salt(c.solver_id), query);
+    match vc_cache_lookup(c, key, query, n_names) {
+        Option::Some(hit) => { hit },
+        Option::None => { miss },
+    }
+}
+
+// Stores a decisive answer for `query` that was reached without a standalone
+// call (an `unsat` from a shared session): the same entry a standalone `unsat`
+// of that text would have written.
+fn vc_cache_put(c: VcCache, query: String, ans: VcSolverAnswer) [io, read, write] {
+    if !vc_cache_on(c) { return; }
+    vc_cache_store(c, vc_cache_key(vc_cache_salt(c.solver_id), query), query, ans);
+}
+
+// `vc_solver_check` through the cache. A non-positive budget is a timeout
+// before any lookup, so a warm run reports it exactly as a cold one does.
+fn vc_solver_check_cached(c: VcCache, bin: String, query: String, names: Vec<String>, widths: Vec<i64>, budget_ms: i64, scratch: String) -> VcSolverAnswer [io, read, write] {
+    if budget_ms <= 0 || !vc_cache_on(c) {
+        return vc_solver_check(bin, query, names, widths, budget_ms, scratch);
+    }
+    let key: String = vc_cache_key(vc_cache_salt(c.solver_id), query);
+    match vc_cache_lookup(c, key, query, names.len()) {
+        Option::Some(hit) => { hit },
+        Option::None => {
+            let ans: VcSolverAnswer = vc_solver_check(bin, query, names, widths, budget_ms, scratch);
+            vc_cache_store(c, key, query, ans);
+            ans
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Resolution: where the cache lives and which solver it is keyed to
+// ---------------------------------------------------------------------------
+
+// `$VOW_CACHE_DIR/verify-native`, else `$HOME/.cache/vow/verify-native`, else "".
+fn vc_cache_dir_from(vow_cache_dir: String, home: String) -> String {
+    let mut root: String = String::from("");
+    if vow_cache_dir.len() > 0 {
+        root = String::from(vow_cache_dir);
+    } else if home.len() > 0 {
+        root = String::from(home);
+        root.push_str(String::from("/.cache/vow"));
+    }
+    if root.len() == 0 { return root; }
+    root.push_str(String::from("/verify-native"));
+    root
+}
+
+// The first non-empty line of `--version` output, trimmed; "" when there is none.
+fn vc_cache_solver_id(out: String) -> String {
+    vc_first_line(str_trim(out))
+}
+
+// The cache for this run: off when no directory can be made or `bin` does not
+// report a version (the key could not name the solver that answered).
+fn vc_cache_resolve(bin: String) -> VcCache [io, read, write] {
+    if bin.len() == 0 { return vc_cache_off(); }
+    let dir: String = vc_cache_dir_from(getenv(String::from("VOW_CACHE_DIR")), getenv(String::from("HOME")));
+    if dir.len() == 0 { return vc_cache_off(); }
+    let args: Vec<String> = Vec::new();
+    args.push(String::from("--version"));
+    let handle: i64 = process_start(bin, args);
+    if handle < 0 { return vc_cache_off(); }
+    let exit_code: i64 = process_wait_timeout(handle, 10000);
+    let stdout: String = process_stdout_for(handle);
+    let stderr: String = process_stderr_for(handle);
+    process_kill(handle);
+    if exit_code != 0 { return vc_cache_off(); }
+    let mut id: String = vc_cache_solver_id(stdout);
+    if id.len() == 0 { id = vc_cache_solver_id(stderr); }
+    if id.len() == 0 || fs_mkdir(dir) != 0 { return vc_cache_off(); }
+    VcCache { dir: dir, solver_id: id }
+}

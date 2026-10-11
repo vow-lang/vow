@@ -2,6 +2,7 @@ module VcWorker
 
 use ir
 use verifier
+use vc_cache
 use vc_native
 use vc_cex
 
@@ -312,6 +313,7 @@ fn vc_worker_result(exit_code: i64, stdout: String, stderr: String) -> VcOutcome
 // prove is started or kept, which is wrong for a report that spans functions
 // (`contracts`, `test`), so those clear it. `kinds` is per task and
 // `module_root` is the explicit module root the parent lowered with, if any.
+// `cache` is the result cache every worker of the pool shares (off by default).
 struct VcPool {
     exe: String,
     path: String,
@@ -327,6 +329,7 @@ struct VcPool {
     results: Vec<VcOutcome>,
     state: Vec<i64>,
     clauses: bool,
+    cache: VcCache,
     halt: bool,
     kinds: Vec<i64>,
     module_root: String,
@@ -368,6 +371,7 @@ fn vc_pool_new(exe: String, path: String, fn_idx: Vec<i64>, fn_names: Vec<String
         results: results,
         state: state,
         clauses: false,
+        cache: vc_cache_off(),
         halt: true,
         kinds: kinds,
         module_root: String::from(""),
@@ -402,6 +406,12 @@ fn vc_worker_argv(p: VcPool, k: u64) -> Vec<String> {
     if p.module_root.len() > 0 {
         a.push(String::from("--worker-module-root"));
         a.push(p.module_root);
+    }
+    if vc_cache_on(p.cache) {
+        a.push(String::from("--worker-cache-dir"));
+        a.push(p.cache.dir);
+        a.push(String::from("--worker-solver-id"));
+        a.push(p.cache.solver_id);
     }
     a
 }

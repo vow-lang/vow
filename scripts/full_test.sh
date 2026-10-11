@@ -1441,6 +1441,7 @@ else
 fi
 
 native_have_solver=0
+native_cache_total=0
 command -v bitwuzla >/dev/null 2>&1 && native_have_solver=1
 if [ "$native_have_solver" -eq 0 ]; then
     skip "verify-native/pass+fail fixtures" "bitwuzla not on PATH"
@@ -1572,6 +1573,20 @@ print(sum(1 for d in ds if d.get('error_code') == sys.argv[2]))
                 native_errors+=("$native_knob=1 changed the result: runs with and without it differ")
             fi
         done
+        # The result cache (#1429) must never change what the verifier reports:
+        # a cold run on an empty cache and a warm run that replays it equal the
+        # --no-cache baseline in JSON and exit status.
+        native_cache_dir=$(mktemp -d "$TMPDIR/native-cache.XXXXXX")
+        for native_pass in cold warm; do
+            native_cache_json="" native_cache_exit=0
+            native_cache_json=$(VOW_CACHE_DIR="$native_cache_dir" run_self verify --backend native "$vow_file" 2>/dev/null) || native_cache_exit=$?
+            if [ "$native_cache_json" != "$native_json" ] || [ "$native_cache_exit" -ne "$native_exit" ]; then
+                native_errors+=("result cache changed the result: $native_pass run differs from --no-cache")
+            fi
+        done
+        native_cache_entries=$(find "$native_cache_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+        native_cache_total=$((native_cache_total + native_cache_entries))
+        rm -rf "$native_cache_dir"
     fi
     if [ ${#native_errors[@]} -eq 0 ]; then
         pass "verify-native/${native_dir}/${name}"
@@ -1579,6 +1594,19 @@ print(sum(1 for d in ds if d.get('error_code') == sys.argv[2]))
         fail "verify-native/${native_dir}/${name}" "$(IFS='; '; echo "${native_errors[*]}")"
     fi
 done
+# Non-vacuity of the cache comparison above: a solver whose `--version` probe
+# yields nothing silently disables the cache, which would make cold == warm
+# trivially. With a real solver the corpus must have stored something.
+if [ "$native_have_solver" -eq 1 ]; then
+    if [ -z "$(bitwuzla --version 2>/dev/null | tr -d '[:space:]')" ]; then
+        fail "verify-native/cache-probe" "bitwuzla --version printed nothing, so the result cache is disabled"
+    elif [ "$native_cache_total" -eq 0 ]; then
+        fail "verify-native/cache-stored" "no fixture stored a cache entry; the cold/warm comparison was vacuous"
+    else
+        pass "verify-native/cache-stored"
+    fi
+fi
+
 
 # `vowc contracts --verify --backend native` (#1427): each fixture in
 # tests/verify-native/contracts/ pins the clause statuses and the weak-contract
