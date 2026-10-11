@@ -1,0 +1,19 @@
+// An enum parameter: `s.0` is the discriminant, the payload follows from `s.1`. A
+// negative payload makes an arm entered by an exact discriminant compare violate.
+// TEST: counterexample-fn "area"
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-blame Callee
+// TEST: counterexample-violation "ensures result >= 0"
+module EnumParamWrongArm
+
+enum Shape { Circle(i64), Rect(i64, i64), Empty }
+
+fn area(s: Shape) -> i64 vow {
+  ensures: result >= 0
+} {
+  match s {
+    Shape::Circle(r) => r,
+    Shape::Rect(w, h) => w * h,
+    Shape::Empty => 0,
+  }
+}

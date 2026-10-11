@@ -1601,8 +1601,9 @@ cx = j.get('counterexamples') or []
 bad = [c.get('function', '?') + '=' + str(c.get('replay', '')) for c in cx if c.get('replay') != 'confirmed']
 print(','.join(bad) if bad else ('confirmed' if cx else 'none'))
 " "$native_replay_json" 2>/dev/null) || native_replay=""
-        # `// TEST: replay-skipped <reason>`: the self-hosted harness replays only
-        # i64/u64/bool scalars and shift counts are not runtime aborts, so a fixture
+        # `// TEST: replay-skipped <reason>`: the self-hosted harness rebuilds only
+        # i64/u64/bool scalars and struct, enum, Option and Result parameters of
+        # such scalars, and shift counts are not runtime aborts, so a fixture
         # outside that must say why its counterexample cannot be confirmed.
         native_replay_want="confirmed"
         if grep -q '^// TEST: replay-skipped ' "$vow_file"; then native_replay_want="skipped"; fi

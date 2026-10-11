@@ -38,9 +38,16 @@ fn check_128_bit() -> i64 {
     0
 }
 
+fn check_bool() -> i64 {
+    if vc_format_int(ITY_BOOL(), 1, 0) != String::from("true") { return 30; }
+    if vc_format_int(ITY_BOOL(), 0, 0) != String::from("false") { return 31; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_narrow_types();
     if r == 0 { r = check_64_bit(); }
     if r == 0 { r = check_128_bit(); }
+    if r == 0 { r = check_bool(); }
     i64_to_i32_wrap(r)
 }

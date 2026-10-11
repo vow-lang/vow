@@ -116,6 +116,136 @@ fn check_long_main_keeps_tail() -> i32 [io] {
     0
 }
 
+// Splits `a=1,b=2` into the parallel name/value lists a counterexample carries:
+// the names when `values` is false, the values when it is true.
+fn kv_part(kv: String, values: bool) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    let mut start: u64 = 0u64;
+    let mut i: u64 = 0u64;
+    while i <= kv.len() {
+        if i == kv.len() || kv.byte_at(i) == 44 {
+            if i > start {
+                let pair: String = kv.substring(start, i);
+                let at: u64 = index_of(pair, String::from("=")) as u64;
+                if values {
+                    out.push(pair.substring(at + 1u64, pair.len()));
+                } else {
+                    out.push(pair.substring(0u64, at));
+                }
+            }
+            start = i + 1u64;
+        }
+        i = i + 1u64;
+    }
+    out
+}
+
+fn agg_src() -> String {
+    let s: String = String::from("");
+    s.push_str(String::from("module T\n"));
+    s.push_str(String::from("struct Pair { lo: i64, hi: i64 }\n"));
+    s.push_str(String::from("struct Flags { on: bool, n: u8 }\n"));
+    s.push_str(String::from("struct Wide { a: i64, w: i128 }\n"));
+    s.push_str(String::from("struct Holder { p: Pair }\n"));
+    s.push_str(String::from("enum Shape { Circle(i64), Rect(i64, i64), Empty }\n"));
+    s.push_str(String::from("type Alias = Pair;\n"));
+    s.push_str(String::from("fn fp(p: Pair) -> i64 { p.lo }\n"));
+    s.push_str(String::from("fn ff(f: Flags) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fw(w: Wide) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fh(h: Holder) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fs(s: Shape) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fo(o: Option<i64>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fr(r: Result<i64, bool>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fop(o: Option<Pair>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fv(v: Vec<i64>) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fref(p: &Pair) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fa(a: Alias) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fu(u: Unknown) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fq(x: i64, p: Pair) -> i64 { 0 }\n"));
+    s.push_str(String::from("fn fe(r: Result<(), bool>) -> i64 { 0 }\n"));
+    s
+}
+
+fn agg(fname: String, pi: i64, kv: String) -> ReplayArg [io] {
+    let m: Module = parse_src(agg_src());
+    replay_agg_arg(m, fname, pi, kv_part(kv, false), kv_part(kv, true))
+}
+
+fn lit_of(fname: String, kv: String) -> String [io] {
+    let r: ReplayArg = agg(fname, 0, kv);
+    if r.reason.len() > 0 { return str2s(String::from("<skip: "), r.reason); }
+    r.lit
+}
+
+fn str2s(a: String, b: String) -> String {
+    let out: String = String::from(a);
+    out.push_str(b);
+    out
+}
+
+fn check_struct_arg() -> i32 [io] {
+    if lit_of(String::from("fp"), String::from("p.0=3,p.1=-4")) != String::from("Pair { lo: 3, hi: -4 }") { return 101; }
+    if agg(String::from("fp"), 0, String::from("p.0=3")).ty_text != String::from("Pair") { return 102; }
+    if lit_of(String::from("fp"), String::from("")) != String::from("Pair { lo: 0, hi: 0 }") { return 103; }
+    if lit_of(String::from("ff"), String::from("f.0=true,f.1=255")) != String::from("Flags { on: true, n: 255 }") { return 104; }
+    if lit_of(String::from("fp"), String::from("p.0=-9223372036854775808")) != String::from("Pair { lo: (-9223372036854775807 - 1), hi: 0 }") { return 105; }
+    let second: ReplayArg = agg(String::from("fq"), 1, String::from("p.0=1,p.1=2"));
+    if second.lit != String::from("Pair { lo: 1, hi: 2 }") { return 106; }
+    0
+}
+
+fn check_enum_arg() -> i32 [io] {
+    if lit_of(String::from("fs"), String::from("s.0=1,s.1=5,s.2=6")) != String::from("Shape::Rect(5, 6)") { return 111; }
+    if lit_of(String::from("fs"), String::from("s.0=2")) != String::from("Shape::Empty") { return 112; }
+    if lit_of(String::from("fs"), String::from("s.1=9")) != String::from("Shape::Circle(9)") { return 113; }
+    if lit_of(String::from("fs"), String::from("")) != String::from("Shape::Circle(0)") { return 114; }
+    let bad: ReplayArg = agg(String::from("fs"), 0, String::from("s.0=7"));
+    if bad.lit.len() != 0 { return 115; }
+    if index_of(bad.reason, String::from("discriminant 7 outside Shape (3 variants)")) < 0 { return 116; }
+    if agg(String::from("fs"), 0, String::from("s.0=-1")).reason.len() == 0 { return 117; }
+    0
+}
+
+fn check_option_result_arg() -> i32 [io] {
+    if lit_of(String::from("fo"), String::from("o.0=0")) != String::from("Option::None") { return 121; }
+    if lit_of(String::from("fo"), String::from("o.0=1,o.1=9")) != String::from("Option::Some(9)") { return 122; }
+    if agg(String::from("fo"), 0, String::from("o.0=0")).ty_text != String::from("Option<i64>") { return 123; }
+    if lit_of(String::from("fr"), String::from("r.0=0,r.1=4")) != String::from("Result::Ok(4)") { return 124; }
+    if lit_of(String::from("fr"), String::from("r.0=1,r.1=false")) != String::from("Result::Err(false)") { return 125; }
+    if agg(String::from("fr"), 0, String::from("r.0=0")).ty_text != String::from("Result<i64, bool>") { return 126; }
+    if lit_of(String::from("fe"), String::from("r.0=0")) != String::from("Result::Ok(())") { return 129; }
+    if lit_of(String::from("fe"), String::from("r.0=1,r.1=true")) != String::from("Result::Err(true)") { return 130; }
+    // One slot read at two sorts: each variant's payload takes its own view.
+    let both: String = String::from("r.0=1,r.1:64=4,r.1:bool=true");
+    if lit_of(String::from("fr"), both) != String::from("Result::Err(true)") { return 127; }
+    let ok_side: String = String::from("r.0=0,r.1:64=4,r.1:bool=true");
+    if lit_of(String::from("fr"), ok_side) != String::from("Result::Ok(4)") { return 128; }
+    0
+}
+
+fn check_unsupported_args_are_skipped_with_a_reason() -> i32 [io] {
+    if agg(String::from("fw"), 0, String::from("w.0=1")).reason.len() == 0 { return 131; }
+    if agg(String::from("fh"), 0, String::from("")).reason.len() == 0 { return 132; }
+    if agg(String::from("fop"), 0, String::from("o.0=1")).reason.len() == 0 { return 133; }
+    if lit_of(String::from("fop"), String::from("o.0=0")) != String::from("Option::None") { return 146; }
+    if agg(String::from("fv"), 0, String::from("")).reason.len() == 0 { return 134; }
+    if agg(String::from("fref"), 0, String::from("")).reason.len() == 0 { return 135; }
+    if agg(String::from("fa"), 0, String::from("")).reason.len() == 0 { return 136; }
+    if agg(String::from("fu"), 0, String::from("")).reason.len() == 0 { return 137; }
+    if agg(String::from("missing"), 0, String::from("")).reason.len() == 0 { return 138; }
+    if agg(String::from("fp"), 5, String::from("")).reason.len() == 0 { return 139; }
+    0
+}
+
+fn check_value_text_is_validated() -> i32 [io] {
+    if agg(String::from("ff"), 0, String::from("f.1=-1")).reason.len() == 0 { return 141; }
+    if agg(String::from("fp"), 0, String::from("p.0=abc")).reason.len() == 0 { return 142; }
+    if agg(String::from("ff"), 0, String::from("f.1=18446744073709551615")).reason.len() == 0 { return 143; }
+    if lit_of(String::from("fp"), String::from("p.1=9223372036854775807")) != String::from("Pair { lo: 0, hi: 9223372036854775807 }") { return 145; }
+    if agg(String::from("ff"), 0, String::from("f.1=300")).reason.len() == 0 { return 144; }
+    0
+}
+
 fn main() -> i32 [io] {
     let r1: i32 = check_locates_main();
     if r1 != 0 { return r1; }
@@ -131,5 +261,15 @@ fn main() -> i32 [io] {
     if r6 != 0 { return r6; }
     let r7: i32 = check_long_main_keeps_tail();
     if r7 != 0 { return r7; }
+    let r8: i32 = check_struct_arg();
+    if r8 != 0 { return r8; }
+    let r9: i32 = check_enum_arg();
+    if r9 != 0 { return r9; }
+    let r10: i32 = check_option_result_arg();
+    if r10 != 0 { return r10; }
+    let r11: i32 = check_unsupported_args_are_skipped_with_a_reason();
+    if r11 != 0 { return r11; }
+    let r12: i32 = check_value_text_is_validated();
+    if r12 != 0 { return r12; }
     0
 }

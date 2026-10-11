@@ -158,6 +158,33 @@ fn check_wide_and_narrow_widths() -> i64 {
     0
 }
 
+fn check_bool_literals() -> i64 {
+    let ns: Vec<String> = Vec::new();
+    ns.push(String::from("p0f1s0"));
+    let t: VcModel = vc_parse_model(String::from("sat\n((p0f1s0 true))\n"), ns, w1(0));
+    if t.ok != 1 { return 120; }
+    if t.values[0] != 1 { return 121; }
+    let f: VcModel = vc_parse_model(String::from("sat\n((p0f1s0 false))\n"), ns, w1(0));
+    if f.ok != 1 { return 122; }
+    if f.values[0] != 0 { return 123; }
+    if vc_parse_model(String::from("sat\n((p0f1s0 #b1))\n"), ns, w1(0)).ok != 0 { return 124; }
+    if vc_parse_model(String::from("sat\n((p0f1s0 (_ bv1 1)))\n"), ns, w1(0)).ok != 0 { return 125; }
+    if vc_parse_model(String::from("sat\n((p0f1s0 truex))\n"), ns, w1(0)).ok != 0 { return 126; }
+    if vc_parse_model(String::from("sat\n((p0f1s0 true))\n"), ns, w1(8)).ok != 0 { return 127; }
+    if vc_parse_model(String::from("sat\n((p0f1s0 #b00000001))\n"), ns, w1(8)).values[0] != 1 { return 128; }
+    let two: Vec<String> = Vec::new();
+    two.push(String::from("p0f0s64"));
+    two.push(String::from("p0f1s0"));
+    let ws: Vec<i64> = Vec::new();
+    ws.push(64);
+    ws.push(0);
+    let m: VcModel = vc_parse_model(String::from("sat\n(\n  (p0f0s64 (_ bv7 64))\n  (p0f1s0 true)\n)\n"), two, ws);
+    if m.ok != 1 { return 129; }
+    if m.values[0] != 7 { return 130; }
+    if m.values[1] != 1 { return 131; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_verdicts();
     if r == 0 { r = check_multiline_model(); }
@@ -167,5 +194,6 @@ fn main() -> i32 {
     if r == 0 { r = check_incomplete_or_malformed_is_not_ok(); }
     if r == 0 { r = check_classify_run(); }
     if r == 0 { r = check_wide_and_narrow_widths(); }
+    if r == 0 { r = check_bool_literals(); }
     i64_to_i32_wrap(r)
 }
