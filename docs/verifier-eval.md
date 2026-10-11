@@ -100,11 +100,11 @@ Exit code is non-zero on any bucket except known-gaps. A machine-readable
 ## Category coverage
 
 <!-- GENERATE:CORPUS_COUNTS:START -->
-All 7 categories are represented (157 programs):
+All 7 categories are represented (158 programs):
 
 | Category | Count |
 | --- | --- |
-| callee-blame | 52 |
+| callee-blame | 53 |
 | model-drift | 29 |
 | bounds | 28 |
 | overflow | 19 |
