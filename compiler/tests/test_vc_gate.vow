@@ -542,8 +542,75 @@ fn check_scalar_calls() -> i64 {
     0
 }
 
+fn args3(a: i64, b: i64, c: i64) -> Vec<i64> {
+    let v: Vec<i64> = args2(a, b);
+    v.push(c);
+    v
+}
+
+fn vec_new_insts() -> Vec<IrInst> {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_const_i64(0, 8));
+    insts.push(mk_inst_const_i64(1, 8));
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), args2(0, 1), String::from("__vow_vec_new")));
+    insts
+}
+
+// let v = Vec::new(); v.push(7); v[0] = 9; let x = v[0]; v.pop(); return v.len()
+fn check_vec_ops_accepted() -> i64 {
+    let insts: Vec<IrInst> = vec_new_insts();
+    insts.push(mk_inst_const_i64(3, 7));
+    insts.push(mk_inst_call_extern(4, ITY_UNIT(), args2(2, 3), String::from("__vow_vec_push_val")));
+    insts.push(mk_inst_const_i64(5, 0));
+    insts.push(mk_inst_call_extern(6, ITY_UNIT(), args3(2, 5, 3), String::from("__vow_vec_set_val")));
+    insts.push(mk_inst_call_extern(7, ITY_I64(), args2(2, 5), String::from("__vow_vec_get_val")));
+    insts.push(mk_inst_call_extern(8, ITY_UNIT(), args1(2), String::from("__vow_vec_pop")));
+    insts.push(mk_inst_call_extern(9, ITY_U64(), args1(2), String::from("__vow_vec_len")));
+    insts.push(mk_inst_return(10, 9));
+    let f: IrFunction = one_block(String::from("v"), Vec::new(), ITY_U64(), insts);
+    let why: String = vc_skip_reason(f);
+    if why.len() != 0 { return 1; }
+    0
+}
+
+fn vec_fn_with(sym: String, ty: i64, args: Vec<i64>, extra: Vec<IrInst>) -> IrFunction {
+    let insts: Vec<IrInst> = vec_new_insts();
+    let mut k: u64 = 0;
+    while k < extra.len() {
+        insts.push(extra[k]);
+        k = k + 1;
+    }
+    insts.push(mk_inst_call_extern(20, ty, args, sym));
+    insts.push(mk_inst_const_i64(21, 0));
+    insts.push(mk_inst_return(22, 21));
+    one_block(String::from("v"), Vec::new(), ITY_I64(), insts)
+}
+
+fn check_vec_ops_rejected() -> i64 {
+    let none: Vec<IrInst> = Vec::new();
+    // A symbol outside the Vec table stays an unmodelled builtin.
+    let clear: IrFunction = vec_fn_with(String::from("__vow_vec_clear"), ITY_UNIT(), args1(2), none);
+    if vc_skip_reason(clear) != String::from("unmodeled-builtin: __vow_vec_clear") { return 10; }
+    let raw: IrFunction = vec_fn_with(String::from("__vow_vec_from_raw_parts_copy_val"), ITY_PTR(), args1(2), none);
+    if vc_reason_code(vc_skip_reason(raw)) != VC_SKIP_UNMODELED_BUILTIN() { return 11; }
+    // A pointer element (nested Vec, String, struct) is not one 8-byte slot of a scalar.
+    let ptr_push: IrFunction = vec_fn_with(String::from("__vow_vec_push_val"), ITY_UNIT(), args2(2, 2), none);
+    if vc_reason_code(vc_skip_reason(ptr_push)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 12; }
+    // A 32-bit index is not read as a 64-bit one.
+    let narrow: Vec<IrInst> = Vec::new();
+    narrow.push(mk_inst(30, IOP_CONST_I32(), ITY_I32(), Vec::new()));
+    let idx32: IrFunction = vec_fn_with(String::from("__vow_vec_get_val"), ITY_I64(), args2(2, 30), narrow);
+    if vc_reason_code(vc_skip_reason(idx32)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 13; }
+    // `len` yields u64.
+    let bad_len: IrFunction = vec_fn_with(String::from("__vow_vec_len"), ITY_I64(), args1(2), none);
+    if vc_reason_code(vc_skip_reason(bad_len)) != VC_SKIP_UNSUPPORTED_OPCODE() { return 14; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_accepted();
+    if r == 0 { r = check_vec_ops_accepted(); }
+    if r == 0 { r = check_vec_ops_rejected(); }
     if r == 0 { r = check_scalar_calls(); }
     if r == 0 { r = check_effects(); }
     if r == 0 { r = check_branches_accepted(); }

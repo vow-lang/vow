@@ -1,0 +1,16 @@
+// TEST: skip-reason unmodeled-builtin
+module VecClearSkipped
+
+fn emptied() -> u64 vow {
+  ensures: result == 0
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.clear();
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(emptied());
+  0
+}

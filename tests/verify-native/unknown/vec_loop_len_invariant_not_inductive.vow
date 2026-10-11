@@ -1,0 +1,25 @@
+// TEST: category invariant
+// The postcondition is true, but the length is a function of the loop's
+// pushes and the invariant says nothing about the Vec. A Vec written in a loop
+// is never cut for induction, and the parameter bound defeats unwinding, so the
+// result is unknown, never proven.
+module VecLoopLenInvariantNotInductive
+
+fn fill(n: u64) -> u64 vow {
+  ensures: result == n
+} {
+  let v: Vec<i64> = Vec::new();
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    v.push(1);
+    i = i + 1;
+  }
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill(3));
+  0
+}

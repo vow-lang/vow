@@ -1,0 +1,15 @@
+// Only the length of a `Vec<Vec<_>>` is read; its pointer elements are never
+// touched, so the array-plus-length model is exact for it.
+module VecOfVecLen
+
+fn rows(v: Vec<Vec<i64>>) -> u64 vow {
+  ensures: result == v.len()
+} {
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<Vec<i64>> = Vec::new();
+  print_u64(rows(v));
+  0
+}

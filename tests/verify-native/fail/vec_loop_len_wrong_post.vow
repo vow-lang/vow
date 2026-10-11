@@ -1,0 +1,27 @@
+// TEST: category invariant
+// TEST: counterexample-fn fill
+// TEST: counterexample-blame Callee
+// The loop pushes `n` elements, so the false postcondition `result == 0` is
+// reachable for n = 1. The user invariant does not mention the Vec, and the
+// loop's Vec state is not a header Phi: induction must not treat the length as
+// the one the loop was entered with and prove the postcondition.
+module VecLoopLenWrongPost
+
+fn fill(n: u64) -> u64 vow {
+  ensures: result == 0
+} {
+  let v: Vec<i64> = Vec::new();
+  let mut i: u64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    v.push(1);
+    i = i + 1;
+  }
+  v.len()
+}
+
+fn main() -> i32 [io] {
+  print_u64(fill(0));
+  0
+}

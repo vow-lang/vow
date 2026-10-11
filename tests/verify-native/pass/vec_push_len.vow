@@ -1,0 +1,16 @@
+module VecPushLen
+
+fn three() -> Vec<i64> vow {
+  ensures: result.len() == 3
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(10);
+  v.push(20);
+  v.push(30);
+  v
+}
+
+fn main() -> i32 [io] {
+  print_u64(three().len());
+  0
+}

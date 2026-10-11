@@ -1,0 +1,31 @@
+// A parameter Vec is pushed in one arm only: the other arm carries its initial
+// state into the join, so the length after the merge is `len` or `len + 1`.
+module VecParamArmPush
+
+fn arm_only(v: Vec<i64>, c: i64) -> u64 vow {
+  ensures: !(c > 0) || result >= 1
+} {
+  if c > 0 {
+    v.push(1);
+  }
+  v.len()
+}
+
+fn arm_reads(v: Vec<i64>, c: i64) -> i64 vow {
+  requires: v.len() == 1
+  ensures: result == result
+} {
+  if c > 0 {
+    v.push(5);
+    v[1]
+  } else {
+    v[0]
+  }
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  print_u64(arm_only(v, 1));
+  0
+}

@@ -8,6 +8,7 @@ use vc_int
 use vc_cfg
 use vc_loops
 use vc_agg
+use vc_vec
 use ast
 
 // Fail-closed subset gate for the native verifier. `vc_skip_reason` returns ""
@@ -15,7 +16,8 @@ use ast
 // and whose loops are reducible and unrollable (`vc_loops`), built from the
 // integer (8 to 128 bits) and Bool operations the
 // symbolic executor models and the struct, enum and `Option` values it
-// scalarises (`vc_agg`), with the control-flow shape `vc_cfg_detail` accepts;
+// scalarises (`vc_agg`) and the `Vec`s of Bool and integers up to 64 bits it
+// models as an array plus a length (`vc_vec`), with the control-flow shape `vc_cfg_detail` accepts;
 // every other function is `Skipped` with "<code>: <detail>" using the closed
 // codes of ADR-1430 (listed in `vc_ops`). An unknown opcode is never accepted.
 
@@ -195,6 +197,37 @@ fn vc_call_scalar(inst: IrInst, tys: Vec<i64>) -> bool {
     true
 }
 
+// A bit-vector or Bool element a `Vec` slot holds: one 8-byte slot, so up to 64
+// bits. Wider integers and every pointer element (nested `Vec`, `String`,
+// struct) are not modelled.
+fn vc_vec_elem_ok(ty: i64) -> bool {
+    ty == ITY_BOOL() || (vc_ty_is_int(ty) && vc_ty_bits(ty) <= 64)
+}
+
+fn vc_vec_index_ok(ty: i64) -> bool {
+    vc_ty_is_int(ty) && vc_ty_bits(ty) == 64
+}
+
+// Operand and result types of a `Vec` call. `get` yields the raw 8-byte slot as
+// `i64`; the lowerer narrows it with its own cast.
+fn vc_vec_call_ok(inst: IrInst, tys: Vec<i64>, kind: i64) -> bool {
+    let n: u64 = inst.args.len();
+    let t0: i64 = vc_arg_ty(tys, inst, 0);
+    let t1: i64 = vc_arg_ty(tys, inst, 1);
+    if kind == VC_VEC_NEW() {
+        return n == 2 && inst.ty == ITY_PTR() && vc_ty_is_int(t0) && vc_ty_is_int(t1);
+    }
+    if t0 != ITY_PTR() { return false; }
+    if kind == VC_VEC_PUSH() { return n == 2 && inst.ty == ITY_UNIT() && vc_vec_elem_ok(t1); }
+    if kind == VC_VEC_GET() { return n == 2 && inst.ty == ITY_I64() && vc_vec_index_ok(t1); }
+    if kind == VC_VEC_SET() {
+        return n == 3 && inst.ty == ITY_UNIT() && vc_vec_index_ok(t1) && vc_vec_elem_ok(vc_arg_ty(tys, inst, 2));
+    }
+    if kind == VC_VEC_LEN() { return n == 1 && inst.ty == ITY_U64(); }
+    if kind == VC_VEC_POP() { return n == 1 && inst.ty == ITY_UNIT(); }
+    false
+}
+
 // True when the instruction is one the symbolic executor models, given the
 // types of the values it reads. `calls` admits a scalar call of a user function
 // (inlined before execution); without it only the unwrap abort is a call.
@@ -229,6 +262,8 @@ fn vc_inst_supported(f: IrFunction, inst: IrInst, tys: Vec<i64>, lits: Vec<i64>,
     }
     if op == IOP_CALL() {
         if vc_is_unwrap_abort(inst) { return n == 0 && inst.ty == ITY_UNIT(); }
+        let vk: i64 = vc_inst_vec_kind(inst);
+        if vk != VC_VEC_NONE() { return vc_vec_call_ok(inst, tys, vk); }
         return calls && vc_call_scalar(inst, tys);
     }
     if vc_is_arith_op(op) {
@@ -272,7 +307,8 @@ fn vc_inst_specific_reason(inst: IrInst) -> String {
     let model: i64 = vc_op_model(inst.op);
     if model == VC_OPM_FLOAT_REM() { return vc_reason(VC_SKIP_FLOAT_REM(), opcode_name(inst.op)); }
     if model == VC_OPM_CALL() {
-        if inst.dk == IDATA_CALL_EXTERN() && !vc_is_unwrap_abort(inst) && !catalogue_verifier_known(inst.ds) {
+        if inst.dk == IDATA_CALL_EXTERN() && !vc_is_unwrap_abort(inst) && vc_inst_vec_kind(inst) == VC_VEC_NONE()
+            && !catalogue_verifier_known(inst.ds) {
             return vc_reason(VC_SKIP_UNMODELED_BUILTIN(), inst.ds);
         }
         return String::from("");
@@ -332,6 +368,7 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
     // has to be modelled, and the generic one would hide it behind a parameter
     // or constant that precedes it.
     let mut have_generic: bool = false;
+    let mut has_vec: bool = false;
     let mut generic: String = String::from("");
     let mut bi: u64 = 0;
     while bi < f.blocks.len() {
@@ -339,6 +376,7 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
         let mut ii: u64 = 0;
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_CALL() && vc_inst_vec_kind(inst) != VC_VEC_NONE() { has_vec = true; }
             if !vc_inst_supported(f, inst, tys, lits, calls) {
                 let specific: String = vc_inst_specific_reason(inst);
                 if specific.len() > 0 { return specific; }
@@ -355,6 +393,12 @@ fn vc_skip_reason_with(src: IrFunction, calls: bool) -> String {
     let shape: String = vc_agg_shape_detail(f, tys.len());
     if shape.len() > 0 {
         return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), shape);
+    }
+    if has_vec {
+        let vec_shape: String = vc_vec_shape_detail(f, tys.len());
+        if vec_shape.len() > 0 {
+            return vc_reason(VC_SKIP_UNSUPPORTED_OPCODE(), vec_shape);
+        }
     }
     let cfg: String = vc_cfg_detail(f, tys);
     if cfg.len() > 0 {

@@ -100,6 +100,43 @@ fn vc_is_unwrap_abort(inst: IrInst) -> bool {
     inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == VC_INTERNAL_UNWRAP_PANIC()
 }
 
+// `Vec` operations the symbolic executor models as an array plus a symbolic
+// length (`vc_vec`). They are listed here by runtime symbol, like the unwrap
+// abort, and not in the builtin catalogue: the catalogue is keyed by Vow builtin
+// name and its entries need a grammar row. A symbol not listed (`clear`,
+// `truncate`, `reserve`, `from_raw_parts_copy`, the wide-slot variants, ...) is an
+// unmodelled builtin.
+fn VC_VEC_NONE() -> i64 { 0 }
+fn VC_VEC_NEW() -> i64 { 1 }
+fn VC_VEC_PUSH() -> i64 { 2 }
+fn VC_VEC_GET() -> i64 { 3 }
+fn VC_VEC_SET() -> i64 { 4 }
+fn VC_VEC_LEN() -> i64 { 5 }
+fn VC_VEC_POP() -> i64 { 6 }
+
+// Dispatched on the symbol's length, so a call to anything else costs one
+// comparison instead of one per operation.
+fn vc_vec_op_kind(sym: String) -> i64 {
+    let n: u64 = sym.len();
+    if n == 13 {
+        if sym == String::from("__vow_vec_new") { return VC_VEC_NEW(); }
+        if sym == String::from("__vow_vec_len") { return VC_VEC_LEN(); }
+        if sym == String::from("__vow_vec_pop") { return VC_VEC_POP(); }
+    } else if n == 17 {
+        if sym == String::from("__vow_vec_get_val") { return VC_VEC_GET(); }
+        if sym == String::from("__vow_vec_set_val") { return VC_VEC_SET(); }
+    } else if n == 18 {
+        if sym == String::from("__vow_vec_push_val") { return VC_VEC_PUSH(); }
+    }
+    VC_VEC_NONE()
+}
+
+// The `Vec` operation an instruction is, or `VC_VEC_NONE`.
+fn vc_inst_vec_kind(inst: IrInst) -> i64 {
+    if inst.op != IOP_CALL() || inst.dk != IDATA_CALL_EXTERN() { return VC_VEC_NONE(); }
+    vc_vec_op_kind(inst.ds)
+}
+
 // The `Unreachable` the loop unroller puts where a back edge goes past the
 // bound. Reaching it means some run needs more iterations than the bound.
 fn VC_INTERNAL_UNWIND_SINK() -> String { String::from("__vc_unwind_sink") }
@@ -150,11 +187,19 @@ fn vc_frame_mark(k: i64) -> String {
     out
 }
 
-// The frame an instruction was spliced from; -1 for the target's own. The
-// unwrap abort keeps its extern name in `ds`, so its frame travels in `dv2`
-// (`frame + 1`; 0 for the target's own, which the lowerer emits with `dv2` 0).
+// An extern call that can fail keeps its symbol in `ds`, so the frame it was
+// spliced from travels in `dv2` (`frame + 1`; 0 for the target's own, which the
+// lowerer emits with `dv2` 0): the unwrap abort and a `Vec` `get`/`set`, whose
+// bounds check is a claim.
+fn vc_frame_in_dv2(inst: IrInst) -> bool {
+    if vc_is_unwrap_abort(inst) { return true; }
+    let k: i64 = vc_inst_vec_kind(inst);
+    k == VC_VEC_GET() || k == VC_VEC_SET()
+}
+
+// The frame an instruction was spliced from; -1 for the target's own.
 fn vc_frame_of(inst: IrInst) -> i64 {
-    if vc_is_unwrap_abort(inst) { return inst.dv2 - 1; }
+    if vc_frame_in_dv2(inst) { return inst.dv2 - 1; }
     let pre: String = VC_FRAME_PREFIX();
     if inst.ds.len() <= pre.len() || string_starts_with(inst.ds, pre) != 1 {
         return -1;

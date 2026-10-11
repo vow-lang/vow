@@ -321,6 +321,24 @@ fn check_ptr_phi() -> i64 {
     0
 }
 
+// A Vec written in the loop body is not a header Phi, so the havoc copy would
+// keep the state the loop was entered with: the function is not cut.
+fn check_vec_written_in_loop() -> i64 {
+    let f: IrFunction = count_up();
+    if vc_induct_cut(f).status != VC_INDUCT_OK() { return 1; }
+    let body: IrBlock = f.blocks[2];
+    let w: Vec<IrInst> = Vec::new();
+    w.push(mk_inst_call_extern(50, ITY_UNIT(), pair(0, 9), String::from("__vow_vec_push_val")));
+    let mut i: u64 = 0;
+    while i < body.insts.len() {
+        w.push(body.insts[i]);
+        i = i + 1;
+    }
+    f.blocks[2] = mk_block(2, w);
+    if vc_induct_cut(f).status != VC_INDUCT_NA() { return 2; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_structure();
     if r == 0 { r = check_and_region() + 100; if r == 100 { r = 0; } }
@@ -328,5 +346,6 @@ fn main() -> i32 {
     if r == 0 { r = check_deterministic() + 200; if r == 200 { r = 0; } }
     if r == 0 { r = check_not_applicable() + 300; if r == 300 { r = 0; } }
     if r == 0 { r = check_ptr_phi() + 400; if r == 400 { r = 0; } }
+    if r == 0 { r = check_vec_written_in_loop() + 500; if r == 500 { r = 0; } }
     i64_to_i32_wrap(r)
 }

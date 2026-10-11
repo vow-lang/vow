@@ -1,0 +1,17 @@
+// TEST: replay-skipped the abort is a bounds check, which the replay harness does not reproduce
+// TEST: counterexample-fn "first"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+module VecEmptyIndex
+
+fn first() -> i64 vow {
+  ensures: result == result
+} {
+  let v: Vec<i64> = Vec::new();
+  v[0]
+}
+
+fn main() -> i32 [io] {
+  print_i64(first());
+  0
+}

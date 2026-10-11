@@ -1,8 +1,9 @@
 // TEST: skip-reason unmodeled-builtin
 module WideVecElementSkipped
 
-// A `Vec<i128>` element stays `Skipped` (like every collection) until the Vec
-// model of #1423 lands; 128-bit struct fields and enum payloads are modelled.
+// A `Vec<i128>` element is two 8-byte slots read through the wide-slot builtins,
+// which the Vec model (one 64-bit slot per element) does not cover; it stays
+// `Skipped`. 128-bit struct fields and enum payloads are modelled.
 fn first(v: Vec<i128>) -> i128 vow {
   requires: v.len() > 0
 } {

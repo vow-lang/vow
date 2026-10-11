@@ -55,6 +55,11 @@ fn vc_script_set_logic(s: SmtScript, logic: String) {
     vc_script_push(s, VC_CMD_SET_LOGIC(), logic, String::from(""), 0, -1);
 }
 
+// Swaps the logic a script was opened with (command 0, from `set_logic`).
+fn vc_script_replace_logic(s: SmtScript, logic: String) {
+    s.names[0] = logic;
+}
+
 fn vc_script_set_option(s: SmtScript, key: String, val: String) {
     vc_script_push(s, VC_CMD_SET_OPTION(), key, val, 0, -1);
 }
@@ -127,12 +132,17 @@ fn vc_op_symbol(op: i64) -> String {
     if op == VC_OP_BVSMULO() { return String::from("bvsmulo"); }
     if op == VC_OP_BVUMULO() { return String::from("bvumulo"); }
     if op == VC_OP_ITE() { return String::from("ite"); }
+    if op == VC_OP_SELECT() { return String::from("select"); }
+    if op == VC_OP_STORE() { return String::from("store"); }
     String::from("vc-unmapped-operator")
 }
 
 fn vc_sort_text(sort: i64) -> String {
     if sort == VC_SORT_BOOL() {
         return String::from("Bool");
+    }
+    if sort == VC_SORT_ARRAY64() {
+        return String::from("(Array (_ BitVec 64) (_ BitVec 64))");
     }
     let out: String = String::from("(_ BitVec ");
     out.push_str(i64_to_string(sort));
