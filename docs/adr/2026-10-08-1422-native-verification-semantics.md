@@ -264,7 +264,7 @@ function into an acyclic one before symbolic execution.
   induction closes the loops (addendum #1422).
 - `invariant` is a claim checked on every header visit and is not assumed by
   bounded unwinding. Its inductive use is the addendum (#1422) below; automatic
-  k-induction for invariant-free loops is still open.
+  k-induction for loops with no usable invariant is the addendum (#1425).
 - Soft arithmetic sites are collected per source site from the round that proves
   the function, so a loop body does not repeat its warning once per iteration.
 
@@ -374,5 +374,58 @@ acyclic function.
   unwinding leaves `unknown` (a parameter bound, a literal bound above 64) is
   `proven` given an inductive invariant. `tests/verify-native/unknown/loop_literal_100.vow`
   carried an invariant and was `unknown`; it is `pass/loop_literal_100_invariant.vow`
-  now, and the `unknown/` fixture keeps the invariant-free loop. No ESBMC
-  `proven` becomes weaker.
+  now, and the `unknown/` fixture kept the invariant-free loop until the
+  addendum (#1425) below proved it too. No ESBMC `proven` becomes weaker.
+
+## Addendum (#1425): automatic k-induction for loops with no usable invariant
+
+Rule 1's second strategy is implemented in the unroller (`vc_unroll_step`), the
+executor (hypothesis blocks) and the driver (`vc_step_attempt`). No new flag,
+no C-emitter or ESBMC change; it exists only in the self-hosted verifier.
+
+- **Step function.** After a bounded round at bound `k` ends open (base case
+  `unsat` for all hard claims, unwinding claim `sat`), the same function is
+  unrolled to `k` back edges from an arbitrary header state: each header Phi of
+  copy 0 is a havoc constant and the entry Upsilons into it are dropped; every
+  iteration copy below `k` is a hypothesis block, whose claims (guards, callee
+  clauses, the target's `invariant`) are assumed instead of asked; every edge
+  out of the loop from such a copy is cut, so only runs that took the back edge
+  continue; copy `k` asks its claims, then assumes its `invariant`, and its
+  back edge ends in a marker that claims and assumes nothing. Values defined
+  before the loop stay real, which is stronger than a full havoc and still
+  sound.
+- **Soundness.** The bounded round supplies the base case (copies `0..k` are
+  claim-checked) and the step proves that `k` consecutive iterations that hold
+  the property are followed by one that does, so it holds at every iteration of
+  every run. The loop condition of the earlier copies is an assumption, so a
+  plain counting loop closes at `k = 2` with no invariant at all. The
+  postcondition is a goal at the exit of copy `k`, never a hypothesis.
+- **Outcome.** All claims of the step `unsat` is `proven`, used exactly as a
+  1-induction proof is (addendum #1422): a function with a checked-arithmetic
+  claim keeps running the bounded rounds for its warnings and uses the proof
+  where they end `unknown`. Anything else says nothing: a counterexample to the
+  step may be a state no run reaches, so it is never `failed` and the bounded
+  schedule goes on. The step runs only after a bounded round that did not end
+  and was open, and only when the 1-induction of a user invariant did not
+  already prove the function, so it never changes a counterexample or a proof
+  a bounded round reaches. It shares `--timeout` with the rounds.
+- **Scope.** A function whose loop-closed form has exactly one loop (hence no
+  nesting), no pointer carried by its header Phi and no aggregate field written
+  in the loop. A written aggregate would keep its entry state in copy 0 while
+  the scalars are havoc'd, which is not an arbitrary state; such a function and
+  a function with several loops keep their bounded and #1422 verdicts. The
+  step is tried at every bound of the schedule (2 to 64), the first one that
+  closes ends the check.
+- **Partial correctness.** As for invariant induction, a loop that never exits
+  has no run that reaches the `ensures`: `while true { ... }` with no invariant is
+  `proven` (`tests/verify-native/pass/loop_infinite_partial_correctness.vow`;
+  ESBMC's k-induction also reports success there).
+- **Verdict impact.** Stronger, as Rule 1 and Rule 2 allow. Moved from
+  `unknown/` to `pass/`: `loop_symbolic_bound`, `loop_literal_100`,
+  `loop_invariant_k_inductive` (was `loop_invariant_too_weak`: the invariant is
+  not enough for the 1-induction, the step case at `k = 2` closes it) and
+  `loop_infinite_partial_correctness`. Still `unknown/`: `loop_bug_beyond_bound`,
+  `loop_kinduction_not_inductive` and `loop_kinduction_break_not_inductive`,
+  where the step has a model for every `k`. New `pass/` fixtures that only the
+  step proves: `loop_kinduction_alternating_divisor`, `_callee_requires`,
+  `_invariant_not_one_inductive` and `_break`.

@@ -206,7 +206,7 @@ class CorpusTest(unittest.TestCase):
             "VerifyFailed", by_name["verify-native/fail/add_wrong_post"].truth
         )
         self.assertEqual("Skipped", by_name["verify-native/skip/float_skipped"].truth)
-        self.assertIsNone(by_name["verify-native/unknown/loop_infinite"].truth)
+        self.assertIsNone(by_name["verify-native/unknown/loop_bug_beyond_bound"].truth)
         multi = by_name["verify-fail-multi/stub_requires_violation"]
         self.assertEqual("VerifyFailed", multi.truth)
         self.assertTrue(multi.path.endswith("main.vow"))

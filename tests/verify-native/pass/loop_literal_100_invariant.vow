@@ -1,7 +1,8 @@
 // TEST: category invariant
 // A loop that really runs 100 times is deeper than the largest unrolling bound,
 // so unwinding alone is `unknown`. Its invariant is inductive and gives the
-// postcondition on exit, so it is proven.
+// postcondition on exit, so the induction of ADR-2026-10-08-1422 proves it
+// before any k-induction step case is tried.
 module LoopLiteral100Invariant
 
 fn hundred() -> u64 vow {
