@@ -1342,14 +1342,8 @@ mod tests {
 
     #[test]
     fn test_unary_of_nested_question_of_cast_is_parenthesised() {
-        let cast = Expr {
-            kind: ExprKind::Cast {
-                expr: Box::new(ident_expr("a")),
-                target_ty: Box::new(named_ty("u64")),
-            },
-            span: s(),
-        };
-        let nested = question_expr(question_expr(cast.clone()));
+        let cast = cast_expr(ident_expr("a"), "u64");
+        let nested = question_expr(question_expr(cast));
         assert_eq!(
             print_expr(&unary_expr(UnOp::Neg, nested.clone())),
             "-(a as u64??)"
@@ -1359,25 +1353,13 @@ mod tests {
         let neg_question = unary_expr(UnOp::Neg, question_expr(ident_expr("a")));
         assert_eq!(print_expr(&neg_question), "-a?");
 
-        let question_cast = Expr {
-            kind: ExprKind::Cast {
-                expr: Box::new(question_expr(ident_expr("a"))),
-                target_ty: Box::new(named_ty("u64")),
-            },
-            span: s(),
-        };
+        let question_cast = cast_expr(question_expr(ident_expr("a")), "u64");
         assert_eq!(
             print_expr(&unary_expr(UnOp::Neg, question_cast)),
             "-(a? as u64)"
         );
 
-        let cast_of_neg_question = Expr {
-            kind: ExprKind::Cast {
-                expr: Box::new(neg_question),
-                target_ty: Box::new(named_ty("u64")),
-            },
-            span: s(),
-        };
+        let cast_of_neg_question = cast_expr(neg_question, "u64");
         assert_eq!(print_expr(&cast_of_neg_question), "(-a?) as u64");
     }
 
@@ -1424,6 +1406,16 @@ mod tests {
             span: s(),
         };
         assert_eq!(print_expr(&cast), "(-a) as u64");
+    }
+
+    fn cast_expr(inner: Expr, ty: &str) -> Expr {
+        Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(inner),
+                target_ty: Box::new(named_ty(ty)),
+            },
+            span: s(),
+        }
     }
 
     fn question_expr(inner: Expr) -> Expr {
