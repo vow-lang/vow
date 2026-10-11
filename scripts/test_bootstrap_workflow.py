@@ -39,6 +39,7 @@ EQUIVALENCE_WORKFLOW = WORKFLOWS / "equivalence.yml"
 FULL_TEST_WORKFLOW = WORKFLOWS / "full-test.yml"
 PROMOTED_FIXTURES_WORKFLOW = WORKFLOWS / "promoted-fixtures.yml"
 RELEASE_WORKFLOW = WORKFLOWS / "release.yml"
+NATIVE_ORACLE_WORKFLOW = WORKFLOWS / "native-oracle.yml"
 INSTALL_ESBMC_ACTION = (
     REPO_ROOT / ".github" / "actions" / "install-esbmc" / "action.yml"
 )
@@ -501,6 +502,76 @@ class EquivalenceWorkflowTest(unittest.TestCase):
 
         self.assertRegex(workflow_header, r"permissions:\s*\n\s*contents:\s*read")
         self.assertNotRegex(workflow_header, r"contents:\s*write")
+
+
+class NativeOracleWorkflowTest(unittest.TestCase):
+    """The native verifier's two oracles (#1431) stay wired and blocking."""
+
+    def setUp(self) -> None:
+        self.text = NATIVE_ORACLE_WORKFLOW.read_text(encoding="utf-8")
+        self.jobs = job_blocks(self.text)
+        self.oracles = self.jobs["oracles"]
+
+    def test_runs_on_push_to_main_nightly_and_on_demand(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(workflow_header, r"push:\s*\n\s*branches:\s*\[main\]")
+        self.assertIn("workflow_dispatch:", workflow_header)
+        found = crons(self.text)
+        self.assertTrue(found, "expected a scheduled run")
+        for cron in found:
+            with self.subTest(cron=cron):
+                self.assertTrue(cron.endswith("* * *"), "expected a daily cron")
+
+    def test_keeps_read_only_repository_permissions(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(workflow_header, r"permissions:\s*\n\s*contents:\s*read")
+        self.assertNotRegex(workflow_header, r"contents:\s*write")
+
+    def test_installs_both_solvers_from_the_pinned_actions(self) -> None:
+        self.assertIn("uses: ./.github/actions/install-bitwuzla", self.oracles)
+        self.assertIn("uses: ./.github/actions/install-z3", self.oracles)
+
+    def test_builds_the_compiler_without_esbmc(self) -> None:
+        # Neither oracle runs ESBMC; installing it here would only hide a
+        # native-backend regression that quietly fell back to it.
+        self.assertIn("scripts/bootstrap.sh --no-verify", self.oracles)
+        self.assertNotIn("install-esbmc", self.text)
+
+    def test_runs_both_oracles_against_the_native_backend(self) -> None:
+        self.assertIn("scripts/verifier_runtime.py --backend native", self.oracles)
+        self.assertIn("scripts/z3_crosscheck.py", self.oracles)
+        self.assertLess(
+            self.oracles.index("scripts/bootstrap.sh"),
+            self.oracles.index("scripts/verifier_runtime.py"),
+        )
+
+    def test_sweeps_a_seed_pinned_generated_corpus(self) -> None:
+        self.assertRegex(self.oracles, r"gen_corpus\.py --seed \"\$seed\"")
+        self.assertRegex(self.oracles, r"(?m)^\s+seed=1431$")
+        self.assertIn("--extra-root", self.oracles)
+
+    def test_failures_are_blocking(self) -> None:
+        self.assertNotIn("continue-on-error", self.text)
+        self.assertNotIn("|| true", self.text)
+
+    def test_coverage_floors_keep_an_empty_sweep_from_reading_clean(self) -> None:
+        self.assertRegex(self.oracles, r"--min-checked \d+")
+        self.assertRegex(self.oracles, r"--min-agreed \d+")
+
+    def test_is_sharded(self) -> None:
+        self.assertRegex(self.oracles, r'shard: \["0/4", "1/4", "2/4", "3/4"\]')
+        self.assertIn("fail-fast: false", self.oracles)
+
+    def test_cron_does_not_collide_with_the_other_scheduled_workflows(self) -> None:
+        schedules = {}
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            for cron in crons(path.read_text(encoding="utf-8")):
+                schedules.setdefault(cron, []).append(path.name)
+
+        collisions = {c: names for c, names in schedules.items() if len(names) > 1}
+        self.assertEqual({}, collisions)
 
 
 class ParserTest(unittest.TestCase):

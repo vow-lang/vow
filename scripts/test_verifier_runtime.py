@@ -298,6 +298,32 @@ class NativeCorpusTest(unittest.TestCase):
         self.assertTrue(set(halves[0]).isdisjoint(halves[1]))
 
 
+class ExtraRootTest(unittest.TestCase):
+    def test_extra_roots_extend_the_defaults(self):
+        roots = verifier_runtime.resolve_roots([], ["/gen"], "native")
+
+        self.assertEqual(verifier_runtime.default_roots("native") + ["/gen"], roots)
+
+    def test_explicit_roots_replace_the_defaults_and_still_take_extras(self):
+        roots = verifier_runtime.resolve_roots(["a"], ["/gen"], None)
+
+        self.assertEqual(["a", "/gen"], roots)
+
+
+class RelativePathTest(unittest.TestCase):
+    def test_a_corpus_outside_the_repo_keeps_its_absolute_path(self):
+        outside = Path("/somewhere/else/gen_0.vow")
+
+        self.assertEqual(str(outside), verifier_runtime.relative_to_repo(outside))
+
+    def test_a_repo_file_is_reported_repo_relative(self):
+        inside = verifier_runtime.REPO_ROOT / "tests" / "verify" / "x.vow"
+
+        self.assertEqual(
+            "tests/verify/x.vow", verifier_runtime.relative_to_repo(inside)
+        )
+
+
 class MainBackendTest(unittest.TestCase):
     def test_native_with_the_rust_compiler_is_a_usage_error(self):
         with patch.object(

@@ -59,6 +59,14 @@ NOT_A_RUNTIME_ABORT = (
 DEFAULT_VERIFIERS = {None: "target/release/vow", "esbmc": "target/release/vow"}
 
 
+def relative_to_repo(path):
+    """Repo-relative report key; a corpus outside the repo keeps its own path."""
+    try:
+        return str(Path(path).relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
 def default_verifier(backend):
     return DEFAULT_VERIFIERS.get(backend, "build/vowc")
 
@@ -333,6 +341,11 @@ def default_roots(backend=None):
     return roots + [REPO_ROOT / "examples"]
 
 
+def resolve_roots(roots, extra, backend):
+    """Explicit roots, or the backend's defaults, plus any `--extra-root`."""
+    return list(roots or default_roots(backend)) + list(extra)
+
+
 def collect_corpus(roots, shard=None):
     """Sorted, de-duplicated `.vow` files under `roots`, optionally one shard.
 
@@ -363,6 +376,13 @@ def main():
         default=None,
         help="verification backend passed to `verify` (native needs a vowc)",
     )
+    ap.add_argument(
+        "--extra-root",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="also sweep PATH (repeatable), e.g. a generated corpus",
+    )
     ap.add_argument("--output-dir", default="verifier-runtime.out")
     ap.add_argument("--timeout", type=int, default=300)
     ap.add_argument("--shard", default=None, metavar="K/N")
@@ -386,7 +406,9 @@ def main():
         print(f"error: verifier not found: {verifier}", file=sys.stderr)
         return 2
 
-    corpus = collect_corpus(args.roots or default_roots(args.backend), args.shard)
+    corpus = collect_corpus(
+        resolve_roots(args.roots, args.extra_root, args.backend), args.shard
+    )
 
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -399,7 +421,7 @@ def main():
     records, soundness, precision, checked = [], [], [], 0
     replay_gaps, replay_skipped = [], {}
     for i, f in enumerate(corpus, 1):
-        rel = str(f.relative_to(REPO_ROOT))
+        rel = relative_to_repo(f)
         text = f.read_text(errors="replace")
         skip = DIRECTIVE_SKIP.search(text)
         if skip:

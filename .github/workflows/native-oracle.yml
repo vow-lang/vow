@@ -1,0 +1,120 @@
+name: Native verifier oracles
+
+# Two independent checks on `vowc verify --backend native` (epic #1398, #1431):
+#
+#   * the verifier-versus-runtime differential (`scripts/verifier_runtime.py`):
+#     a `Verified` program must not violate a contract when run in debug mode,
+#     and every counterexample must replay;
+#   * the Z3 cross-check (`scripts/z3_crosscheck.py`): every query the native
+#     backend sends to Bitwuzla is re-run under Z3 and a sat/unsat
+#     disagreement fails the run.
+#
+# Z3 is CI-only: it is installed by this workflow and nowhere else, and no
+# product code depends on it. Neither oracle needs ESBMC, so the compiler is
+# built with `bootstrap.sh --no-verify`.
+#
+# Off the pull-request path, like bootstrap.yml and full-test.yml: the job is
+# bootstrap-class in runtime. A false proof is attributed to the merge that
+# introduced it because it runs on every push to `main`; the nightly run is the
+# backstop and rotates the generated-corpus seed.
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 05:37 UTC -- clear of cargo-mutants (02:17), bootstrap (03:53),
+    # equivalence (04:41), arena-verify (06:29) and full-test (07:20).
+    - cron: "37 5 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Classify changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: classify
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 scripts/ci_docs_only.py --base "$BASE_SHA" --head "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+  oracles:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: Oracles (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0/4", "1/4", "2/4", "3/4"]
+    env:
+      # Shared by every step that runs an oracle; the harness reads it.
+      SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install Bitwuzla
+        uses: ./.github/actions/install-bitwuzla
+      - name: Install Z3
+        uses: ./.github/actions/install-z3
+      - name: Build the self-hosted compiler
+        # Verification does not change codegen, so the fixed point is as
+        # meaningful as in bootstrap.yml; ESBMC is simply not involved here.
+        run: scripts/bootstrap.sh --no-verify
+      - name: Generate the seeded corpus
+        id: corpus
+        # Pinned on pushes so a red run is reproducible from the commit alone;
+        # date-derived on the nightly so the corpus keeps moving. The seed is
+        # echoed either way.
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            seed="$(date -u +%Y%m%d)"
+          else
+            seed=1431
+          fi
+          echo "generated-corpus seed: $seed"
+          python3 scripts/gen_corpus.py --seed "$seed" --count 100 \
+            --output-dir "$RUNNER_TEMP/generated"
+          echo "dir=$RUNNER_TEMP/generated" >> "$GITHUB_OUTPUT"
+      - name: Native verifier versus runtime
+        env:
+          CORPUS: ${{ steps.corpus.outputs.dir }}
+        run: |
+          python3 scripts/verifier_runtime.py --backend native \
+            --shard "$SHARD" --min-checked 30 \
+            --extra-root "$CORPUS" \
+            --output-dir "$RUNNER_TEMP/verifier-runtime"
+      - name: Z3 cross-check of the native queries
+        # Runs even when the differential above failed, so one run reports
+        # both oracles.
+        if: ${{ !cancelled() }}
+        env:
+          CORPUS: ${{ steps.corpus.outputs.dir }}
+        run: |
+          python3 scripts/z3_crosscheck.py \
+            --shard "$SHARD" --min-agreed 250 \
+            --extra-root "$CORPUS" \
+            --output-dir "$RUNNER_TEMP/z3-crosscheck"
+      - name: Upload oracle results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-oracle-shard-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/verifier-runtime/results.json
+            ${{ runner.temp }}/z3-crosscheck/results.json
+            ${{ runner.temp }}/z3-crosscheck/queries/
+          if-no-files-found: warn

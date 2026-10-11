@@ -1,0 +1,146 @@
+name: Install Z3
+description: Restore or install a checksum-verified Z3 release
+
+# ─── The Z3 pin ───────────────────────────────────────────────────────
+#
+# CI-only. Z3 is the second opinion of `scripts/z3_crosscheck.py` (#1431),
+# which re-runs the queries the native verifier sends to Bitwuzla and fails on
+# a `sat`/`unsat` disagreement. It is never a product dependency: nothing under
+# `compiler/` or `vow-*` may shell out to it, and no release job installs it.
+#
+# `version` and the platform checksums move together: each checksum is of the
+# release archive for that exact version, and it is part of the cache key, so a
+# rotation forces a fresh download and re-verify even if the version is
+# unchanged. Pin a numbered release, never the `Nightly` tag: the assets behind
+# a rolling tag change under a fixed URL. To bump:
+#
+#   gh release view z3-<N> --repo Z3Prover/z3 --json assets \
+#     --jq '.assets[] | select(.name | startswith("z3-<N>-")) | [.name, .digest]'
+#
+# or download each archive and `sha256sum` it. The archive names carry the
+# glibc/macOS floor the build targets, so a bump may rename them: edit the
+# `zip` names below together with the version.
+inputs:
+  version:
+    description: Z3 release version
+    required: false
+    default: "5.1.0"
+  sha256:
+    description: SHA-256 checksum of the Linux x86_64 release archive
+    required: false
+    default: f47be8d27d3230e823bf1eeede2fe0abaca55bb78d0b59974370e6689a92284a
+  sha256-macos:
+    description: SHA-256 checksum of the macOS ARM64 release archive
+    required: false
+    default: 81d29e934fd863079a74af35eecaeaef8047e0e12414d33ca322b358d68383db
+  sha256-linux-arm64:
+    description: SHA-256 checksum of the Linux ARM64 release archive
+    required: false
+    default: 2832cfd43c6862fbaf78834b5f1e35d031b4a87e85456b696c1c6f609cd5609e
+
+runs:
+  using: composite
+  steps:
+    - name: Select Z3 archive
+      id: select
+      shell: bash
+      env:
+        Z3_VERSION: ${{ inputs.version }}
+        Z3_SHA256_LINUX: ${{ inputs.sha256 }}
+        Z3_SHA256_MACOS: ${{ inputs.sha256-macos }}
+        Z3_SHA256_LINUX_ARM64: ${{ inputs.sha256-linux-arm64 }}
+      run: |
+        case "$RUNNER_OS/$RUNNER_ARCH" in
+          Linux/X64)
+            z3_zip="z3-$Z3_VERSION-x64-glibc-2.39.zip"
+            z3_sha256="$Z3_SHA256_LINUX"
+            ;;
+          Linux/ARM64)
+            z3_zip="z3-$Z3_VERSION-arm64-glibc-2.38.zip"
+            z3_sha256="$Z3_SHA256_LINUX_ARM64"
+            ;;
+          macOS/ARM64)
+            z3_zip="z3-$Z3_VERSION-arm64-osx-13.3.zip"
+            z3_sha256="$Z3_SHA256_MACOS"
+            ;;
+          *)
+            echo "no Z3 pin for runner platform $RUNNER_OS/$RUNNER_ARCH" >&2
+            exit 1
+            ;;
+        esac
+        echo "zip=$z3_zip" >> "$GITHUB_OUTPUT"
+        echo "sha256=$z3_sha256" >> "$GITHUB_OUTPUT"
+
+    - name: Validate inputs
+      shell: bash
+      env:
+        Z3_VERSION: ${{ inputs.version }}
+        Z3_SHA256: ${{ steps.select.outputs.sha256 }}
+      run: |
+        if [[ -z "$Z3_VERSION" ]]; then
+          echo "version input must not be empty" >&2
+          exit 1
+        fi
+        if [[ -z "$Z3_SHA256" ]]; then
+          echo "sha256 input for $RUNNER_OS/$RUNNER_ARCH must not be empty" >&2
+          exit 1
+        fi
+
+    - name: Cache Z3
+      id: cache-z3
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/z3
+        key: z3-${{ inputs.version }}-${{ steps.select.outputs.sha256 }}-${{ runner.os }}-${{ runner.arch }}
+
+    - name: Install Z3
+      if: steps.cache-z3.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        Z3_VERSION: ${{ inputs.version }}
+        Z3_SHA256: ${{ steps.select.outputs.sha256 }}
+        Z3_ZIP: ${{ steps.select.outputs.zip }}
+      run: |
+        Z3_URL="https://github.com/Z3Prover/z3/releases/download/z3-$Z3_VERSION/$Z3_ZIP"
+
+        curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+          -o "$RUNNER_TEMP/$Z3_ZIP" "$Z3_URL"
+
+        if command -v sha256sum >/dev/null 2>&1; then
+          echo "$Z3_SHA256  $RUNNER_TEMP/$Z3_ZIP" | sha256sum --check --strict -
+        else
+          echo "$Z3_SHA256  $RUNNER_TEMP/$Z3_ZIP" | shasum -a 256 --check --strict -
+        fi
+
+        unzip -q "$RUNNER_TEMP/$Z3_ZIP" -d ~/z3
+        rm "$RUNNER_TEMP/$Z3_ZIP"
+
+    # Locate the binary rather than assuming where it sits, so a layout change
+    # in a future release fails here instead of as a missing command in
+    # whichever job runs first.
+    - name: Add Z3 to PATH
+      shell: bash
+      run: |
+        z3_bin="$(find "$HOME/z3" -type f -path '*/bin/z3' -print -quit)"
+        if [[ -z "$z3_bin" ]]; then
+          echo "::error::no z3 found under $HOME/z3" >&2
+          find "$HOME/z3" -maxdepth 3 >&2
+          exit 1
+        fi
+        chmod +x "$z3_bin"
+        dirname "$z3_bin" >> "$GITHUB_PATH"
+
+    # Fail here, at install time, rather than in the first job that needs the
+    # solver. The printed version must match the pin so a mislabelled archive
+    # cannot pass.
+    - name: Verify Z3 runs
+      shell: bash
+      env:
+        Z3_VERSION: ${{ inputs.version }}
+      run: |
+        reported="$(z3 --version)"
+        echo "$reported"
+        if [[ "$reported" != *"$Z3_VERSION"* ]]; then
+          echo "::error::z3 reports '$reported', expected $Z3_VERSION" >&2
+          exit 1
+        fi

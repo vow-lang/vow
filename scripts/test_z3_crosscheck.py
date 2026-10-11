@@ -380,6 +380,19 @@ class MainTest(WorkTest):
         self.assertEqual(1, first["counts"]["agree"])
         self.assertEqual(1, second["counts"]["agree"])
 
+    def test_extra_root_is_swept_alongside_explicit_roots(self):
+        self.fixture("a.vow", "unsat unsat")
+        extra = self.work / "generated"
+        extra.mkdir()
+        (extra / "g.vow").write_text("// query: sat sat\n")
+
+        status, results = self.run_main(
+            self.work / "corpus", extra=("--extra-root", str(extra))
+        )
+
+        self.assertEqual(0, status)
+        self.assertEqual(2, results["counts"]["agree"])
+
     def test_min_agreed_floor(self):
         self.fixture("a.vow", "unsat unsat")
 

@@ -206,10 +206,6 @@ def capture_fixture(vowc, fixture, shim_dir, capture_dir, real_bitwuzla, timeout
     }
 
 
-def default_roots():
-    return [REPO_ROOT / r for r in verifier_runtime.default_roots("native")]
-
-
 def _parse_args(argv):
     ap = argparse.ArgumentParser(
         description="Re-run the native verifier's Bitwuzla queries under Z3 (#1431)"
@@ -218,6 +214,13 @@ def _parse_args(argv):
     ap.add_argument("--vowc", default="build/vowc")
     ap.add_argument("--bitwuzla", default=None, help="default: first on PATH")
     ap.add_argument("--z3", default=None, help="default: first on PATH")
+    ap.add_argument(
+        "--extra-root",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="also sweep PATH (repeatable), e.g. a generated corpus",
+    )
     ap.add_argument("--output-dir", default="z3-crosscheck.out")
     ap.add_argument("--timeout", type=int, default=300, help="per fixture, seconds")
     ap.add_argument("--solver-timeout", type=int, default=60, help="per query")
@@ -256,7 +259,10 @@ def main(argv=None):
             print(f"error: {p}", file=sys.stderr)
         return 2
 
-    corpus = verifier_runtime.collect_corpus(args.roots or default_roots(), args.shard)
+    corpus = verifier_runtime.collect_corpus(
+        verifier_runtime.resolve_roots(args.roots, args.extra_root, "native"),
+        args.shard,
+    )
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
     saved = outdir / "queries"
@@ -277,7 +283,7 @@ def main(argv=None):
         shim_dir.mkdir()
         install_shim(shim_dir)
         for i, fixture in enumerate(corpus, 1):
-            rel = _relative(fixture)
+            rel = verifier_runtime.relative_to_repo(fixture)
             text = fixture.read_text(errors="replace")
             skip = verifier_runtime.DIRECTIVE_SKIP.search(text)
             if skip:
@@ -366,13 +372,6 @@ def main(argv=None):
             file=sys.stderr,
         )
     return status
-
-
-def _relative(path):
-    try:
-        return str(Path(path).relative_to(REPO_ROOT))
-    except ValueError:
-        return str(path)
 
 
 def _slug(rel):
