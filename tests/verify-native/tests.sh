@@ -796,8 +796,11 @@ usage_error() {
 usage_error "--backend must be" verify --backend bogus "$ONE_CLAIM"
 usage_error "--backend must be" verify "$ONE_CLAIM" --backend
 usage_error "only supported by" build --backend native "$ONE_CLAIM"
-usage_error "only supported by" contracts --backend native "$ONE_CLAIM"
-usage_error "only supported by" test --backend native "$ONE_CLAIM"
+usage_error "requires --verify" contracts --backend native "$ONE_CLAIM"
+usage_error "requires --verify" test --backend native "$ONE_CLAIM"
+usage_error "--solver" contracts --verify --backend native --solver z3 "$ONE_CLAIM"
+usage_error "--solver" test --verify --backend native --solver z3 "$ONE_CLAIM"
+usage_error "--max-k-step" test --verify --backend native --max-k-step 5 "$ONE_CLAIM"
 usage_error "only supported by" "$ONE_CLAIM" --backend native
 usage_error "--max-k-step" verify --backend native --max-k-step 5 "$ONE_CLAIM"
 usage_error "--solver" verify --backend native --solver z3 "$ONE_CLAIM"
@@ -991,6 +994,198 @@ expect "undecided unwinding proves no clause" \
         "$VOWC_BIN" verify-worker "$SYMBOLIC_LOOP" --worker-index 0 --worker-name count \
         --worker-budget-ms 60000 --worker-clauses 2>/dev/null | python3 "$WIRE_DECODE")" "6 -1 "
 no_leftovers "undecided unwinding"
+
+# `contracts --verify` and `test --verify` on the native backend (#1427). The
+# weak-contract probes are separate worker tasks, so a fake solver that answers
+# `unsat` to everything reads as "every requires is contradictory" and
+# `sat_empty` as "nothing is proven": the cases below pin the plumbing, and the
+# real-solver fixtures in tests/verify-native/contracts/ pin the verdicts.
+TWO_FUNCS="$TMP_ROOT/two_funcs.vow"
+cat > "$TWO_FUNCS" <<'SRC'
+module TwoFuncs
+
+fn inc(a: i64) -> i64 vow {
+  requires: a > 0 && a < 1000
+  ensures: result - a == 1
+} {
+  a + 1
+}
+
+fn dec(a: i64) -> i64 vow {
+  requires: a > 0 && a < 1000
+  ensures: a - result == 1
+} {
+  a - 1
+}
+
+fn main() -> i32 [io] {
+  print_i64(inc(1) + dec(2));
+  0
+}
+SRC
+
+run_cmd() {
+    local mode="$1"; shift
+    BW_DIR=$(mktemp -d "$TMP_ROOT/bw.XXXXXX")
+    RUN_RC=0
+    RUN_OUT=$(PATH="$FAKE_DIR:$PATH" TMPDIR="$SCRATCH" FAKE_BW_MODE="$mode" FAKE_BW_DIR="$BW_DIR" \
+        "$VOWC_BIN" "$@" 2>/dev/null) || RUN_RC=$?
+}
+
+# Nothing proven: every ensures is failed, every requires unknown, and the
+# second function is reported although the first one failed.
+run_cmd sat contracts --verify --backend native "$TWO_FUNCS"
+expect "contracts sat exit" "$RUN_RC" "1"
+expect "contracts sat total" "$(field "$RUN_OUT" summary.total)" "4"
+expect "contracts sat failed" "$(field "$RUN_OUT" summary.failed)" "2"
+expect "contracts sat unknown" "$(field "$RUN_OUT" summary.unknown)" "2"
+expect "contracts sat vacuous" "$(field "$RUN_OUT" summary.vacuous)" "0"
+expect "contracts sat trivial" "$(field "$RUN_OUT" summary.trivially_satisfiable)" "0"
+expect "contracts later function status" "$(field "$RUN_OUT" contracts.3.status)" "failed"
+expect "contracts later function name" "$(field "$RUN_OUT" contracts.3.function)" "dec"
+if [ "$(queries)" -lt 2 ]; then fail "contracts native reached the solver for fewer than both functions"; fi
+no_leftovers "contracts sat"
+
+# Every query unsat: both probes are proven, so both contracts are vacuous and
+# both ensures clauses trivially satisfiable.
+run_cmd unsat contracts --verify --backend native "$TWO_FUNCS"
+expect "contracts unsat exit" "$RUN_RC" "1"
+expect "contracts unsat vacuous" "$(field "$RUN_OUT" summary.vacuous)" "4"
+expect "contracts unsat trivial" "$(field "$RUN_OUT" summary.trivially_satisfiable)" "2"
+expect "contracts unsat requires status" "$(field "$RUN_OUT" contracts.0.status)" "vacuous"
+expect "contracts unsat ensures flag" "$(field "$RUN_OUT" contracts.1.trivially_satisfiable)" "True"
+expect "contracts unsat requires flag" "$(field "$RUN_OUT" contracts.0.trivially_satisfiable)" "False"
+no_leftovers "contracts unsat"
+
+# Without a solver every clause that needed one is `error`, the JSON is still
+# complete and the run fails closed.
+RUN_RC=0
+RUN_OUT=$(PATH="$EMPTY_DIR" TMPDIR="$SCRATCH" "$VOWC_BIN" contracts --verify --backend native "$TWO_FUNCS" 2>/dev/null) || RUN_RC=$?
+expect "contracts no solver exit" "$RUN_RC" "1"
+expect "contracts no solver error" "$(field "$RUN_OUT" summary.error)" "4"
+expect "contracts no solver total" "$(field "$RUN_OUT" summary.total)" "4"
+no_leftovers "contracts no solver"
+
+# A function outside the native subset is `skipped`, needs no solver and fails
+# the run closed; the clause rows keep the schema's shape.
+RUN_RC=0
+RUN_OUT=$(PATH="$EMPTY_DIR" TMPDIR="$SCRATCH" "$VOWC_BIN" contracts --verify --backend native tests/verify-native/skip/effects_skipped.vow 2>/dev/null) || RUN_RC=$?
+expect "contracts skipped exit" "$RUN_RC" "1"
+expect "contracts skipped status" "$(field "$RUN_OUT" contracts.0.status)" "skipped"
+expect "contracts skipped count" "$(field "$RUN_OUT" summary.skipped)" "$(field "$RUN_OUT" summary.total)"
+
+python3 - "$RUN_OUT" <<'PY' || fail "contracts native JSON does not match contracts-result.schema.json"
+import json, sys
+schema = json.load(open("docs/spec/schemas/contracts-result.schema.json"))
+out = json.loads(sys.argv[1])
+assert set(schema["required"]) <= set(out), (schema["required"], list(out))
+row_schema = schema["properties"]["contracts"]["items"]
+for row in out["contracts"]:
+    assert set(row_schema["required"]) <= set(row), (row_schema["required"], list(row))
+    assert row["status"] in row_schema["properties"]["status"]["enum"], row["status"]
+summary_schema = schema["properties"]["summary"]
+assert set(summary_schema["required"]) <= set(out["summary"]), list(out["summary"])
+PY
+
+# `--verify-jobs` and `--timeout` are honoured, not just accepted.
+run_cmd unsat contracts --verify --backend native --verify-jobs 4 --timeout 30 "$TWO_FUNCS"
+expect "contracts jobs exit" "$RUN_RC" "1"
+expect "contracts jobs total" "$(field "$RUN_OUT" summary.total)" "4"
+
+# `test --verify`: a proven module runs, an unproven one fails before running.
+run_cmd unsat test --verify --backend native "$ONE_CLAIM"
+expect "test proven status" "$(field "$RUN_OUT" status)" "TestsPassed"
+expect "test proven entry" "$(field "$RUN_OUT" tests.0.status)" "passed"
+expect "test proven exit" "$RUN_RC" "0"
+no_leftovers "test proven"
+
+run_cmd sat test --verify --backend native "$ONE_CLAIM"
+expect "test failed status" "$(field "$RUN_OUT" status)" "TestsFailed"
+expect "test failed entry" "$(field "$RUN_OUT" tests.0.status)" "verify_failed"
+expect "test failed code" "$(field "$RUN_OUT" tests.0.diagnostics.0.error_code)" "VerifyFailed"
+expect "test failed stdout" "$(field "$RUN_OUT" tests.0.stdout)" ""
+expect "test failed exit" "$RUN_RC" "1"
+no_leftovers "test failed"
+
+# An undecided function fails closed too: the ESBMC path lets an `error` pass.
+run_cmd unknown test --verify --backend native "$ONE_CLAIM"
+expect "test unknown entry" "$(field "$RUN_OUT" tests.0.status)" "verify_failed"
+run_cmd garbage test --verify --backend native "$ONE_CLAIM"
+expect "test error entry" "$(field "$RUN_OUT" tests.0.status)" "verify_failed"
+
+RUN_RC=0
+RUN_OUT=$(PATH="$EMPTY_DIR" TMPDIR="$SCRATCH" "$VOWC_BIN" test --verify --backend native "$ONE_CLAIM" 2>/dev/null) || RUN_RC=$?
+expect "test no solver entry" "$(field "$RUN_OUT" tests.0.status)" "verify_failed"
+
+RUN_RC=0
+RUN_OUT=$(PATH="$EMPTY_DIR" TMPDIR="$SCRATCH" "$VOWC_BIN" test --verify --backend native tests/verify-native/skip/effects_skipped.vow 2>/dev/null) || RUN_RC=$?
+expect "test skipped entry" "$(field "$RUN_OUT" tests.0.status)" "contract_skipped"
+expect "test skipped code" "$(field "$RUN_OUT" tests.0.diagnostics.0.error_code)" "VerificationSkipped"
+expect "test skipped exit" "$RUN_RC" "1"
+
+# Parallel test workers inherit the backend: both files reach the fake solver.
+TEST_DIR="$TMP_ROOT/test_dir"
+mkdir -p "$TEST_DIR"
+cp "$ONE_CLAIM" "$TEST_DIR/test_one.vow"
+sed 's/module One/module Two/' "$ONE_CLAIM" > "$TEST_DIR/test_two.vow"
+run_cmd unsat test --verify --backend native --jobs 2 "$TEST_DIR"
+expect "test parallel status" "$(field "$RUN_OUT" status)" "TestsPassed"
+expect "test parallel total" "$(field "$RUN_OUT" total)" "2"
+expect "test parallel queries" "$(queries)" "2"
+no_leftovers "test parallel"
+
+# A sibling module found through `--module-root` is lowered the same way by the
+# worker as by the parent.
+MOD_DIR="$TMP_ROOT/modroot"
+mkdir -p "$MOD_DIR/lib" "$MOD_DIR/t"
+cat > "$MOD_DIR/lib/helper.vow" <<'SRC'
+module Helper
+
+fn bump(x: i64) -> i64 vow {
+  ensures: result - x == 1
+} {
+  x + 1
+}
+SRC
+cat > "$MOD_DIR/t/test_helper.vow" <<'SRC'
+module TestHelper
+
+use lib.helper
+
+fn main() -> i32 [io] {
+  if bump(1) == 2 { 0 } else { 1 }
+}
+SRC
+run_cmd unsat test --verify --backend native --module-root "$MOD_DIR" "$MOD_DIR/t/test_helper.vow"
+expect "test module root entry" "$(field "$RUN_OUT" tests.0.status)" "passed"
+expect "test module root queries" "$(queries)" "1"
+no_leftovers "test module root"
+
+# Real solver: the verdicts agree with what the program does.
+if command -v bitwuzla >/dev/null 2>&1; then
+    RUN_RC=0
+    RUN_OUT=$("$VOWC_BIN" test --verify --backend native "$ONE_CLAIM" 2>/dev/null) || RUN_RC=$?
+    expect "real: test proven entry" "$(field "$RUN_OUT" tests.0.status)" "passed"
+    BROKEN="$TMP_ROOT/broken.vow"
+    cat > "$BROKEN" <<'SRC'
+module Broken
+
+fn inc(a: i64) -> i64 vow {
+  requires: a > 0 && a < 1000
+  ensures: result == a + 2
+} {
+  a + 1
+}
+
+fn main() -> i32 [io] {
+  0
+}
+SRC
+    RUN_RC=0
+    RUN_OUT=$("$VOWC_BIN" test --verify --backend native "$BROKEN" 2>/dev/null) || RUN_RC=$?
+    expect "real: test failed entry" "$(field "$RUN_OUT" tests.0.status)" "verify_failed"
+    expect "real: test failed exit" "$RUN_RC" "1"
+fi
 
 # A clause is only ever given 1/0 here; its status string comes from
 # `resolve_clause_status`, whose vocabulary must stay inside the schema's.

@@ -1,0 +1,27 @@
+// TEST: contract-exit 1
+// TEST: contract-status unsat_range requires vacuous
+// TEST: contract-status unsat_range ensures vacuous
+// TEST: contract-status satisfiable requires proven
+// TEST: contract-status satisfiable ensures proven
+// `requires` that no input satisfies make every `ensures` hold for nothing: the
+// whole contract is `vacuous`. A satisfiable `requires` next to it is untouched.
+module VacuousRequires
+
+fn unsat_range(a: i64) -> i64 vow {
+  requires: a > 0 && a < 0
+  ensures: result == a + 1
+} {
+  a
+}
+
+fn satisfiable(a: i64) -> i64 vow {
+  requires: a > 0 && a < 100
+  ensures: result == a
+} {
+  a
+}
+
+fn main() -> i32 [io] {
+  print_i64(satisfiable(1));
+  0
+}

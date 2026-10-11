@@ -1,0 +1,26 @@
+// TEST: contract-exit 1
+// TEST: contract-status broken ensures failed
+// TEST: contract-status after_broken ensures proven
+// TEST: contract-status after_broken requires proven
+// One function failing does not stop the report: the functions after it are
+// verified and reported too.
+module LaterFunctionStillReported
+
+fn broken(a: i64) -> i64 vow {
+  requires: a > 0 && a < 1000
+  ensures: result == a + 2
+} {
+  a + 1
+}
+
+fn after_broken(a: i64) -> i64 vow {
+  requires: a > 0 && a < 1000
+  ensures: result == a + 1
+} {
+  a + 1
+}
+
+fn main() -> i32 [io] {
+  print_i64(broken(1) + after_broken(1));
+  0
+}
