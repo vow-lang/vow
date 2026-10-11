@@ -1116,6 +1116,74 @@ else
 fi
 echo ""
 
+# ─── Skip set independent of cache and --verify-jobs (#1561) ──────
+#
+# A VerificationSkipped warning is a static fact about the program, so the set
+# of skipped functions and the verdict must not depend on how fast a failing
+# function came back: a cold cache, a warm cache and any job count agree.
+# Only the verdict and the skip set are compared; other warnings produced
+# inside the verifier pool can still vary on a halted parallel run.
+
+skip_set_summary() {
+    python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+skips = sorted(x.get('message', '') for x in d.get('diagnostics', [])
+               if x.get('error_code') == 'VerificationSkipped' and x.get('severity') == 'warning')
+print(d.get('status', ''), len(skips), *skips, sep='\\n')
+" "$1" 2>/dev/null || echo "<unparseable>"
+}
+
+for fixture in tests/verify-fail/skip_after_failure.vow stdlib/heap/main.vow tests/verify-fail/clamp_wrong_op.vow; do
+    name="verify_skip_set_scheduling_independent/$(basename "$(dirname "$fixture")")-$(basename "$fixture" .vow)"
+    errors=()
+    skip_cache_dir=$(mktemp -d "$TMPDIR/skip-cache.XXXXXX")
+
+    base_json=$($RUST verify --no-cache --verify-jobs 1 "$fixture" 2>/dev/null) || true
+    base=$(skip_set_summary "$base_json")
+    for pass in "no-cache-jobs4" "cold-jobs4" "warm-jobs4" "warm-jobs1"; do
+        case "$pass" in
+            no-cache-jobs4) pass_json=$($RUST verify --no-cache --verify-jobs 4 "$fixture" 2>/dev/null) || true ;;
+            cold-jobs4|warm-jobs4) pass_json=$(VOW_CACHE_DIR="$skip_cache_dir" $RUST verify --verify-jobs 4 "$fixture" 2>/dev/null) || true ;;
+            warm-jobs1) pass_json=$(VOW_CACHE_DIR="$skip_cache_dir" $RUST verify --verify-jobs 1 "$fixture" 2>/dev/null) || true ;;
+        esac
+        if [ "$(skip_set_summary "$pass_json")" != "$base" ]; then
+            errors+=("rust $pass differs from --no-cache --verify-jobs 1")
+        fi
+    done
+
+    self_base_json=$(run_self verify --no-cache --verify-jobs 1 "$fixture" 2>/dev/null) || true
+    self_jobs4_json=$(run_self verify --no-cache --verify-jobs 4 "$fixture" 2>/dev/null) || true
+    if [ "$(skip_set_summary "$self_base_json")" != "$base" ]; then
+        errors+=("self --verify-jobs 1 differs from rust")
+    fi
+    if [ "$(skip_set_summary "$self_jobs4_json")" != "$base" ]; then
+        errors+=("self --verify-jobs 4 differs from rust")
+    fi
+
+    case "$fixture" in
+        tests/verify-fail/skip_after_failure.vow)
+            if [ "$(printf '%s' "$base" | sed -n 2p)" != "2" ]; then
+                errors+=("expected 2 VerificationSkipped warnings, got: $(printf '%s' "$base" | sed -n 2p)")
+            fi
+            ;;
+        tests/verify-fail/clamp_wrong_op.vow)
+            # Non-vacuity: the warm passes only exercise the cache if it stored a failure.
+            if [ -z "$(find "$skip_cache_dir" -name '*.vr' 2>/dev/null | head -1)" ]; then
+                errors+=("verify cache stored no entry; the cold/warm comparison was vacuous")
+            fi
+            ;;
+    esac
+    rm -rf "$skip_cache_dir"
+
+    if [ ${#errors[@]} -eq 0 ]; then
+        pass "$name"
+    else
+        fail "$name" "$(IFS='; '; echo "${errors[*]}")"
+    fi
+done
+echo ""
+
 # ─── Checked-arithmetic abort model (#585) ────────────────────────
 #
 # Sections 4b/4c already hold Rust/self parity and the Verified/VerifyFailed
@@ -1978,10 +2046,12 @@ for multi in stack geometry bignum gc math heap; do
         compare_json "${multi}/build-no-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
     fi
 
-    # verify
+    # verify (isolated cache: a shared ~/.cache/vow must not influence the result)
     rust_json="" self_json="" rust_exit=0 self_exit=0
-    rust_json=$($RUST verify "$main_file" 2>/dev/null) || rust_exit=$?
+    multi_cache_dir=$(mktemp -d "$TMPDIR/multi-cache.XXXXXX")
+    rust_json=$(VOW_CACHE_DIR="$multi_cache_dir" $RUST verify "$main_file" 2>/dev/null) || rust_exit=$?
     self_json=$(run_self verify "$main_file" 2>/dev/null) || self_exit=$?
+    rm -rf "$multi_cache_dir"
 
     if ! check_empty_output "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"; then
         compare_full_json "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
