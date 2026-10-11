@@ -1,0 +1,20 @@
+// Native-only: ESBMC marks every `[panic]` function non-modelable.
+// TEST: replay-skipped Option parameter
+// TEST: counterexample-fn "with_unwrap"
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-blame None
+// TEST: counterexample-violation "unwrap() called on None"
+module StructLiteralUnwrapParamNone
+
+struct P { a: i64, b: i64 }
+
+fn with_unwrap(o: Option<i64>) -> P [panic] vow {
+  ensures: result.b == 0
+} {
+  P { a: o.unwrap(), b: 0 }
+}
+
+fn main() -> i32 [io, panic] {
+  print_i64(with_unwrap(Option::Some(1)).a);
+  0
+}

@@ -1,0 +1,23 @@
+module FieldSetBothArms
+
+struct Cell { v: i64, w: i64 }
+
+fn both_arms(x: i64) -> i64 vow {
+  ensures: (x > 0 && result == x) || (x <= 0 && result == 7)
+} {
+  let c: Cell = Cell { v: 7, w: 0 };
+  let seen: i64 = c.v;
+  if x > 0 {
+    c.v = x;
+  } else {
+    c.w = seen;
+    c.v = c.w;
+  }
+  c.v
+}
+
+fn main() -> i32 [io] {
+  print_i64(both_arms(5));
+  print_i64(both_arms(-5));
+  0
+}
