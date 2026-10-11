@@ -1,0 +1,25 @@
+// TEST: category invariant
+// TEST: counterexample-fn count
+// TEST: counterexample-blame Callee
+// The invariant `i <= 3` is false once the loop takes a fourth iteration. The
+// bound is unbounded, but bounded unwinding checks the invariant at every header
+// visit and reaches that run, so the result is a counterexample, not unknown.
+module LoopUnboundedWrongInvariant
+
+fn count(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == n
+} {
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i <= 3
+  } {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_i64(count(3));
+  0
+}

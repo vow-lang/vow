@@ -1,0 +1,23 @@
+// TEST: category invariant
+// The invariant is true but too weak to give the postcondition on exit
+// (`i >= 0 && i >= n` does not imply `i == n`), so induction does not close and
+// the result stays unknown, never Verified and never failed.
+module LoopInvariantTooWeak
+
+fn count(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == n
+} {
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i >= 0
+  } {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_i64(count(3));
+  0
+}

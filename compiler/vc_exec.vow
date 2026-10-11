@@ -39,7 +39,10 @@ use ir_dominance
 // claim "no run needs more iterations than the bound". It is a claim only and
 // assumes nothing afterwards: a counterexample means the bound was too small,
 // not that the function is wrong. A loop `invariant` is checked like an
-// `ensures` at every iteration copy of its header, and assumed nowhere.
+// `ensures` at every iteration copy of its header, and assumed nowhere in an
+// unrolled function. In the inductive attempt (`vc_induct`) the loop is cut
+// instead: a header Phi is a havoc marker, a fresh unconstrained constant, and
+// the invariant of the havoc copy is a plain `requires`, an assumption.
 //
 // A call has been spliced into its caller before this point (`vc_inline`), and
 // the clauses of the copy carry the frame they came from (`vc_frame_of`). In a
@@ -402,6 +405,10 @@ fn vc_walk_inst(w: VcWalk, bi: u64, inst: IrInst, succ: Vec<i64>) {
         vc_flow_add_edge(fl, succ[bi * 2] as u64, bi as i64, pc, fl.block_foff[bi], fl.block_flen[bi]);
     } else if op == IOP_BRANCH() {
         vc_walk_branch(w, inst, bi, succ[bi * 2], succ[bi * 2 + 1]);
+    } else if vc_is_havoc(inst) {
+        let name: String = String::from("h");
+        name.push_str(i64_to_string(inst.id));
+        vc_define(w, inst, vc_agg_declare(cs.arena, cs.header, name, vc_ty_sort(inst.ty)));
     } else if vc_is_unwrap_abort(inst) {
         vc_guard(cs, VC_CLAIM_UNWRAP_NONE(), VC_LABEL_UNWRAP_NONE(), pc, vc_tm_bool_const(cs.arena, false), inst);
     } else if vc_is_unwind_sink(inst) {

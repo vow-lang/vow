@@ -157,6 +157,29 @@ fn main() -> i32 [io] {
 }
 SRC
 
+LOOP_INV_CLAIMS="$TMP_ROOT/loop_inv.vow"
+cat > "$LOOP_INV_CLAIMS" <<'SRC'
+module LoopInv
+
+fn count(n: i64) -> i64 vow {
+  requires: n >= 0
+  ensures: result == n
+} {
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i <= n
+  } {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_i64(count(1));
+  0
+}
+SRC
+
 CALL_CLAIMS="$TMP_ROOT/calls.vow"
 cat > "$CALL_CLAIMS" <<'SRC'
 module Calls
@@ -513,7 +536,10 @@ no_leftovers "loop sat"
 
 # a loop with a literal bound folds to constants: every claim, the unwinding
 # claim of the rounds that stop short and the invariants of the covering round
-# included, is decided by the simplifier, so not one query reaches the solver.
+# included, is decided by the simplifier, so no bounded round spawns a query. The
+# solver answers `unknown` so the inductive attempt (the loop has an invariant)
+# cannot prove the function itself and leave the bounded rounds unexercised: its
+# first claim is the one query.
 LITERAL_LOOP="$TMP_ROOT/literal_loop.vow"
 cat > "$LITERAL_LOOP" <<'SRC'
 module LiteralLoop
@@ -537,21 +563,23 @@ fn main() -> i32 [io] {
   0
 }
 SRC
-run_native unsat "$LITERAL_LOOP"
+run_native unknown "$LITERAL_LOOP"
 expect "literal loop status" "$(field "$RUN_OUT" status)" "Verified"
-expect "literal loop spawns nothing" "$(queries)" "0"
+expect "literal loop bounded rounds spawn nothing" "$(queries)" "1"
 no_leftovers "literal loop"
 
 # the same loop with a `requires` keeps its unwinding claim for the solver: a
 # contradictory assumption would make it `unsat`, which only the solver can tell.
+# With `unknown` the inductive attempt and the unwinding claim are one query each.
 GUARDED_LOOP="$TMP_ROOT/guarded_loop.vow"
 sed -e 's/fn tally() -> u64 vow {/fn tally(n: u64) -> u64 vow {/' \
     -e 's/  ensures: result == 36/  requires: n > 0,\n  ensures: result == 36/' \
     -e 's/tally());/tally(1));/' \
     -e 's/module LiteralLoop/module GuardedLoop/' "$LITERAL_LOOP" > "$GUARDED_LOOP"
-run_native unsat "$GUARDED_LOOP"
-expect "guarded loop status" "$(field "$RUN_OUT" status)" "Verified"
-if [ "$(queries)" -lt 1 ]; then fail "guarded loop: the unwinding claim never reached the solver"; fi
+run_native unknown "$GUARDED_LOOP"
+expect "guarded loop status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "guarded loop verify_status" "$(field "$RUN_OUT" verify_status)" "unknown"
+expect "guarded loop unwinding claim reaches the solver" "$(queries)" "2"
 no_leftovers "guarded loop"
 
 # a decided-false claim is not dropped: the counterexample needs the solver.
@@ -562,6 +590,31 @@ expect "wrong literal loop status" "$(field "$RUN_OUT" status)" "VerifyFailed"
 expect "wrong literal loop function" "$(field "$RUN_OUT" counterexamples.0.function)" "tally"
 if [ "$(queries)" -lt 1 ]; then fail "wrong literal loop: no query reached the solver"; fi
 no_leftovers "wrong literal loop"
+
+# a loop whose every loop carries an invariant is tried inductively before any
+# unrolling: with every query `unsat` the three claims of the cut function (the
+# invariant on entry, the invariant at the back edge and the ensures) are the
+# only queries, and the function is proven without a bounded round.
+run_native unsat "$LOOP_INV_CLAIMS"
+expect "invariant loop unsat status" "$(field "$RUN_OUT" status)" "Verified"
+expect "invariant loop unsat queries" "$(queries)" "3"
+no_leftovers "invariant loop unsat"
+
+# an undecided inductive query proves nothing: bounded unwinding runs and ends
+# on its own first undecided query.
+run_native unknown "$LOOP_INV_CLAIMS"
+expect "invariant loop unknown status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "invariant loop unknown verify_status" "$(field "$RUN_OUT" verify_status)" "unknown"
+expect "invariant loop unknown has no counterexample" "$(field "$RUN_OUT" counterexamples.0.function)" ""
+no_leftovers "invariant loop unknown"
+
+# a `sat` inductive query is never a counterexample (the havoc state may be
+# unreachable): the verdict comes from bounded unwinding, which names the
+# invariant's own vow id.
+run_native sat "$LOOP_INV_CLAIMS"
+expect "invariant loop sat status" "$(field "$RUN_OUT" status)" "VerifyFailed"
+expect "invariant loop sat violation" "$(field "$RUN_OUT" counterexamples.0.violation)" "invariant i <= n"
+no_leftovers "invariant loop sat"
 
 # branches: the query grows with the number of changed names, not with the
 # number of paths. N sequential (2^N paths) and N nested (N+1 paths) `if`s each

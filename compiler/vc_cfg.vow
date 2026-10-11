@@ -38,7 +38,7 @@ fn vc_reachable_unreachable_detail(f: IrFunction, rpo: Vec<i64>) -> String {
     while bi < f.blocks.len() {
         let blk: IrBlock = f.blocks[bi];
         let last: IrInst = blk.insts[blk.insts.len() - 1];
-        if rpo[bi] >= 0 && last.op == IOP_UNREACHABLE() && !vc_unwrap_abort_precedes(blk) && !vc_is_unwind_sink(last) {
+        if rpo[bi] >= 0 && last.op == IOP_UNREACHABLE() && !vc_unwrap_abort_precedes(blk) && !vc_is_unwind_sink(last) && !vc_is_cut_end(last) {
             return opcode_name(last.op);
         }
         bi = bi + 1;
