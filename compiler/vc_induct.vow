@@ -256,8 +256,7 @@ fn vc_induct_vec_written_in_loop(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>) -
 // copy of the header would keep the field values the loop was entered with and
 // an invariant-based proof would be about the wrong state. Such a function is
 // not cut: bounded unwinding decides it alone.
-fn vc_induct_agg_written_in_loop(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>) -> bool {
-    let n_ids: u64 = (dom_max_inst_id(f) + 1) as u64;
+fn vc_induct_agg_written_in_loop(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, n_ids: u64) -> bool {
     let alloc_blk: Vec<i64> = dom_fill(n_ids, -1);
     let mut b: u64 = 0;
     while b < f.blocks.len() {
@@ -550,14 +549,17 @@ fn vc_induct_cut(f: IrFunction) -> VcInduct {
     let succ: Vec<i64> = dom_successors(f, id_to_idx);
     let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
     let li: VcLoopInfo = vc_loop_analysis(nb, succ, rpo);
-    if li.n_loops == 0 || vc_loop_shape_detail(f, succ, rpo).len() > 0 || vc_induct_ptr_phi(f, li) || vc_induct_vec_written_in_loop(f, li, rpo) || vc_induct_agg_written_in_loop(f, li, rpo) {
+    if li.n_loops == 0 {
+        return vc_induct_status(f, VC_INDUCT_NA());
+    }
+    let n_ids: u64 = (dom_max_inst_id(f) + 1) as u64;
+    if vc_loop_shape_detail(f, succ, rpo).len() > 0 || vc_induct_ptr_phi(f, li) || vc_induct_vec_written_in_loop(f, li, rpo) || vc_induct_agg_written_in_loop(f, li, rpo, n_ids) {
         return vc_induct_status(f, VC_INDUCT_NA());
     }
     let rg: VcRegions = vc_induct_regions(f, li, succ, rpo);
     if !rg.ok {
         return vc_induct_status(f, VC_INDUCT_NA());
     }
-    let n_ids: u64 = (dom_max_inst_id(f) + 1) as u64;
     let n_loops: u64 = li.n_loops as u64;
     let st: VcCut = VcCut {
         f: f,

@@ -352,8 +352,7 @@ fn vc_walk_agg(w: VcWalk, bi: u64, inst: IrInst) -> bool {
         return true;
     }
     if op == IOP_REGION_ALLOC() {
-        let obj: i64 = vc_agg_alloc(ag);
-        ag.births[obj as u64] = w.fl.block_pc[bi];
+        let obj: i64 = vc_agg_alloc(ag, w.fl.block_pc[bi]);
         w.obj_of[inst.id as u64] = obj;
         return true;
     }
@@ -390,7 +389,7 @@ fn vc_walk_vec(w: VcWalk, bi: u64, inst: IrInst, pc: i64) -> bool {
     let vv: VcVec = w.vv;
     let b: i64 = bi as i64;
     if kind == VC_VEC_NEW() {
-        let obj: i64 = vc_agg_alloc(w.ag);
+        let obj: i64 = vc_agg_alloc(w.ag, w.fl.block_pc[bi]);
         w.obj_of[inst.id as u64] = obj;
         vc_vec_create(vv, w.ag, ar, hdr, obj, b);
         return true;

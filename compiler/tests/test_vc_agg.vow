@@ -361,7 +361,7 @@ fn check_slot_overwrite_and_sorts() -> i64 {
     let ar: VcArena = vc_arena_new();
     let hdr: SmtScript = vc_script_new();
     let ag: VcAgg = vc_agg_new(vc_flow_new(1, 1));
-    let o: i64 = vc_agg_alloc(ag);
+    let o: i64 = vc_agg_alloc(ag, -1);
     let a: i64 = vc_tm_bv(ar, 64, 1, 0);
     let b: i64 = vc_tm_bv(ar, 64, 2, 0);
     vc_agg_set(ag, o, 3, 64, a);
@@ -463,7 +463,7 @@ fn check_wide_slot_overlap() -> i64 {
     let ar: VcArena = vc_arena_new();
     let hdr: SmtScript = vc_script_new();
     let ag: VcAgg = vc_agg_new(vc_flow_new(1, 1));
-    let o: i64 = vc_agg_alloc(ag);
+    let o: i64 = vc_agg_alloc(ag, -1);
     let w: i64 = vc_tm_bv(ar, 128, 1, 0);
     let w2: i64 = vc_tm_bv(ar, 128, 2, 0);
     let n: i64 = vc_tm_bv(ar, 64, 3, 0);
@@ -566,8 +566,7 @@ fn check_write_path_conditions() -> i64 {
     let ag: VcAgg = vc_agg_new(vc_flow_new(1, 1));
     let c1: i64 = vc_agg_declare(ar, hdr, String::from("c1"), VC_SORT_BOOL());
     let c2: i64 = vc_agg_declare(ar, hdr, String::from("c2"), VC_SORT_BOOL());
-    let o: i64 = vc_agg_alloc(ag);
-    ag.births[o as u64] = c1;
+    let o: i64 = vc_agg_alloc(ag, c1);
     let a: i64 = vc_tm_bv(ar, 64, 1, 0);
     let b: i64 = vc_tm_bv(ar, 64, 2, 0);
     vc_agg_write(ag, ar, hdr, o, 0, 64, a, c1);
@@ -589,7 +588,7 @@ fn check_conditional_write_covers_other_views() -> i64 {
     let hdr: SmtScript = vc_script_new();
     let ag: VcAgg = vc_agg_new(vc_flow_new(1, 1));
     let c: i64 = vc_agg_declare(ar, hdr, String::from("c"), VC_SORT_BOOL());
-    let o: i64 = vc_agg_alloc(ag);
+    let o: i64 = vc_agg_alloc(ag, -1);
     let n: i64 = vc_tm_bv(ar, 64, 3, 0);
     let w: i64 = vc_tm_bv(ar, 128, 4, 0);
     vc_agg_write(ag, ar, hdr, o, 3, 64, n, vc_tm_bool_const(ar, true));

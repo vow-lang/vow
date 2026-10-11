@@ -86,8 +86,11 @@ fn vc_agg_push_obj(ag: VcAgg, kind: i64, owner: i64, phi: i64) -> i64 {
     id
 }
 
-fn vc_agg_alloc(ag: VcAgg) -> i64 {
-    vc_agg_push_obj(ag, VC_OBJ_ALLOC(), -1, -1)
+// `pc` is the path condition of the block that allocates the object.
+fn vc_agg_alloc(ag: VcAgg, pc: i64) -> i64 {
+    let obj: i64 = vc_agg_push_obj(ag, VC_OBJ_ALLOC(), -1, -1);
+    ag.births[obj as u64] = pc;
+    obj
 }
 
 // One object per parameter index, so a parameter's field symbols are declared once.
@@ -135,25 +138,24 @@ fn vc_agg_slot_width(sort: i64) -> i64 {
     1
 }
 
-// Writes `term` into slot `idx` at `sort`; every view of a slot the write covers
-// reads as unconstrained, then the exact view takes `term`.
+fn vc_agg_overlaps(ag: VcAgg, s: i64, idx: i64, end: i64) -> bool {
+    let si: i64 = ag.sl_idx[s as u64];
+    si < end && idx < si + vc_agg_slot_width(ag.sl_sort[s as u64])
+}
+
+// Unconditional write: `term` goes into slot `idx` at `sort`; every view of a
+// slot the write covers reads as unconstrained, then the exact view takes `term`.
 fn vc_agg_set(ag: VcAgg, obj: i64, idx: i64, sort: i64, term: i64) {
     ag.epoch = ag.epoch + 1;
     let end: i64 = idx + vc_agg_slot_width(sort);
     let mut s: i64 = ag.heads[obj as u64];
     while s >= 0 {
-        let si: i64 = ag.sl_idx[s as u64];
-        if si < end && idx < si + vc_agg_slot_width(ag.sl_sort[s as u64]) {
+        if vc_agg_overlaps(ag, s, idx, end) {
             ag.sl_term[s as u64] = -1;
         }
         s = ag.sl_next[s as u64];
     }
     vc_agg_store(ag, obj, idx, sort, term);
-}
-
-fn vc_agg_overlaps(ag: VcAgg, s: i64, idx: i64, end: i64) -> bool {
-    let si: i64 = ag.sl_idx[s as u64];
-    si < end && idx < si + vc_agg_slot_width(ag.sl_sort[s as u64])
 }
 
 // Writes `term` into slot `idx` of `obj` when the block runs under `pc`. A write
