@@ -1,0 +1,161 @@
+module VcSession
+
+use vc_term
+use vc_smt
+use vc_exec
+use vc_solver
+
+// One interactive Bitwuzla process answering the claims of a verification
+// round in order. Claim `k`'s query is the first `header_lens[k]` header
+// commands, the first `assumed_lens[k]` assumptions and its negated goal
+// (`vc_claim_script`); both lists are append-only, so a session sends each
+// command once, at base level, and asks the negated goal inside a
+// `push`/`pop` scope. Claim `k`'s answer is delimited by an `(echo "vow-k")`
+// sentinel: a reply that is not exactly `<verdict>` then the sentinel is a
+// desynchronised solver and ends the session. Nothing here decides a verdict
+// on its own: a session answer is `VC_ANS_NONE` unless the reply is
+// well-formed, and the caller re-decides anything but `unsat` (and a soft
+// `sat`) with a standalone query, so counterexample models never come from it.
+
+fn VC_ANS_NONE() -> i64 { 7 }
+
+struct VcSession {
+    bin: String,
+    handle: i64,
+    live: bool,
+    sent_hdr: u64,
+    sent_assumed: u64,
+}
+
+// `live` false makes every ask `VC_ANS_NONE` without starting a process.
+fn vc_session_new(live: bool) -> VcSession {
+    VcSession { bin: String::from(""), handle: -1, live: live, sent_hdr: 0, sent_assumed: 0 }
+}
+
+fn vc_session_probe_sentinel() -> String {
+    String::from("\"vow-open\"")
+}
+
+// `"vow-<k>"`, quotes included, as `(echo "vow-<k>")` prints it.
+fn vc_session_sentinel(k: u64) -> String {
+    let out: String = String::from("\"vow-");
+    out.push_str(i64_to_string(k as i64));
+    out.push_str(String::from("\""));
+    out
+}
+
+// The commands claim `k` needs that a session which already sent the first
+// `sent_hdr` header commands and `sent_assumed` assumptions has not: the
+// header up to `header_lens[k]`, then the assumptions up to `assumed_lens[k]`.
+// A definition is only ever used by a later command, so each assertion sees
+// every definition it names.
+fn vc_session_delta(cs: VcClaims, sent_hdr: u64, sent_assumed: u64, k: u64) -> String {
+    let out: String = vc_smt_render_cmds(cs.arena, cs.header, sent_hdr, cs.header_lens[k] as u64);
+    let na: u64 = cs.assumed_lens[k] as u64;
+    let mut i: u64 = sent_assumed;
+    while i < na {
+        out.push_str(vc_smt_assert_text(cs.arena, cs.assumed[i]));
+        out.push_str(String::from("\n"));
+        i = i + 1;
+    }
+    out
+}
+
+// The scoped question for claim `k`.
+fn vc_session_frame(cs: VcClaims, k: u64) -> String {
+    let out: String = String::from("(push 1)\n");
+    out.push_str(vc_smt_assert_text(cs.arena, cs.negated_goals[k]));
+    out.push_str(String::from("\n(check-sat)\n(echo "));
+    out.push_str(vc_session_sentinel(k));
+    out.push_str(String::from(")\n(pop 1)\n"));
+    out
+}
+
+// `lines` are the trimmed stdout lines of one reply. The verdict only when the
+// reply is exactly `<verdict>` followed by claim `k`'s sentinel; anything
+// else, an `(error ...)` text included, is `VC_ANS_NONE`.
+fn vc_session_classify(lines: Vec<String>, k: u64) -> i64 {
+    if lines.len() != 2 { return VC_ANS_NONE(); }
+    if lines[1] != vc_session_sentinel(k) { return VC_ANS_NONE(); }
+    if lines[0] == String::from("unsat") { return VC_ANS_UNSAT(); }
+    if lines[0] == String::from("sat") { return VC_ANS_SAT(); }
+    if lines[0] == String::from("unknown") { return VC_ANS_UNKNOWN(); }
+    VC_ANS_NONE()
+}
+
+fn vc_session_kill(ss: VcSession) [io] {
+    ss.live = false;
+    if ss.handle >= 0 {
+        process_close_stdin(ss.handle);
+        process_kill(ss.handle);
+        ss.handle = -1;
+    }
+}
+
+// Reads stdout lines until `sentinel`, the solver's end of file or `deadline_us`
+// (a `time_micros` instant), at most `limit` lines. The trimmed lines read,
+// the sentinel last when it arrived.
+fn vc_session_read_until(handle: i64, sentinel: String, deadline_us: i64, limit: u64) -> Vec<String> [io] {
+    let lines: Vec<String> = Vec::new();
+    while lines.len() < limit {
+        let left_ms: i64 = (deadline_us - time_micros()) / 1000;
+        if left_ms <= 0 { return lines; }
+        let raw: String = process_read_line(handle, left_ms);
+        if process_read_status(handle) != 0 { return lines; }
+        let line: String = str_trim(raw);
+        lines.push(line);
+        if line == sentinel { return lines; }
+    }
+    lines
+}
+
+// Starts the process on the first ask: the header up to claim `k`'s, then a
+// scope round trip. A solver without `push`/`pop` or `echo` support prints an
+// error and exits, which shows as end of file here.
+fn vc_session_start(ss: VcSession, cs: VcClaims, k: u64, deadline_us: i64) -> bool [io] {
+    let handle: i64 = process_start_piped(ss.bin, vc_solver_stdin_args());
+    if handle < 0 { return false; }
+    ss.handle = handle;
+    let hello: String = vc_smt_render_cmds(cs.arena, cs.header, 0, cs.header_lens[k] as u64);
+    hello.push_str(String::from("(push 1)\n(pop 1)\n(echo "));
+    hello.push_str(vc_session_probe_sentinel());
+    hello.push_str(String::from(")\n"));
+    if process_write_stdin(handle, hello) != 0 { return false; }
+    let lines: Vec<String> = vc_session_read_until(handle, vc_session_probe_sentinel(), deadline_us, 2);
+    if lines.len() != 1 || lines[0] != vc_session_probe_sentinel() { return false; }
+    ss.sent_hdr = cs.header_lens[k] as u64;
+    true
+}
+
+// Asks claim `k` of `cs`, waiting at most `wait_ms`. `VC_ANS_SAT`, `UNSAT` or
+// `UNKNOWN` only from a well-formed reply; every failure (no process, write
+// error, end of file, timeout, a stray line) is `VC_ANS_NONE` and kills the
+// session, so no later ask can read a stale reply. `bin` is the solver path.
+fn vc_session_ask(ss: VcSession, bin: String, cs: VcClaims, k: u64, wait_ms: i64) -> i64 [io] {
+    if !ss.live || wait_ms <= 0 { return VC_ANS_NONE(); }
+    let deadline_us: i64 = time_micros() + wait_ms * 1000;
+    if ss.handle < 0 {
+        ss.bin = String::from(bin);
+        if !vc_session_start(ss, cs, k, deadline_us) {
+            vc_session_kill(ss);
+            return VC_ANS_NONE();
+        }
+    }
+    let query: String = vc_session_delta(cs, ss.sent_hdr, ss.sent_assumed, k);
+    query.push_str(vc_session_frame(cs, k));
+    if process_write_stdin(ss.handle, query) != 0 {
+        vc_session_kill(ss);
+        return VC_ANS_NONE();
+    }
+    ss.sent_hdr = cs.header_lens[k] as u64;
+    ss.sent_assumed = cs.assumed_lens[k] as u64;
+    let lines: Vec<String> = vc_session_read_until(ss.handle, vc_session_sentinel(k), deadline_us, 3);
+    let verdict: i64 = vc_session_classify(lines, k);
+    if verdict == VC_ANS_NONE() { vc_session_kill(ss); }
+    verdict
+}
+
+// Ends the session and reaps the process. Safe to call more than once.
+fn vc_session_close(ss: VcSession) [io] {
+    vc_session_kill(ss);
+}

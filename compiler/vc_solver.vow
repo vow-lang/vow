@@ -223,6 +223,14 @@ fn vc_solver_args(file: String) -> Vec<String> {
     args
 }
 
+// Arguments of an interactive session: commands come from stdin.
+fn vc_solver_stdin_args() -> Vec<String> {
+    let args: Vec<String> = Vec::new();
+    args.push(String::from("--bv-output-format"));
+    args.push(String::from("2"));
+    args
+}
+
 // Runs `bin` on one self-contained query and returns its classified answer.
 // `budget_ms` is a hard wall-clock limit enforced by the runtime watchdog; a
 // non-positive budget is a timeout without spawning. The query lives in

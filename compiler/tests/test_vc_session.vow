@@ -1,0 +1,176 @@
+module TestVcSession
+
+use ir
+use vc_term
+use vc_smt
+use vc_exec
+use vc_solver
+use vc_session
+use tests.builders
+
+fn args1(a: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v
+}
+
+fn args2(a: i64, b: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+fn mk_vow(id: i64, op: i64, pred: i64, vow_id: i64) -> IrInst {
+    ir_inst_new(id, op, ITY_UNIT(), args1(pred), IDATA_VOW_ID(), vow_id, 0, String::from(""))
+}
+
+fn count_of(hay: String, needle: String) -> i64 {
+    let mut n: i64 = 0;
+    let mut i: u64 = 0;
+    while i + needle.len() <= hay.len() {
+        if hay.substring(i, i + needle.len()) == needle {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+fn lines2(a: String, b: String) -> Vec<String> {
+    let v: Vec<String> = Vec::new();
+    v.push(a);
+    v.push(b);
+    v
+}
+
+// f(a, b): requires a > 0, requires b > 0, ensures a + a > a, ensures b + b > b
+fn two_claims() -> VcClaims {
+    let i: Vec<IrInst> = Vec::new();
+    i.push(mk_inst_arg(0, ITY_I64(), 0));
+    i.push(mk_inst_arg(1, ITY_I64(), 1));
+    i.push(mk_inst_const_i64(2, 0));
+    i.push(mk_inst(3, IOP_GT(), ITY_BOOL(), args2(0, 2)));
+    i.push(mk_vow(4, IOP_VOW_REQ(), 3, 0));
+    i.push(mk_inst(5, IOP_GT(), ITY_BOOL(), args2(1, 2)));
+    i.push(mk_vow(6, IOP_VOW_REQ(), 5, 1));
+    i.push(mk_inst_add(7, 0, 0));
+    i.push(mk_inst(8, IOP_GT(), ITY_BOOL(), args2(7, 0)));
+    i.push(mk_vow(9, IOP_VOW_ENS(), 8, 2));
+    i.push(mk_inst_add(10, 1, 1));
+    i.push(mk_inst(11, IOP_GT(), ITY_BOOL(), args2(10, 1)));
+    i.push(mk_vow(12, IOP_VOW_ENS(), 11, 3));
+    i.push(mk_inst_return(13, 7));
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, i));
+    let p: Vec<i64> = Vec::new();
+    p.push(ITY_I64());
+    p.push(ITY_I64());
+    vc_claims(mk_function(1, String::from("two_claims"), p, ITY_I64(), blocks))
+}
+
+fn tail_of(cs: VcClaims, k: u64) -> String {
+    let out: String = vc_smt_assert_text(cs.arena, cs.negated_goals[k]);
+    out.push_str(String::from("\n(check-sat)\n(get-value (p0 p1))\n"));
+    out
+}
+
+// A session that has sent nothing asks exactly what a standalone query holds,
+// before its negated goal.
+fn check_first_delta_is_the_standalone_prefix() -> i64 {
+    let cs: VcClaims = two_claims();
+    if cs.kinds.len() != 2 { return 1; }
+    let mut k: u64 = 0;
+    while k < 2 {
+        let want: String = vc_smt_render(cs.arena, vc_claim_script(cs, k));
+        let got: String = vc_session_delta(cs, 0, 0, k);
+        got.push_str(tail_of(cs, k));
+        if got != want { return 2 + k as i64; }
+        k = k + 1;
+    }
+    0
+}
+
+// What claim 0 sent is not sent again with claim 1: the two deltas together
+// hold as many commands as claim 1's standalone prefix, and the second adds
+// what the first lacks.
+fn check_later_delta_is_the_remainder() -> i64 {
+    let cs: VcClaims = two_claims();
+    let d0: String = vc_session_delta(cs, 0, 0, 0);
+    let d1: String = vc_session_delta(cs, cs.header_lens[0] as u64, cs.assumed_lens[0] as u64, 1);
+    let whole: String = vc_session_delta(cs, 0, 0, 1);
+    if count_of(d0, String::from("\n")) + count_of(d1, String::from("\n")) != count_of(whole, String::from("\n")) { return 1; }
+    if d1.len() == 0 { return 2; }
+    if d1.contains(String::from("(set-logic")) { return 3; }
+    if d1.contains(String::from("(declare-const p0")) { return 4; }
+    if !d0.contains(String::from("(declare-const p0 (_ BitVec 64))\n")) { return 5; }
+    0
+}
+
+fn check_repeated_ask_sends_no_delta() -> i64 {
+    let cs: VcClaims = two_claims();
+    let d: String = vc_session_delta(cs, cs.header_lens[1] as u64, cs.assumed_lens[1] as u64, 1);
+    if d != String::from("") { return 1; }
+    0
+}
+
+fn check_frame_text() -> i64 {
+    let cs: VcClaims = two_claims();
+    let want: String = String::from("(push 1)\n");
+    want.push_str(vc_smt_assert_text(cs.arena, cs.negated_goals[1]));
+    want.push_str(String::from("\n(check-sat)\n(echo \"vow-1\")\n(pop 1)\n"));
+    if vc_session_frame(cs, 1) != want { return 1; }
+    if vc_session_sentinel(12) != String::from("\"vow-12\"") { return 2; }
+    0
+}
+
+fn check_classify_accepts_only_the_exact_reply() -> i64 {
+    let s3: String = String::from("\"vow-3\"");
+    if vc_session_classify(lines2(String::from("unsat"), s3), 3) != VC_ANS_UNSAT() { return 1; }
+    if vc_session_classify(lines2(String::from("sat"), s3), 3) != VC_ANS_SAT() { return 2; }
+    if vc_session_classify(lines2(String::from("unknown"), s3), 3) != VC_ANS_UNKNOWN() { return 3; }
+    if vc_session_classify(lines2(String::from("unsat"), String::from("\"vow-4\"")), 3) != VC_ANS_NONE() { return 4; }
+    if vc_session_classify(lines2(String::from("(error \"bad\")"), s3), 3) != VC_ANS_NONE() { return 5; }
+    if vc_session_classify(lines2(String::from("unsat"), String::from("unsat")), 3) != VC_ANS_NONE() { return 6; }
+    if vc_session_classify(lines2(String::from(""), s3), 3) != VC_ANS_NONE() { return 7; }
+    let one: Vec<String> = Vec::new();
+    one.push(String::from("unsat"));
+    if vc_session_classify(one, 3) != VC_ANS_NONE() { return 8; }
+    if vc_session_classify(Vec::new(), 3) != VC_ANS_NONE() { return 9; }
+    let three: Vec<String> = Vec::new();
+    three.push(String::from("(error \"x\")"));
+    three.push(String::from("unsat"));
+    three.push(s3);
+    if vc_session_classify(three, 3) != VC_ANS_NONE() { return 10; }
+    0
+}
+
+fn check_disabled_session_never_starts() -> i64 [io] {
+    let cs: VcClaims = two_claims();
+    let ss: VcSession = vc_session_new(false);
+    if vc_session_ask(ss, String::from("/nonexistent/bitwuzla"), cs, 0, 1000) != VC_ANS_NONE() { return 1; }
+    if ss.handle >= 0 { return 2; }
+    vc_session_close(ss);
+    vc_session_close(ss);
+    0
+}
+
+fn check_missing_solver_kills_the_session() -> i64 [io] {
+    let cs: VcClaims = two_claims();
+    let ss: VcSession = vc_session_new(true);
+    if vc_session_ask(ss, String::from("/nonexistent/bitwuzla"), cs, 0, 1000) != VC_ANS_NONE() { return 1; }
+    if ss.live { return 2; }
+    if vc_session_ask(ss, String::from("/nonexistent/bitwuzla"), cs, 1, 1000) != VC_ANS_NONE() { return 3; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let mut r: i64 = check_first_delta_is_the_standalone_prefix();
+    if r == 0 { r = check_later_delta_is_the_remainder(); }
+    if r == 0 { r = check_repeated_ask_sends_no_delta(); }
+    if r == 0 { r = check_frame_text(); }
+    if r == 0 { r = check_classify_accepts_only_the_exact_reply(); }
+    if r == 0 { r = check_disabled_session_never_starts(); }
+    if r == 0 { r = check_missing_solver_kills_the_session(); }
+    i64_to_i32_wrap(r)
+}

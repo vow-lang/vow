@@ -279,14 +279,29 @@ fn vc_command_text(ar: VcArena, s: SmtScript, i: u64) -> String {
     out
 }
 
-// One command per line, each line newline-terminated.
-fn vc_smt_render(ar: VcArena, s: SmtScript) -> String {
+// Commands `[from, to)` (clamped to the script), one per line, each line
+// newline-terminated.
+fn vc_smt_render_cmds(ar: VcArena, s: SmtScript, from: u64, to: u64) -> String {
     let out: String = String::from("");
-    let mut i: u64 = 0;
-    while i < s.kinds.len() {
+    let mut i: u64 = from;
+    while i < to && i < s.kinds.len() {
         out.push_str(vc_command_text(ar, s, i));
         out.push_str(String::from("\n"));
         i = i + 1;
     }
+    out
+}
+
+// One command per line, each line newline-terminated.
+fn vc_smt_render(ar: VcArena, s: SmtScript) -> String {
+    vc_smt_render_cmds(ar, s, 0, s.kinds.len())
+}
+
+// `(assert <term>)` for a term id, as `vc_command_text` writes an assertion
+// command; no trailing newline.
+fn vc_smt_assert_text(ar: VcArena, t: i64) -> String {
+    let out: String = String::from("(assert ");
+    out.push_str(vc_term_text(ar, t));
+    out.push_str(String::from(")"));
     out
 }

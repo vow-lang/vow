@@ -6,7 +6,9 @@ set -euo pipefail
 # query it is given, so this tier needs no real solver: it checks that one
 # self-contained .smt2 reaches the solver per claim, that each solver outcome
 # maps to the right verdict, that temp files and child processes are cleaned up,
-# and that the CLI rejects what the native backend does not support.
+# and that the CLI rejects what the native backend does not support. The
+# incremental sessions of #1428 are off for everything but the section that
+# tests them (`run_incremental`), so the counts above stay per-claim.
 
 VOWC_BIN="${VOWC_BIN:-build/vowc}"
 VOWC_BIN=$(cd "$(dirname "$VOWC_BIN")" && pwd)/$(basename "$VOWC_BIN")
@@ -20,18 +22,68 @@ FAKE_DIR="$TMP_ROOT/fake"
 EMPTY_DIR="$TMP_ROOT/empty"
 SCRATCH="$TMP_ROOT/tmp"
 mkdir -p "$FAKE_DIR" "$EMPTY_DIR" "$SCRATCH"
+export VOW_VERIFY_NO_INCREMENTAL=1
 
 cat > "$FAKE_DIR/bitwuzla" <<'SHIM'
 #!/usr/bin/env bash
 set -eu
 file="${!#}"
+if [ ! -f "$file" ]; then
+    # an interactive session: commands on stdin, one reply per `(check-sat)`.
+    s=1
+    until mkdir "$FAKE_BW_DIR/.sess.$s" 2>/dev/null; do s=$((s + 1)); done
+    t="$FAKE_BW_DIR/s.$s.smt2"
+    : > "$t"
+    echo "$*" >> "$FAKE_BW_DIR/sargs"
+    echo $$ >> "$FAKE_BW_DIR/spids"
+    case "$FAKE_BW_MODE" in
+        exit1) echo "[error] boom" >&2; exit 1 ;;
+        oom_msg) echo "(error) Out of memory" >&2; exit 1 ;;
+        hang) echo $$ > "$FAKE_BW_DIR/pid"; exec sleep 29 ;;
+        kill_worker) kill -9 "$PPID"; sleep 5 ;;
+        crash_worker) kill -6 "$PPID"; sleep 5 ;;
+    esac
+    die_after=-1
+    case "$FAKE_BW_MODE" in session_die_after_*) die_after="${FAKE_BW_MODE#session_die_after_}" ;; esac
+    checks=0
+    while IFS= read -r line; do
+        echo "$line" >> "$t"
+        case "$line" in
+            "(push 1)")
+                if [ "$FAKE_BW_MODE" = session_noscope ]; then
+                    echo "[error] push is not supported" >&2
+                    exit 1
+                fi
+                ;;
+            "(check-sat)")
+                checks=$((checks + 1))
+                if [ "$die_after" -ge 0 ] && [ "$checks" -gt "$die_after" ]; then
+                    echo "[error] session died" >&2
+                    exit 1
+                fi
+                case "$FAKE_BW_MODE" in
+                    garbage) echo "what is this" ;;
+                    session_error_line) echo '(error "boom")' ;;
+                    sat|session_sat) echo sat ;;
+                    unknown|session_unknown) echo unknown ;;
+                    *) echo unsat ;;
+                esac
+                ;;
+            "(echo "*)
+                msg="${line#\(echo }"
+                echo "${msg%)}"
+                ;;
+        esac
+    done
+    exit 0
+fi
 n=1
 until mkdir "$FAKE_BW_DIR/.slot.$n" 2>/dev/null; do n=$((n + 1)); done
 cp "$file" "$FAKE_BW_DIR/q.$n.smt2"
 echo "$file" >> "$FAKE_BW_DIR/paths"
 echo "$*" >> "$FAKE_BW_DIR/args"
 case "$FAKE_BW_MODE" in
-    unsat) echo unsat ;;
+    unsat|session_unsat|session_unknown|session_die_after_*|session_error_line|session_noscope) echo unsat ;;
     unknown) echo unknown ;;
     garbage) echo "what is this" ;;
     exit1) echo "[error] boom" >&2; exit 1 ;;
@@ -75,7 +127,7 @@ case "$FAKE_BW_MODE" in
         done
         echo ")"
         ;;
-    sat|sat_zero)
+    sat|sat_zero|session_sat)
         val=7
         [ "$FAKE_BW_MODE" = sat_zero ] && val=0
         echo sat
@@ -279,7 +331,17 @@ run_native() {
     run_cmd "$mode" verify --no-cache --backend native "$@"
 }
 
+# the same, with the claims of a round sharing one solver process.
+run_incremental() {
+    local saved="$VOW_VERIFY_NO_INCREMENTAL"
+    export VOW_VERIFY_NO_INCREMENTAL=0
+    run_native "$@"
+    export VOW_VERIFY_NO_INCREMENTAL="$saved"
+}
+
 queries() { find "$BW_DIR" -name 'q.*.smt2' | wc -l | tr -d ' '; }
+sessions() { find "$BW_DIR" -name 's.*.smt2' | wc -l | tr -d ' '; }
+session_lines() { grep -c -- "$2" "$BW_DIR/s.$1.smt2" || true; }
 
 expect() {
     local what="$1" got="$2" want="$3"
@@ -1225,6 +1287,128 @@ enum = schema["properties"]["contracts"]["items"]["properties"]["status"]["enum"
 missing = {"proven", "failed", "unknown", "timeout", "error"} - set(enum)
 assert not missing, missing
 PY
+
+# Incremental solver sessions (#1428): the claims of a round share one solver
+# process (header and assumptions asserted once, each negated goal in a
+# push/pop scope). Only `unsat`, and `sat` on a soft claim, is taken from it; a
+# `sat` on a hard claim is re-decided by a standalone full query, which alone
+# supplies the model, and anything else falls back to standalone queries.
+no_survivors() {
+    local what="$1" p
+    [ -f "$BW_DIR/spids" ] || return 0
+    while read -r p; do
+        case "$(ps -p "$p" -o stat= 2>/dev/null | tr -d ' ')" in
+            ""|Z*) ;;
+            *) fail "$what: solver session $p survived"; kill -9 "$p" 2>/dev/null || true ;;
+        esac
+    done < "$BW_DIR/spids"
+}
+
+run_incremental session_unsat "$THREE_CLAIMS"
+expect "session unsat status" "$(field "$RUN_OUT" status)" "Verified"
+expect "session unsat exit" "$RUN_RC" "0"
+expect "session unsat: one solver process" "$(sessions)" "1"
+expect "session unsat: no standalone query" "$(queries)" "0"
+expect "session: header sent once" "$(session_lines 1 '^(set-logic')" "1"
+expect "session: one check per claim" "$(session_lines 1 '^(check-sat)$')" "3"
+expect "session: one scope per claim and the probe" "$(session_lines 1 '^(push 1)$')" "4"
+expect "session: scopes are closed" "$(session_lines 1 '^(pop 1)$')" "4"
+expect "session: declarations sent once" "$(session_lines 1 '^(declare-const p0 ')" "1"
+expect "session: no model request" "$(session_lines 1 'get-value')" "0"
+grep -q -- '--bv-output-format 2' "$BW_DIR/sargs" || fail "session not run with --bv-output-format 2"
+no_survivors "session unsat"
+no_leftovers "session unsat"
+
+# a hard `sat` is re-decided by one standalone full query: same report, byte for byte.
+run_incremental session_sat "$THREE_CLAIMS"
+inc_out="$RUN_OUT"
+expect "session sat: one solver process" "$(sessions)" "1"
+expect "session sat: one standalone confirmation" "$(queries)" "1"
+no_survivors "session sat"
+no_leftovers "session sat"
+run_native sat "$THREE_CLAIMS"
+expect "session sat: report equals the standalone report" "$inc_out" "$RUN_OUT"
+expect "session sat status" "$(field "$inc_out" status)" "VerifyFailed"
+expect "session sat model" "$(field "$inc_out" counterexamples.0.values.a)" "7"
+
+# a session that says `unknown` leaves the claim to the standalone queries.
+run_incremental session_unknown "$THREE_CLAIMS"
+expect "session unknown status" "$(field "$RUN_OUT" status)" "Verified"
+expect "session unknown: every claim falls back" "$(queries)" "3"
+no_survivors "session unknown"
+no_leftovers "session unknown"
+
+# a solver that dies mid-round: the claims it answered stand, the rest are
+# standalone, and the verdict is the one-shot verdict.
+run_incremental session_die_after_1 "$THREE_CLAIMS"
+expect "session death status" "$(field "$RUN_OUT" status)" "Verified"
+expect "session death exit" "$RUN_RC" "0"
+expect "session death: one session" "$(sessions)" "1"
+expect "session death: later claims standalone" "$(queries)" "2"
+no_survivors "session death"
+no_leftovers "session death"
+
+# a solver that cannot run a session (no push/pop, an error line, junk) never
+# decides a claim: every claim is standalone and the verdict is unchanged.
+for mode in session_noscope session_error_line session_die_after_0; do
+    run_incremental "$mode" "$THREE_CLAIMS"
+    expect "$mode status" "$(field "$RUN_OUT" status)" "Verified"
+    expect "$mode: every claim standalone" "$(queries)" "3"
+    no_survivors "$mode"
+    no_leftovers "$mode"
+done
+
+# the failure modes of the one-shot path hold with a session in front of it.
+for mode in garbage exit1; do
+    run_incremental "$mode" "$THREE_CLAIMS"
+    expect "session $mode verify_status" "$(field "$RUN_OUT" verify_status)" "error"
+    expect "session $mode exit" "$RUN_RC" "1"
+    no_survivors "session $mode"
+    no_leftovers "session $mode"
+done
+for mode in kill_worker oom_msg; do
+    run_incremental "$mode" "$THREE_CLAIMS"
+    expect "session $mode verify_status" "$(field "$RUN_OUT" verify_status)" "unknown"
+    case "$(field "$RUN_OUT" verify_message)" in
+        *"memory limit exceeded"*) ;;
+        *) fail "session $mode lacks a memory reason: $(field "$RUN_OUT" verify_message)" ;;
+    esac
+    no_survivors "session $mode"
+    no_leftovers "session $mode"
+done
+run_incremental crash_worker "$THREE_CLAIMS"
+expect "session crash verify_status" "$(field "$RUN_OUT" verify_status)" "panicked"
+
+# a hung session is killed at the budget, with the same status as without one.
+start=$(date +%s)
+run_incremental hang "$THREE_CLAIMS" --timeout 1
+elapsed=$(( $(date +%s) - start ))
+expect "session hang verify_status" "$(field "$RUN_OUT" verify_status)" "timeout"
+if [ "$elapsed" -gt 10 ]; then fail "session hang took ${elapsed}s with --timeout 1"; fi
+all_dead "$BW_DIR/spids" "hung session"
+all_dead "$BW_DIR/pid" "hung solver"
+no_leftovers "session hang"
+
+# a round with a single claim for the solver has nothing to share.
+run_incremental session_unsat "$ONE_CLAIM"
+expect "single claim: verified" "$(field "$RUN_OUT" status)" "Verified"
+expect "single claim: no session" "$(sessions)" "0"
+expect "single claim: one standalone query" "$(queries)" "1"
+
+# a function with a loop runs one session per unwinding round.
+run_incremental session_unsat "$LOOP_CLAIMS"
+expect "loop session status" "$(field "$RUN_OUT" status)" "Verified"
+expect "loop session: no standalone query" "$(queries)" "0"
+no_survivors "loop session"
+no_leftovers "loop session"
+
+# inlined calls: the same report with and without sessions.
+run_incremental session_sat "$CALL_CLAIMS" --verify-jobs 1
+inc_out="$RUN_OUT"
+run_native sat "$CALL_CLAIMS" --verify-jobs 1
+expect "calls: report equals the standalone report" "$inc_out" "$RUN_OUT"
+no_survivors "calls"
+no_leftovers "calls session"
 
 if [ "$failures" -ne 0 ]; then
     echo "verify-native: $failures failure(s)" >&2
