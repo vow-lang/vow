@@ -1,0 +1,563 @@
+module VcInduct
+
+use ir
+use ir_dominance
+use vc_ops
+use vc_gate
+use vc_cfg
+use vc_loops
+use vc_inline
+
+// Loop cut for inductive verification from user `invariant` clauses. Every loop
+// of a loop-closed function is replaced by three pieces, giving an acyclic
+// function the symbolic executor already walks:
+//
+//   entry copy    the invariant region of the header on the state the loop is
+//                 entered with: the invariant is a claim there (base case); it
+//                 then continues into the header proper;
+//   header proper the original loop, with each header Phi turned into an
+//                 unconstrained constant and each invariant of the region into
+//                 an assumption (an arbitrary state satisfying the invariant),
+//                 the loop condition, the body and the exit untouched;
+//   back copy     the invariant region again, fed by the back edges: the
+//                 invariant is a claim on the state the body produced
+//                 (preservation) and the copy ends where control would return.
+//
+// The invariant region of a loop is the part of its header that computes the
+// invariant clauses: the Phis, the clause code and the last `VowInv`. A clause
+// with `&&`/`||` lowers to branches, so the region may span several blocks; the
+// copy of the block holding the last `VowInv` stops right after it.
+//
+// A loop the cut cannot treat exactly (a loop without an invariant, a pointer
+// carried by a header Phi, an irregular header) makes the whole function `NA`:
+// the caller keeps the bounded verdict, as it does for a cut the executor cannot
+// walk. An accepted cut is only a transformation: it never produces a verdict
+// itself.
+
+fn VC_INDUCT_OK() -> i64 { 0 }
+fn VC_INDUCT_NA() -> i64 { 1 }
+
+struct VcInduct {
+    f: IrFunction,
+    status: i64,
+}
+
+fn vc_induct_status(f: IrFunction, status: i64) -> VcInduct {
+    VcInduct { f: f, status: status }
+}
+
+// Position of the last `VowInv` of a block; -1 when it has none.
+fn vc_induct_last_inv(blk: IrBlock) -> i64 {
+    let mut i: i64 = blk.insts.len() as i64;
+    while i > 0 {
+        i = i - 1;
+        let inst: IrInst = blk.insts[i as u64];
+        if inst.op == IOP_VOW_INV() {
+            return i;
+        }
+    }
+    -1
+}
+
+fn vc_induct_innermost(li: VcLoopInfo, b: u64) -> i64 {
+    let n: i64 = vc_chain_len(li, b);
+    if n == 0 {
+        return -1;
+    }
+    vc_chain_at(li, b, n - 1)
+}
+
+// The reachable block holding `VowInv`s of loop `j` that every other such block
+// dominates (the one the invariant region ends in); -1 when the blocks do not
+// form a dominator chain or there is none.
+fn vc_induct_last_block(f: IrFunction, li: VcLoopInfo, rpo: Vec<i64>, j: i64) -> i64 {
+    let nb: u64 = f.blocks.len();
+    let mut b: u64 = 0;
+    while b < nb {
+        let blk: IrBlock = f.blocks[b];
+        if rpo[b] >= 0 && vc_induct_innermost(li, b) == j && vc_induct_last_inv(blk) >= 0 {
+            let mut all: bool = true;
+            let mut c: u64 = 0;
+            while c < nb {
+                let other: IrBlock = f.blocks[c];
+                if rpo[c] >= 0 && vc_induct_innermost(li, c) == j && vc_induct_last_inv(other) >= 0 {
+                    if !dom_dominates(li.nums, nb, c as i64, b as i64) {
+                        all = false;
+                    }
+                }
+                c = c + 1;
+            }
+            if all {
+                return b as i64;
+            }
+        }
+        b = b + 1;
+    }
+    -1
+}
+
+// Marks in `owner` every block that reaches `last` without passing the header
+// `h`, `h` included. False when the walk leaves the loop or meets another
+// loop's region.
+fn vc_induct_mark_region(li: VcLoopInfo, owner: Vec<i64>, j: i64, h: i64, last: i64) -> bool {
+    let nb: u64 = owner.len();
+    let stack: Vec<i64> = Vec::new();
+    if owner[last as u64] >= 0 {
+        return false;
+    }
+    owner[last as u64] = j;
+    stack.push(last);
+    while stack.len() > 0 {
+        let b: i64 = stack[stack.len() - 1];
+        stack.pop();
+        if b != h {
+            let mut pi: i64 = li.pred_off[b as u64];
+            while pi < li.pred_off[(b + 1) as u64] {
+                let p: i64 = li.preds[pi as u64];
+                if owner[p as u64] != j {
+                    if owner[p as u64] >= 0 || !dom_dominates(li.nums, nb, h, p) {
+                        return false;
+                    }
+                    owner[p as u64] = j;
+                    stack.push(p);
+                }
+                pi = pi + 1;
+            }
+        }
+    }
+    owner[h as u64] == j
+}
+
+// Every region block of loop `j` but `last` belongs to `j` itself and leads only
+// into the region, never back to the header.
+fn vc_induct_region_closed(li: VcLoopInfo, succ: Vec<i64>, owner: Vec<i64>, j: i64, h: i64, last: i64) -> bool {
+    let nb: u64 = owner.len();
+    let mut b: u64 = 0;
+    while b < nb {
+        if owner[b] == j {
+            if vc_induct_innermost(li, b) != j {
+                return false;
+            }
+            if b as i64 != last {
+                let mut k: u64 = 0;
+                while k < 2 {
+                    let s: i64 = succ[b * 2 + k];
+                    if s >= 0 && (owner[s as u64] != j || s == h) {
+                        return false;
+                    }
+                    k = k + 1;
+                }
+            }
+        }
+        b = b + 1;
+    }
+    true
+}
+
+fn vc_induct_count_inv(blk: IrBlock) -> i64 {
+    let mut n: i64 = 0;
+    let mut i: u64 = 0;
+    while i < blk.insts.len() {
+        let inst: IrInst = blk.insts[i];
+        if inst.op == IOP_VOW_INV() {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+struct VcRegions {
+    ok: bool,
+    owner: Vec<i64>,
+    last: Vec<i64>,
+}
+
+// Invariant region of every loop. Not `ok` unless every loop has one, regions
+// are disjoint, and no `VowInv` of the function lies outside them.
+fn vc_induct_regions(f: IrFunction, li: VcLoopInfo, succ: Vec<i64>, rpo: Vec<i64>) -> VcRegions {
+    let nb: u64 = f.blocks.len();
+    let rg: VcRegions = VcRegions { ok: false, owner: dom_fill(nb, -1), last: Vec::new() };
+    let mut j: i64 = 0;
+    while j < li.n_loops {
+        let h: i64 = li.headers[j as u64];
+        let last: i64 = vc_induct_last_block(f, li, rpo, j);
+        if last < 0 || !vc_induct_mark_region(li, rg.owner, j, h, last) {
+            return rg;
+        }
+        if !vc_induct_region_closed(li, succ, rg.owner, j, h, last) {
+            return rg;
+        }
+        rg.last.push(last);
+        j = j + 1;
+    }
+    let mut total: i64 = 0;
+    let mut inside: i64 = 0;
+    let mut b: u64 = 0;
+    while b < nb {
+        if rpo[b] >= 0 {
+            let n: i64 = vc_induct_count_inv(f.blocks[b]);
+            total = total + n;
+            if rg.owner[b] >= 0 {
+                inside = inside + n;
+            }
+        }
+        b = b + 1;
+    }
+    rg.ok = total == inside;
+    rg
+}
+
+// True when a header Phi carries a pointer: the aggregate model keeps no state
+// across a havoc, so such a loop is not cut.
+fn vc_induct_ptr_phi(f: IrFunction, li: VcLoopInfo) -> bool {
+    let mut j: i64 = 0;
+    while j < li.n_loops {
+        let blk: IrBlock = f.blocks[li.headers[j as u64] as u64];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            let inst: IrInst = blk.insts[i];
+            if inst.op == IOP_PHI() && inst.ty == ITY_PTR() {
+                return true;
+            }
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    false
+}
+
+struct VcCut {
+    f: IrFunction,
+    li: VcLoopInfo,
+    id_to_idx: Vec<i64>,
+    owner: Vec<i64>,
+    last: Vec<i64>,
+    remap: Vec<i64>,
+    blk_new: Vec<i64>,
+    phi_loop: Vec<i64>,
+    ent_phi: Vec<i64>,
+    back_phi: Vec<i64>,
+    ent_head: Vec<i64>,
+    back_head: Vec<i64>,
+    next_inst: i64,
+    next_blk: i64,
+    bad: bool,
+    clones: Vec<IrBlock>,
+}
+
+// Number of leading instructions of block `b` that loop `j`'s copy keeps.
+fn vc_induct_keep(st: VcCut, j: i64, b: u64) -> u64 {
+    let blk: IrBlock = st.f.blocks[b];
+    if st.last[j as u64] == b as i64 {
+        return (vc_induct_last_inv(blk) + 1) as u64;
+    }
+    blk.insts.len()
+}
+
+// Block id for original block id `id` inside the copy being built.
+fn vc_induct_copy_target(st: VcCut, id: i64) -> i64 {
+    let idx: i64 = dom_block_index(st.id_to_idx, id);
+    if idx < 0 || st.blk_new[idx as u64] < 0 {
+        st.bad = true;
+        return id;
+    }
+    st.blk_new[idx as u64]
+}
+
+fn vc_induct_copy_inst(st: VcCut, inst: IrInst) -> IrInst {
+    let mut new_id: i64 = -1;
+    if inst.id >= 0 {
+        new_id = st.remap[inst.id as u64];
+    }
+    let args: Vec<i64> = vc_map_args(inst, st.remap, 0);
+    let mut dv: i64 = inst.dv;
+    let mut dv2: i64 = inst.dv2;
+    if inst.op == IOP_UPSILON() {
+        if dv >= 0 && (dv as u64) < st.remap.len() && st.remap[dv as u64] >= 0 {
+            dv = st.remap[dv as u64];
+        } else {
+            st.bad = true;
+        }
+    } else if inst.op == IOP_BRANCH() && inst.dk == IDATA_BRANCH_TARGETS() {
+        dv = vc_induct_copy_target(st, inst.dv);
+        dv2 = vc_induct_copy_target(st, inst.dv2);
+    } else if inst.op == IOP_JUMP() && inst.dk == IDATA_JUMP_TARGET() {
+        dv = vc_induct_copy_target(st, inst.dv);
+    }
+    vc_clone_inst(inst, new_id, args, dv, dv2)
+}
+
+// The terminator that closes the copy of the block ending in the last `VowInv`:
+// a jump into the original header for the entry copy, the cut end for the back
+// copy.
+fn vc_induct_copy_end(st: VcCut, j: i64, back: bool, inv: IrInst) -> IrInst {
+    let id: i64 = st.next_inst;
+    st.next_inst = st.next_inst + 1;
+    let mut end: IrInst = ir_inst_new(id, IOP_UNREACHABLE(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, VC_INTERNAL_CUT_END());
+    if !back {
+        let h: IrBlock = st.f.blocks[st.li.headers[j as u64] as u64];
+        end = ir_inst_new(id, IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), h.id, 0, String::from(""));
+    }
+    end.ostart = inv.ostart;
+    end.olen = inv.olen;
+    end
+}
+
+fn vc_induct_copy_block(st: VcCut, j: i64, b: u64, back: bool) -> IrBlock {
+    let src: IrBlock = st.f.blocks[b];
+    let out: IrBlock = ir_block_new(st.blk_new[b]);
+    let keep: u64 = vc_induct_keep(st, j, b);
+    let mut i: u64 = 0;
+    while i < keep {
+        out.insts.push(vc_induct_copy_inst(st, src.insts[i]));
+        i = i + 1;
+    }
+    if st.last[j as u64] == b as i64 {
+        out.insts.push(vc_induct_copy_end(st, j, back, src.insts[keep - 1]));
+    }
+    out
+}
+
+// Builds the entry (`back` false) or back copy of loop `j`'s invariant region
+// with fresh block and instruction ids, and records the copy of each header Phi
+// and of the header block.
+fn vc_induct_copy(st: VcCut, j: i64, back: bool) {
+    let nb: u64 = st.f.blocks.len();
+    let h: u64 = st.li.headers[j as u64] as u64;
+    let mut b: u64 = 0;
+    while b < nb {
+        if st.owner[b] == j {
+            st.blk_new[b] = st.next_blk;
+            st.next_blk = st.next_blk + 1;
+            let blk: IrBlock = st.f.blocks[b];
+            let keep: u64 = vc_induct_keep(st, j, b);
+            let mut i: u64 = 0;
+            while i < keep {
+                let inst: IrInst = blk.insts[i];
+                if inst.id >= 0 {
+                    st.remap[inst.id as u64] = st.next_inst;
+                    st.next_inst = st.next_inst + 1;
+                }
+                i = i + 1;
+            }
+        }
+        b = b + 1;
+    }
+    b = 0;
+    while b < nb {
+        if st.owner[b] == j {
+            st.clones.push(vc_induct_copy_block(st, j, b, back));
+        }
+        b = b + 1;
+    }
+    let hb: IrBlock = st.f.blocks[h];
+    let mut pi: u64 = 0;
+    while pi < hb.insts.len() {
+        let p: IrInst = hb.insts[pi];
+        if p.op == IOP_PHI() {
+            if back {
+                st.back_phi[p.id as u64] = st.remap[p.id as u64];
+            } else {
+                st.ent_phi[p.id as u64] = st.remap[p.id as u64];
+            }
+        }
+        pi = pi + 1;
+    }
+    if back {
+        st.back_head[j as u64] = st.blk_new[h];
+    } else {
+        st.ent_head[j as u64] = st.blk_new[h];
+    }
+    b = 0;
+    while b < nb {
+        if st.owner[b] == j {
+            let blk: IrBlock = st.f.blocks[b];
+            let keep: u64 = vc_induct_keep(st, j, b);
+            let mut i: u64 = 0;
+            while i < keep {
+                let inst: IrInst = blk.insts[i];
+                if inst.id >= 0 {
+                    st.remap[inst.id as u64] = -1;
+                }
+                i = i + 1;
+            }
+            st.blk_new[b] = -1;
+        }
+        b = b + 1;
+    }
+}
+
+// `inst` with another opcode, no operands and no frame marker.
+fn vc_induct_retag(inst: IrInst, op: i64, dk: i64, ds: String) -> IrInst {
+    let out: IrInst = vc_clone_inst(inst, inst.id, Vec::new(), 0, 0);
+    out.op = op;
+    out.dk = dk;
+    out.ds = ds;
+    out
+}
+
+// The unconstrained stand-in for a header Phi.
+fn vc_induct_havoc(phi: IrInst) -> IrInst {
+    if phi.ty == ITY_UNIT() {
+        return vc_induct_retag(phi, IOP_CONST_UNIT(), IDATA_NONE(), String::from(""));
+    }
+    vc_induct_retag(phi, IOP_CALL(), IDATA_CALL_EXTERN(), VC_INTERNAL_HAVOC())
+}
+
+// A header-region invariant as the assumption it is in the havoc state. The
+// frame marker is cleared: an invariant of a spliced callee is a claim in the
+// copies and a plain assumption here.
+fn vc_induct_assume(inv: IrInst) -> IrInst {
+    let out: IrInst = vc_clone_inst(inv, inv.id, inv.args, inv.dv, inv.dv2);
+    out.op = IOP_VOW_REQ();
+    out.ds = String::from("");
+    out
+}
+
+// A branch or jump target that is a loop header, retargeted to that loop's entry
+// copy or, from inside the loop, to its back copy.
+fn vc_induct_edge_target(st: VcCut, src: u64, id: i64) -> i64 {
+    let idx: i64 = dom_block_index(st.id_to_idx, id);
+    if idx < 0 {
+        return id;
+    }
+    let t: i64 = st.li.loop_of_header[idx as u64];
+    if t < 0 {
+        return id;
+    }
+    if vc_in_loop(st.li, src, t) {
+        return st.back_head[t as u64];
+    }
+    st.ent_head[t as u64]
+}
+
+// The Upsilon feeding a header Phi, retargeted at the copy of that Phi on the
+// side of the edge it sits on.
+fn vc_induct_upsilon(st: VcCut, src: u64, inst: IrInst) -> IrInst {
+    let p: i64 = inst.dv;
+    if p < 0 || (p as u64) >= st.phi_loop.len() || st.phi_loop[p as u64] < 0 {
+        return inst;
+    }
+    let t: i64 = st.phi_loop[p as u64];
+    let mut np: i64 = st.ent_phi[p as u64];
+    if vc_in_loop(st.li, src, t) {
+        np = st.back_phi[p as u64];
+    }
+    if np < 0 {
+        st.bad = true;
+    }
+    vc_clone_inst(inst, inst.id, inst.args, np, inst.dv2)
+}
+
+fn vc_induct_rebuild_inst(st: VcCut, b: u64, inst: IrInst) -> IrInst {
+    let op: i64 = inst.op;
+    let hl: i64 = st.li.loop_of_header[b];
+    if op == IOP_PHI() && hl >= 0 && inst.id >= 0 && st.phi_loop[inst.id as u64] == hl {
+        return vc_induct_havoc(inst);
+    }
+    if op == IOP_VOW_INV() && st.owner[b] >= 0 {
+        return vc_induct_assume(inst);
+    }
+    if op == IOP_UPSILON() {
+        return vc_induct_upsilon(st, b, inst);
+    }
+    if op == IOP_BRANCH() && inst.dk == IDATA_BRANCH_TARGETS() {
+        return vc_clone_inst(inst, inst.id, inst.args, vc_induct_edge_target(st, b, inst.dv), vc_induct_edge_target(st, b, inst.dv2));
+    }
+    if op == IOP_JUMP() && inst.dk == IDATA_JUMP_TARGET() {
+        return vc_clone_inst(inst, inst.id, inst.args, vc_induct_edge_target(st, b, inst.dv), inst.dv2);
+    }
+    inst
+}
+
+fn vc_induct_rebuild_block(st: VcCut, b: u64) -> IrBlock {
+    let src: IrBlock = st.f.blocks[b];
+    let out: IrBlock = ir_block_new(src.id);
+    let mut i: u64 = 0;
+    while i < src.insts.len() {
+        out.insts.push(vc_induct_rebuild_inst(st, b, src.insts[i]));
+        i = i + 1;
+    }
+    out
+}
+
+// Header Phi id -> its loop, -1 elsewhere.
+fn vc_induct_phi_loops(f: IrFunction, li: VcLoopInfo, n_ids: u64) -> Vec<i64> {
+    let out: Vec<i64> = dom_fill(n_ids, -1);
+    let mut j: i64 = 0;
+    while j < li.n_loops {
+        let blk: IrBlock = f.blocks[li.headers[j as u64] as u64];
+        let mut i: u64 = 0;
+        while i < blk.insts.len() {
+            let inst: IrInst = blk.insts[i];
+            if inst.op == IOP_PHI() && inst.id >= 0 {
+                out[inst.id as u64] = j;
+            }
+            i = i + 1;
+        }
+        j = j + 1;
+    }
+    out
+}
+
+// `f` (loop-closed, accepted by `vc_loop_shape_detail`) with every loop cut as
+// described above; `NA` and `f` itself when some loop cannot be.
+fn vc_induct_cut(f: IrFunction) -> VcInduct {
+    let nb: u64 = f.blocks.len();
+    if nb == 0 {
+        return vc_induct_status(f, VC_INDUCT_NA());
+    }
+    let id_to_idx: Vec<i64> = dom_block_id_table(f);
+    let succ: Vec<i64> = dom_successors(f, id_to_idx);
+    let rpo: Vec<i64> = dom_rpo_numbers(nb, succ);
+    let li: VcLoopInfo = vc_loop_analysis(nb, succ, rpo);
+    if li.n_loops == 0 || vc_loop_shape_detail(f, succ, rpo).len() > 0 || vc_induct_ptr_phi(f, li) {
+        return vc_induct_status(f, VC_INDUCT_NA());
+    }
+    let rg: VcRegions = vc_induct_regions(f, li, succ, rpo);
+    if !rg.ok {
+        return vc_induct_status(f, VC_INDUCT_NA());
+    }
+    let n_ids: u64 = (dom_max_inst_id(f) + 1) as u64;
+    let n_loops: u64 = li.n_loops as u64;
+    let st: VcCut = VcCut {
+        f: f,
+        li: li,
+        id_to_idx: id_to_idx,
+        owner: rg.owner,
+        last: rg.last,
+        remap: dom_fill(n_ids, -1),
+        blk_new: dom_fill(nb, -1),
+        phi_loop: vc_induct_phi_loops(f, li, n_ids),
+        ent_phi: dom_fill(n_ids, -1),
+        back_phi: dom_fill(n_ids, -1),
+        ent_head: dom_fill(n_loops, -1),
+        back_head: dom_fill(n_loops, -1),
+        next_inst: n_ids as i64,
+        next_blk: id_to_idx.len() as i64,
+        bad: false,
+        clones: Vec::new(),
+    };
+    let mut j: i64 = 0;
+    while j < li.n_loops {
+        vc_induct_copy(st, j, false);
+        vc_induct_copy(st, j, true);
+        j = j + 1;
+    }
+    let g: IrFunction = vc_function_shell(f);
+    let mut b: u64 = 0;
+    while b < nb {
+        g.blocks.push(vc_induct_rebuild_block(st, b));
+        b = b + 1;
+    }
+    let mut c: u64 = 0;
+    while c < st.clones.len() {
+        g.blocks.push(st.clones[c]);
+        c = c + 1;
+    }
+    if st.bad || vc_unrolled_detail(g, vc_ty_table(g)).len() > 0 || ir_non_dominating_read(g).len() > 0 {
+        return vc_induct_status(f, VC_INDUCT_NA());
+    }
+    vc_induct_status(g, VC_INDUCT_OK())
+}

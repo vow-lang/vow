@@ -1,0 +1,21 @@
+// TEST: category invariant
+// A proof covers terminating runs: this loop never exits, so no run reaches the
+// `ensures` and it holds vacuously. Pins the partial-correctness decision of
+// ADR-2026-10-08-1422.
+module LoopNonterminatingPartialCorrectness
+
+fn spin(x: u64) -> u64 vow {
+  ensures: result == x
+} {
+  let mut i: u64 = 0;
+  while true vow {
+    invariant: true
+  } {
+    i = i + 1;
+  }
+  x
+}
+
+fn main() -> i32 [io] {
+  0
+}

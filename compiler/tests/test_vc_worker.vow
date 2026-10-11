@@ -247,8 +247,8 @@ fn check_stopped_outcome_keeps_earlier_failure() -> i64 {
     let targets: Vec<i64> = Vec::new();
     targets.push(3);
     targets.push(4);
-    let frozen: VcRound = vc_round(sample_result(), true, true, -1, false);
-    let unfrozen: VcRound = vc_round(sample_result(), false, false, -1, false);
+    let frozen: VcRound = vc_round(sample_result(), true, true, -1, false, false);
+    let unfrozen: VcRound = vc_round(sample_result(), false, false, -1, false, false);
     let kept_fb: VcOutcome = vc_bare_outcome(vc_plain_result(VERIFY_UNKNOWN(), String::from("budget")));
     let kept: VcOutcome = vc_stopped_outcome(f, fr, frozen, kept_fb, acc, targets, true);
     if kept.result.status != VERIFY_FAILED() { return 1; }
