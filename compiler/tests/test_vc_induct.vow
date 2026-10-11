@@ -339,6 +339,48 @@ fn check_vec_written_in_loop() -> i64 {
     0
 }
 
+// A field written in the loop body on an object allocated before the loop is
+// not a header Phi either, so the function is not cut. An object allocated and
+// written inside the body is fresh each iteration and keeps the cut.
+fn check_agg_written_in_loop() -> i64 {
+    let f: IrFunction = count_up();
+    let e: IrBlock = f.blocks[0];
+    let pre: Vec<IrInst> = Vec::new();
+    pre.push(mk_inst_alloc(30, 8));
+    let mut i: u64 = 0;
+    while i < e.insts.len() {
+        pre.push(e.insts[i]);
+        i = i + 1;
+    }
+    f.blocks[0] = mk_block(0, pre);
+    let body: IrBlock = f.blocks[2];
+    let w: Vec<IrInst> = Vec::new();
+    w.push(body.insts[0]);
+    w.push(mk_inst_field_set(31, 30, 0, 9));
+    let mut j: u64 = 1;
+    while j < body.insts.len() {
+        w.push(body.insts[j]);
+        j = j + 1;
+    }
+    f.blocks[2] = mk_block(2, w);
+    if vc_induct_cut(f).status != VC_INDUCT_NA() { return 1; }
+
+    let g: IrFunction = count_up();
+    let gb: IrBlock = g.blocks[2];
+    let loc: Vec<IrInst> = Vec::new();
+    loc.push(mk_inst_alloc(32, 8));
+    loc.push(gb.insts[0]);
+    loc.push(mk_inst_field_set(33, 32, 0, 9));
+    let mut k: u64 = 1;
+    while k < gb.insts.len() {
+        loc.push(gb.insts[k]);
+        k = k + 1;
+    }
+    g.blocks[2] = mk_block(2, loc);
+    if vc_induct_cut(g).status != VC_INDUCT_OK() { return 2; }
+    0
+}
+
 fn main() -> i32 {
     let mut r: i64 = check_structure();
     if r == 0 { r = check_and_region() + 100; if r == 100 { r = 0; } }
@@ -347,5 +389,6 @@ fn main() -> i32 {
     if r == 0 { r = check_not_applicable() + 300; if r == 300 { r = 0; } }
     if r == 0 { r = check_ptr_phi() + 400; if r == 400 { r = 0; } }
     if r == 0 { r = check_vec_written_in_loop() + 500; if r == 500 { r = 0; } }
+    if r == 0 { r = check_agg_written_in_loop() + 600; if r == 600 { r = 0; } }
     i64_to_i32_wrap(r)
 }
