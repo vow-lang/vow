@@ -106,7 +106,12 @@ fn vc_driver_run(exe: String, path: String, module_root: String, ir_mod: IrModul
             run.outcomes[idx] = oc;
         } else if task_kind[k] == VC_TASK_KIND_VACUITY() {
             if proven { run.vacuous[idx] = 1; }
-        } else if proven {
+        } else if proven && oc.sites.len() == 0 {
+            // A reachable checked-arithmetic abort is a warning, not a failure,
+            // for `verify`. Here it means the replaced body is not a body that
+            // returns the default: the computation it kept can still abort, and
+            // an `ensures` that holds only because it always does is not met by
+            // one that returns (the ESBMC probe reads such a run as not proven).
             run.trivial[idx] = 1;
         }
         k = k + 1;
