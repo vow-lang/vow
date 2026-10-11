@@ -389,14 +389,15 @@ fn vc_worker_argv(p: VcPool, k: u64) -> Vec<String> {
         a.push(p.scratch[k]);
     }
     let kind: i64 = p.kinds[k];
-    if kind == VC_TASK_KIND_VACUITY() {
+    if kind == VC_TASK_KIND_VERIFY() {
+        if p.clauses { a.push(String::from("--worker-clauses")); }
+    } else {
         a.push(String::from("--worker-probe"));
-        a.push(String::from("vacuity"));
-    } else if kind == VC_TASK_KIND_TRIVIAL() {
-        a.push(String::from("--worker-probe"));
-        a.push(String::from("trivial"));
-    } else if p.clauses {
-        a.push(String::from("--worker-clauses"));
+        if kind == VC_TASK_KIND_VACUITY() {
+            a.push(String::from("vacuity"));
+        } else {
+            a.push(String::from("trivial"));
+        }
     }
     if p.module_root.len() > 0 {
         a.push(String::from("--worker-module-root"));

@@ -40,6 +40,12 @@ fn vc_driver_settled(p: VcPool) -> bool {
     true
 }
 
+fn vc_driver_plan_task(task_fn: Vec<i64>, task_name: Vec<String>, task_kind: Vec<i64>, fi: u64, name: String, kind: i64) {
+    task_fn.push(fi as i64);
+    task_name.push(name);
+    task_kind.push(kind);
+}
+
 // Verifies every function of `ir_mod` that has a `vow` block and is inside the
 // native subset. `clauses` asks for per-clause verdicts, `probes` adds the two
 // weak-contract probes where they apply. `module_root` is the explicit root the
@@ -70,18 +76,12 @@ fn vc_driver_run(exe: String, path: String, module_root: String, ir_mod: IrModul
             if why.len() > 0 {
                 run.skip[fi] = why;
             } else {
-                task_fn.push(fi as i64);
-                task_name.push(f.name);
-                task_kind.push(VC_TASK_KIND_VERIFY());
+                vc_driver_plan_task(task_fn, task_name, task_kind, fi, f.name, VC_TASK_KIND_VERIFY());
                 if probes && vc_probe_vacuity_applicable(f) {
-                    task_fn.push(fi as i64);
-                    task_name.push(f.name);
-                    task_kind.push(VC_TASK_KIND_VACUITY());
+                    vc_driver_plan_task(task_fn, task_name, task_kind, fi, f.name, VC_TASK_KIND_VACUITY());
                 }
                 if probes && vc_probe_trivial_applicable(f) {
-                    task_fn.push(fi as i64);
-                    task_name.push(f.name);
-                    task_kind.push(VC_TASK_KIND_TRIVIAL());
+                    vc_driver_plan_task(task_fn, task_name, task_kind, fi, f.name, VC_TASK_KIND_TRIVIAL());
                 }
             }
         }
