@@ -1162,8 +1162,10 @@ fn check_struct_literal_complete(e: CheckEnv, a: AstArena, eid: i64, sidx: i64, 
             let given_sid: i64 = list_get(a, fields_lid, j * 2);
             if arena_str(a, given_sid) == declared {
                 present = true;
+                j = n_literal;
+            } else {
+                j = j + 1;
             }
-            j = j + 1;
         }
         if !present {
             emit_missing_struct_field(e, sname, declared, expr_span(a, eid));
