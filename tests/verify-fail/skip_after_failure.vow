@@ -1,5 +1,7 @@
-// TEST: category verify-skip-after-failure
+// TEST: category callee-blame
+// TEST: counterexample-vow-id 0
 // TEST: counterexample-fn "wrong_ensures"
+// TEST: counterexample-blame Callee
 // Regression for #1561: a VerificationSkipped warning is a static fact about
 // the program, so every non-modelable vowed function is reported even when an
 // earlier function fails verification. The warning set must not depend on the

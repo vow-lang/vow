@@ -1124,6 +1124,8 @@ echo ""
 # Only the verdict and the skip set are compared; other warnings produced
 # inside the verifier pool can still vary on a halted parallel run.
 
+section_begin "Skip set independent of cache and --verify-jobs (#1561)"
+
 skip_set_summary() {
     python3 -c "
 import json, sys
