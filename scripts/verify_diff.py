@@ -286,9 +286,27 @@ def short_circuit_requires(table, function):
     )
 
 
-def classify_clause(truth, key, esbmc, native, esbmc_table):
+def aborting_functions(verify_result, native_table):
+    """Functions the native `verify` refutes although no clause of theirs failed.
+
+    The counterexample is then an abort (division, shift, unwrap, index) or a
+    callee's clause: `verify` fails the function while every clause of it can
+    still hold on the executions that return.
+    """
+    refuted = {c["fn"] for c in verify_eval.actual_cex(verify_result or {})}
+    failed = {fn for (fn, _, _), c in native_table.items() if c["status"] == "failed"}
+    return refuted - failed
+
+
+def classify_clause(truth, key, esbmc, native, esbmc_table, aborting=frozenset()):
     """Class and detail for one clause present in both `contracts` reports."""
     e, n = esbmc["status"], native["status"]
+    if n == "unknown" and e in ("proven", "failed") and key[0] in aborting:
+        return (
+            MORE_PRECISE,
+            "native fails the function on an abort and proves none of its "
+            f"clauses; ESBMC reports the clause {e}",
+        )
     if "not_verified" in (e, n):
         return (
             HARNESS,
@@ -312,7 +330,7 @@ def classify_clause(truth, key, esbmc, native, esbmc_table):
     return classify(truth, ev, nv, native_status=n if n == "error" else None)
 
 
-def compare_contracts(truth, esbmc_result, native_result):
+def compare_contracts(truth, esbmc_result, native_result, aborting=frozenset()):
     """(class, detail) of two `contracts --verify` reports of one fixture."""
     if esbmc_result is None or native_result is None:
         return HARNESS, "no usable contracts result"
@@ -322,7 +340,7 @@ def compare_contracts(truth, esbmc_result, native_result):
     worst, detail = MATCH, None
     for key in sorted(etable, key=repr):
         e, n = etable[key], ntable[key]
-        cls, why = classify_clause(truth, key, e, n, etable)
+        cls, why = classify_clause(truth, key, e, n, etable, aborting)
         if cls == MATCH and e["trivially_satisfiable"] != n["trivially_satisfiable"]:
             cls = WEAKER
             why = (
@@ -407,8 +425,10 @@ def diff_clauses(vowc, timeout, sub, exp, command, truth, max_fns):
             "counterexamples": [],
         }
     if command == "contracts":
+        verify_result, _ = run_backend(vowc, "native", exp.path, timeout, max_fns)
+        aborting = aborting_functions(verify_result, clause_table(results["native"]))
         row["class"], row["detail"] = compare_contracts(
-            truth, results["esbmc"], results["native"]
+            truth, results["esbmc"], results["native"], aborting
         )
     else:
         row["class"], row["detail"] = classify_test(

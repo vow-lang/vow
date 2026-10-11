@@ -217,7 +217,15 @@ python3 scripts/verify_diff.py --command test --jobs 4
 The acceptance criterion for the native `contracts`/`test` backends is zero
 `soundness` rows, and every `weaker` row also non-`match` under
 `--command verify` (the native subset legitimately skips what ESBMC models) or
-listed in `cli.md` under "Verdict divergence from ESBMC".
+listed in `cli.md` under "Verdict divergence from ESBMC". A clause that ESBMC
+calls `proven` or `failed` and native `unknown`, in a function the native
+`verify` refutes without any clause of its own failing (an abort, or a callee's
+precondition), is `more_precise`: the native report proves no clause of a
+function that can abort, where ESBMC judges the clause on the executions that
+continue past it. The two rows of the corpus left on the allow-list are
+`verify-fail/callee_ensures_wrong_function` (`verify` stops at the callee, so
+the caller is never refuted there) and `verify-fail/verify_jobs_ce_before_soft`
+(an unbounded loop without an `invariant`, which ESBMC's k-induction closes).
 
 ## Performance gate: native verifier vs ESBMC
 

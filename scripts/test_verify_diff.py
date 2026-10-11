@@ -282,6 +282,35 @@ class ContractsTest(unittest.TestCase):
         n = report(clause("f", "ensures", 1, "error"))
         self.assertEqual(vd.WEAKER, self.cmp(e, n))
 
+    def test_abort_only_failure_proves_no_clause_is_not_weaker(self):
+        e = report(clause("f", "ensures", 1, "proven"))
+        n = report(clause("f", "ensures", 1, "unknown"))
+        self.assertEqual(vd.WEAKER, vd.compare_contracts("Verified", e, n)[0])
+        self.assertEqual(
+            vd.MORE_PRECISE, vd.compare_contracts("Verified", e, n, {"f"})[0]
+        )
+        e = report(clause("f", "ensures", 1, "failed"))
+        self.assertEqual(
+            vd.MORE_PRECISE, vd.compare_contracts("VerifyFailed", e, n, {"f"})[0]
+        )
+
+    def test_aborting_functions_are_refuted_without_a_failed_clause(self):
+        table = vd.clause_table(
+            report(
+                clause("f", "ensures", 1, "unknown"),
+                clause("g", "ensures", 1, "failed"),
+            )
+        )
+        cex = [
+            {"fn": "f", "blame": "Caller", "vow_id": 0},
+            {"fn": "g", "blame": "Callee", "vow_id": 1},
+            {"fn": "h", "blame": "None", "vow_id": 4294967293},
+        ]
+        with mock.patch.object(vd.verify_eval, "actual_cex", return_value=cex):
+            self.assertEqual({"f", "h"}, vd.aborting_functions({}, table))
+        with mock.patch.object(vd.verify_eval, "actual_cex", return_value=[]):
+            self.assertEqual(set(), vd.aborting_functions({}, table))
+
     def test_fixture_takes_the_worst_clause(self):
         e = report(
             clause("f", "ensures", 1, "proven"), clause("g", "ensures", 1, "failed")
